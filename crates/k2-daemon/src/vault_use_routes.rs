@@ -344,18 +344,23 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
 /// - a fetch-only secret: `k2 vault fetch`, or the owner widens it (`k2
 ///   vault delivery NAME file|env`, or a card: `k2 permission request
 ///   vault.delivery …`).
-fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Selector, who: &Requester, name: &str, e: VaultError, want: k2_vault::Delivery) -> VaultError {
+pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Selector, who: &Requester, name: &str, e: VaultError, want: k2_vault::Delivery) -> VaultError {
     use k2_vault::Delivery;
     if e.code != "delivery_not_granted" {
         return e;
     }
     let item = vault.spawn_items(who).ok().and_then(|items| items.into_iter().find(|i| i.name == name));
     let refuse = |hint: String| VaultError::forbidden("delivery_not_granted", hint);
+    // Accepting is consent (2026-10-30): a copy a person accepted into
+    // this workspace can be taken up to the accepted ceiling by the agent
+    // itself; say the one command instead of "ask a person".
+    let take = vault.meta(sel, &c.actor).ok().and_then(|m| take_yourself(vault, c, &m, want));
     match item.as_ref().map(|i| i.delivery) {
         Some(Delivery::File) => {
             let f = item.as_ref().and_then(|i| i.file_name.clone()).unwrap_or_else(|| name.to_string());
+            let also = take.map(|t| format!(" To get it as {want} too: {t}.")).unwrap_or_default();
             return refuse(format!(
-                "{name} is delivered to you as a file, not {want}: run k2 vault file --secret {name} (it prints the path of a short-lived 0600 copy; pass the file, e.g. tool --code - < \"$(k2 vault file --secret {name})\"), or read $K2_SECRETS_DIR/{f}. Not there yet? k2 vault sync (a session with no $K2_SECRETS_DIR: {})",
+                "{name} is delivered to you as a file, not {want}: read $K2_SECRETS_DIR/{f} (not there yet? run k2 vault sync; a session with no $K2_SECRETS_DIR: {}), or run k2 vault file --secret {name} (it prints the path of a short-lived 0600 copy; pass the file, e.g. tool --code - < \"$(k2 vault file --secret {name})\").{also}",
                 crate::vault::spawn::RESTART_TO_RECEIVE
             ));
         }
@@ -372,9 +377,70 @@ fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Selector, wh
     } else {
         format!("it is delivered to you as {} only. ", m.default_delivery)
     };
+    if let Some(t) = take {
+        return refuse(format!("{name}: {how}To read it as {want}: {t}"));
+    }
     refuse(format!(
         "{name}: {how}To read it as {want}, its delivery must be widened by a person: k2 vault delivery {name} {want} (Settings → Vault); an agent may only widen secrets its own workspace created"
     ))
+}
+
+/// Accepting is consent (2026-10-30): when a person accepted `m` into the
+/// caller's own workspace up to a ceiling that covers `want`, the one
+/// command the agent runs itself. `None` otherwise (the vault decides the
+/// same rule again when it runs; this only words the hint).
+pub(crate) fn take_yourself(vault: &LocalVault, c: &VaultCaller, m: &k2_vault::SecretMeta, want: k2_vault::Delivery) -> Option<String> {
+    let ws = c.workspace_id()?;
+    if m.scope.kind != k2_vault::ScopeKind::Workspace || m.scope.id != ws || want == k2_vault::Delivery::None {
+        return None;
+    }
+    let ceiling = vault.handoff_accepted_ceiling(m)?;
+    if want.level() > ceiling.level() || want.level() > m.delivery_ceiling.level() {
+        return None;
+    }
+    Some(format!(
+        "a person accepted it into this workspace (at most {ceiling}), so take it yourself, no owner needed: k2 vault grant {} --to ws:{} --as {want}",
+        m.name,
+        crate::vault::workspace_label(ws)
+    ))
+}
+
+/// D (2026-10-30): how this caller CAN use a secret right now, for a
+/// refusal that would otherwise only say no: a file in $K2_SECRETS_DIR,
+/// env, the ssh agent, or fetch (only for an HTTP key with sites). With a
+/// person's accept, what the agent may also take itself. `None` when the
+/// caller isn't an agent or has no way in (the refusal stays as it was).
+pub(crate) fn what_works(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Selector) -> Option<String> {
+    use k2_vault::Delivery;
+    let who = c.requester().ok()?;
+    let m = vault.meta(sel, &c.actor).ok()?;
+    let item = vault.spawn_items(&who).ok().and_then(|items| items.into_iter().find(|i| i.secret_id == m.id));
+    let own = m.scope.kind == k2_vault::ScopeKind::Workspace && c.workspace_id() == Some(m.scope.id.as_str());
+    let have = match &item {
+        Some(i) => i.delivery,
+        None if own && matches!(m.default_delivery, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() => Delivery::Fetch,
+        None => return None,
+    };
+    let name = &m.name;
+    let how = match have {
+        Delivery::File => {
+            let f = item.as_ref().and_then(|i| i.file_name.clone()).unwrap_or_else(|| name.clone());
+            format!("{name} is delivered to you as a file: $K2_SECRETS_DIR/{f} (run k2 vault sync if it isn't there yet; or k2 vault file --secret {name})")
+        }
+        Delivery::Env => {
+            let n = item.as_ref().and_then(|i| i.env_name.clone()).unwrap_or_else(|| k2_vault::delivery::default_env_name(name));
+            format!("{name} is delivered to you as env: ${n} in new sessions, or now k2 vault env-file --secret {name} (or k2 vault file --secret {name})")
+        }
+        Delivery::Agent => format!("{name} is an ssh key on $SSH_AUTH_SOCK: ssh and git sign with it"),
+        _ => format!("{name} is delivered to you for fetch: k2 vault fetch --secret {name} <url> (K2 adds it)"),
+    };
+    let more = [Delivery::Env, Delivery::File]
+        .into_iter()
+        .filter(|d| d.level() > have.level())
+        .find_map(|d| take_yourself(vault, c, &m, d))
+        .map(|t| format!(". More: {t}"))
+        .unwrap_or_default();
+    Some(format!("{how}{more}"))
 }
 
 // ── file (2026-10-28) ──────────────────────────────────────────────

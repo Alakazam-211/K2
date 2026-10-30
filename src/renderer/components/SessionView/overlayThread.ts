@@ -219,6 +219,12 @@ export interface OverlayHandoff {
   /** The sender's `--ttl` in seconds: the copy is kept that long after it
    *  was sent (2026-10-28). Absent: no expiry. */
   ttlSecs?: number | null
+  /** How the receiving agent gets it once accepted (`file`, `env`, `fetch`,
+   *  `agent`), 2026-10-30. Absent on older cards. */
+  delivery?: string | null
+  /** The most its agents may take it as after the accept, without asking
+   *  the owner again (accepting is consent, 2026-10-30). */
+  ceiling?: string | null
 }
 
 /** Where a secret card's answer is kept (the vault's scope). */
@@ -1268,6 +1274,9 @@ export function cardExpiryLabel(expiresAt: number | null | undefined, nowSec: nu
   return `expires in ${plural(Math.round(left / 86400), 'day')}`
 }
 
+/** Deliveries a handoff card may name (anything else is dropped). */
+const HANDOFF_DELIVERIES = new Set(['fetch', 'agent', 'file', 'env'])
+
 export function coerceHandoff(raw: unknown): OverlayHandoff | null {
   if (!raw || typeof raw !== 'object') return null
   const h = raw as Record<string, unknown>
@@ -1289,6 +1298,8 @@ export function coerceHandoff(raw: unknown): OverlayHandoff | null {
   if (typeof h.reference === 'string') out.reference = h.reference
   if (typeof h.workspace === 'string') out.workspace = h.workspace
   if (typeof h.ttlSecs === 'number' && h.ttlSecs > 0) out.ttlSecs = h.ttlSecs
+  if (typeof h.delivery === 'string' && HANDOFF_DELIVERIES.has(h.delivery)) out.delivery = h.delivery
+  if (typeof h.ceiling === 'string' && HANDOFF_DELIVERIES.has(h.ceiling)) out.ceiling = h.ceiling
   Object.assign(out, closedExtras(h))
   return out
 }

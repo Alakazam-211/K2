@@ -357,11 +357,16 @@ pub fn meta_json(m: &SecretMeta) -> Value {
         // A copy another agent sent (prd-agent-secret-handoff-v1 §6.3):
         // who, from where, when, and the delivery id.
         if let Some(id) = m.origin.strip_prefix(k2_vault::handoff::ORIGIN_PREFIX) {
-            if let Some(r) = crate::vault::get().ok().and_then(|v| v.handoff_get(id, "in").ok()) {
-                o.insert(
-                    "handoff".into(),
-                    json!({ "deliveryId": r.delivery_id, "from": r.peer_addr, "at": r.created_at, "decidedBy": r.decided_by }),
-                );
+            if let Some(v) = crate::vault::get().ok() {
+                if let Ok(r) = v.handoff_get(id, "in") {
+                    // A: the ceiling a person accepted it at (absent when
+                    // no person decided it).
+                    let accepted = v.handoff_accepted_ceiling(m).map(|d| d.as_str());
+                    o.insert(
+                        "handoff".into(),
+                        json!({ "deliveryId": r.delivery_id, "from": r.peer_addr, "at": r.created_at, "decidedBy": r.decided_by, "acceptedCeiling": accepted }),
+                    );
+                }
             }
         }
     }
@@ -735,6 +740,27 @@ fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
     // wrote, places noted by hand): names and places only.
     let placements = crate::vault_systemd_routes::placements_for(vault, &m);
     let mut out = json!({ "secret": meta_json(&m), "grants": grants, "audit": audit, "placements": placements });
+    // C (2026-10-30): how to use it at the delivery it has. For an agent,
+    // the delivery that reaches it (its grants included); else the
+    // secret's own. Fetch is named only for an HTTP key with sites.
+    let have = c
+        .requester()
+        .ok()
+        .and_then(|who| vault.spawn_items(&who).ok())
+        .and_then(|items| items.into_iter().find(|i| i.secret_id == m.id))
+        .map(|i| i.delivery)
+        .unwrap_or(m.default_delivery);
+    out["use"] = json!(k2_vault::handoff::use_hint_for(have, &m.name, !m.hosts.is_empty()));
+    out["delivered"] = json!(have.as_str());
+    // A: a person accepted it into this agent's workspace; what the agent
+    // may take itself, no owner needed.
+    if let Some(t) = [Delivery::Env, Delivery::File]
+        .into_iter()
+        .filter(|d| d.level() > have.level())
+        .find_map(|d| crate::vault_use_routes::take_yourself(vault, c, &m, d))
+    {
+        out["canTake"] = json!(t);
+    }
     // Item 3: an ssh key's agent settings (the defaults when none are set).
     if m.kind == Kind::SshKey {
         out["agentPolicy"] = json!(vault.agent_policy(&m.id)?);
@@ -1527,8 +1553,23 @@ fn policy(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
         description: b.description.clone(),
         rotate_every_days: b.rotate_every_days,
     };
-    let m = vault.set_policy(&sel, p, &c.actor)?;
+    let m = vault.set_policy(&sel, p, &c.actor).map_err(|e| with_what_works(vault, c, &sel, e))?;
     Ok(json!({ "ok": true, "secret": meta_json(&m) }))
+}
+
+/// D (2026-10-30): a passport's refused grant or delivery change also says
+/// how it CAN use the secret now (a file in $K2_SECRETS_DIR, env, fetch
+/// for an HTTP key with sites), and what a person's accept lets it take
+/// itself. Same code and status; only the hint grows, and only when the
+/// caller has a way in.
+fn with_what_works(vault: &LocalVault, c: &VaultCaller, sel: &Selector, e: VaultError) -> VaultError {
+    if !c.is_passport() || !matches!(e.code, "vault_owner_confirm_required" | "delivery_above_ceiling") {
+        return e;
+    }
+    match crate::vault_use_routes::what_works(vault, c, sel) {
+        Some(w) => VaultError::new(e.code, e.status, format!("{}. {w}", e.hint.trim_end_matches('.'))),
+        None => e,
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1660,7 +1701,7 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         )
         .map_err(|e| match &service {
             Some(label) => service_share_refusal(vault, c, &sel, label, delivery, b.env_name.as_deref(), e),
-            None => e,
+            None => with_what_works(vault, c, &sel, e),
         })?;
     if delivery == Delivery::Api {
         crate::vault::auth_audit("vault-api-grant", &c.actor.stamp(), &format!("ok {}", g.secret_id), "-");
@@ -1870,7 +1911,11 @@ fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, 
     }
     let sel = selector(c, &b)?;
     let who = c.requester()?;
-    let r = vault.resolve(&sel, Use::Api, &who)?;
+    // D (2026-10-30): a refusal names the delivery that does work.
+    let name = b.name.clone().unwrap_or_default();
+    let r = vault
+        .resolve(&sel, Use::Api, &who)
+        .map_err(|e| crate::vault_use_routes::use_refusal(vault, c, &sel, &who, &name, e, Delivery::Api))?;
     Ok(json!({
         "valueB64": base64::engine::general_purpose::STANDARD.encode(r.value.expose()),
         "version": r.version,

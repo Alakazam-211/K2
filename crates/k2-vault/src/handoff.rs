@@ -231,6 +231,79 @@ impl HandoffItem {
         }
     }
 
+    /// The sender says what the secret is (Rosson 2026-10-30): `--delivery`
+    /// and `--kind` on `k2 vault send`. Rides on the item's existing fields
+    /// (`kind`, `delivery`, `hosts`, `inject`), so a receiver that predates
+    /// this lands it the same way and nothing new crosses the wire.
+    ///
+    /// - `file` or `env`: a code or token for a CLI. The copy carries no
+    ///   sites and no header template.
+    /// - `fetch`: an HTTP API key; it keeps the sender's sites and
+    ///   injection, and needs sites.
+    /// - The delivery can't be above the sender's own ceiling: a sender
+    ///   never hands out more than its own copy allows. The ceiling itself
+    ///   is never changed here (the landing caps it at `env`).
+    /// - `kind` relabels a plain value (api_key, oauth_token, generic,
+    ///   password, dsn, url); ssh/TLS keys and signers keep theirs.
+    ///
+    /// Neither given: unchanged (today's behaviour).
+    pub fn shape_for(&mut self, kind: Option<&str>, delivery: Option<&str>) -> Result<()> {
+        const PLAIN: &[Kind] = &[Kind::ApiKey, Kind::OauthToken, Kind::Generic, Kind::Password, Kind::Dsn, Kind::Url];
+        if let Some(k) = kind.map(str::trim).filter(|k| !k.is_empty()) {
+            let want = Kind::parse(k)?;
+            if want.as_str() != self.kind {
+                let have = Kind::parse(&self.kind)?;
+                if !PLAIN.contains(&have) || !PLAIN.contains(&want) {
+                    return Err(VaultError::bad_request(
+                        "kind_fixed",
+                        format!(
+                            "{} is a {}; it is sent as one. --kind relabels a plain value only (api_key, oauth_token, generic, password, dsn, url)",
+                            self.name, self.kind
+                        ),
+                    ));
+                }
+                if self.inject.as_ref().is_some_and(|i| i.sign.is_some()) {
+                    return Err(VaultError::bad_request("kind_fixed", format!("{} signs requests; it keeps its kind", self.name)));
+                }
+                self.kind = want.as_str().to_string();
+            }
+        }
+        let Some(d) = delivery.map(str::trim).filter(|d| !d.is_empty()) else { return Ok(()) };
+        let d = Delivery::parse(d)?;
+        if !matches!(d, Delivery::Fetch | Delivery::File | Delivery::Env) {
+            return Err(VaultError::bad_request(
+                "bad_delivery",
+                "--delivery is fetch (an HTTP API key: K2 adds it to requests to its sites), file or env (a code or token a tool reads)",
+            ));
+        }
+        let ceiling = Delivery::parse(&self.ceiling)?;
+        if d.level() > ceiling.level() {
+            return Err(VaultError::forbidden(
+                "delivery_above_ceiling",
+                format!(
+                    "{} can be delivered at most as {ceiling}, so the copy can't be {d}; a person raises the ceiling (k2 vault delivery {} {d} --ceiling {d})",
+                    self.name, self.name
+                ),
+            ));
+        }
+        match d {
+            Delivery::Fetch => {
+                if self.hosts.is_empty() {
+                    return Err(VaultError::bad_request(
+                        "fetch_needs_sites",
+                        format!("{} has no sites, so fetch can't send it anywhere; send a code or token for a tool as --delivery file (or env)", self.name),
+                    ));
+                }
+            }
+            _ => {
+                self.hosts.clear();
+                self.inject = None;
+            }
+        }
+        self.delivery = d.as_str().to_string();
+        Ok(())
+    }
+
     /// Check what arrived (a peer's payload or a route body).
     pub fn validate(&self) -> Result<()> {
         crate::model::validate_name(&self.name, true)?;
@@ -348,14 +421,27 @@ impl HandoffItem {
 /// How an agent uses a secret delivered to it as `d` (the stamp message,
 /// `k2 vault incoming accept`, refusals). Names only, never a value.
 pub fn use_hint(d: Delivery, name: &str) -> String {
+    use_hint_for(d, name, true)
+}
+
+/// [`use_hint`] for a secret whose sites are known (2026-10-30, "say how
+/// to use it"): fetch is named only for an HTTP key that has sites; a
+/// fetch secret with none says nothing can use it yet. File names the
+/// spawn copy in `$K2_SECRETS_DIR` and `k2 vault sync`; env names the
+/// variable and the forms that work in a running session.
+pub fn use_hint_for(d: Delivery, name: &str, has_sites: bool) -> String {
     match d {
-        Delivery::Fetch | Delivery::Proxy => format!("k2 vault fetch --secret {name} <url> (K2 adds it to the request)"),
+        Delivery::Fetch | Delivery::Proxy if has_sites => format!("k2 vault fetch --secret {name} <url> (K2 adds it to the request)"),
+        Delivery::Fetch | Delivery::Proxy => format!(
+            "nothing yet: it has no sites, so fetch can't send it anywhere; for a tool that reads it, it must be delivered as a file (k2 vault delivery {name} file)"
+        ),
         Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK (it is never shown)".to_string(),
         Delivery::File => format!(
-            "k2 vault file --secret {name} prints the path of a short-lived 0600 file holding it; pass the file, never the value (e.g. some-tool --code - < \"$(k2 vault file --secret {name})\")"
+            "file: $K2_SECRETS_DIR/{name} (run k2 vault sync if it isn't there yet), or k2 vault file --secret {name} for a short-lived 0600 copy; pass the file, never the value (some-tool --code - < \"$K2_SECRETS_DIR/{name}\")"
         ),
         Delivery::Env => format!(
-            "k2 vault file --secret {name} (a short-lived 0600 file holding it), or k2 vault env-file --secret {name} for docker/podman --env-file"
+            "env: ${} in new sessions; in this one, k2 vault env-file --secret {name} (docker/podman --env-file) or k2 vault file --secret {name} (a short-lived 0600 file)",
+            crate::delivery::default_env_name(name)
         ),
         Delivery::Api => format!("k2 vault get {name}"),
         Delivery::None => "it isn't delivered to agents; ask your owner".to_string(),

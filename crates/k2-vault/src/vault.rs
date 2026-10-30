@@ -1017,12 +1017,19 @@ impl LocalVault {
                 .any(|g| g.consumer.kind == ConsumerKind::Workspace && (g.consumer.id == a.workspace_id || g.consumer.id == "*")),
             None => false,
         };
+        // Accepting is consent (2026-10-30): only worked out for an agent,
+        // from the vault's own MAC'd handoff row.
+        let handoff_ceiling = match actor.agent() {
+            Some(_) => self.accepted_handoff_ceiling(conn, keys, m),
+            None => None,
+        };
         Ok(Facts {
             namespace: m.namespace,
             scope: &m.scope,
             created_by: &m.created_by,
             human_given: m.human_given,
             own_ws_has_grant,
+            handoff_ceiling,
         })
     }
 
@@ -1197,7 +1204,7 @@ impl LocalVault {
                 let preset = inject::detect(value.expose());
                 let inject = match (&req.inject, req.kind) {
                     (Some(i), _) => Some(i.clone()),
-                    (None, Kind::ApiKey | Kind::OauthToken | Kind::Generic) => Some(preset.map(|p| p.inject()).unwrap_or_default()),
+                    (None, Kind::ApiKey | Kind::OauthToken | Kind::Generic) if !req.no_inject => Some(preset.map(|p| p.inject()).unwrap_or_default()),
                     (None, _) => None,
                 };
                 let signed = inject.as_ref().and_then(|i| i.sign.as_ref());
@@ -1415,8 +1422,9 @@ impl LocalVault {
                 let v = self.decrypt_version(&conn, &keys, &row.meta, row.meta.latest_version)?;
                 agent_store::check_agent_delivery(row.meta.kind, &to_agent, Some(v.expose()))?;
             }
-            (row.clone(), f.own_ws_has_grant)
+            (row.clone(), (f.own_ws_has_grant, f.handoff_ceiling))
         };
+        let (f_own_grant, f_handoff_ceiling) = f_own_grant;
         let old = row.meta.clone();
         if old.status == SecretStatus::Destroyed {
             return Err(VaultError::conflict("secret_destroyed", "that secret was destroyed"));
@@ -1465,8 +1473,18 @@ impl LocalVault {
             created_by: &old.created_by,
             human_given: old.human_given,
             own_ws_has_grant: f_own_grant,
+            handoff_ceiling: f_handoff_ceiling,
         };
-        let check = if loosens { policy::can_loosen(actor, &facts) } else { policy::can_manage(actor, &facts) };
+        // Accepting is consent (2026-10-30): `k2 vault delivery NAME
+        // file|env` on a copy a person accepted into this agent's own
+        // workspace, when the delivery is the ONLY thing it widens and it
+        // stays at or below the accepted ceiling. Wider sites, a higher
+        // ceiling or another injection still need the owner.
+        let only_delivery = !hosts::widens(&old.hosts, &m.hosts)
+            && m.delivery_ceiling.level() <= old.delivery_ceiling.level()
+            && m.inject == old.inject;
+        let consented = loosens && only_delivery && policy::accepted_handoff_covers(actor, &facts, m.default_delivery);
+        let check = if loosens && !consented { policy::can_loosen(actor, &facts) } else { policy::can_manage(actor, &facts) };
         if let Err(e) = check {
             return Err(self.deny(Entry::new("policy", &stamp, "deny").secret(&old.id, None), e));
         }
@@ -1645,8 +1663,9 @@ impl LocalVault {
             let conn = self.conn.lock();
             let row = self.find_row(&conn, &keys, &g.selector)?;
             let f = self.facts_for(&conn, &keys, &row.meta, actor)?;
-            (row.clone(), f.own_ws_has_grant)
+            (row.clone(), (f.own_ws_has_grant, f.handoff_ceiling))
         };
+        let (facts_own, facts_handoff_ceiling) = facts_own;
         let m = &row.meta;
         if m.status != SecretStatus::Active {
             return Err(VaultError::conflict("secret_not_active", "that secret is disabled or destroyed"));
@@ -1727,6 +1746,7 @@ impl LocalVault {
             created_by: &m.created_by,
             human_given: m.human_given,
             own_ws_has_grant: facts_own,
+            handoff_ceiling: facts_handoff_ceiling,
         };
         if let Err(e) = policy::can_grant(actor, &facts, &g.consumer, g.delivery, m.default_delivery) {
             return Err(self.deny(Entry::new("grant", &stamp, "deny").secret(&m.id, None).consumer(g.consumer.label()), e));

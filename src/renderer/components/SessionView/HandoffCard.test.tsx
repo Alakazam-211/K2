@@ -56,6 +56,26 @@ describe('HandoffCard', () => {
     expect(coerceHandoff({ ...BASE, ttlSecs: 'x' })?.ttlSecs).toBeUndefined()
   })
 
+  it('shows what accepting gives the agent: the delivery and the ceiling (2026-10-30)', () => {
+    const h = coerceHandoff({ ...BASE, kind: 'generic', hosts: [], delivery: 'file', ceiling: 'env' })
+    expect(h?.delivery).toBe('file')
+    expect(h?.ceiling).toBe('env')
+    render(<HandoffCard handoff={h as OverlayHandoff} onDecide={async () => {}} />)
+    expect(screen.getByTestId('thread-handoff-consent').textContent).toBe(
+      'If you accept, the agent gets it as a file; its agents may take it up to env without asking you again.',
+    )
+    cleanup()
+    // Same delivery and ceiling: nothing more to take.
+    render(<HandoffCard handoff={{ ...BASE, delivery: 'env', ceiling: 'env' }} onDecide={async () => {}} />)
+    expect(screen.getByTestId('thread-handoff-consent').textContent).toBe('If you accept, the agent gets it as env.')
+    cleanup()
+    // An older card (no fields) shows no consent line; junk is dropped.
+    render(<HandoffCard handoff={BASE} onDecide={async () => {}} />)
+    expect(screen.queryByTestId('thread-handoff-consent')).toBeNull()
+    expect(coerceHandoff({ ...BASE, delivery: 'api', ceiling: 7 })?.delivery).toBeUndefined()
+    expect(coerceHandoff({ ...BASE, delivery: 'api', ceiling: 7 })?.ceiling).toBeUndefined()
+  })
+
   it('names the sender, host, secret, kind, site and note, and has no value field', () => {
     const { container } = render(<HandoffCard handoff={BASE} onDecide={async () => {}} />)
     const header = screen.getByTestId('thread-handoff-header').textContent ?? ''

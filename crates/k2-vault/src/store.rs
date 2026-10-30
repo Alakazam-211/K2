@@ -100,6 +100,10 @@ pub struct PutRequest {
     /// still lands; callers warn when it doesn't read as a key. Agent
     /// delivery still needs a key the agent serves.
     pub landed_copy: bool,
+    /// With `inject: None`: store no injection at all, instead of the key
+    /// kinds' `Bearer {}` default. A handed-off code or token for a CLI
+    /// (file or env, no sites) carries no header template (2026-10-30).
+    pub no_inject: bool,
 }
 
 impl PutRequest {
@@ -121,6 +125,7 @@ impl PutRequest {
             idempotent: false,
             human_given_override: None,
             landed_copy: false,
+            no_inject: false,
         }
     }
 }

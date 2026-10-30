@@ -118,6 +118,15 @@ pub struct Facts<'a> {
     pub human_given: bool,
     /// Does the actor's own workspace hold an explicit grant on it?
     pub own_ws_has_grant: bool,
+    /// Accepting is consent (Rosson 2026-10-30): set only when this secret
+    /// is a copy another agent handed to this workspace **and a person
+    /// accepted it** here (`k2 vault incoming accept`, the Thread card,
+    /// Settings → Vault → Incoming). It is the ceiling the accept card
+    /// showed, read from the vault's own MAC'd handoff row, never from the
+    /// request. `None` for everything else, including copies that landed
+    /// without a person (accept-from, an answered ask) and pending or
+    /// declined ones.
+    pub handoff_ceiling: Option<Delivery>,
 }
 
 fn denied(code: &'static str, hint: &str) -> VaultError {
@@ -187,6 +196,32 @@ pub fn can_see(actor: &Actor, f: &Facts<'_>, granted_to_actor: bool) -> bool {
         },
         Actor::Guest { username, .. } => f.created_by == format!("guest:{username}"),
     }
+}
+
+/// Accepting is consent (Rosson 2026-10-30, "The things you get in your
+/// vault shouldn't be limited in this way"): after a person accepted a
+/// handed-off secret into a workspace, that workspace's own agents may take
+/// it at any delivery up to the ceiling the accept card showed, with no
+/// second owner confirm. Only:
+/// - an agent of the workspace the copy landed in (`scope` is that
+///   workspace, and it is the agent's own);
+/// - a copy a person accepted ([`Facts::handoff_ceiling`] is set);
+/// - at or below that ceiling (never `api`: a landing ceiling is at most
+///   `env`).
+///
+/// Every other rule stands: other workspaces, a higher ceiling, wider
+/// sites, another injection and secrets the workspace didn't receive this
+/// way still need the owner.
+pub fn accepted_handoff_covers(actor: &Actor, f: &Facts<'_>, delivery: Delivery) -> bool {
+    let Some(a) = actor.agent() else { return false };
+    let Some(ceiling) = f.handoff_ceiling else { return false };
+    f.namespace == Namespace::User
+        && f.scope.kind == ScopeKind::Workspace
+        && f.scope.id == a.workspace_id
+        && !f.human_given
+        && ceiling.level() <= Delivery::Env.level()
+        && delivery != Delivery::None
+        && delivery.level() <= ceiling.level()
 }
 
 /// Rotate, narrow, disable, destroy (tightening or same-level changes).
@@ -313,6 +348,11 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
             if within_own {
                 return Ok(());
             }
+            // Accepting is consent: the workspace a person accepted a
+            // handed-off copy into takes it up to the accepted ceiling.
+            if (own_ws || own_session || own_job) && accepted_handoff_covers(actor, f, delivery) {
+                return Ok(());
+            }
             can_loosen(actor, f)
         }
     }
@@ -344,7 +384,7 @@ mod tests {
     }
 
     fn facts<'a>(scope: &'a Scope, created_by: &'a str, human: bool) -> Facts<'a> {
-        Facts { namespace: Namespace::User, scope, created_by, human_given: human, own_ws_has_grant: false }
+        Facts { namespace: Namespace::User, scope, created_by, human_given: human, own_ws_has_grant: false, handoff_ceiling: None }
     }
 
     #[test]
@@ -446,6 +486,47 @@ mod tests {
         assert!(can_grant(&a, &f, &Consumer::workspace("w2"), Delivery::Fetch, Delivery::Fetch).is_err(), "other ws");
     }
 
+    /// Accepting is consent (2026-10-30): the policy edge, without a vault.
+    #[test]
+    fn an_accepted_handoff_covers_its_own_workspace_up_to_the_ceiling_only() {
+        let ws = Scope::workspace("w1");
+        let mut f = facts(&ws, "system:handoff", false);
+        let a = agent("w1", false);
+        let own = Consumer::workspace("w1");
+        // Not accepted by a person (or not a handoff copy): as before.
+        assert_eq!(can_grant(&a, &f, &own, Delivery::Env, Delivery::File).expect_err("no consent").code, "vault_owner_confirm_required");
+        f.handoff_ceiling = Some(Delivery::Env);
+        can_grant(&a, &f, &own, Delivery::Env, Delivery::File).expect("own workspace, at the ceiling");
+        can_grant(&a, &f, &Consumer::session("s1"), Delivery::Env, Delivery::File).expect("own session");
+        can_grant(&a, &f, &Consumer::job("w1", "collect"), Delivery::Env, Delivery::File).expect("own job");
+        // Above the ceiling, to another workspace, to every workspace, to
+        // a service, to a compute node, and for another workspace's agent.
+        assert_eq!(can_grant(&a, &f, &own, Delivery::Api, Delivery::File).expect_err("api").code, "vault_owner_confirm_required");
+        assert_eq!(can_grant(&a, &f, &Consumer::workspace("w2"), Delivery::File, Delivery::File).expect_err("w2").code, "vault_owner_confirm_required");
+        assert_eq!(can_grant(&a, &f, &Consumer::all_workspaces(), Delivery::File, Delivery::File).expect_err("ws:*").code, "vault_owner_confirm_required");
+        assert_eq!(can_grant(&a, &f, &Consumer::published_service("svc"), Delivery::Env, Delivery::File).expect_err("svc").code, "vault_owner_confirm_required");
+        assert_eq!(can_grant(&a, &f, &Consumer::compute("w1", "n1"), Delivery::Env, Delivery::File).expect_err("compute").code, "vault_owner_confirm_required");
+        assert!(can_grant(&agent("w2", false), &f, &Consumer::workspace("w2"), Delivery::File, Delivery::File).is_err(), "another workspace's agent");
+        // A lower accepted ceiling caps it.
+        f.handoff_ceiling = Some(Delivery::File);
+        can_grant(&a, &f, &own, Delivery::File, Delivery::Fetch).expect("file");
+        assert_eq!(can_grant(&a, &f, &own, Delivery::Env, Delivery::Fetch).expect_err("env above file").code, "vault_owner_confirm_required");
+        // A ceiling above env (never written by a landing) covers nothing.
+        f.handoff_ceiling = Some(Delivery::Api);
+        assert!(!accepted_handoff_covers(&a, &f, Delivery::File));
+        // A person-given secret, a server secret, people and guests: no.
+        f.handoff_ceiling = Some(Delivery::Env);
+        f.human_given = true;
+        assert!(!accepted_handoff_covers(&a, &f, Delivery::File));
+        f.human_given = false;
+        let srv = Scope::server();
+        let fs = Facts { scope: &srv, ..f.clone() };
+        assert!(!accepted_handoff_covers(&agent("w1", true), &fs, Delivery::File));
+        assert!(!accepted_handoff_covers(&Actor::Guest { username: "g".into(), workspace_id: "w1".into() }, &f, Delivery::File));
+        // It never makes can_loosen pass (sites, ceiling, injection).
+        assert_eq!(can_loosen(&a, &f).expect_err("loosen").code, "vault_owner_confirm_required");
+    }
+
     #[test]
     fn reveal_needs_admin_and_confirm() {
         let c = HumanProof::Confirmed { method: "password".into() };
@@ -466,7 +547,7 @@ mod tests {
         let srv = Scope::server();
         assert!(!can_see(&agent("w2", false), &facts(&srv, "owner", true), false));
         assert!(can_see(&agent("w2", true), &facts(&srv, "owner", true), false));
-        let sys = Facts { namespace: Namespace::System, scope: &srv, created_by: "system:mail", human_given: false, own_ws_has_grant: false };
+        let sys = Facts { namespace: Namespace::System, scope: &srv, created_by: "system:mail", human_given: false, own_ws_has_grant: false, handoff_ceiling: None };
         assert!(can_see(&Actor::Owner, &sys, false));
         assert!(!can_see(&agent("w1", true), &sys, false));
     }

@@ -169,6 +169,48 @@ impl LocalVault {
         self.handoff_load(&conn, &keys, id, dir)?.ok_or_else(|| VaultError::not_found("no such delivery"))
     }
 
+    /// Accepting is consent (Rosson 2026-10-30): the ceiling a person
+    /// accepted `m` at, when `m` is a handed-off copy a person accepted into
+    /// the workspace it lives in. Read from the MAC'd `in` row the copy's
+    /// `origin` names, never from a request:
+    ///
+    /// - `m` is a `user` secret in workspace scope, made by the handoff
+    ///   (`origin = handoff:<delivery id>`);
+    /// - that delivery's `in` row is `landed`, for this same workspace and
+    ///   this same secret id, and a person decided it (`decided_by` is
+    ///   `owner` or `connect:<user>`: an accept-from or answered-ask
+    ///   landing has no decider and gets nothing here);
+    /// - the ceiling is what the accept card showed
+    ///   ([`HandoffItem::landing_delivery`] of the stored item), at most
+    ///   `env`.
+    ///
+    /// `None` otherwise (pending, declined, expired, unsent, a tampered
+    /// row, a secret the workspace made itself).
+    pub(crate) fn accepted_handoff_ceiling(&self, conn: &Connection, keys: &Keys, m: &SecretMeta) -> Option<Delivery> {
+        if m.namespace != Namespace::User || m.scope.kind != ScopeKind::Workspace || m.status != SecretStatus::Active {
+            return None;
+        }
+        let id = m.origin.strip_prefix(h::ORIGIN_PREFIX)?;
+        if !h::valid_delivery_id(id) {
+            return None;
+        }
+        let r = self.handoff_load(conn, keys, id, "in").ok().flatten()?;
+        let person = r.decided_by.as_deref().is_some_and(|d| d == "owner" || (d.starts_with("connect:") && d.len() > "connect:".len()));
+        if r.status != "landed" || r.local_workspace_id != m.scope.id || r.secret_id.as_deref() != Some(m.id.as_str()) || !person || r.decided_at.is_none() {
+            return None;
+        }
+        let (_, ceiling) = r.item.landing_delivery();
+        (ceiling.level() <= Delivery::Env.level() && ceiling.level() >= Delivery::Fetch.level()).then_some(ceiling)
+    }
+
+    /// The accepted ceiling of `m` for display (`k2 vault show`, the
+    /// landing notice, refusals): [`Self::accepted_handoff_ceiling`].
+    pub fn handoff_accepted_ceiling(&self, m: &SecretMeta) -> Option<Delivery> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        self.accepted_handoff_ceiling(&conn, &keys, m)
+    }
+
     /// Deliveries, newest first, optionally for one workspace and one
     /// direction. Rows that fail their MAC are skipped (and noted).
     pub fn handoffs(&self, workspace: Option<&str>, direction: Option<&str>) -> Result<Vec<HandoffRecord>> {
@@ -484,6 +526,9 @@ impl LocalVault {
         let mut req = PutRequest::new(Namespace::User, Scope::workspace(ws), name, kind);
         req.hosts = inc_item.hosts.clone();
         req.inject = inc_item.inject.clone();
+        // A code or token for a CLI (no sites, not fetch, and the sender
+        // named no injection): no `Bearer {}` header template is made up.
+        req.no_inject = inc_item.inject.is_none() && inc_item.hosts.is_empty() && !matches!(d, Delivery::Fetch | Delivery::Proxy);
         req.default_delivery = Some(d);
         req.delivery_ceiling = Some(c);
         req.origin = format!("{}{delivery_id}", h::ORIGIN_PREFIX);

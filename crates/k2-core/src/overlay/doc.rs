@@ -571,6 +571,14 @@ pub struct HandoffCardBody {
     /// was sent, then destroyed. Absent: no expiry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_secs: Option<i64>,
+    /// How the receiving agent gets it once accepted (`file`, `env`,
+    /// `fetch`, `agent`), 2026-10-30. Absent on older cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
+    /// The most its agents may take it as after the accept, with no owner
+    /// confirm (accepting is consent, 2026-10-30). Absent on older cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling: Option<String>,
 }
 
 /// Provenance of an imported Thread line (prd-clone-carries-threads-and-

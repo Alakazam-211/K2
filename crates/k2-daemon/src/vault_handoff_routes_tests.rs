@@ -417,16 +417,23 @@ fn the_stamp_message_is_names_only() {
         decided_by: None,
         expires_at: None,
     };
-    let t = stamp_text(&rec, "sales", Some("k2v://ws/ops/STRIPE_KEY"), Some(k2_vault::Delivery::Fetch));
+    // An HTTP key with sites: fetch.
+    rec.item.hosts = vec!["https://api.stripe.com".into()];
+    let t = stamp_text(&rec, "sales", Some("k2v://ws/ops/STRIPE_KEY"), None);
     assert_eq!(
         t,
         "[k2 vault] sales sent STRIPE_KEY → your vault (k2v://ws/ops/STRIPE_KEY, delivered to you as fetch). Use: k2 vault fetch --secret STRIPE_KEY <url> (K2 adds it to the request). Note: \"for the refund job\""
     );
     // 2026-10-28: the "Use:" line follows the copy's real delivery (a file
     // copy was told to use k2 vault fetch), and names its --ttl end.
+    // 2026-10-30: a file copy names $K2_SECRETS_DIR and k2 vault sync.
+    rec.item.hosts.clear();
     rec.expires_at = Some("2026-10-28T13:00:00Z".into());
     let t = stamp_text(&rec, "sales", None, None);
-    assert!(t.contains("delivered to you as file, until 2026-10-28T13:00:00Z). Use: k2 vault file --secret STRIPE_KEY"), "{t}");
+    assert!(
+        t.contains("delivered to you as file, until 2026-10-28T13:00:00Z). Use: file: $K2_SECRETS_DIR/STRIPE_KEY (run k2 vault sync if it isn't there yet), or k2 vault file --secret STRIPE_KEY"),
+        "{t}"
+    );
     assert!(!t.contains("k2 vault fetch"), "{t}");
     rec.status = "pending".into();
     assert!(stamp_text(&rec, "sales", None, None).contains("It waits for your owner to accept (k2 vault incoming)"));
@@ -681,5 +688,108 @@ fn a_widget_origin_never_answers_a_persons_card() {
         // Replay: a second decide is refused.
         let (st, j) = routed(DECIDE, json!({ "id": id, "action": "accept" }), HashMap::new());
         assert_eq!((st, code(&j)), (409, "not_pending"), "{j}");
+    });
+}
+
+/// The 2026-10-30 incident, end to end on one server (Rosson: "The things
+/// you get in your vault shouldn't be limited in this way"): a pairing
+/// code for a CLI, sent as a file (B), accepted by a person, is then usable
+/// by the receiving agent without a second owner confirm (A), every
+/// surface says how to use it (C), and every refusal names what works (D).
+/// Another workspace and anything above the accepted ceiling stay refused.
+#[test]
+fn an_accepted_cli_code_is_usable_and_every_answer_says_how() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let v = crate::vault::ensure_test_vault();
+        let (sew, web, other) = (workspace("sew"), workspace("web"), workspace("other"));
+        link(&sew, &web);
+        let code_value = format!("K2TEST{}.FP", &uuid::Uuid::new_v4().simple().to_string()[..12].to_uppercase());
+        // The sender's own copy: the default api_key (fetch, no sites,
+        // ceiling env), as `k2 vault set` makes it.
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(&sew.id), "PAIR_CODE", Kind::ApiKey);
+        r.hosts = vec![];
+        v.put(r, SecretBytes::from_slice(code_value.as_bytes()), &Actor::Agent(AgentActor { workspace_id: sew.id.clone(), session_id: None, shell: false, vault_manage: false }))
+            .expect("put");
+
+        // B: the sender says it is a code for a CLI, delivered as a file.
+        let (st, e, raw) = call(&v, SEND, &agent(&sew), json!({ "name": "PAIR_CODE", "to": web.name, "delivery": "api" }));
+        assert_eq!((st, code(&e)), (400, "bad_delivery"), "{raw}");
+        let (st, e, raw) = call(&v, SEND, &agent(&sew), json!({ "name": "PAIR_CODE", "to": web.name, "delivery": "fetch" }));
+        assert_eq!((st, code(&e)), (400, "fetch_needs_sites"), "{raw}");
+        let (st, j, raw) = call(&v, SEND, &agent(&sew), json!({ "name": "PAIR_CODE", "to": web.name, "kind": "generic", "delivery": "file", "note": "valid 10 minutes" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["status"], "pending", "{raw}");
+        assert_eq!((j["landsAs"]["delivery"].as_str(), j["landsAs"]["ceiling"].as_str()), (Some("file"), Some("env")), "{raw}");
+        let id = j["deliveryId"].as_str().expect("id").to_string();
+
+        // A: the accept card shows the delivery and the ceiling.
+        let card_ref = v.handoff_get(&id, "in").expect("row").card.expect("card");
+        let doc = k2_core::overlay::get_doc(card_ref.rsplit_once('/').expect("conv/card").1).expect("doc").expect("card doc");
+        let h = doc.handoff.as_ref().expect("handoff body");
+        assert_eq!((h.kind.as_str(), h.delivery.as_deref(), h.ceiling.as_deref()), ("generic", Some("file"), Some("env")));
+        assert!(h.hosts.is_empty());
+
+        // A pending copy gives the agent nothing.
+        let me = agent(&web);
+        let vcall = |c: &VaultCaller, path: &str, body: Value| -> (u16, Value, String) {
+            let r = crate::vault_routes::handle_on(&v, path, Ok(c.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+            let st: u16 = r.status[..3].parse().expect("status");
+            (st, serde_json::from_str(&r.body).unwrap_or_else(|_| panic!("json from {path}: {}", r.body)), r.body)
+        };
+        let grant = |to: &str, d: &str| json!({ "name": "PAIR_CODE", "to": to, "as": d });
+        let (st, e, raw) = vcall(&me, crate::vault_routes::GRANT, grant(&format!("ws:{}", web.name), "env"));
+        assert_eq!((st, code(&e)), (404, "not_found"), "{raw}");
+
+        // The person accepts. The answer and the notice say file.
+        let (st, j, raw) = call(&v, DECIDE, &owner(), json!({ "id": id, "action": "accept" }));
+        assert_eq!(st, 200, "{raw}");
+        let used = j["secret"]["use"].as_str().unwrap_or("");
+        assert!(used.starts_with("file: $K2_SECRETS_DIR/PAIR_CODE (run k2 vault sync"), "{j}");
+        assert!(!used.contains("k2 vault fetch"), "{j}");
+
+        // C: k2 vault show says how, and what the accept lets it take.
+        let r = crate::vault_routes::handle_on(&v, crate::vault_routes::SHOW, Ok(me.clone()), b"", &HashMap::from([("name".to_string(), "PAIR_CODE".to_string())]), "test", None);
+        assert!(r.status.starts_with("200"), "{}", r.body);
+        let s: Value = serde_json::from_str(&r.body).expect("json");
+        assert!(s["use"].as_str().unwrap_or("").starts_with("file: $K2_SECRETS_DIR/PAIR_CODE"), "{s}");
+        assert_eq!(s["delivered"], "file", "{s}");
+        assert!(s["canTake"].as_str().unwrap_or("").contains(&format!("k2 vault grant PAIR_CODE --to ws:{} --as env", web.name)), "{s}");
+        assert_eq!(s["secret"]["handoff"]["acceptedCeiling"], "env", "{s}");
+        assert!(s["secret"]["inject"].is_null(), "no header template for a CLI code: {s}");
+        assert!(s["secret"]["hosts"].as_array().expect("hosts").is_empty(), "{s}");
+
+        // D: env-file and get are refused and name the file and the grant.
+        let (st, e, raw) = vcall(&me, crate::vault_use_routes::ENV_FILE, json!({ "secrets": ["PAIR_CODE"] }));
+        assert_eq!((st, code(&e)), (403, "delivery_not_granted"), "{raw}");
+        let hint = e["error"]["hint"].as_str().unwrap_or("");
+        assert!(hint.contains("$K2_SECRETS_DIR/PAIR_CODE") && hint.contains("k2 vault sync"), "{hint}");
+        assert!(hint.contains(&format!("k2 vault grant PAIR_CODE --to ws:{} --as env", web.name)), "{hint}");
+        let (st, e, raw) = vcall(&me, crate::vault_routes::GET, json!({ "name": "PAIR_CODE" }));
+        assert_eq!((st, code(&e)), (403, "delivery_not_granted"), "{raw}");
+        assert!(e["error"]["hint"].as_str().unwrap_or("").contains("$K2_SECRETS_DIR/PAIR_CODE"), "{raw}");
+
+        // A: another workspace stays the owner's call; the refusal names
+        // the path that works.
+        let (st, e, raw) = vcall(&me, crate::vault_routes::GRANT, grant(&format!("ws:{}", other.name), "file"));
+        assert_eq!((st, code(&e)), (403, "vault_owner_confirm_required"), "{raw}");
+        let hint = e["error"]["hint"].as_str().unwrap_or("");
+        assert!(hint.contains("PAIR_CODE is delivered to you as a file: $K2_SECRETS_DIR/PAIR_CODE"), "{hint}");
+        // Above the accepted ceiling: refused.
+        let (st, e, raw) = vcall(&me, crate::vault_routes::GRANT, grant(&format!("ws:{}", web.name), "api"));
+        assert_eq!((st, code(&e)), (403, "delivery_above_ceiling"), "{raw}");
+        assert!(e["error"]["hint"].as_str().unwrap_or("").contains("$K2_SECRETS_DIR/PAIR_CODE"), "{raw}");
+        // Another workspace's agent can't take it at all.
+        let (st, _, raw) = vcall(&agent(&other), crate::vault_routes::GRANT, json!({ "name": "PAIR_CODE", "scope": "workspace", "workspace": web.name, "to": format!("ws:{}", other.name), "as": "file" }));
+        assert!(st == 403 || st == 404, "{raw}");
+
+        // The incident's refusal, now allowed: env for its own workspace.
+        let (st, g, raw) = vcall(&me, crate::vault_routes::GRANT, grant(&format!("ws:{}", web.name), "env"));
+        assert_eq!(st, 200, "accepting is consent: {raw}");
+        assert_eq!(g["grant"]["delivery"], "env", "{raw}");
+        v.resolve(&Selector::user(Scope::workspace(&web.id), "PAIR_CODE"), Use::Env, &Requester::Session { workspace_id: web.id.clone(), session_id: Some("sess-1".into()) })
+            .expect("env now");
+
+        assert!(!surfaces(&v, &[&sew, &web, &other]).contains(&code_value), "the value never reached a K2 surface");
     });
 }

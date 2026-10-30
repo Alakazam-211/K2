@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import {
   handoffApi,
+  handoffConsentWords,
   handoffStatusWords,
   shortDelivery,
   splitPeer,
@@ -83,6 +84,11 @@ function IncomingRow({
         </span>
       </div>
       {row.note && <div className={`${muted} whitespace-pre-wrap break-words`}>Note: {row.note}</div>}
+      {pending && row.landsAs && (
+        <div className={muted} data-testid="vault-incoming-consent">
+          {handoffConsentWords(row.landsAs.delivery, row.landsAs.ceiling)}
+        </div>
+      )}
       {row.status === 'landed' && row.ref && <div className="font-mono text-[10px] select-all">{row.ref}</div>}
       {row.decidedBy && !pending && <div className={muted}>decided by {row.decidedBy}</div>}
       {pending && (

@@ -115,7 +115,11 @@ pub(crate) struct SendBody {
     workspace: Option<String>,
     /// `--stdin` (person channel, cross server only).
     value_b64: Option<String>,
+    /// `--kind`: what it is (a plain value relabels; B, 2026-10-30).
     kind: Option<String>,
+    /// `--delivery fetch|file|env`: how the receiving agent gets it (B).
+    /// Absent: the sender's own delivery, as before.
+    delivery: Option<String>,
     #[serde(default)]
     hosts: Vec<String>,
     description: Option<String>,
@@ -303,6 +307,8 @@ fn prepare_stdin(b: &SendBody, v64: &str, as_name: Option<String>, note_max: usi
         human_given: true,
         ttl_secs: b.ttl_secs,
     };
+    let mut item = item;
+    item.shape_for(None, b.delivery.as_deref())?;
     item.validate()?;
     let note = handoff::check_note(&b.note, note_max, value.expose())?;
     Ok(Prepared { item, value, note, sender_ws: None, source: None })
@@ -335,7 +341,11 @@ fn prepare_named(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, as_name
     let value = vault.resolve(&Selector::Id(meta.id.clone()), Use::System, &Requester::System(handoff::SYSTEM_ACTOR.into()))?.value;
     handoff::check_value(value.expose())?;
     let note = handoff::check_note(&b.note, note_max, value.expose())?;
-    let item = HandoffItem::from_meta(&meta, as_name, b.ttl_secs);
+    let mut item = HandoffItem::from_meta(&meta, as_name, b.ttl_secs);
+    // B (2026-10-30): the sender says what it is. Never above its own
+    // ceiling; nothing said keeps today's item.
+    item.shape_for(b.kind.as_deref(), b.delivery.as_deref())?;
+    item.validate()?;
     Ok(Prepared { item, value, note, sender_ws: Some(meta.scope.id.clone()), source: Some((meta.id.clone(), meta.latest_version)) })
 }
 
@@ -476,7 +486,15 @@ pub(crate) fn send_answer(rec: &HandoffRecord, to: &str, cross: bool, reference:
         "cross": cross,
         "who": who,
         "ref": reference,
+        "landsAs": lands_as(rec),
     })
+}
+
+/// What the receiving agent gets (the accept card shows the same): the
+/// delivery and the ceiling a person's accept lets its agents take.
+pub(crate) fn lands_as(rec: &HandoffRecord) -> Value {
+    let (d, c) = rec.item.landing_delivery();
+    json!({ "delivery": d.as_str(), "ceiling": c.as_str(), "sites": !rec.item.hosts.is_empty() })
 }
 
 /// The stamp message the receiving agent gets (§6.5): built by the daemon
@@ -486,17 +504,19 @@ pub(crate) fn send_answer(rec: &HandoffRecord, to: &str, cross: bool, reference:
 /// `landed`: the copy's delivery as stored (`None`: what the item lands
 /// as). The "Use:" line follows it (bug 1, 2026-10-28: a file copy was
 /// told to use `k2 vault fetch`).
-pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Option<&str>, landed: Option<k2_vault::Delivery>) -> String {
+pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Option<&str>, landed: Option<&k2_vault::SecretMeta>) -> String {
     let name = rec.landed_name.clone().unwrap_or_else(|| rec.name.clone());
     let note = if rec.note.is_empty() { String::new() } else { format!(" Note: \"{}\"", rec.note) };
     match rec.status.as_str() {
         "landed" => {
-            let d = landed.unwrap_or_else(|| rec.item.landing_delivery().0);
+            let d = landed.map(|m| m.default_delivery).unwrap_or_else(|| rec.item.landing_delivery().0);
+            // C (2026-10-30): fetch only for an HTTP key with sites.
+            let sites = landed.map(|m| !m.hosts.is_empty()).unwrap_or(!rec.item.hosts.is_empty());
             format!(
                 "[k2 vault] {from_label} sent {name} → your vault ({}, delivered to you as {d}{}). Use: {}.{note}",
                 reference.unwrap_or("k2 vault list"),
                 expiry_words(rec.expires_at.as_deref()),
-                handoff::use_hint(d, &name)
+                handoff::use_hint_for(d, &name, sites)
             )
         }
         _ => format!("[k2 vault] {from_label} sent {name}. It waits for your owner to accept (k2 vault incoming).{note}"),
@@ -524,7 +544,7 @@ pub(crate) fn landed_json(m: &k2_vault::SecretMeta) -> Value {
         "delivery": m.default_delivery.as_str(),
         "ceiling": m.delivery_ceiling.as_str(),
         "expiresAt": m.expires_at,
-        "use": handoff::use_hint(m.default_delivery, &m.name),
+        "use": handoff::use_hint_for(m.default_delivery, &m.name, !m.hosts.is_empty()),
     })
 }
 
@@ -571,6 +591,10 @@ pub(crate) fn after_receive(
             workspace: target_id.to_string(),
             // Bug 3: the card says how long the copy is kept (`--ttl`).
             ttl_secs: rec.item.ttl(),
+            // A (2026-10-30): the person consents to what its agents get:
+            // the delivery, and the ceiling they may take it up to.
+            delivery: Some(rec.item.landing_delivery().0.as_str().to_string()),
+            ceiling: Some(rec.item.landing_delivery().1.as_str().to_string()),
         };
         let body = format!("{from_label} sent {name}. Accept it in Settings → Vault → Incoming.");
         match crate::overlay_routes::post_handoff_card(target_path, from_label, &body, card) {
@@ -585,8 +609,8 @@ pub(crate) fn after_receive(
     if !knock {
         return;
     }
-    let landed = landed_meta(vault, rec).map(|m| m.default_delivery);
-    let text = stamp_text(rec, from_label, reference, landed);
+    let landed = landed_meta(vault, rec);
+    let text = stamp_text(rec, from_label, reference, landed.as_ref());
     let wake = rec.status == "landed";
     let (resp, _) = crate::hire_routes::deliver_recorded(
         target_path,
@@ -756,12 +780,15 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
         // follows the copy's real delivery (bug 1).
         if let Some(path) = crate::vault::workspace_path(&r.local_workspace_id) {
             let d = got.meta.as_ref().map(|m| m.default_delivery).unwrap_or_else(|| r.item.landing_delivery().0);
+            let sites = got.meta.as_ref().map(|m| !m.hosts.is_empty()).unwrap_or(!r.item.hosts.is_empty());
+            // A (2026-10-30): what the accept lets this agent take itself.
+            let more = got.meta.as_ref().and_then(|m| accept_more(vault, m)).map(|t| format!(" {t}")).unwrap_or_default();
             let text = format!(
-                "[k2 vault] your owner accepted {landed} from {} → your vault ({}, delivered to you as {d}{}). Use: {}.",
+                "[k2 vault] your owner accepted {landed} from {} → your vault ({}, delivered to you as {d}{}). Use: {}.{more}",
                 r.peer_addr,
                 reference.as_deref().unwrap_or("k2 vault list"),
                 expiry_words(got.meta.as_ref().and_then(|m| m.expires_at.as_deref())),
-                handoff::use_hint(d, &landed)
+                handoff::use_hint_for(d, &landed, sites)
             );
             let sender = crate::hire_routes::Sender { workspace_id: None, via: "owner", actor: stamp.clone(), on_behalf_of: None };
             let _ = crate::hire_routes::deliver_recorded(&path, &text, "k2 vault", "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT, "msg", &sender);
@@ -775,7 +802,23 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
         "ref": reference,
         "alwaysAdded": always_added,
         "secret": got.meta.as_ref().map(landed_json),
+        "more": got.meta.as_ref().and_then(|m| accept_more(vault, m)),
     }))
+}
+
+/// The accept notice's extra line (A, 2026-10-30): a person accepted `m`
+/// at a ceiling above its delivery, so its agents may take more without
+/// asking. `None` when there is nothing more to take.
+pub(crate) fn accept_more(vault: &LocalVault, m: &k2_vault::SecretMeta) -> Option<String> {
+    let ceiling = vault.handoff_accepted_ceiling(m)?;
+    if ceiling.level() <= m.default_delivery.level() || m.scope.kind != k2_vault::ScopeKind::Workspace {
+        return None;
+    }
+    Some(format!(
+        "Accepting it lets you take it up to {ceiling} yourself, no owner needed: k2 vault grant {} --to ws:{} --as {ceiling}.",
+        m.name,
+        crate::vault::workspace_label(&m.scope.id)
+    ))
 }
 
 // ── accept-from ─────────────────────────────────────────────────────

@@ -993,3 +993,287 @@ fn rekey_stops_on_a_tampered_row_in_every_macd_table() {
         assert_eq!(e.code, "vault_tamper", "{table}: {e:?}");
     }
 }
+
+// ── accepting is consent (Rosson 2026-10-30) ────────────────────────
+
+/// The incident's secret: a short-lived pairing code for a CLI, sent as
+/// the sender's default api_key (fetch, no sites, ceiling env).
+fn cli_code(name: &str) -> HandoffItem {
+    let mut it = item(name);
+    it.hosts.clear();
+    it.delivery = "fetch".into();
+    it.ceiling = "env".into();
+    it
+}
+
+fn grant_to(v: &LocalVault, ws: &str, name: &str, to: crate::model::Consumer, d: Delivery, actor: &Actor) -> Result<crate::store::Grant> {
+    v.grant(
+        crate::store::GrantRequest {
+            selector: Selector::user(Scope::workspace(ws), name),
+            consumer: to,
+            delivery: d,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        actor,
+    )
+}
+
+fn accept(v: &LocalVault, id: &str, actor: &Actor) -> SecretMeta {
+    v.handoff_decide(id, &Decision { action: "accept".into(), as_name: None, replace: false }, actor).expect("accept").meta.expect("landed")
+}
+
+const CODE: &[u8] = b"K2TEST-PAIR.CODE-0123456789";
+
+/// A: after a person accepts, the receiving workspace's agents take it at
+/// any delivery up to the ceiling the card showed, with no owner confirm,
+/// and nothing else moves.
+#[test]
+fn accepting_is_consent_the_receiving_workspace_takes_it_up_to_the_ceiling() {
+    let t = open("ho-consent");
+    let v = &t.v;
+    let ws = crate::model::Consumer::workspace;
+    let p = v.handoff_receive(incoming("ws-ops", cli_code("PAIR_CODE"), "sew::sewlab.k2.dev", false), SecretBytes::from_slice(CODE)).expect("pend");
+    assert_eq!(p.record.status, "pending");
+    let id = p.record.delivery_id.clone();
+    // Pending gives nothing: there is no secret to take.
+    assert_eq!(grant_to(v, "ws-ops", "PAIR_CODE", ws("ws-ops"), Delivery::Env, &agent("ws-ops")).expect_err("pending").code, "not_found");
+    // The card showed: delivered as file, at most env.
+    assert_eq!(p.record.item.landing_delivery(), (Delivery::File, Delivery::Env));
+
+    let m = accept(v, &id, &Actor::Owner);
+    assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::File, Delivery::Env));
+    assert!(m.inject.is_none(), "a code with no sites gets no made-up header template: {:?}", m.inject);
+    let sel = Selector::user(Scope::workspace("ws-ops"), "PAIR_CODE");
+    assert_eq!(v.resolve(&sel, Use::File, &ops_session()).expect("file as accepted").value.expose(), CODE);
+    assert_eq!(v.resolve(&sel, Use::Env, &ops_session()).err().expect("not env yet").code, "delivery_not_granted");
+
+    // The receiving agent takes env (the incident's refusal).
+    let g = grant_to(v, "ws-ops", "PAIR_CODE", ws("ws-ops"), Delivery::Env, &agent("ws-ops")).expect("accepting is consent: env for its own workspace");
+    assert_eq!(g.delivery, Delivery::Env);
+    assert_eq!(v.resolve(&sel, Use::Env, &ops_session()).expect("env now").value.expose(), CODE);
+    // `k2 vault delivery PAIR_CODE env` too: only the delivery widens.
+    let m2 = v.set_policy(&sel, PolicyPatch { default_delivery: Some(Delivery::Env), ..Default::default() }, &agent("ws-ops")).expect("raise to the ceiling");
+    assert_eq!((m2.default_delivery, m2.delivery_ceiling), (Delivery::Env, Delivery::Env));
+
+    // Above the ceiling: refused.
+    assert_eq!(grant_to(v, "ws-ops", "PAIR_CODE", ws("ws-ops"), Delivery::Api, &agent("ws-ops")).expect_err("api").code, "delivery_above_ceiling");
+    for (what, patch) in [
+        ("raise the ceiling", PolicyPatch { delivery_ceiling: Some(Delivery::Api), ..Default::default() }),
+        ("api delivery", PolicyPatch { default_delivery: Some(Delivery::Api), delivery_ceiling: Some(Delivery::Api), ..Default::default() }),
+        ("add a site", PolicyPatch { add_hosts: vec!["api.example.com".into()], ..Default::default() }),
+        ("an injection", PolicyPatch { inject: Some(crate::inject::Inject::default()), ..Default::default() }),
+    ] {
+        assert_eq!(v.set_policy(&sel, patch, &agent("ws-ops")).expect_err(what).code, "vault_owner_confirm_required", "{what}");
+    }
+    // Another workspace on the same server: as before.
+    assert_eq!(grant_to(v, "ws-ops", "PAIR_CODE", ws("ws-sales"), Delivery::File, &agent("ws-ops")).expect_err("ws-sales").code, "vault_owner_confirm_required");
+    assert_eq!(
+        grant_to(v, "ws-ops", "PAIR_CODE", crate::model::Consumer::all_workspaces(), Delivery::File, &agent("ws-ops")).expect_err("ws:*").code,
+        "vault_owner_confirm_required"
+    );
+    assert_eq!(
+        grant_to(v, "ws-ops", "PAIR_CODE", crate::model::Consumer::compute("ws-ops", "k2n7"), Delivery::Env, &agent("ws-ops")).expect_err("compute").code,
+        "vault_owner_confirm_required"
+    );
+    // Another workspace's agent can't touch it at all.
+    assert_eq!(grant_to(v, "ws-ops", "PAIR_CODE", ws("ws-sales"), Delivery::File, &agent("ws-sales")).expect_err("not theirs").code, "vault_not_yours");
+    assert_eq!(
+        v.resolve(&sel, Use::File, &Requester::Session { workspace_id: "ws-sales".into(), session_id: Some("s".into()) }).err().expect("other ws").code,
+        "delivery_not_granted"
+    );
+}
+
+/// A: the card's ceiling is the cap, even when someone raises the copy's
+/// own ceiling later; a Member's accept is a person's consent too.
+#[test]
+fn the_accepted_ceiling_caps_it_even_after_the_owner_raises_the_copy() {
+    let t = open("ho-consent-cap");
+    let v = &t.v;
+    let mut it = cli_code("FILE_ONLY");
+    it.ceiling = "file".into();
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales", false), SecretBytes::from_slice(CODE)).expect("pend");
+    let member = Actor::Login { username: "mo".into(), role: Role::Member };
+    let m = accept(v, &p.record.delivery_id, &member);
+    assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::File, Delivery::File));
+    let sel = Selector::user(Scope::workspace("ws-ops"), "FILE_ONLY");
+    grant_to(v, "ws-ops", "FILE_ONLY", crate::model::Consumer::session("s1"), Delivery::File, &agent("ws-ops")).expect("its own session, as file");
+    assert_eq!(
+        grant_to(v, "ws-ops", "FILE_ONLY", crate::model::Consumer::workspace("ws-ops"), Delivery::Env, &agent("ws-ops")).expect_err("env").code,
+        "delivery_above_ceiling"
+    );
+    // The owner raises the copy's ceiling: the agent still gets no more
+    // than the card showed without the owner.
+    v.set_policy(&sel, PolicyPatch { delivery_ceiling: Some(Delivery::Env), ..Default::default() }, &Actor::Owner).expect("owner");
+    assert_eq!(
+        grant_to(v, "ws-ops", "FILE_ONLY", crate::model::Consumer::workspace("ws-ops"), Delivery::Env, &agent("ws-ops")).expect_err("above the card").code,
+        "vault_owner_confirm_required"
+    );
+    assert_eq!(
+        v.set_policy(&sel, PolicyPatch { default_delivery: Some(Delivery::Env), ..Default::default() }, &agent("ws-ops")).expect_err("above the card").code,
+        "vault_owner_confirm_required"
+    );
+    assert_eq!(v.handoff_accepted_ceiling(&v.meta(&sel, &Actor::Owner).expect("meta")), Some(Delivery::File));
+}
+
+/// A: no person, no consent. A copy that landed by accept-from (no one
+/// decided it), a declined or pending one, a secret the workspace made
+/// itself or a person gave, a Replace over one, and a forged decider all
+/// behave exactly as before.
+#[test]
+fn without_a_persons_accept_nothing_changes() {
+    let t = open("ho-consent-none");
+    let v = &t.v;
+    let own = crate::model::Consumer::workspace("ws-ops");
+    // Auto-landed (accept-from): the receiving agent still can't widen it.
+    let l = v.handoff_receive(incoming("ws-ops", cli_code("AUTO_CODE"), "sales", true), SecretBytes::from_slice(CODE)).expect("land");
+    assert_eq!(l.record.status, "landed");
+    assert_eq!(grant_to(v, "ws-ops", "AUTO_CODE", own.clone(), Delivery::Env, &agent("ws-ops")).expect_err("no person").code, "vault_owner_confirm_required");
+    assert_eq!(v.handoff_accepted_ceiling(&l.meta.clone().expect("meta")), None);
+    // Declined: nothing landed.
+    let d = v.handoff_receive(incoming("ws-ops", cli_code("NO_CODE"), "sales", false), SecretBytes::from_slice(CODE)).expect("pend");
+    v.handoff_decide(&d.record.delivery_id, &Decision { action: "decline".into(), as_name: None, replace: false }, &Actor::Owner).expect("decline");
+    assert_eq!(grant_to(v, "ws-ops", "NO_CODE", own.clone(), Delivery::File, &agent("ws-ops")).expect_err("declined").code, "not_found");
+    // A person gave it: as before.
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "GIVEN", Kind::ApiKey);
+    r.default_delivery = Some(Delivery::File);
+    v.put(r, SecretBytes::from_slice(b"k2test-given-1"), &Actor::Owner).expect("put");
+    assert_eq!(grant_to(v, "ws-ops", "GIVEN", own.clone(), Delivery::Env, &agent("ws-ops")).expect_err("person-given").code, "vault_owner_confirm_required");
+    // The workspace made it itself: as before (its own to widen).
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "MINE", Kind::ApiKey);
+    r.default_delivery = Some(Delivery::File);
+    v.put(r, SecretBytes::from_slice(b"k2test-mine-2"), &agent("ws-ops")).expect("put");
+    grant_to(v, "ws-ops", "MINE", own.clone(), Delivery::Env, &agent("ws-ops")).expect("its own");
+    // Replace over the person's secret: the secret keeps its origin, so
+    // the accept hands the agent nothing beyond what it had.
+    let mut it = cli_code("GIVEN");
+    it.delivery = "file".into();
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales", false), SecretBytes::from_slice(CODE)).expect("pend");
+    v.handoff_decide(&p.record.delivery_id, &Decision { action: "accept".into(), as_name: None, replace: true }, &Actor::Owner).expect("replace");
+    assert_eq!(grant_to(v, "ws-ops", "GIVEN", own.clone(), Delivery::Env, &agent("ws-ops")).expect_err("replace").code, "vault_owner_confirm_required");
+    // A forged decider on the auto-landed row breaks its MAC: no consent.
+    let c = rusqlite::Connection::open(t._d.path().join("vault/vault.db")).expect("db");
+    let n = c
+        .execute(
+            "UPDATE handoff SET decided_by = 'owner', decided_at = '2026-10-30T00:00:00Z' WHERE delivery_id = ?1 AND direction = 'in'",
+            [&l.record.delivery_id],
+        )
+        .expect("tamper");
+    assert_eq!(n, 1);
+    drop(c);
+    assert_eq!(grant_to(v, "ws-ops", "AUTO_CODE", own, Delivery::Env, &agent("ws-ops")).expect_err("forged").code, "vault_owner_confirm_required");
+}
+
+/// A and B: a sender claiming more than the card can show widens nothing.
+/// An `api` delivery and ceiling land (and are shown) as env at most; the
+/// accepted copy can't be taken above env, nor its ceiling raised.
+#[test]
+fn a_sender_claiming_api_gets_env_at_most_after_an_accept() {
+    let t = open("ho-consent-claim");
+    let v = &t.v;
+    let mut it = cli_code("LOUD");
+    it.delivery = "api".into();
+    it.ceiling = "api".into();
+    assert_eq!(it.landing_delivery(), (Delivery::Env, Delivery::Env), "what the card shows");
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales::rosson.k2.dev", false), SecretBytes::from_slice(CODE)).expect("pend");
+    let m = accept(v, &p.record.delivery_id, &Actor::Owner);
+    assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::Env, Delivery::Env));
+    assert_eq!(v.handoff_accepted_ceiling(&m), Some(Delivery::Env));
+    let own = crate::model::Consumer::workspace("ws-ops");
+    assert_eq!(grant_to(v, "ws-ops", "LOUD", own, Delivery::Api, &agent("ws-ops")).expect_err("api").code, "delivery_above_ceiling");
+    let sel = Selector::user(Scope::workspace("ws-ops"), "LOUD");
+    assert_eq!(
+        v.set_policy(&sel, PolicyPatch { default_delivery: Some(Delivery::Api), delivery_ceiling: Some(Delivery::Api), ..Default::default() }, &agent("ws-ops"))
+            .expect_err("api")
+            .code,
+        "vault_owner_confirm_required"
+    );
+    assert_eq!(v.resolve(&sel, Use::Api, &ops_session()).err().expect("never api").code, "delivery_not_granted");
+}
+
+// ── the sender picks the kind and delivery (B) ──────────────────────
+
+#[test]
+fn the_sender_says_what_it_is_within_its_own_ceiling() {
+    use Delivery as D;
+    // An HTTP key with sites, sent as a CLI token: no sites, no header.
+    let mut it = item("STRIPE_KEY");
+    it.inject = Some(crate::inject::Inject::default());
+    it.delivery = "fetch".into();
+    it.ceiling = "env".into();
+    it.shape_for(Some("generic"), Some("env")).expect("env for a CLI");
+    assert_eq!((it.kind.as_str(), it.delivery.as_str(), it.ceiling.as_str()), ("generic", "env", "env"));
+    assert!(it.hosts.is_empty() && it.inject.is_none(), "{it:?}");
+    assert_eq!(it.landing_delivery(), (D::Env, D::Env));
+    // The incident's code, sent as file: lands as file, no header.
+    let mut it = cli_code("PAIR_CODE");
+    it.shape_for(None, Some("file")).expect("file");
+    assert_eq!(it.landing_delivery(), (D::File, D::Env));
+    // Nothing said: unchanged (today's behaviour).
+    let before = item("SAME");
+    let mut same = before.clone();
+    same.shape_for(None, None).expect("no-op");
+    same.shape_for(Some(""), Some("  ")).expect("blank is nothing");
+    assert_eq!(same, before);
+    // Fetch keeps its sites, and needs some.
+    let mut it = item("HTTP");
+    it.ceiling = "env".into();
+    it.shape_for(None, Some("fetch")).expect("fetch");
+    assert_eq!(it.hosts, vec!["https://api.stripe.com".to_string()]);
+    assert_eq!(cli_code("NOSITE").shape_for(None, Some("fetch")).expect_err("no sites").code, "fetch_needs_sites");
+    // Never above the sender's own ceiling.
+    let mut low = cli_code("LOW");
+    low.ceiling = "file".into();
+    assert_eq!(low.clone().shape_for(None, Some("env")).expect_err("env above file").code, "delivery_above_ceiling");
+    low.shape_for(None, Some("file")).expect("file is within");
+    // Only fetch, file and env.
+    for d in ["api", "agent", "proxy", "none"] {
+        assert_eq!(cli_code("X").shape_for(None, Some(d)).expect_err(d).code, "bad_delivery", "{d}");
+    }
+    // Keys and signers keep their kind; plain values relabel.
+    let mut ssh = cli_code("DEPLOY");
+    ssh.kind = "ssh_key".into();
+    assert_eq!(ssh.shape_for(Some("generic"), None).expect_err("ssh").code, "kind_fixed");
+    assert_eq!(cli_code("X").shape_for(Some("ssh_key"), None).expect_err("to ssh").code, "kind_fixed");
+    assert_eq!(cli_code("X").shape_for(Some("login_slot"), None).expect_err("never").code, "kind_fixed");
+    let mut pw = cli_code("PW");
+    pw.shape_for(Some("password"), None).expect("relabel");
+    assert_eq!(pw.kind, "password");
+}
+
+#[test]
+fn a_shaped_send_lands_with_no_sites_and_no_header_template() {
+    let t = open("ho-shape-land");
+    let v = &t.v;
+    let mut it = item("GH_CLI");
+    it.inject = Some(crate::inject::Inject::default());
+    it.ceiling = "env".into();
+    it.shape_for(Some("oauth_token"), Some("env")).expect("shape");
+    let r = v.handoff_receive(incoming("ws-ops", it, "sales", true), SecretBytes::from_slice(b"gho_k2test_shape_1")).expect("land");
+    let m = r.meta.expect("meta");
+    assert_eq!((m.kind, m.default_delivery, m.delivery_ceiling), (Kind::OauthToken, Delivery::Env, Delivery::Env));
+    assert!(m.hosts.is_empty() && m.inject.is_none(), "{m:?}");
+    v.resolve(&Selector::user(Scope::workspace("ws-ops"), "GH_CLI"), Use::Env, &ops_session()).expect("env");
+    // Today's default item (an old sender): keeps its header template.
+    let r = v.handoff_receive(incoming("ws-ops", item("OLD_STYLE"), "sales", true), SecretBytes::from_slice(b"k2test-old-style")).expect("land");
+    assert!(r.meta.expect("meta").inject.is_some(), "an HTTP key with sites keeps its injection");
+}
+
+// ── say how to use it (C) ───────────────────────────────────────────
+
+#[test]
+fn use_hints_follow_the_delivery_the_copy_has() {
+    use Delivery as D;
+    let f = use_hint_for(D::File, "PAIR_CODE", false);
+    assert!(f.starts_with("file: $K2_SECRETS_DIR/PAIR_CODE (run k2 vault sync"), "{f}");
+    assert!(!f.contains("k2 vault fetch"), "{f}");
+    let e = use_hint_for(D::Env, "pair-code", false);
+    assert!(e.starts_with("env: $PAIR_CODE in new sessions"), "{e}");
+    assert!(e.contains("k2 vault env-file --secret pair-code"), "{e}");
+    let n = use_hint_for(D::Fetch, "PAIR_CODE", false);
+    assert!(!n.contains("k2 vault fetch"), "fetch only for an HTTP key with sites: {n}");
+    assert!(use_hint_for(D::Fetch, "STRIPE_KEY", true).starts_with("k2 vault fetch --secret STRIPE_KEY"));
+}

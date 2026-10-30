@@ -31,6 +31,9 @@ export interface HandoffView {
   expiresAt?: string | null
   /** `k2v://…` once it landed. */
   ref?: string | null
+  /** How it lands (pending rows): the delivery the agent gets and the
+   *  most its agents may take it as after an accept (2026-10-30). */
+  landsAs?: { delivery: string; ceiling: string } | null
 }
 
 export interface HandoffDecideBody {
@@ -89,7 +92,14 @@ export function coerceHandoffView(raw: unknown): HandoffView | null {
     decidedBy: optStr(r.decidedBy),
     expiresAt: optStr(r.expiresAt),
     ref: optStr(r.ref),
+    landsAs: landsAsOf(r.landsAs),
   }
+}
+
+function landsAsOf(v: unknown): { delivery: string; ceiling: string } | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  return typeof o.delivery === 'string' && typeof o.ceiling === 'string' ? { delivery: o.delivery, ceiling: o.ceiling } : null
 }
 
 function views(raw: unknown): HandoffView[] {
@@ -182,6 +192,23 @@ const KIND_WORDS: Record<string, string> = {
 
 export function handoffKindWords(kind: string): string {
   return KIND_WORDS[kind] ?? kind.replace(/_/g, ' ')
+}
+
+const DELIVERY_WORDS: Record<string, string> = {
+  fetch: 'for fetch only (K2 adds it to requests; never shown)',
+  agent: 'on the ssh agent (never shown)',
+  file: 'as a file',
+  env: 'as env',
+}
+
+/** What accepting gives the receiving agent (2026-10-30, accepting is
+ *  consent): the delivery it gets, and the most its agents may take it as
+ *  without asking again. `null` when the card predates these fields. */
+export function handoffConsentWords(delivery?: string | null, ceiling?: string | null): string | null {
+  if (!delivery) return null
+  const gets = DELIVERY_WORDS[delivery] ?? delivery
+  const more = ceiling && ceiling !== delivery ? `; its agents may take it up to ${ceiling} without asking you again` : ''
+  return `If you accept, the agent gets it ${gets}${more}.`
 }
 
 /** Status in words for lists and cards. */

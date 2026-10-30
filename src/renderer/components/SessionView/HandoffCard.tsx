@@ -14,6 +14,7 @@ import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel, ttlWords, type OverlayHandoff } from './overlayThread'
 import { siteLabel } from './SecretCard'
 import {
+  handoffConsentWords,
   handoffKindWords,
   splitPeer,
   type HandoffDecideBody,
@@ -76,6 +77,8 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide, remoteHost 
   const expiry = cardExpiryLabel(handoff.expiresAt, nowSec ?? Math.floor(Date.now() / 1000))
   // A doc from another server can come without `hosts`.
   const sites = (handoff.hosts ?? []).map(siteLabel).filter(Boolean)
+  // Accepting is consent (2026-10-30): the person sees what the agent gets.
+  const consent = handoffConsentWords(handoff.delivery, handoff.ceiling)
 
   const decide = async (body: Omit<HandoffDecideBody, 'id'>): Promise<void> => {
     if (busy) return
@@ -131,6 +134,11 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide, remoteHost 
         {typeof handoff.ttlSecs === 'number' && handoff.ttlSecs > 0 && (
           <div className={`text-[10px] ${muted}`} data-testid="thread-handoff-ttl">
             the copy is kept {ttlWords(handoff.ttlSecs)} after it was sent, then destroyed
+          </div>
+        )}
+        {consent && (
+          <div className={`text-[10px] ${muted}`} data-testid="thread-handoff-consent">
+            {consent}
           </div>
         )}
       </div>

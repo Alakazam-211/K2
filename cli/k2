@@ -29119,6 +29119,11 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
 
   k2 vault send NAME --to <agent>|<agent>::<host> [--as NEWNAME] [--note "…"] [--ttl 7d] [--json]
                                     same server: vault to vault; another server: sealed to its vault
+  k2 vault send NAME --to <agent> --delivery file|env [--kind generic]
+                                    a code or token for a CLI: they get it as a file
+                                    ($K2_SECRETS_DIR/NAME) or env; no sites, no header
+  k2 vault send NAME --to <agent> --delivery fetch
+                                    an HTTP API key: K2 adds it to requests to its sites
   k2 vault incoming [--workspace <ws>] [--json]     secrets sent to this agent (names only)
   k2 vault sent [--workspace <ws>] [--json]         what this agent sent
   k2 vault accept-from list [--workspace <ws>]      who may land secrets here without asking
@@ -29142,14 +29147,18 @@ same secret makes a new version. A secret a person gave needs a person
 to send it to another server. Server-wide secrets aren't sent (the owner
 shares them with k2 vault grant).
 
-The copy keeps the sender's delivery, at most env and never api: fetch
-with sites stays fetch (k2 vault fetch), fetch with no sites lands as file,
-file stays file, env stays env. A file copy: k2 vault file --secret NAME
-prints a 0600 path to hand a tool on stdin, never the value on a command
-line. k2 vault incoming shows how each one reached you. --replace takes
-the incoming delivery (a wider one needs an Owner or Admin). --ttl is kept
-on the other side: the copy (and a pending card) ends that long after it
-was sent.
+The copy keeps the sender's delivery (or --delivery), at most env and
+never api: fetch with sites stays fetch (k2 vault fetch), fetch with no
+sites lands as file, file stays file, env stays env. --delivery can't go
+above your own copy's ceiling. A file copy is $K2_SECRETS_DIR/NAME (not
+there yet? k2 vault sync), or k2 vault file --secret NAME for a 0600 path
+to hand a tool on stdin, never the value on a command line. The accept
+card shows the delivery and the ceiling; once a person accepts it, the
+receiving agent may take it up to that ceiling itself, no owner needed:
+k2 vault grant NAME --to ws:<you> --as env. k2 vault incoming and
+k2 vault show NAME say how to use each one. --replace takes the incoming
+delivery (a wider one needs an Owner or Admin). --ttl is kept on the other
+side: the copy (and a pending card) ends that long after it was sent.
 
 Exit codes: 0 landed · 3 a person must act (pending, held, declined, not
 connected, not allowed) · 2 bad request or the peer can't (peer_too_old,
@@ -29222,7 +29231,7 @@ _vault_handoff_call() {
 _vault_handoff() {
     local sub="$1"; shift
     if _wants_help "$@"; then _vault_handoff_usage; return 0; fi
-    local to="" as_n="" note="" ttl="" reply="" scope="" workspace="" via="" kind="" hosts="" as_json=0 stdin=0 replace=0 always=0
+    local to="" as_n="" note="" ttl="" reply="" scope="" workspace="" via="" kind="" hosts="" hdelivery="" as_json=0 stdin=0 replace=0 always=0
     local pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -29230,11 +29239,12 @@ _vault_handoff() {
             --stdin) stdin=1; shift ;;
             --replace) replace=1; shift ;;
             --always) always=1; shift ;;
-            --to|--as|--note|--ttl|--reply|--scope|--workspace|--via|--kind|--for)
+            --to|--as|--note|--ttl|--reply|--scope|--workspace|--via|--kind|--for|--delivery)
                 [ $# -ge 2 ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
                     --to) to="$2" ;; --as) as_n="$2" ;; --note) note="$2" ;; --ttl) ttl="$2" ;; --reply) reply="$2" ;;
                     --scope) scope="$2" ;; --workspace) workspace="$2" ;; --via) via="$2" ;; --kind) kind="$2" ;; --for) hosts="$2" ;;
+                    --delivery) hdelivery="$2" ;;
                 esac
                 shift 2 ;;
             --value|--value=*|--secret-value*)
@@ -29253,7 +29263,7 @@ _vault_handoff() {
             local body
             body="$(python3 -c '
 import json, re, sys
-name, to, as_n, note, ttl, reply, scope, via, kind, hosts = sys.argv[1:11]
+name, to, as_n, note, ttl, reply, scope, via, kind, hosts, delivery = sys.argv[1:12]
 o = {"name": name, "to": to}
 if as_n: o["as"] = as_n
 if note: o["note"] = note
@@ -29270,7 +29280,8 @@ elif scope:
 if via: o["via"] = via
 if kind: o["kind"] = kind
 if hosts: o["hosts"] = [h.strip() for h in hosts.split(",") if h.strip()]
-print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$via" "$kind" "$hosts")" || exit 2
+if delivery: o["delivery"] = delivery
+print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$via" "$kind" "$hosts" "$hdelivery")" || exit 2
             if [ "$stdin" = "1" ]; then
                 # A value a person types in: the person channel only (H15).
                 _vault_person_guard
@@ -29299,6 +29310,8 @@ line = "sent %s to %s (%s): %s" % (v.get("name"), v.get("to"), v.get("deliveryId
 if st == "landed" and v.get("ref"): line += " → " + v["ref"]
 if v.get("landedName") and v.get("landedName") != v.get("name"): line += " as " + v["landedName"]
 print(line)
+la = v.get("landsAs") or {}
+if la.get("delivery"): print("they get it as %s (at most %s)" % (la["delivery"], la.get("ceiling")))
 if v.get("who"): print(v["who"], file=sys.stderr)
 if v.get("addressNote"): print("note: " + v["addressNote"], file=sys.stderr)'
             fi
@@ -29333,6 +29346,7 @@ m = v.get("secret") or {}
 if m:
     print("delivered to the agent as %s (at most %s)%s" % (m.get("delivery"), m.get("ceiling"), (", until " + m["expiresAt"]) if m.get("expiresAt") else ""))
     print("it uses it with: %s" % m.get("use"))
+if v.get("more"): print(v["more"])
 if v.get("alwaysAdded"): print("always accepting from " + v["alwaysAdded"] + " now")'
                 exit 0
             fi
@@ -30956,6 +30970,11 @@ if sg:
 elif inj: print("goes in:   %s as %s" % (inj.get("dst"), inj.get("fmt")))
 print("delivery:  %s (at most %s)%s" % (m.get("defaultDelivery"), m.get("deliveryCeiling"), " — agents can see it" if m.get("agentCanSee") else ""))
 print("given by:  %s%s" % (m.get("createdBy"), " (a person)" if m.get("humanGiven") else ""))
+ho = m.get("handoff") or {}
+if ho:
+    print("sent by:   %s (%s)%s" % (ho.get("from"), ho.get("deliveryId"), (", accepted by %s up to %s" % (ho.get("decidedBy"), ho["acceptedCeiling"])) if ho.get("acceptedCeiling") else ""))
+if v.get("use"): print("use:       %s" % v["use"])
+if v.get("canTake"): print("more:      %s" % v["canTake"])
 ap = v.get("agentPolicy")
 if ap:
     print("agent:     at most %s signatures a second, %s a minute per session; forwarded agents %s" % (ap.get("burst"), ap.get("perMinute"), "allowed" if ap.get("allowForwarded") else "refused"))

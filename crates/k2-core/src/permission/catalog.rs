@@ -176,6 +176,12 @@ pub enum ParamKind {
     /// The name a secret arrives under (an env variable or a file), never a
     /// value: `vault.share-service env_name=`, `file_name=`.
     DeliveryName,
+    /// A person on the box (a skin principal), by username or id, whoever's
+    /// App they're on: `app.login-grant user=`. Never an agent's login.
+    Principal,
+    /// An App role (box-wide or that App's), by name or id:
+    /// `app.login-grant role=`.
+    AppRole,
 }
 
 /// One value an action takes (`key=value` on the CLI).

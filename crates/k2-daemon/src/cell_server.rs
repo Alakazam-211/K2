@@ -1112,6 +1112,7 @@ mod unix_impl {
             "/cli/skin/users" if !is_post => from_cli(crate::skin_routes::handle_users_get()),
             "/cli/skin/roles" if !is_post => from_cli(crate::skin_routes::handle_roles_get()),
             "/cli/skin/roles/suggest" if !is_post => from_cli(crate::app_mobile_routes::handle_roles_suggest()),
+            crate::skin_routes::GRANTS_OWN if !is_post => from_cli(crate::skin_routes::handle_grants_own(&principal.workspace_uuid)),
             "/cli/skin-tokens" if !is_post => from_cli(crate::skin_routes::handle_tokens_get()),
             // `/cli/respond` is POST-only (TCP answers a GET with 405).
             "/cli/respond" if !is_post => {

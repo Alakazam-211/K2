@@ -1536,6 +1536,18 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// `GET /cli/skin/grants/own`: an agent's `k2 app grant list`, the logins
+/// on its own workspace's Apps only (`kind=app`), with names. A grant holds
+/// no secret; nothing about another workspace's Apps is listed.
+pub const GRANTS_OWN: &str = "/cli/skin/grants/own";
+
+pub fn handle_grants_own(workspace_id: &str) -> CliResponse {
+    match crate::permission::actions::app_login::own_logins(workspace_id) {
+        Ok(rows) => CliResponse::ok_json(serde_json::json!({ "grants": rows, "scope": "your workspace's Apps" }).to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
 pub fn handle_grants_get() -> CliResponse {
     let grants = match skin::list_grants() {
         Ok(g) => g,

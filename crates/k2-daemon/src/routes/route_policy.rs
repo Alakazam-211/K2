@@ -1578,6 +1578,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/grants/delete", Owner),
     post("/cli/skin/grants/enabled", Owner),
     post("/cli/skin/grants/host", Owner),
+    // An agent's own Apps' logins (the handler admits a passport only).
+    get("/cli/skin/grants/own", Member),
     post("/cli/skin/grants/role", Owner),
     post("/cli/skin/grants/update", Owner),
     // Sew for Apps A2 (0.46.6): guests.chat / guests.setChat, an App's own

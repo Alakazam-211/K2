@@ -8107,9 +8107,14 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.
   k2 app role remove <name>            Drop an unassigned role
-  k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state)
+  k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state).
+                                        An agent sees the logins on its own workspace's Apps.
   k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]
-                                        Owner only. kind=app is a login on one App: --role, or --room (repeatable;
+                                        Owner only. An App's own agent asks for a login on its App on a
+                                        permission card: the refusal ends with the line to ask with
+                                        (k2 permission request app.login-grant op=add|remove user=… app=… role=…);
+                                        the owner's Allow makes it, so don't run the add again.
+                                        kind=app is a login on one App: --role, or --room (repeatable;
                                         Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
                                         Other kinds need --scope and no --role (recorded, not enforced).
   k2 app grant add --kind chat --subject-kind principal --subject <username|id> [--scope member|guest]
@@ -17172,16 +17177,26 @@ for line in r.get("roomAccess") or []:
             case "$action" in
                 list|"")
                     local raw
-                    raw=$(cli_request "/cli/skin/grants")
+                    # An agent (a passport) sees the logins on its own
+                    # workspace's Apps; the owner sees every grant.
+                    if [ -n "${SCOPED_TOKEN:-}" ]; then
+                        raw=$(cli_request "/cli/skin/grants/own")
+                    else
+                        raw=$(cli_request "/cli/skin/grants")
+                    fi
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 grants=d.get("grants") or []
 if not grants:
-    print("No grants.")
+    print("No grants." if not d.get("scope") else "No logins on your Apps.")
     sys.exit(0)
 for g in grants:
+    if d.get("scope"):
+        what=("role " + g["role"]) if g.get("role") else ("rooms " + ",".join(g.get("rooms") or []))
+        print("%s  %s on %s  %s%s" % (g.get("id") or "", g.get("username") or g.get("subjectId") or "", g.get("app") or g.get("targetId") or "", what, "" if g.get("enabled", True) else "  [off]"))
+        continue
     role=g.get("roleId") or g.get("role_id") or ""
     scope=g.get("scope") or ""
     extra=("role "+role) if role else (("scope "+scope) if scope else "")
@@ -72756,6 +72771,14 @@ You can't widen a secret a person gave you yourself, so `k2 publish secret add <
     k2 permission request vault.share-service as=file secret=NAME service=<service> --why "<what you need it for>"
 
 Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
+
+## Logins on your own App
+
+`k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:
+
+    k2 permission request app.login-grant op=add user=<username> app=<your app> role=<role> --why "<what you need it for>"
+
+The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
 
 ## Apps
 

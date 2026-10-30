@@ -12020,6 +12020,22 @@ async fn handle_one_request(
                             })
                     }
                 }
+                // An agent's `k2 app grant list`: its own workspace's Apps.
+                crate::skin_routes::GRANTS_OWN => {
+                    let _ = stream.read(&mut buf).await;
+                    if is_post {
+                        crate::cli_response::CliResponse::method_not_allowed()
+                    } else {
+                        match scoped_hook_auth(p, &query, bearer_token.as_deref()) {
+                            (true, Some(principal)) => tokio::task::spawn_blocking(move || {
+                                crate::skin_routes::handle_grants_own(&principal.workspace_uuid)
+                            })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e)),
+                            _ => skin_dual_auth_failure(&query, bearer_token.as_deref()),
+                        }
+                    }
+                }
                 // Sew S27: grant-hook status + log (owner-tier reads).
                 "/cli/skin/grant-hooks" => {
                     let _ = stream.read(&mut buf).await;

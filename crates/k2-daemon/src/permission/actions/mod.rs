@@ -17,6 +17,7 @@
 //! | `harness.rs` | 0.46.6 | `agent.harness-switch` (move the pinned chat to another harness) |
 //! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env), `vault.share-service` (give its own service or App one) |
 //! | `heartbeats.rs` | 0.46.6 | `heartbeat.pause-other`, `heartbeat.resume-other` (another workspace's heartbeat) |
+//! | `app_login.rs` | 0.46.7 | `app.login-grant` (add or remove a login on the agent's own App) |
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |
 //! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
 //!
@@ -28,6 +29,7 @@
 use k2_core::permission::catalog::{ActionSpec, NotCardableSpec};
 use serde_json::{Map, Value};
 
+pub(crate) mod app_login;
 pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod gardens;
@@ -120,6 +122,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(heartbeats::actions());
     out.extend(password_reset::actions());
     out.extend(workbench::actions());
+    out.extend(app_login::actions());
     out
 }
 
@@ -137,6 +140,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(heartbeats::not_cardable());
     out.extend(password_reset::not_cardable());
     out.extend(workbench::not_cardable());
+    out.extend(app_login::not_cardable());
     out
 }
 

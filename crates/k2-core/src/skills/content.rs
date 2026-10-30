@@ -1401,6 +1401,14 @@ You can't widen a secret a person gave you yourself, so `k2 publish secret add <
 
 Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
 
+## Logins on your own App
+
+`k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:
+
+    k2 permission request app.login-grant op=add user=<username> app=<your app> role=<role> --why "<what you need it for>"
+
+The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

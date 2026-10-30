@@ -1133,6 +1133,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // listing an App for discovery (the handler admits only the App's
         // own agent with switch 2).
         "/cli/skin/roles/suggest",
+        // `k2 app grant list` for an agent: the logins on its own
+        // workspace's Apps (the handler reads the passport's workspace).
+        // Adding and removing them stays the owner's (`/cli/skin/grants`).
+        "/cli/skin/grants/own",
         "/cli/skin/roles/from-template",
         "/cli/skin/access/listed",
         // agent-app-users (0.46.4): an agent invites people to its own
@@ -2165,6 +2169,7 @@ mod tests {
             !is_agent_verb("/cli/skin/grants"),
             "grants are owner-only, not an agent verb"
         );
+        assert!(is_agent_verb("/cli/skin/grants/own"), "an agent lists its own Apps' logins");
         assert!(
             !is_agent_verb("/cli/skin/grants/delete"),
             "grant revoke is owner-only, not an agent verb"

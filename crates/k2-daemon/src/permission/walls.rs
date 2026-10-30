@@ -83,6 +83,10 @@ pub(crate) struct Row {
     /// picks one itself: `apps.user-password-reset app=`), instead of a
     /// `key=<key>` placeholder for the agent to fill in.
     pub optional: &'static [&'static str],
+    /// `(pointer, value)`: the refused request's JSON body must have this
+    /// string there (ASCII case aside): `app.login-grant` is `kind=app`
+    /// only. Read for a match only.
+    pub body_eq: &'static [(&'static str, &'static str)],
 }
 
 const fn ask(action: &'static str, floor: Floor) -> Target {
@@ -97,7 +101,7 @@ const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
 const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: WallMethod) -> Row {
-    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None, optional: &[] }
+    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None, optional: &[], body_eq: &[] }
 }
 
 /// "a person does this in Settings" for never / dropped walls a broad row
@@ -124,7 +128,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 42] = [
+pub(crate) const V1_ACTIONS: [&str; 43] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -173,6 +177,8 @@ pub(crate) const V1_ACTIONS: [&str; 42] = [
     "vault.delivery",
     // Let the agent give its own service or App a secret a person gave it.
     "vault.share-service",
+    // An App's own agent: add or remove a login on its App.
+    "app.login-grant",
     // 0.46.6: pause / resume another workspace's heartbeat.
     "heartbeat.pause-other",
     "heartbeat.resume-other",
@@ -218,6 +224,15 @@ const PASSWORD_RESET_SET_PARAMS: &[(&str, &[ParamFrom])] = &[("user", &[ParamFro
 
 /// The password-reset card's floor, from its one constant (PR-A2).
 const PASSWORD_RESET_FLOOR: Floor = super::actions::password_reset::FLOOR;
+
+/// `app.login-grant`: the route's own floor, and its values from the
+/// refused `k2 app grant add` body (never a password: there is none).
+const LOGIN_GRANT_FLOOR: Floor = super::actions::app_login::FLOOR;
+const LOGIN_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("user", &[ParamFrom::Body("/subjectId")]),
+    ("app", &[ParamFrom::Body("/targetId")]),
+    ("role", &[ParamFrom::Body("/roleId")]),
+];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
 /// off-goldens' captured refusals).
@@ -325,6 +340,29 @@ pub(crate) const ROWS: &[Row] = &[
         fixed: &[("mode", "password")],
         params: PASSWORD_RESET_SET_PARAMS,
         ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/password", POST)
+    },
+    // `k2 app grant add|rm … --kind app` by an App's own agent: the owner's
+    // route (`owner_only`). Only kind=app with a principal; any other grant
+    // stays "It can't be requested". A removal by grant id can't name the
+    // person or the App: the agent fills them in from `k2 app grant list`.
+    Row {
+        body_eq: &[("/kind", "app"), ("/subjectKind", "principal")],
+        fixed: &[("op", "add")],
+        params: LOGIN_GRANT_PARAMS,
+        optional: &["role"],
+        ..row(ask("app.login-grant", LOGIN_GRANT_FLOOR), code(403, "owner_only"), "/cli/skin/grants", POST)
+    },
+    Row {
+        body_has: Some(("/id", true)),
+        fixed: &[("op", "remove")],
+        params: &[("user", &[]), ("app", &[])],
+        ..row(ask("app.login-grant", LOGIN_GRANT_FLOOR), code(403, "owner_only"), "/cli/skin/grants/delete", POST)
+    },
+    Row {
+        body_eq: &[("/kind", "app"), ("/subjectKind", "principal")],
+        fixed: &[("op", "remove")],
+        params: &[("user", &[ParamFrom::Body("/subjectId")]), ("app", &[ParamFrom::Body("/targetId")])],
+        ..row(ask("app.login-grant", LOGIN_GRANT_FLOOR), code(403, "owner_only"), "/cli/skin/grants/delete", POST)
     },
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
@@ -576,6 +614,13 @@ fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
         && r.when.iter().all(|(k, v)| req.params.get(*k).map(String::as_str) == Some(*v))
         && r.needs.is_none_or(|p| req.response.pointer(p).is_some())
         && r.body_has.is_none_or(|(p, present)| body_value(req.body, p) == present)
+        && body_eq_ok(r, req.body)
+}
+
+fn body_eq_ok(r: &Row, body: Option<&Value>) -> bool {
+    r.body_eq.iter().all(|(p, want)| {
+        body.and_then(|b| b.pointer(p)).and_then(Value::as_str).is_some_and(|v| v.trim().eq_ignore_ascii_case(want))
+    })
 }
 
 /// The request body has a non-empty value at `pointer`.
@@ -826,6 +871,7 @@ pub(crate) fn cell_gated_body(
                 && path.starts_with(r.prefix)
                 && method_ok(r.method, method)
                 && r.when.iter().all(|(k, v)| params.get(*k).map(String::as_str) == Some(*v))
+                && body_eq_ok(r, json.as_ref())
         })
         .max_by_key(|r| r.prefix.len());
     let permission = match row {
@@ -924,6 +970,8 @@ mod tests {
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
             // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
             (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
+            // `k2 app grant add … --kind app` by the App's own agent.
+            (403, "POST", "/cli/skin/grants", vec![], Some(json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","roleId":"viewer"})), json!({"error":{"code":"owner_only","hint":"x"}}), "app.login-grant"),
             // `k2 publish secret add svc NAME` on a secret a person gave.
             (403, "POST", "/cli/vault/grant", vec![], Some(json!({"name":"PIN","to":"service:svc","as":"file"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"file"}}), "vault.share-service"),
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
@@ -1145,6 +1193,38 @@ mod tests {
         assert!(p.get("command").is_none(), "{p}");
     }
 
+    /// `app.login-grant`: kind=app with a principal, add or remove, names
+    /// the person, the App and the role as the agent gave them; another
+    /// kind, or a workspace subject, stays "It can't be requested".
+    #[test]
+    fn login_grant_teaches_only_an_app_login() {
+        let add = json!({"subjectKind":"principal","subjectId":"dana","kind":"App","targetId":"jobs","roleId":"viewer"});
+        let p = teach_of(403, "POST", "/cli/skin/grants", &[], Some(add), json!({"error":{"code":"owner_only","hint":"x"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request app.login-grant app=jobs op=add role=viewer user=dana --why \"<what you need it for>\"", "{p}");
+        assert_eq!(p["approvers"], "owner", "{p}");
+        let rooms = json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","rooms":["sales"]});
+        let p = teach_of(403, "POST", "/cli/skin/grants", &[], Some(rooms), json!({"error":{"code":"owner_only"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request app.login-grant app=jobs op=add user=dana --why \"<what you need it for>\"", "the card names a role or nothing: {p}");
+        let rm = json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs"});
+        let p = teach_of(403, "POST", "/cli/skin/grants/delete", &[], Some(rm), json!({"error":{"code":"owner_only"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request app.login-grant app=jobs op=remove user=dana --why \"<what you need it for>\"", "{p}");
+        let p = teach_of(403, "POST", "/cli/skin/grants/delete", &[], Some(json!({"id":"g_1"})), json!({"error":{"code":"owner_only"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request app.login-grant app=<app> op=remove user=<user> --why \"<what you need it for>\"", "{p}");
+        for body in [
+            json!({"subjectKind":"principal","subjectId":"dana","kind":"mailbox","targetId":"x","scope":"y"}),
+            json!({"subjectKind":"workspace","subjectId":"sales","kind":"app","targetId":"jobs"}),
+            json!({"subjectKind":"principal","subjectId":"dana","kind":"chat"}),
+        ] {
+            let p = teach_of(403, "POST", "/cli/skin/grants", &[], Some(body.clone()), json!({"error":{"code":"owner_only"}})).unwrap();
+            assert_eq!(p["requestable"], false, "{body}: {p}");
+        }
+        // The cell socket: the same rows, from the request body alone.
+        let empty = HashMap::new();
+        let b = br#"{"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","roleId":"viewer"}"#;
+        let ws = "no-such-workspace";
+        assert!(cell_gated_body("POST", "/cli/skin/grants", &empty, b, ws).is_none(), "the gate is off for an unknown workspace");
+    }
+
     /// `sources.approve` teaches the source the agent tried (`name`) and
     /// the spec it reviewed (`specHash`); a batch teaches one ask with the
     /// values left for the agent to fill in. The area's switch still
@@ -1300,7 +1380,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 42);
+        assert_eq!(V1_ACTIONS.len(), 43);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -1310,7 +1390,8 @@ mod tests {
                     && a.method == b.method
                     && a.when == b.when
                     && a.needs == b.needs
-                    && a.body_has == b.body_has;
+                    && a.body_has == b.body_has
+                    && a.body_eq == b.body_eq;
                 assert!(!same, "two rows claim {:?} on {}", a.matches, a.prefix);
             }
         }

@@ -11014,10 +11014,10 @@ WHO MAY
   switches; the owner turns them on, an Admin only off).
 
 CORES (what your Apps may use)
-  The owner ticks cores for you: Database, Files and rooms, Thread (Mail
-  and Chat / Voice Hosting take effect when App mail and chat for Apps
-  land). A deploy or first install whose caps all sit in ticked cores goes
-  on at once; any
+  The owner ticks cores for you: Database, Files and rooms, Thread, Chat /
+  Voice Hosting (its chat caps; not chat:channels), Mail (takes effect
+  when App mail lands). A deploy or first install whose caps all sit in
+  ticked cores goes on at once; any
   other cap waits for the owner (exit 2), and the hold names the core to
   tick. Switch 2 never adds a core. heartbeats:write and
   files:agentconfig reach you yourself: always the owner's, in person.
@@ -11418,9 +11418,8 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        ways). --core ticks a
                                        core: its Apps then use Database, Files
                                        and rooms, or Thread inside their own
-                                       slice with no hold (Mail and Chat /
-                                       Voice Hosting take effect when App
-                                       mail and chat for Apps land). The
+                                       slice with no hold (Mail takes effect
+                                       when App mail lands). The
                                        owner turns things on, from
                                        a terminal outside K2; an Admin may only
                                        turn them off. Anything that loosens an

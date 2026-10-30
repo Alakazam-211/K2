@@ -368,7 +368,7 @@ pub(crate) fn tell_agent(ws_id: &str, handle: &str, by: &str) {
         on_off(now == Level::Full),
         on_off(k2_core::workspace::settings::agents_can_manage_app_users(ws_id)),
         if cores.is_empty() { "none".to_string() } else { cores.join(", ") },
-        if later { " Mail and Chat / Voice Hosting take effect when App mail and chat for Apps land." } else { "" },
+        if later { " Mail takes effect when App mail lands." } else { "" },
     );
     super::alerts::note(ws_id, "Your App access changed", &text);
 }

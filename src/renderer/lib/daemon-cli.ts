@@ -565,6 +565,7 @@ function parseDaemonText(res: Response, text: string): string {
 function httpError(res: Response, text: string): DaemonHttpError {
   let msg = text
   let code: string | null = null
+  let details: Record<string, unknown> | null = null
   try {
     const parsed = JSON.parse(text)
     if (parsed && typeof parsed.error === 'string') msg = parsed.error
@@ -573,11 +574,12 @@ function httpError(res: Response, text: string): DaemonHttpError {
     if (parsed && parsed.error && typeof parsed.error === 'object') {
       if (typeof parsed.error.hint === 'string' && parsed.error.hint !== '') msg = parsed.error.hint
       if (typeof parsed.error.code === 'string' && parsed.error.code !== '') code = code ?? parsed.error.code
+      if (!Array.isArray(parsed.error)) details = parsed.error as Record<string, unknown>
     }
   } catch {
     /* fall through with raw text */
   }
-  return new DaemonHttpError(msg || `daemon ${route(res.url)} ${res.status}`, res.status, code)
+  return new DaemonHttpError(msg || `daemon ${route(res.url)} ${res.status}`, res.status, code, details)
 }
 
 function route(url: string): string {

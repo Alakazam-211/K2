@@ -278,8 +278,35 @@ export async function parkApp(app: string): Promise<void> {
   await daemonCliPost<unknown>(primaryScope(), 'app/park', { app })
 }
 
-export async function uninstallApp(app: string): Promise<void> {
-  await daemonCliPost<unknown>(primaryScope(), 'app/uninstall', { app })
+/** Uninstall `app` (its data stays). Without `dropAccess` the daemon
+ *  refuses `409 uninstall_drops_access` while people would lose their
+ *  logins, grants, shared secrets or chat Spaces (`accessLossOf`). */
+export async function uninstallApp(app: string, dropAccess = false): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'app/uninstall', dropAccess ? { app, dropAccess: true } : { app })
+}
+
+/** Uninstall every App a workspace maintains, before removing it
+ *  (`POST /cli/app/release {workspace, apps: "uninstall", forRemoval}`).
+ *  All or nothing: a workspace that can't be removed (Point of Contact),
+ *  or Apps that would drop people's access without `dropAccess`, are
+ *  refused before any App goes. */
+export async function uninstallWorkspaceApps(workspace: string, dropAccess = false): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'app/release', {
+    workspace,
+    apps: 'uninstall',
+    forRemoval: true,
+    ...(dropAccess ? { dropAccess: true } : {}),
+  })
+}
+
+/** The App ids a workspace maintains (`GET /cli/app/list?workspace=`). */
+export async function workspaceAppIds(workspace: string): Promise<string[]> {
+  const v = await daemonCliGet<unknown>(primaryScope(), 'app/list', { workspace })
+  const apps = v !== null && typeof v === 'object' ? (v as { apps?: unknown }).apps : null
+  if (!Array.isArray(apps)) return []
+  return apps
+    .map((a) => (a !== null && typeof a === 'object' ? (a as { appId?: unknown }).appId : null))
+    .filter((a): a is string => typeof a === 'string' && a !== '')
 }
 
 // ── App handover (prd-app-handoff-v1, `k2 app handover`, 0.46.5) ─────

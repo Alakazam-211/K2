@@ -682,6 +682,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   removeProject: async (id: string) => {
+    let removed = false
     try {
       const tabsStore = useTabsStore.getState()
 
@@ -696,6 +697,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       daemonCliPost(primaryScope(), 'workspace-layouts/delete', { projectId: id, workspaceId: null }).catch((e) => console.warn('[projects] workspace-layouts/delete failed:', e))
 
       await daemonCliPost(primaryScope(), 'projects/delete', { id })
+      removed = true
       emitProjectsChanged()
 
       const state = get()
@@ -729,6 +731,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       useToastStore.getState().addToast('Workspace removed', 'info')
     } catch (err) {
       console.error('[projects] removeProject failed:', err)
+      // 0.46.7: a refused removal goes to the caller (the Remove Workspace
+      // dialog turns workspace_has_apps into its Apps step); never a
+      // silent failure behind a closed dialog. After the removal itself,
+      // a local refresh hiccup stays a log line.
+      if (!removed) throw err
     }
   },
 

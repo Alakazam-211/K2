@@ -46,6 +46,7 @@ import { SettingsGroup, SettingDropdown } from '../controls/SettingControls'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
+import { useRemoveWorkspaceDialogStore } from '@/stores/remove-workspace-dialog'
 import { HeartbeatsPanel, HistoryPanel, WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { ContextStackEditor, type ContextEditTarget } from './ContextStackEditor'
 import { RoleSkillEditor } from './RoleSkillEditor'
@@ -123,7 +124,6 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
 
 export function ProjectsSection(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
-  const removeProject = useProjectsStore((s) => s.removeProject)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
 
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
@@ -886,7 +886,6 @@ export function ProjectsSection(): React.JSX.Element {
             project={selectedProject}
             focusGroups={focusGroups}
             focusGroupsEnabled={focusGroupsEnabled}
-            removeProject={removeProject}
             assignProjectToGroup={assignProjectToGroup}
             fetchProjects={fetchProjects}
           />
@@ -1075,14 +1074,12 @@ function ProjectDetail({
   project,
   focusGroups,
   focusGroupsEnabled,
-  removeProject,
   assignProjectToGroup,
   fetchProjects
 }: {
   project: ReturnType<typeof useProjectsStore.getState>['projects'][number]
   focusGroups: ReturnType<typeof useFocusGroupsStore.getState>['focusGroups']
   focusGroupsEnabled: boolean
-  removeProject: (id: string) => Promise<void>
   assignProjectToGroup: (projectId: string, groupId: string | null) => Promise<void>
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
@@ -1484,7 +1481,16 @@ function ProjectDetail({
 
             <div className="pt-2 border-t border-[var(--color-border)]">
               <button
-                onClick={() => removeProject(project.id)}
+                // 0.46.7: the same dialog as the sidebar's Remove (mode,
+                // then a workspace's Apps and what they'd lose), never a
+                // silent failure.
+                onClick={() =>
+                  useRemoveWorkspaceDialogStore.getState().open({
+                    projectId: project.id,
+                    projectName: project.name,
+                    projectPath: project.path,
+                  })
+                }
                 className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
               >
                 Remove Workspace

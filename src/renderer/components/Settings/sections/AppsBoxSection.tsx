@@ -29,6 +29,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
+import { accessLossOf, type AppLoss } from '@/lib/app-access-loss'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -92,6 +93,9 @@ export function AppsBoxSection(): React.JSX.Element | null {
   const [sheet, setSheet] = useState<string | null>(null)
   const [handovers, setHandovers] = useState<Map<string, HandoverRow>>(new Map())
   const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null)
+  // 0.46.7: an uninstall the daemon refused because people would lose
+  // access (409 uninstall_drops_access): what they'd lose, and "anyway".
+  const [loss, setLoss] = useState<AppLoss | null>(null)
   const mounted = useRef(true)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -146,6 +150,24 @@ export function AppsBoxSection(): React.JSX.Element | null {
       setNotice({ tone: 'ok', text: ok })
     } catch (e) {
       setNotice({ tone: 'error', text: daemonErrorText(e) })
+    } finally {
+      setBusy(null)
+      setConfirmUninstall(null)
+      await refresh()
+    }
+  }
+
+  const uninstall = async (appId: string, dropAccess: boolean): Promise<void> => {
+    setBusy(`rm:${appId}`)
+    setNotice(null)
+    try {
+      await uninstallApp(appId, dropAccess)
+      setLoss(null)
+      setNotice({ tone: 'ok', text: `${appId} is uninstalled; its data stays.` })
+    } catch (e) {
+      const lost = accessLossOf(e, appId)
+      if (lost) setLoss(lost[0])
+      else setNotice({ tone: 'error', text: daemonErrorText(e) })
     } finally {
       setBusy(null)
       setConfirmUninstall(null)
@@ -345,11 +367,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
                             <Button
                               variant="danger"
                               disabled={busy !== null}
-                              onClick={() =>
-                                void act(`rm:${app.appId}`, `${app.appId} is uninstalled; its data stays.`, () =>
-                                  uninstallApp(app.appId),
-                                )
-                              }
+                              onClick={() => void uninstall(app.appId, false)}
                             >
                               Uninstall {app.appId} (data stays)
                             </Button>
@@ -362,6 +380,27 @@ export function AppsBoxSection(): React.JSX.Element | null {
                             Uninstall
                           </Button>
                         ) : null}
+                      </div>
+                    ) : null}
+                    {loss && loss.app === app.appId ? (
+                      <div className="pl-9" data-testid={`apps-row-${app.appId}-loss`}>
+                        <Callout tone="warn">
+                          <p>Uninstalling {app.appId} would take away:</p>
+                          <ul className="list-disc pl-4 my-1">
+                            {loss.parts.map((p) => (
+                              <li key={p}>{p}</li>
+                            ))}
+                          </ul>
+                          <p>Reinstalling makes a new App that gets none of this back. To add a public URL instead, use k2 app expose {app.appId} --tunnel.</p>
+                          <div className="flex gap-2 mt-2">
+                            <Button variant="danger" disabled={busy !== null} onClick={() => void uninstall(app.appId, true)}>
+                              Uninstall anyway
+                            </Button>
+                            <Button variant="ghost" disabled={busy !== null} onClick={() => setLoss(null)}>
+                              Keep it
+                            </Button>
+                          </div>
+                        </Callout>
                       </div>
                     ) : null}
                     {sheet === app.appId && isOwner ? (

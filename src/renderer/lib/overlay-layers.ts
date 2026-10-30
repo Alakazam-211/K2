@@ -16,3 +16,8 @@ export const SETTINGS_OVERLAY_Z = 200
  *  all of them — same modal layer as IconCropDialog, which follows it in
  *  the icon flow — and below toasts (9999). */
 export const HOST_PICKER_Z = 1000
+
+/** The Remove Workspace dialog (RemoveWorkspaceDialog): opened from the
+ *  sidebar and from Settings → Workspaces (0.46.7), so above Settings and
+ *  below toasts. */
+export const REMOVE_WORKSPACE_Z = 1000

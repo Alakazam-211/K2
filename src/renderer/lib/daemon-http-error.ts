@@ -9,11 +9,22 @@
 export class DaemonHttpError extends Error {
   readonly status: number
   readonly code: string | null
-  constructor(message: string, status: number, code: string | null) {
+  /** The body's `error` object when it is one (`{code, hint, …}`): the
+   *  refusal's own fields, e.g. the Apps an uninstall would cost. */
+  readonly details: Record<string, unknown> | null
+  constructor(message: string, status: number, code: string | null, details: Record<string, unknown> | null = null) {
     super(message)
     this.status = status
     this.code = code
+    this.details = details
   }
+}
+
+/** The refusal's own fields (the body's `error` object), or null. */
+export function httpDetailsOf(err: unknown): Record<string, unknown> | null {
+  if (err === null || typeof err !== 'object') return null
+  const d = (err as { details?: unknown }).details
+  return d !== null && typeof d === 'object' && !Array.isArray(d) ? (d as Record<string, unknown>) : null
 }
 
 /** The HTTP status of a daemon answer an error came from, or null when the

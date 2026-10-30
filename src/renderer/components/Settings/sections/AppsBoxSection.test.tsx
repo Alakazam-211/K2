@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   off: false,
   role: 'owner' as 'owner' | 'admin' | 'member' | null,
   /** Per route, refusals to answer before the call succeeds (in order). */
-  refuse: {} as Record<string, Array<{ code: string; hint: string }>>,
+  refuse: {} as Record<string, Array<{ code: string; hint: string } & Record<string, unknown>>>,
   plan: null as unknown,
   handovers: [] as unknown[],
   confirmMethods: ['local-auth'] as string[],
@@ -223,6 +223,41 @@ describe('the Apps rows', () => {
     expect(h.posts).toHaveLength(4)
     fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
     await waitFor(() => expect(h.posts[4]).toEqual({ route: 'app/uninstall', body: { app: 'old' } }))
+  })
+
+  it('an uninstall that would drop people’s access lists what they would lose and offers "Uninstall anyway"', async () => {
+    h.refuse['app/uninstall'] = [
+      {
+        code: 'uninstall_drops_access',
+        hint: 'uninstalling old would drop 3 App logins, 1 chat Space bound to it. …',
+        wouldDrop: { logins: 3, chatGrants: 0, otherGrants: 0, ownerGrants: 0, secretShares: null, spaces: 1, total: 4 },
+      },
+    ]
+    render(<AppsBoxSection />)
+    const actions = await screen.findByTestId('apps-row-old-actions')
+    fireEvent.click(within(actions).getByRole('button', { name: 'Uninstall' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
+    const loss = await screen.findByTestId('apps-row-old-loss')
+    expect(within(loss).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['3 App logins', '1 chat Space bound to it'])
+    expect(loss.textContent).toContain('k2 app expose old --tunnel')
+    expect(screen.queryByText(/uninstall_drops_access/)).toBeNull()
+    expect(h.posts).toEqual([{ route: 'app/uninstall', body: { app: 'old' } }])
+
+    // Keep it: nothing more is sent.
+    fireEvent.click(within(loss).getByRole('button', { name: 'Keep it' }))
+    expect(screen.queryByTestId('apps-row-old-loss')).toBeNull()
+    expect(h.posts).toHaveLength(1)
+
+    // Again, then anyway: the second call carries dropAccess.
+    h.refuse['app/uninstall'] = [{ code: 'uninstall_drops_access', hint: '…', wouldDrop: { logins: 1, total: 1 } }]
+    fireEvent.click(within(screen.getByTestId('apps-row-old-actions')).getByRole('button', { name: 'Uninstall' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
+    const again = await screen.findByTestId('apps-row-old-loss')
+    expect(within(again).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1 App login'])
+    fireEvent.click(within(again).getByRole('button', { name: 'Uninstall anyway' }))
+    await waitFor(() => expect(h.posts[2]).toEqual({ route: 'app/uninstall', body: { app: 'old', dropAccess: true } }))
+    await screen.findByText('old is uninstalled; its data stays.')
+    expect(screen.queryByTestId('apps-row-old-loss')).toBeNull()
   })
 
   it('an orphan (its workspace removed): hand over and park; an admin gets park and uninstall only; a member nothing', async () => {

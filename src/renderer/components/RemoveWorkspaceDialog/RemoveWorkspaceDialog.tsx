@@ -7,6 +7,9 @@ import {
   type RemoveWorkspaceResult,
 } from '../../stores/remove-workspace-dialog'
 import { useProjectsStore } from '../../stores/projects'
+import { REMOVE_WORKSPACE_Z } from '@/lib/overlay-layers'
+import { uninstallWorkspaceApps, workspaceAppIds } from '../Settings/sections/app-access-api'
+import { runRemoval, type RemovalStep } from './remove-workspace-flow'
 
 interface ModeOption {
   id: RemoveWorkspaceMode
@@ -50,11 +53,15 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
   const removeProject = useProjectsStore((s) => s.removeProject)
 
   const [mode, setMode] = useState<RemoveWorkspaceMode>('deregister_only')
+  // 0.46.7: a workspace that maintains Apps. "apps": which ones (uninstall
+  // them first?); "loss": what people would lose (remove anyway?).
+  const [step, setStep] = useState<Exclude<RemovalStep, { kind: 'done' }> | null>(null)
 
   // Reset mode when dialog reopens
   useEffect(() => {
     if (isOpen) {
       setMode('deregister_only')
+      setStep(null)
     }
   }, [isOpen])
 
@@ -68,19 +75,34 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
     return () => window.removeEventListener('keydown', handler)
   }, [isOpen, isPending, close])
 
-  const handleConfirm = async (): Promise<void> => {
+  const handleConfirm = async (uninstallApps = false, dropAccess = false): Promise<void> => {
     if (!projectId || !projectPath) return
     setIsPending(true)
     try {
-      let teardownResults: RemoveWorkspaceResult[] = []
-      if (mode !== 'deregister_only') {
-        teardownResults = await invoke<RemoveWorkspaceResult[]>('k2so_agents_teardown_workspace', {
-          projectPath,
-          mode,
-        })
-        setResults(teardownResults)
+      const outcome = await runRemoval(
+        projectId,
+        { uninstallApps, dropAccess },
+        {
+          appIds: workspaceAppIds,
+          uninstallApps: uninstallWorkspaceApps,
+          teardown: async () => {
+            if (mode === 'deregister_only') return
+            const teardownResults = await invoke<RemoveWorkspaceResult[]>('k2so_agents_teardown_workspace', {
+              projectPath,
+              mode,
+            })
+            setResults(teardownResults)
+          },
+          remove: removeProject,
+        },
+      )
+      if (outcome.kind !== 'done') {
+        // Nothing was removed: show the Apps (or what they'd lose) and ask.
+        setStep(outcome)
+        setIsPending(false)
+        return
       }
-      await removeProject(projectId)
+      setStep(null)
       // If we showed results (keep_current / restore_original), leave them on screen briefly.
       // For deregister-only, close immediately since there's nothing to report.
       if (mode === 'deregister_only') {
@@ -100,7 +122,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
 
   return (
     <DialogScrim
-      zIndex={50}
+      zIndex={REMOVE_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
       onClick={isPending ? undefined : close}
@@ -124,8 +146,39 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
           ) : null}
         </div>
 
+        {/* 0.46.7: the workspace maintains Apps — nothing has changed yet. */}
+        {step ? (
+          <div className="flex-1 overflow-y-auto px-5 pb-3" data-testid="remove-workspace-apps-step">
+            {step.kind === 'apps' ? (
+              <Callout tone="warn">
+                <p>
+                  This workspace maintains {step.apps.length === 1 ? 'an App' : `${step.apps.length} Apps`}:{' '}
+                  <span className="font-mono">{step.apps.join(', ')}</span>. A workspace is never removed while its Apps
+                  are still running under it.
+                </p>
+                <p className="mt-1">
+                  Remove it by uninstalling {step.apps.length === 1 ? 'that App' : 'those Apps'} first (each App's data
+                  stays on this server). To give them to another agent or park them instead, use Settings → Apps.
+                </p>
+              </Callout>
+            ) : (
+              <Callout tone="warn">
+                <p>Nothing has been removed yet. Uninstalling these Apps would take away:</p>
+                <ul className="list-disc pl-4 my-1">
+                  {step.loss.map((l) => (
+                    <li key={l.app}>
+                      <span className="font-mono">{l.app}</span>: {l.parts.join(', ')}
+                    </li>
+                  ))}
+                </ul>
+                <p>A reinstall is a new App and gets none of this back.</p>
+              </Callout>
+            )}
+          </div>
+        ) : null}
+
         {/* Mode picker (only before the teardown runs) */}
-        {!showingResults ? (
+        {step ? null : !showingResults ? (
           <div className="flex-1 overflow-y-auto px-5 pb-3">
             <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
               What should K2 do with the files?
@@ -204,7 +257,24 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
 
         {/* Actions */}
         <div className="px-5 pb-5 flex gap-2 justify-end border-t border-[var(--color-border)] pt-3">
-          {!showingResults ? (
+          {step ? (
+            <>
+              <button
+                className="px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+                onClick={close}
+                disabled={isPending}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-status-error)] hover:opacity-90 disabled:opacity-40"
+                onClick={() => void handleConfirm(true, step.kind === 'loss')}
+                disabled={isPending}
+              >
+                {isPending ? 'Working…' : step.kind === 'apps' ? 'Uninstall its Apps and remove' : 'Remove anyway'}
+              </button>
+            </>
+          ) : !showingResults ? (
             <>
               <button
                 className="px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
@@ -215,7 +285,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
               </button>
               <button
                 className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)] disabled:opacity-40"
-                onClick={handleConfirm}
+                onClick={() => void handleConfirm()}
                 disabled={isPending}
               >
                 {isPending

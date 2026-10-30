@@ -4,7 +4,7 @@ description = "Reference models: slow, obvious implementations of every MPC prim
 # Standalone on purpose (no workspace inheritance): consumers copy this directory by git subtree.
 edition = "2021"
 publish = false
-version = "0.3.0"
+version = "0.4.1"
 
 [lints.rust]
 unsafe_code = "forbid"

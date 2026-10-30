@@ -7,6 +7,13 @@
 //! outcome, the reported conflict regions as an exact set (U11), and every pid's stack
 //! depths. The first difference stops the trace and is reported, never adjusted.
 //!
+//! **Restart twin** ([`run_twin`]; spec U22a v1.6, restart transparency): a stack-free trace
+//! (no undo or redo, which a restart rightly changes) also runs on a second kit that never
+//! restarts; after every step its outcome and texts must equal the restarted kit's. The
+//! class `revert_restart_transparent` is a revert whose record's carry was persisted (the
+//! window moved past it while it was pending), with a restart after that, a later change on
+//! its root, and another restart before the revert.
+//!
 //! Sequential runs only: the concurrency class and the positions property test are later
 //! (`docs/CONFORMANCE.md`).
 
@@ -53,6 +60,7 @@ pub const CLASSES: &[&str] = &[
     "history_lost_after_restart",
     "multi_root_batch",
     "repeated_text_identity",
+    "revert_restart_transparent",
 ];
 
 /// Low entropy on purpose (repeated text is where a wrong position hides), with multi-byte
@@ -218,6 +226,26 @@ enum Plan {
     },
     Restart,
     Tick,
+    /// The newest change becomes the scenario's marked change (if it is `p`'s, with two
+    /// regions on `root`); resolves to no step.
+    Mark {
+        p: usize,
+        root: usize,
+    },
+    /// A deletion across the marked change's first region's start (and not its end).
+    CrossStart {
+        p: usize,
+        root: usize,
+    },
+    /// The gap between the marked change's first two regions on `root` deleted (as revert
+    /// carries them), so they touch.
+    DeleteMarkedGap {
+        p: usize,
+        root: usize,
+    },
+    RevertMarked {
+        p: usize,
+    },
 }
 
 struct PidSpec {
@@ -256,7 +284,22 @@ pub struct Runner {
     repeated: bool,
     /// The mismatching step was a revert whose kit report is the oracle's plus taints.
     revert_taints_more: bool,
+    /// The mismatch: the restarted kit differs from the twin that never restarted.
+    restart_differs: bool,
     res: TraceResult,
+    /// The restart twin: the same steps on a kit that never restarts ([`run_twin`]).
+    twin: Option<Kit>,
+    /// A stack-free trace (no undo or redo, no restore): the twin's traces.
+    stackless: bool,
+    /// The directed restart scenario's change.
+    marked: Option<ChangeId>,
+    /// Change → the head when the window moved past it while its record was kept (its
+    /// carry persisted).
+    persisted_at: BTreeMap<ChangeId, ChangeId>,
+    /// The head at every restart.
+    restart_heads: Vec<ChangeId>,
+    /// Change → the roots it changed.
+    change_roots: BTreeMap<ChangeId, BTreeSet<usize>>,
 }
 
 /// The knobs every trace runs with: small, so the bounds, the window and compaction are
@@ -281,13 +324,28 @@ pub fn run(seed: u64) -> TraceResult {
 
 /// [`run`], logging every root's text after each step (`verbose`).
 pub fn run_with(seed: u64, verbose: bool) -> TraceResult {
-    let mut rng = SmallRng::seed_from_u64(mix(seed));
+    run_mode(seed, verbose, false)
+}
+
+/// A restart-twin trace (spec U22a v1.6, restart transparency): stack-free, an assistant
+/// always, the directed restart scenario first, and every step also run on a second kit
+/// that never restarts, whose outcomes and texts must equal the restarted kit's.
+pub fn run_twin(seed: u64) -> TraceResult {
+    run_mode(seed, false, true)
+}
+
+fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
+    let mut rng = SmallRng::seed_from_u64(mix(seed) ^ u64::from(twin));
     let n_pids = rng.gen_range(2..=5);
-    let steps = rng.gen_range(20..=200);
+    let steps = if twin {
+        rng.gen_range(60..=160)
+    } else {
+        rng.gen_range(20..=200)
+    };
     let mut pids = Vec::new();
     for i in 0..n_pids {
         let slots = rng.gen_range(1..=3);
-        let assistant = i == 0 && rng.gen_bool(0.6);
+        let assistant = i == 0 && (twin || rng.gen_bool(0.6));
         let obo = (0..slots)
             .map(|k| assistant.then(|| ["person-x", "person-y"][k % 2].to_owned()))
             .collect();
@@ -307,6 +365,7 @@ pub fn run_with(seed: u64, verbose: bool) -> TraceResult {
         ]
     };
     let kit = Kit::open([&seeds[0], &seeds[1]], &KNOBS);
+    let twin_kit = twin.then(|| Kit::open([&seeds[0], &seeds[1]], &KNOBS));
     let head = kit.version();
     let bounds = Bounds {
         depth: KNOBS.undo_depth,
@@ -336,12 +395,24 @@ pub fn run_with(seed: u64, verbose: bool) -> TraceResult {
         verbose,
         repeated,
         revert_taints_more: false,
+        restart_differs: false,
         res: TraceResult::default(),
+        twin: twin_kit,
+        stackless: twin,
+        marked: None,
+        persisted_at: BTreeMap::new(),
+        restart_heads: Vec::new(),
+        change_roots: BTreeMap::new(),
     };
+    if twin {
+        r.restart_scenario();
+    }
     for i in 0..steps {
         r.res.steps = i + 1;
         if let Err(what) = r.step(i) {
-            let label = if r.revert_taints_more {
+            let label = if r.restart_differs {
+                LABEL_RESTART
+            } else if r.revert_taints_more {
                 LABEL_REVERT_TAINT
             } else if r.res.hunk_diff.is_some() {
                 LABEL_HUNKS
@@ -399,7 +470,14 @@ pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String>
         verbose: true,
         repeated: false,
         revert_taints_more: false,
+        restart_differs: false,
         res: TraceResult::default(),
+        twin: None,
+        stackless: false,
+        marked: None,
+        persisted_at: BTreeMap::new(),
+        restart_heads: Vec::new(),
+        change_roots: BTreeMap::new(),
     };
     for (i, st) in steps.into_iter().enumerate() {
         r.kit.advance();
@@ -551,6 +629,8 @@ fn normalise(out: KitOut) -> Result<Outcome, String> {
 
 /// A mismatch after a step whose applied hunks differed (same text) earlier in the trace.
 pub const LABEL_HUNKS: &str = "F1: an undo, redo or revert applied other hunks than the merge's";
+/// The restarted kit differs from a kit that never restarted (U22a v1.6).
+pub const LABEL_RESTART: &str = "restart transparency: a restart changed an outcome";
 /// A revert reporting the oracle's regions plus more taints.
 pub const LABEL_REVERT_TAINT: &str = "F2: revert taints more than U22a";
 
@@ -718,7 +798,20 @@ impl Runner {
     }
 
     fn draw(&mut self) -> Step {
-        if !self.queue.is_empty() {
+        let step = self.draw_any();
+        if !self.stackless {
+            return step;
+        }
+        // the twin's traces are stack-free: a restart rightly changes undo and redo
+        match step {
+            Step::Undo { p, s, .. } => self.revert_step(p, s, false),
+            Step::Restore { p, s, .. } | Step::Name { p, s } => Step::Read { p, s },
+            other => other,
+        }
+    }
+
+    fn draw_any(&mut self) -> Step {
+        while !self.queue.is_empty() {
             let plan = self.queue.remove(0);
             if let Some(s) = self.resolve(plan) {
                 return s;
@@ -726,7 +819,7 @@ impl Runner {
         }
         if self.rng.gen_bool(0.05) {
             self.scenario();
-            if !self.queue.is_empty() {
+            while !self.queue.is_empty() {
                 let plan = self.queue.remove(0);
                 if let Some(s) = self.resolve(plan) {
                     return s;
@@ -908,6 +1001,7 @@ impl Runner {
                 }
             }
             87 => Step::Restart,
+            88..=89 if self.stackless => Step::Restart,
             88..=91 => Step::Tick,
             _ => {
                 let n = self.rng.gen_range(1..=2);
@@ -980,7 +1074,12 @@ impl Runner {
             Mode::All
         };
         let line = format!("{}\n", self.word().replace('\n', ""));
-        let q = match self.rng.gen_range(0..8) {
+        let q = match self.rng.gen_range(0..9) {
+            // U22a v1.6: revert after restarts, its carry persisted
+            8 => {
+                self.restart_scenario();
+                return;
+            }
             // U12: undo of a last-line delete after a foreign append
             0 => vec![
                 Plan::DeleteLastLine { p: a, root },
@@ -1064,6 +1163,53 @@ impl Runner {
             ],
         };
         self.queue.extend(q);
+    }
+
+    /// U22a (v1.6), restart transparency: an assistant's change with two regions (pending
+    /// on-behalf); a deletion across the first region's start only; the window moves past
+    /// it (its carry is persisted); a restart; the gap deleted (they touch); a restart; the
+    /// revert. A carry that kept one taint per region (v1.5) taints the second region here.
+    fn restart_scenario(&mut self) {
+        if self.pids[0].obo[0].is_none() {
+            return;
+        }
+        let n = self.pids.len();
+        let b = 1 + self.rng.gen_range(0..n - 1);
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let other = 1 - root;
+        let mut q = vec![
+            Plan::TwoSpots { p: 0, root },
+            Plan::Mark { p: 0, root },
+            Plan::CrossStart { p: b, root },
+        ];
+        for _ in 0..=KNOBS.keep_changes {
+            q.push(Plan::Append {
+                p: b,
+                root: other,
+                text: "f\n".into(),
+            });
+        }
+        q.extend([
+            Plan::Tick,
+            Plan::Restart,
+            Plan::DeleteMarkedGap { p: b, root },
+            Plan::Restart,
+            Plan::RevertMarked { p: 0 },
+        ]);
+        self.queue.extend(q);
+    }
+
+    /// The marked change's revert-carried edges on `root`.
+    fn marked_edges(&self, root: usize) -> Option<Vec<spec_undo::model::Edges>> {
+        let rec = self.model.records.get(&self.marked?)?;
+        Some(
+            rec.regions
+                .iter()
+                .zip(&rec.edges)
+                .filter(|(r, _)| r.root == root)
+                .map(|(_, e)| *e)
+                .collect(),
+        )
     }
 
     fn resolve(&mut self, plan: Plan) -> Option<Step> {
@@ -1292,6 +1438,158 @@ impl Runner {
             }
             Plan::Restart => Step::Restart,
             Plan::Tick => Step::Tick,
+            Plan::Mark { p, root } => {
+                let head = self.model.head;
+                let rec = self.model.records.get(&head);
+                let ok = rec.is_some_and(|r| {
+                    r.author == self.pids[p].name
+                        && r.on_behalf_of.is_some()
+                        && r.regions.iter().filter(|g| g.root == root).count() >= 2
+                });
+                self.marked = ok.then_some(head);
+                return None;
+            }
+            Plan::CrossStart { p, root } => {
+                let ed = *self.marked_edges(root)?.first()?;
+                let t = &self.model.texts[root];
+                let b = bounds_of(t);
+                // lo < start < hi <= end: across the start only
+                let lo = *b.iter().rev().find(|&&x| x < ed.start)?;
+                let hi = *b.iter().find(|&&x| x > ed.start)?;
+                if hi > ed.end {
+                    return None;
+                }
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(
+                        root,
+                        vec![Edit {
+                            start: lo,
+                            end: hi,
+                            insert: String::new(),
+                        }],
+                    )],
+                }
+            }
+            Plan::DeleteMarkedGap { p, root } => {
+                let es = self.marked_edges(root)?;
+                let (l, r) = (es.first()?, es.get(1)?);
+                if l.end >= r.start {
+                    return None;
+                }
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(
+                        root,
+                        vec![Edit {
+                            start: l.end,
+                            end: r.start,
+                            insert: String::new(),
+                        }],
+                    )],
+                }
+            }
+            Plan::RevertMarked { p } => {
+                let change = self.marked.take()?;
+                let s = self.slot(p);
+                Step::Revert {
+                    p,
+                    s,
+                    change,
+                    partial: self.rng.gen_bool(0.5),
+                }
+            }
+        })
+    }
+}
+
+/// The twin's half of a step (stack-free traces only): the same call on the kit that never
+/// restarts.
+impl Runner {
+    fn twin_exec(&mut self, step: &Step) -> Option<KitOut> {
+        let twin = self.twin.as_mut()?;
+        let mut conn = |p: usize, s: usize, pids: &[PidSpec]| {
+            twin.conn(&pids[p].name, s, pids[p].obo[s].as_deref())
+        };
+        match step.clone() {
+            Step::Edit { p, s, edits } => {
+                let c = conn(p, s, &self.pids);
+                let hs: Vec<(usize, Vec<Hunk>)> =
+                    edits.iter().map(|(r, es)| (*r, to_hunks(es))).collect();
+                Some(twin.edit(c, &hs))
+            }
+            Step::Replace { p, s, root, new } => {
+                let c = conn(p, s, &self.pids);
+                Some(twin.replace(c, root, &new))
+            }
+            Step::Read { p, s } => {
+                let c = conn(p, s, &self.pids);
+                twin.read(c);
+                None
+            }
+            Step::WriteBase {
+                p,
+                s,
+                root,
+                read,
+                ours,
+            } => {
+                let c = conn(p, s, &self.pids);
+                Some(twin.write_base(c, root, self.reads[read].version, &ours))
+            }
+            Step::Revert {
+                p,
+                s,
+                change,
+                partial,
+            } => {
+                let c = conn(p, s, &self.pids);
+                Some(twin.revert(c, change, partial))
+            }
+            Step::Purge { p, s, secret } => {
+                let c = conn(p, s, &self.pids);
+                Some(twin.purge(c, &secret))
+            }
+            Step::Leave { p, s } => {
+                twin.leave(&self.pids[p].name, s);
+                None
+            }
+            Step::Tick => {
+                twin.tick();
+                None
+            }
+            Step::Restart => None,
+            Step::Undo { .. } | Step::Name { .. } | Step::Restore { .. } => {
+                unreachable!("stack-free traces have no {step:?}")
+            }
+        }
+    }
+
+    /// The class `revert_restart_transparent`: `change`'s carry was persisted, then a
+    /// restart, a later change on its root, and another restart, before this revert.
+    fn restart_transparent_case(&self, change: ChangeId) -> bool {
+        let (Some(&at), Some(roots)) = (
+            self.persisted_at.get(&change),
+            self.change_roots.get(&change),
+        ) else {
+            return false;
+        };
+        let rs: Vec<ChangeId> = self
+            .restart_heads
+            .iter()
+            .copied()
+            .filter(|&r| r >= at)
+            .collect();
+        rs.windows(2).any(|w| {
+            (w[0] + 1..=w[1]).any(|x| {
+                self.change_roots
+                    .get(&x)
+                    .is_some_and(|rr| !rr.is_disjoint(roots))
+            })
         })
     }
 }
@@ -1313,6 +1611,9 @@ impl Runner {
     /// One step: draw it, run it on both sides, compare.
     fn step(&mut self, i: usize) -> Result<(), String> {
         self.kit.advance();
+        if let Some(t) = &self.twin {
+            t.advance();
+        }
         let step = self.draw();
         self.exec(i, step)
     }
@@ -1445,6 +1746,7 @@ impl Runner {
             Step::Restart => {
                 self.model.restart();
                 self.kit.restart();
+                self.restart_heads.push(self.model.head);
                 for v in &mut self.present {
                     v.iter_mut().for_each(|x| *x = false);
                 }
@@ -1453,17 +1755,55 @@ impl Runner {
                 (Outcome::Changed(None), None)
             }
             Step::Tick => {
+                let held: Vec<ChangeId> = self.model.records.keys().copied().collect();
                 self.model.tick();
                 self.kit.tick();
+                // the window moved past these while they were kept: carries persisted
+                let gone = held.iter().filter(|c| !self.model.records.contains_key(c));
+                if let Some(&cut) = gone.max() {
+                    let head = self.model.head;
+                    for &c in held.iter().filter(|&&c| c < cut) {
+                        if self.model.records.contains_key(&c) {
+                            self.persisted_at.entry(c).or_insert(head);
+                        }
+                    }
+                }
                 (Outcome::Changed(None), None)
             }
         };
-        // ---- compare ----
-        if let Some(ko) = ko {
-            let ko = normalise(ko).map_err(|e| format!("{e}; the oracle: {mo:?}"))?;
-            if !same(&mo, &ko) {
+        // ---- the restart twin first (U22a v1.6): the same step on a kit that never
+        // restarts must give the same outcome and texts ----
+        let ko = match ko {
+            Some(ko) => Some(normalise(ko).map_err(|e| format!("{e}; the oracle: {mo:?}"))?),
+            None => None,
+        };
+        if let Some(to) = self.twin_exec(&step) {
+            let to = normalise(to).map_err(|e| format!("the twin: {e}"))?;
+            if let Some(k) = &ko {
+                if !same(k, &to) {
+                    self.restart_differs = true;
+                    return Err(format!(
+                        "restart transparency (U22a v1.6): the outcome differs from a kit \
+                         that never restarted:\n  restarted {k:?}\n  never     {to:?}"
+                    ));
+                }
+            }
+        }
+        if let Some(twin) = &self.twin {
+            let (kt, tt) = (self.kit.texts(), twin.texts());
+            if kt != tt || self.kit.version() != twin.version() {
+                self.restart_differs = true;
+                return Err(format!(
+                    "restart transparency (U22a v1.6): texts differ from a kit that never \
+                     restarted:\n  restarted {kt:?}\n  never     {tt:?}"
+                ));
+            }
+        }
+        // ---- compare with the oracle ----
+        if let Some(ko) = &ko {
+            if !same(&mo, ko) {
                 self.revert_taints_more =
-                    matches!(step, Step::Revert { .. }) && taints_more(&mo, &ko);
+                    matches!(step, Step::Revert { .. }) && taints_more(&mo, ko);
                 return Err(format!("outcome:\n  oracle {mo:?}\n  kit    {ko:?}"));
             }
         }
@@ -1570,10 +1910,19 @@ impl Runner {
                 self.hit(c);
             }
         }
+        for id in head_before + 1..=self.model.head {
+            if let Some(rec) = self.model.records.get(&id) {
+                let roots = rec.hunks.iter().map(|(r, _)| *r).collect();
+                self.change_roots.insert(id, roots);
+            }
+        }
         match &step {
             Step::Revert { change, .. } if mo != Outcome::TooOld => {
                 if *change <= self.restart_head {
                     self.hit("revert_after_restart");
+                }
+                if self.restart_transparent_case(*change) {
+                    self.hit("revert_restart_transparent");
                 }
                 if *change <= self.compacted_head {
                     self.hit("revert_beyond_compaction");

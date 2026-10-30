@@ -477,16 +477,6 @@ impl RevertIndex {
         }
     }
 
-    /// Record `seq`'s regions as carried now: `(root, start, end, tainted)`.
-    pub fn bounds(&mut self, seq: Seq) -> Option<Vec<(String, usize, usize, bool)>> {
-        Some(
-            self.edges(seq)?
-                .into_iter()
-                .map(|(root, s, e, ts, te)| (root, s, e, ts || te))
-                .collect(),
-        )
-    }
-
     /// Record `seq`'s regions as carried now, with the taint of each edge apart:
     /// `(root, start, end, start tainted, end tainted)`. Revert needs the end's taint on
     /// its own for the shared-edge rule ([`super::undo::revert_regions`]).
@@ -563,11 +553,11 @@ impl RevertIndex {
                 if c.carried_to > upto {
                     break;
                 }
-                // one persisted flag per region: taint both edges (conservative)
+                // each edge's persisted taint (U22a; an old single flag reads as both)
                 let r: Vec<Edges> = c
                     .regions
                     .iter()
-                    .map(|(root, a, b, t)| (root.clone(), *a as usize, *b as usize, *t, *t))
+                    .map(|(root, a, b, ts, te)| (root.clone(), *a as usize, *b as usize, *ts, *te))
                     .collect();
                 let nodes = ix.add(&r);
                 ix.records.insert(*s, nodes);
@@ -793,8 +783,8 @@ mod tests {
     #[test]
     fn index_built_from_the_store_equals_the_live_one() {
         use crate::store::{
-            ChangeInfo, ChangeKind, DocKey, DocMeta, LogEntry, NewChange, RecordHunk, RecordRoot,
-            RevertRecord,
+            Carry, ChangeInfo, ChangeKind, DocKey, DocMeta, LogEntry, NewChange, RecordHunk,
+            RecordRoot, RevertRecord,
         };
         let dir = std::env::temp_dir().join(format!("k2mb-carry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -821,7 +811,29 @@ mod tests {
             len: 2_000,
             rng: 99,
         };
-        for _ in 0..400 {
+        for k in 0..400 {
+            if k == 200 {
+                // the window moves: records 1..=100 get their carry persisted, each edge's
+                // taint apart (U22a), and are rebuilt from it below
+                let carries: Vec<(Seq, Carry)> = (1..=100)
+                    .map(|seq| {
+                        let regions = live
+                            .edges(seq)
+                            .unwrap()
+                            .into_iter()
+                            .map(|(r, s, e, ts, te)| (r, s as u64, e as u64, ts, te))
+                            .collect();
+                        (
+                            seq,
+                            Carry {
+                                carried_to: 200,
+                                regions,
+                            },
+                        )
+                    })
+                    .collect();
+                store.prune_reverts(id, &[], &carries).unwrap();
+            }
             let hs = ch.next();
             live.carry("source", &hs);
             let mut delta: isize = 0;
@@ -871,17 +883,25 @@ mod tests {
         }
         let mut built = RevertIndex::build(&store, id).unwrap();
         assert_eq!(built.len(), 400);
+        let mut one_edge = 0;
         for seq in 1..=400 {
-            assert_eq!(built.bounds(seq), live.bounds(seq), "record {seq}");
+            let e = live.edges(seq).unwrap();
+            one_edge += e.iter().filter(|x| x.3 != x.4).count();
+            // each edge's taint included: a rebuild (a restart) equals the live index
+            assert_eq!(built.edges(seq), Some(e), "record {seq}");
         }
+        assert!(
+            one_edge > 0,
+            "no region tainted at one edge only: the test is vacuous"
+        );
         // after dropping old records the rebuilt trees still agree
         let drop: Vec<Seq> = (1..=300).filter(|s| s % 3 != 0).collect();
         live.remove(&drop);
         for seq in (1..=400).filter(|s| !drop.contains(s)) {
-            assert!(live.bounds(seq).is_some());
+            assert!(live.edges(seq).is_some());
             assert_eq!(
-                built.bounds(seq),
-                live.bounds(seq),
+                built.edges(seq),
+                live.edges(seq),
                 "record {seq} after removal"
             );
         }

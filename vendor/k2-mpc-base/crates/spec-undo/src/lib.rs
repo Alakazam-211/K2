@@ -8,4 +8,6 @@
 //!
 //! Never published; nothing depends on it.
 
+pub mod bounded;
+pub mod itf;
 pub mod model;

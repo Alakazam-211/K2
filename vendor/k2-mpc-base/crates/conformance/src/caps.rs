@@ -15,6 +15,8 @@
 //!   by delivering what it has ([`BranchAt`]: forked at any version this replica has had).
 //! - [`Purge`]: erase a live span as an event that keeps IDs, lengths and positions, and a
 //!   byte scan of everything the replica keeps ([`BlameAt`]: blame at a past version).
+//! - [`SpanIds`]: purge a span by the element IDs it covers, deleted elements strictly
+//!   inside it included.
 //!
 //! **Doc-level capabilities** are not [`TextReplica`]s: they are one doc that several agents
 //! edit through the engine's history machinery (the kit's is a session over its store; the
@@ -255,6 +257,19 @@ pub trait Purge: Events {
     /// Whether `needle`, whole or by any 8-byte window, is in anything this replica keeps
     /// (a byte scan: what it would store or send, tombstones included).
     fn holds(&self, needle: &str) -> bool;
+}
+
+/// Span purge (E-ERASE-1, `erase.span_includes_tombstones`): purge a selection by the
+/// element IDs it covers, so a deleted character inside it (a typo fixed mid-secret) is
+/// erased with it.
+pub trait SpanIds: Purge {
+    /// Erase bytes `start..end` (`start < end`) of the current text as this replica's
+    /// agent, as one event: the elements from the span's first character's through its
+    /// last's, plus every deleted element strictly between them; deleted elements just
+    /// outside either end are left alone. The returned batch carries it to other replicas.
+    /// Refused, changing nothing, for an empty or reversed span or an offset out of range
+    /// or off a character boundary.
+    fn purge_span(&mut self, start: usize, end: usize) -> Result<Self::Batch, Refused>;
 }
 
 /// Blame at a past version (E-HIST-4).

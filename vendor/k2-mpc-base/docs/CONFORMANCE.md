@@ -38,12 +38,12 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 | `erase.participant` | E-ERASE-5, K-PURGE-7 | Erasure | pass | never |
 | `erase.no_readmit` | E-ERASE-6 | Purge | pass | pass |
 | `erase.versions` | E-ERASE-7, K-PURGE-4 | HistoryPurge | pass | pass |
-| `erase.span_includes_tombstones` | E-ERASE-1 | SpanIds | never | awaiting: mpce-model v0.4.1 (`Doc::span_ids`) |
+| `erase.span_includes_tombstones` | E-ERASE-1 | SpanIds | never | pass |
 
 ## Engines
 
 - **kit Doc (yrs)**: Text, Events, Blame, Anchors, Undo, Versions, HistoryPurge, Erasure, Branches, Purge.
-- **mpce-model (FugueMax)**: Text, Events, Blame, Anchors, Versions, HistoryPurge, Branches, BranchAt, Purge, BlameAt.
+- **mpce-model (FugueMax)**: Text, Events, Blame, Anchors, Versions, HistoryPurge, Branches, BranchAt, Purge, BlameAt, SpanIds.
 
 ## Pinned deviations
 
@@ -57,7 +57,6 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 
 - `sec.duplicate_ranges` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
 - `sec.base_too_old` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
-- `erase.span_includes_tombstones` on mpce-model (FugueMax): a span purge covers the elements from the span's first visible character through its last, plus every tombstone strictly between; tombstones just outside the span are excluded. The model's span purge needs the IDs a span covers, tombstones included. Target: mpce-model v0.4.1 (`Doc::span_ids`).
 
 ## Never
 

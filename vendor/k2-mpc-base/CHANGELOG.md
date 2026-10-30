@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.8.2 (2026-10-28)
+
+A patch: a revert's conflicts no longer change across a host restart. No API change for
+hosts; no store format change (still 4); no new dependency. Undo spec v1.6
+(`docs/SPEC-UNDO.md`).
+
+**Fixed**
+- **A revert's conflicts could differ after a host restart.** When the revert window moves
+  past a pending on-behalf change, its record's carried bounds are persisted. They kept one
+  taint flag per region, and a rebuild of the revert index (a host restart) tainted both
+  edges of a region tainted at one. A neighbouring region that came to touch its clean edge
+  then inherited a taint (spec U22a) and the revert reported a conflict it doesn't report
+  without the restart. The carry now keeps each edge's taint, as the live index does
+  (`store/history.rs`, `session/carry.rs`, `session/live/history.rs`), so a restart changes
+  no revert's outcome.
+- **Stores written by v0.8.1 or earlier:** a carry already persisted holds one flag per
+  region; it keeps reading as both edges tainted (the old, conservative reading), and so
+  does that record from then on. Taint that arises after the upgrade is kept per edge.
+  Same carry record version, same store format; v0.8.1 reads a new carry's taint byte as
+  tainted at both edges (its own reading), so going back is safe.
+
+**Undo spec suite** (`crates/spec-undo`, never published)
+- `docs/SPEC-UNDO.md` v1.6: U22a's restart sentence dropped; restart transparency is a
+  tested property. The oracle's restart touches no record.
+- The trace test's **restart twin**: stack-free traces also run on a session that never
+  restarts, and every outcome and text must match; the class `revert_restart_transparent`
+  (a persisted carry, restarts between the change and the revert and between later
+  changes). On v0.8.1's kit 43 of 64 twin traces fail it; here 0.
+- The model check `MC text-undo` (`docs/MODEL-CHECK.md`): `spec/quint/undo.qnt`, the
+  bounded world over the oracle, the exhaustive enumerator `undo_enum`, ITF replay
+  `undo_itf_replay`, six mutants (feature `mutants`), and K2-agnostic node jobs (`tools/`).
+  ITF replay 0 mismatches (G1 bound included); TLC's exact counts equal the enumerator's at
+  four small bounds; every mutant fails in both at the same depth. The G1 bound itself is
+  beyond exhaustive reach; its plan is in the doc.
+- Two findings, reported, not fixed here: **F3**, undo can delete another participant's
+  identical character when their insertion at the region's start repeats its text
+  (`hist.undo_own_only` per element; the kit too); **F4**, U12's equivalence note fails in
+  repeated text.
+
+**Conformance**
+- `erase.span_includes_tombstones` runs on the reference model (mpce-model v0.4.1, vendored;
+  `Doc::span_ids`); it stays "never" on Yrs.
+
 ## v0.8.1 (2026-10-28)
 
 A patch: undo, redo and revert remove only their own text. No API change for hosts; no

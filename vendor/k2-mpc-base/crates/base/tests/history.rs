@@ -671,6 +671,108 @@ fn hist_revert_declined_after_restart() {
     assert_eq!(text(&s, p), "# The plan\n- one\n- two\n");
 }
 
+/// Undo spec U22a (v1.6), restart transparency (E-HIST-3): a pending on-behalf change's
+/// two regions; a deletion crosses the left region's **start** only; the window moves
+/// (the record's carry is persisted); the regions are then made to touch. The right region
+/// inherits the left's **end** taint, which is clean, so revert conflicts on the left
+/// region only, with or without a restart between the change and the revert and between
+/// the later deletes. v0.8.1 persisted one flag per region and reloaded it at both edges:
+/// after a restart the right region conflicted too.
+#[test]
+fn revert_after_restart_keeps_each_edges_taint() {
+    use k2_mpc_base::text::Hunk;
+    use k2_mpc_base::Edit;
+    let at = |s: usize, e: usize, t: &str| {
+        vec![Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![Hunk {
+                start: s,
+                end: e,
+                insert: t.into(),
+            }],
+        }]
+    };
+    let run = |restarts: bool| {
+        let mut c = config();
+        c.revert_keep_changes = 3;
+        c.revert_keep_ms = 0;
+        c.history_tick_ms = 0;
+        let mut f = fx_with(if restarts { "edgetaint-r" } else { "edgetaint" }, c);
+        let s = f.open("e.md", b"abcdefghij\n");
+        f.host.grant("asst", Rights::editor());
+        let asst = s
+            .join(agent("asst").on_behalf_of("p"), Stay::Held)
+            .unwrap()
+            .conn;
+        let p = f.join(&s, person("p"), Rights::editor());
+        let change = s
+            .edit(
+                asst,
+                vec![Edit::Text {
+                    root: ROOT.into(),
+                    hunks: vec![
+                        Hunk {
+                            start: 1,
+                            end: 3,
+                            insert: "BC".into(),
+                        },
+                        Hunk {
+                            start: 7,
+                            end: 8,
+                            insert: "H".into(),
+                        },
+                    ],
+                }],
+                None,
+            )
+            .unwrap()
+            .version; // "aBCdefgHij\n": regions [1, 3) and [7, 8)
+        s.edit(p, at(0, 2, ""), None).unwrap(); // across the left start only: "CdefgHij\n"
+        for i in 0..5 {
+            s.edit_with(p, ROOT, |t| Ok::<_, ()>(format!("{t}{i}\n")))
+                .unwrap();
+        }
+        f.host.advance(1);
+        let rep = f.mgr.tick().unwrap();
+        assert!(rep.reverts_dropped >= 3, "the window moved: {rep:?}");
+        let mut s = s;
+        let mut p = p;
+        let restart = |f: &mut Fx, s: &mut Arc<Session>, p: &mut ConnId| {
+            if restarts {
+                f.restart();
+                *s = f.reopen("e.md");
+                *p = f.join(s, person("p"), Rights::editor());
+            }
+        };
+        restart(&mut f, &mut s, &mut p);
+        s.edit(p, at(1, 3, ""), None).unwrap(); // "CfgHij…"
+        restart(&mut f, &mut s, &mut p);
+        s.edit(p, at(1, 3, ""), None).unwrap(); // "CHij…": the regions touch
+        restart(&mut f, &mut s, &mut p);
+        let all = s.revert(p, change, false).unwrap();
+        let part = s.revert(p, change, true).unwrap();
+        (all, part, text(&s, p))
+    };
+    let want = run(false);
+    match &want.0 {
+        UndoOutcome::Conflicts { step: 1, conflicts } => {
+            let got: Vec<_> = conflicts
+                .iter()
+                .map(|c| (c.range.clone(), c.kind))
+                .collect();
+            assert_eq!(got, vec![(0..1, ConflictKind::Taint)]);
+        }
+        o => panic!("{o:?}"),
+    }
+    assert!(
+        matches!(&want.1, UndoOutcome::Applied { skipped, .. } if skipped.len() == 1),
+        "{:?}",
+        want.1
+    );
+    assert!(want.2.starts_with("Chij\n"), "{}", want.2);
+    assert_eq!(run(true), want, "a restart changed the revert's outcome");
+}
+
 #[test]
 fn revert_rights() {
     let f = fx("revertrights");

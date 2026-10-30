@@ -7,9 +7,12 @@
 //! - [`tree`]: the Fugue tree (Algorithm 1) with FugueMax's right-sibling rule (Def. 6);
 //! - [`text`]: plain text: events, causal delivery, tombstones, the visible text; versions,
 //!   restore, branches and purge;
-//! - [`check`]: the automated Def. 4 checker and the strong list specification.
+//! - [`check`]: the automated Def. 4 checker and the strong list specification;
+//! - [`tree_move`]: movable trees: [Move] Fig. 4 transcribed, FugueMax sibling order per
+//!   parent, the causal skeleton, compaction, and the rescue projection.
 #![forbid(unsafe_code)]
 
 pub mod check;
 pub mod text;
 pub mod tree;
+pub mod tree_move;

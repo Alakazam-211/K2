@@ -16,5 +16,21 @@ name = "spec_undo"
 # trace runner reads; it is off in every host's build, and nothing depends on this crate.
 k2-mpc-base = { path = "../base", features = ["conformance"] }
 
+[features]
+# The model check's mutants (`model::mutant`): test builds only; the oracle of record is
+# never a mutant without it.
+mutants = []
+
 [dev-dependencies]
 rand = { version = "0.8", features = ["small_rng"] }
+
+# One process per mutant set: the active mutant is process-wide.
+[[test]]
+name = "mutants"
+required-features = ["mutants"]
+
+[[bin]]
+name = "undo_enum"
+
+[[bin]]
+name = "undo_itf_replay"

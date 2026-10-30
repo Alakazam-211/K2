@@ -1962,6 +1962,9 @@ async fn async_main() {
 /// The tunnel-ingress listener and the E2E TLS listener (with the routing
 /// map persisted by the last refresh, so nested Apps route at once).
 async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
+    // 0.46.7: TCP_NODELAY on the tunnel sockets, with its off switch read
+    // once here (before any tunnel socket exists) and logged.
+    log_debug!("{}", tunnel_tls_listener::init_nodelay_switch());
     // front443: the box :443 socket (systemd's LISTEN_FDS, or the previous
     // daemon's on a hand-off) — taken before `drop_untaken` closes it.
     // No socket = no front; never fails boot.

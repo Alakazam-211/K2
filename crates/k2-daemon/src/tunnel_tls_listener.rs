@@ -885,15 +885,70 @@ async fn cert_renewal_loop(
 /// us must leave at once. With Nagle on, a small write that follows one
 /// the peer has not ACKed yet waits for that ACK, and the peer (frpc, a
 /// Go program, or the dispatcher) delays its ACK by up to 40 ms on Linux
-/// (more on macOS). On the tunnel that showed up as ~40 ms extra on the
-/// TLS handshake and again on each request (ops, 2026-10-30). frp's own
-/// sockets are TCP_NODELAY already (Go's default); `front443` sets it on
-/// its splice too. A failure is ignored: the splice still works, just
-/// slower.
+/// (more on macOS). Through frps → frpc with a 0.4 ms link that was
+/// ~40 ms extra on the first request of every connection (ops report
+/// 2026-10-30; reproduced on K2 compute: 48.7 ms → 9.3 ms first byte).
+/// frp's own sockets are TCP_NODELAY already (Go's default); `front443`
+/// sets it on its splice too. A failure is ignored: the splice still
+/// works, just slower.
+///
+/// Off switch ([`NODELAY_ENV`]`=0`): the sockets keep Nagle on, as before
+/// 0.46.7.
 pub(crate) fn no_nagle(s: &TcpStream) {
+    if !nodelay_on() {
+        return;
+    }
     if let Err(e) = s.set_nodelay(true) {
         log_debug!("[daemon/e2e] set TCP_NODELAY: {e}");
     }
+}
+
+/// The off switch for [`no_nagle`] (keep the old path until proven,
+/// 0.46.7): `K2_TUNNEL_NODELAY=0` (or `false`/`off`/`no`) puts the tunnel
+/// sockets back to the old behaviour without a rebuild. Default ON; any
+/// other value is ON. Read once at daemon start ([`init_nodelay_switch`]).
+pub const NODELAY_ENV: &str = "K2_TUNNEL_NODELAY";
+
+/// 0 = not read yet, 1 = on, 2 = off.
+static NODELAY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether a [`NODELAY_ENV`] value leaves TCP_NODELAY on.
+pub(crate) fn nodelay_setting(raw: Option<&str>) -> bool {
+    !matches!(
+        raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
+/// Read [`NODELAY_ENV`] once and fix the switch for this process. Returns
+/// the one start-up log line naming the state in effect.
+pub fn init_nodelay_switch() -> String {
+    let raw = std::env::var(NODELAY_ENV).ok();
+    let on = nodelay_setting(raw.as_deref());
+    NODELAY.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::SeqCst);
+    format!(
+        "[daemon/e2e] tunnel TCP_NODELAY {} ({NODELAY_ENV}={})",
+        if on { "on" } else { "OFF (old path: Nagle on)" },
+        raw.as_deref().unwrap_or("unset"),
+    )
+}
+
+fn nodelay_on() -> bool {
+    match NODELAY.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => true,
+        2 => false,
+        // A process that never ran the daemon's start (tests, tools).
+        _ => {
+            init_nodelay_switch();
+            NODELAY.load(std::sync::atomic::Ordering::SeqCst) == 1
+        }
+    }
+}
+
+/// Tests: force the switch (the env is read once per process).
+#[cfg(test)]
+pub(crate) fn set_nodelay_switch_for_test(on: bool) {
+    NODELAY.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Dial a same-host splice backend with the H2 connect timeout applied.
@@ -1982,19 +2037,70 @@ mod tests {
             .collect()
     }
 
-    /// Ops 2026-10-30: through frps → frpc → this listener every round
-    /// trip (the handshake, then each request) cost ~40–100 ms more than
-    /// talking to the listener directly. A K2 socket with Nagle on holds a
-    /// small write behind an un-ACKed one until the peer's delayed ACK
-    /// (~40 ms on Linux). Every socket the daemon owns on that path must
-    /// have TCP_NODELAY: the one frpc dialed, the splice upstream, and the
-    /// tunnel-ingress listener's side of it.
+    /// One frpc-style session (PROXY v2, then TLS, one keep-alive `/ping`)
+    /// and the daemon's sockets on its path: the E2E listener's (frpc
+    /// side), the splice upstream, and tunnel-ingress's side of it. The
+    /// session is returned so the splice stays up while the caller looks.
+    #[cfg(unix)]
+    async fn tunnel_hop_sockets(
+        cert_pem: &str,
+        https_port: u16,
+    ) -> (tokio_rustls::client::TlsStream<TcpStream>, Vec<(&'static str, OwnSocket)>) {
+        use crate::front443::proxy_v2;
+        let header = proxy_v2::header("203.0.113.9:5555".parse().unwrap(), "127.0.0.1:443".parse().unwrap());
+        let mut tls = frpc_session(cert_pem, https_port, "rosson.k2.dev", Some(header))
+            .await
+            .expect("frpc-style TLS session");
+        tls.write_all(b"GET /ping HTTP/1.1\r\nHost: rosson.k2.dev\r\n\r\n").await.expect("write");
+        let mut buf = Vec::new();
+        let (head, _) = next_response(&mut tls, &mut buf).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "the /ping must come back first:\n{head}");
+
+        let client = tls.get_ref().0.local_addr().expect("client addr");
+        let ingress = crate::tunnel_ingress_listener::recorded_port().expect("tunnel-ingress listener up");
+        let socks = own_tcp_sockets();
+        let upstream_addrs: Vec<std::net::SocketAddr> =
+            socks.iter().filter(|s| s.peer.port() == ingress).map(|s| s.local).collect();
+        let mut hops = Vec::new();
+        let (mut frpc, mut up, mut ing) = (0, 0, 0);
+        for s in socks {
+            if s.local.port() == https_port && s.peer == client {
+                frpc += 1;
+                hops.push(("E2E listener (frpc side)", s));
+            } else if s.peer.port() == ingress {
+                up += 1;
+                hops.push(("splice upstream", s));
+            } else if s.local.port() == ingress && upstream_addrs.contains(&s.peer) {
+                ing += 1;
+                hops.push(("tunnel-ingress accepted", s));
+            }
+        }
+        assert_eq!(frpc, 1, "the E2E listener's socket for this client, in {hops:#?}");
+        assert_eq!(up, 1, "one splice upstream to tunnel-ingress :{ingress}, in {hops:#?}");
+        assert_eq!(ing, 1, "tunnel-ingress's side of the splice, in {hops:#?}");
+        (tls, hops)
+    }
+
+    /// Ops 2026-10-30: through frps → frpc → this listener the first
+    /// request of a connection cost ~40–100 ms more than talking to the
+    /// listener directly. A K2 socket with Nagle on holds a small write
+    /// behind an un-ACKed one until the peer's delayed ACK (~40 ms on
+    /// Linux). With the switch on (the default) every socket the daemon
+    /// owns on that path has TCP_NODELAY; with `K2_TUNNEL_NODELAY=0` they
+    /// keep the old behaviour (Nagle on).
     #[cfg(unix)]
     #[tokio::test]
-    async fn every_daemon_socket_on_the_tunnel_path_has_nagle_off() {
-        use crate::front443::proxy_v2;
+    async fn every_daemon_socket_on_the_tunnel_path_has_nagle_off_unless_switched_off() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let _home = crate::test_support::TempHome::new();
+        // The switch is process-wide: put it back on even if this panics.
+        struct SwitchBackOn;
+        impl Drop for SwitchBackOn {
+            fn drop(&mut self) {
+                set_nodelay_switch_for_test(true);
+            }
+        }
+        let _back_on = SwitchBackOn;
         let http_port = install_test_ingress_state();
         crate::boot_status::set_ready();
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
@@ -2006,38 +2112,66 @@ mod tests {
         let https_port = l.local_addr().unwrap().port();
         tokio::spawn(async move { accept_loop(Arc::new(l), shared, http_port).await });
 
-        // As frpc dials it: PROXY v2, then TLS; one keep-alive request so
-        // the whole splice is up while we look.
-        let header = proxy_v2::header("203.0.113.9:5555".parse().unwrap(), "127.0.0.1:443".parse().unwrap());
-        let mut tls = frpc_session(&cert_pem, https_port, "rosson.k2.dev", Some(header))
-            .await
-            .expect("frpc-style TLS session");
-        tls.write_all(b"GET /ping HTTP/1.1\r\nHost: rosson.k2.dev\r\n\r\n").await.expect("write");
-        let mut buf = Vec::new();
-        let (head, _) = next_response(&mut tls, &mut buf).await;
-        assert!(head.starts_with("HTTP/1.1 200"), "the /ping must come back first:\n{head}");
-
-        let client = tls.get_ref().0.local_addr().expect("client addr");
-        let ingress = crate::tunnel_ingress_listener::recorded_port().expect("tunnel-ingress listener up");
-        let socks = own_tcp_sockets();
-        let frpc_side: Vec<&OwnSocket> =
-            socks.iter().filter(|s| s.local.port() == https_port && s.peer == client).collect();
-        let upstream: Vec<&OwnSocket> = socks.iter().filter(|s| s.peer.port() == ingress).collect();
-        let ingress_side: Vec<&OwnSocket> = socks
-            .iter()
-            .filter(|s| s.local.port() == ingress && upstream.iter().any(|u| u.local == s.peer))
-            .collect();
-        assert_eq!(frpc_side.len(), 1, "the E2E listener's socket for this client, in {socks:#?}");
-        assert!(!upstream.is_empty(), "the splice upstream to tunnel-ingress :{ingress}, in {socks:#?}");
-        assert!(!ingress_side.is_empty(), "tunnel-ingress's side of the splice, in {socks:#?}");
-        for (hop, s) in frpc_side
-            .iter()
-            .map(|s| ("E2E listener (frpc side)", s))
-            .chain(upstream.iter().map(|s| ("splice upstream", s)))
-            .chain(ingress_side.iter().map(|s| ("tunnel-ingress accepted", s)))
-        {
-            assert!(s.nodelay, "{hop} socket has Nagle on (TCP_NODELAY off): {s:?}");
+        // Switch on (the default).
+        set_nodelay_switch_for_test(true);
+        let (session, hops) = tunnel_hop_sockets(&cert_pem, https_port).await;
+        for (hop, s) in &hops {
+            assert!(s.nodelay, "switch on: {hop} socket has Nagle on (TCP_NODELAY off): {s:?}");
         }
+        // Close it and wait until its splice is gone, so the next look
+        // only finds the next session's sockets.
+        drop(session);
+        let ingress = crate::tunnel_ingress_listener::recorded_port().expect("tunnel-ingress listener up");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while own_tcp_sockets()
+            .iter()
+            .any(|s| s.peer.port() == ingress || (s.local.port() == https_port && s.peer.port() != 0))
+        {
+            assert!(std::time::Instant::now() < deadline, "the first session's splice never closed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Switch off (`K2_TUNNEL_NODELAY=0`): the old path, Nagle on.
+        set_nodelay_switch_for_test(false);
+        let (_session, hops) = tunnel_hop_sockets(&cert_pem, https_port).await;
+        for (hop, s) in &hops {
+            assert!(!s.nodelay, "switch off: {hop} socket must keep Nagle on (the old path): {s:?}");
+        }
+    }
+
+    /// `K2_TUNNEL_NODELAY`: only an explicit 0/false/off/no turns it off.
+    #[test]
+    fn nodelay_switch_defaults_on() {
+        assert!(nodelay_setting(None), "unset → on");
+        for on in ["1", "true", "on", "yes", "", "anything"] {
+            assert!(nodelay_setting(Some(on)), "{on:?} → on");
+        }
+        for off in ["0", "false", "OFF", " no ", "False"] {
+            assert!(!nodelay_setting(Some(off)), "{off:?} → off");
+        }
+    }
+
+    /// The start-up log line names the state in effect and the raw value.
+    #[test]
+    fn nodelay_switch_start_line_names_the_state() {
+        let _home = crate::test_support::TempHome::new();
+        struct SwitchBackOn;
+        impl Drop for SwitchBackOn {
+            fn drop(&mut self) {
+                set_nodelay_switch_for_test(true);
+            }
+        }
+        let _back_on = SwitchBackOn;
+        {
+            let _off = k2_core::test_env::EnvVar::set(NODELAY_ENV, "0");
+            let line = init_nodelay_switch();
+            assert!(line.contains("TCP_NODELAY OFF") && line.contains("K2_TUNNEL_NODELAY=0"), "{line}");
+            assert!(!nodelay_on(), "the env read at start is what stays in effect");
+        }
+        let _unset = k2_core::test_env::EnvVar::remove(NODELAY_ENV);
+        let line = init_nodelay_switch();
+        assert!(line.contains("TCP_NODELAY on") && line.contains("K2_TUNNEL_NODELAY=unset"), "{line}");
+        assert!(nodelay_on());
     }
 
     /// 0.46.3 end to end: a fake frpc writes the relay's PROXY v2 header,

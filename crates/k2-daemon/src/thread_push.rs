@@ -117,6 +117,12 @@ pub trait PushEnv {
     fn muted(&self, person: &str, conversation_id: &str) -> bool;
     /// `person`'s badge numbers now (thread-read-v1 `unreadTotal`).
     fn totals(&self, person: &str) -> k2_core::read_state::Totals;
+    /// push-content-available-v1 (0.46.7): `conversation_id` changed with
+    /// no alert to `person` (muted, viewed on the desktop, over budget):
+    /// hint it on their next silent push.
+    fn stale(&self, person: &str, conversation_id: &str);
+    /// An alert to `person` for `conversation_id` went out.
+    fn alerted(&self, person: &str, conversation_id: &str);
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +158,8 @@ impl Coalescer {
         }
         for r in env.recipients(&post.project_id) {
             if env.muted(&r.person, &post.conversation_id) {
+                // Muted: never an alert, but the phone's copy is stale.
+                env.stale(&r.person, &post.conversation_id);
                 continue;
             }
             let key = (post.conversation_id.clone(), r.person.clone());
@@ -232,12 +240,15 @@ impl Coalescer {
             w.pending = 0;
             w.open_until = None;
             w.viewed_since_push = true;
+            // Seen on the desktop; the phone still needs the posts.
+            env.stale(person, conversation);
             return;
         }
         // Muted while the window was open: nothing goes.
         if env.muted(person, conversation) {
             w.pending = 0;
             w.open_until = None;
+            env.stale(person, conversation);
             return;
         }
         // Previews: the master switch, then this person's phones. A split
@@ -278,6 +289,8 @@ impl Coalescer {
             // after another window (logged by the env, never queued).
             crate::push_routes::note_budget_drop(k2_core::push::budget::BudgetClass::Thread);
             w.open_until = Some(now + WINDOW);
+            // The alert waits; a silent hint (its own budget) can go now.
+            env.stale(person, conversation);
             return;
         }
         let len = if w.last_push.is_some() && !w.viewed_since_push { BACKOFF } else { WINDOW };
@@ -312,6 +325,7 @@ impl Coalescer {
         // The phone now has these numbers: a badge push with the same ones
         // is skipped.
         crate::badge_push::note_told(person, totals);
+        env.alerted(person, conversation);
     }
 }
 
@@ -391,6 +405,14 @@ impl PushEnv for DaemonEnv {
             return Default::default();
         }
         k2_core::read_state::totals(&conn, &p, k2_core::read_state::now_secs()).unwrap_or_default()
+    }
+
+    fn stale(&self, person: &str, conversation_id: &str) {
+        crate::badge_push::note_stale(person, conversation_id);
+    }
+
+    fn alerted(&self, person: &str, conversation_id: &str) {
+        crate::badge_push::note_alerted(person, conversation_id);
     }
 }
 
@@ -506,7 +528,7 @@ pub fn last_preview(conversation_id: &str) -> Option<String> {
 }
 
 /// True when `from` names a human on this server (TP14).
-fn is_human_from(from: &str) -> bool {
+pub(crate) fn is_human_from(from: &str) -> bool {
     let owner = crate::workspace_msg::resolve_owner_from();
     match People::load() {
         Ok(p) => p.is_human_from(from, &owner),
@@ -585,6 +607,9 @@ mod tests {
         calls_taken: RefCell<Vec<usize>>,
         /// (person, conversation) pairs that are muted.
         muted: RefCell<HashSet<(String, String)>>,
+        /// push-content-available-v1: stale notes and alerts, in order.
+        stale: RefCell<Vec<(String, String)>>,
+        alerted: RefCell<Vec<(String, String)>>,
     }
 
     impl Fake {
@@ -652,6 +677,40 @@ mod tests {
         fn totals(&self, person: &str) -> k2_core::read_state::Totals {
             k2_core::read_state::Totals { total: person.len() as i64, waiting_total: 1 }
         }
+        fn stale(&self, person: &str, conversation_id: &str) {
+            self.stale.borrow_mut().push((person.into(), conversation_id.into()));
+        }
+        fn alerted(&self, person: &str, conversation_id: &str) {
+            self.alerted.borrow_mut().push((person.into(), conversation_id.into()));
+        }
+    }
+
+    /// push-content-available-v1 (K3): an agent post that gives a person
+    /// no alert (muted, viewing on the desktop, over budget) notes the chat
+    /// stale for them; an alert that goes out says so instead.
+    #[test]
+    fn a_post_without_an_alert_notes_the_chat_stale() {
+        let pair = |p: &str, c: &str| (p.to_string(), c.to_string());
+        let env = Fake::with(&[("owner", &["owner"]), ("gina", &["gina"]), ("mo", &["mo"])]);
+        env.muted.borrow_mut().insert(pair("gina", "c-1"));
+        env.viewers.borrow_mut().insert(pair("mo", "c-1"));
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, post("c-1", 1, ThreadMsgKind::Text), t0);
+        assert_eq!(env.sent().iter().map(|t| t.principal.clone()).collect::<Vec<_>>(), ["owner"]);
+        assert_eq!(*env.alerted.borrow(), vec![pair("owner", "c-1")]);
+        let mut stale = env.stale.borrow().clone();
+        stale.sort();
+        assert_eq!(stale, vec![pair("gina", "c-1"), pair("mo", "c-1")], "muted and viewing");
+
+        // Over budget: the alert waits, the chat is noted stale now.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        env.budget.set(Some(0));
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-2", 1, ThreadMsgKind::Text), t0);
+        assert!(env.sent().is_empty());
+        assert_eq!(*env.stale.borrow(), vec![pair("owner", "c-2")]);
+        assert!(env.alerted.borrow().is_empty());
     }
 
     fn post(conv: &str, seq: i64, kind: ThreadMsgKind) -> Post {

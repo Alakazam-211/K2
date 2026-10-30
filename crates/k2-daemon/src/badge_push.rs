@@ -21,6 +21,17 @@
 //!   push is DROPPED, never retried: the next one carries the full totals.
 //! - Air-gap on, or no per-daemon relay path (no paired tunnel): nothing.
 //!
+//! **Stale hints (push-content-available-v1, 0.46.7).** A chat that changed
+//! with no alert to this person (a human post, a card closing, a muted
+//! chat, an agent post they were viewing on the desktop or that went over
+//! the Thread budget) is noted with [`note_stale`]. Notes wait up to
+//! [`STALE_WINDOW`] (60 s) and ride the person's next badge push as
+//! `stale` (`conversationId:seq` pairs, newest first, at most 8; `seq` =
+//! the chat's newest seq when the push is built). The same limits apply:
+//! one push per person per 10 s, the badge budget, the per-daemon path,
+//! a drop is never retried. An alert to the person for that chat clears
+//! its note ([`note_alerted`]): the alert already carries it.
+//!
 //! The [`Coalescer`] is pure state + an injected [`BadgeEnv`] (fake clock
 //! and capture sink in tests). The daemon ticks one global instance.
 
@@ -33,6 +44,8 @@ use k2_core::read_state::Totals;
 
 /// At most one badge push per person per window.
 pub const WINDOW: Duration = Duration::from_secs(10);
+/// How long a stale-only note waits to merge into one push.
+pub const STALE_WINDOW: Duration = Duration::from_secs(60);
 /// Forget a person whose last push is this old and who has nothing due.
 const FORGET_AFTER: Duration = Duration::from_secs(60 * 60);
 
@@ -48,6 +61,8 @@ pub trait BadgeEnv {
     fn blocked(&self) -> bool;
     /// Send one badge push.
     fn send(&self, event: PushEvent);
+    /// A chat's newest Thread seq now (`None` = unknown: left out).
+    fn latest_seq(&self, conversation_id: &str) -> Option<i64>;
 }
 
 #[derive(Debug, Default, Clone)]
@@ -58,6 +73,11 @@ struct Entry {
     last_send: Option<Instant>,
     /// A send scheduled for the end of the window.
     due: Option<Instant>,
+    /// Chats that changed without an alert to this person, oldest note
+    /// first (push-content-available-v1).
+    stale: Vec<String>,
+    /// When the stale notes go out on their own.
+    stale_due: Option<Instant>,
 }
 
 /// Per-person badge state.
@@ -89,6 +109,27 @@ impl Coalescer {
         self.people.entry(person.to_string()).or_default().last_told = Some(totals);
     }
 
+    /// `conversation` changed without an alert to `person`: hint it on
+    /// their next badge push, within [`STALE_WINDOW`].
+    pub fn note_stale(&mut self, person: &str, conversation: &str, now: Instant) {
+        let e = self.people.entry(person.to_string()).or_default();
+        e.stale.retain(|c| c != conversation);
+        e.stale.push(conversation.to_string());
+        if e.stale_due.is_none() {
+            e.stale_due = Some(now + STALE_WINDOW);
+        }
+    }
+
+    /// An alert to `person` for `conversation` went out: its note is moot.
+    pub fn note_alerted(&mut self, person: &str, conversation: &str) {
+        if let Some(e) = self.people.get_mut(person) {
+            e.stale.retain(|c| c != conversation);
+            if e.stale.is_empty() {
+                e.stale_due = None;
+            }
+        }
+    }
+
     /// Send every scheduled push whose window is over.
     pub fn tick(&mut self, env: &dyn BadgeEnv, now: Instant) {
         let due: Vec<String> = self
@@ -100,10 +141,26 @@ impl Coalescer {
         for p in due {
             self.flush(env, &p, now);
         }
+        // Stale notes whose wait is over: sent now, or at the end of the
+        // person's 10 s window.
+        let stale_due: Vec<String> = self
+            .people
+            .iter()
+            .filter(|(_, e)| e.due.is_none() && e.stale_due.is_some_and(|t| now >= t))
+            .map(|(p, _)| p.clone())
+            .collect();
+        for p in stale_due {
+            let Some(e) = self.people.get_mut(&p) else { continue };
+            match e.last_send {
+                Some(t) if now.saturating_duration_since(t) < WINDOW => e.due = Some(t + WINDOW),
+                _ => self.flush(env, &p, now),
+            }
+        }
         // A person's last-told totals are kept (one small entry per
         // person); only an idle entry with nothing to remember goes.
         self.people.retain(|_, e| {
             e.due.is_some()
+                || e.stale_due.is_some()
                 || e.last_told.is_some()
                 || e.last_send.is_some_and(|t| now.saturating_duration_since(t) < FORGET_AFTER)
         });
@@ -112,11 +169,18 @@ impl Coalescer {
     fn flush(&mut self, env: &dyn BadgeEnv, person: &str, now: Instant) {
         let Some(e) = self.people.get_mut(person) else { return };
         e.due = None;
+        // Whatever happens next, the stale notes go with this attempt: a
+        // drop is never retried (the foreground catch-up is the guarantee).
+        let stale = std::mem::take(&mut e.stale);
+        e.stale_due = None;
         if env.blocked() {
             return;
         }
         let Some(totals) = env.totals(person) else { return };
-        if e.last_told == Some(totals) {
+        // Newest note first, with each chat's newest seq now.
+        let pairs: Vec<(String, i64)> =
+            stale.iter().rev().filter_map(|c| env.latest_seq(c).map(|s| (c.clone(), s))).collect();
+        if e.last_told == Some(totals) && pairs.is_empty() {
             return;
         }
         let devices = env.devices(person);
@@ -135,6 +199,7 @@ impl Coalescer {
             device_usernames: devices,
             unread_total: totals.total.to_string(),
             waiting_total: totals.waiting_total.to_string(),
+            stale: k2_core::push::StaleHint::of(pairs),
         }));
     }
 
@@ -175,6 +240,18 @@ impl BadgeEnv for DaemonEnv {
 
     fn send(&self, event: PushEvent) {
         crate::push_routes::deliver_badge(event);
+    }
+
+    fn latest_seq(&self, conversation_id: &str) -> Option<i64> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT last_thread_seq FROM overlay_conversations WHERE conversation_id = ?1",
+            rusqlite::params![conversation_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok()
+        .filter(|s| *s > 0)
     }
 }
 
@@ -271,6 +348,21 @@ pub fn note_told(person: &str, totals: Totals) {
     lock().note_told(person, totals);
 }
 
+/// push-content-available-v1: `conversation` changed with no alert to
+/// `person` (see the module docs). Off the caller's thread.
+pub fn note_stale(person: &str, conversation: &str) {
+    let (person, conversation) = (person.to_string(), conversation.to_string());
+    run_off_thread(move || {
+        ensure_ticker();
+        lock().note_stale(&person, &conversation, Instant::now());
+    });
+}
+
+/// A Thread alert to `person` for `conversation` went out.
+pub fn note_alerted(person: &str, conversation: &str) {
+    lock().note_alerted(person, conversation);
+}
+
 #[cfg(test)]
 fn run_off_thread(f: impl FnOnce() + Send + 'static) {
     // Unit tests drive the Coalescer directly; the daemon wiring is a no-op
@@ -297,6 +389,7 @@ mod tests {
         budget: Cell<Option<u32>>,
         blocked: Cell<bool>,
         sent: RefCell<Vec<BadgePush>>,
+        seqs: RefCell<HashMap<String, i64>>,
     }
 
     impl Fake {
@@ -340,6 +433,77 @@ mod tests {
                 other => panic!("badge coalescer sent a non-badge push: {other:?}"),
             }
         }
+        fn latest_seq(&self, conversation_id: &str) -> Option<i64> {
+            self.seqs.borrow().get(conversation_id).copied()
+        }
+    }
+
+    /// push-content-available-v1 (K3): stale notes wait 60 s and merge into
+    /// ONE push (newest first, each chat's seq read at send time), even
+    /// with unchanged totals; they ride an earlier badge push instead; an
+    /// alert clears its chat; the 10 s window and the budget still apply,
+    /// and a dropped hint is not retried.
+    #[test]
+    fn stale_notes_merge_into_one_push_within_the_window() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        env.seqs.borrow_mut().extend([("c-1".to_string(), 40), ("c-2".to_string(), 7), ("c-3".to_string(), 9)]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", Totals { total: 2, waiting_total: 0 });
+        c.note_stale("gina", "c-1", t0);
+        c.note_stale("gina", "c-2", t0 + Duration::from_secs(5));
+        c.note_stale("gina", "c-3", t0 + Duration::from_secs(6));
+        c.note_stale("gina", "c-1", t0 + Duration::from_secs(10));
+        c.note_alerted("gina", "c-3");
+        c.tick(&env, t0 + Duration::from_secs(59));
+        assert!(env.sent().is_empty(), "nothing before the window ends");
+        env.seqs.borrow_mut().insert("c-1".into(), 42);
+        c.tick(&env, t0 + STALE_WINDOW);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 1, "one push for every note");
+        assert_eq!(sent[0].stale.pairs, vec![("c-1".to_string(), 42), ("c-2".to_string(), 7)], "newest first, seq at send");
+        assert_eq!(sent[0].unread_total, "2", "same totals still go: the hint is new");
+        assert_eq!(sent[0].device_usernames, vec!["gina".to_string()]);
+        c.tick(&env, t0 + STALE_WINDOW + Duration::from_secs(61));
+        assert_eq!(env.sent().len(), 1, "a sent hint is gone");
+
+        // A badge push inside the window carries the notes along.
+        let env = Fake::with("gina", &["gina"], 3, 0);
+        env.seqs.borrow_mut().insert("c-9".into(), 5);
+        let mut c = Coalescer::new();
+        c.note_stale("gina", "c-9", t0);
+        c.trigger(&env, "gina", t0 + Duration::from_secs(1));
+        assert_eq!(env.sent().len(), 1);
+        assert_eq!(env.sent()[0].stale.pairs, vec![("c-9".to_string(), 5)]);
+        c.tick(&env, t0 + STALE_WINDOW + Duration::from_secs(1));
+        assert_eq!(env.sent().len(), 1, "nothing left to send");
+
+        // A chat with no known seq is left out; with nothing left and the
+        // same totals, nothing is sent.
+        let env = Fake::with("gina", &["gina"], 4, 0);
+        let mut c = Coalescer::new();
+        c.note_told("gina", Totals { total: 4, waiting_total: 0 });
+        c.note_stale("gina", "c-unknown", t0);
+        c.tick(&env, t0 + STALE_WINDOW);
+        assert!(env.sent().is_empty());
+
+        // Over budget: dropped, never retried.
+        let env = Fake::with("gina", &["gina"], 4, 0);
+        env.seqs.borrow_mut().insert("c-6".into(), 3);
+        env.budget.set(Some(0));
+        let mut c = Coalescer::new();
+        c.note_stale("gina", "c-6", t0);
+        c.tick(&env, t0 + STALE_WINDOW);
+        c.tick(&env, t0 + STALE_WINDOW * 3);
+        assert!(env.sent().is_empty());
+
+        // Blocked (air-gap / no per-daemon path) or no phones: nothing.
+        let env = Fake::with("gina", &[], 4, 0);
+        env.seqs.borrow_mut().insert("c-7".into(), 3);
+        let mut c = Coalescer::new();
+        c.note_stale("gina", "c-7", t0);
+        c.tick(&env, t0 + STALE_WINDOW);
+        assert!(env.sent().is_empty());
     }
 
     #[test]
@@ -428,6 +592,7 @@ mod tests {
             device_usernames: vec!["gina".into()],
             unread_total: "1".into(),
             waiting_total: "0".into(),
+            stale: Default::default(),
         });
         assert_eq!(e.budget_class(), k2_core::push::budget::BudgetClass::Badge);
     }

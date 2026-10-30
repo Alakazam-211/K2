@@ -171,6 +171,8 @@ pub mod notify_routes;
 pub mod homes_routes;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
+// push-content-available-v1 (0.46.7): stale hints for Thread changes that never alert.
+pub mod stale_hint;
 pub mod thread_attachments;
 pub mod ticket_attachments;
 pub mod guest_paths;

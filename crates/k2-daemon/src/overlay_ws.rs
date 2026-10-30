@@ -126,6 +126,9 @@ pub fn publish(mut frame: OverlayFrame) {
         if let Some(conv) = frame.conversation_id.as_deref() {
             crate::read_live::conversation_changed(k2_core::read_state::KIND_THREAD, conv);
         }
+        // push-content-available-v1: a person's post or a closed card
+        // alerts nobody; their phones get a stale hint instead.
+        crate::stale_hint::on_thread_frame(&frame);
     }
     let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     frame.rev = REV.fetch_add(1, Ordering::SeqCst) + 1;

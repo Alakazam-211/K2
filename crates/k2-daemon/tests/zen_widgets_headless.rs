@@ -244,11 +244,11 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     }
 
     // Templates: the two starts, then the Diary (with nothing to allow), then
-    // the Kanban catalog Garden.
+    // the Kanban and Workbench (0.46.7, workbench-v1) catalog Gardens.
     let (s, v) = call(port, "GET", &format!("/cli/zen/templates?token={tok}"), None);
     assert_eq!(s, 200, "{v}");
     let shorts: Vec<&str> = v["templates"].as_array().expect("templates").iter().filter_map(|t| t["short"].as_str()).collect();
-    assert_eq!(shorts, vec!["texting", "blank", "diary", "kanban"]);
+    assert_eq!(shorts, vec!["texting", "blank", "diary", "kanban", "workbench"]);
     assert!(v["templates"][2].get("needsGrant").is_none(), "no permissions: {v}");
     assert_eq!(v["templates"][2]["newUsers"], true);
 

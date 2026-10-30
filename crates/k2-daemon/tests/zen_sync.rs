@@ -838,8 +838,9 @@ fn gs51_news_catalog_updates_and_seen() {
     let f = ZenFiles::with_defaults(&z, fake_set(|s| with_diary(s, 1)));
     let news = f.news().expect("news");
     let ids: Vec<&str> = news["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str()).collect();
-    // The Kanban is new catalog data in 0.45.7 (Rosson 2026-10-15).
-    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban"], "the first run lists the catalog: {news}");
+    // The Kanban is new catalog data in 0.45.7 (Rosson 2026-10-15), the
+    // Workbench in 0.46.7 (workbench-v1, Rosson 2026-10-29).
+    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban", "catalog:workbench"], "the first run lists the catalog: {news}");
     assert_eq!(news["items"][0]["label"], "Diary");
     // The binary's newest Diary (k2.diary@2 since 0.45.2) is the one offered.
     assert_eq!(news["items"][0]["template"], zen::garden_catalog::DIARY_TEMPLATE_ID);
@@ -866,9 +867,10 @@ fn gs51_news_catalog_updates_and_seen() {
     let uid = update["id"].as_str().expect("id").to_string();
     f.news_seen(&[uid], false).expect("seen");
     let left: Vec<String> = f.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
-    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string()]);
+    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string(), "catalog:workbench".to_string()]);
     f.news_mark_template_seen("k2.diary@1").expect("made a Diary");
     f.news_mark_template_seen(zen::garden_catalog::KANBAN_TEMPLATE_ID).expect("made a Kanban");
+    f.news_mark_template_seen(WORKBENCH_TEMPLATE_ID).expect("made a Workbench");
     assert_eq!(f.news().expect("news")["items"], json!([]), "creating from the catalog marks it seen");
     assert!(f.news_seen(&["nonsense".into()], false).is_err(), "unknown id shapes are refused");
     assert!(f.news_seen(&[], false).is_err(), "ids or all");
@@ -882,14 +884,31 @@ fn gs51_news_catalog_updates_and_seen() {
     assert!(!news["items"].as_array().expect("items").iter().any(|i| i["kind"] == "catalog"), "diary@2 isn't new: {news}");
 }
 
+/// The Workbench catalog Garden (`workbench-1.toml`, 0.46.7, workbench-v1).
+const WORKBENCH_TEMPLATE_ID: &str = "k2.workbench@1";
+
+/// Take 0.46.7's Workbench out of a set: its catalog template.
+fn strip_0467(s: &mut DefaultsSet) {
+    assert!(s.templates.remove(WORKBENCH_TEMPLATE_ID).is_some(), "this build ships the Workbench");
+}
+
+/// K2's catalog as 0.46.6 (and every release from 0.45.7) shipped it: this
+/// build's set without the Workbench. Only the catalog differs; the
+/// release_* sets below model their releases' Garden 1, not the catalog.
+fn release_0466() -> Defaults {
+    fake_set(strip_0467)
+}
+
 /// 0.45.7 (Rosson 2026-10-15): a computer that already saw the Diary
 /// (every 0.45.x one) gets the Kanban as one "New in the Garden catalog"
 /// item; making a Kanban Garden, or Seen, clears it. A fresh computer sees
-/// it as the catalog, not as new (GS38).
+/// it as the catalog, not as new (GS38). The upgrade lands on a catalog of
+/// the Kanban's time (0.45.7 to 0.46.6, no Workbench); the Workbench's own
+/// step is `the_workbench_is_new_in_the_catalog_after_0466`.
 #[test]
 fn gs51_the_kanban_is_new_in_the_catalog() {
     let (_t, z) = temp_dir("news-kanban");
-    let f = ZenFiles::new(&z);
+    let f = ZenFiles::with_defaults(&z, release_0466());
     legacy_setup(&f);
     f.news_seen(&["catalog:diary".into()], false).expect("the Diary was seen on 0.45.x");
     let news = f.news().expect("news");
@@ -918,6 +937,56 @@ fn gs51_the_kanban_is_new_in_the_catalog() {
     assert_eq!(fresh.news().expect("news")["items"], json!([]));
     assert_eq!(fresh.read_news().catalog_seen.get("kanban"), Some(&5));
     assert!(fresh.find_garden("Kanban").is_none(), "never preinstalled");
+}
+
+/// 0.46.7 (workbench-v1, Rosson 2026-10-29): a computer on 0.46.6, which
+/// already saw the Diary and the Kanban, gets the Workbench as one "New in
+/// the Garden catalog" item and no update item (a new catalog Garden moves
+/// none of yours); making a Workbench Garden, or Seen, clears it. A fresh
+/// computer sees it as the catalog, not as new (GS38).
+#[test]
+fn the_workbench_is_new_in_the_catalog_after_0466() {
+    // A computer set up on 0.46.6, then this build on the same folder.
+    let on_0466 = |tag: &str| {
+        let (t, z) = temp_dir(tag);
+        let old = ZenFiles::with_defaults(&z, release_0466());
+        old.setup().expect("setup on 0.46.6");
+        assert_eq!(old.news().expect("news on 0.46.6")["items"], json!([]), "0.46.6's catalog was seen at setup");
+        assert!(old.read_news().catalog_seen.get("workbench").is_none(), "0.46.6 had no Workbench");
+        old.forget_boot();
+        (t, ZenFiles::new(&z))
+    };
+    let (_t, f) = on_0466("news-workbench");
+    let news = f.news().expect("news after the upgrade");
+    let items = news["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "only the Workbench is new, and no Garden moved: {news}");
+    let w = &items[0];
+    assert_eq!(w["kind"], "catalog");
+    assert_eq!(w["id"], "catalog:workbench");
+    assert_eq!(w["short"], "workbench");
+    assert_eq!(w["label"], "Workbench");
+    assert_eq!(w["template"], WORKBENCH_TEMPLATE_ID);
+    assert_eq!(w["version"], 1);
+    assert!(w["description"].as_str().is_some_and(|d| d.contains("git worktree")), "{w}");
+    // Making a Workbench Garden marks it seen.
+    let g = f.new_garden("Workbench", Some("workbench"), None, None).expect("new Workbench");
+    assert_eq!(g.template, WORKBENCH_TEMPLATE_ID);
+    assert_eq!(f.news().expect("news")["items"], json!([]), "made from the catalog: seen");
+    assert_eq!(f.read_news().catalog_seen.get("workbench"), Some(&1));
+
+    // Seen clears it too.
+    let (_t2, f2) = on_0466("news-workbench-seen");
+    f2.news_seen(&["catalog:workbench".into()], false).expect("seen");
+    assert_eq!(f2.news().expect("news")["items"], json!([]));
+    assert_eq!(f2.read_news().catalog_seen.get("workbench"), Some(&1));
+
+    // A fresh computer: the Workbench is part of the catalog it starts with.
+    let (_t3, z3) = temp_dir("news-workbench-fresh");
+    let fresh = ZenFiles::new(&z3);
+    fresh.setup().expect("setup");
+    assert_eq!(fresh.news().expect("news")["items"], json!([]));
+    assert_eq!(fresh.read_news().catalog_seen.get("workbench"), Some(&1));
+    assert!(fresh.find_garden("Workbench").is_none(), "never preinstalled");
 }
 
 /// 0.46.1 (Rosson 2026-10-18; GS21, GS45, never-revert): K2's default

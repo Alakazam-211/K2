@@ -163,7 +163,11 @@ fn exposure_counts_are_pinned() {
     // Catalog v34 (0.46.6, app-chat-v1, Sew for Apps): + guests.chat,
     // guests.setChat, chat.member, chat.whois (app).
     // Catalog v35 (0.46.6, Sew for Apps A9): + chat.createChannel (app).
-    assert_eq!((widget, app, garden_local), (44, 129, 43), "per-exposure verb counts (widget, app, garden-local)");
+    // Catalog v40 (workbench-v1, the Workbench Garden): + agents.openTerminal
+    // (widget) and 10 garden-local rows, work.list, git.snapshot/diffFile/
+    // log/land/note, compute.jobs, agents.start/stop/settle. None is an App
+    // row: app stays 129.
+    assert_eq!((widget, app, garden_local), (45, 129, 53), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()

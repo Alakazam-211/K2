@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.1 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.9.1** (its double-BOM fix covers this pack with no code change). `Cargo.lock` and the crate version only.
+
 ## v0.2.0 (2026-10-28)
 
 Planned as v0.2.0. Still requires `k2-mpc-base` v0.9.0.

@@ -31,6 +31,74 @@ impl Env {
     }
 }
 
+/// An App (and a `k2 publish --cmd` service) leads its own session, so it
+/// outlives the test process by design: that is how it survives a daemon
+/// restart. A test that ended with one running left it behind for good
+/// (the 10-29 soak: seven `python3 server.py` held its systemd scope open
+/// after it finished). This ends them with the test, passing or panicking.
+impl Drop for Env {
+    fn drop(&mut self) {
+        stop_every_app_in_this_process();
+        k2_daemon::publish_runtime::kill_all_live_children();
+        reap_apps_under(self.path());
+    }
+}
+
+/// The orderly way: this process's supervisor stops what it runs, so it
+/// doesn't take the next step for a crash and restart it.
+fn stop_every_app_in_this_process() {
+    let Some(db) = k2_core::db::try_shared() else { return };
+    let apps = {
+        let conn = db.lock();
+        k2_core::deploy::store::list_apps(&conn, None)
+    };
+    let apps = match apps {
+        Ok(apps) => apps,
+        Err(e) => {
+            eprintln!("cleanup: listing Apps: {e}");
+            return;
+        }
+    };
+    for app in apps.iter().filter(|a| a.state != k2_core::deploy::store::STATE_STOPPED) {
+        if let Err(f) = k2_daemon::apps::supervisor::stop_app(app, "test-cleanup") {
+            eprintln!("cleanup: stopping {}: {}", app.app_id, f.message);
+        }
+        k2_daemon::apps::supervisor::forget(&app.app_id);
+    }
+}
+
+/// Whatever is still up under `home` (a deploy still running, or a real
+/// `k2-daemon` child that was killed): each instance records its pid in
+/// `~/.k2/apps/<id>/run/<deployment>.json`, and leads its own process group.
+#[cfg(unix)]
+pub fn reap_apps_under(home: &Path) {
+    let Ok(apps) = std::fs::read_dir(home.join(".k2/apps")) else { return };
+    for app in apps.flatten() {
+        let Ok(runs) = std::fs::read_dir(app.path().join("run")) else { continue };
+        for run in runs.flatten() {
+            let Some(pid) = std::fs::read(run.path())
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .and_then(|v| v["pid"].as_i64())
+            else {
+                continue;
+            };
+            let pid = pid as i32;
+            // SAFETY: signals only; a pid that no longer leads its own group
+            // is not this App's.
+            unsafe {
+                if pid > 0 && libc::getpgid(pid) == pid {
+                    libc::killpg(pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// Windows: an App's Job Object is kill-on-close, so it ends with this process.
+#[cfg(not(unix))]
+pub fn reap_apps_under(_home: &Path) {}
+
 /// A temp `$HOME` (short path), the preview flag on, and fast deploy
 /// timings for tests. Holds the env lock for the test.
 pub fn setup(extra: &[(&str, &str)]) -> Env {

@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 struct Reaper {
     child: Option<Child>,
     pids: Vec<i32>,
+    home: Option<PathBuf>,
 }
 
 impl Drop for Reaper {
@@ -44,6 +45,10 @@ impl Drop for Reaper {
         if let Some(c) = self.child.as_mut() {
             let _ = c.kill();
             let _ = c.wait();
+        }
+        // The App outlives its daemons by design, and this test's too.
+        if let Some(home) = &self.home {
+            app_fixture::reap_apps_under(home);
         }
     }
 }
@@ -103,6 +108,7 @@ fn handoff_keeps_the_app_front_port_and_its_connections() {
     let log_path = home.join("daemon.log");
     let log = std::fs::File::create(&log_path).unwrap();
     let mut reaper = Reaper::default();
+    reaper.home = Some(home.clone());
     reaper.child = Some(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
             .env("HOME", &home)
@@ -240,5 +246,6 @@ fn handoff_keeps_the_app_front_port_and_its_connections() {
     assert!(fails.is_empty(), "{}", dump(&format!("{} failed front-port probe(s) across the hand-off: {fails:?}", fails.len())));
     assert!(ok_n.load(Ordering::SeqCst) > 20, "the prober ran");
     assert_eq!(app_fixture::http_get(front, "/").map(|(s, _)| s), Some(200), "{}", dump("the successor serves the same front port"));
+    drop(reaper);
     let _ = std::fs::remove_dir_all(&home);
 }

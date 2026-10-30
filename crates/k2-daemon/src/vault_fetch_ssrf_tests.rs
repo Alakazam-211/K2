@@ -225,6 +225,15 @@ fn proxy_env_ignored() {
     let proxy = Fake::start(|_| http("200 OK", &[], b"{\"via\":\"proxy\"}"));
     let up = Fake::start(|_| http("200 OK", &[], b"{\"via\":\"direct\"}"));
     let p = format!("http://127.0.0.1:{}", proxy.port);
+    // The proxy variables are process-wide: a parallel test's HTTP client
+    // (one that honours them, as reqwest does) sent its loopback request here
+    // instead, got this proxy's body, and both tests failed (soak re-run,
+    // seed 6: mail::jmap "no usable 'apiUrl'" and conns() == 1 below). Loopback
+    // bypasses the proxy for everyone else; `direct.test` is not on the list,
+    // so a fetch that honoured the proxy would still come here. Set BEFORE the
+    // proxies (and so dropped after them): no moment has a proxy without it.
+    let _n1 = k2_core::test_env::EnvVar::set("NO_PROXY", "127.0.0.1,localhost,::1");
+    let _n2 = k2_core::test_env::EnvVar::set("no_proxy", "127.0.0.1,localhost,::1");
     let _e1 = k2_core::test_env::EnvVar::set("HTTP_PROXY", &p);
     let _e2 = k2_core::test_env::EnvVar::set("HTTPS_PROXY", &p);
     let _e3 = k2_core::test_env::EnvVar::set("ALL_PROXY", &p);

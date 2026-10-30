@@ -60,9 +60,21 @@ export interface SewUnit {
   memoryMax?: number | null
 }
 
+/** The pinned release file the daemon is fetching or used (0.46.7). */
+export interface SewDownload {
+  file?: string
+  label?: string
+  url?: string
+  /** `download`, `cache` or `tarball`. */
+  source?: string
+  bytes?: number
+  total?: number | null
+}
+
 export interface SewProgress {
   steps?: Record<string, { at?: number; seq?: number }>
   current?: string | null
+  download?: SewDownload | null
   result?: string | null
   owner?: string
   from?: string
@@ -244,6 +256,18 @@ export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
 
 /** Checks the inputs can fix: enable stays possible while they fail. */
 export const SEW_FIXABLE_CHECKS = ['source', 'existing_data']
+
+/** "12.3 of 24.7 MB" / "from K2's cache" beside the download step. */
+export function downloadNote(d: SewDownload | null | undefined): string | null {
+  if (!d) return null
+  if (d.source === 'cache') return `${d.label ?? 'Sew'} from K2's download cache`
+  if (d.source === 'tarball') return `${d.label ?? 'Sew'} from the file you named`
+  if (d.source !== 'download' || typeof d.bytes !== 'number') return null
+  const mb = (n: number): string => (n / 1e6).toFixed(1)
+  return typeof d.total === 'number' && d.total > 0
+    ? `${d.label ?? 'Sew'}: ${mb(d.bytes)} of ${mb(d.total)} MB`
+    : `${d.label ?? 'Sew'}: ${mb(d.bytes)} MB`
+}
 
 export type SewAlarmAction = 'backup' | 'offbox' | 'recovery-key' | 'public-url'
 

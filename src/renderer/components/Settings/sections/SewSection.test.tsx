@@ -299,6 +299,23 @@ describe('enable wizard', () => {
     )
   })
 
+  it('shows the release download beside the download step while it runs', async () => {
+    const download = {
+      file: 'sew-0.5.0-x86_64-unknown-linux-gnu.tar.gz',
+      label: 'Sew 0.5.0',
+      source: 'download',
+      bytes: 12_300_000,
+      total: 24_667_386,
+    }
+    gets({
+      'sew/status': running({ state: 'installing', enableProgress: { steps: { 'master-key': { at: 1 } }, current: 'stage', download } }),
+      'sew/preflight': { ready: true, checks: [] },
+    })
+    render(<SewSection />)
+    expect((await screen.findByTestId('sew-download')).textContent).toBe('Sew 0.5.0: 12.3 of 24.7 MB')
+    expect(screen.getByTestId('sew-step-stage').dataset.step).toBe('current')
+  })
+
   it('a refusal shows the daemon hint', async () => {
     gets({ 'sew/status': notInstalled(), 'sew/preflight': { ready: true, checks: [] } })
     posts({ 'sew/server/enable': new DaemonHttpError('Another Sew action', 409, 'lifecycle_in_progress') })

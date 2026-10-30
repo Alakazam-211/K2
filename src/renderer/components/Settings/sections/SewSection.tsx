@@ -37,6 +37,7 @@ import {
   SEW_CLI,
   SEW_ENABLE_STEPS,
   SEW_FIXABLE_CHECKS,
+  downloadNote,
   SEW_MAC_BANNER,
   SEW_PREFLIGHT_LABELS,
   alarmInfo,
@@ -272,7 +273,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
           <div className="pl-5 space-y-1">
             <input aria-label="Voice URL" placeholder="wss://voice.<box>.k2.dev (default)" value={voiceUrl} onChange={(e) => setVoiceUrl(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
             <input aria-label="Node IP" placeholder="node IP (optional)" value={nodeIp} onChange={(e) => setNodeIp(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
-            <input aria-label="Voice tarball path" placeholder="/path/to/sew-media.tar.gz (optional)" value={mediaTarball} onChange={(e) => setMediaTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+            <input aria-label="Voice tarball path" placeholder="/path/to/sew-media.tar.gz (only for a box without internet)" value={mediaTarball} onChange={(e) => setMediaTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
           </div>
         ) : null}
       </fieldset>
@@ -282,7 +283,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
           {advanced ? 'Hide advanced' : 'Advanced'}
         </button>
         {showSource ? (
-          <input aria-label="Release tarball path" placeholder="/absolute/path/to/sew.tar.gz" value={tarball} disabled={!canMutate} onChange={(e) => setTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+          <input aria-label="Release tarball path" placeholder="/absolute/path/to/sew.tar.gz (only for a box without internet)" value={tarball} disabled={!canMutate} onChange={(e) => setTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
         ) : null}
         {showRecovery ? (
           <input aria-label="Recovery key file" placeholder="/absolute/path/to/recovery-key" value={recoveryFile} disabled={!canMutate} onChange={(e) => setRecoveryFile(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
@@ -300,6 +301,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
 function Progress({ status }: { status: SewStatus }): React.JSX.Element | null {
   const p = status.enableProgress
   if (!p || (status.state !== 'installing' && status.state !== 'error')) return null
+  const note = downloadNote(p.download)
   return (
     <ol className="space-y-0.5" data-testid="sew-progress">
       {SEW_ENABLE_STEPS.map((s) => {
@@ -312,6 +314,11 @@ function Progress({ status }: { status: SewStatus }): React.JSX.Element | null {
               {failed ? '✕' : done ? '✓' : current ? '…' : '·'}
             </span>
             <span className={current ? 'text-[var(--color-text-primary)]' : secondary}>{s.label}</span>
+            {s.id === 'stage' && note ? (
+              <span className={muted} data-testid="sew-download">
+                {note}
+              </span>
+            ) : null}
           </li>
         )
       })}

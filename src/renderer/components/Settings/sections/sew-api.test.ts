@@ -24,6 +24,7 @@ import {
   alarmInfo,
   chatGrantsOf,
   confirmSecretId,
+  downloadNote,
   enableBody,
   enableLabel,
   isNotBuilt,
@@ -145,6 +146,19 @@ describe('bodies', () => {
       { id: 'g1', subjectKind: 'principal', subjectId: 'p1', scope: 'guest', enabled: true, hookState: 'blocked', hookError: 'sew down' },
       { id: 'g3', subjectKind: 'connect', subjectId: 'c1', scope: null, enabled: false },
     ])
+  })
+})
+
+describe('download note (0.46.7)', () => {
+  it('reads the daemon progress.download the way the supervisor writes it', () => {
+    // The keys the daemon writes (supervisor.rs download_note / obtain_release).
+    const src = rust('supervisor.rs')
+    for (const k of ['"file"', '"label"', '"url"', '"bytes"', '"total"', '"source"']) expect(src).toContain(k)
+    expect(downloadNote({ label: 'Sew 0.5.0', source: 'download', bytes: 12_300_000, total: 24_667_386 })).toBe('Sew 0.5.0: 12.3 of 24.7 MB')
+    expect(downloadNote({ label: 'Sew 0.5.0', source: 'download', bytes: 1_000_000, total: null })).toBe('Sew 0.5.0: 1.0 MB')
+    expect(downloadNote({ label: 'Sew 0.5.0', source: 'cache' })).toBe("Sew 0.5.0 from K2's download cache")
+    expect(downloadNote({ label: 'Sew 0.5.0', source: 'tarball' })).toBe('Sew 0.5.0 from the file you named')
+    expect(downloadNote(null)).toBeNull()
   })
 })
 

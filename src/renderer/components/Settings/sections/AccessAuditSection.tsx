@@ -282,7 +282,7 @@ export function AccessAuditSection(): React.JSX.Element {
                         key={`${ev.ts}-${ev.user}-${ev.outcome}-${i}`}
                         data-agent-vault-export={flagged ? 'true' : undefined}
                         className={`border-b border-[var(--color-border)] text-[var(--color-text-primary)] ${
-                          flagged ? 'bg-[var(--color-status-warn-soft)] border-l-2 border-l-[var(--color-status-warn)]' : ''
+                          flagged ? 'bg-[var(--color-status-warn)]/10 border-l-2 border-l-[var(--color-status-warn)]' : ''
                         }`}
                       >
                         <td className="py-1.5 pr-3 font-mono whitespace-nowrap">

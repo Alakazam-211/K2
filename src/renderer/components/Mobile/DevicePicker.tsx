@@ -170,7 +170,10 @@ function NeedCard({
 }): React.JSX.Element {
   return (
     <div
-      className="flex flex-col gap-1.5 border border-[var(--color-status-warn)] bg-[var(--color-status-warn-soft)] px-3 py-2 text-xs"
+      // A tint of the warn colour over the surface, never the solid
+      // --color-status-warn-soft (a saturated yellow in several themes, which
+      // made the primary/secondary text unreadable).
+      className="flex flex-col gap-1.5 border border-[var(--color-status-warn)]/40 border-l-2 border-l-[var(--color-status-warn)] bg-[var(--color-status-warn)]/10 px-3 py-2 text-xs"
       style={{ borderRadius: 'var(--radius-field, 0px)' }}
       data-mobile-need={testId}
     >

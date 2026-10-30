@@ -97,7 +97,9 @@ export function MobileNotice({
 export function MobileHoldPill({ text, kind }: { text: string; kind: string }): React.JSX.Element {
   return (
     <div
-      className="flex items-center gap-1.5 border border-[var(--color-status-warn)] bg-[var(--color-status-warn-soft)] px-3 py-1 text-xs text-[var(--color-status-warn-text)] shadow-sm"
+      // Opaque warn tint over the elevated surface (it floats over the
+      // device), so --color-status-warn-text reads in light and dark themes.
+      className="flex items-center gap-1.5 border border-[var(--color-status-warn)]/60 bg-[color-mix(in_oklab,var(--color-status-warn)_14%,var(--color-bg-elevated))] px-3 py-1 text-xs text-[var(--color-status-warn-text)] shadow-sm"
       style={{ borderRadius: 'calc(var(--radius-field, 0px) * 100)' }}
       data-mobile-held={kind}
     >

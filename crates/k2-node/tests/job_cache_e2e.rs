@@ -1,5 +1,8 @@
 //! Job caches (`k2 compute run --cache NAME`, protocol 6) against a
 //! loopback fake controller: a `--dev` node in temp dirs, no real users.
+// pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
+// until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
+#![cfg(unix)]
 
 mod common;
 

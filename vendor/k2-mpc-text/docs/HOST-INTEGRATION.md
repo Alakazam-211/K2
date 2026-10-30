@@ -145,11 +145,10 @@ permission check.
 
 Two notes for the host's CLI:
 
-- **`cat` gives the file's exact bytes, BOM included.** A `write --base V` body made from
-  those bytes should have its leading BOM (U+FEFF) removed before it reaches
-  `write_base`/`replace_text`. If it is kept, it is written as a second BOM, because edit
-  verbs never see the first one. Line endings in bodies don't matter, since they are
-  normalised in.
+- **`cat` gives the file's exact bytes, BOM included.** The host doesn't need to strip it:
+  since k2-mpc-base v0.9.1, a `write` / `write --base` body that starts with U+FEFF loses
+  that one character when the file has a BOM (`Pack::writes_bom`), so no second BOM is
+  written. Line endings in bodies don't matter, since they are normalised in.
 - **Policies on file contents belong to the host.** For example, whether `.env` files or
   key files may be read is not decided by the pack. The table lists `.env` as `config`
   because it is text. Visibility is the host's call.
@@ -165,4 +164,4 @@ Two notes for the host's CLI:
 - [ ] The editor binding keeps `\n` line breaks (no custom separator) and binds to `source`.
 - [ ] The watcher calls `file_changed()` and ignores `is_write_temp` names.
 - [ ] `rekey` and `file_moved` on renames.
-- [ ] The CLI strips a leading BOM from `write` bodies, and applies the host's secret policy.
+- [ ] The CLI applies the host's secret policy (the kit strips a leading BOM from `write` bodies itself, since base v0.9.1).

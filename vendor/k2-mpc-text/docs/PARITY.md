@@ -60,5 +60,5 @@ Edit verbs and line tools see the doc's text: `\n` line breaks and no BOM, whate
 uses. Byte tools (`cat` without flags, `wc`, `head -c`, `tail -c`) see the file's exact bytes.
 Text an agent sends (`insert`, `append`, `patch`, `write` bodies) may use any line endings:
 they are read as line breaks and written back in the file's own style (LF, CRLF or CR). A
-`write` body made from `cat`'s bytes should drop a leading BOM first (edit verbs never see
-it; kept, it would be written as a second one).
+`write` body made from `cat`'s bytes may keep its leading BOM: since k2-mpc-base v0.9.1 the
+kit drops it when the file has a BOM, so no second one is written.

@@ -3,7 +3,7 @@
 # template. Expects k2-mpc-base checked out beside this repo.
 set -eu
 cd "$(dirname "$0")/.."
-cargo fmt --all -- --check
+cargo fmt -p k2-mpc-text -- --check   # own crate only: path deps (the kit, its vendored model) keep their own style
 cargo clippy -q --locked --all-targets -- -D warnings
 cargo test -q --locked --all-targets
 ./scripts/check-licences.sh

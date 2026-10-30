@@ -9,7 +9,7 @@
 #      with the exact Ask-with line;
 #   4. the agent's request for another workspace's service or secret is refused;
 #   5. the agent can't answer, a Member can't, Allow without a confirm can't;
-#   6. the owner confirms and allows; the service still doesn't have it until
+#   6. an Admin login confirms with her password and allows; the service still doesn't have it until
 #      the agent restarts it, then reads the file in $K2_SECRETS_DIR;
 #   7. a second answer is 409; the value is in no response, log or audit.
 #
@@ -207,19 +207,36 @@ st="$(post "/cli/thread/answer?token=$OWNER" "$(answer ',"confirmToken":"k2vc_ma
 ok "Allow takes a real confirm; nothing was shared"
 
 echo "== Allow =="
-st="$(post "/cli/vault/confirm-password/set?token=$OWNER" '{"password":"k2test-Confirm-Horse-71"}')"; [ "$st" = 200 ] || fail "confirm password: $st $(body)"
-st="$(post "/cli/vault/confirm/start?token=$OWNER" "{\"action\":\"vault-share-service\",\"secretId\":\"$REQ\"}")"
-[ "$st" = 200 ] || fail "confirm start: $st $(body)"; has "$(body)" "vault-password"
-st="$(post "/cli/vault/confirm/finish?token=$PP" "{\"action\":\"vault-share-service\",\"secretId\":\"$REQ\",\"method\":\"vault-password\",\"password\":\"k2test-Confirm-Horse-71\"}")"
+# People sign in over Connect (setting the vault password takes a person at
+# the machine, not a token): a Member, and an Admin who confirms with her
+# own password.
+printf 'k2test-Member-Horse-71\n' | owner_k2 users add mem --role member --password-stdin >/dev/null || fail "users add mem"
+printf 'k2test-Admin-Horse-71\n' | owner_k2 users add ada --role admin --password-stdin >/dev/null || fail "users add ada"
+login() {
+    st="$(post "/cli/auth/login" "{\"username\":\"$1\",\"password\":\"$2\"}")"
+    [ "$st" = 200 ] || fail "login $1: $st $(body)"
+    jq -r '.token // .session_token // empty' "$SANDBOX/body"
+}
+MEM="$(login mem k2test-Member-Horse-71)"; ADA="$(login ada k2test-Admin-Horse-71)"
+[ -n "$MEM" ] && [ -n "$ADA" ] || fail "no session tokens"
+st="$(post "/cli/thread/answer?token=$MEM" "$(answer '')")"
+[ "$st" = 403 ] || fail "a Member answered: $st $(body)"
+finish() { post "/cli/vault/confirm/finish?token=$1" "{\"action\":\"vault-share-service\",\"secretId\":\"$REQ\",\"method\":\"$2\",\"password\":\"$3\"}"; }
+st="$(finish "$PP" vault-password x)"
 [ "$st" = 403 ] || fail "an agent got a confirm: $st $(body)"
-st="$(post "/cli/vault/confirm/finish?token=$OWNER" "{\"action\":\"vault-share-service\",\"secretId\":\"$REQ\",\"method\":\"vault-password\",\"password\":\"k2test-Confirm-Horse-71\"}")"
+st="$(finish "$ADA" connect-password k2test-Admin-Horse-71)"
 [ "$st" = 200 ] || fail "confirm finish: $st $(body)"
 TOKEN="$(jq -r .token "$SANDBOX/body")"; [ -n "$TOKEN" ] && [ "$TOKEN" != null ] || fail "no token: $(body)"
 st="$(post "/cli/thread/answer?token=$OWNER" "$(answer ",\"confirmToken\":\"$TOKEN\"")")"
+[ "$st" = 403 ] || fail "someone else's confirm: $st $(body)"; has "$(body)" "vault_confirm_required"
+st="$(finish "$ADA" connect-password k2test-Admin-Horse-71)"
+[ "$st" = 200 ] || fail "confirm finish again: $st $(body)"
+TOKEN="$(jq -r .token "$SANDBOX/body")"
+st="$(post "/cli/thread/answer?token=$ADA" "$(answer ",\"confirmToken\":\"$TOKEN\"")")"
 [ "$st" = 200 ] || fail "Allow: $st $(body)"
 [ "$(jq -r .action.result.outcome "$SANDBOX/body")" = approved ] || fail "not approved: $(body)"
 hasnt "$(body)" "$VALUE"
-ok "the owner confirmed and allowed it"
+ok "a Member can't answer; an Admin confirmed with her password and allowed it"
 
 [ "$(curl -s "http://127.0.0.1:$SVC_PORT/PREVIEW_PIN" -o /dev/null -w '%{http_code}')" = 404 ] || fail "a running process got it without a restart"
 run agent_k2 "$PP" "$AGENT" publish stop sharesvc
@@ -231,7 +248,7 @@ wait_http "$SVC_PORT"
 ok "after the agent's restart the service reads \$K2_SECRETS_DIR/PREVIEW_PIN"
 
 echo "== once, and no value anywhere =="
-st="$(post "/cli/thread/answer?token=$OWNER" "$(answer ",\"confirmToken\":\"$TOKEN\"")")"
+st="$(post "/cli/thread/answer?token=$ADA" "$(answer ",\"confirmToken\":\"$TOKEN\"")")"
 [ "$st" = 409 ] || fail "a second answer: $st $(body)"
 run agent_k2 "$PP" "$AGENT" permission status "$REQ"
 [ "$rc" = 0 ] || fail "status: $out $err"; has "$out" "approved"; hasnt "$out" "$VALUE"

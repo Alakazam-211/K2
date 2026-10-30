@@ -78,6 +78,8 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Zen/widgets/ZenPermissionSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a permission card a Garden widget shows)',
   'components/Zen/widgets/ZenDownloadSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s card before a Garden widget\'s k2.download saves a file)',
   'components/Zen/widgets/ZenLinkSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s card the first time a Garden widget opens a site with k2.open)',
+  'components/Zen/widgets/ZenWorkSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s Workbench sheet before a Garden widget starts, lands or retires a worktree agent)',
+  'components/PromptStash/PromptStash.tsx': 'the stash drawer is laid out in the compose bar\'s own column, in flow above the bar (its listbox never floats over another pane)',
 }
 
 function walk(dir: string, out: string[]): void {

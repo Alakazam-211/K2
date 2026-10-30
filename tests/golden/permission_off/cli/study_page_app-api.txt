@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 41.
+From K2's verb catalog, version 42.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -192,6 +192,8 @@ guests:chat (Give its own guests chat (an owner grant per App, never a guest's))
   guests.setChat           POST /cli/skin/guests/chat (server only)           Give one of this App's guests chat (member or guest) or take it away; only grants this App made, within its ceiling; idempotent, audited.
 chat:channels (Make chat channels in its own Space and add its users to them)
   chat.createChannel       POST /cli/sew/app/channels (server only)           Make a text channel in this App's own Sew Space (or find it: the same slug answers created: false) and put listed App users in it, adding them to the Space first. Needs Sew 0.5.0+.
+  chat.channels            POST /cli/sew/app/channels/bulk (server only)      Make, rename, archive or unarchive channels in this App's own App-governed Space, many at once (Sew's bulk channel ops). Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.setChannels.
+  chat.setChannels         POST /cli/sew/app/member-channels (server only)    Set which of this App's private channels each of its users is in (the App's list, in full), in its own App-governed Space. Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.channels.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required (no pass: every call, login too) / pass_invalid

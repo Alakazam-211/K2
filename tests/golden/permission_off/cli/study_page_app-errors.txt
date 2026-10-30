@@ -382,6 +382,18 @@ PAIRING (pairing a phone with an App)
   reauth_required (exit 3)
       fix: Ask the person for the password and send it with the start.
 
+CHAT (an App's chat key and the Spaces it governs)
+  home_client_cannot_govern (exit 3)
+      fix: Use another App for the chat key, or the owner moves the home
+      client first: k2 hostchat home client <app>|none
+  no_chat_caps (exit 3)
+      fix: The owner approves the App's chat caps (k2 app approvals; k2 app
+      approve <id>), or name them: k2 app grant <app> --kind chat-key --caps
+      "chat:read chat:post"
+  provider_is_standalone (exit 3)
+      fix: Run Sew under K2 to use chat keys (k2 study app-chat). Until then
+      the App's chat goes through Sew's own logins.
+
 LINKS (iOS and Android link files)
   link_path_dropped (exit 3)
       fix: Keep the path, or drop it on purpose: pass --drop <path>.

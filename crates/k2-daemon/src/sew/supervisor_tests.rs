@@ -2183,9 +2183,10 @@ fn enable_without_a_tarball_downloads_verifies_and_stages_the_pinned_release() {
     assert!(gets.contains(&format!("GET {CORE_PATH}")), "{gets:?}");
     assert!(!s.seen.lock().unwrap().iter().any(|l| l.contains("Authorization") || l.contains("Cookie")), "no credentials sent");
 
-    // From the cache now: the preflight says so, no new request.
+    // From the cache now (the source check before a reinstall, say): it
+    // says so and asks the network nothing.
     let before = s.seen.lock().unwrap().len();
-    let src = preflight(&t.env(), &EnableRequest::default()).into_iter().find(|c| c["id"] == "source").unwrap();
+    let src = source_check(&t.env(), "x86_64");
     assert_eq!(src["detail"], "Sew 0.0.2 is in K2's download cache", "{src}");
     assert_eq!(s.seen.lock().unwrap().len(), before);
 }

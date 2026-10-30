@@ -48,6 +48,14 @@ fn fixture(public: bool) -> Box1 {
         json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true }).to_string(),
     )
     .expect("tunnel.json");
+    // The routing map is process-global and starts empty in a fresh process
+    // (nextest runs each test alone): this box's subdomain is `rosson`, as
+    // tunnel.json says, so a one-time link has a public address. Stored under
+    // the env lock the TempHome holds.
+    k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap {
+        primary: "rosson".into(),
+        ..Default::default()
+    });
     let id = uuid::Uuid::new_v4().simple().to_string();
     let (ws, other) = (format!("ws-{id}"), format!("other-{id}"));
     let label = format!("site-{}", &id[..10]);

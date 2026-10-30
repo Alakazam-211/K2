@@ -203,6 +203,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("handover", "moving Apps between workspaces and boxes"),
     ("push", "notifications to an App's users"),
     ("pairing", "pairing a phone with an App"),
+    ("chat", "an App's chat key and the Spaces it governs"),
     ("links", "iOS and Android link files"),
     ("updates", "a desktop app's update feed"),
     ("static", "static Apps (a built folder, no process)"),

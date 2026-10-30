@@ -289,6 +289,13 @@ pub(super) const ROWS: &[Refusal] = &[
         "The App's owner turns it on: k2 app pairing setup <app>. Server-wide off (K2_APP_PAIRING=off) is the owner's."),
     r("reauth_required", "pairing", 401, Who::Person, "The sign-in is more than 15 minutes old.",
         "Ask the person for the password and send it with the start."),
+    // ── chat ──
+    r("home_client_cannot_govern", "chat", 409, Who::Owner, "The App is the chat install's home client (it sees every Space a person is in), so it can't hold a chat key or govern a Space.",
+        "Use another App for the chat key, or the owner moves the home client first: k2 hostchat home client <app>|none"),
+    r("no_chat_caps", "chat", 409, Who::Owner, "The App's manifest chat caps aren't approved yet (or the App is suspended), so a chat key has nothing to grant.",
+        "The owner approves the App's chat caps (k2 app approvals; k2 app approve <id>), or name them: k2 app grant <app> --kind chat-key --caps \"chat:read chat:post\""),
+    r("provider_is_standalone", "chat", 409, Who::Owner, "This box's Sew is a standalone install: it takes no K2 passes, so an App on it has no chat key.",
+        "Run Sew under K2 to use chat keys (k2 study app-chat). Until then the App's chat goes through Sew's own logins."),
     // ── links ──
     r("link_path_dropped", "links", 409, Who::Agent, "k2 app links set would drop a link path that already shipped in a phone app.",
         "Keep the path, or drop it on purpose: pass --drop <path>."),

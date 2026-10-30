@@ -348,6 +348,33 @@ pub fn username_matches(want: &str, have: &str, ext: &ExternalId) -> bool {
     have == want || have == suffixed_username(want, &ext.to_string())
 }
 
+/// App-governed Spaces S0 (AG-29): is `name` a box user's chat handle? The
+/// owner's ([`owner_username`]) and every Connect login's
+/// ([`login_username`], owner-linked logins included). Box users are
+/// separate accounts from App users, so these handles stay theirs.
+pub fn is_box_handle(ctx: &HookCtx, name: &str) -> bool {
+    owner_username(ctx.owner_login.as_deref()) == name
+        || ctx
+            .connect
+            .values()
+            .any(|c| login_username(&c.username).as_deref() == Some(name))
+}
+
+/// The handle a principal (a K2 App user) asks Sew for: its username, or,
+/// when that is a box user's handle ([`is_box_handle`]), the conflict
+/// fallback [`suffixed_username`] from the start. It is the same string
+/// the worker's `username_taken` rewrite makes (same base, same external
+/// id as the outbox subject), so [`username_matches`] accepts it and a
+/// reconcile never flips it back; a box login made later moves an App user
+/// off the plain handle at the next reconcile.
+pub fn principal_handle(ctx: &HookCtx, username: &str, ext: &ExternalId) -> String {
+    if is_box_handle(ctx, username) {
+        suffixed_username(username, &ext.to_string())
+    } else {
+        username.to_string()
+    }
+}
+
 fn chat_grants_of(conn: &Connection, sql_where: &str, v: &str) -> Result<Vec<SkinGrant>, String> {
     let mut stmt = conn
         .prepare(&format!(
@@ -429,6 +456,7 @@ pub fn provision_request(
                 .ok_or_else(|| format!("unknown principal id '{}'", grant.subject_id))?;
             check_username(&p.username)?;
             let display_name = principal_display_name(conn, &p.id, p.full_name.as_deref(), &p.username)?;
+            let username = principal_handle(ctx, &p.username, &ext);
             ProvisionRequest {
                 external_id: ext,
                 kind: MemberKind::Person,
@@ -437,7 +465,7 @@ pub fn provision_request(
                 guest: scope == ChatScope::Guest,
                 profile: ProfileInput {
                     display_name,
-                    username: p.username,
+                    username,
                     email: p.email,
                     title: None,
                     pronouns: None,

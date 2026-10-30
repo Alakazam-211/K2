@@ -15,7 +15,10 @@
 //! bound Spaces). The rules, whoever calls through an App:
 //! - only a guest of **this App** (a principal with a `kind=app` grant on
 //!   it). A Connect login, another App's guest, a name nobody has are the
-//!   same [`Refusal::NotFound`] (no oracle). An agent login (`k2 app user
+//!   same [`Refusal::NotFound`] (no oracle). An App user whose name is
+//!   also a Connect login's is a separate account and gets chat as itself
+//!   (App-governed Spaces S0), with a suffixed chat handle so the box
+//!   user keeps the plain one. An agent login (`k2 app user
 //!   agent`) is never a chat person ([`Refusal::AgentLogin`]): agents are
 //!   their workspace in chat.
 //! - a chat grant is per person, box-wide, so an App only changes the grant
@@ -369,10 +372,11 @@ fn person_of(app: Option<&str>, username: &str) -> Result<Person, Refusal> {
         return Err(Refusal::NotFound);
     }
     let Ok(username) = normalize_username(username) else { return Err(Refusal::NotFound) };
-    // A Connect login (the owner included) is never a chat principal here.
-    if crate::connect_users::role_for_user(&username).is_some() {
-        return Err(Refusal::NotFound);
-    }
+    // App-governed Spaces S0: a name is never an identity. Only skin
+    // principals are looked up here, so a Connect login (the owner
+    // included) is never reached, while an App user who shares a box
+    // login's name is a separate account that gets chat as
+    // `k2:principal:<id>` with a suffixed handle (`chat::principal_handle`).
     let p = with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else { return Ok(None) };
         if let Some(a) = app {

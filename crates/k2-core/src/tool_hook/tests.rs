@@ -1940,3 +1940,110 @@ fn reconcile_keeps_the_last_change_and_a_short_history_past_no_op_passes() {
     assert_eq!(v["lastChangeAt"], 1_000);
     assert!(v["reconcileHistory"].is_array());
 }
+
+// ── App-governed Spaces S0: box users keep their chat handles (AG-29) ──
+
+fn s0_ctx(owner_login: Option<&str>, connect: &[&str]) -> HookCtx {
+    HookCtx {
+        actor: "owner-token".into(),
+        owner_login: owner_login.map(str::to_string),
+        connect: connect
+            .iter()
+            .map(|n| {
+                let id = uuid();
+                (
+                    id.clone(),
+                    ConnectFacts { id, username: (*n).to_string(), display_name: (*n).to_string(), owner_linked: false },
+                )
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+fn s0_desired(ctx: &HookCtx) -> Vec<Desired> {
+    crate::skin::with_skin_conn(|conn| Ok(reconcile::build_desired(conn, ctx)?.desired)).expect("desired")
+}
+
+fn s0_handle(desired: &[Desired], ext: &ExternalId) -> String {
+    desired
+        .iter()
+        .find(|d| &d.request.external_id == ext)
+        .unwrap_or_else(|| panic!("{ext} is desired"))
+        .request
+        .profile
+        .username
+        .clone()
+}
+
+/// An App user whose username is the owner's chat handle or a Connect
+/// login's is its own `k2:principal:<id>` member and asks Sew for the
+/// suffixed handle from the start; the box users' plain handles stay
+/// theirs. Nobody else is suffixed.
+#[test]
+fn s0_app_users_named_like_box_users_get_the_suffixed_handle_from_the_start() {
+    let _e = setup();
+    enable_chat();
+    let (z, b, c) = (person("z3thon"), person("bob"), person("cara"));
+    for p in [&z, &b, &c] {
+        grant("principal", &p.id, Some("member")).expect("chat grant");
+    }
+    let ctx = s0_ctx(Some("z3thon"), &["bob"]);
+    let desired = s0_desired(&ctx);
+    let (pz, pb, pc) = (
+        ExternalId::K2Principal(z.id.clone()),
+        ExternalId::K2Principal(b.id.clone()),
+        ExternalId::K2Principal(c.id.clone()),
+    );
+    assert_eq!(s0_handle(&desired, &pz), chat::suffixed_username("z3thon", &pz.to_string()));
+    assert_eq!(s0_handle(&desired, &pb), chat::suffixed_username("bob", &pb.to_string()));
+    assert_eq!(s0_handle(&desired, &pc), "cara", "no box user is named cara");
+    assert_eq!(s0_handle(&desired, &ExternalId::K2Owner), "z3thon", "the owner keeps the plain handle");
+    // The App user named like the owner is never the owner's member.
+    let owners: Vec<_> = desired.iter().filter(|d| d.request.external_id == ExternalId::K2Owner).collect();
+    assert_eq!(owners.len(), 1, "exactly one k2:owner, the owner's own");
+    assert!(owners[0].grant.is_none(), "k2:owner never comes from a grant");
+    assert_eq!(desired.len(), 4, "the owner and three App users: {desired:?}");
+    // The suffix is the worker's fallback string, so it never flips back.
+    assert!(chat::username_matches(&s0_handle(&desired, &pb), &s0_handle(&desired, &pb), &pb));
+    // Nothing linked: the owner's handle is `owner`, and that is reserved.
+    assert!(chat::is_box_handle(&s0_ctx(None, &[]), "owner"));
+    assert!(!chat::is_box_handle(&s0_ctx(None, &[]), "z3thon"));
+}
+
+/// A box login made after an App user already holds the plain handle: the
+/// next reconcile moves the App user to the suffixed handle (one update),
+/// and members already on their right handles get nothing.
+#[test]
+fn s0_a_later_box_login_moves_the_app_user_off_the_plain_handle() {
+    let _e = setup();
+    enable_chat();
+    let (b, c) = (person("bob"), person("cara"));
+    for p in [&b, &c] {
+        grant("principal", &p.id, Some("member")).expect("chat grant");
+    }
+    let (pb, pc) = (ExternalId::K2Principal(b.id.clone()), ExternalId::K2Principal(c.id.clone()));
+    // Sew today: bob already suffixed (a box login `bob` exists), cara
+    // still on the plain handle (no box login `cara` yet).
+    let bob_handle = chat::suffixed_username("bob", &pb.to_string());
+    let actual = vec![
+        member(ExternalId::K2Owner, MemberKind::Person, "owner", "Owner"),
+        member(pb.clone(), MemberKind::Person, &bob_handle, "bob"),
+        member(pc.clone(), MemberKind::Person, "cara", "cara"),
+    ];
+    let before = s0_desired(&s0_ctx(None, &["bob"]));
+    let (planned, _) = reconcile::plan(&before, &actual, &HashSet::new(), &HashMap::new());
+    assert!(planned.is_empty(), "nothing to change yet: {planned:?}");
+
+    // A Connect login `cara` appears.
+    let after = s0_desired(&s0_ctx(None, &["bob", "cara"]));
+    let (planned, s) = reconcile::plan(&after, &actual, &HashSet::new(), &HashMap::new());
+    assert_eq!(ops_for(&planned, &pc), [Op::Update]);
+    assert!(ops_for(&planned, &pb).is_empty(), "{planned:?}");
+    assert_eq!(planned.len(), 1, "{planned:?}");
+    assert_eq!(s.updated, 1);
+    assert_eq!(
+        planned[0].payload["profile"]["username"],
+        serde_json::json!(chat::suffixed_username("cara", &pc.to_string()))
+    );
+}

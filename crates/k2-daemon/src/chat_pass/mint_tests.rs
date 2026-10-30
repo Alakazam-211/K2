@@ -1066,3 +1066,68 @@ fn an_agent_marked_app_login_gets_no_person_pass_ag5() {
     });
     assert!(audit_text().contains("agent_subject"), "the refusal is audited");
 }
+
+/// App-governed Spaces S0 (security). App users named like the owner's
+/// linked login and like an Admin's login are separate accounts: on the
+/// App's link each mints as its own `k2:principal:<id>`, a plain member
+/// (`sewRole: member`, never `k2:owner`, never install powers), scoped to
+/// the App. The box users themselves (the owner token, the owner's Connect
+/// login, an Admin's Connect login) never mint on an App's link.
+#[test]
+fn s0_box_logins_never_mint_through_an_app_and_a_same_name_app_user_is_itself() {
+    use k2_core::connect_users::{self as cu, Role as CRole};
+    let _home = TempHome::new();
+    let r = ring("s0-box-logins");
+    cu::add_user("z3thon", "pw-owner-long-1").expect("owner login");
+    cu::set_role("z3thon", CRole::Owner).expect("owner role");
+    k2_core::app_settings::update(json!({ "ownerAccounts": ["z3thon"] })).expect("link the owner");
+    cu::add_user("ada", "pw-admin-long-1").expect("admin login");
+    cu::set_role("ada", CRole::Admin).expect("admin role");
+    let owner_login = cu::create_session("z3thon");
+    let admin_login = cu::create_session("ada");
+    // App users with the same names (their own principals and passwords).
+    let z = app_guest("z3thon", &[MEET_SVC]);
+    let a = app_guest("ada", &[MEET_SVC]);
+    let z_s = k2_core::skin::create_app_session_token("z3thon", MEET_SVC).expect("App user z3thon signs in");
+    let a_s = k2_core::skin::create_app_session_token("ada", MEET_SVC).expect("App user ada signs in");
+    let meet = mint::OnLink { app_id: "meet", service_id: MEET_SVC, link_id: "gw:38602" };
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+
+    with_deps(&r, T0, false, |d| {
+        let on_link = |bearer: &str| {
+            let mut q = req(Some(bearer), b"{}");
+            q.ingress = "app-link";
+            q.link = Some(meet);
+            mint::handle_pass_with(&q, d)
+        };
+        // The box users: refused on the App's link, every one.
+        for (bearer, who) in [(OWNER, "the owner token"), (owner_login.as_str(), "the owner's Connect login"), (admin_login.as_str(), "an Admin's Connect login")] {
+            let x = on_link(bearer);
+            assert_eq!((x.response.status, code(&x).as_str()), ("403 Forbidden", "pass_wrong_link"), "{who}");
+            assert!(!x.response.body.contains("\"pass\""), "{who}: {}", x.response.body);
+        }
+        // The App users: their own principals, plain members, App-scoped.
+        for (s, id, name) in [(&z_s, &z, "z3thon"), (&a_s, &a, "ada")] {
+            let x = on_link(&s.raw);
+            assert_eq!(x.response.status, "200 OK", "{name}: {}", x.response.body);
+            let b = body(&x);
+            let sub = format!("k2:principal:{id}");
+            assert_eq!(b["sub"].as_str(), Some(sub.as_str()), "{name}");
+            assert_eq!(b["sewRole"], "member", "{name}: no install powers through an App");
+            assert_eq!(b["app"].as_str(), Some(MEET_SVC), "{name}");
+            let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
+            assert_eq!(c.sub, sub, "{name}");
+            assert_ne!(c.sub, identity::OWNER_SUB, "{name} is never the owner");
+            assert!(!c.sub.starts_with("k2:connect:"), "{name} is never a Connect member");
+            assert_eq!(c.app.as_deref(), Some(MEET_SVC));
+        }
+    });
+    // The same names off a link stay the box users (unchanged; no `app`).
+    let owner_ident = identity::classify(&owner_login, OWNER).expect("owner login classifies");
+    assert_eq!((owner_ident.sub.as_str(), owner_ident.app.as_deref()), (identity::OWNER_SUB, None));
+    let admin_ident = identity::classify(&admin_login, OWNER).expect("admin login classifies");
+    assert!(admin_ident.sub.starts_with("k2:connect:") && admin_ident.app.is_none(), "{admin_ident:?}");
+    let z_ident = identity::classify(&z_s.raw, OWNER).expect("App user classifies");
+    assert_eq!(z_ident.sew_role, SewRole::Member);
+    assert_eq!(z_ident.provenance, Provenance::AppSession);
+}

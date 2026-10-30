@@ -94,6 +94,34 @@ fn only_this_apps_guests_and_never_an_agent_login_or_a_login() {
     assert_eq!(set(&Caller::App, Some(HOST_APP_ID), "fay", Scope::Member, "x", "app"), Err(Refusal::NotFound));
 }
 
+/// App-governed Spaces S0: an App user whose name is also a Connect login
+/// (the owner's or an Admin's) is a separate account and gets chat as its
+/// own principal. A Connect login itself is still nobody here.
+#[test]
+fn an_app_user_named_like_a_box_login_gets_chat_as_itself_s0() {
+    let f = fx("s0");
+    grant(&f.app, None, "owner-token").unwrap();
+    crate::connect_users::add_user("rosson", "password-long-1").unwrap();
+    crate::connect_users::set_role("rosson", crate::connect_users::Role::Owner).unwrap();
+    crate::connect_users::add_user("ada", "password-long-1").unwrap();
+    crate::connect_users::set_role("ada", crate::connect_users::Role::Admin).unwrap();
+    let r = add_principal_for_app("rosson", None, &f.app, None, "test").unwrap();
+    let out = set_app(&f, "rosson", Scope::Member).expect("the App user named like the owner's login gets chat");
+    assert!(out.changed);
+    assert_eq!(out.principal_id, r.id, "its own principal, never the box login");
+    assert_eq!(out.scope.as_deref(), Some("member"));
+    let g = chat_grant_of("rosson").expect("a chat grant");
+    assert_eq!((g.subject_kind.as_str(), g.subject_id.as_str()), ("principal", r.id.as_str()));
+    assert_eq!(read(&f.app, "rosson").unwrap().principal_id, r.id);
+    // The owner's CLI reaches the same App user, never the login.
+    assert_eq!(owner_read(None, "rosson").unwrap().principal_id, r.id);
+    // A name that is only a Connect login (the Admin) is nobody to the App
+    // or the owner's command: no grant is ever written for a box user.
+    assert_eq!(set_app(&f, "ada", Scope::Member), Err(Refusal::NotFound));
+    assert_eq!(set(&Caller::Owner, None, "ada", Scope::Member, "owner-token", "cli"), Err(Refusal::NotFound));
+    assert!(list_grants().unwrap().iter().all(|g| g.subject_kind != "connect"), "no Connect chat grant");
+}
+
 #[test]
 fn an_owner_grant_is_the_owners_and_an_off_grant_stays_off() {
     let f = fx("owner");

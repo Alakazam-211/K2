@@ -298,13 +298,10 @@ pub fn prepare(app: &str, ask: Ask) -> Result<Prep, Refusal> {
     if !crate::tool_hook::get_target(CHAT_KIND)?.is_some_and(|t| t.enabled) {
         return Err(Refusal::ChatOff);
     }
-    // Connect logins (the owner included) are never an App's chat user.
-    let connect: HashSet<String> = ask
-        .members
-        .iter()
-        .filter_map(|u| normalize_username(u).ok())
-        .filter(|u| crate::connect_users::role_for_user(u).is_some())
-        .collect();
+    // App-governed Spaces S0: names are never identities. Only this App's
+    // principals are looked up below, so a Connect login (the owner
+    // included) is never reached; an App user who shares a box login's
+    // name is its own account (`k2:principal:<id>`).
     let agent_logins: HashSet<String> = {
         let mut out = HashSet::new();
         let ids: Vec<(String, String)> = with_conn(|conn| {
@@ -325,14 +322,13 @@ pub fn prepare(app: &str, ask: Ask) -> Result<Prep, Refusal> {
         }
         out
     };
-    with_conn(|conn| Ok(build(conn, &app, &ask, &connect, &agent_logins)))?
+    with_conn(|conn| Ok(build(conn, &app, &ask, &agent_logins)))?
 }
 
 fn build(
     conn: &rusqlite::Connection,
     app: &str,
     ask: &Ask,
-    connect: &HashSet<String>,
     agent_logins: &HashSet<String>,
 ) -> Result<Prep, Refusal> {
     let space_id = pick_space(conn, app, ask.space.as_deref())?;
@@ -363,7 +359,7 @@ fn build(
         }
         seen.push(user.clone());
         let not = |reason: &str| NotAdded { username: user.clone(), reason: reason.to_string() };
-        if connect.contains(&user) || agent_logins.contains(&user) {
+        if agent_logins.contains(&user) {
             prep.not_added.push(not(NOT_FOUND));
             continue;
         }

@@ -124,7 +124,7 @@ set +e
 out="$(env HOME="$HOME1" "$K2_CLI" sessions spawn --agent foo 2>&1)"; rc=$?
 set -e
 assert_eq "sessions spawn retired exit 2" "$rc" "2"
-assert_contains "sessions spawn says where it moved" "$out" "moved to: k2 sidecar new"
+assert_contains "sessions spawn says where it moved" "$out" "moved to: k2 sessions new"
 
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: sidecar tool id" "$(_cli_tool_id_for_verb sidecar)" "sidecar"

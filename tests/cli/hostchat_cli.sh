@@ -78,13 +78,16 @@ assert_eq "catalog: hostchat tool id" "$(_cli_tool_id_for_verb hostchat)" "hostc
 assert_eq "catalog: hostchat is an id tool" "$(_cli_tool_default_mode hostchat)" "id"
 if _cli_tool_is_locked hostchat; then ok "catalog: hostchat is locked"; else bad "catalog: hostchat is locked"; fi
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
-python3 -c '
+# Over stdin, never argv: the whole schema as one argument is past Linux's
+# per-argument limit ("Argument list too long"). python3 reads it all before
+# any assert, so printf never takes SIGPIPE under pipefail.
+printf '%s' "$schema" | python3 -c '
 import json, sys
-names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
+names = {c["name"] for c in json.load(sys.stdin)["commands"]}
 for n in ("hostchat", "hostchat enable", "hostchat media", "hostchat users", "hostchat config",
           "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log"):
     assert n in names, n
-' "$schema" && ok "schema lists the hostchat verbs" || bad "schema lists the hostchat verbs"
+' && ok "schema lists the hostchat verbs" || bad "schema lists the hostchat verbs"
 
 # ── 2. stub daemon ───────────────────────────────────────────────────
 echo "== stub daemon =="

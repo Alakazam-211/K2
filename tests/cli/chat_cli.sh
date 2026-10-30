@@ -81,15 +81,18 @@ for verb in unread mark-read follow prefs; do
     assert_absent "S31 verb $verb is no longer a placeholder" "$e" "coming in a later update"
 done
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
-python3 -c '
+# Over stdin, never argv: the whole schema as one argument is past Linux's
+# per-argument limit ("Argument list too long"). python3 reads it all before
+# any assert, so printf never takes SIGPIPE under pipefail.
+printf '%s' "$schema" | python3 -c '
 import json, sys
-names = {c["name"] for c in json.loads(sys.argv[1])["commands"]}
+names = {c["name"] for c in json.load(sys.stdin)["commands"]}
 for n in ("chat", "chat send", "chat wait", "chat access", "chat channel", "chat space", "chat role",
           "chat unread", "chat follow", "chat prefs",
           "hostchat people", "hostchat approvals", "hostchat agents", "hostchat on-behalf", "hostchat log",
           "hostchat deliveries"):
     assert n in names, n
-' "$schema" && ok "schema lists the chat verbs" || bad "schema lists the chat verbs"
+' && ok "schema lists the chat verbs" || bad "schema lists the chat verbs"
 
 # ── 2. stub daemon + vault.sock ──────────────────────────────────────
 echo "== stub daemon =="

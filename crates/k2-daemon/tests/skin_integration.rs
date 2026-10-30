@@ -5401,7 +5401,7 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
             port,
             "POST",
             &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
-            Some(&format!(r#"{{"project":"{}"}}"#, docs_dir.display())),
+            Some(&serde_json::json!({"project": docs_dir.display().to_string()}).to_string()),
         );
         assert_eq!(
             abs_project.status, 400,
@@ -5749,11 +5749,17 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
             port,
             "POST",
             &format!("/cli/fs/upload-chunk?token={OWNER_TOKEN}"),
-            Some(&format!(
-                r#"{{"upload_id":"o1","dir":"{}","filename":"o.bin","offset":0,"base64":"{}","is_last":true}}"#,
-                owner_dir.display(),
-                b64(b"owner")
-            )),
+            Some(
+                &serde_json::json!({
+                    "upload_id": "o1",
+                    "dir": owner_dir.display().to_string(),
+                    "filename": "o.bin",
+                    "offset": 0,
+                    "base64": b64(b"owner"),
+                    "is_last": true
+                })
+                .to_string(),
+            ),
         );
         assert_eq!(owner.status, 200, "owner upload; {}", owner.body);
         let ov = json(&owner.body);
@@ -5768,13 +5774,20 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
             port,
             "POST",
             &format!("/cli/fs/upload-chunk?token={OWNER_TOKEN}"),
-            Some(&format!(
-                r#"{{"upload_id":"o2","dir":"{}","filename":"o.bin","offset":5,"base64":"{}","is_last":false}}"#,
-                owner_dir.display(),
-                b64(b"x")
-            )),
+            Some(
+                &serde_json::json!({
+                    "upload_id": "o2",
+                    "dir": owner_dir.display().to_string(),
+                    "filename": "o.bin",
+                    "offset": 5,
+                    "base64": b64(b"x"),
+                    "is_last": false
+                })
+                .to_string(),
+            ),
         );
         assert_eq!(owner_gap.status, 400, "owner out-of-order stays 400; {}", owner_gap.body);
+        assert!(!owner_gap.body.contains("invalid JSON body"), "refused for the gap, not the body; {}", owner_gap.body);
         let no_token = http(port, "POST", "/cli/fs/upload-chunk", Some("{}"));
         assert_eq!(no_token.status, 403, "no token; {}", no_token.body);
 

@@ -2252,7 +2252,8 @@ mod tests {
             assert_eq!(status_for(&legacy_file).relay_default_set_by.as_deref(), Some("tunnel.json"));
             assert_eq!(status_for(&cfg_with(OLD, vec![])).relay_default_set_by, None);
             assert!(
-                status_for(&legacy_file).config_file.ends_with(".k2/tunnel.json"),
+                std::path::Path::new(&status_for(&legacy_file).config_file)
+                    .ends_with(std::path::Path::new(".k2").join("tunnel.json")),
                 "{}",
                 status_for(&legacy_file).config_file
             );

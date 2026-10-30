@@ -131,7 +131,7 @@ fn manager_scenario_with_a_fake_lane() {
     assert_eq!(l.lines.len(), 3);
     assert!(l.truncated);
     let s = m.screenshot(&a, &agent(), None).expect("shot");
-    assert!(s.path.starts_with(&tmp.join("a").join(".k2/sim/shots").display().to_string()), "{}", s.path);
+    assert!(s.path.starts_with(&tmp.join("a").join(".k2").join("sim").join("shots").display().to_string()), "{}", s.path);
     assert_eq!((s.width, s.height), (400, 800));
     assert!(Path::new(&s.path).is_file());
     let crop = m.screenshot(&a, &agent(), Some(&save)).expect("crop");

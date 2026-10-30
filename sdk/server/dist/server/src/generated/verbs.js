@@ -5,7 +5,7 @@
 // The server SDK's verb table and types (runtime S23). `fromEnv()` builds
 // one helper per row; `call` / `subscribe` reach the same verbs by name.
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 40;
+export const CATALOG_VERSION = 41;
 /** Every App verb, in catalog order. */
 export const APP_VERBS = {
     'me.get': {

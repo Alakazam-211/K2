@@ -230,7 +230,7 @@ pub fn sew_refusal(status: u16, reason: &str, app_id: Option<&str>, approved: bo
             true,
             format!(
                 "Sew refused the home client (home_client_cannot_govern): App {} governs a Space, and the home client never governs one. \
-                 The owner picks another App (k2 hostchat home client <app>) or hands that Space back to Sew first",
+                 The owner picks another App (k2 hostchat home client <app>), or first switches that Space back to Sew-governed in Sew",
                 app_id.unwrap_or("?")
             ),
         )),

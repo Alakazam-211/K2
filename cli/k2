@@ -65571,7 +65571,7 @@ if not sew.get("appScopedSessions"):
     print("              not app-scoped yet: only the owner gives chat (k2 app user chat <user> member --app <app>),")
     print("              and an App can see all chat its people can")
 hc = v.get("homeClient")
-print("home client:  %s%s" % (hc or "none", "" if v.get("homeClientDelivered", True) else ("  (refused: %s)" % v["homeClientError"]) if v.get("homeClientError") else "  (sending)"))
+print("home client:  %s%s" % (hc or "none", "" if v.get("homeClientDelivered", True) else ("  (wanted, not set: %s)" % v["homeClientError"]) if v.get("homeClientError") else "  (sending)"))
 for a in v.get("apps") or []:
     print("  %-38s %-20s %s%s%s" % (a.get("app"), a.get("name") or "", "App-only" if a.get("hiddenFromHome") else "shown in the home client",
         ("  origin " + a["origin"]) if a.get("origin") else "", "" if a.get("delivered") else "  (sending)"))'

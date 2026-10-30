@@ -29,6 +29,9 @@ pub const ROTATE_AFTER_SECS: i64 = 30 * 86_400;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct E2eRegistration {
+    /// The sealed format the phone can open: 1 (every phone), or 2 (also
+    /// the bigger buckets, push-e2e-v2, 0.46.7). A daemon without
+    /// `push-e2e-v2` in `/boot-status` refuses 2.
     pub v: u32,
     pub suite: String,
     /// base64url of the 65-byte SEC1 uncompressed public key.
@@ -46,6 +49,8 @@ pub struct NewKey {
     pub public_key: Vec<u8>,
     pub psk: Vec<u8>,
     pub key_id: String,
+    /// The registration's `e2e.v` (1 or 2).
+    pub v: u32,
 }
 
 impl std::fmt::Debug for NewKey {
@@ -104,6 +109,8 @@ pub struct StoredKey {
     pub created_at: i64,
     pub expires_at: i64,
     pub updated_at: i64,
+    /// The highest sealed format the phone can open (migration 0251).
+    pub v: u32,
 }
 
 impl std::fmt::Debug for StoredKey {
@@ -124,6 +131,16 @@ impl StoredKey {
     pub fn rotate_after(&self) -> i64 {
         self.created_at + ROTATE_AFTER_SECS
     }
+
+    /// The sealed format to use for this phone: 2 only when the phone can
+    /// open it AND the relay accepts it (`relay_v2`).
+    pub fn format(&self, relay_v2: bool) -> seal::Format {
+        if self.v >= 2 && relay_v2 {
+            seal::Format::V2
+        } else {
+            seal::Format::V1
+        }
+    }
 }
 
 /// One device's E2E state for dispatch and the routes.
@@ -141,8 +158,8 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Validate a registration (V14: a usage error names the field).
 pub fn validate(reg: &E2eRegistration) -> Result<NewKey, String> {
-    if reg.v != 1 {
-        return Err(format!("usage: e2e.v must be 1 (got {})", reg.v));
+    if !(1..=2).contains(&reg.v) {
+        return Err(format!("usage: e2e.v must be 1 or 2 (got {})", reg.v));
     }
     if reg.suite != seal::SUITE_NAME {
         return Err(format!("usage: e2e.suite must be '{}' (got '{}')", seal::SUITE_NAME, reg.suite));
@@ -158,11 +175,11 @@ pub fn validate(reg: &E2eRegistration) -> Result<NewKey, String> {
         return Err("usage: e2e.psk must be random bytes, not zeros".to_string());
     }
     let key_id = seal::key_id(&public_key);
-    Ok(NewKey { public_key, psk, key_id })
+    Ok(NewKey { public_key, psk, key_id, v: reg.v })
 }
 
 const KEY_SELECT: &str = "SELECT device_id, suite, public_key, psk, key_id, next_ctr, created_at, \
-    expires_at, updated_at FROM push_device_keys";
+    expires_at, updated_at, v FROM push_device_keys";
 
 fn row_to_key(r: &rusqlite::Row) -> rusqlite::Result<StoredKey> {
     Ok(StoredKey {
@@ -175,6 +192,7 @@ fn row_to_key(r: &rusqlite::Row) -> rusqlite::Result<StoredKey> {
         created_at: r.get(6)?,
         expires_at: r.get(7)?,
         updated_at: r.get(8)?,
+        v: r.get::<_, i64>(9).map(|v| u32::try_from(v).unwrap_or(1))?,
     })
 }
 
@@ -193,21 +211,39 @@ pub fn get_key(device_id: &str) -> Result<Option<StoredKey>, String> {
 }
 
 /// Store a key for a device. The same public key and PSK again is a no-op
-/// (`Ok(false)`); a new key replaces the old one, which is not kept.
+/// (`Ok(false)`) apart from its `v` (an app update that learned format 2
+/// re-registers the same key with `v: 2`); a new key replaces the old one,
+/// which is not kept.
 pub fn put_key_in(conn: &Connection, device_id: &str, key: &NewKey, now: i64) -> Result<bool, String> {
     if let Some(old) = get_key_in(conn, device_id)? {
         if old.public_key == key.public_key && old.psk == key.psk {
+            if old.v != key.v {
+                conn.execute(
+                    "UPDATE push_device_keys SET v = ?2 WHERE device_id = ?1",
+                    params![device_id.trim(), i64::from(key.v)],
+                )
+                .map_err(|e| format!("push key format update failed: {e}"))?;
+            }
             return Ok(false);
         }
     }
     conn.execute(
         "INSERT INTO push_device_keys (device_id, suite, public_key, psk, key_id, next_ctr, \
-         created_at, expires_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?6) \
+         created_at, expires_at, updated_at, v) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?6, ?8) \
          ON CONFLICT(device_id) DO UPDATE SET suite = excluded.suite, \
          public_key = excluded.public_key, psk = excluded.psk, key_id = excluded.key_id, \
          created_at = excluded.created_at, expires_at = excluded.expires_at, \
-         updated_at = excluded.updated_at",
-        params![device_id.trim(), seal::SUITE_NAME, key.public_key, key.psk, key.key_id, now, now + KEY_TTL_SECS],
+         updated_at = excluded.updated_at, v = excluded.v",
+        params![
+            device_id.trim(),
+            seal::SUITE_NAME,
+            key.public_key,
+            key.psk,
+            key.key_id,
+            now,
+            now + KEY_TTL_SECS,
+            i64::from(key.v)
+        ],
     )
     .map_err(|e| format!("push key store failed: {e}"))?;
     Ok(true)
@@ -297,7 +333,7 @@ mod tests {
     pub(crate) fn test_key(seed: u8) -> NewKey {
         let (_, pk) = seal::derive_keypair(&[seed; 32]);
         let psk = vec![seed.wrapping_add(1); 32];
-        NewKey { key_id: seal::key_id(&pk), public_key: pk, psk }
+        NewKey { key_id: seal::key_id(&pk), public_key: pk, psk, v: 1 }
     }
 
     fn reg_of(k: &NewKey) -> E2eRegistration {
@@ -324,13 +360,42 @@ mod tests {
             .expect("register with key");
     }
 
+    /// push-e2e-v2: the same key again with `v: 2` (an app update) keeps
+    /// the key row and changes only its format; format 2 is used only with
+    /// a relay that accepts it.
+    #[test]
+    fn the_same_key_again_with_v2_updates_only_its_format() {
+        let id = format!("kv2-{}", uuid::Uuid::new_v4());
+        let tok = format!("tok-{id}");
+        upsert_device_e2e(&id, "apns", &tok, "owner", None, None, E2eChange::Set(test_key(21))).expect("v1");
+        let before = get_key(&id).expect("read").expect("key");
+        assert_eq!(before.v, 1);
+        assert_eq!(before.format(true), seal::Format::V1, "a v1 phone never gets format 2");
+        let mut k = test_key(21);
+        k.v = 2;
+        upsert_device_e2e(&id, "apns", &tok, "owner", None, None, E2eChange::Set(k)).expect("v2");
+        let after = get_key(&id).expect("read").expect("key");
+        assert_eq!(after.v, 2);
+        assert_eq!(after.key_id, before.key_id);
+        assert_eq!(after.created_at, before.created_at, "the same key is not re-created");
+        assert_eq!(after.format(true), seal::Format::V2);
+        assert_eq!(after.format(false), seal::Format::V1, "a relay without s2 keeps format 1");
+        devices::remove_device(&id).expect("cleanup");
+    }
+
     #[test]
     fn validation_names_the_field() {
         let k = test_key(4);
         assert_eq!(validate(&reg_of(&k)).expect("valid"), k);
+        // push-e2e-v2 (0.46.7): 2 is a phone that opens the bigger buckets.
         let mut r = reg_of(&k);
         r.v = 2;
-        assert!(validate(&r).expect_err("v").contains("e2e.v"));
+        assert_eq!(validate(&r).expect("v2").v, 2);
+        for bad in [0, 3, 9] {
+            let mut r = reg_of(&k);
+            r.v = bad;
+            assert!(validate(&r).expect_err("v").contains("e2e.v"), "v={bad}");
+        }
         let mut r = reg_of(&k);
         r.suite = "p256-base".into();
         assert!(validate(&r).expect_err("suite").contains("e2e.suite"));

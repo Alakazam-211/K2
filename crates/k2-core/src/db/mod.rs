@@ -1705,6 +1705,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // `projects.mobile_tab_enabled`, nullable (NULL = auto). ADD COLUMN
         // only; renumber freely on a slip (and edit the migration-order tests).
         ("0250_workspace_mobile_tab", include_str!("../../drizzle_sql/0250_workspace_mobile_tab.sql")),
+        // 0251 — bigger sealed push buckets (push-e2e-v2, 0.46.7, K2):
+        // `push_device_keys.v` (the format a phone can open) and
+        // `push_relay_caps.s2`. Additive columns; renumber freely on a slip
+        // (and edit the migration-order tests).
+        ("0251_push_e2e_v2", include_str!("../../drizzle_sql/0251_push_e2e_v2.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2368,7 +2373,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0250_workspace_mobile_tab",
+            last_name, "0251_push_e2e_v2",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2470,6 +2475,8 @@ mod tests {
                 "0248_email_notify_queue",
                 // 0.46.7: the pinned Mobile tab switch.
                 "0250_workspace_mobile_tab",
+                // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
+                "0251_push_e2e_v2",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2579,6 +2586,8 @@ mod tests {
                 "0248_email_notify_queue",
                 // 0.46.7: the pinned Mobile tab switch.
                 "0250_workspace_mobile_tab",
+                // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
+                "0251_push_e2e_v2",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2806,7 +2815,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0250_workspace_mobile_tab", "0250 (0.46.7) runs last");
+        assert_eq!(top, "0251_push_e2e_v2", "0251 (0.46.7) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2843,9 +2852,10 @@ mod tests {
                 "0246_email_sender_envelope",
                 "0247_email_agent_notices",
                 "0248_email_notify_queue",
-                "0250_workspace_mobile_tab"
+                "0250_workspace_mobile_tab",
+                "0251_push_e2e_v2"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250 and 0251)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3687,7 +3697,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0250 (the Mobile tab switch, 0.46.7) is newest: its record
+            // 0251 (push-e2e-v2, 0.46.7) is newer still: its record goes
+            // (re-adding its two columns is skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0251_push_e2e_v2'", []).unwrap();
+            // 0250 (the Mobile tab switch, 0.46.7) came before it: its record
             // goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0250_workspace_mobile_tab'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0248_email_notify_queue'", []).unwrap();

@@ -148,6 +148,42 @@ pub struct BadgePush {
     pub device_usernames: Vec<String>,
     pub unread_total: String,
     pub waiting_total: String,
+    /// push-content-available-v1 (0.46.7): which of the person's chats
+    /// changed without an alert to them. Empty = a plain badge push.
+    pub stale: StaleHint,
+}
+
+/// The `stale` hint on a silent push (push-content-available-v1, 0.46.7):
+/// `conversationId:seq` pairs, newest first, where `seq` is the chat's
+/// newest Thread seq when the push was built. Ids and seqs only, never
+/// content or names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaleHint {
+    /// `(conversation_id, seq)`, at most [`STALE_MAX_PAIRS`].
+    pub pairs: Vec<(String, i64)>,
+    /// Pairs were left out (`staleMore: "1"`).
+    pub more: bool,
+}
+
+/// Most `stale` pairs one silent push carries.
+pub const STALE_MAX_PAIRS: usize = 8;
+
+impl StaleHint {
+    /// Up to [`STALE_MAX_PAIRS`] of `pairs` (newest first); `more` when
+    /// some were left out.
+    pub fn of(pairs: Vec<(String, i64)>) -> Self {
+        let more = pairs.len() > STALE_MAX_PAIRS;
+        Self { pairs: pairs.into_iter().take(STALE_MAX_PAIRS).collect(), more }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// The wire value: `"c-1:42,c-9:7"`.
+    pub fn wire(&self) -> String {
+        self.pairs.iter().map(|(c, s)| format!("{c}:{s}")).collect::<Vec<_>>().join(",")
+    }
 }
 
 /// `data.badgeKey`: a stable, opaque key per (server, person). Every
@@ -320,10 +356,11 @@ pub struct ThreadMsg {
 }
 
 impl ThreadMsg {
-    /// The most text a held post keeps: more than any 1536-byte bucket can
-    /// carry, so the seal-time cut decides; the raw message is never held
+    /// The most text a held post keeps: more than any alert bucket can
+    /// carry (format 2's is 2880 bytes, and a character is at least a
+    /// byte), so the seal-time cut decides; the raw message is never held
     /// in full.
-    pub const HOLD_MAX_CHARS: usize = 2048;
+    pub const HOLD_MAX_CHARS: usize = 2880;
 
     /// Build one, holding at most [`Self::HOLD_MAX_CHARS`] characters
     /// (grapheme boundary). A secret card never carries text.
@@ -882,6 +919,8 @@ pub struct GatewayResponse {
     /// prd-e2e-push-v1: the response carried `X-K2-Push-Caps` listing
     /// `s1` ([`e2e::CAPS_HEADER`]): this relay accepts the sealed kinds.
     pub s1: bool,
+    /// push-e2e-v2 (0.46.7): the caps also list `s2` (format-2 blobs).
+    pub s2: bool,
 }
 
 impl GatewayResponse {
@@ -995,8 +1034,13 @@ impl HttpDispatchSender {
             .get(e2e::CAPS_HEADER)
             .and_then(|v| v.to_str().ok())
             .is_some_and(e2e::caps_has_s1);
+        let s2 = response
+            .headers()
+            .get(e2e::CAPS_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(e2e::caps_has_s2);
         let body = response.text().unwrap_or_default();
-        Ok(GatewayResponse { status, body, s0, s1 })
+        Ok(GatewayResponse { status, body, s0, s1, s2 })
     }
 }
 
@@ -1086,6 +1130,12 @@ impl GatewayConfig {
             && tunnel_rejected_recently(now).is_none()
             && !old_gateway_recently(now)
             && e2e::relay_s1(&self.url)
+    }
+
+    /// push-e2e-v2: format-2 blobs may go now (sealed ready, and the relay
+    /// also advertised `s2`).
+    pub fn sealed_v2_ready(&self, now: i64) -> bool {
+        self.sealed_ready(now) && e2e::relay_s2(&self.url)
     }
 }
 
@@ -1285,6 +1335,9 @@ pub struct SealedDevice<'a> {
     pub device: &'a crate::push_devices::PushDevice,
     /// Its active key.
     pub key: crate::push_device_keys::StoredKey,
+    /// The blob format it gets (2 only for a `v: 2` phone on an `s2`
+    /// relay).
+    pub format: seal::Format,
     /// If the relay refuses the sealed send (a stale stored `s1`), this
     /// push may go today's way: `sealed-when-supported` or a `sealed`
     /// override. Never under `sealed-only`.
@@ -1411,9 +1464,16 @@ impl K2Cloud {
                 data.insert("instanceId", stamp.instance_id.clone());
             }
         }
-        if let PushEvent::Badge(_) = event {
+        if let PushEvent::Badge(b) = event {
             // Silent (thread-read-v1): no title, body or sound; the relay
             // sends it as a background push and collapses on `badgeKey`.
+            // push-content-available-v1: plus `stale` (ids + seqs only).
+            if !b.stale.is_empty() {
+                data.insert("stale", b.stale.wire());
+                if b.stale.more {
+                    data.insert("staleMore", "1");
+                }
+            }
             return serde_json::json!({ "data": data });
         }
         let mut payload = serde_json::json!({
@@ -1483,7 +1543,7 @@ impl K2Cloud {
                 out.observe("s0", &resp);
                 // prd-e2e-push-v1: learn the relay's `s1` capability from
                 // every per-daemon response (a rollback clears it).
-                e2e::note_relay_caps(&self.config.url, resp.s1);
+                e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
                 if resp.is_success() {
                     note_tunnel_accepted();
                     return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
@@ -1573,6 +1633,10 @@ impl K2Cloud {
         mode: e2e::PushE2eMode,
     ) -> Result<(), PushError> {
         let now = unix_now();
+        // K5 (0.46.7): one push per phone. Two rows of this person that
+        // share a vendor token (an old id the phone dropped) reach the same
+        // phone; only the most recently seen one is sent to.
+        let devices = &crate::push_devices::dedupe_by_token(devices);
         let plan = Self::plan_lanes(Some(&self.config), event, devices, mode, now);
         let mut result = Ok(());
         if !plan.legacy.is_empty() {
@@ -1649,6 +1713,7 @@ impl K2Cloud {
             }
         };
         let sealed_ok = config.is_some_and(|c| c.sealed_ready(now));
+        let v2_ok = config.is_some_and(|c| c.sealed_v2_ready(now));
         for d in devices {
             let st = states.get(&d.device_id).cloned().unwrap_or_default();
             let eff = e2e::effective(mode, st.override_);
@@ -1659,6 +1724,7 @@ impl K2Cloud {
                 e2e::Lane::Generic => plan.generic.push(d),
                 e2e::Lane::Sealed => plan.sealed.push(SealedDevice {
                     device: d,
+                    format: key.as_ref().map_or(seal::Format::V1, |k| k.format(v2_ok)),
                     key: key.expect("sealed lane has a key"),
                     legacy_fallback: eff == e2e::Effective::Sealed,
                 }),
@@ -1703,7 +1769,7 @@ impl K2Cloud {
         let mut sealed: Vec<(e2e::SealedEntry, &SealedDevice<'_>)> = Vec::with_capacity(devices.len());
         for sd in devices {
             let d = sd.device;
-            match Self::seal_for(event, kind, d, &sd.key, &stamp, badge_key, now, now_ms) {
+            match Self::seal_for(event, kind, sd.format, d, &sd.key, &stamp, badge_key, now, now_ms) {
                 Ok(e2e) => sealed.push((e2e::SealedEntry { platform: d.platform.clone(), token: d.token.clone(), e2e }, sd)),
                 // A nudge that can't fit (a very long server name): skipped,
                 // logged once per device so it shows.
@@ -1725,9 +1791,16 @@ impl K2Cloud {
         }
         let url = format!("{}/push/dispatch", self.config.url);
         let mut result = Ok(());
-        for chunk in sealed.chunks(MAX_DEVICES_PER_CALL) {
+        // push-e2e-v2: one relay call carries one format (the relay checks
+        // every blob's length against the call's `v`).
+        let mut by_format: std::collections::BTreeMap<seal::Format, Vec<(e2e::SealedEntry, &SealedDevice<'_>)>> =
+            Default::default();
+        for (e, sd) in sealed {
+            by_format.entry(sd.format).or_default().push((e, sd));
+        }
+        for (format, chunk) in by_format.iter().flat_map(|(f, all)| all.chunks(MAX_DEVICES_PER_CALL).map(move |c| (*f, c))) {
             let entries: Vec<e2e::SealedEntry> = chunk.iter().map(|(e, _)| e.clone()).collect();
-            let body = e2e::sealed_dispatch_body(kind, &entries);
+            let body = e2e::sealed_dispatch_body_in(kind, format, &entries);
             let started = std::time::Instant::now();
             let mut out = attempts::RelayOutcome::default();
             let sent = self.post_sealed(&url, &body, now, &mut out);
@@ -1782,6 +1855,7 @@ impl K2Cloud {
     fn seal_for(
         event: &PushEvent,
         kind: seal::SealKind,
+        format: seal::Format,
         device: &crate::push_devices::PushDevice,
         key: &crate::push_device_keys::StoredKey,
         stamp: &PushStamp,
@@ -1792,17 +1866,17 @@ impl K2Cloud {
         let ctr = crate::push_device_keys::take_ctr(&device.device_id, now_ms).map_err(|_| SealFailure::Counter)?;
         let ctx = e2e::SealCtx { kid: key.key_id.clone(), ctr, ts: now, stamp: stamp.clone(), badge_key: badge_key.to_string() };
         let json = match event {
-            PushEvent::Badge(b) => e2e::fit_nudge(&e2e::nudge_plaintext(b, &ctx)),
+            PushEvent::Badge(b) => e2e::fit_nudge_in(&e2e::nudge_plaintext_in(b, &ctx, format), format),
             _ => {
                 // The device's own previews choice decides the lock screen
                 // text; names and ids always ride inside the blob.
                 let shown = if device.previews { event.clone() } else { event.without_preview() };
                 let v = e2e::alert_plaintext(&shown, &ctx).ok_or(SealFailure::Kind)?;
-                e2e::fit_alert(&v)
+                e2e::fit_alert_in(&v, format)
             }
         }
         .map_err(SealFailure::Seal)?;
-        seal::seal(kind, &key.public_key, &key.psk, &json).map_err(SealFailure::Seal)
+        seal::seal_in(kind, format, &key.public_key, &key.psk, &json).map_err(SealFailure::Seal)
     }
 
     /// POST one sealed body: per-daemon auth, 10 s timeout, never retried,
@@ -1823,7 +1897,7 @@ impl K2Cloud {
         let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
         let resp = self.sender.post_sealed(url, &auth, body).inspect_err(|e| out.observe_err("s1", e))?;
         out.observe("s1", &resp);
-        e2e::note_relay_caps(&self.config.url, resp.s1);
+        e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
         if resp.is_success() {
             note_tunnel_accepted();
             return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
@@ -2101,6 +2175,7 @@ mod tests {
                 body: self.response.to_string(),
                 s0: false,
                 s1: false,
+                s2: false,
             }))
         }
     }
@@ -2306,6 +2381,7 @@ mod tests {
             device_usernames: vec![principal.into()],
             unread_total: "3".into(),
             waiting_total: "1".into(),
+            stale: Default::default(),
         })
     }
 
@@ -2622,8 +2698,9 @@ mod tests {
             body: serde_json::json!({ "error": { "code": code } }).to_string(),
             s0,
             s1: false,
+            s2: false,
         };
-        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false };
+        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true, s1: false, s2: false };
         let now = unix_now();
 
         // 1. Accepted: one call, tunnel token + X-K2-Subdomain.
@@ -2689,7 +2766,7 @@ mod tests {
 
     #[test]
     fn gateway_response_reason_reads_the_error_code() {
-        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true, s1: false }.reason();
+        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true, s1: false, s2: false }.reason();
         assert_eq!(r(r#"{"error":{"code":"suspended"}}"#), "suspended");
         assert_eq!(r(r#"{"error":"unknown_token"}"#), "unknown_token");
         assert_eq!(r(r#"{"code":"subdomain_not_owned"}"#), "subdomain_not_owned");

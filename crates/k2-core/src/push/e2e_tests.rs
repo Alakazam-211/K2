@@ -40,6 +40,7 @@ impl Relay {
             body: "{\"ok\":true,\"results\":[]}".into(),
             s0: true,
             s1: *self.caps_s1.lock().expect("relay"),
+            s2: false,
         }
     }
 }
@@ -76,7 +77,7 @@ fn tunnel_cloud(url: &str, relay: Arc<Relay>) -> K2Cloud {
 fn phone_key(seed: u8) -> (Vec<u8>, NewKey) {
     let (sk, pk) = seal::derive_keypair(&[seed; 32]);
     let psk = vec![seed ^ 0x5a; 32];
-    (sk, NewKey { key_id: seal::key_id(&pk), public_key: pk, psk })
+    (sk, NewKey { key_id: seal::key_id(&pk), public_key: pk, psk, v: 1 })
 }
 
 /// Register a device in the (scoped) DB, optionally with a key.
@@ -159,6 +160,7 @@ fn canary_events() -> Vec<PushEvent> {
             device_usernames: vec!["owner".into()],
             unread_total: "3".into(),
             waiting_total: "1".into(),
+            stale: Default::default(),
         }),
         // Sew S30: an agent's chat post waits for approval (no body ever).
         PushEvent::ChatApprovalRequested {
@@ -199,7 +201,7 @@ fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
             for mode in [PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
                 let url = unique_url("noleak");
                 let relay = Relay::new(true);
-                e2e::note_relay_caps(&url, true);
+                e2e::note_relay_caps(&url, true, false);
                 tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, "0123456789abcdef0123456789abcdef", &keyed, mode).expect("sealed");
                 let calls = relay.calls();
                 assert_eq!(calls.len(), 1, "one relay call for the person's keyed phones: {event:?}");
@@ -227,7 +229,7 @@ fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
             // Legacy-generic: unkeyed devices at sealed-only.
             let url = unique_url("noleak-generic");
             let relay = Relay::new(true);
-            e2e::note_relay_caps(&url, true);
+            e2e::note_relay_caps(&url, true, false);
             tunnel_cloud(&url, relay.clone())
                 .dispatch_in_mode(&event, "0123456789abcdef0123456789abcdef", &unkeyed, PushE2eMode::SealedOnly)
                 .expect("generic");
@@ -266,7 +268,7 @@ fn dispatch_seals_per_device_and_the_phone_opens_it() {
     ];
     let url = unique_url("roundtrip");
     let relay = Relay::new(true);
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let cloud = tunnel_cloud(&url, relay.clone());
     let event = legacy_golden::golden_events()
         .into_iter()
@@ -317,6 +319,167 @@ fn dispatch_seals_per_device_and_the_phone_opens_it() {
     assert!(n.get("group").is_none() && n.get("title").is_none());
 }
 
+/// push-e2e-v2 (0.46.7, K2): a `v: 2` phone on an `s2` relay gets a
+/// format-2 alert (`v: "2"`, a 3951-character blob) that carries a
+/// 2,000-character reply WHOLE; a `v: 1` phone of the same person gets
+/// today's format in its own relay call; a relay without `s2` keeps the
+/// `v: 2` phone on format 1.
+#[test]
+fn a_v2_phone_on_an_s2_relay_gets_the_bigger_bucket_and_the_whole_reply() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (sk2, mut k2) = phone_key(41);
+    k2.v = 2;
+    let (sk1, k1) = phone_key(42);
+    let devices = vec![
+        register("v2-new", "apns", "tok-v2-new", true, Some(&k2)),
+        register("v2-old", "fcm", "tok-v2-old", true, Some(&k1)),
+    ];
+    let reply: String = "All 14 checks passed; the release notes are drafted. ".repeat(38);
+    assert!(reply.len() > 1900 && reply.len() < 2100, "{}", reply.len());
+    let event = msg_thread(&reply);
+
+    let url = unique_url("v2");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    cloud.dispatch_in_mode(&event, "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "one relay call per format");
+    let by_v = |v: &str| calls.iter().find(|c| c.1["payload"]["data"]["v"] == v).expect("call").1.clone();
+    let v2 = by_v("2");
+    let v1 = by_v("1");
+    assert_eq!(v2["payload"], serde_json::json!({ "data": { "kind": "e2e", "v": "2" } }));
+    let blob2 = v2["devices"][0]["e2e"].as_str().expect("e2e");
+    assert_eq!(v2["devices"].as_array().expect("devs").len(), 1);
+    assert_eq!(blob2.len(), seal::Format::V2.b64_len(SealKind::Alert));
+    assert_eq!(blob2.len(), 3951);
+    let (format, json) = seal::open_format(SealKind::Alert, &sk2, &k2.psk, blob2).expect("open v2");
+    assert_eq!(format, seal::Format::V2);
+    let pt: serde_json::Value = serde_json::from_slice(&json).expect("json");
+    assert_eq!(pt["msg"]["text"], reply.as_str(), "the whole reply rides");
+    assert_eq!(pt["msg"]["truncated"], false);
+    // The v1 phone: today's 2159 blob, the reply cut.
+    let blob1 = v1["devices"][0]["e2e"].as_str().expect("e2e");
+    assert_eq!(blob1.len(), 2159);
+    let pt1: serde_json::Value =
+        serde_json::from_slice(&seal::open(SealKind::Alert, &sk1, &k1.psk, blob1).expect("open v1")).expect("json");
+    assert_eq!(pt1["msg"]["truncated"], true, "1536 bytes can't hold it");
+
+    // A relay that never said s2: the v2 phone stays on format 1.
+    let url = unique_url("v2-no-s2");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, false);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    cloud.dispatch_in_mode(&event, "bk-test", &devices[..1], PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1["payload"]["data"]["v"], "1");
+    assert_eq!(calls[0].1["devices"][0]["e2e"].as_str().expect("e2e").len(), 2159);
+    // The caps are stored with s2 and survive a restart.
+    assert_eq!(e2e::load_relay_caps_full(&url).expect("load"), Some(e2e::RelayCaps { s1: true, s2: false }));
+}
+
+/// push-content-available-v1 (0.46.7, K3): the stale hint names chats by
+/// id and seq only. A format-2 nudge seals it (no plaintext anywhere on
+/// the wire); a format-1 nudge never carries it; today's badge push
+/// carries `stale` in clear and nothing else new; a hint too big for the
+/// bucket loses pairs (`staleMore`), never the totals.
+#[test]
+fn the_stale_hint_carries_ids_and_seqs_only() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let stale = StaleHint::of(vec![("conv-canary-77".into(), 42), ("c-9".into(), 7)]);
+    assert_eq!(stale.wire(), "conv-canary-77:42,c-9:7");
+    let badge = PushEvent::Badge(BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "3".into(),
+        waiting_total: "1".into(),
+        stale: stale.clone(),
+    });
+    let (sk2, mut k2) = phone_key(51);
+    k2.v = 2;
+    let (sk1, k1) = phone_key(52);
+    let devices = vec![
+        register("st-v2", "apns", "tok-st-v2", true, Some(&k2)),
+        register("st-v1", "apns", "tok-st-v1", true, Some(&k1)),
+        register("st-legacy", "fcm", "tok-st-legacy", true, None),
+    ];
+    let url = unique_url("stale");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    cloud.dispatch_in_mode(&badge, "bk-test", &devices, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 3, "legacy, v1 nudge, v2 nudge");
+    for (_, body, sealed) in &calls {
+        if *sealed {
+            // Sealed calls: no id, seq or count anywhere outside the blob.
+            let mut outside = body.clone();
+            for d in outside["devices"].as_array_mut().expect("devs") {
+                d["e2e"] = "".into();
+            }
+            let text = outside.to_string();
+            assert!(!text.contains("conv-canary-77") && !text.contains(":42"), "{text}");
+        }
+    }
+    let nudge = |v: &str| calls.iter().find(|c| c.2 && c.1["payload"]["data"]["v"] == v).expect("nudge").1.clone();
+    let n2 = nudge("2");
+    let blob2 = n2["devices"][0]["e2e"].as_str().expect("e2e");
+    assert_eq!(blob2.len(), 1476);
+    let pt2: serde_json::Value =
+        serde_json::from_slice(&seal::open(SealKind::Nudge, &sk2, &k2.psk, blob2).expect("open")).expect("json");
+    assert_eq!(
+        pt2["data"],
+        serde_json::json!({ "unreadTotal": "3", "waitingTotal": "1", "stale": "conv-canary-77:42,c-9:7" }),
+        "ids and seqs only"
+    );
+    let n1 = nudge("1");
+    let pt1: serde_json::Value = serde_json::from_slice(
+        &seal::open(SealKind::Nudge, &sk1, &k1.psk, n1["devices"][0]["e2e"].as_str().expect("e2e")).expect("open"),
+    )
+    .expect("json");
+    assert_eq!(pt1["data"], serde_json::json!({ "unreadTotal": "3", "waitingTotal": "1" }), "format 1: never ids");
+    let legacy = calls.iter().find(|c| !c.2).expect("legacy").1.clone();
+    let data = legacy["payload"]["data"].clone();
+    assert_eq!(data["stale"], "conv-canary-77:42,c-9:7");
+    assert!(data.get("staleMore").is_none());
+    assert!(legacy["payload"].get("title").is_none() && legacy["payload"].get("body").is_none(), "silent");
+    for (k, v) in data.as_object().expect("data") {
+        assert!(v.is_string(), "{k}: every data value is a string");
+        assert!(
+            ["kind", "unreadTotal", "waitingTotal", "badgeKey", "subdomain", "instanceId", "stale"].contains(&k.as_str()),
+            "unexpected key {k}"
+        );
+    }
+
+    // Too many pairs for the bucket: pairs go from the end, the totals stay.
+    let many: Vec<(String, i64)> = (0..8).map(|i| (format!("{i}-{}", "x".repeat(120)), 1_000_000 + i)).collect();
+    let b = BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec![],
+        unread_total: "9".into(),
+        waiting_total: "0".into(),
+        stale: StaleHint::of(many),
+    };
+    let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
+    let fitted = e2e::fit_nudge_in(&e2e::nudge_plaintext_in(&b, &ctx, seal::Format::V2), seal::Format::V2).expect("fits");
+    assert!(fitted.len() <= seal::Format::V2.max_json(SealKind::Nudge));
+    let out: serde_json::Value = serde_json::from_slice(&fitted).expect("json");
+    assert_eq!(out["data"]["unreadTotal"], "9");
+    assert_eq!(out["data"]["staleMore"], "1");
+    let kept = out["data"]["stale"].as_str().expect("some pairs kept").split(',').count();
+    assert!((1..8).contains(&kept), "{kept}");
+    assert!(out["data"]["stale"].as_str().expect("stale").starts_with("0-"), "newest first are kept");
+    // More than 8 pairs: 8 kept, `more` set.
+    let nine = StaleHint::of((0..9).map(|i| (format!("c{i}"), i)).collect());
+    assert_eq!(nine.pairs.len(), STALE_MAX_PAIRS);
+    assert!(nine.more);
+}
+
 /// Today's bodies, byte for byte, with keys registered: the switch `off`,
 /// a device override `off`, and a relay that never said `s1`.
 #[test]
@@ -330,7 +493,7 @@ fn legacy_bodies_stay_byte_identical_with_keys_present() {
     register("golden-dev-off", "fcm", "tok-golden-off", false, Some(&k2));
     let run = |mode: PushE2eMode, caps: bool| {
         let url = unique_url("golden-keys");
-        e2e::note_relay_caps(&url, caps);
+        e2e::note_relay_caps(&url, caps, false);
         legacy_golden::collect_with(
             &|sender| {
                 K2Cloud::with_config(
@@ -368,7 +531,7 @@ fn switch_modes_and_overrides_follow_the_table() {
     let run = |mode: PushE2eMode| -> Vec<(bool, serde_json::Value)> {
         let url = unique_url("switch");
         let relay = Relay::new(true);
-        e2e::note_relay_caps(&url, true);
+        e2e::note_relay_caps(&url, true, false);
         tunnel_cloud(&url, relay.clone())
             .dispatch_in_mode(&event, "bk", &[keyed.clone(), old.clone()], mode)
             .expect("dispatch");
@@ -458,7 +621,7 @@ fn sealed_waits_for_s1_and_never_falls_back() {
 
     // Shared token only: never sealed, whatever the cache says.
     let url2 = unique_url("s1-shared");
-    e2e::note_relay_caps(&url2, true);
+    e2e::note_relay_caps(&url2, true, false);
     let relay2 = Relay::new(true);
     K2Cloud::with_config(
         GatewayConfig { url: url2.clone(), tunnel: None, shared_token: Some("gw".into()), subdomain: "rosson".into() },
@@ -471,13 +634,14 @@ fn sealed_waits_for_s1_and_never_falls_back() {
     // A sealed refusal under sealed-only: no shared fallback, no retry, no
     // legacy fallback, error class only.
     let url3 = unique_url("s1-refused");
-    e2e::note_relay_caps(&url3, true);
+    e2e::note_relay_caps(&url3, true, false);
     let relay3 = Relay::new(true);
     relay3.script.lock().expect("relay").push_back(GatewayResponse {
         status: 401,
         body: "{\"error\":{\"code\":\"secret-detail-canary\"},\"results\":[{\"error\":\"/3/device/tok\"}]}".into(),
         s0: false,
         s1: false,
+        s2: false,
     });
     let err = tunnel_cloud(&url3, relay3.clone())
         .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedOnly)
@@ -500,7 +664,7 @@ fn restart_with_stored_s1_seals_the_first_push() {
     let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "thread-text-x1-preview").expect("e").1;
     // Before the restart: a per-daemon response said s1 (persisted).
     let url = unique_url("restart");
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     assert_eq!(e2e::load_relay_caps(&url).expect("load"), Some(true), "stored");
     // The restart: memory is empty, the stored value stays.
     e2e::forget_relay_caps_memory(&url);
@@ -540,11 +704,12 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
         body: "{\"error\":{\"code\":\"invalid_title\"}}".into(),
         s0: true,
         s1: false,
+        s2: false,
     };
 
     // sealed-when-supported: refused, then today's push.
     let url = unique_url("stale");
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     e2e::forget_relay_caps_memory(&url);
     let relay = Relay::new(false);
     relay.script.lock().expect("relay").push_back(old_relay_refusal());
@@ -567,7 +732,7 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
 
     // A sealed override behaves like sealed-when-supported.
     let url_ov = unique_url("stale-ov");
-    e2e::note_relay_caps(&url_ov, true);
+    e2e::note_relay_caps(&url_ov, true, false);
     keys::set_override("st-key", Some(DeviceOverride::Sealed)).expect("override");
     let relay = Relay::new(false);
     relay.script.lock().expect("relay").push_back(old_relay_refusal());
@@ -579,7 +744,7 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
 
     // sealed-only: refused, nothing else is sent, caps cleared.
     let url2 = unique_url("stale-only");
-    e2e::note_relay_caps(&url2, true);
+    e2e::note_relay_caps(&url2, true, false);
     e2e::forget_relay_caps_memory(&url2);
     let relay = Relay::new(false);
     relay.script.lock().expect("relay").push_back(old_relay_refusal());
@@ -601,7 +766,7 @@ fn an_oversized_nudge_is_skipped_not_sent_in_clear() {
     let (_, k) = phone_key(63);
     let d = vec![register("nz-key", "apns", "tok-nz-key", true, Some(&k))];
     let url = unique_url("nudge-long");
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let relay = Relay::new(true);
     let long = "a".repeat(63);
     let cloud = K2Cloud::with_config(
@@ -750,7 +915,7 @@ fn replayed_pushes_are_rejected_on_the_open_side() {
     let d = vec![register("rp-key", "apns", "tok-rp-key", true, Some(&k))];
     let url = unique_url("replay");
     let relay = Relay::new(true);
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let cloud = tunnel_cloud(&url, relay.clone());
     let event = legacy_golden::golden_events().into_iter().find(|(n, _)| n == "ticket-commented").expect("t").1;
     let mut blobs = Vec::new();
@@ -811,7 +976,7 @@ fn msg_rides_only_inside_sealed_alerts() {
     let text = format!("{MSG_CANARY}: the whole message, well past the 140-character preview. ").repeat(4);
     let event = msg_thread(&text);
     let url = unique_url("msg");
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let relay = Relay::new(true);
     let cloud = tunnel_cloud(&url, relay.clone());
 
@@ -867,7 +1032,7 @@ fn msg_rides_only_inside_sealed_alerts() {
     assert!(!wire.contains(MSG_CANARY) && !wire.contains("\"msg\""), "{wire}");
     // The nudge plaintext never has msg (a badge push has no post).
     let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
-    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into() };
+    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into(), stale: Default::default() };
     assert!(e2e::nudge_plaintext(&badge, &ctx).get("msg").is_none());
 }
 
@@ -947,8 +1112,9 @@ fn attempt_line_for_a_sealed_push() {
         body: r#"{"ok":true,"results":[{"token":"tok-attempt-sealed","sent":true,"dead":false}]}"#.into(),
         s0: true,
         s1: true,
+        s2: false,
     });
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let event = golden("thread-text-x1-preview");
     tunnel_cloud(&url, relay.clone())
         .dispatch_in_mode(&event, "bk", std::slice::from_ref(&dev), PushE2eMode::SealedWhenSupported)
@@ -1004,8 +1170,9 @@ fn attempt_line_for_a_legacy_push_and_a_refusal() {
         body: r#"{"ok":true,"results":[{"token":"tok-attempt-legacy","sent":false,"dead":true,"error":"fcm 404: https://fcm.example/x"}]}"#.into(),
         s0: true,
         s1: false,
+        s2: false,
     });
-    e2e::note_relay_caps(&url, true);
+    e2e::note_relay_caps(&url, true, false);
     let event = golden("thread-text-x1-preview");
     tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, "bk", &[dev], PushE2eMode::Off).expect("dispatch");
     let payload_len = relay.calls()[0].1["payload"].to_string().len();
@@ -1033,6 +1200,7 @@ fn attempt_line_for_a_legacy_push_and_a_refusal() {
         body: r#"{"error":{"code":"subdomain_not_owned"}}"#.into(),
         s0: true,
         s1: false,
+        s2: false,
     });
     let sent = tunnel_cloud(&unique_url("attempt-refused"), relay)
         .dispatch_in_mode(&event, "bk", std::slice::from_ref(&dev2), PushE2eMode::Off);
@@ -1103,8 +1271,9 @@ fn attempt_lines_and_ring_carry_no_content_or_tokens() {
                 body: r#"{"ok":true,"results":[{"token":"tok-ATTEMPT-CANARY-keyed-0123456789","sent":true,"dead":false},{"token":"tok-ATTEMPT-CANARY-old-0123456789","sent":false,"dead":false,"error":"apns 400: ZEBRA-PREVIEW-distinctive-text"}]}"#.into(),
                 s0: true,
                 s1: true,
+                s2: false,
             });
-            e2e::note_relay_caps(&url, true);
+            e2e::note_relay_caps(&url, true, false);
             tunnel_cloud(&url, relay)
                 .dispatch_in_mode(event, "0123456789abcdef0123456789abcdef", &[keyed.clone(), old.clone()], mode)
                 .expect("dispatch");

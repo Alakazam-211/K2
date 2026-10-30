@@ -34,7 +34,7 @@ impl DispatchSender for Recorder {
 }
 
 fn golden_ok() -> GatewayResponse {
-    GatewayResponse { status: 200, body: "{\"results\":[]}".into(), s0: false, s1: false }
+    GatewayResponse { status: 200, body: "{\"results\":[]}".into(), s0: false, s1: false, s2: false }
 }
 
 pub(crate) fn golden_cloud(sender: Arc<dyn DispatchSender>) -> K2Cloud {
@@ -135,6 +135,7 @@ pub(crate) fn golden_events() -> Vec<(String, PushEvent)> {
                 device_usernames: vec!["owner".into()],
                 unread_total: "3".into(),
                 waiting_total: "1".into(),
+                stale: Default::default(),
             }),
         ),
     ];

@@ -11,6 +11,16 @@
 //!   256 (nudge) bytes, so a blob is always 1619 / 339 bytes = 2159 / 452
 //!   base64url characters (the relay refuses any other length).
 //!
+//! **Format 2** (`push-e2e-v2`, 0.46.7): the same suite, `info`, PSK and
+//! padding rule, with byte 0 = `0x02` (so the AAD binds the format) and
+//! bigger buckets: 2880 (alert) / 1024 (nudge) bytes of plaintext, so a
+//! blob is 2963 / 1107 bytes = 3951 / 1476 base64url characters. The
+//! alert bucket is the largest 64-byte multiple whose relay APNs body
+//! (`{"aps":{…},"kind":"e2e","v":"2","e2e":"<3951>"}`, 4072 bytes) stays
+//! under Apple's 4096-byte cap; FCM's `data` is 3963 bytes of its 4096.
+//! Only for a phone that registered `e2e.v: 2` and a relay that advertised
+//! `s2`; everything else stays format 1.
+//!
 //! No key id rides in clear: the phone trial-decrypts with its keys. This
 //! module is pure: no DB, no network, no logging (never log a blob, a key
 //! or a plaintext).
@@ -25,6 +35,8 @@ type Kem = DhP256HkdfSha256;
 
 /// Blob byte 0: the format version.
 pub const FORMAT_V1: u8 = 0x01;
+/// Blob byte 0 of format 2 (the bigger buckets).
+pub const FORMAT_V2: u8 = 0x02;
 /// Blob byte 1: the suite (mode_psk / DHKEM P-256 / HKDF-SHA256 / AES-256-GCM).
 pub const SUITE_ID: u8 = 0x01;
 /// The suite name a phone registers (`e2e.suite`).
@@ -45,6 +57,13 @@ pub const HEADER_LEN: usize = 2;
 pub const ALERT_PAD: usize = 1536;
 /// Padded nudge plaintext.
 pub const NUDGE_PAD: usize = 256;
+/// Format 2's padded alert plaintext (the largest 64-byte multiple that
+/// keeps the relay's APNs body under 4096 bytes).
+pub const ALERT_PAD_V2: usize = 2880;
+/// Format 2's padded nudge plaintext (room for the `stale` hint).
+pub const NUDGE_PAD_V2: usize = 1024;
+/// Apple's cap on a push payload, and FCM's on a message's `data`.
+pub const VENDOR_PAYLOAD_MAX: usize = 4096;
 /// The `data.kind` of a sealed alert on the relay wire.
 pub const WIRE_KIND_ALERT: &str = "e2e";
 /// The `data.kind` of a sealed nudge on the relay wire.
@@ -100,6 +119,67 @@ impl SealKind {
     }
 }
 
+/// The blob format: which buckets and which byte 0. Format 1 is every
+/// phone's; format 2 needs the phone's `e2e.v: 2` and the relay's `s2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Format {
+    V1,
+    V2,
+}
+
+impl Format {
+    /// Blob byte 0 (also in the AAD).
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::V1 => FORMAT_V1,
+            Self::V2 => FORMAT_V2,
+        }
+    }
+
+    /// The relay wire `data.v` (a string).
+    pub const fn wire_version(self) -> &'static str {
+        match self {
+            Self::V1 => WIRE_VERSION,
+            Self::V2 => WIRE_VERSION_V2,
+        }
+    }
+
+    /// The number a phone registers (`e2e.v`) and a key row stores.
+    pub const fn number(self) -> u32 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
+
+    /// The padded plaintext size of `kind` in this format.
+    pub const fn pad_len(self, kind: SealKind) -> usize {
+        match (self, kind) {
+            (Self::V1, k) => k.pad_len(),
+            (Self::V2, SealKind::Alert) => ALERT_PAD_V2,
+            (Self::V2, SealKind::Nudge) => NUDGE_PAD_V2,
+        }
+    }
+
+    /// The blob size in bytes.
+    pub const fn blob_len(self, kind: SealKind) -> usize {
+        HEADER_LEN + ENC_LEN + self.pad_len(kind) + TAG_LEN
+    }
+
+    /// The base64url length (what the relay checks).
+    pub const fn b64_len(self, kind: SealKind) -> usize {
+        (self.blob_len(kind) * 4).div_ceil(3)
+    }
+
+    /// The most JSON bytes a bucket holds.
+    pub const fn max_json(self, kind: SealKind) -> usize {
+        self.pad_len(kind) - 2
+    }
+}
+
+/// `data.v` of a format-2 sealed push on the relay wire.
+pub const WIRE_VERSION_V2: &str = "2";
+
 /// Why a seal or open failed. Never carries key, plaintext or blob bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SealError {
@@ -133,14 +213,19 @@ pub const fn max_json(kind: SealKind) -> usize {
 
 /// `u16be(len) ‖ json ‖ 0x00…` to exactly `kind.pad_len()` bytes.
 pub fn pad(json: &[u8], kind: SealKind) -> Result<Vec<u8>, SealError> {
-    let max = max_json(kind);
+    pad_in(json, kind, Format::V1)
+}
+
+/// [`pad`] to `format`'s bucket.
+pub fn pad_in(json: &[u8], kind: SealKind, format: Format) -> Result<Vec<u8>, SealError> {
+    let max = format.max_json(kind);
     if json.len() > max {
         return Err(SealError::TooLarge { len: json.len(), max });
     }
-    let mut out = Vec::with_capacity(kind.pad_len());
+    let mut out = Vec::with_capacity(format.pad_len(kind));
     out.extend_from_slice(&(json.len() as u16).to_be_bytes());
     out.extend_from_slice(json);
-    out.resize(kind.pad_len(), 0);
+    out.resize(format.pad_len(kind), 0);
     Ok(out)
 }
 
@@ -188,24 +273,36 @@ pub fn seal_with_rng<R: hpke::rand_core::CryptoRng + hpke::rand_core::RngCore>(
     json: &[u8],
     rng: &mut R,
 ) -> Result<Vec<u8>, SealError> {
+    seal_with_rng_in(kind, Format::V1, public_key, psk, json, rng)
+}
+
+/// [`seal_with_rng`] in `format`.
+pub fn seal_with_rng_in<R: hpke::rand_core::CryptoRng + hpke::rand_core::RngCore>(
+    kind: SealKind,
+    format: Format,
+    public_key: &[u8],
+    psk: &[u8],
+    json: &[u8],
+    rng: &mut R,
+) -> Result<Vec<u8>, SealError> {
     check_public_key(public_key)?;
     if psk.len() != PSK_LEN {
         return Err(SealError::BadKey("psk must be 32 bytes"));
     }
     let pk = <Kem as KemTrait>::PublicKey::from_bytes(public_key)
         .map_err(|_| SealError::BadKey("public key rejected by hpke"))?;
-    let padded = pad(json, kind)?;
-    let header = [FORMAT_V1, SUITE_ID];
+    let padded = pad_in(json, kind, format)?;
+    let header = [format.byte(), SUITE_ID];
     let mode = OpModeS::Psk(PskBundle { psk, psk_id: PSK_ID });
     let (enc, mut ctx) = hpke::setup_sender::<AesGcm256, HkdfSha256, Kem, _>(&mode, &pk, kind.info(), rng)
         .map_err(|_| SealError::Crypto("encap failed"))?;
     let ct = ctx.seal(&padded, &header).map_err(|_| SealError::Crypto("seal failed"))?;
-    let mut blob = Vec::with_capacity(kind.blob_len());
+    let mut blob = Vec::with_capacity(format.blob_len(kind));
     blob.extend_from_slice(&header);
     blob.extend_from_slice(&enc.to_bytes());
     blob.extend_from_slice(&ct);
-    debug_assert_eq!(blob.len(), kind.blob_len());
-    if blob.len() != kind.blob_len() {
+    debug_assert_eq!(blob.len(), format.blob_len(kind));
+    if blob.len() != format.blob_len(kind) {
         return Err(SealError::Malformed("blob length drifted"));
     }
     Ok(blob)
@@ -239,19 +336,31 @@ impl hpke::rand_core::CryptoRng for OsRng {}
 /// Seal with a fresh OS-random ephemeral key; returns the base64url blob
 /// (exactly [`SealKind::b64_len`] characters).
 pub fn seal(kind: SealKind, public_key: &[u8], psk: &[u8], json: &[u8]) -> Result<String, SealError> {
-    let blob = seal_with_rng(kind, public_key, psk, json, &mut OsRng)?;
+    seal_in(kind, Format::V1, public_key, psk, json)
+}
+
+/// [`seal`] in `format` (exactly [`Format::b64_len`] characters).
+pub fn seal_in(kind: SealKind, format: Format, public_key: &[u8], psk: &[u8], json: &[u8]) -> Result<String, SealError> {
+    let blob = seal_with_rng_in(kind, format, public_key, psk, json, &mut OsRng)?;
     Ok(B64.encode(blob))
 }
 
 /// The receiver side (what the phones implement; here for tests, the test
 /// vectors and the headless check): decode, check the header and length,
-/// open with the private key + PSK, unpad. Returns the JSON bytes.
+/// open with the private key + PSK, unpad. Returns the JSON bytes. Both
+/// formats open: the length names the format, and byte 0 must agree.
 pub fn open(kind: SealKind, private_key: &[u8], psk: &[u8], blob_b64: &str) -> Result<Vec<u8>, SealError> {
-    if blob_b64.len() != kind.b64_len() {
-        return Err(SealError::Malformed("wrong blob length"));
-    }
+    open_format(kind, private_key, psk, blob_b64).map(|(_, json)| json)
+}
+
+/// [`open`], also saying which format the blob was.
+pub fn open_format(kind: SealKind, private_key: &[u8], psk: &[u8], blob_b64: &str) -> Result<(Format, Vec<u8>), SealError> {
+    let format = [Format::V1, Format::V2]
+        .into_iter()
+        .find(|f| f.b64_len(kind) == blob_b64.len())
+        .ok_or(SealError::Malformed("wrong blob length"))?;
     let blob = B64.decode(blob_b64).map_err(|_| SealError::Malformed("not base64url"))?;
-    if blob.len() != kind.blob_len() || blob[0] != FORMAT_V1 || blob[1] != SUITE_ID {
+    if blob.len() != format.blob_len(kind) || blob[0] != format.byte() || blob[1] != SUITE_ID {
         return Err(SealError::Malformed("bad header or length"));
     }
     let sk = <Kem as KemTrait>::PrivateKey::from_bytes(private_key)
@@ -264,7 +373,7 @@ pub fn open(kind: SealKind, private_key: &[u8], psk: &[u8], blob_b64: &str) -> R
     let pt = ctx
         .open(&blob[HEADER_LEN + ENC_LEN..], &blob[..HEADER_LEN])
         .map_err(|_| SealError::Crypto("open failed"))?;
-    Ok(unpad(&pt)?.to_vec())
+    Ok((format, unpad(&pt)?.to_vec()))
 }
 
 /// The public key (SEC1 uncompressed) of a P-256 private key (tests,
@@ -373,6 +482,76 @@ mod tests {
                 assert_eq!(open(kind, &sk, &psk, &b).expect("open"), json);
             }
         }
+    }
+
+    /// The relay's sealed bodies, byte for byte (k2-connect `apns.rs`
+    /// `sealed_apns_body`), at their largest.
+    fn relay_apns_body(kind: SealKind, format: Format) -> String {
+        let blob = "A".repeat(format.b64_len(kind));
+        let aps = match kind {
+            SealKind::Alert => serde_json::json!({
+                "alert": { "title": "K2", "body": "New message" },
+                "sound": "default",
+                "mutable-content": 1,
+            }),
+            SealKind::Nudge => serde_json::json!({ "content-available": 1 }),
+        };
+        serde_json::json!({ "aps": aps, "kind": kind.wire_kind(), "v": format.wire_version(), "e2e": blob }).to_string()
+    }
+
+    /// FCM counts the `data` keys and values against 4096 bytes
+    /// (k2-connect `fcm.rs` `sealed_fcm_body`: `{kind, v, e2e}`).
+    fn fcm_data_bytes(kind: SealKind, format: Format) -> usize {
+        let pairs = [("kind", kind.wire_kind()), ("v", format.wire_version())];
+        pairs.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() + "e2e".len() + format.b64_len(kind)
+    }
+
+    /// K2 (0.46.7): format 2's buckets are fixed, and the relay's whole
+    /// APNs body and FCM data stay under 4096 bytes with base64 and the
+    /// envelope. The alert bucket is the LARGEST 64-byte multiple that does
+    /// (the next one is over), so most replies arrive whole.
+    #[test]
+    fn format_2_buckets_fit_the_vendor_caps_and_the_alert_one_is_the_largest() {
+        assert_eq!(Format::V2.blob_len(SealKind::Alert), 2963);
+        assert_eq!(Format::V2.b64_len(SealKind::Alert), 3951);
+        assert_eq!(Format::V2.blob_len(SealKind::Nudge), 1107);
+        assert_eq!(Format::V2.b64_len(SealKind::Nudge), 1476);
+        // Format 1 is unchanged (the relay's s1 contract).
+        assert_eq!(Format::V1.b64_len(SealKind::Alert), SealKind::Alert.b64_len());
+        assert_eq!(Format::V1.b64_len(SealKind::Nudge), SealKind::Nudge.b64_len());
+        assert_eq!(relay_apns_body(SealKind::Alert, Format::V1).len(), 2280, "today's alert push");
+        let apns = relay_apns_body(SealKind::Alert, Format::V2).len();
+        assert_eq!(apns, 4072, "the format-2 alert push");
+        assert!(apns <= VENDOR_PAYLOAD_MAX);
+        assert!(relay_apns_body(SealKind::Nudge, Format::V2).len() <= VENDOR_PAYLOAD_MAX);
+        assert_eq!(fcm_data_bytes(SealKind::Alert, Format::V2), 3963);
+        assert!(fcm_data_bytes(SealKind::Alert, Format::V2) <= VENDOR_PAYLOAD_MAX);
+        // The next 64-byte bucket would not fit Apple's cap.
+        let next = ALERT_PAD_V2 + 64;
+        let next_b64 = ((HEADER_LEN + ENC_LEN + next + TAG_LEN) * 4).div_ceil(3);
+        let over = apns - Format::V2.b64_len(SealKind::Alert) + next_b64;
+        assert!(over > VENDOR_PAYLOAD_MAX, "{next} would still fit ({over} bytes): raise the bucket");
+        // Real seals are exactly those lengths, open back, and say their format.
+        let (sk, pk) = derive_keypair(&[8u8; 32]);
+        let psk = [2u8; 32];
+        for kind in [SealKind::Alert, SealKind::Nudge] {
+            for json in [&b"{}"[..], &vec![b'z'; Format::V2.max_json(kind)][..]] {
+                let b = seal_in(kind, Format::V2, &pk, &psk, json).expect("seal v2");
+                assert_eq!(b.len(), Format::V2.b64_len(kind));
+                let raw = B64.decode(&b).expect("b64");
+                assert_eq!(raw[0], FORMAT_V2);
+                assert_eq!(open_format(kind, &sk, &psk, &b).expect("open"), (Format::V2, json.to_vec()));
+            }
+            assert!(matches!(
+                seal_in(kind, Format::V2, &pk, &psk, &vec![b'z'; Format::V2.max_json(kind) + 1]),
+                Err(SealError::TooLarge { .. })
+            ));
+        }
+        // The format byte is bound by the AAD: a v2 blob relabelled v1 fails.
+        let b = seal_in(SealKind::Alert, Format::V2, &pk, &psk, b"{}").expect("seal");
+        let mut raw = B64.decode(&b).expect("b64");
+        raw[0] = FORMAT_V1;
+        assert!(open(SealKind::Alert, &sk, &psk, &B64.encode(&raw)).is_err());
     }
 
     #[test]

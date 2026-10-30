@@ -135,54 +135,92 @@ pub const CAPS_HEADER: &str = "X-K2-Push-Caps";
 /// The token that says the relay accepts the sealed kinds.
 pub const CAPS_S1: &str = "s1";
 
-/// True when a `X-K2-Push-Caps` value lists `s1`.
-pub fn caps_has_s1(value: &str) -> bool {
-    value.split(',').any(|t| t.trim().eq_ignore_ascii_case(CAPS_S1))
+/// The token that says the relay also accepts format-2 blobs (the bigger
+/// buckets, push-e2e-v2, 0.46.7): `data.v: "2"`, an alert `e2e` of 3951
+/// characters and a nudge of 1476.
+pub const CAPS_S2: &str = "s2";
+
+fn caps_has(value: &str, token: &str) -> bool {
+    value.split(',').any(|t| t.trim().eq_ignore_ascii_case(token))
 }
 
-static RELAY_S1: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> = std::sync::Mutex::new(None);
+/// True when a `X-K2-Push-Caps` value lists `s1`.
+pub fn caps_has_s1(value: &str) -> bool {
+    caps_has(value, CAPS_S1)
+}
 
-fn relay_map() -> std::sync::MutexGuard<'static, Option<std::collections::HashMap<String, bool>>> {
-    RELAY_S1.lock().unwrap_or_else(|p| p.into_inner())
+/// True when a `X-K2-Push-Caps` value lists `s2`.
+pub fn caps_has_s2(value: &str) -> bool {
+    caps_has(value, CAPS_S2)
+}
+
+/// What a relay last said it accepts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RelayCaps {
+    /// Sealed kinds, format 1.
+    pub s1: bool,
+    /// Format 2 too (only meaningful with `s1`).
+    pub s2: bool,
+}
+
+type CapsMap = std::collections::HashMap<String, RelayCaps>;
+
+static RELAY_CAPS: std::sync::Mutex<Option<CapsMap>> = std::sync::Mutex::new(None);
+
+fn relay_map() -> std::sync::MutexGuard<'static, Option<CapsMap>> {
+    RELAY_CAPS.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Cache the relay's capability from a per-daemon-path response (any
 /// status). A response without `s1` (a rollback, or a failover to an
-/// older relay) sends the next dispatch back to today's path. A change is
-/// persisted (`push_relay_caps`, migration 0211) so the first push after
-/// a restart is sealed too.
-pub fn note_relay_caps(gateway_url: &str, s1: bool) {
+/// older relay) sends the next dispatch back to today's path; one without
+/// `s2` sends format-2 phones back to format 1. A change is persisted
+/// (`push_relay_caps`, migrations 0211 + 0251) so the first push after a
+/// restart is sealed too.
+pub fn note_relay_caps(gateway_url: &str, s1: bool, s2: bool) {
+    let caps = RelayCaps { s1, s2 };
     let changed = {
         let mut g = relay_map();
         let map = g.get_or_insert_with(Default::default);
-        map.insert(gateway_url.to_string(), s1) != Some(s1)
+        map.insert(gateway_url.to_string(), caps) != Some(caps)
     };
     if changed {
-        if let Err(e) = store_relay_caps(gateway_url, s1) {
+        if let Err(e) = store_relay_caps(gateway_url, caps) {
             crate::log_debug!("[push] relay caps store failed: {e}");
         }
     }
 }
 
 /// The last seen capability for this gateway: memory first, then the
-/// stored value from before a restart; `false` when never seen (a fresh
+/// stored value from before a restart; nothing when never seen (a fresh
 /// install: the first push takes today's path).
-pub fn relay_s1(gateway_url: &str) -> bool {
+pub fn relay_caps(gateway_url: &str) -> RelayCaps {
     if let Some(v) = relay_map().as_ref().and_then(|m| m.get(gateway_url)).copied() {
         return v;
     }
-    let stored = match load_relay_caps(gateway_url) {
-        Ok(v) => v.unwrap_or(false),
+    let stored = match load_relay_caps_full(gateway_url) {
+        Ok(v) => v.unwrap_or_default(),
         Err(e) => {
             crate::log_debug!("[push] relay caps read failed: {e}");
-            false
+            RelayCaps::default()
         }
     };
     relay_map().get_or_insert_with(Default::default).insert(gateway_url.to_string(), stored);
     stored
 }
 
-fn store_relay_caps(gateway_url: &str, s1: bool) -> Result<(), String> {
+/// The relay accepts the sealed kinds (`s1`).
+pub fn relay_s1(gateway_url: &str) -> bool {
+    relay_caps(gateway_url).s1
+}
+
+/// The relay accepts format 2 too (`s1` and `s2`).
+pub fn relay_s2(gateway_url: &str) -> bool {
+    let c = relay_caps(gateway_url);
+    c.s1 && c.s2
+}
+
+fn store_relay_caps(gateway_url: &str, caps: RelayCaps) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -190,26 +228,30 @@ fn store_relay_caps(gateway_url: &str, s1: bool) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
-        "INSERT INTO push_relay_caps (gateway_url, s1, seen_at) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(gateway_url) DO UPDATE SET s1 = excluded.s1, seen_at = excluded.seen_at",
-        rusqlite::params![gateway_url, i64::from(s1), now],
+        "INSERT INTO push_relay_caps (gateway_url, s1, s2, seen_at) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(gateway_url) DO UPDATE SET s1 = excluded.s1, s2 = excluded.s2, seen_at = excluded.seen_at",
+        rusqlite::params![gateway_url, i64::from(caps.s1), i64::from(caps.s2), now],
     )
     .map(|_| ())
     .map_err(|e| e.to_string())
 }
 
-/// The stored capability (`None` = never seen).
+/// The stored `s1` (`None` = never seen).
 pub fn load_relay_caps(gateway_url: &str) -> Result<Option<bool>, String> {
+    load_relay_caps_full(gateway_url).map(|c| c.map(|c| c.s1))
+}
+
+/// The stored capability (`None` = never seen).
+pub fn load_relay_caps_full(gateway_url: &str) -> Result<Option<RelayCaps>, String> {
     use rusqlite::OptionalExtension as _;
     let db = crate::db::shared();
     let conn = db.lock();
     conn.query_row(
-        "SELECT s1 FROM push_relay_caps WHERE gateway_url = ?1",
+        "SELECT s1, s2 FROM push_relay_caps WHERE gateway_url = ?1",
         rusqlite::params![gateway_url],
-        |r| r.get::<_, i64>(0),
+        |r| Ok(RelayCaps { s1: r.get::<_, i64>(0)? != 0, s2: r.get::<_, i64>(1)? != 0 }),
     )
     .optional()
-    .map(|v| v.map(|n| n != 0))
     .map_err(|e| e.to_string())
 }
 
@@ -350,13 +392,25 @@ fn fit_msg_text(v: &serde_json::Value, max: usize) -> Option<serde_json::Value> 
 }
 
 /// The sealed nudge plaintext (§5): totals only. No conversation ids or
-/// seqs, ever.
+/// seqs in format 1, ever.
 pub fn nudge_plaintext(b: &BadgePush, ctx: &SealCtx) -> serde_json::Value {
+    nudge_plaintext_in(b, ctx, seal::Format::V1)
+}
+
+/// [`nudge_plaintext`] in `format`. Format 2 (push-content-available-v1,
+/// 0.46.7) also carries the stale hint inside the blob: `data.stale` =
+/// `"<conversationId>:<seq>,…"` (newest first) and `data.staleMore` =
+/// `"1"` when pairs were left out. Ids and seqs only, never content.
+pub fn nudge_plaintext_in(b: &BadgePush, ctx: &SealCtx, format: seal::Format) -> serde_json::Value {
     let mut m = head(super::seal::WIRE_KIND_NUDGE, ctx);
-    m.insert(
-        "data".into(),
-        serde_json::json!({ "unreadTotal": b.unread_total, "waitingTotal": b.waiting_total }),
-    );
+    let mut data = serde_json::json!({ "unreadTotal": b.unread_total, "waitingTotal": b.waiting_total });
+    if format == seal::Format::V2 && !b.stale.is_empty() {
+        data["stale"] = b.stale.wire().into();
+        if b.stale.more {
+            data["staleMore"] = "1".into();
+        }
+    }
+    m.insert("data".into(), data);
     serde_json::Value::Object(m)
 }
 
@@ -417,7 +471,12 @@ fn cap_name(v: &mut serde_json::Value, pointer: &str) {
 /// fetches the rest); then cut `body` (+ "…"); then cap names at 64
 /// characters; then drop `avatarRev`/`agentColor`.
 pub fn fit_alert(v: &serde_json::Value) -> Result<Vec<u8>, SealError> {
-    let max = seal::max_json(SealKind::Alert);
+    fit_alert_in(v, seal::Format::V1)
+}
+
+/// [`fit_alert`] within `format`'s alert bucket (2880 bytes in format 2).
+pub fn fit_alert_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u8>, SealError> {
+    let max = format.max_json(SealKind::Alert);
     let bytes = json_bytes(v);
     if bytes.len() <= max {
         return Ok(bytes);
@@ -451,8 +510,36 @@ pub fn fit_alert(v: &serde_json::Value) -> Result<Vec<u8>, SealError> {
 
 /// The nudge JSON bytes within the 256-byte bucket.
 pub fn fit_nudge(v: &serde_json::Value) -> Result<Vec<u8>, SealError> {
+    fit_nudge_in(v, seal::Format::V1)
+}
+
+/// [`fit_nudge`] within `format`'s bucket. A stale hint that doesn't fit
+/// loses pairs from its end (`staleMore: "1"`); the totals never shrink.
+pub fn fit_nudge_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u8>, SealError> {
+    let max = format.max_json(SealKind::Nudge);
     let bytes = json_bytes(v);
-    let max = seal::max_json(SealKind::Nudge);
+    if bytes.len() <= max {
+        return Ok(bytes);
+    }
+    let mut v = v.clone();
+    loop {
+        let Some(stale) = v.pointer("/data/stale").and_then(|s| s.as_str()).map(str::to_string) else { break };
+        let mut pairs: Vec<&str> = stale.split(',').collect();
+        pairs.pop();
+        if pairs.is_empty() {
+            if let Some(d) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
+                d.remove("stale");
+            }
+        } else {
+            v["data"]["stale"] = pairs.join(",").into();
+        }
+        v["data"]["staleMore"] = "1".into();
+        let bytes = json_bytes(&v);
+        if bytes.len() <= max {
+            return Ok(bytes);
+        }
+    }
+    let bytes = json_bytes(&v);
     if bytes.len() > max {
         return Err(SealError::TooLarge { len: bytes.len(), max });
     }
@@ -472,12 +559,18 @@ pub struct SealedEntry {
 /// The relay dispatch body for sealed devices: `payload.data` is exactly
 /// `{kind, v}`; no title, body, sound, threadId, collapseId or stamp.
 pub fn sealed_dispatch_body(kind: SealKind, entries: &[SealedEntry]) -> serde_json::Value {
+    sealed_dispatch_body_in(kind, seal::Format::V1, entries)
+}
+
+/// [`sealed_dispatch_body`] for `format`'s blobs (`v: "2"` for format 2:
+/// every blob in one call has the same format).
+pub fn sealed_dispatch_body_in(kind: SealKind, format: seal::Format, entries: &[SealedEntry]) -> serde_json::Value {
     serde_json::json!({
         "devices": entries
             .iter()
             .map(|e| serde_json::json!({ "platform": e.platform, "token": e.token, "e2e": e.e2e }))
             .collect::<Vec<_>>(),
-        "payload": { "data": { "kind": kind.wire_kind(), "v": seal::WIRE_VERSION } },
+        "payload": { "data": { "kind": kind.wire_kind(), "v": format.wire_version() } },
     })
 }
 

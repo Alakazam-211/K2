@@ -162,11 +162,32 @@ pub fn upsert_device_e2e(
         ));
     }
     let now = now_secs();
+    // K5 (0.46.7): who this registration's person is, read before the DB
+    // lock (the people list is a file).
+    let people = crate::notify_prefs::People::load().ok();
+    let person_of = |login: &str| match people.as_ref() {
+        Some(p) => p.person_key(login),
+        None => login.trim().to_ascii_lowercase(),
+    };
+    let me = person_of(username);
     let db = crate::db::shared();
     let conn = db.lock();
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| format!("push device upsert failed: {e}"))?;
+    // K5: the same vendor token under another deviceId for the same person
+    // is the same install registered twice (an old id the phone dropped):
+    // that person's every push reached the phone twice. The new id
+    // replaces it.
+    for dup in duplicate_token_rows(&tx, platform, token, device_id)?
+        .into_iter()
+        .filter(|(_, login)| person_of(login) == me)
+        .map(|(id, _)| id)
+    {
+        crate::push_device_keys::delete_key_in(&tx, &dup)?;
+        tx.execute("DELETE FROM push_devices WHERE device_id = ?1", params![dup])
+            .map_err(|e| format!("push device duplicate delete failed: {e}"))?;
+    }
     let prev_user: Option<String> = tx
         .query_row(
             "SELECT username FROM push_devices WHERE device_id = ?1",
@@ -208,6 +229,52 @@ pub fn upsert_device_e2e(
         .map_err(|e| format!("push device readback failed: {e}"))?;
     tx.commit().map_err(|e| format!("push device upsert failed: {e}"))?;
     Ok(device)
+}
+
+/// Other rows holding this platform's vendor token: `(device_id, username)`.
+fn duplicate_token_rows(
+    conn: &rusqlite::Connection,
+    platform: &str,
+    token: &str,
+    device_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut st = conn
+        .prepare("SELECT device_id, username FROM push_devices WHERE platform = ?1 AND token = ?2 AND device_id != ?3")
+        .map_err(|e| format!("push device duplicate check failed: {e}"))?;
+    let rows = st
+        .query_map(params![platform, token, device_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("push device duplicate check failed: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("push device duplicate check failed: {e}"))
+}
+
+/// A short, stable fingerprint of a vendor token (K5, 0.46.7): the first 8
+/// hex characters of SHA-256(token). Two rows with the same fingerprint
+/// hold the same token. The token itself is never shown.
+pub fn token_fingerprint(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.trim().as_bytes()).iter().take(4).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Keep one row per vendor token (the most recently seen): a person's
+/// phone must never get the same push twice because two of its rows share
+/// a token (K5). Order is otherwise kept.
+pub fn dedupe_by_token(devices: &[PushDevice]) -> Vec<PushDevice> {
+    let mut best: std::collections::HashMap<(&str, &str), (i64, usize)> = std::collections::HashMap::new();
+    for (i, d) in devices.iter().enumerate() {
+        let k = (d.platform.as_str(), d.token.as_str());
+        match best.get(&k) {
+            Some((seen, _)) if *seen >= d.last_seen_at => {}
+            _ => {
+                best.insert(k, (d.last_seen_at, i));
+            }
+        }
+    }
+    devices
+        .iter()
+        .enumerate()
+        .filter(|(i, d)| best.get(&(d.platform.as_str(), d.token.as_str())).is_some_and(|(_, keep)| keep == i))
+        .map(|(_, d)| d.clone())
+        .collect()
 }
 
 /// Delete the key rows of the devices a `WHERE` clause selects (V13: every
@@ -592,5 +659,98 @@ mod tests {
         assert!(!ids.contains(&id_dead), "dead-token device pruned");
         assert!(ids.contains(&id_live), "unrelated device survives the prune");
         remove_device(&id_live).expect("cleanup");
+    }
+
+    /// K5 (0.46.7): a register whose vendor token another row of the same
+    /// person already holds replaces that row (the new id stays, with no
+    /// leftover key row); different tokens keep both.
+    #[test]
+    fn a_reregister_with_the_same_token_under_a_new_id_leaves_one_row() {
+        let t = tok("dup");
+        let old = did("dup-old");
+        let new = did("dup-new");
+        upsert_device(&old, "apns", &t, "owner").expect("old id");
+        let (_, pk) = crate::push::seal::derive_keypair(&[4u8; 32]);
+        let key = crate::push_device_keys::NewKey {
+            key_id: crate::push::seal::key_id(&pk),
+            public_key: pk,
+            psk: vec![9u8; 32],
+            v: 1,
+        };
+        upsert_device_e2e(&old, "apns", &t, "owner", None, None, crate::push_device_keys::E2eChange::Set(key))
+            .expect("old key");
+        assert!(crate::push_device_keys::get_key(&old).expect("key read").is_some());
+        upsert_device(&new, "apns", &t, "owner").expect("new id, same token");
+        let rows: Vec<_> = list_devices().expect("list").into_iter().filter(|d| d.token == t).collect();
+        assert_eq!(rows.len(), 1, "one row per token: {rows:?}");
+        assert_eq!(rows[0].device_id, new, "the new id is kept");
+        assert!(get_device(&old).expect("get").is_none(), "the old row is gone");
+        assert!(crate::push_device_keys::get_key(&old).expect("key read").is_none(), "its key row too");
+        // The same id again is a plain refresh, never a self-delete.
+        upsert_device(&new, "apns", &t, "owner").expect("refresh");
+        assert!(get_device(&new).expect("get").is_some());
+        remove_device(&new).expect("cleanup");
+    }
+
+    #[test]
+    fn different_tokens_keep_two_rows_and_another_platform_is_not_a_duplicate() {
+        let (a, b) = (did("two-a"), did("two-b"));
+        let (ta, tb) = (tok("two-a"), tok("two-b"));
+        upsert_device(&a, "apns", &ta, "owner").expect("a");
+        upsert_device(&b, "apns", &tb, "owner").expect("b");
+        assert!(get_device(&a).expect("get").is_some());
+        assert!(get_device(&b).expect("get").is_some());
+        // The same token string on the other vendor is another handle.
+        let c = did("two-c");
+        upsert_device(&c, "fcm", &ta, "owner").expect("c");
+        assert!(get_device(&a).expect("get").is_some(), "an apns row is not an fcm row's duplicate");
+        assert!(get_device(&c).expect("get").is_some());
+        for id in [&a, &b, &c] {
+            remove_device(id).expect("cleanup");
+        }
+    }
+
+    /// Two people on one phone (two saved server entries, one per login)
+    /// share its token: each keeps their own registration.
+    #[test]
+    fn the_same_token_for_another_person_is_kept() {
+        let t = tok("two-people");
+        let (a, b) = (did("tp-owner"), did("tp-gina"));
+        upsert_device(&a, "apns", &t, "owner").expect("owner");
+        upsert_device(&b, "apns", &t, "k5gina").expect("gina");
+        assert!(get_device(&a).expect("get").is_some(), "the owner's row stays");
+        assert!(get_device(&b).expect("get").is_some());
+        remove_device(&a).expect("cleanup");
+        remove_device(&b).expect("cleanup");
+    }
+
+    #[test]
+    fn the_token_fingerprint_is_stable_short_hex_and_never_the_token() {
+        let t = "80f2c1d3e4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1";
+        let f = token_fingerprint(t);
+        assert_eq!(f, token_fingerprint(t), "stable");
+        assert_eq!(f.len(), 8);
+        assert!(f.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{f}");
+        assert!(!t.contains(&f), "the fingerprint is not a slice of the token: {f}");
+        // sha256("abc") = ba7816bf…: the first 4 bytes, pinned.
+        assert_eq!(token_fingerprint("abc"), "ba7816bf");
+        assert_ne!(token_fingerprint("abd"), token_fingerprint("abc"));
+    }
+
+    #[test]
+    fn dedupe_by_token_keeps_the_most_recently_seen_row() {
+        let row = |id: &str, token: &str, seen: i64| PushDevice {
+            device_id: id.into(),
+            platform: "apns".into(),
+            token: token.into(),
+            username: "owner".into(),
+            created_at: 1,
+            updated_at: seen,
+            last_seen_at: seen,
+            previews: true,
+        };
+        let out = dedupe_by_token(&[row("old", "t1", 10), row("other", "t2", 5), row("new", "t1", 20)]);
+        let ids: Vec<_> = out.iter().map(|d| d.device_id.as_str()).collect();
+        assert_eq!(ids, ["other", "new"]);
     }
 }

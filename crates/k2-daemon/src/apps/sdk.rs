@@ -74,10 +74,10 @@ fn box_kit() -> R<SewKit> {
             sdk_codes::SEW_KIT_MISSING,
             409,
             format!(
-                "Sew's App kit {v} isn't on this box yet. It comes with Sew's release: put {f} beside the Sew tarball when \
-                 you install or upgrade Sew (k2 hostchat enable|upgrade --tarball …), or keep it now: k2 app sdk kit <path>/{f}",
+                "Sew's App kit {v} isn't on this box yet. k2 hostchat enable and upgrade fetch it with Sew's release \
+                 (or take it from beside --tarball). To add it now: {}",
+                crate::sew::fetch::ReleaseFile::app_kit(pin, k).by_hand("k2 app sdk kit"),
                 v = k.version,
-                f = app_sdk::sew_kit::file_name(k.version)
             ),
         )),
         Err(e) => Err(refusal(e)),

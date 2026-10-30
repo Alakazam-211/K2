@@ -1050,7 +1050,7 @@ fn artifact_in(rel: &'static SewRelease, arch: &str) -> Result<&'static SewArtif
         .find(|a| a.arch == arch)
         .ok_or_else(|| format!("unsupported CPU architecture '{arch}': Sew ships x86_64 and aarch64"))?;
     if checksum_is_placeholder(a) {
-        return Err("refusing to install: this build has no Sew pin (placeholder checksum; Sew SW1 not published)".into());
+        return Err("refusing to install: this build has no Sew pin (placeholder checksum)".into());
     }
     Ok(a)
 }

@@ -153,6 +153,11 @@ fn sew_needs_the_kit_on_this_box() {
     let (st, v) = post("/cli/app/sdk/add", &Who::Owner, json!({"folder": s(&app), "sew": true}));
     assert_eq!((st, code(&v)), (409, "sew_kit_missing"), "{v}");
     assert!(v["error"]["hint"].as_str().unwrap().contains("k2 app sdk kit"), "{v}");
+    // 0.46.7: the hint names the exact file, its public URL and pinned sha256.
+    let kit = k2_root_proto::sew::app_kit("0.0.2").expect("the test pin has a kit");
+    let hint = v["error"]["hint"].as_str().unwrap();
+    assert!(hint.contains("/sew-releases/releases/download/v0.0.2/sew-app-kit-0.0.2.tar.gz"), "{hint}");
+    assert!(hint.contains(kit.sha256), "{hint}");
     assert!(!app.join("vendor").exists(), "nothing vendored on a refusal");
 
     // A tampered kit is refused at the door and not kept.

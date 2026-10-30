@@ -35,10 +35,14 @@
 //! file); disable pauses it; uninstall pauses or drops it; purge drops it
 //! ([`supervisor::grant_hook_off`]).
 //!
+//! - [`fetch`]: the pinned release files (core, sew-media, App kit) when
+//!   no `--tarball` is given: K2's cache, else Sew's public GitHub
+//!   releases, verified against the pin in K2's code (0.46.7).
 //! - [`s32`]: the S32 daemon side (K26 status fields + emit points, the
 //!   app-url / ship / mirror routes, the off-box shipper, K31's App Space
 //!   routes).
 
+pub mod fetch;
 pub mod health;
 pub mod home;
 pub mod meet;

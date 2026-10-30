@@ -310,13 +310,19 @@ fn preflight_hard_stops_refuse_before_any_effect() {
     assert!(t0.ops.effects().is_empty(), "effects {:?}", t0.ops.effects());
     assert!(t0.ops.calls.lock().unwrap().iter().all(|c| c.argv == "engine sew status"), "only the read-only status call");
     drop(t0);
-    // No tarball and nothing installed: the SW1 seam names --tarball.
+    // No tarball, nothing installed, and offline (the fake's default): the
+    // source check says exactly which file to fetch by hand (0.46.7).
     let t1 = t();
     let f = enable_begin(&t1.env(), &EnableRequest::default()).err().unwrap();
     let rep = f.extra.unwrap()["report"].clone();
     let src = rep.as_array().unwrap().iter().find(|c| c["id"] == "source").unwrap().clone();
     assert_eq!(src["status"], "fail");
-    assert!(src["hint"].as_str().unwrap().contains("--tarball"));
+    assert!(src["detail"].as_str().unwrap().starts_with("can't download Sew 0.0.2"), "{src}");
+    let hint = src["hint"].as_str().unwrap();
+    assert!(hint.contains("https://github.com/Alakazam-211/sew-releases/releases/download/v0.0.2/sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), "{hint}");
+    assert!(hint.contains(pinned_artifact("x86_64").unwrap().tarball_sha256), "{hint}");
+    assert!(hint.contains("k2 hostchat enable --tarball /path/to/sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), "{hint}");
+    assert!(!hint.contains("SW1") && !hint.contains("has not published"), "{hint}");
     // Not Linux: refused before anything, supported:false in status.
     drop(t1);
     let mut t2 = t();
@@ -956,7 +962,9 @@ fn upgrade_preconditions_refuse_without_effects() {
     *t.ops.on_disk.lock().unwrap() = Some("9.0.0".into());
     assert_eq!(upgrade_begin(&t.env(), &req).err().unwrap().code, "downgrade_refused");
     *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
-    assert_eq!(upgrade_begin(&t.env(), &UpgradeRequest::default()).err().unwrap().code, "release_source_unset");
+    // 0.46.7: no --tarball is no longer a refusal: the machine downloads.
+    let dl = upgrade_begin(&t.env(), &UpgradeRequest { dry_run: true, ..Default::default() }).unwrap().err().unwrap();
+    assert!(dl["steps"][0].as_str().unwrap().starts_with("download the pinned tarball from Sew's GitHub releases"), "{dl}");
     *t.ops.helper.lock().unwrap() = helper_ok(7, true, "0.0.1");
     assert_eq!(upgrade_begin(&t.env(), &req).err().unwrap().code, "helper_outdated");
     *t.ops.helper.lock().unwrap() = helper_ok(7, true, pinned().version);
@@ -1625,9 +1633,6 @@ fn upgrade_with_voice_upgrades_the_engine_through_the_new_core_after_its_health_
     let t = t2_old();
     with_voice(&t);
     let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
-    let f = upgrade_begin(&t.env(), &req).err().expect("refused");
-    assert_eq!(f.code, "media_tarball_needed", "{}", f.hint);
-    assert!(f.hint.contains("--media-tarball"), "{}", f.hint);
     let dry = upgrade_begin(&t.env(), &UpgradeRequest { dry_run: true, media_tarball_path: Some(MEDIA_TARBALL.into()), ..req.clone() })
         .unwrap()
         .err()
@@ -1698,6 +1703,31 @@ fn upgrade_with_voice_aborts_before_any_change_on_a_wrong_media_tarball() {
     assert!(!t.ops.effects().iter().any(|e| e == "engine sew upgrade"), "{:?}", t.ops.effects());
     let last = t.row().last_error.expect("reason");
     assert!(last.contains("aborted before any change") && last.contains("sew-media"), "{last}");
+}
+
+/// 0.46.7, an offline box with voice: no --media-tarball and no download.
+/// The upgrade stops before the core moves and says exactly what to fetch.
+#[test]
+fn upgrade_with_voice_offline_aborts_before_any_change_naming_the_media_file() {
+    let t = t2_old();
+    with_voice(&t);
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &req).expect("begin no longer refuses").unwrap();
+    let p = upgrade_machine(&env, &req, &from);
+    drop(l);
+    assert_eq!(p["result"], "aborted", "{p}");
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew upgrade"), "{:?}", t.ops.effects());
+    let last = t.row().last_error.expect("reason");
+    let (_, art) = k2_root_proto::sew::pinned_media_artifact("x86_64").unwrap();
+    assert!(last.contains("could not download sew-media 0.0.2"), "{last}");
+    assert!(
+        last.contains("https://github.com/Alakazam-211/sew-releases/releases/download/v0.0.2/sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz"),
+        "{last}"
+    );
+    assert!(last.contains(art.tarball_sha256), "{last}");
+    assert!(last.contains("k2 hostchat upgrade --media-tarball /path/to/sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), "{last}");
+    assert_eq!(t.row().status, "running");
     assert_eq!(p["lastError"].as_str(), Some(last.as_str()));
 }
 
@@ -1754,7 +1784,8 @@ fn rollback_with_voice_refuses_before_anything_moves_without_the_previous_engine
     let t = upgraded_with_voice();
     let f = rollback_with(&t.env(), &rollback_req(None)).unwrap_err();
     assert_eq!(f.code, "previous_media_tarball_needed", "{}", f.hint);
-    assert!(f.hint.contains("--media-tarball sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"), "{}", f.hint);
+    assert!(f.hint.contains("--media-tarball /path/to/sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"), "{}", f.hint);
+    assert!(f.hint.contains("/sew-releases/releases/download/v0.0.1/sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"), "{}", f.hint);
     assert!(f.hint.contains("nothing was changed"));
     assert!(!t.ops.effects().iter().any(|e| e == "engine sew rollback"), "{:?}", t.ops.effects());
     // The wrong tarball: refused, nothing staged or rolled back.
@@ -2088,4 +2119,138 @@ fn accept_binary_upgrades_only_the_exact_unknown_binary() {
     t.ops.clear();
     assert_eq!(rollback(&t.env()).err().unwrap().code, "rollback_refused");
     assert!(!t.ops.effects().iter().any(|e| e.contains("rollback")), "{:?}", t.ops.effects());
+}
+
+// ── 0.46.7: auto-fetch (a loopback server stands in for GitHub) ─────────
+
+use crate::sew::fetch::test_server::{Reply, Scratch, Server};
+
+/// `t` with the fake's release source on a loopback server and a scratch
+/// cache. The server holds nothing until a test serves it.
+fn online(t: &T) -> (Server, Scratch) {
+    let s = Server::start();
+    let dir = Scratch::new("sup");
+    *t.ops.release_source.lock().unwrap() =
+        crate::sew::fetch::Source { origin: s.origin(), cache_root: Some(dir.0.join("cache").join("sew")) };
+    (s, dir)
+}
+
+const CORE_PATH: &str = "/v0.0.2/sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz";
+
+fn enable_no_tarball(t: &T) -> Result<(), String> {
+    let env = t.env();
+    let req = EnableRequest::default();
+    let latch = match enable_begin(&env, &req) {
+        Ok(Ok(l)) => l,
+        Ok(Err(v)) => return Err(format!("answered without a machine: {v}")),
+        Err(f) => return Err(format!("{}: {} {:?}", f.code, f.hint, f.extra)),
+    };
+    let r = enable_machine(&env, &req);
+    drop(latch);
+    r
+}
+
+/// Enable with no flags: preflight sees the download, the machine fetches
+/// the pinned tarball, verifies it, and hands exactly those bytes to the
+/// helper's stage; a second enable takes the cache and makes no request.
+#[test]
+fn enable_without_a_tarball_downloads_verifies_and_stages_the_pinned_release() {
+    let t = t();
+    let (s, dir) = online(&t);
+    let core = fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+    s.serve(CORE_PATH, Reply::Bytes(core.clone()));
+
+    let src = preflight(&t.env(), &EnableRequest::default()).into_iter().find(|c| c["id"] == "source").unwrap();
+    assert_eq!(src["status"], "ok", "{src}");
+    assert_eq!(
+        src["detail"],
+        format!("will download Sew 0.0.2 ({}) from Sew's GitHub releases on enable", crate::sew::fetch::size_words(core.len() as u64))
+    );
+
+    enable_no_tarball(&t).expect("enable");
+    let row = t.row();
+    assert_eq!(row.status, "running");
+    let dl = &row.enable_progress.as_ref().unwrap()["download"];
+    assert_eq!(dl["source"], "download", "{dl}");
+    assert_eq!(dl["file"], "sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+    assert_eq!((dl["bytes"].as_u64(), dl["total"].as_u64()), (Some(core.len() as u64), Some(core.len() as u64)), "{dl}");
+    // The helper staged exactly the downloaded bytes.
+    let staged = t.ops.calls.lock().unwrap().iter().find(|c| c.argv == "engine sew stage").expect("staged").clone();
+    assert_eq!(staged.stdin.as_deref(), Some(core.as_slice()), "the helper got the pinned bytes");
+    let cached = dir.0.join("cache/sew/0.0.2/sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+    assert_eq!(std::fs::read(&cached).unwrap(), core);
+    let gets = s.seen.lock().unwrap().iter().filter(|l| l.starts_with("GET ")).cloned().collect::<Vec<_>>();
+    assert!(gets.contains(&format!("GET {CORE_PATH}")), "{gets:?}");
+    assert!(!s.seen.lock().unwrap().iter().any(|l| l.contains("Authorization") || l.contains("Cookie")), "no credentials sent");
+
+    // From the cache now: the preflight says so, no new request.
+    let before = s.seen.lock().unwrap().len();
+    let src = preflight(&t.env(), &EnableRequest::default()).into_iter().find(|c| c["id"] == "source").unwrap();
+    assert_eq!(src["detail"], "Sew 0.0.2 is in K2's download cache", "{src}");
+    assert_eq!(s.seen.lock().unwrap().len(), before);
+}
+
+/// GitHub serves other bytes: refused loudly, the file deleted, nothing
+/// staged or installed.
+#[test]
+fn enable_refuses_a_download_that_is_not_the_pin_and_deletes_it() {
+    let t = t();
+    let (s, dir) = online(&t);
+    s.serve(CORE_PATH, Reply::Bytes(b"not sew".to_vec()));
+    let e = enable_no_tarball(&t).expect_err("must refuse");
+    assert!(e.starts_with("stage: the download of Sew 0.0.2"), "{e}");
+    assert!(e.contains(pinned_artifact("x86_64").unwrap().tarball_sha256) && e.contains("deleted"), "{e}");
+    assert!(!t.ops.effects().iter().any(|x| x == "engine sew stage" || x == "engine sew install-bin"), "{:?}", t.ops.effects());
+    let left: Vec<_> = std::fs::read_dir(dir.0.join("cache/sew/0.0.2")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(left.is_empty(), "nothing kept: {left:?}");
+    assert_eq!(t.row().status, "error");
+}
+
+/// --tarball wins: no request at all, even with the download reachable.
+#[test]
+fn an_explicit_tarball_takes_precedence_over_the_download() {
+    let t = t();
+    let (s, _dir) = online(&t);
+    s.serve(CORE_PATH, Reply::Bytes(fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz")));
+    let src = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "source").unwrap();
+    assert_eq!(src["detail"], format!("--tarball {TARBALL}"));
+    t.enable().expect("enable");
+    assert!(s.seen.lock().unwrap().is_empty(), "never asked the network: {:?}", s.seen.lock().unwrap());
+    assert_eq!(t.row().enable_progress.unwrap()["download"]["source"], "tarball");
+}
+
+/// Upgrade with no flags fetches the pin the same way.
+#[test]
+fn upgrade_without_a_tarball_downloads_the_pin() {
+    let t = t2_old();
+    let (s, _dir) = online(&t);
+    let core = fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+    s.serve(CORE_PATH, Reply::Bytes(core.clone()));
+    let req = UpgradeRequest::default();
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
+    let p = upgrade_machine(&env, &req, &from);
+    drop(l);
+    assert_eq!(p["result"], "done", "{p}");
+    assert_eq!(p["download"]["source"], "download", "{p}");
+    let staged = t.ops.calls.lock().unwrap().iter().find(|c| c.argv == "engine sew stage").expect("staged").clone();
+    assert_eq!(staged.stdin.as_deref(), Some(core.as_slice()));
+}
+
+/// Rollback with voice and no kept engine: the previous release's
+/// sew-media is fetched and staged before the core moves.
+#[test]
+fn rollback_with_voice_fetches_the_previous_engine_when_not_kept() {
+    let t = upgraded_with_voice();
+    let (s, _dir) = online(&t);
+    let old_media = fixture("sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz");
+    s.serve("/v0.0.1/sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz", Reply::Bytes(old_media.clone()));
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let _ = rollback_with(&t.env(), &rollback_req(None));
+    let calls = t.ops.calls.lock().unwrap().clone();
+    let stage = calls.iter().position(|c| c.argv == "engine sew stage-media").expect("staged the old engine");
+    assert_eq!(calls[stage].stdin.as_deref(), Some(old_media.as_slice()));
+    let back = calls.iter().position(|c| c.argv == "engine sew rollback").expect("rolled back");
+    assert!(stage < back, "the engine is in hand before the core moves");
 }

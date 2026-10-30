@@ -34,6 +34,7 @@ use k2_root_proto::sew::{
 };
 use k2_root_proto::version::SEW_MIN_PROTOCOL;
 
+use super::fetch::{self, FetchError, ReleaseFile};
 use super::ops::{MgmtError, RealOps, SewOps, UnitInfo};
 use super::secrets::{kek_id, SewSecrets, VaultSecrets};
 use super::sew_wire as wire;
@@ -436,7 +437,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     };
     match pinned_artifact(&arch) {
         Ok(_) => c.push(check("pin", "ok", format!("Sew {}", pinned().version), "")),
-        Err(e) => c.push(check("pin", "fail", e, "this K2 build has no Sew release pinned yet (Sew SW1)")),
+        Err(e) => c.push(check("pin", "fail", e, "this K2 build pins no Sew release for this CPU")),
     }
     let st = if helper_ok { box_status(env) } else { None };
     let (present, version, known) = st.as_ref().map(on_disk).unwrap_or((false, None, false));
@@ -466,12 +467,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     match (&req.tarball_path, have_bin) {
         (_, true) => c.push(check("source", "ok", "the pinned binary is already installed", "")),
         (Some(p), _) => c.push(check("source", "ok", format!("--tarball {}", p.display()), "")),
-        (None, false) => c.push(check(
-            "source",
-            "fail",
-            "no Sew release source",
-            "Sew has not published a pinned release yet (SW1): k2 hostchat enable --tarball <sew-<v>-<triple>.tar.gz>",
-        )),
+        (None, false) => c.push(source_check(env, &arch)),
     }
     match env.ops.mem_total() {
         Some(m) if m < 4 * GIB => c.push(check("ram", "fail", gib(m), "Sew on a K2 box needs at least 4 GiB of RAM")),
@@ -554,6 +550,64 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         c.push(check("vault", "ok", "the K2 vault is open (enable stores a new Sew master key there)", ""));
     }
     c
+}
+
+/// The `source` check with no `--tarball` (0.46.7): the pinned release is
+/// in K2's cache, or its download answers (a HEAD, a few seconds), or the
+/// words for fetching it by hand.
+fn source_check(env: &Env, arch: &str) -> Value {
+    let Ok(art) = pinned_artifact(arch) else {
+        return check("source", "fail", "no pinned Sew release for this CPU", "");
+    };
+    let f = ReleaseFile::core(pinned().version, art);
+    let src = env.ops.release_source();
+    if fetch::cached(&src, &f).is_some() {
+        return check("source", "ok", format!("{} is in K2's download cache", f.label), "");
+    }
+    match fetch::probe(&src, &f) {
+        Ok(Some(n)) => check("source", "ok", format!("will download {} ({}) from Sew's GitHub releases on enable", f.label, fetch::size_words(n)), ""),
+        Ok(None) => check("source", "ok", format!("will download {} from Sew's GitHub releases on enable", f.label), ""),
+        Err(e) => check("source", "fail", format!("can't download {}: {e}", f.label), f.by_hand("k2 hostchat enable --tarball")),
+    }
+}
+
+// ── release files (0.46.7) ───────────────────────────────────────────────
+
+/// Download progress for `f`, handed to `save` at most twice a second and
+/// at the end (`{file, label, url, bytes, total, source}`).
+fn download_note<'a>(f: &'a ReleaseFile, save: &'a dyn Fn(Value)) -> impl Fn(u64, Option<u64>) + 'a {
+    let last = std::cell::Cell::new(None::<std::time::Instant>);
+    move |n, total| {
+        let now = std::time::Instant::now();
+        let end = total == Some(n);
+        if !end && last.get().is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(500)) {
+            return;
+        }
+        last.set(Some(now));
+        save(json!({"file": f.name, "label": f.label, "url": f.url(), "bytes": n, "total": total, "source": "download"}));
+    }
+}
+
+/// Why a pinned file could not be had, with what to fetch by hand (`cmd`
+/// is the command that takes the file).
+pub(crate) fn fetch_refusal(f: &ReleaseFile, e: &FetchError, cmd: &str) -> String {
+    match e {
+        FetchError::Unreachable(why) => format!("could not download {} ({why}). {}", f.label, f.by_hand(cmd)),
+        FetchError::Cache(why) => format!("could not keep {} ({why}). {}", f.label, f.by_hand(cmd)),
+        FetchError::Mismatch(m) => format!("{m}. {}", f.by_hand(cmd)),
+        FetchError::Refused(m) => format!("{m}; nothing was installed. {}", f.by_hand(cmd)),
+    }
+}
+
+/// The pinned file `f` with no path given: K2's cache, else a download
+/// into it (progress to `save`). Verified against the pin either way.
+pub(crate) fn obtain_release(env: &Env, f: &ReleaseFile, cmd: &str, save: &dyn Fn(Value)) -> Result<std::path::PathBuf, String> {
+    let o = fetch::obtain(&env.ops.release_source(), f, &download_note(f, save)).map_err(|e| fetch_refusal(f, &e, cmd))?;
+    if o.how == "cache" {
+        save(json!({"file": f.name, "label": f.label, "url": f.url(), "source": "cache"}));
+    }
+    k2_core::log_debug!("[sew] {} from {}: {}", f.label, o.how, o.path.display());
+    Ok(o.path)
 }
 
 fn failed(checks: &[Value]) -> bool {
@@ -704,19 +758,60 @@ fn poll_active(env: &Env, units: &[&str], secs: u32) -> Result<(), String> {
     Err(format!("{} not active after {secs} s", units.join(" + ")))
 }
 
-/// Read and verify the tarball the owner named; stage it through the helper.
-fn stage_tarball(env: &Env, path: Option<&std::path::Path>) -> Result<(), String> {
-    let p = path.ok_or("no Sew release source: pass --tarball (Sew SW1 has not published a pinned release)")?;
-    if !p.is_absolute() {
-        return Err("--tarball must be an absolute path".into());
-    }
-    let bytes = env.ops.read_file(p, MAX_TARBALL)?;
+/// The pinned core tarball, staged through the helper. Source order
+/// (0.46.7): the `--tarball` the owner named, else K2's cache, else Sew's
+/// GitHub release ([`fetch`]); `cmd` is the command an offline box runs
+/// instead. The bytes are checked against the pin before the helper sees
+/// them; the App kit comes from beside `--tarball`, or with the download.
+fn stage_tarball(env: &Env, path: Option<&std::path::Path>, cmd: &str, save: &dyn Fn(Value)) -> Result<(), String> {
     let art = pinned_artifact(&env.ops.arch())?;
+    let f = ReleaseFile::core(pinned().version, art);
+    let (p, given) = match path {
+        Some(p) => {
+            if !p.is_absolute() {
+                return Err("--tarball must be an absolute path".into());
+            }
+            save(json!({"file": f.name, "label": f.label, "source": "tarball", "path": p.display().to_string()}));
+            (p.to_path_buf(), true)
+        }
+        None => (obtain_release(env, &f, cmd, save)?, false),
+    };
+    let bytes = env.ops.read_file(&p, MAX_TARBALL)?;
     if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
         return Err(format!("sha256 mismatch: {} is not Sew {} for {} — NOT installing", p.display(), pinned().version, art.triple));
     }
-    keep_app_kit_beside(env, p)?;
+    if given {
+        keep_app_kit_beside(env, &p)?;
+    } else {
+        fetch_app_kit(env, save)?;
+    }
     helper(env, &["stage"], Some(&bytes)).map(|_| ())
+}
+
+/// With no `--tarball`: the pinned release's App kit from K2's cache or
+/// Sew's GitHub release, verified and kept for `k2 app sdk add --sew`.
+/// Unreachable is logged and skipped (chat does not need the kit, and
+/// `k2 app sdk add --sew` says how to add it); bytes that are not the
+/// pinned kit stop the install before any change.
+fn fetch_app_kit(env: &Env, save: &dyn Fn(Value)) -> Result<(), String> {
+    let pin_v = pinned().version;
+    let Some(kit) = pin::app_kit(pin_v) else { return Ok(()) };
+    if matches!(k2_core::app_sdk::load_kit(kit.version, kit.sha256), Ok(Some(_))) {
+        return Ok(());
+    }
+    let f = ReleaseFile::app_kit(pin_v, kit);
+    let o = match fetch::obtain(&env.ops.release_source(), &f, &download_note(&f, save)) {
+        Ok(o) => o,
+        Err(e @ (FetchError::Mismatch(_) | FetchError::Refused(_))) => return Err(fetch_refusal(&f, &e, "k2 app sdk kit")),
+        Err(e) => {
+            k2_core::log_debug!("[sew] {} not fetched ({e}); k2 app sdk add --sew waits for k2 app sdk kit", f.label);
+            return Ok(());
+        }
+    };
+    let bytes = env.ops.read_file(&o.path, k2_core::app_sdk::sew_kit::MAX_KIT)?;
+    k2_core::app_sdk::store_kit(&bytes, kit.version, kit.sha256)
+        .map(|_| ())
+        .map_err(|e| format!("{} is not Sew's App kit {} ({e}) — NOT installing", o.path.display(), kit.version))
 }
 
 /// 0.46.6: Sew's App kit (`sew-app-kit-<pin>.tar.gz`, Sew 0.5.0 on) beside
@@ -799,7 +894,13 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
     let (_, on_disk_v, _) = on_disk(&st);
     if on_disk_v.as_deref() != Some(pin_v) {
         step(env, "stage");
-        stage_tarball(env, req.tarball_path.as_deref()).map_err(|e| ("stage", e))?;
+        let note = |d: Value| {
+            save_enable(env, |r| {
+                let p = r.enable_progress.get_or_insert_with(|| json!({"steps": {}, "current": null}));
+                p["download"] = d.clone();
+            })
+        };
+        stage_tarball(env, req.tarball_path.as_deref(), "k2 hostchat enable --tarball", &note).map_err(|e| ("stage", e))?;
         done(env, "stage");
         step(env, "install-bin");
         helper(env, &["install-bin"], None).map_err(|e| ("install-bin", e))?;
@@ -2170,26 +2271,30 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
         }
         _ => {}
     }
-    if req.tarball_path.is_none() {
-        return Err(no(
-            "release_source_unset",
-            409,
-            format!("no Sew release source: k2 hostchat upgrade --tarball <sew-{to}-<triple>.tar.gz> (Sew SW1 is not published)"),
-        ));
-    }
     let voice = super::voice::load(env).installed;
     if voice {
         upgrade_media_source(env, req)?;
     }
     if req.dry_run {
         let mut steps = vec![
-            "stage the pinned tarball",
+            if req.tarball_path.is_some() {
+                "stage the pinned tarball (--tarball)"
+            } else {
+                "download the pinned tarball from Sew's GitHub releases (or take K2's cached copy), check it against K2's pin, stage it"
+            },
             "sew upgrade --binary (the installed Sew backs up, swaps, migrates, checks health, rolls back on failure)",
             "K2 health check: units active, mgmt healthy, version = pin",
             "on a failed K2 health check: automatic rollback",
         ];
         if voice {
-            steps.insert(1, "stage the pinned sew-media tarball");
+            steps.insert(
+                1,
+                if req.media_tarball_path.is_some() {
+                    "stage the pinned sew-media tarball (--media-tarball)"
+                } else {
+                    "stage the pinned sew-media tarball (downloaded or cached the same way, unless the helper already has it)"
+                },
+            );
             steps.push("voice: the NEW sew runs sew media upgrade --now (Sew rolls the engine back itself on failure)");
         }
         if !is_release(&from) {
@@ -2209,26 +2314,14 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
     Ok(Ok((latch, from)))
 }
 
-/// With voice installed, a sew-media source must be in hand before the
-/// core moves: a tarball path now, or the media pin already staged.
+/// With voice installed, this build must pin a sew-media for the box. The
+/// tarball itself (`--media-tarball`, K2's cache or a download) is staged
+/// with the core, before anything moves (0.46.7).
 fn upgrade_media_source(env: &Env, req: &UpgradeRequest) -> R<()> {
     if req.media_tarball_path.is_some() {
         return Ok(());
     }
-    let (v, art) = k2_root_proto::sew::pinned_media_artifact(&env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
-    let staged = helper(env, &["status"], None).ok().and_then(|s| s.pointer("/staged/media").and_then(Value::as_str).map(str::to_string));
-    if staged.as_deref() == Some(v) {
-        return Ok(());
-    }
-    Err(no(
-        "media_tarball_needed",
-        409,
-        format!(
-            "voice is installed: the voice engine is upgraded right after the core, so name the sew-media {v} release tarball \
-             for {} too (k2 hostchat upgrade --tarball <sew> --media-tarball <sew-media>); nothing was changed",
-            art.triple
-        ),
-    ))
+    k2_root_proto::sew::pinned_media_artifact(&env.ops.arch()).map(|_| ()).map_err(|e| no("media_unpinned", 409, e))
 }
 
 /// Record a step change; with `result`, the end of the upgrade. A result
@@ -2292,9 +2385,17 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
         .and_then(|p| p.get("prior").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "running".into());
     let voice = super::voice::load(env).installed;
-    let staged = stage_tarball(env, req.tarball_path.as_deref()).and_then(|_| {
+    let note = |d: Value| {
+        save_enable(env, |r| {
+            if let Some(p) = r.upgrade_progress.as_mut() {
+                p["download"] = d.clone();
+            }
+        })
+    };
+    let staged = stage_tarball(env, req.tarball_path.as_deref(), "k2 hostchat upgrade --tarball", &note).and_then(|_| {
         if voice {
-            super::voice::stage_media_bytes(env, req.media_tarball_path.as_deref()).map_err(|f| format!("sew-media: {}", f.hint))
+            super::voice::stage_media_bytes(env, req.media_tarball_path.as_deref(), "k2 hostchat upgrade --media-tarball", &note)
+                .map_err(|f| format!("sew-media: {}", f.hint))
         } else {
             Ok(())
         }
@@ -2547,21 +2648,41 @@ fn rollback_media_source(env: &Env, prev: Option<&str>, req: &RollbackRequest) -
         }
         helper(env, &["stage-media"], Some(&bytes)).map_err(|e| no("helper_error", 500, e))?;
     }
-    let kept = helper(env, &["status"], None)
-        .ok()
-        .and_then(|s| s.pointer("/staged/keptMedia").and_then(Value::as_array).cloned())
-        .unwrap_or_default();
-    if !kept.iter().any(|k| k.as_str() == Some(mv)) {
-        return Err(no(
-            "previous_media_tarball_needed",
-            409,
-            format!(
-                "voice is installed: after the core goes back to {prev}, that core reinstalls its own voice engine, sew-media \
-                 {mv}, and this box doesn't keep that tarball. Name it: k2 hostchat rollback --media-tarball \
-                 sew-media-{mv}-{}.tar.gz; nothing was changed",
-                art.triple
-            ),
-        ));
+    let kept_now = || {
+        helper(env, &["status"], None)
+            .ok()
+            .and_then(|s| s.pointer("/staged/keptMedia").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+            .iter()
+            .any(|k| k.as_str() == Some(mv))
+    };
+    if !kept_now() {
+        // 0.46.7: neither kept nor named: K2's cache, else Sew's release.
+        let f = ReleaseFile::media(prev, mv, art);
+        let fetched = obtain_release(env, &f, "k2 hostchat rollback --media-tarball", &|_: Value| {}).and_then(|p| {
+            let bytes = env.ops.read_file(&p, MAX_TARBALL)?;
+            if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
+                return Err(format!("{} is not sew-media {mv} for {} — NOT installing", p.display(), art.triple));
+            }
+            helper(env, &["stage-media"], Some(&bytes)).map(|_| ())
+        });
+        if let Err(e) = fetched {
+            return Err(no(
+                "previous_media_tarball_needed",
+                409,
+                format!(
+                    "voice is installed: after the core goes back to {prev}, that core reinstalls its own voice engine, \
+                     sew-media {mv}, and this box doesn't keep that tarball. {e}; nothing was changed"
+                ),
+            ));
+        }
+        if !kept_now() {
+            return Err(no(
+                "previous_media_tarball_needed",
+                409,
+                format!("the root helper staged sew-media {mv} but does not keep it for the rollback; nothing was changed"),
+            ));
+        }
     }
     Ok(Some(mv.to_string()))
 }

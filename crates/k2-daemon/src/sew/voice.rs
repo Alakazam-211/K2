@@ -478,8 +478,9 @@ pub struct InstallRequest {
     pub public_url: Option<String>,
     /// The node IP(s) to advertise; default the one K2 Connect sees.
     pub node_ip: Option<String>,
-    /// The sew-media release tarball (until Sew publishes a release K2
-    /// downloads; the bytes must match this build's pin).
+    /// The sew-media release tarball, for a box without internet (the
+    /// bytes must match this build's pin). Without it the pinned file comes
+    /// from K2's cache or Sew's GitHub release (0.46.7).
     pub tarball_path: Option<std::path::PathBuf>,
 }
 
@@ -567,7 +568,14 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     };
 
     step(env, "stage");
-    stage_media_bytes(env, req.tarball_path.as_deref())?;
+    let note = |d: Value| {
+        update(env, |st| {
+            if let Some(p) = st.progress.as_mut() {
+                p["download"] = d.clone();
+            }
+        });
+    };
+    stage_media_bytes(env, req.tarball_path.as_deref(), "k2 hostchat media install --tarball", &note)?;
 
     step(env, "turn-dns");
     step(env, "turn-cert");
@@ -685,19 +693,24 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     }))
 }
 
-pub(crate) fn stage_media_bytes(env: &Env, path: Option<&std::path::Path>) -> R<()> {
+/// Stage the pinned sew-media: the path given, else (when the helper does
+/// not already hold it) K2's cache or Sew's GitHub release (0.46.7). `cmd`
+/// is what an offline box runs instead; `note` gets download progress.
+pub(crate) fn stage_media_bytes(env: &Env, path: Option<&std::path::Path>, cmd: &str, note: &dyn Fn(Value)) -> R<()> {
     let (v, art) = pinned_media_artifact(&env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
     let staged = sup::helper_json(env, &["status"]).ok().and_then(|s| s.pointer("/staged/media").and_then(Value::as_str).map(str::to_string));
     if staged.as_deref() == Some(v) && path.is_none() {
         return Ok(());
     }
-    let p = path.ok_or_else(|| {
-        no(
-            "media_tarball_needed",
-            409,
-            format!("name the sew-media {v} release tarball for {} (k2 hostchat media install --tarball <file>)", art.triple),
-        )
-    })?;
+    let fetched;
+    let p = match path {
+        Some(p) => p,
+        None => {
+            let f = super::fetch::ReleaseFile::media(pin::pinned().version, v, art);
+            fetched = sup::obtain_release(env, &f, cmd, note).map_err(|e| no("media_tarball_needed", 409, e))?;
+            fetched.as_path()
+        }
+    };
     let bytes = env.ops.read_file(p, MAX_TARBALL).map_err(|e| no("bad_request", 400, e))?;
     if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
         return Err(no("sha256_mismatch", 400, format!("{} is not sew-media {v} for {} — NOT installing", p.display(), art.triple)));

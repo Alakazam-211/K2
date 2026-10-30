@@ -96,6 +96,11 @@ pub trait SewOps: Send + Sync {
     fn api_health(&self) -> Result<(u16, Value), String> {
         Err("this build has no client-listener probe".into())
     }
+    /// Where pinned Sew release files come from when no `--tarball` is
+    /// given (0.46.7): K2's cache and Sew's public GitHub releases.
+    fn release_source(&self) -> super::fetch::Source {
+        super::fetch::Source::offline()
+    }
 
     // ── voice (K13) ──────────────────────────────────────────────────────
     /// This box's k2.dev label (the tunnel's primary label), `None` without
@@ -281,6 +286,9 @@ pub const MGMT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 impl SewOps for RealOps {
     fn linux(&self) -> bool {
         super::sew_supported()
+    }
+    fn release_source(&self) -> super::fetch::Source {
+        super::fetch::Source::live()
     }
     fn arch(&self) -> String {
         std::env::consts::ARCH.to_string()
@@ -771,6 +779,10 @@ pub mod fake {
         /// Queued `/api/v1/health` answers (default: 200 ready).
         pub api_health_q: Mutex<VecDeque<Result<(u16, Value), String>>>,
         pub api_health_n: Mutex<usize>,
+        /// [`SewOps::release_source`] (default: offline, no cache). A test
+        /// points it at a loopback server and a scratch cache; files under
+        /// that cache are read from disk by `read_file`.
+        pub release_source: Mutex<crate::sew::fetch::Source>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -865,6 +877,7 @@ pub mod fake {
                 passthrough: Mutex::new(true),
                 served_ports: Mutex::new(vec![]),
                 front_rebuilds: Mutex::new(0),
+                release_source: Mutex::new(crate::sew::fetch::Source::offline()),
             }
         }
 
@@ -1201,6 +1214,9 @@ pub mod fake {
     }
 
     impl SewOps for FakeOps {
+        fn release_source(&self) -> crate::sew::fetch::Source {
+            self.release_source.lock().unwrap().clone()
+        }
         fn sew_released(&self) -> bool {
             *self.released.lock().unwrap()
         }
@@ -1262,13 +1278,12 @@ pub mod fake {
                 .unwrap_or(UnitInfo { active: "inactive".into(), ..Default::default() })
         }
         fn read_file(&self, path: &Path, cap: usize) -> Result<Vec<u8>, String> {
-            let b = self
-                .files
-                .lock()
-                .unwrap()
-                .get(&path.display().to_string())
-                .cloned()
-                .ok_or_else(|| format!("{}: No such file or directory", path.display()))?;
+            let in_cache = self.release_source.lock().unwrap().cache_root.as_ref().is_some_and(|r| path.starts_with(r));
+            let b = match self.files.lock().unwrap().get(&path.display().to_string()).cloned() {
+                Some(b) => b,
+                None if in_cache => std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
+                None => return Err(format!("{}: No such file or directory", path.display())),
+            };
             if b.len() > cap {
                 return Err("too large".into());
             }

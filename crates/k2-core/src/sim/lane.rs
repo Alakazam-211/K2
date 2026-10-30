@@ -313,6 +313,45 @@ pub enum Key {
     ArrowRight,
 }
 
+/// Modifier keys held with a [`Key`] (a person's Shift+Arrow selects,
+/// Option+Arrow jumps a word). Command / Ctrl chords go through
+/// [`EditOp`] instead, so K2 keeps its own ⌘ shortcuts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyMods {
+    #[serde(default)]
+    pub shift: bool,
+    /// Option on a Mac keyboard.
+    #[serde(default)]
+    pub alt: bool,
+}
+
+/// A text-editing command a person's ⌘ (or Ctrl) chord means inside the
+/// device: iOS gets ⌘<letter>, Android Ctrl+<letter>. Paste is
+/// [`Action::Paste`] (it carries the host clipboard's text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditOp {
+    SelectAll,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+}
+
+impl EditOp {
+    /// The letter of the chord (`a` for select-all) and whether Shift is
+    /// held too (redo is ⇧⌘Z / Ctrl+Shift+Z).
+    pub fn chord(self) -> (char, bool) {
+        match self {
+            EditOp::SelectAll => ('a', false),
+            EditOp::Undo => ('z', false),
+            EditOp::Redo => ('z', true),
+            EditOp::Cut => ('x', false),
+            EditOp::Copy => ('c', false),
+        }
+    }
+}
+
 /// One input or device action. The core resolves element ids to points
 /// before calling the lane, so lanes only see coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -326,9 +365,21 @@ pub enum Action {
     /// up). Lanes that can't stream phases may buffer until `Up` and replay
     /// as a tap / swipe.
     Touch { phase: TouchPhase, at: Point },
-    /// Type text into whatever has focus.
+    /// Type text into whatever has focus (`k2 sim type`: the lane finds
+    /// the field and checks the text arrived).
     Type { text: SimText },
-    Key { key: Key },
+    /// A person typing on the stream: send the text as key events at
+    /// once, with no focus lookup and no read-back (that would cost a
+    /// round trip per keystroke). Characters the device keyboard can't
+    /// type (an IME commit, an accented letter) go in through the
+    /// device's pasteboard instead.
+    Keystrokes { text: SimText },
+    /// Put text on the device's pasteboard and press its paste chord (a
+    /// person's ⌘V with the host clipboard's text).
+    Paste { text: SimText },
+    Key { key: Key, mods: KeyMods },
+    /// A ⌘ / Ctrl editing chord inside the device.
+    Edit { op: EditOp },
     Button { button: Button },
     /// Rotate to an absolute orientation.
     Rotate { orientation: Orientation },
@@ -369,7 +420,10 @@ impl Action {
             Action::Swipe { .. } => "swipe",
             Action::Touch { .. } => "touch",
             Action::Type { .. } => "type",
+            Action::Keystrokes { .. } => "keys",
+            Action::Paste { .. } => "paste",
             Action::Key { .. } => "key",
+            Action::Edit { .. } => "edit",
             Action::Button { .. } => "button",
             Action::Rotate { .. } => "rotate",
             Action::OpenUrl { .. } => "open-url",

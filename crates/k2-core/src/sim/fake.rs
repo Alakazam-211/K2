@@ -165,6 +165,20 @@ impl SimLane for FakeLane {
                 self.email.lock().push_str(text.expose());
                 self.actions.lock().push(format!("type {:?}", text));
             }
+            // A person's keyboard: never the text itself (it may be a pasted secret).
+            Action::Keystrokes { text } => self.actions.lock().push(format!("keys {}", text.len_chars())),
+            Action::Paste { text } => self.actions.lock().push(format!("paste {}", text.len_chars())),
+            Action::Key { key, mods } => {
+                let mut s = format!("key {key:?}");
+                if mods.shift {
+                    s.push_str("+shift");
+                }
+                if mods.alt {
+                    s.push_str("+alt");
+                }
+                self.actions.lock().push(s)
+            }
+            Action::Edit { op } => self.actions.lock().push(format!("edit {op:?}")),
             other => self.actions.lock().push(other.verb().to_string()),
         }
         Ok(())

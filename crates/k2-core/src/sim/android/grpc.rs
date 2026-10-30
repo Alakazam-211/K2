@@ -117,6 +117,13 @@ pub const KEY_KEYDOWN: i32 = 0;
 pub const KEY_KEYUP: i32 = 1;
 pub const KEY_KEYPRESS: i32 = 2;
 
+/// `ClipData`: the guest clipboard's text (`setClipboard`).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ClipData {
+    #[prost(string, tag = "1")]
+    pub text: String,
+}
+
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GpsState {
     #[prost(bool, tag = "1")]
@@ -336,6 +343,11 @@ impl EmuGrpc {
 
     pub async fn send_key(&self, ev: &KeyboardEvent) -> Result<(), GrpcError> {
         self.unary::<_, Empty>("sendKey", ev).await.map(|_| ())
+    }
+
+    /// Sets the guest's clipboard (the text rides the gRPC body, never argv).
+    pub async fn set_clipboard(&self, c: &ClipData) -> Result<(), GrpcError> {
+        self.unary::<_, Empty>("setClipboard", c).await.map(|_| ())
     }
 
     pub async fn set_gps(&self, g: &GpsState) -> Result<(), GrpcError> {

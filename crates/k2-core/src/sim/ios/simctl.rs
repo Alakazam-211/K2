@@ -5,7 +5,7 @@
 //! person's own Simulators (vs-live test 3). The runner is the seam the unit
 //! tests replace (M-A18).
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -57,6 +57,12 @@ pub struct Output {
 /// Runs one program to completion, or kills it at `timeout`.
 pub trait Runner: Send + Sync {
     fn run(&self, program: &str, args: &[String], timeout: Duration) -> SimResult<Output>;
+
+    /// Like [`Runner::run`], with `input` on the program's stdin (text that
+    /// must never be on a command line, e.g. `simctl pbcopy`).
+    fn run_input(&self, program: &str, _args: &[String], _input: &[u8], _timeout: Duration) -> SimResult<Output> {
+        Err(SimError::new("spawn_failed", format!("this runner can't send input to {program}")))
+    }
 }
 
 /// The real runner.
@@ -64,46 +70,63 @@ pub struct ProcessRunner;
 
 impl Runner for ProcessRunner {
     fn run(&self, program: &str, args: &[String], timeout: Duration) -> SimResult<Output> {
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| SimError::new("spawn_failed", format!("could not run {program}: {e}")))?;
-        // Drain both pipes on threads so a chatty child never blocks on a full pipe.
-        let mut out = child.stdout.take().expect("piped stdout");
-        let mut err = child.stderr.take().expect("piped stderr");
-        let t_out = std::thread::spawn(move || {
-            let mut s = Vec::new();
-            let _ = out.read_to_end(&mut s);
-            s
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut s = Vec::new();
-            let _ = err.read_to_end(&mut s);
-            s
-        });
-        let start = Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(s)) => break s,
-                Ok(None) if start.elapsed() >= timeout => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(SimError::new(
-                        "timeout",
-                        format!("{program} {} took longer than {}s", args.join(" "), timeout.as_secs()),
-                    ));
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(e) => return Err(SimError::new("spawn_failed", format!("waiting for {program}: {e}"))),
-            }
-        };
-        let stdout = String::from_utf8_lossy(&t_out.join().unwrap_or_default()).into_owned();
-        let stderr = String::from_utf8_lossy(&t_err.join().unwrap_or_default()).into_owned();
-        Ok(Output { status: status.code().unwrap_or(-1), stdout, stderr })
+        run_process(program, args, None, timeout)
     }
+
+    fn run_input(&self, program: &str, args: &[String], input: &[u8], timeout: Duration) -> SimResult<Output> {
+        run_process(program, args, Some(input), timeout)
+    }
+}
+
+fn run_process(program: &str, args: &[String], input: Option<&[u8]>, timeout: Duration) -> SimResult<Output> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| SimError::new("spawn_failed", format!("could not run {program}: {e}")))?;
+    if let Some(bytes) = input {
+        // Feed stdin on a thread (a big input never deadlocks against a
+        // full stdout pipe); dropping the handle closes it (EOF).
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let bytes = bytes.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&bytes);
+        });
+    }
+    // Drain both pipes on threads so a chatty child never blocks on a full pipe.
+    let mut out = child.stdout.take().expect("piped stdout");
+    let mut err = child.stderr.take().expect("piped stderr");
+    let t_out = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = out.read_to_end(&mut s);
+        s
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = err.read_to_end(&mut s);
+        s
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(SimError::new(
+                    "timeout",
+                    format!("{program} {} took longer than {}s", args.join(" "), timeout.as_secs()),
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => return Err(SimError::new("spawn_failed", format!("waiting for {program}: {e}"))),
+        }
+    };
+    let stdout = String::from_utf8_lossy(&t_out.join().unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&t_err.join().unwrap_or_default()).into_owned();
+    Ok(Output { status: status.code().unwrap_or(-1), stdout, stderr })
 }
 
 /// One simulator device as simctl lists it.
@@ -362,6 +385,17 @@ impl Simctl {
         self.call(&["location", udid, "set", &at], QUICK).map(|_| ())
     }
 
+    /// Puts `text` on the device's pasteboard (`simctl pbcopy`, over stdin:
+    /// the text is never on a command line).
+    pub fn pbcopy(&self, udid: &str, text: &str) -> SimResult<()> {
+        let _ = std::fs::create_dir_all(&self.set);
+        let out = self.runner.run_input("xcrun", &self.args(&["pbcopy", udid]), text.as_bytes(), QUICK)?;
+        if out.status != 0 {
+            return Err(simctl_error("pbcopy", &out));
+        }
+        Ok(())
+    }
+
     pub fn appearance(&self, udid: &str, dark: bool) -> SimResult<()> {
         self.call(&["ui", udid, "appearance", if dark { "dark" } else { "light" }], QUICK).map(|_| ())
     }
@@ -411,6 +445,14 @@ mod tests {
     impl Runner for FakeRunner {
         fn run(&self, program: &str, args: &[String], _t: Duration) -> SimResult<Output> {
             self.calls.lock().unwrap().push((program.to_string(), args.to_vec()));
+            (self.answer)(program, args)
+        }
+
+        /// Records stdin as a last `<stdin>…` argument (tests only).
+        fn run_input(&self, program: &str, args: &[String], input: &[u8], _t: Duration) -> SimResult<Output> {
+            let mut a = args.to_vec();
+            a.push(format!("<stdin>{}", String::from_utf8_lossy(input)));
+            self.calls.lock().unwrap().push((program.to_string(), a));
             (self.answer)(program, args)
         }
     }

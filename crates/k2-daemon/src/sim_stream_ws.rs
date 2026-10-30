@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::sim::encode;
 use k2_core::sim::hold::HoldView;
-use k2_core::sim::lane::{Action, FrameOpts, Point};
+use k2_core::sim::lane::{Action, FrameOpts, KeyMods, Point};
 use k2_core::sim::manager::{self, Ws};
 use k2_core::sim::stream::*;
 
@@ -196,13 +196,13 @@ fn to_action(m: &ViewerMsg) -> Option<Action> {
             to: Point { x: *x2, y: *y2 },
             duration: Duration::from_millis(duration_ms.unwrap_or(250).clamp(50, 3000) as u64),
         },
-        ViewerMsg::Text { text } => {
-            if text.chars().count() > 4096 {
-                return None;
-            }
-            Action::Type { text: k2_core::sim::lane::SimText::plain(text.clone()) }
-        }
-        ViewerMsg::Key { key } => Action::Key { key: *key },
+        // A person's keyboard (caps: `check_input`; the rate: the viewer's
+        // `InputBudget`). Typing goes as key events with no read-back.
+        ViewerMsg::Text { .. } | ViewerMsg::Paste { .. } if check_input(m).is_err() => return None,
+        ViewerMsg::Text { text } => Action::Keystrokes { text: k2_core::sim::lane::SimText::plain(text.clone()) },
+        ViewerMsg::Paste { text } => Action::Paste { text: k2_core::sim::lane::SimText::plain(text.clone()) },
+        ViewerMsg::Key { key, shift, alt } => Action::Key { key: *key, mods: KeyMods { shift: *shift, alt: *alt } },
+        ViewerMsg::Edit { op } => Action::Edit { op: *op },
         ViewerMsg::Button { button } => Action::Button { button: *button },
         ViewerMsg::Rotate { orientation } => Action::Rotate { orientation: *orientation },
         ViewerMsg::Appearance { appearance } => Action::Appearance { appearance: *appearance },
@@ -324,6 +324,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
             }
         })
     };
+    let mut budget = InputBudget::new(Instant::now());
     let mut auth = tokio::time::interval(Duration::from_secs(5));
     auth.tick().await;
     let mut pending = true; // send the newest frame as soon as we may
@@ -407,6 +408,10 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                     other => {
                         if !can_control {
                             let _ = write.send(text(&ServerMsg::Error { code: "sim_watch_only".into(), message: "You can watch this device but not use it.".into() })).await;
+                            continue;
+                        }
+                        if let Err(r) = check_input(&other).and_then(|_| budget.take(&other, Instant::now())) {
+                            let _ = write.send(text(&ServerMsg::Error { code: r.code.into(), message: r.message })).await;
                             continue;
                         }
                         if in_tx.try_send(other).is_err() {
@@ -521,6 +526,69 @@ mod tests {
         assert!(matches!(to_action(&ViewerMsg::Tap { x: 1.0, y: 2.0 }), Some(Action::Tap { .. })));
         assert!(to_action(&ViewerMsg::OpenUrl { url: "no scheme".into() }).is_none());
         assert!(to_action(&ViewerMsg::Text { text: "x".repeat(5000) }).is_none());
+        assert!(to_action(&ViewerMsg::Text { text: "x".repeat(TEXT_MAX_CHARS + 1) }).is_none());
+        assert!(to_action(&ViewerMsg::Paste { text: "x".repeat(PASTE_MAX_BYTES + 1) }).is_none());
         assert!(to_action(&ViewerMsg::Ack { seq: 1 }).is_none());
+    }
+
+    /// A person's keyboard: typing is key events (no read-back), ⌘V is a
+    /// paste, Shift/Option ride the key, ⌘A/⌘Z are edit chords.
+    #[test]
+    fn keyboard_messages_map_to_keyboard_actions() {
+        use k2_core::sim::lane::{EditOp, Key};
+        match to_action(&ViewerMsg::Text { text: "日本".into() }) {
+            Some(Action::Keystrokes { text }) => assert_eq!(text.expose(), "日本"),
+            other => panic!("text → keystrokes, got {other:?}"),
+        }
+        match to_action(&ViewerMsg::Paste { text: "a\nb".into() }) {
+            Some(Action::Paste { text }) => assert_eq!(text.expose(), "a\nb"),
+            other => panic!("paste → paste, got {other:?}"),
+        }
+        assert_eq!(
+            to_action(&ViewerMsg::Key { key: Key::ArrowLeft, shift: true, alt: false }),
+            Some(Action::Key { key: Key::ArrowLeft, mods: KeyMods { shift: true, alt: false } })
+        );
+        assert_eq!(to_action(&ViewerMsg::Edit { op: EditOp::Undo }), Some(Action::Edit { op: EditOp::Undo }));
+        assert!(to_action(&ViewerMsg::Text { text: "a\u{1b}".into() }).is_none(), "control characters are refused");
+    }
+
+    /// Keyboard actions reach the device lane the same way touch does (the
+    /// fake lane records them, never the text itself).
+    #[test]
+    fn keyboard_input_reaches_the_lane_through_person_input() {
+        use k2_core::sim::lane::{EditOp, Key};
+        let _serial = crate::sim_routes::sim_test_lock();
+        let tmp = std::env::temp_dir().join(format!("k2-sim-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("ws")).expect("ws");
+        k2_core::sim::set_base_for_tests(tmp.join("home"));
+        k2_core::sim::limits::save_settings(&k2_core::sim::limits::SimSettings { min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
+        let fake = Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Android));
+        k2_core::sim::register_lane(fake.clone());
+        let m = manager::manager();
+        m.refresh_probes();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, 'keys', ?2)", rusqlite::params![id, tmp.join("ws").display().to_string()])
+                .expect("project");
+        }
+        let ws = Ws { id: id.clone(), handle: "keys".into(), path: tmp.join("ws") };
+        m.boot(&ws, &manager::Actor::Person { name: "owner".into() }, &k2_core::sim::api::BootReq { no_tab: true, ..Default::default() }).expect("boot");
+        let owner = Caller::Owner;
+        person_input(&ws, "owner", &owner, ViewerMsg::Text { text: "hé".into() }).expect("text");
+        person_input(&ws, "owner", &owner, ViewerMsg::Key { key: Key::ArrowRight, shift: true, alt: false }).expect("key");
+        person_input(&ws, "owner", &owner, ViewerMsg::Edit { op: EditOp::SelectAll }).expect("edit");
+        person_input(&ws, "owner", &owner, ViewerMsg::Paste { text: "pasted secret".into() }).expect("paste");
+        let e = person_input(&ws, "owner", &owner, ViewerMsg::Paste { text: "x".repeat(PASTE_MAX_BYTES + 1) }).expect_err("too big");
+        assert_eq!(e.code, "sim_invalid");
+        let acts = fake.actions.lock().clone();
+        let tail: Vec<&str> = acts.iter().rev().take(4).rev().map(String::as_str).collect();
+        assert_eq!(tail, vec!["keys 2", "key ArrowRight+shift", "edit SelectAll", "paste 13"]);
+        assert!(!acts.iter().any(|a| a.contains("secret")), "{acts:?}");
+        m.stop(&ws, &manager::Actor::Person { name: "owner".into() }, "test").expect("stop");
+        crate::sim_routes::clear_lanes_for_tests();
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -357,10 +357,13 @@ final class HID {
         try touch(false, x2, y2)
     }
 
-    func press(_ usage: UInt32, shift: Bool) throws {
-        if shift { try send(key(0xE1, 1)) }
+    /// One key with modifiers held: Left Shift 0xE1, Left Option 0xE2,
+    /// Left Command 0xE3 (⌘V pastes, ⌘Z undoes, ⌥← jumps a word).
+    func press(_ usage: UInt32, shift: Bool, alt: Bool = false, cmd: Bool = false) throws {
+        let mods: [UInt32] = (cmd ? [0xE3] : []) + (alt ? [0xE2] : []) + (shift ? [0xE1] : [])
+        for m in mods { try send(key(m, 1)) }
         try send(key(usage, 1)); usleep(8_000); try send(key(usage, 2))
-        if shift { try send(key(0xE1, 2)) }
+        for m in mods.reversed() { try send(key(m, 2)) }
         usleep(8_000)
     }
 
@@ -746,7 +749,8 @@ func handle(_ r: [String: Any]) throws -> [String: Any] {
         try needHID().type(try str(r, "text"))
         return [:]
     case "key":
-        try needHID().press(UInt32(try num(r, "usage")), shift: (r["shift"] as? Bool) ?? false)
+        try needHID().press(UInt32(try num(r, "usage")), shift: (r["shift"] as? Bool) ?? false,
+                            alt: (r["alt"] as? Bool) ?? false, cmd: (r["cmd"] as? Bool) ?? false)
         return [:]
     case "button":
         try needHID().hardwareButton(try str(r, "name"))

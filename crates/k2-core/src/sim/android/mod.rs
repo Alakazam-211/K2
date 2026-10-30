@@ -342,6 +342,39 @@ impl AndroidLane {
         }
     }
 
+    /// Send key events in order. When one fails, the modifiers already
+    /// pressed are still released, so a Shift never sticks.
+    fn send_keys(g: &grpc::EmuGrpc, evs: Vec<grpc::KeyboardEvent>) -> Result<(), LaneError> {
+        let mut held: Vec<grpc::KeyboardEvent> = Vec::new();
+        for ev in evs {
+            let g2 = g.clone();
+            let sent = ev.clone();
+            if let Err(e) = Self::block(async move { g2.send_key(&sent).await }) {
+                for down in held.into_iter().rev() {
+                    let up = grpc::KeyboardEvent { event_type: grpc::KEY_KEYUP, ..down };
+                    let g3 = g.clone();
+                    let _ = Self::block(async move { g3.send_key(&up).await });
+                }
+                return Err(e);
+            }
+            match ev.event_type {
+                grpc::KEY_KEYDOWN => held.push(ev),
+                grpc::KEY_KEYUP => held.retain(|h| h.key != ev.key),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The guest clipboard gets `text`, then Ctrl+V pastes it.
+    fn paste(&self, dev: &DeviceRef, st: &State, text: &str) -> Result<(), LaneError> {
+        let g = self.grpc(dev, st)?;
+        let clip = grpc::ClipData { text: text.to_string() };
+        let g2 = g.clone();
+        Self::block(async move { g2.set_clipboard(&clip).await })?;
+        Self::send_keys(&g, paste_events())
+    }
+
     fn keycode(b: Button) -> &'static str {
         match b {
             Button::Home => "KEYCODE_HOME",
@@ -655,11 +688,23 @@ impl SimLane for AndroidLane {
                 let ev = grpc::KeyboardEvent { event_type: grpc::KEY_KEYPRESS, text: text.expose().to_string(), ..Default::default() };
                 Self::block(async move { g.send_key(&ev).await })
             }
-            Action::Key { key } => {
+            Action::Key { key, mods } => {
                 let g = self.grpc(dev, &st)?;
-                let ev = grpc::KeyboardEvent { event_type: grpc::KEY_KEYPRESS, key: Self::key_name(*key).to_string(), ..Default::default() };
+                Self::send_keys(&g, key_events(*key, *mods))
+            }
+            Action::Edit { op } => {
+                let g = self.grpc(dev, &st)?;
+                Self::send_keys(&g, edit_events(*op))
+            }
+            // A person typing: key presses when the emulator's keyboard can
+            // type every character, else the clipboard + Ctrl+V (an IME
+            // commit, accented letters).
+            Action::Keystrokes { text } if typable(text.expose()) => {
+                let g = self.grpc(dev, &st)?;
+                let ev = grpc::KeyboardEvent { event_type: grpc::KEY_KEYPRESS, text: text.expose().to_string(), ..Default::default() };
                 Self::block(async move { g.send_key(&ev).await })
             }
+            Action::Keystrokes { text } | Action::Paste { text } => self.paste(dev, &st, text.expose()),
             Action::Button { button } => self.shell_ok(&st, &format!("input keyevent {}", Self::keycode(*button)), "press the button").map(|_| ()),
             Action::Rotate { orientation } => self
                 .shell_ok(
@@ -773,6 +818,47 @@ fn need_line(n: &LaneNeed) -> String {
 
 /// Lane-private state for tests and the live test binary.
 #[doc(hidden)]
+fn kev(event_type: i32, key: &str) -> grpc::KeyboardEvent {
+    grpc::KeyboardEvent { event_type, key: key.to_string(), ..Default::default() }
+}
+
+/// `key` pressed with `mods` (W3C key names) held: downs, the press, ups.
+fn chord(mods: &[&str], key: &str) -> Vec<grpc::KeyboardEvent> {
+    let mut v: Vec<grpc::KeyboardEvent> = mods.iter().map(|m| kev(grpc::KEY_KEYDOWN, m)).collect();
+    v.push(kev(grpc::KEY_KEYPRESS, key));
+    v.extend(mods.iter().rev().map(|m| kev(grpc::KEY_KEYUP, m)));
+    v
+}
+
+/// A named key with Shift / Alt held (Shift+Arrow selects).
+fn key_events(key: Key, mods: KeyMods) -> Vec<grpc::KeyboardEvent> {
+    let mut held = Vec::new();
+    if mods.shift {
+        held.push("Shift");
+    }
+    if mods.alt {
+        held.push("Alt");
+    }
+    chord(&held, AndroidLane::key_name(key))
+}
+
+/// Ctrl+<letter> (Ctrl+Shift+Z for redo): what Android text fields take.
+fn edit_events(op: EditOp) -> Vec<grpc::KeyboardEvent> {
+    let (c, shift) = op.chord();
+    let held: &[&str] = if shift { &["Control", "Shift"] } else { &["Control"] };
+    chord(held, &c.to_string())
+}
+
+fn paste_events() -> Vec<grpc::KeyboardEvent> {
+    chord(&["Control"], "v")
+}
+
+/// Text the emulator's keyboard types key by key (US printable ASCII);
+/// anything else goes through the clipboard.
+fn typable(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c == ' ' || c.is_ascii_graphic())
+}
+
 pub fn state_json(console: u16, grpc_port: u16, pid: u32) -> serde_json::Value {
     json!({ "consolePort": console, "grpcPort": grpc_port, "pid": pid, "profile": "pixel_9", "widthPx": 1080, "heightPx": 2424, "scale": 2.625 })
 }
@@ -807,5 +893,45 @@ mod tests {
         let st: State = serde_json::from_value(v.clone()).expect("state");
         assert_eq!((st.console_port, st.grpc_port, st.pid), (5554, 8554, 42));
         assert!(!v.to_string().contains("token"));
+    }
+
+    fn evs(v: &[grpc::KeyboardEvent]) -> Vec<(i32, String)> {
+        v.iter().map(|e| (e.event_type, e.key.clone())).collect()
+    }
+
+    #[test]
+    fn keys_with_modifiers_press_and_release_them_around_the_key() {
+        use grpc::{KEY_KEYDOWN as D, KEY_KEYPRESS as P, KEY_KEYUP as U};
+        assert_eq!(evs(&key_events(Key::Enter, KeyMods::default())), vec![(P, "Enter".to_string())]);
+        assert_eq!(
+            evs(&key_events(Key::ArrowLeft, KeyMods { shift: true, alt: true })),
+            vec![(D, "Shift".into()), (D, "Alt".into()), (P, "ArrowLeft".into()), (U, "Alt".into()), (U, "Shift".into())]
+        );
+        assert_eq!(evs(&edit_events(EditOp::SelectAll)), vec![(D, "Control".into()), (P, "a".into()), (U, "Control".into())]);
+        assert_eq!(
+            evs(&edit_events(EditOp::Redo)),
+            vec![(D, "Control".into()), (D, "Shift".into()), (P, "z".into()), (U, "Shift".into()), (U, "Control".into())]
+        );
+        assert_eq!(evs(&edit_events(EditOp::Copy))[1], (P, "c".to_string()));
+        assert_eq!(evs(&paste_events()), vec![(D, "Control".into()), (P, "v".into()), (U, "Control".into())]);
+        // No event ever carries text: a pasted value only rides setClipboard.
+        assert!(paste_events().iter().all(|e| e.text.is_empty()));
+    }
+
+    #[test]
+    fn only_us_printable_text_is_typed_key_by_key() {
+        assert!(typable("hello World 42!"));
+        assert!(typable("a@k2.dev"));
+        assert!(!typable("日本語"), "an IME commit goes through the clipboard");
+        assert!(!typable("café"));
+        assert!(!typable("tab\there"));
+        assert!(!typable(""));
+    }
+
+    #[test]
+    fn clip_data_encodes_the_text_as_field_one() {
+        use prost::Message;
+        let b = grpc::ClipData { text: "hi".into() }.encode_to_vec();
+        assert_eq!(b, vec![0x0a, 2, b'h', b'i']);
     }
 }

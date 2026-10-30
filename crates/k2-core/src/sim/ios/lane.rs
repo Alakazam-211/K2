@@ -283,6 +283,25 @@ impl IosLane {
         ))
     }
 
+    /// A person typing on the stream: key events straight away, no focus
+    /// lookup, no read-back. Text with a character the US HID keyboard
+    /// can't type (an IME commit, `é`) goes in through the pasteboard; the
+    /// helper checks the whole string first, so nothing is half-typed.
+    fn person_keys(&self, h: &dyn HelperIo, udid: &str, text: &str) -> SimResult<&'static str> {
+        match h.call("type", json!({ "text": text }), INPUT_TIMEOUT) {
+            Ok(_) => Ok("typed"),
+            Err(e) if e.code == "unmappable" => self.paste(h, udid, text).map(|_| "pasted"),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The device pasteboard gets `text` (simctl pbcopy, over stdin), then
+    /// ⌘V on the HID keyboard pastes it into the focused field.
+    fn paste(&self, h: &dyn HelperIo, udid: &str, text: &str) -> SimResult<()> {
+        self.simctl.pbcopy(udid, text)?;
+        h.call("key", paste_args(), INPUT_TIMEOUT).map(|_| ())
+    }
+
     fn set_last_tap(&self, udid: &str, p: Point) {
         self.live.lock().unwrap().entry(udid.to_string()).or_default().last_tap = Some(p);
     }
@@ -370,6 +389,29 @@ fn key_usage(k: Key) -> u32 {
         Key::ArrowDown => 0x51,
         Key::ArrowUp => 0x52,
     }
+}
+
+/// HID usage of a lowercase letter (`a` = 0x04).
+fn letter_usage(c: char) -> u32 {
+    debug_assert!(c.is_ascii_lowercase(), "{c:?}");
+    c as u32 - 'a' as u32 + 0x04
+}
+
+/// The helper's `key` request for a named key with Shift / Option.
+fn key_args(k: Key, m: KeyMods) -> J {
+    json!({ "usage": key_usage(k), "shift": m.shift, "alt": m.alt })
+}
+
+/// ⌘<letter> (⇧⌘Z for redo): what an iPhone with a hardware keyboard
+/// takes for editing.
+fn edit_args(op: EditOp) -> J {
+    let (c, shift) = op.chord();
+    json!({ "usage": letter_usage(c), "shift": shift, "cmd": true })
+}
+
+/// ⌘V.
+fn paste_args() -> J {
+    json!({ "usage": letter_usage('v'), "cmd": true })
 }
 
 /// Pulls the helper's newest JPEG; dropping it stops the capture.
@@ -648,7 +690,16 @@ impl SimLane for IosLane {
                 }
                 Ok(())
             }
-            Action::Key { key } => self.helper(id).lane()?.call("key", json!({"usage": key_usage(*key)}), INPUT_TIMEOUT).map(|_| ()).lane(),
+            Action::Key { key, mods } => self.helper(id).lane()?.call("key", key_args(*key, *mods), INPUT_TIMEOUT).map(|_| ()).lane(),
+            Action::Edit { op } => self.helper(id).lane()?.call("key", edit_args(*op), INPUT_TIMEOUT).map(|_| ()).lane(),
+            Action::Keystrokes { text } => {
+                let h = self.helper(id).lane()?;
+                self.person_keys(h.as_ref(), id, text.expose()).map(|_| ()).lane()
+            }
+            Action::Paste { text } => {
+                let h = self.helper(id).lane()?;
+                self.paste(h.as_ref(), id, text.expose()).lane()
+            }
             Action::Type { text } => {
                 let h = self.helper(id).lane()?;
                 let hint = self.live.lock().unwrap().get(id).and_then(|l| l.last_tap);
@@ -1070,5 +1121,74 @@ mod tests {
         assert_eq!(p[0].name, "iPhone 17");
         assert!(p[0].default && p.iter().filter(|p| p.default).count() == 1);
         assert!(!p.iter().any(|p| p.name.contains("iPad")));
+    }
+
+    /// A helper that records each call; `type` refuses non-ASCII like the
+    /// real one (it checks the whole string before typing anything).
+    struct FakeKeys {
+        calls: M<Vec<(String, J)>>,
+    }
+    impl HelperIo for FakeKeys {
+        fn call(&self, op: &str, args: J, _t: Duration) -> SimResult<J> {
+            self.calls.lock().unwrap().push((op.to_string(), args.clone()));
+            match op {
+                "type" if args["text"].as_str().unwrap().chars().any(|c| !c.is_ascii()) => Err(SimError::new("unmappable", "no US-keyboard key for U+65E5")),
+                "type" | "key" => Ok(json!({"ok": true})),
+                _ => Err(SimError::new("bad_op", op.to_string())),
+            }
+        }
+        fn frame_slot(&self, _s: Option<Arc<FrameSlot>>) {}
+        fn alive(&self) -> bool {
+            true
+        }
+    }
+
+    fn pbcopies(fake: &FakeRunner) -> Vec<Vec<String>> {
+        fake.calls.lock().unwrap().iter().filter(|(_, a)| a.get(3).map(String::as_str) == Some("pbcopy")).map(|(_, a)| a.clone()).collect()
+    }
+
+    #[test]
+    fn a_persons_typing_goes_straight_to_the_keyboard_with_no_read_back() {
+        let (lane, fake) = lane_with(world(), "26.5");
+        let h = FakeKeys { calls: M::new(vec![]) };
+        assert_eq!(lane.person_keys(&h, "UDID-1", "h").unwrap(), "typed");
+        let calls = h.calls.lock().unwrap().clone();
+        assert_eq!(calls, vec![("type".to_string(), json!({"text": "h"}))], "one call: no focus lookup, no value read");
+        assert!(pbcopies(&fake).is_empty());
+    }
+
+    #[test]
+    fn ime_text_and_pastes_go_through_the_device_pasteboard_then_cmd_v() {
+        let (lane, fake) = lane_with(world(), "26.5");
+        let h = FakeKeys { calls: M::new(vec![]) };
+        assert_eq!(lane.person_keys(&h, "UDID-1", "日本語").unwrap(), "pasted");
+        let calls = h.calls.lock().unwrap().clone();
+        assert_eq!(calls[0].0, "type");
+        assert_eq!(calls[1], ("key".to_string(), json!({"usage": 0x19, "cmd": true})), "⌘V after the pasteboard is set");
+        let pb = pbcopies(&fake);
+        assert_eq!(pb.len(), 1);
+        let a = &pb[0];
+        assert_eq!(&a[..2], &["simctl", "--set"]);
+        assert_eq!(a[2], lane.config().set_path.to_string_lossy(), "K2's own device set");
+        assert_eq!(&a[3..5], &["pbcopy", "UDID-1"]);
+        assert_eq!(a[5], "<stdin>日本語", "the text rides stdin, never argv");
+        assert_eq!(a.len(), 6);
+        // A paste never types key by key.
+        let h = FakeKeys { calls: M::new(vec![]) };
+        lane.paste(&h, "UDID-1", "line 1\nline 2").unwrap();
+        assert_eq!(h.calls.lock().unwrap().iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), vec!["key"]);
+        assert_eq!(pbcopies(&fake)[1][5], "<stdin>line 1\nline 2");
+    }
+
+    #[test]
+    fn keys_carry_shift_and_option_and_edit_chords_are_command_letters() {
+        assert_eq!(key_args(Key::ArrowLeft, KeyMods { shift: true, alt: false }), json!({"usage": 0x50, "shift": true, "alt": false}));
+        assert_eq!(key_args(Key::Backspace, KeyMods { shift: false, alt: true }), json!({"usage": 0x2A, "shift": false, "alt": true}));
+        assert_eq!(edit_args(EditOp::SelectAll), json!({"usage": 0x04, "shift": false, "cmd": true}));
+        assert_eq!(edit_args(EditOp::Undo), json!({"usage": 0x1D, "shift": false, "cmd": true}));
+        assert_eq!(edit_args(EditOp::Redo), json!({"usage": 0x1D, "shift": true, "cmd": true}));
+        assert_eq!(edit_args(EditOp::Cut), json!({"usage": 0x1B, "shift": false, "cmd": true}));
+        assert_eq!(edit_args(EditOp::Copy), json!({"usage": 0x06, "shift": false, "cmd": true}));
+        assert_eq!(paste_args(), json!({"usage": 0x19, "cmd": true}));
     }
 }

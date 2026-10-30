@@ -148,7 +148,7 @@ fn an_agent_drives_the_ios_simulator_end_to_end() {
     let t = tree_until(&lane, &dev, "the unicode value", |t| find(root(t), "email").and_then(|e| e.value.clone()).as_deref() == Some("live@k2.dev ünï ✓"));
     lane.act(&dev, &Action::Type { text: SimText::secret("-s3cret") }).expect("type secret");
     tree_until(&lane, &dev, "the secret appended", |t| find(root(t), "email").and_then(|e| e.value.clone()).as_deref() == Some("live@k2.dev ünï ✓-s3cret"));
-    lane.act(&dev, &Action::Key { key: Key::Enter }).expect("enter");
+    lane.act(&dev, &Action::Key { key: Key::Enter, mods: KeyMods::default() }).expect("enter");
 
     // Frames: start the animation, pull for 2 s at 15 fps.
     let mut src = lane.frames(&dev, FrameOpts { max_fps: 15, max_width_px: Some(t.width_pt as u32) }).expect("frames");

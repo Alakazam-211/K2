@@ -34,7 +34,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::hold::HoldView;
-use super::lane::{Appearance, Button, DeviceProfile, Key, LaneKind, Orientation, TouchPhase};
+use super::lane::{Appearance, Button, DeviceProfile, EditOp, Key, LaneKind, Orientation, TouchPhase};
 
 pub const MAGIC: [u8; 4] = *b"K2SF";
 pub const HEADER_LEN: usize = 16;
@@ -177,15 +177,143 @@ pub enum ViewerMsg {
     Tap { x: f32, y: f32 },
     #[serde(rename_all = "camelCase")]
     Swipe { x1: f32, y1: f32, x2: f32, y2: f32, #[serde(default)] duration_ms: Option<u32> },
-    /// Typed text (printable characters).
+    /// Typed text: one keystroke's character or one IME commit
+    /// (printable, at most [`TEXT_MAX_CHARS`]).
     Text { text: String },
-    Key { key: Key },
+    /// A non-text key, with Shift / Option held or not.
+    Key {
+        key: Key,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        shift: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        alt: bool,
+    },
+    /// The host clipboard's text, on the person's explicit ⌘V (at most
+    /// [`PASTE_MAX_BYTES`]).
+    Paste { text: String },
+    /// A ⌘ / Ctrl editing chord the person pressed inside the device.
+    Edit { op: EditOp },
     Button { button: Button },
     Rotate { orientation: Orientation },
     Appearance { appearance: Appearance },
     OpenUrl { url: String },
     TakeOver,
     HandBack,
+}
+
+// ── keyboard input: caps and rate ────────────────────────────────────
+
+/// One `text` message: a keystroke or an IME commit. Longer text is a paste.
+pub const TEXT_MAX_CHARS: usize = 256;
+/// One `paste` message (UTF-8 bytes).
+pub const PASTE_MAX_BYTES: usize = 64 * 1024;
+/// Keystrokes (`text`, `key`, `edit`): a burst of this many, then
+/// [`KEYS_PER_SEC`]. Held-key repeat is ~30/s; fast typing ~15/s.
+pub const KEYS_BURST: f64 = 60.0;
+pub const KEYS_PER_SEC: f64 = 30.0;
+/// Pastes: a burst of this many, then one every two seconds.
+pub const PASTES_BURST: f64 = 3.0;
+pub const PASTES_PER_SEC: f64 = 0.5;
+
+/// Why a viewer's keyboard message was refused (sent back as
+/// [`ServerMsg::Error`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputRefusal {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl InputRefusal {
+    fn invalid(m: impl Into<String>) -> Self {
+        InputRefusal { code: "sim_invalid", message: m.into() }
+    }
+}
+
+/// Size and content checks for keyboard messages (other messages pass).
+pub fn check_input(m: &ViewerMsg) -> Result<(), InputRefusal> {
+    match m {
+        ViewerMsg::Text { text } => {
+            let n = text.chars().count();
+            if n == 0 {
+                return Err(InputRefusal::invalid("Empty text."));
+            }
+            if n > TEXT_MAX_CHARS {
+                return Err(InputRefusal::invalid(format!("Typed text is over {TEXT_MAX_CHARS} characters; send it as a paste.")));
+            }
+            if text.chars().any(char::is_control) {
+                return Err(InputRefusal::invalid("Typed text can't hold control characters; send Enter, Tab and Backspace as keys."));
+            }
+            Ok(())
+        }
+        ViewerMsg::Paste { text } => {
+            if text.is_empty() {
+                return Err(InputRefusal::invalid("The clipboard has no text."));
+            }
+            if text.len() > PASTE_MAX_BYTES {
+                return Err(InputRefusal::invalid(format!("The clipboard text is over {} KB; paste less at a time.", PASTE_MAX_BYTES / 1024)));
+            }
+            if text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) {
+                return Err(InputRefusal::invalid("The clipboard text holds control characters."));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A token bucket.
+#[derive(Debug, Clone)]
+struct Bucket {
+    cap: f64,
+    per_sec: f64,
+    tokens: f64,
+    at: std::time::Instant,
+}
+
+impl Bucket {
+    fn new(cap: f64, per_sec: f64, now: std::time::Instant) -> Self {
+        Bucket { cap, per_sec, tokens: cap, at: now }
+    }
+    fn take(&mut self, now: std::time::Instant) -> bool {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.at = self.at.max(now);
+        self.tokens = (self.tokens + dt * self.per_sec).min(self.cap);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// One viewer's keyboard rate limit. Touch is not counted here (the
+/// input queue bounds it).
+#[derive(Debug, Clone)]
+pub struct InputBudget {
+    keys: Bucket,
+    pastes: Bucket,
+}
+
+impl InputBudget {
+    pub fn new(now: std::time::Instant) -> Self {
+        InputBudget { keys: Bucket::new(KEYS_BURST, KEYS_PER_SEC, now), pastes: Bucket::new(PASTES_BURST, PASTES_PER_SEC, now) }
+    }
+
+    /// Spend one token for a keyboard message; `Err` when this viewer
+    /// sends too fast. Other messages are free.
+    pub fn take(&mut self, m: &ViewerMsg, now: std::time::Instant) -> Result<(), InputRefusal> {
+        let ok = match m {
+            ViewerMsg::Text { .. } | ViewerMsg::Key { .. } | ViewerMsg::Edit { .. } => self.keys.take(now),
+            ViewerMsg::Paste { .. } => self.pastes.take(now),
+            _ => true,
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(InputRefusal { code: "sim_rate_limited", message: "Typing faster than the device takes it; slow down.".into() })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -219,5 +347,69 @@ mod tests {
         assert_eq!(s, serde_json::json!({"t":"hold","hold":{"kind":"takeover","by":"rosson","idleMs":5}}));
         let s = serde_json::to_value(ServerMsg::State { state: SimState::Running, message: None }).expect("json");
         assert_eq!(s, serde_json::json!({"t":"state","state":"running"}));
+    }
+
+    #[test]
+    fn keyboard_messages_parse_with_optional_modifiers() {
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"key","key":"arrow-left"}"#).expect("plain key");
+        assert_eq!(m, ViewerMsg::Key { key: Key::ArrowLeft, shift: false, alt: false });
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"key","key":"arrow-left","shift":true,"alt":true}"#).expect("chord");
+        assert_eq!(m, ViewerMsg::Key { key: Key::ArrowLeft, shift: true, alt: true });
+        assert_eq!(serde_json::to_value(&m).expect("json"), serde_json::json!({"t":"key","key":"arrow-left","shift":true,"alt":true}));
+        let plain = ViewerMsg::Key { key: Key::Enter, shift: false, alt: false };
+        assert_eq!(serde_json::to_value(&plain).expect("json"), serde_json::json!({"t":"key","key":"enter"}), "unset modifiers stay off the wire");
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"paste","text":"hello\nworld"}"#).expect("paste");
+        assert_eq!(m, ViewerMsg::Paste { text: "hello\nworld".into() });
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"edit","op":"select-all"}"#).expect("edit");
+        assert_eq!(m, ViewerMsg::Edit { op: EditOp::SelectAll });
+        assert!(serde_json::from_str::<ViewerMsg>(r#"{"t":"edit","op":"format-disk"}"#).is_err());
+        assert!(serde_json::from_str::<ViewerMsg>(r#"{"t":"key","key":"f13"}"#).is_err());
+    }
+
+    #[test]
+    fn keyboard_messages_are_capped() {
+        let text = |s: &str| ViewerMsg::Text { text: s.into() };
+        assert_eq!(check_input(&text("a")), Ok(()));
+        assert_eq!(check_input(&text("日本語")), Ok(()));
+        assert_eq!(check_input(&text(&"é".repeat(TEXT_MAX_CHARS))), Ok(()), "the cap counts characters, not bytes");
+        assert_eq!(check_input(&text(&"x".repeat(TEXT_MAX_CHARS + 1))).expect_err("too long").code, "sim_invalid");
+        assert!(check_input(&text("")).is_err());
+        assert!(check_input(&text("a\nb")).is_err(), "Enter is a key, not text");
+        assert!(check_input(&text("\u{1b}[A")).is_err());
+        let paste = |s: String| ViewerMsg::Paste { text: s };
+        assert_eq!(check_input(&paste("line 1\r\nline 2\tend".into())), Ok(()));
+        assert_eq!(check_input(&paste("x".repeat(PASTE_MAX_BYTES))), Ok(()));
+        let e = check_input(&paste("x".repeat(PASTE_MAX_BYTES + 1))).expect_err("too big");
+        assert!(e.message.contains("64 KB"), "{}", e.message);
+        assert!(check_input(&paste(String::new())).is_err());
+        assert!(check_input(&paste("bell\u{7}".into())).is_err());
+        assert_eq!(check_input(&ViewerMsg::Tap { x: 1.0, y: 1.0 }), Ok(()));
+    }
+
+    #[test]
+    fn keyboard_messages_are_rate_limited_per_viewer() {
+        let t0 = std::time::Instant::now();
+        let mut b = InputBudget::new(t0);
+        let key = ViewerMsg::Key { key: Key::Backspace, shift: false, alt: false };
+        for i in 0..KEYS_BURST as usize {
+            assert_eq!(b.take(&key, t0), Ok(()), "burst {i}");
+        }
+        let e = b.take(&ViewerMsg::Text { text: "a".into() }, t0).expect_err("over the burst");
+        assert_eq!(e.code, "sim_rate_limited");
+        // Taps never spend the keyboard budget.
+        assert_eq!(b.take(&ViewerMsg::Tap { x: 1.0, y: 1.0 }, t0), Ok(()));
+        // 100 ms later three keys' worth has refilled (30/s).
+        let t1 = t0 + std::time::Duration::from_millis(100);
+        for _ in 0..3 {
+            assert_eq!(b.take(&ViewerMsg::Edit { op: EditOp::Undo }, t1), Ok(()));
+        }
+        assert!(b.take(&key, t1).is_err());
+        // Pastes have their own, smaller budget.
+        let p = ViewerMsg::Paste { text: "x".into() };
+        for _ in 0..PASTES_BURST as usize {
+            assert_eq!(b.take(&p, t1), Ok(()));
+        }
+        assert!(b.take(&p, t1).is_err());
+        assert_eq!(b.take(&p, t1 + std::time::Duration::from_secs(2)), Ok(()), "one paste every two seconds");
     }
 }

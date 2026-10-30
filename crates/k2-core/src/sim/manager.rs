@@ -735,7 +735,7 @@ impl Manager {
                     },
                 )
             }
-            ActSpec::Key { key } => (vec![Action::Key { key: *key }], format!("key {}", serde_plain(key))),
+            ActSpec::Key { key } => (vec![Action::Key { key: *key, mods: Default::default() }], format!("key {}", serde_plain(key))),
             ActSpec::Button { button } => (vec![Action::Button { button: *button }], format!("button {}", serde_plain(button))),
             ActSpec::Rotate { turn, orientation } => {
                 let cur = self.with_live(row.id, |l| l.orientation.unwrap_or(Orientation::Portrait));

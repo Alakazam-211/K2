@@ -26,6 +26,7 @@
 // DIRECTLY on that step (pickHost's remembered-temp-password auto-login,
 // and the W2 data-plane `password_change_required` route-back).
 
+import { applyStartPage } from '@/stores/page-view'
 import React, { useEffect, useRef, useState } from 'react'
 import {
   useConnectHostStore,
@@ -127,6 +128,9 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     // cached so the tile's owner controls work, and we stay on the current view.
     if (activate) {
       selectHost(updated)
+      // Signed in and switched: the window opens on the start page (unless
+      // a page was already chosen here).
+      applyStartPage()
     } else {
       cancelSignIn()
     }

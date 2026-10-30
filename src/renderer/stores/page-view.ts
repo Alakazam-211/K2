@@ -21,6 +21,44 @@ import { readWikiViewPref, writeWikiViewPref, type WikiView } from '@/lib/wiki-v
 
 export type AppPage = 'home' | 'agents' | 'projects' | 'feedback' | 'wiki'
 
+// ── Start page (Rosson 2026-10-30) ──────────────────────────────────────
+// The page this window opens on: Agents (the default, as before) or Home.
+// A per-client view preference (`k2.startPage` in localStorage, like
+// `k2.workspaceSwitchFocus`), not a daemon setting. It applies at launch
+// (the store's first page) and after a sign-in that switches the window
+// (`applyStartPage`), never over a page the person (or a deep link) has
+// already chosen in this window.
+
+export type StartPage = 'agents' | 'home'
+
+export const LS_START_PAGE = 'k2.startPage'
+
+/** Anything but `home` is Agents (today's default). */
+export function normalizeStartPage(value: unknown): StartPage {
+  return value === 'home' ? 'home' : 'agents'
+}
+
+export function readStartPage(): StartPage {
+  try {
+    return normalizeStartPage(typeof localStorage !== 'undefined' ? localStorage.getItem(LS_START_PAGE) : null)
+  } catch {
+    return 'agents'
+  }
+}
+
+export function writeStartPage(value: StartPage): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(LS_START_PAGE, value)
+  } catch {
+    // Private mode / blocked storage: the next launch opens on Agents.
+  }
+}
+
+/** A page was chosen in this window since it opened (a tab, a shortcut, a
+ *  deep link): the start page no longer applies. */
+let pageChosen = false
+
 /** Pages that show the workspace room shell (top bar, sidebar, tab strip,
  *  panes, drawers). Home and Agents share it; only the sidebar's list
  *  differs. Everything that asks "is the room on screen?" uses this. */
@@ -68,7 +106,7 @@ interface PageViewState {
 }
 
 export const usePageViewStore = create<PageViewState>((set) => ({
-  page: 'agents',
+  page: readStartPage(),
   wikiProjectPath: null,
   wikiReturnPage: 'agents',
   lastWikiPath: null,
@@ -78,22 +116,26 @@ export const usePageViewStore = create<PageViewState>((set) => ({
     writeWikiViewPref(view)
     set({ wikiView: view })
   },
-  setPage: (page) =>
+  setPage: (page) => {
+    pageChosen = true
     set((s) => ({
       page,
       // Leaving wiki clears the bound workspace path so a later open
       // does not flash stale data under a different project.
       wikiProjectPath: page === 'wiki' ? s.wikiProjectPath : null,
       wikiReturnPage: page === 'wiki' && s.page !== 'wiki' ? s.page : s.wikiReturnPage,
-    })),
-  openWiki: (projectPath, opts) =>
+    }))
+  },
+  openWiki: (projectPath, opts) => {
+    pageChosen = true
     set((s) => ({
       page: 'wiki',
       wikiOpenAll: opts?.allOfK2 === true,
       wikiProjectPath: projectPath,
       wikiReturnPage: s.page === 'wiki' ? s.wikiReturnPage : s.page,
       lastWikiPath: projectPath ?? s.lastWikiPath,
-    })),
+    }))
+  },
   closeWiki: () =>
     set((s) => ({
       page: s.page === 'wiki' ? s.wikiReturnPage : s.page,
@@ -101,3 +143,17 @@ export const usePageViewStore = create<PageViewState>((set) => ({
       wikiReturnPage: 'agents',
     })),
 }))
+
+/** After a sign-in switches this window: open the start page, unless a
+ *  page was already chosen here (an explicit pick or a deep link wins). */
+export function applyStartPage(): void {
+  if (pageChosen) return
+  const page = readStartPage()
+  if (usePageViewStore.getState().page !== page) usePageViewStore.setState({ page })
+}
+
+/** Tests: as if the window just opened. */
+export function resetStartPageForTests(): void {
+  pageChosen = false
+  usePageViewStore.setState({ page: readStartPage() })
+}

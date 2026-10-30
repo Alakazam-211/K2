@@ -58,6 +58,7 @@ import { LocalLLMSettings } from '../shared/LocalLLMSettings'
 import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
+import { StartPageRow } from './StartPageRow'
 import { primaryScope } from '@/kessel/server-scope'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
@@ -65,6 +66,7 @@ import { YourAccountRow } from './YourAccountRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
+  { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
   { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools: one click to install them (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
@@ -205,6 +207,7 @@ export function GeneralSection(): React.JSX.Element {
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] w-full max-w-xl">
       {tab === 'general' && (
       <div className="space-y-4">
+        <StartPageRow />
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">

@@ -79,14 +79,13 @@ HISTORY (needs the history right)
   k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
 
 UNDO, REDO AND REVERT
-  Undo reverses your own changes. One known exception, being fixed: if someone
-  else rewrote a line after you changed it, undoing your change can put your
-  old text back inside their line. Check that line after an undo, and use
-  history or blame to see who wrote what. Text put back by an undo or redo
-  keeps its original author: blame shows who wrote it and who restored it, and
-  later undos and reverts treat it as the original author's. Nothing is lost:
-  undone text stays in history and can be restored. This holds across
-  restarts.
+  Undo only reverses your own changes and never alters a word someone else
+  wrote: if someone has since changed one of your words, that word is theirs,
+  and your undo leaves it as it is and tells you. Text put back by an undo or
+  redo keeps its original author: blame shows who wrote it and who restored
+  it, and later undos and reverts treat it as the original author's. Nothing
+  is lost: undone text stays in history and can be restored. This holds
+  across restarts.
   Conflicts exit 1 (the error lists them). Undo, redo and revert aren't checked
   against your last read.
   k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the

@@ -2051,15 +2051,15 @@ mod tests {
         assert!(handle("GET", "/cli/docs/nope", &params, b"", &caller).status.starts_with("404"));
     }
 
-    /// Undo, until the kit's undo fix (v0.9.7): K2 Cores' interim wording
-    /// (10-29) is in `k2 doc --help` and `k2 study docs` word for word (line
-    /// breaks aside), and the old promise (kit v0.9.1) is in neither. The
-    /// vendored kit must still list the gap as a known issue fixed in v0.9.7;
-    /// once the kit is v0.9.7 this fails, and the help takes the post-fix
-    /// wording.
+    /// Undo after the kit's D1 (v0.9.7, undo spec v1.10): K2 Cores'
+    /// post-fix sentence, the one hosts pin verbatim, is in `k2 doc --help`
+    /// and `k2 study docs` word for word (line breaks aside); the interim
+    /// wording and the old promise are in neither; and the sentence is the
+    /// kit's own, from its v0.9.7 CHANGELOG.
     #[test]
-    fn the_interim_undo_wording_is_in_the_help_and_the_study_page_verbatim() {
-        const INTERIM: &str = "Undo reverses your own changes. One known exception, being fixed: if someone else rewrote a line after you changed it, undoing your change can put your old text back inside their line. Check that line after an undo, and use history or blame to see who wrote what.";
+    fn the_undo_promise_after_d1_is_in_the_help_and_the_study_page_verbatim() {
+        const PROMISE: &str = "Undo only reverses your own changes and never alters a word someone else wrote: if someone has since changed one of your words, that word is theirs, and your undo leaves it as it is and tells you.";
+        const INTERIM: &str = "One known exception, being fixed";
         const OLD_PROMISE: &str = "Your undo never removes text someone else wrote";
         let cli = include_str!("../../../../cli/k2");
         let page = |start: &str| {
@@ -2069,15 +2069,22 @@ mod tests {
         };
         for start in ["\n_doc_usage() {", "\n_study_page_docs() {"] {
             let p = page(start);
-            assert!(p.contains(INTERIM), "the interim undo wording isn't verbatim in {start}");
+            assert!(p.contains(PROMISE), "the post-fix undo sentence isn't verbatim in {start}");
+            assert!(!p.contains(INTERIM), "the interim undo wording is still in {start}");
             assert!(!p.contains(OLD_PROMISE), "the old undo promise is still in {start}");
         }
         let changelog = include_str!("../../../../vendor/k2-mpc-base/CHANGELOG.md");
-        assert!(!changelog.contains("\n## v0.9.7"), "the kit is v0.9.7: use K2 Cores' post-fix undo wording");
-        assert!(
-            changelog.contains("**The D1 gap (amendment approved; fixed in v0.9.7).**"),
-            "the vendored kit no longer lists the undo gap as a known issue"
-        );
+        let from = changelog.find("\n## v0.9.7").expect("v0.9.7 in the kit's CHANGELOG");
+        let to = changelog[from + 1..].find("\n## v").expect("the section after v0.9.7") + from + 1;
+        let section = &changelog[from..to];
+        let at = section.find("The\nsentence hosts pin verbatim").expect("the pinned sentence in v0.9.7's D1 notes");
+        let quoted: Vec<&str> = section[at..]
+            .lines()
+            .skip_while(|l| !l.starts_with("> "))
+            .take_while(|l| l.starts_with("> ") || *l == ">")
+            .map(|l| l.trim_start_matches('>').trim())
+            .collect();
+        assert_eq!(quoted.join(" ").split_whitespace().collect::<Vec<_>>().join(" "), PROMISE, "not the kit's v0.9.7 sentence");
     }
 
     /// Provenance is kit-stamped only (spec U23, `sec.client_provenance_refused`):
@@ -2132,9 +2139,12 @@ mod tests {
         v["error"].as_object().unwrap_or_else(|| panic!("no error object: {}", r.body)).clone()
     }
 
-    /// The kit's guidance for v0.9.7's `authored` table, word for word.
-    const STORE_NEWER_AUTHORED: &str = "This store holds data from a newer kit (table \"authored\"). Upgrade K2 to a \
-         version with kit ≥ v0.9.7 to purge or rewrite it; reading and editing still work.";
+    /// A table this kit doesn't know (since v0.9.7 the kit owns `authored`,
+    /// so the stand-in for a newer kit's table is another name, as in the
+    /// kit's own test), and the kit's guidance for it, word for word.
+    const NEWER_TABLE: &str = "later_kit";
+    const STORE_NEWER_LATER: &str = "This store holds data from a newer kit (table \"later_kit\"). Upgrade K2 to a \
+         version with a newer kit to purge or rewrite it; reading and editing still work.";
 
     /// Kit v0.9.5: the two new `DocError`s are plain refusals with their
     /// own codes and exit 3 (never a 500, never `bad_request`); any other
@@ -2162,15 +2172,15 @@ mod tests {
         assert_eq!(e["code"], json!("bad_request"));
         assert_eq!(e["exit"], json!(2));
 
-        let newer = StoreError::NewerData { table: "authored".into() };
+        let newer = StoreError::NewerData { table: NEWER_TABLE.into() };
         for err in [SessionError::Store(newer.clone()), SessionError::Blob(BlobError::Store(newer.clone()))] {
             let r = session_error(&err);
             assert_eq!(r.status, "409 Conflict", "{err:?}");
             let e = error_of(&r);
             assert_eq!(e["code"], json!("store_newer"), "{err:?}");
             assert_eq!(e["id"], json!("MPC-E502"), "{err:?}");
-            assert_eq!(e["table"], json!("authored"), "{err:?}");
-            assert_eq!(e["hint"], json!(STORE_NEWER_AUTHORED), "{err:?}");
+            assert_eq!(e["table"], json!(NEWER_TABLE), "{err:?}");
+            assert_eq!(e["hint"], json!(STORE_NEWER_LATER), "{err:?}");
             assert_eq!(e["exit"], json!(6), "{err:?}");
         }
         // Another table a newer kit adds names no version.
@@ -2182,7 +2192,7 @@ mod tests {
     }
 
     /// Kit v0.9.5, end to end through the kit: a docs store holding a newer
-    /// kit's table (v0.9.7's `authored`, written with redb as that kit
+    /// kit's table (one this kit doesn't know, written with redb as that kit
     /// would) still opens, reads and edits; a purge is refused before
     /// anything changes, and K2 answers `store_newer` with the kit's
     /// guidance verbatim, exit 6.
@@ -2216,7 +2226,7 @@ mod tests {
             let db = redb::Database::open(&path).expect("the store, through redb");
             let w = db.begin_write().expect("write txn");
             {
-                let mut t = w.open_table(redb::TableDefinition::<u64, &[u8]>::new("authored")).expect("a newer kit's table");
+                let mut t = w.open_table(redb::TableDefinition::<u64, &[u8]>::new(NEWER_TABLE)).expect("a newer kit's table");
                 t.insert(1, b"a newer kit's row".as_slice()).expect("row");
             }
             w.commit().expect("commit");
@@ -2228,13 +2238,13 @@ mod tests {
         s.replace_text(conn, k2_mpc_markdown::ROOT, "# notes\n\nkeep this line\nand one more\n").expect("editing still works");
         let before = std::fs::read(&path).expect("read the store file");
         let err = s.purge(conn, PurgeRequest::new(PurgeScope::History)).expect_err("a purge is refused");
-        assert_eq!(err, SessionError::Store(StoreError::NewerData { table: "authored".into() }));
+        assert_eq!(err, SessionError::Store(StoreError::NewerData { table: NEWER_TABLE.into() }));
         assert_eq!(std::fs::read(&path).expect("read the store file"), before, "nothing changed");
         let r = session_error(&err);
         assert_eq!(r.status, "409 Conflict");
         let e = error_of(&r);
         assert_eq!(e["code"], json!("store_newer"));
-        assert_eq!(e["hint"], json!(STORE_NEWER_AUTHORED));
+        assert_eq!(e["hint"], json!(STORE_NEWER_LATER));
         assert_eq!(e["exit"], json!(6));
         drop(s);
         mgr.release().expect("release");

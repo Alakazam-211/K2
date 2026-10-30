@@ -173,8 +173,22 @@ pub async fn dial_target(raw: &str, budget: Duration) -> Result<TcpStream, DialF
         reason: Some(reason),
     };
     let target = parse_target(raw).map_err(fail)?;
-    let addrs = candidate_addrs(&target).await.map_err(fail)?;
-    dial_addrs(raw, &addrs, budget).await
+    let started = Instant::now();
+    let addrs = resolve_within(&target.host, budget, candidate_addrs(&target)).await.map_err(fail)?;
+    dial_addrs(raw, &addrs, budget.saturating_sub(started.elapsed())).await
+}
+
+/// `budget` covers the name lookup too: `getaddrinfo` has no deadline of its
+/// own, and a stalled resolver would otherwise hold the caller (a visitor's
+/// connection and its permit) however short the connect budget is.
+async fn resolve_within<T>(
+    host: &str,
+    budget: Duration,
+    resolve: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::time::timeout(budget, resolve)
+        .await
+        .unwrap_or_else(|_| Err(format!("resolve {host}: timed out after {budget:?}")))
 }
 
 #[cfg(test)]
@@ -332,6 +346,17 @@ mod tests {
             .expect_err("metadata must not be dialed");
         assert_eq!(err.tried.len(), 2, "{err}");
         assert!(err.tried.iter().all(|(_, e)| e.contains("cloud metadata")), "{err}");
+    }
+
+    /// A resolver that never answers costs the budget, not forever.
+    #[tokio::test]
+    async fn a_stalled_resolver_ends_at_the_budget() {
+        let never = std::future::pending::<Result<Vec<SocketAddr>, String>>();
+        let err = tokio::time::timeout(Duration::from_secs(10), resolve_within("slow.example", Duration::from_millis(50), never))
+            .await
+            .expect("bounded by the budget, not by this outer timeout")
+            .expect_err("nothing resolved");
+        assert!(err.contains("slow.example") && err.contains("timed out"), "{err}");
     }
 
     #[tokio::test]

@@ -411,7 +411,7 @@ assert_eq "real new prints the address" "$addr" "sidews/gardens"
 for _ in $(seq 1 100); do [ -s "$SB/claude.argv" ] && break; sleep 0.05; done
 assert_contains "harness got the pointer" "$(cat "$SB/claude.argv" 2>/dev/null)" "Your brief is .k2/sidecars/gardens/BRIEF.md"
 assert_absent "harness argv never holds the brief" "$(cat "$SB/claude.argv" 2>/dev/null)" "$MARKER"
-mode="$(stat -f %Lp "$WSP/.k2/sidecars/gardens/BRIEF.md" 2>/dev/null || stat -c %a "$WSP/.k2/sidecars/gardens/BRIEF.md")"
+mode="$(stat -c %a "$WSP/.k2/sidecars/gardens/BRIEF.md" 2>/dev/null || stat -f %Lp "$WSP/.k2/sidecars/gardens/BRIEF.md")"
 assert_eq "BRIEF.md is 0600" "$mode" "600"
 assert_contains "BRIEF.md content" "$(cat "$WSP/.k2/sidecars/gardens/BRIEF.md")" "$MARKER"
 

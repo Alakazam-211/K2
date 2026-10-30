@@ -110,12 +110,12 @@ import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stas
 import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
 import {
   STASH_DRAWER_OUT_MS,
-  STASH_TAB_WIDTH,
   StashDrawer,
   StashSquareButton,
-  StashTab,
+  StashBookmark,
   composePlusMenuHeight,
   composePlusMenuItems,
+  stashButtonLabel,
   stashPrefersReducedMotion,
 } from '@/components/PromptStash/PromptStash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
@@ -1198,14 +1198,12 @@ export function TerminalComposeBar({
       chord={stashChord}
       look={look}
       closing={stashClosing}
-      // On the Thread box the tab rides on the drawer's top edge, its handle.
-      handle={
-        look === 'zen' ? (
-          <StashTab count={stashItems.length} open={!stashClosing} onToggle={toggleStash} chord={stashChord} handle />
-        ) : undefined
-      }
     />
   )
+  // The stash button sits left of Send, only while the box is empty (no
+  // text, no files): typing hides it, an empty box brings it back (Rosson
+  // 2026-10-30; it replaced the dog ear on the box's top edge).
+  const composeEmpty = draft.length === 0 && pendingFiles.length === 0
   const textarea = (
     <textarea
       ref={textareaRef}
@@ -1359,10 +1357,10 @@ export function TerminalComposeBar({
             ) : undefined
           }
           drawer={
-            // The box's top edge: the activity bar (or, while it is open,
-            // the stash, which slides up over it as the bar slides away)
-            // and, just right of it, the stash button, always there.
-            <div data-zen-stash-row="" className="flex min-w-0 items-end" style={{ margin: '0 14px -1px', gap: 6 }}>
+            // The box's top edge: the activity bar, its full width (or,
+            // while it is open, the stash, which slides up in its place as
+            // the bar slides away; the two share the one spot).
+            <div data-zen-stash-row="" className="flex min-w-0 items-end" style={{ margin: '0 14px -1px' }}>
               <div className="grid min-w-0 flex-1 items-end">
                 {threadDrawer ? (
                   <div style={{ gridArea: '1 / 1', minWidth: 0 }}>
@@ -1370,14 +1368,9 @@ export function TerminalComposeBar({
                   </div>
                 ) : null}
                 {stashOpen ? (
-                  // Over the tab's column too: its right edge is the tab's,
-                  // where the handle rides.
-                  <div style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, marginRight: -(STASH_TAB_WIDTH + 6) }}>
-                    {stashDrawerEl('zen')}
-                  </div>
+                  <div style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1 }}>{stashDrawerEl('zen')}</div>
                 ) : null}
               </div>
-              <StashTab count={stashItems.length} open={stashOpen} onToggle={toggleStash} chord={stashChord} concealed={stashOpen} />
             </div>
           }
         >
@@ -1426,6 +1419,23 @@ export function TerminalComposeBar({
             {textarea}
           </div>
           <ThreadComposeStackSpacer stacked={stacked} />
+          {composeEmpty ? (
+            <ThreadRoundButton
+              label={stashButtonLabel(stashItems.length)}
+              title={`Stash: ${stashChord} saves what you're writing; ${stashChord} on an empty box opens this`}
+              pressed={stashOpen && !stashClosing}
+              onClick={toggleStash}
+              data={{
+                'data-testid': 'stash-button',
+                'data-stash-button': '',
+                'aria-haspopup': 'listbox',
+                'aria-expanded': stashOpen && !stashClosing,
+              }}
+              style={tool}
+            >
+              <StashBookmark count={stashItems.length} />
+            </ThreadRoundButton>
+          ) : null}
           <ThreadSendButton
             canSend={canSend}
             onClick={() => void send()}
@@ -1526,14 +1536,16 @@ export function TerminalComposeBar({
       <div className="relative min-w-0 flex-1">
       {textarea}
       </div>
-      <StashSquareButton
-        count={stashItems.length}
-        open={stashOpen}
-        onToggle={toggleStash}
-        chord={stashChord}
-        size={btnSize}
-        marginBottom={btnNudge}
-      />
+      {composeEmpty ? (
+        <StashSquareButton
+          count={stashItems.length}
+          open={stashOpen && !stashClosing}
+          onToggle={toggleStash}
+          chord={stashChord}
+          size={btnSize}
+          marginBottom={btnNudge}
+        />
+      ) : null}
       <button
         type="button"
         aria-label="Send message"

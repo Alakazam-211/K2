@@ -11,16 +11,22 @@
 //   - `isComposeStashChord`: Cmd+S / Ctrl+S, as in the Thread box.
 // The caller clears its own box after a save (it knows its draft).
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { LOCAL_HOME_HOST } from '@/lib/host-key'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
-import { orNull, type StashFileInput, type StashSource } from '@/lib/prompt-stash/record'
-import { saveToStash } from '@/stores/prompt-stash'
+import { orNull, type StashFileInput, type StashRecord, type StashSource } from '@/lib/prompt-stash/record'
+import { saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
 import { useToastStore } from '@/stores/toast'
-import { composePlusMenuHeight, composePlusMenuItems } from './PromptStash'
+import {
+  STASH_DRAWER_OUT_MS,
+  StashDrawer,
+  composePlusMenuHeight,
+  composePlusMenuItems,
+  stashPrefersReducedMotion,
+} from './PromptStash'
 
 /** Cmd+S on macOS, Ctrl+S elsewhere (the Thread box's chord). */
 export function isComposeStashChord(e: {
@@ -148,4 +154,101 @@ export function useComposePlusMenu(): {
     [],
   )
   return { menuOpen, open }
+}
+
+/** The stash drawer's open/close for a box that has one: it slides back
+ *  out first (`closing`, STASH_DRAWER_OUT_MS), then unmounts; reduced
+ *  motion closes at once; opening again while it leaves keeps it. (The
+ *  Thread box's own copy of this lives in TerminalComposeBar.) */
+export function useStashDrawerPresence(): {
+  open: boolean
+  closing: boolean
+  show: () => void
+  hide: () => void
+  toggle: () => void
+} {
+  const [open, setOpen] = useState(false)
+  const [closing, setClosing] = useState(false)
+  const timer = useRef<number | null>(null)
+  const clear = (): void => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    timer.current = null
+  }
+  useEffect(() => clear, [])
+  const show = useCallback(() => {
+    clear()
+    setClosing(false)
+    setOpen(true)
+  }, [])
+  const hide = useCallback(() => {
+    clear()
+    if (stashPrefersReducedMotion()) {
+      setClosing(false)
+      setOpen(false)
+      return
+    }
+    setClosing(true)
+    timer.current = window.setTimeout(() => {
+      timer.current = null
+      setClosing(false)
+      setOpen(false)
+    }, STASH_DRAWER_OUT_MS)
+  }, [])
+  const toggle = useCallback(() => {
+    if (open && !closing) hide()
+    else show()
+  }, [closing, hide, open, show])
+  return { open, closing, show, hide, toggle }
+}
+
+/** The person's stash (newest first), loaded on first use. */
+export function useStashItems(): readonly StashRecord[] {
+  const items = usePromptStashStore((s) => s.items)
+  useEffect(() => {
+    if (usePromptStashStore.getState().loaded) return
+    void usePromptStashStore.getState().load().catch((err: unknown) => console.warn('[stash] load failed:', err))
+  }, [])
+  return items
+}
+
+/** The stash drawer over the store: pick, ✕ remove, Remove after use. A
+ *  pick is the caller's (it puts the stash in its box); then, with Remove
+ *  after use off, the item stays (marked used). */
+export function ConnectedStashDrawer({
+  look,
+  closing,
+  chord,
+  onPick,
+  onClose,
+}: {
+  look: 'zen' | 'square'
+  closing: boolean
+  chord: string
+  onPick: (rec: StashRecord) => void
+  onClose: () => void
+}): JSX.Element {
+  const items = useStashItems()
+  const loaded = usePromptStashStore((s) => s.loaded)
+  const removeAfterUse = usePromptStashStore((s) => s.removeAfterUse)
+  return (
+    <StashDrawer
+      items={items}
+      loaded={loaded}
+      onPick={onPick}
+      onRemove={(id) => {
+        void usePromptStashStore
+          .getState()
+          .remove(id)
+          .catch((err: unknown) => {
+            useToastStore.getState().addToast(`Couldn't remove it: ${err instanceof Error ? err.message : String(err)}`, 'error')
+          })
+      }}
+      onClose={onClose}
+      removeAfterUse={removeAfterUse}
+      onRemoveAfterUseChange={(on) => usePromptStashStore.getState().setRemoveAfterUse(on)}
+      chord={chord}
+      look={look}
+      closing={closing}
+    />
+  )
 }

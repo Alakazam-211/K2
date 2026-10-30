@@ -1,21 +1,21 @@
 // Prompt stash UI (spec-prompt-stash-v1 "The stash button and drawer"):
-//   - `StashTab`: the permanent bookmark (no count) on the Thread box's
-//     top edge, just right of the activity bar (the Zen ear's look);
+//   - `StashBookmark`: the bookmark the Thread box's stash button shows
+//     (left of Send, only while the box is empty; Rosson 2026-10-30, it
+//     replaced the dog ear on the box's top edge), popping when a save lands;
 //   - `StashSquareButton`: the same button in the terminal compose bar's
-//     square look, beside Send;
+//     square look, beside Send (also only while the box is empty);
 //   - `composePlusMenuItems`: the composer "+" menu's rows, its attach
 //     choice then "Save to stash" (the phone's + menu; Rosson 2026-10-30);
 //   - `StashDrawer`: the list, newest first; each row has a preview, its
 //     source, its age, an attachment badge and ✕. ↑/↓ move, Enter picks,
-//     Esc closes, Delete / ⌘⌫ remove the row. It slides and fades in from
-//     the box's edge and back out on close (`closing`); on the Thread box
-//     the stash tab rides on its top edge as its handle (`handle`), one
-//     shape with it (Rosson 2026-10-30).
-// In K2's square Style the tab, the drawer and its rows are chamfered
+//     Esc closes, Delete / ⌘⌫ remove the row; ✕ in its header is its one
+//     close control. It slides and fades in from the box's edge and back
+//     out on close (`closing`).
+// In K2's square Style the drawer and its rows are chamfered
 // (Thread/chamfer, the Thread's own cut corners).
 // The list itself is `stores/prompt-stash`.
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { stashAge, stashPreview, stashSourceLabel, type StashRecord } from '@/lib/prompt-stash/record'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
@@ -56,12 +56,8 @@ ${CHAMFER_SCOPE} [data-stash-row] { border-radius: 0 !important; clip-path: ${ch
 }
 `
 
-/** The tab's (and the drawer's) top corners on the Thread box. */
+/** The drawer's top corners on the Thread box. */
 const STASH_EAR_RADIUS = 'calc(var(--zen-radius) + 2px)'
-/** The tab's own top corners: half the drawer's, for its half width. */
-const STASH_TAB_RADIUS = 'calc(var(--zen-radius) / 2 + 1px)'
-/** The tab's chamfer: the drawer's cut scaled to its width (5px at 44). */
-const STASH_TAB_CUT = CHAMFER_CUT.button
 
 export function StashGlyph({ size = 12 }: { size?: number }): JSX.Element {
   return (
@@ -131,91 +127,19 @@ export function composePlusMenuHeight(items: readonly ContextMenuItemDef[]): num
   return h
 }
 
-function stashButtonLabel(count: number): string {
+/** The stash button's label: "Stash (N items)". */
+export function stashButtonLabel(count: number): string {
   return count === 1 ? 'Stash (1 item)' : `Stash (${count} items)`
 }
 
-/** The stash tab's width (px), the phone's. */
-export const STASH_TAB_WIDTH = 22
-
-/** The Thread box's stash button: an ear on the box's top edge. */
-export function StashTab({
-  count,
-  open,
-  onToggle,
-  chord,
-  handle = false,
-  concealed = false,
-}: {
-  count: number
-  open: boolean
-  onToggle: () => void
-  /** "⌘S" / "Ctrl+S". */
-  chord: string
-  /** Drawn on the open drawer's top edge, as its handle. */
-  handle?: boolean
-  /** The box-edge tab while its drawer is up (the handle stands in): kept
-   *  for its place, not seen, not focusable. */
-  concealed?: boolean
-}): JSX.Element {
+/** The Thread box's stash button's face: the bookmark, popping when a save
+ *  lands (the count is in the button's label, not drawn). */
+export function StashBookmark({ count, size = 14 }: { count: number; size?: number }): JSX.Element {
   const pop = useCountPop(count)
-  // The handle on an open drawer closes it: it shows ✕, not the bookmark.
-  const closer = handle && open
   return (
-    <button
-      type="button"
-      data-testid={handle ? 'stash-handle' : 'stash-button'}
-      data-stash-tab=""
-      data-stash-handle={handle ? '' : undefined}
-      // On the open drawer the handle is its one control: ✕ (Rosson 2026-10-30).
-      aria-label={closer ? 'Close stash' : stashButtonLabel(count)}
-      aria-expanded={open}
-      aria-haspopup="listbox"
-      aria-hidden={concealed || undefined}
-      tabIndex={concealed ? -1 : undefined}
-      title={closer ? 'Close (Esc)' : `Stash: ${chord} saves what you're writing; ${chord} on an empty box opens this`}
-      // Keep the caret in the message box.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onToggle}
-      // K2's square Style: chamfered top corners, like the activity drawer's tab.
-      data-chamfer=""
-      className="inline-flex flex-none cursor-pointer items-center justify-center"
-      style={{
-        gap: 4,
-        // 22 wide (Rosson 2026-10-30: half the phone's 44); 26 tall, so the
-        // hit area stays comfortable.
-        width: STASH_TAB_WIDTH,
-        height: 26,
-        padding: 0,
-        fontSize: 12,
-        lineHeight: '18px',
-        color: open ? 'var(--zen-accent)' : 'var(--zen-text-muted)',
-        background: ZEN_DRAWER_EAR_FILL,
-        border: '1px solid var(--zen-border)',
-        borderBottom: 'none',
-        borderRadius: `${STASH_TAB_RADIUS} ${STASH_TAB_RADIUS} 0 0`,
-        visibility: concealed ? 'hidden' : undefined,
-        ...chamferVars({
-          cut: [STASH_TAB_CUT, STASH_TAB_CUT, 0, 0],
-          fill: ZEN_DRAWER_EAR_FILL,
-          edge: 'var(--zen-border)',
-          border: 1,
-          outset: '-1px -1px 0 -1px',
-        }),
-      }}
-    >
-      {closer ? (
-        <span data-stash-close="" aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>
-          ✕
-        </span>
-      ) : (
-        // No count on the tab (Rosson 2026-10-30); the label still says how
-        // many, and the icon pops when a save lands.
-        <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
-          <StashGlyph size={11} />
-        </span>
-      )}
-    </button>
+    <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
+      <StashGlyph size={size} />
+    </span>
   )
 }
 
@@ -276,8 +200,6 @@ export interface StashDrawerProps {
   look: 'zen' | 'square'
   /** Sliding back out (it unmounts after `STASH_DRAWER_OUT_MS`). */
   closing?: boolean
-  /** On its top edge at the right: the stash tab, as the drawer's handle. */
-  handle?: ReactNode
   /** Clock (tests). */
   now?: number
 }
@@ -294,7 +216,6 @@ export function StashDrawer({
   chord,
   look,
   closing = false,
-  handle,
   now,
 }: StashDrawerProps): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
@@ -344,17 +265,16 @@ export function StashDrawer({
   }
 
   const zen = look === 'zen'
-  // With a handle, the top-right corner runs straight into it: one shape.
   const shell: CSSProperties = zen
     ? {
         background: ZEN_DRAWER_EAR_FILL,
         border: '1px solid var(--zen-border)',
         borderBottom: 'none',
-        borderRadius: `${STASH_EAR_RADIUS} ${handle ? '0' : STASH_EAR_RADIUS} 0 0`,
+        borderRadius: `${STASH_EAR_RADIUS} ${STASH_EAR_RADIUS} 0 0`,
         color: 'var(--zen-text)',
         ['--stash-row-active' as string]: 'var(--zen-surface-raised)',
         ...chamferVars({
-          cut: [CHAMFER_CUT.drawer, handle ? 0 : CHAMFER_CUT.drawer, 0, 0],
+          cut: [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0],
           fill: ZEN_DRAWER_EAR_FILL,
           edge: 'var(--zen-border)',
           border: 1,
@@ -379,35 +299,26 @@ export function StashDrawer({
       data-closing={closing ? 'true' : undefined}
       data-chamfer={zen ? '' : undefined}
       className="relative flex min-w-0 flex-col"
-      // The list scrolls inside; the drawer itself never clips (its handle
-      // sits above its top edge).
-      style={{ ...shell, overflow: handle ? 'visible' : 'hidden' }}
+      style={{ ...shell, overflow: 'hidden' }}
     >
       <style data-stash-styles="">{STASH_CSS}</style>
-      {handle ? (
-        <div data-stash-handle-slot="" style={{ position: 'absolute', right: -1, bottom: 'calc(100% - 1px)', zIndex: 1 }}>
-          {handle}
-        </div>
-      ) : null}
-      {/* The header: just its name and count. Its close is the handle's ✕
-          (a drawer with no handle, the terminal bar's, keeps its own ✕). */}
+      {/* The header: its name, its count and ✕, the one close control
+          (Rosson 2026-10-30: no bookmark here). */}
       <div className="flex items-center" style={{ gap: 8, padding: '6px 10px 4px 12px', fontSize: 12, color: muted }}>
         <span style={{ fontWeight: 600, color: zen ? 'var(--zen-text)' : 'var(--color-text-primary)' }}>Stash</span>
         <span className="tabular-nums">{items.length}</span>
         <span className="flex-1" />
-        {handle ? null : (
-          <button
-            type="button"
-            aria-label="Close stash"
-            title="Close (Esc)"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onClose}
-            className="cursor-pointer"
-            style={{ color: muted, background: 'none', border: 'none', fontSize: 13, lineHeight: 1, padding: 2 }}
-          >
-            ✕
-          </button>
-        )}
+        <button
+          type="button"
+          aria-label="Close stash"
+          title="Close (Esc)"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onClose}
+          className="cursor-pointer"
+          style={{ color: muted, background: 'none', border: 'none', fontSize: 13, lineHeight: 1, padding: 2 }}
+        >
+          ✕
+        </button>
       </div>
       <div
         ref={listRef}

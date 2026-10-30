@@ -523,11 +523,9 @@ describe('chamfered corners in K2\'s square Style', () => {
                 ? 'stop'
                 : e.hasAttribute('data-zen-load-older')
                   ? 'earlier'
-                  : e.hasAttribute('data-stash-tab')
-                    ? 'stash-tab'
-                    : e.outerHTML.slice(0, 60),
+                  : e.outerHTML.slice(0, 60),
     )
-    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stash-tab', 'stop'])
+    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stop'])
     for (const small of [screen.getByRole('button', { name: 'Attach or save' }), screen.getByTestId('compose-slash-button')]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
@@ -545,6 +543,31 @@ describe('chamfered corners in K2\'s square Style', () => {
     // On the box's top edge: top corners cut, the bottom runs into the field.
     const tile = el('[data-zen-drawer-tile]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '0px', '0px'])
+  })
+
+  // Rosson 2026-10-30: the stash is a bookmark left of Send (only while the
+  // box is empty) that opens the drawer (one ✕); native in each K2 Style.
+  it.each(['square', 'glass', 'bezel'])('%s Style: the stash button shows on an empty box, hides on typing, opens the drawer', async (style) => {
+    document.documentElement.setAttribute('data-style', style)
+    renderThread()
+    const send = el('[data-zen-send]')
+    const btn = screen.getByTestId('stash-button')
+    expect(btn.nextElementSibling).toBe(send)
+    // A soft round button like "+" and "/": no fill, so no chamfer in any Style.
+    expect(btn.hasAttribute('data-zen-soft-button')).toBe(true)
+    expect(btn.hasAttribute('data-chamfer')).toBe(false)
+    expect(document.querySelector('[data-stash-tab]')).toBeNull()
+    fireEvent.change(box(), { target: { value: 'x' } })
+    expect(screen.queryByTestId('stash-button')).toBeNull()
+    fireEvent.change(box(), { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
+    // Square: chamfered; Glass and Bezel: the Thread's round top corners.
+    expect(cut(drawer)).toBe(style === 'square')
+    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0')
+    // It takes the activity bar's place on the box's top edge.
+    expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
   })
 
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {

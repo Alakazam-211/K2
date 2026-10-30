@@ -249,41 +249,47 @@ describe('"Save to stash" in the "+" menu', () => {
     expect(usePromptStashStore.getState().items).toEqual([])
   })
 
-  it('the stash tab on the box\'s top edge is 22 px wide, 26 tall', () => {
-    renderThreadBar()
-    expect(screen.getByTestId('stash-button').style.width).toBe('22px')
-    expect(screen.getByTestId('stash-button').style.height).toBe('26px')
-  })
-
-  it('the stash tab shows the icon, no count (the label still says how many); closed, it keeps the bookmark', async () => {
+  it('the stash button shows the bookmark, no count (the label says how many)', async () => {
     renderThreadBar()
     type('one to count')
     pressStash()
     await waitFor(() => expect(box().value).toBe(''))
-    const tab = screen.getByTestId('stash-button')
-    expect(tab.getAttribute('aria-label')).toBe('Stash (1 item)')
-    expect(tab.querySelector('[data-stash-count]')).toBeNull()
-    expect(tab.querySelector('[data-stash-icon] svg')).not.toBeNull()
-    expect(tab.textContent).toBe('')
+    const btn = screen.getByTestId('stash-button')
+    expect(btn.getAttribute('aria-label')).toBe('Stash (1 item)')
+    expect(btn.querySelector('[data-stash-count]')).toBeNull()
+    expect(btn.querySelector('[data-stash-icon] svg')).not.toBeNull()
+    expect(btn.textContent).toBe('')
   })
 })
 
 describe('the button and the drawer', () => {
-  it('the button is always there, with no activity bar', async () => {
-    renderThreadBar()
+  it.each([
+    ['the Thread box', renderThreadBar],
+    ['the terminal compose bar', renderPtyBar],
+  ])('in %s the button sits left of Send, only while the box is empty', (_where, renderBar) => {
+    renderBar()
+    const send = screen.getByRole('button', { name: 'Send message' })
     const btn = screen.getByTestId('stash-button')
     expect(btn.getAttribute('aria-label')).toBe('Stash (0 items)')
-    expect(document.querySelector('[data-zen-drawer]')).toBeNull()
+    expect(btn.nextElementSibling).toBe(send)
+    // The first character hides it; an empty box brings it back.
+    type('h')
+    expect(screen.queryByTestId('stash-button')).toBeNull()
+    type('   ')
+    expect(screen.queryByTestId('stash-button')).toBeNull()
+    type('')
+    expect(screen.getByTestId('stash-button')).toBeTruthy()
   })
 
-  it('sits just right of the activity bar on the box\'s top edge', () => {
+  it('no dog ear: the activity bar has the box\'s top edge to itself, full width', () => {
     renderThreadBar(primaryScope(), true)
     const row = document.querySelector('[data-zen-stash-row]') as HTMLElement
-    const activity = row.querySelector('[data-zen-drawer]') as HTMLElement
-    const btn = within(row).getByTestId('stash-button')
-    expect(activity.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-    const field = document.querySelector('[data-zen-compose-box]') as HTMLElement
-    expect(row.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(row.querySelector('[data-stash-tab]')).toBeNull()
+    expect(within(row).queryByTestId('stash-button')).toBeNull()
+    expect(row.children).toHaveLength(1)
+    expect((row.firstElementChild as HTMLElement).className).toContain('flex-1')
+    expect(row.querySelector('[data-zen-drawer]')).not.toBeNull()
+    expect(document.querySelector('[data-stash-tab]')).toBeNull()
   })
 
   it('Cmd+S on an empty box opens the drawer, newest first, with source, age and files', async () => {
@@ -326,8 +332,9 @@ describe('the button and the drawer', () => {
     await realSave({ text: 'second stash', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 1_000 })
     await realSave({ text: 'first stash', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 2_000 })
     renderThreadBar(primaryScope(), true)
-    type('already typed')
+    // The button shows on an empty box; text typed while it is open stays.
     fireEvent.click(screen.getByTestId('stash-button'))
+    type('already typed')
     const list = await screen.findByTestId('stash-list')
     await waitFor(() => expect(list.querySelectorAll('[data-stash-row]')).toHaveLength(2))
     expect(activityPhase()).toBe('out')
@@ -402,7 +409,7 @@ describe('closing the drawer', () => {
   })
 })
 
-describe('the drawer and its tab (Rosson 2026-10-30)', () => {
+describe('the drawer (Rosson 2026-10-30)', () => {
   it('opens with a slide-in, closes with the reverse, then unmounts; reopening while it leaves keeps it', async () => {
     renderThreadBar()
     fireEvent.click(screen.getByTestId('stash-button'))
@@ -412,10 +419,10 @@ describe('the drawer and its tab (Rosson 2026-10-30)', () => {
     expect(css).toContain('[data-stash-drawer] { animation: k2-stash-in 200ms')
     expect(css).toContain('[data-stash-drawer][data-closing="true"] { animation: k2-stash-out 180ms')
     expect(css).toMatch(/prefers-reduced-motion: reduce\)[^}]*\[data-stash-drawer\]/)
-    // The handle closes it: it slides out...
-    fireEvent.click(screen.getByTestId('stash-handle'))
+    // Its ✕ closes it: it slides out...
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close stash' }))
     expect(screen.getByTestId('stash-drawer').getAttribute('data-closing')).toBe('true')
-    // ...and the tab opens it again before it is gone: it stays.
+    // ...and the button opens it again before it is gone: it stays.
     fireEvent.click(screen.getByTestId('stash-button'))
     expect(screen.getByTestId('stash-drawer').hasAttribute('data-closing')).toBe(false)
     await act(async () => {
@@ -426,44 +433,22 @@ describe('the drawer and its tab (Rosson 2026-10-30)', () => {
     await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
   })
 
-  it('open, the tab rides on the drawer\'s top edge as its handle, one shape; the edge tab steps aside', async () => {
+  it('one control on the open drawer: ✕ in its header; no bookmark, no handle', async () => {
     renderThreadBar()
-    const edgeTab = screen.getByTestId('stash-button')
-    expect(edgeTab.style.visibility).toBe('')
-    fireEvent.click(edgeTab)
+    fireEvent.click(screen.getByTestId('stash-button'))
     const drawer = await screen.findByTestId('stash-drawer')
-    const handle = within(drawer).getByTestId('stash-handle')
-    expect(handle.getAttribute('aria-expanded')).toBe('true')
-    // One control on the open drawer: the handle is ✕; no bookmark, no
-    // second ✕ in the header.
-    expect(handle.getAttribute('aria-label')).toBe('Close stash')
-    expect(handle.querySelector('[data-stash-close]')?.textContent?.trim()).toBe('✕')
-    expect(handle.querySelector('[data-stash-icon]')).toBeNull()
-    expect(within(drawer).getAllByRole('button', { name: 'Close stash' })).toEqual([handle])
+    expect(screen.getByTestId('stash-button').getAttribute('aria-expanded')).toBe('true')
+    expect(within(drawer).getAllByRole('button', { name: 'Close stash' })).toHaveLength(1)
+    expect(drawer.querySelector('[data-stash-handle], [data-stash-tab]')).toBeNull()
     expect(drawer.querySelectorAll('svg path[d^="M19 21l-7-5-7 5V5"]')).toHaveLength(0)
-    expect(handle.style.width).toBe('22px')
-    const slot = handle.parentElement as HTMLElement
-    expect(slot.style.position).toBe('absolute')
-    expect(slot.style.bottom).toBe('calc(100% - 1px)')
-    expect(slot.style.right).toBe('-1px')
-    // The drawer's top-right corner runs straight into the handle.
-    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) 0 0 0')
-    expect(drawer.style.getPropertyValue('--ch-tr')).toBe('0px')
     expect(drawer.style.getPropertyValue('--ch-tl')).toBe('5px')
-    expect(drawer.style.overflow).toBe('visible')
-    // The edge tab keeps its place, unseen and out of the tab order.
-    expect(edgeTab.style.visibility).toBe('hidden')
-    expect(edgeTab.getAttribute('aria-hidden')).toBe('true')
-    expect(edgeTab.tabIndex).toBe(-1)
+    expect(drawer.style.getPropertyValue('--ch-tr')).toBe('5px')
   })
 
-  it('chamfered in the square Style: the tab, the drawer and its rows; the checkbox is the themed one', async () => {
+  it('chamfered in the square Style: the drawer and its rows; the checkbox is the themed one', async () => {
     await realSave({ text: 'a row', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 1_000 })
     renderThreadBar()
-    const edgeTab = screen.getByTestId('stash-button')
-    expect(edgeTab.hasAttribute('data-chamfer')).toBe(true)
-    expect(['tl', 'tr', 'br', 'bl'].map((k) => edgeTab.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '0px', '0px'])
-    fireEvent.click(edgeTab)
+    fireEvent.click(screen.getByTestId('stash-button'))
     const drawer = await screen.findByTestId('stash-drawer')
     expect(drawer.hasAttribute('data-chamfer')).toBe(true)
     await waitFor(() => expect(drawer.querySelectorAll('[data-stash-row]')).toHaveLength(1))

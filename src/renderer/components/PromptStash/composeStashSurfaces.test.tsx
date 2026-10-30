@@ -24,6 +24,8 @@ vi.mock('@/stores/prompt-stash', async () => {
 import { ZenCompose, __resetZenDraftsForTests } from '@/components/Zen/widgets/ZenCompose'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { isMacPlatform } from '@/lib/desktop-chrome'
+import { usePromptStashStore } from '@/stores/prompt-stash'
+import type { StashRecord } from '@/lib/prompt-stash/record'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -109,6 +111,47 @@ describe('the Zen Conversation box (Gardens and Apps)', () => {
     })
     await waitFor(() => expect(box().value).toBe(''))
     expect(saved.calls.map((c) => c.draft.text)).toEqual(['via the chord'])
+  })
+
+  it('Garden look: the stash button sits left of Send on an empty box, hides on typing, opens the drawer (one ✕), a pick fills the box', async () => {
+    usePromptStashStore.setState({
+      loaded: true,
+      items: [
+        {
+          v: 1,
+          id: 's1',
+          text: 'saved prompt',
+          quotes: [],
+          attachments: [],
+          created_at: 1_000,
+          updated_at: 1_000,
+          deleted_at: null,
+          source: { server_id: null, server_label: null, user: null, agent: 'sales::local', agent_name: 'Sales' },
+        } satisfies StashRecord,
+      ],
+      markUsed: vi.fn(async () => undefined),
+    })
+    render(<ZenCompose bridge={fakeBridge()} address="sales::local" label="Sales" disabled={false} />)
+    const send = document.querySelector('[data-zen-send]')
+    const btn = document.querySelector('[data-testid="stash-button"]') as HTMLElement
+    expect(btn.getAttribute('aria-label')).toBe('Stash (1 item)')
+    expect(btn.nextElementSibling).toBe(send)
+    fireEvent.change(box(), { target: { value: 'h' } })
+    expect(document.querySelector('[data-testid="stash-button"]')).toBeNull()
+    fireEvent.change(box(), { target: { value: '' } })
+    fireEvent.click(document.querySelector('[data-testid="stash-button"]') as HTMLElement)
+    const drawer = await waitFor(() => {
+      const d = document.querySelector('[data-testid="stash-drawer"]')
+      if (!d) throw new Error('no drawer')
+      return d as HTMLElement
+    })
+    expect(drawer.getAttribute('data-look')).toBe('zen')
+    expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
+    // Garden themes are Zen's own: round corners, never the square Style's cuts.
+    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0')
+    fireEvent.click(drawer.querySelector('[data-stash-row]') as HTMLElement)
+    await waitFor(() => expect(box().value).toBe('saved prompt'))
+    await waitFor(() => expect(document.querySelector('[data-testid="stash-drawer"]')).toBeNull())
   })
 
   it('with attachments off, "+" opens with just Save to stash', () => {

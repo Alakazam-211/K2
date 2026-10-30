@@ -24,11 +24,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
 import {
+  ConnectedStashDrawer,
   isComposeStashChord,
   readLocalComposeFiles,
   useComposePlusMenu,
   useComposeStash,
+  useStashDrawerPresence,
+  useStashItems,
 } from '@/components/PromptStash/composeStash'
+import { StashBookmark, stashButtonLabel } from '@/components/PromptStash/PromptStash'
+import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
+import { readStashFile, usePromptStashStore } from '@/stores/prompt-stash'
+import { useToastStore } from '@/stores/toast'
 import {
   __resetZenComposeDraftsForTests,
   keepZenComposeDraft,
@@ -289,6 +296,39 @@ export function ZenCompose({
     setAttachments((cur) => cur.filter((a) => !held.includes(a)))
   }, [attachments, draft, setDraft, stash])
 
+  // The stash drawer (the Thread box's): the bookmark left of Send opens
+  // it, only while the box is empty; a pick goes below the text, its files
+  // attached again.
+  const stashDrawer = useStashDrawerPresence()
+  const stashCount = useStashItems().length
+  const composeEmpty = draft.length === 0 && attachments.length === 0
+  const pickStash = useCallback(
+    async (rec: StashRecord) => {
+      setDraft((cur) => insertStashBelow(cur, stashBody(rec)))
+      stashDrawer.hide()
+      requestAnimationFrame(() => {
+        const ta = ref.current
+        if (!ta) return
+        ta.focus()
+        ta.setSelectionRange(ta.value.length, ta.value.length)
+      })
+      try {
+        if (rec.attachments.length > 0) {
+          const read = await Promise.all(rec.attachments.map((a) => readStashFile(a)))
+          const files = read.filter((f): f is File => f !== null)
+          if (files.length < rec.attachments.length) {
+            useToastStore.getState().addToast("Some of this stash's files are gone from this computer.", 'warning')
+          }
+          if (files.length > 0) setAttachments((cur) => [...cur, ...files.map((file) => ({ kind: 'file' as const, file, name: file.name }))])
+        }
+        await usePromptStashStore.getState().markUsed(rec.id)
+      } catch (err) {
+        useToastStore.getState().addToast(`Couldn't restore the stash's files: ${err instanceof Error ? err.message : String(err)}`, 'error')
+      }
+    },
+    [setDraft, stashDrawer],
+  )
+
   const canSend = !disabled && !sending && (draft.trim().length > 0 || attachments.length > 0)
 
   return (
@@ -302,11 +342,12 @@ export function ZenCompose({
       onDrop={onDrop}
       onKeyDown={(e) => {
         // Cmd+S / Ctrl+S in the box: save to the stash (the box lets
-        // chords through to here).
+        // chords through to here); on an empty box, open the stash.
         if (!isComposeStashChord(e)) return
         e.preventDefault()
         e.stopPropagation()
         if (canStash) void stashDraft()
+        else if (composeEmpty && !stashDrawer.open) stashDrawer.show()
       }}
     >
       <ThreadComposeBox
@@ -339,7 +380,28 @@ export function ZenCompose({
             </>
           ) : undefined
         }
-        drawer={drawer}
+        drawer={
+          stashDrawer.open ? (
+            // The stash slides up in the drawer's place, over it.
+            <div className="grid min-w-0 items-end">
+              {drawer ? <div style={{ gridArea: '1 / 1', minWidth: 0 }}>{drawer}</div> : null}
+              <div data-zen-stash-slot="" style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, margin: '0 14px -1px' }}>
+                <ConnectedStashDrawer
+                  look="zen"
+                  closing={stashDrawer.closing}
+                  chord={stash.chord}
+                  onPick={(rec) => void pickStash(rec)}
+                  onClose={() => {
+                    stashDrawer.hide()
+                    ref.current?.focus()
+                  }}
+                />
+              </div>
+            </div>
+          ) : (
+            drawer
+          )
+        }
         error={
           error ? (
             <div data-zen-compose-error="" style={{ marginTop: 6, fontSize: '0.8em', color: 'var(--zen-danger)' }}>
@@ -410,6 +472,24 @@ export function ZenCompose({
           }}
         />
         <ThreadComposeStackSpacer stacked={stacked} />
+        {composeEmpty ? (
+          // The stash, left of Send, only while the box is empty.
+          <ThreadRoundButton
+            label={stashButtonLabel(stashCount)}
+            title={`Stash: ${stash.chord} saves what you're writing; ${stash.chord} on an empty box opens this`}
+            disabled={disabled}
+            pressed={stashDrawer.open && !stashDrawer.closing}
+            onClick={stashDrawer.toggle}
+            data={{
+              'data-testid': 'stash-button',
+              'data-stash-button': '',
+              'aria-haspopup': 'listbox',
+              'aria-expanded': stashDrawer.open && !stashDrawer.closing,
+            }}
+          >
+            <StashBookmark count={stashCount} />
+          </ThreadRoundButton>
+        ) : null}
         <ThreadSendButton canSend={canSend} onClick={() => void send()} />
       </ThreadComposeBox>
     </div>

@@ -296,7 +296,9 @@ fn land_settle_and_start_ask_k2s_sheet_once_then_run_w1s_routes() {
     assert_eq!(v["result"], json!({ "settled": true, "discarded": true, "cancelled": false }));
     assert!(!b.repo.join(".worktrees/k2-fix").exists(), "the worktree went to the Trash");
     let row = b.call("work.list", json!([])).as_array().expect("rows").iter().find(|r| r["address"] == SIDECAR).cloned().expect("row stays");
-    assert_eq!(row["taskState"], "retired", "{row}");
+    // W1: retired after landing reads as landed (its leftover edits were discarded).
+    assert_eq!(row["taskState"], "landed", "{row}");
+    assert!(row["retiredAt"].is_i64(), "{row}");
 
     let start = json!([{ "workspace": "wb-room::local", "name": "Fix Login", "brief": "Make login keep the cookie." }]);
     let (code, err) = b.refuse("agents.start", start);

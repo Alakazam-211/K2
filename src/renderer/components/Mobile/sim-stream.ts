@@ -1,16 +1,28 @@
 // The device stream (prd-mobile-dev-v1 §7; vs-live M-A4, M-A19), mirroring
 // Builder A's frozen wire, `k2-core::sim::stream`:
 //
-//   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]  (WebSocket)
+//   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]
+//       [&codecs=h264,jpeg&win=<n>]  (WebSocket)
 //
 //  - daemon → viewer, BINARY: a 16-byte header then a baseline JPEG:
 //      0..4 b"K2SF" · 4..8 seq u32 · 8..10 width px u16 · 10..12 height px
 //      u16 · 12..14 width pt u16 · 14..16 height pt u16 (all LE)
-//  - daemon → viewer, TEXT: JSON tagged by "t": hello, state, hold, error, fps;
-//  - viewer → daemon, TEXT: JSON tagged by "t": ack {seq} (one frame in
-//    flight), fps, touch, tap, swipe, text, key (+shift/alt), paste, edit,
-//    button, rotate, appearance, open-url, take-over, hand-back. Input is in
-//    points.
+//  - daemon → viewer, BINARY (0.46.7, when `hello.codec` is "h264"): a
+//    24-byte `K2SV` header then an Annex B H.264 access unit:
+//      0..4 b"K2SV" · 4..8 seq u32 · 8..10 width px · 10..12 height px ·
+//      12..14 width pt · 14..16 height pt · 16 codec u8 (1 = H.264) ·
+//      17 flags u8 (bit 0 keyframe) · 18..20 age ms u16 · 20..24 ts ms u32
+//    (all LE). Decoded by `sim-video.ts` (WebCodecs).
+//  - daemon → viewer, TEXT: JSON tagged by "t": hello (with `codec` and
+//    `window` since 0.46.7), state, hold, error, fps, codec (the daemon fell
+//    back to JPEG mid-stream);
+//  - viewer → daemon, TEXT: JSON tagged by "t": ack {seq} (up to `window`
+//    frames in flight; 1 for an older daemon), fps, keyframe, touch, tap,
+//    swipe, text, key (+shift/alt), paste, edit, button, rotate, appearance,
+//    open-url, take-over, hand-back. Input is in points.
+//  - negotiation: the viewer offers `codecs=h264,jpeg` (only when WebCodecs
+//    here can decode H.264) and `win=3`; the daemon answers in `hello`. An
+//    older daemon ignores both and sends K2SF frames one at a time.
 //  - close codes: 4401 login revoked, 4403 forbidden, 4410 device stopped.
 //
 // The pane talks to a `SimStreamConnection`; `createStubSimStream` stands in
@@ -21,14 +33,27 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { daemonWsBase } from '@/kessel/daemon-ws'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { parseDeviceProfile, parseSimHold, type SimDeviceProfile, type SimHold, type SimLaneId, type SimState } from './simApi'
+import { videoDecodeSupport } from './sim-video'
 
 export const FRAME_MAGIC = 'K2SF'
 export const FRAME_HEADER_LEN = 16
+export const VIDEO_MAGIC = 'K2SV'
+export const VIDEO_HEADER_LEN = 24
+export const VIDEO_CODEC_H264 = 1
+export const VIDEO_FLAG_KEY = 1
+
+/** Frames this tab asks to have in flight (`win=`; the daemon may give fewer). */
+export const STREAM_WINDOW = 3
+
+export type SimCodec = 'jpeg' | 'h264'
 
 /** fps caps (stream::LOCAL_MAX_FPS, REMOTE_*). */
 export const LOCAL_FPS = 30
 export const REMOTE_DEFAULT_FPS = 8
 export const REMOTE_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15]
+/** H.264 streams (stream::REMOTE_VIDEO_*): a remote tab may go to 30. */
+export const REMOTE_VIDEO_DEFAULT_FPS = 24
+export const REMOTE_VIDEO_FPS_CHOICES: readonly number[] = [2, 4, 8, 12, 15, 24, 30]
 
 export const CLOSE_AUTH_REVOKED = 4401
 export const CLOSE_FORBIDDEN = 4403
@@ -90,9 +115,11 @@ export interface SimPoint {
   y: number
 }
 
-/** What a frame holds: a JPEG off the wire, or (stub) a painter. */
+/** What a frame holds: a JPEG or an H.264 access unit off the wire, or
+ *  (stub) a painter. */
 export type SimFrameSource =
   | { kind: 'jpeg'; data: Blob }
+  | { kind: 'h264'; key: boolean; data: Uint8Array; widthPx: number; heightPx: number }
   | { kind: 'paint'; paint: (ctx: CanvasRenderingContext2D, width: number, height: number) => void }
 
 export interface SimFrame {
@@ -125,11 +152,16 @@ export type SimServerMsg =
       hold: SimHold
       isolation: string
       input?: SimInputCaps
+      /** "jpeg" from an older daemon (it has no codec field). */
+      codec: SimCodec
+      /** Frames in flight this socket may have (1 from an older daemon). */
+      window: number
     }
   | { t: 'state'; state: SimState; message?: string }
   | { t: 'hold'; hold: SimHold }
   | { t: 'error'; code: string; message: string }
   | { t: 'fps'; fps: number }
+  | { t: 'codec'; codec: SimCodec; message?: string }
 
 export type SimConnState = 'connecting' | 'open' | 'closed' | 'error'
 
@@ -145,7 +177,17 @@ export interface SimStreamConnection {
   ack(seq: number): void
   /** Ask for another rate (the daemon clamps and answers `fps`). */
   setFps(fps: number): void
+  /** The video decoder lost its place: send a keyframe next. */
+  requestKeyframe(): void
   close(): void
+}
+
+/** What this tab offers in the query. */
+export interface SimStreamOffer {
+  /** Offer H.264 when this webview can decode it. */
+  video: boolean
+  /** `win=`. */
+  window: number
 }
 
 export interface SimStreamOptions {
@@ -154,16 +196,86 @@ export interface SimStreamOptions {
   workspace: string
   fps: number
   handlers: SimStreamHandlers
+  /** Absent: the pre-0.46.7 query (JPEG, one frame in flight). */
+  offer?: SimStreamOffer
 }
 
 export type SimStreamConnector = (opts: SimStreamOptions) => SimStreamConnection
 
 /** The stream URL. `token` rides the query for WebSockets (same as the grid
  *  socket); the daemon re-checks it every 5 s. */
-export function simStreamUrl(wsBase: string, workspace: string, token: string | null | undefined, fps: number): string {
+export function simStreamUrl(
+  wsBase: string,
+  workspace: string,
+  token: string | null | undefined,
+  fps: number,
+  offer?: { codecs: readonly SimCodec[]; window: number },
+): string {
   const q = new URLSearchParams({ workspace, fps: String(Math.round(fps)) })
+  if (offer) {
+    q.set('codecs', offer.codecs.join(','))
+    q.set('win', String(Math.max(1, Math.round(offer.window))))
+  }
   if (token) q.set('token', token)
   return `${wsBase}/cli/sim/stream?${q.toString()}`
+}
+
+/** The four magic bytes of a binary message, or ''. */
+export function frameMagic(buf: ArrayBuffer): string {
+  if (buf.byteLength < 4) return ''
+  const b = new Uint8Array(buf, 0, 4)
+  return String.fromCharCode(b[0], b[1], b[2], b[3])
+}
+
+export interface VideoFrameHeader {
+  seq: number
+  widthPx: number
+  heightPx: number
+  widthPt: number
+  heightPt: number
+  codec: number
+  key: boolean
+  ageMs: number
+  tsMs: number
+}
+
+/** Split a K2SV message into its header and the access unit. */
+export function decodeVideoFrame(buf: ArrayBuffer): (VideoFrameHeader & { data: Uint8Array<ArrayBuffer> }) | null {
+  if (buf.byteLength < VIDEO_HEADER_LEN || frameMagic(buf) !== VIDEO_MAGIC) return null
+  const v = new DataView(buf)
+  return {
+    seq: v.getUint32(4, true),
+    widthPx: v.getUint16(8, true),
+    heightPx: v.getUint16(10, true),
+    widthPt: v.getUint16(12, true),
+    heightPt: v.getUint16(14, true),
+    codec: v.getUint8(16),
+    key: (v.getUint8(17) & VIDEO_FLAG_KEY) !== 0,
+    ageMs: v.getUint16(18, true),
+    tsMs: v.getUint32(20, true),
+    data: new Uint8Array(buf, VIDEO_HEADER_LEN),
+  }
+}
+
+/** Encode a K2SV message the way the daemon does (tests). */
+export function encodeVideoFrame(
+  h: { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number; key: boolean; codec?: number; ageMs?: number; tsMs?: number },
+  au: Uint8Array,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(VIDEO_HEADER_LEN + au.byteLength)
+  const v = new DataView(buf)
+  for (let i = 0; i < 4; i++) v.setUint8(i, VIDEO_MAGIC.charCodeAt(i))
+  v.setUint32(4, h.seq, true)
+  v.setUint16(8, h.widthPx, true)
+  v.setUint16(10, h.heightPx, true)
+  v.setUint16(12, h.widthPt, true)
+  v.setUint16(14, h.heightPt, true)
+  v.setUint8(16, h.codec ?? VIDEO_CODEC_H264)
+  v.setUint8(17, h.key ? VIDEO_FLAG_KEY : 0)
+  v.setUint16(18, h.ageMs ?? 0, true)
+  v.setUint32(20, h.tsMs ?? 0, true)
+  new Uint8Array(buf, VIDEO_HEADER_LEN).set(au)
+  return buf
 }
 
 /** Split a binary message into its header fields and the JPEG bytes. */
@@ -199,6 +311,7 @@ export function encodeFrame(h: { seq: number; widthPx: number; heightPx: number;
 function parseInputCaps(o: Record<string, unknown>): SimInputCaps {
   return { multiTouch: o.multiTouch === true, fling: o.fling === true }
 }
+const CODECS: ReadonlySet<string> = new Set(['jpeg', 'h264'])
 
 const STATES: ReadonlySet<string> = new Set(['installing', 'booting', 'running', 'stopping', 'stopped', 'failed'])
 
@@ -217,6 +330,7 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
     switch (o.t) {
       case 'hello':
         if (typeof o.sim !== 'string' || typeof o.lane !== 'string' || typeof o.state !== 'string' || !STATES.has(o.state)) break
+        if (o.codec !== undefined && (typeof o.codec !== 'string' || !CODECS.has(o.codec))) break
         return {
           t: 'hello',
           sim: o.sim,
@@ -228,6 +342,8 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
           hold: parseSimHold(o.hold),
           isolation: typeof o.isolation === 'string' ? o.isolation : '',
           ...(o.input && typeof o.input === 'object' ? { input: parseInputCaps(o.input as Record<string, unknown>) } : {}),
+          codec: o.codec === undefined ? 'jpeg' : (o.codec as SimCodec),
+          window: typeof o.window === 'number' && o.window >= 1 ? Math.floor(o.window) : 1,
         }
       case 'state':
         if (typeof o.state !== 'string' || !STATES.has(o.state)) break
@@ -239,6 +355,9 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
       case 'fps':
         if (typeof o.fps !== 'number') break
         return { t: 'fps', fps: o.fps }
+      case 'codec':
+        if (typeof o.codec !== 'string' || !CODECS.has(o.codec)) break
+        return { t: 'codec', codec: o.codec as SimCodec, ...(typeof o.message === 'string' ? { message: o.message } : {}) }
     }
   } catch (err) {
     console.warn('[mobile] stream: bad text frame:', err)
@@ -257,7 +376,7 @@ export function closeReason(code: number, reason: string): string {
 }
 
 /** The real socket. */
-export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers }) => {
+export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers, offer }) => {
   let ws: WebSocket | null = null
   let closed = false
   const pending: string[] = []
@@ -270,8 +389,12 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
     try {
       const creds = await scope.creds()
       if (closed) return
+      const video = offer?.video ? await videoDecodeSupport() : false
+      if (closed) return
+      const codecs: SimCodec[] = video ? ['h264', 'jpeg'] : ['jpeg']
+      const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined)
       // MS70: every daemon socket dials through the per-server queue.
-      const sock = await openQueuedWebSocket(scope, simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps))
+      const sock = await openQueuedWebSocket(scope, url)
       if (closed) {
         sock.close()
         return
@@ -292,6 +415,20 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
         if (typeof ev.data === 'string') {
           const m = parseServerMsg(ev.data)
           if (m) handlers.onServer(m)
+          return
+        }
+        if (ev.data instanceof ArrayBuffer && frameMagic(ev.data) === VIDEO_MAGIC) {
+          const v = decodeVideoFrame(ev.data)
+          if (!v || v.codec !== VIDEO_CODEC_H264) {
+            console.warn('[mobile] stream: a K2SV message this tab cannot read')
+            return
+          }
+          handlers.onFrame({
+            seq: v.seq,
+            widthPt: v.widthPt,
+            heightPt: v.heightPt,
+            source: { kind: 'h264', key: v.key, data: v.data, widthPx: v.widthPx, heightPx: v.heightPx },
+          })
           return
         }
         const f = ev.data instanceof ArrayBuffer ? decodeFrame(ev.data) : null
@@ -327,6 +464,9 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
     setFps(n) {
       sendRaw(JSON.stringify({ t: 'fps', fps: Math.round(n) }))
     },
+    requestKeyframe() {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'keyframe' }))
+    },
     close() {
       closed = true
       pending.length = 0
@@ -346,6 +486,10 @@ export interface StubSimStream {
   acks: number[]
   /** fps requests, in order. */
   fpsAsks: number[]
+  /** Keyframe asks. */
+  keyframeAsks: number
+  /** The offer each connection made, in order. */
+  offers: (SimStreamOffer | undefined)[]
   /** Push one frame now (a painted fake screen). */
   pushFrame(label?: string): void
   pushServer(msg: SimServerMsg): void
@@ -384,6 +528,7 @@ export function createStubSimStream(
   const inputs: SimInput[] = []
   const acks: number[] = []
   const fpsAsks: number[] = []
+  const offers: (SimStreamOffer | undefined)[] = []
   const live = new Set<SimStreamHandlers>()
   let seq = 0
   let size = { ...screen }
@@ -392,9 +537,12 @@ export function createStubSimStream(
     inputs,
     acks,
     fpsAsks,
+    keyframeAsks: 0,
+    offers,
     connector: (opts) => {
       const { handlers } = opts
       workspace = opts.workspace
+      offers.push(opts.offer)
       live.add(handlers)
       handlers.onConn('connecting')
       queueMicrotask(() => {
@@ -410,6 +558,8 @@ export function createStubSimStream(
           hold: { kind: 'free' },
           isolation: 'Separate, not sealed: the device runs as the same system user as this server’s agents.',
           ...(caps.input ? { input: caps.input } : {}),
+          codec: 'jpeg',
+          window: opts.offer ? Math.min(STREAM_WINDOW, opts.offer.window) : 1,
         })
       })
       return {
@@ -427,6 +577,9 @@ export function createStubSimStream(
         },
         setFps(n) {
           fpsAsks.push(n)
+        },
+        requestKeyframe() {
+          stub.keyframeAsks += 1
         },
         close() {
           live.delete(handlers)

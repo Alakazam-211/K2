@@ -90,6 +90,11 @@ describe('stream adapter (sim::stream)', () => {
   it('builds the socket URL with the workspace, the fps cap and the token', () => {
     expect(simStreamUrl('ws://127.0.0.1:9', 'p-docs', 'tok', 8)).toBe('ws://127.0.0.1:9/cli/sim/stream?workspace=p-docs&fps=8&token=tok')
     expect(simStreamUrl('wss://box.k2.dev', 'my docs', '', 30)).toBe('wss://box.k2.dev/cli/sim/stream?workspace=my+docs&fps=30')
+    // 0.46.7: the offer rides the query (an older daemon ignores it).
+    expect(simStreamUrl('ws://127.0.0.1:9', 'p-docs', 'tok', 8, { codecs: ['h264', 'jpeg'], window: 3 })).toBe(
+      'ws://127.0.0.1:9/cli/sim/stream?workspace=p-docs&fps=8&codecs=h264%2Cjpeg&win=3&token=tok',
+    )
+    expect(simStreamUrl('ws://h', 'w', null, 30, { codecs: ['jpeg'], window: 0 })).toBe('ws://h/cli/sim/stream?workspace=w&fps=30&codecs=jpeg&win=1')
     expect(defaultFps(false)).toBe(30)
     expect(defaultFps(true)).toBe(8)
   })
@@ -128,7 +133,29 @@ describe('stream adapter (sim::stream)', () => {
       parseServerMsg(
         '{"t":"hello","sim":"s1","lane":"android","state":"running","fps":30,"remote":false,"hold":{"kind":"free"},"isolation":"Separate, not sealed."}',
       ),
-    ).toEqual({ t: 'hello', sim: 's1', lane: 'android', state: 'running', fps: 30, remote: false, hold: { kind: 'free' }, isolation: 'Separate, not sealed.' })
+    ).toEqual({
+      t: 'hello',
+      sim: 's1',
+      lane: 'android',
+      state: 'running',
+      fps: 30,
+      remote: false,
+      hold: { kind: 'free' },
+      isolation: 'Separate, not sealed.',
+      // A hello from a daemon before 0.46.7 has neither: JPEG, one in flight.
+      codec: 'jpeg',
+      window: 1,
+    })
+    expect(
+      parseServerMsg('{"t":"hello","sim":"s1","lane":"ios","state":"running","fps":24,"remote":true,"hold":{"kind":"free"},"isolation":"x","codec":"h264","window":3}'),
+    ).toMatchObject({ t: 'hello', codec: 'h264', window: 3, fps: 24, remote: true })
+    expect(parseServerMsg('{"t":"hello","sim":"s1","lane":"ios","state":"running","fps":24,"remote":true,"hold":{"kind":"free"},"isolation":"x","codec":"av1"}')).toBeNull()
+    expect(parseServerMsg('{"t":"codec","codec":"jpeg","message":"The video encoder stopped."}')).toEqual({
+      t: 'codec',
+      codec: 'jpeg',
+      message: 'The video encoder stopped.',
+    })
+    expect(parseServerMsg('{"t":"codec","codec":"vp9"}')).toBeNull()
     // 0.46.7: hello.input (stream::InputCaps); an older daemon sends none.
     expect(
       parseServerMsg(

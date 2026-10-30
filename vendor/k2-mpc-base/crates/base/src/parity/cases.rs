@@ -1061,23 +1061,27 @@ fn p30_person(p: &mut Person<'_>) -> R {
     })
 }
 fn p30_agent(a: &mut Agent<'_>) -> R {
-    agent_step(
-        a.verb(&["log", "--pending", "--on-behalf-of", "me"], b"")?,
-        |o| match &o.value {
-            VerbValue::Log(l) => {
-                let mut seqs: Vec<u64> = l
-                    .iter()
-                    .filter_map(|i| match i {
-                        LogItem::Change { info, .. } => Some(info.seq),
-                        _ => None,
-                    })
-                    .collect();
-                seqs.sort_unstable();
-                Output::value(seqs)
-            }
-            v => Output::value(v),
-        },
-    )
+    p30_agent_as(a, &["log", "--pending", "--on-behalf-of", "me"])
+}
+/// P30 through the alias (`approvals`, the same as `log --pending`).
+fn p30_alias_agent(a: &mut Agent<'_>) -> R {
+    p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
+}
+fn p30_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
+    agent_step(a.verb(argv, b"")?, |o| match &o.value {
+        VerbValue::Log(l) => {
+            let mut seqs: Vec<u64> = l
+                .iter()
+                .filter_map(|i| match i {
+                    LogItem::Change { info, .. } => Some(info.seq),
+                    _ => None,
+                })
+                .collect();
+            seqs.sort_unstable();
+            Output::value(seqs)
+        }
+        v => Output::value(v),
+    })
 }
 
 fn p31_person(p: &mut Person<'_>) -> R {
@@ -1541,14 +1545,24 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
             )
             .setup(aide_setup),
         ],
-        P::Pending => vec![c(
-            action,
-            "log --pending",
-            "waiting for me",
-            p30_person,
-            p30_agent,
-        )
-        .setup(p30_setup)],
+        P::Pending => vec![
+            c(
+                action,
+                "log --pending",
+                "waiting for me",
+                p30_person,
+                p30_agent,
+            )
+            .setup(p30_setup),
+            c(
+                action,
+                "approvals",
+                "waiting for me",
+                p30_person,
+                p30_alias_agent,
+            )
+            .setup(p30_setup),
+        ],
         P::Revert => vec![c(
             action,
             "revert",

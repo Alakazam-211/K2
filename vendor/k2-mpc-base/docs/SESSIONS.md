@@ -12,7 +12,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | Type | Who provides it | What it is |
 |---|---|---|
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file) |
-| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none) |
+| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
 | `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob` |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
@@ -182,6 +182,7 @@ an empty `changed`.
 | Call | Use |
 |---|---|
 | `edit_with(conn, root, f)` | **Read live, compute, apply, atomically.** Runs `f(&live_text) -> Result<String, E>` under the session lock, diffs to minimal hunks, and applies them as one change. Returns `Ok(None)` when nothing changed. `f`'s error comes back as `EditWithError::Compute(e)`, and refusals as `EditWithError::Session(_)`; nothing is applied in either case. |
+| `edit_with_options(conn, root, &EditOptions, f)` | `edit_with` with the host's [claim policy](#the-claim-policy-on-edits) and a version guard, both checked **under the session lock** (as `run_tool_with` does for edit verbs). `EditOptions::new().policy(p).if_version(v)` (`#[non_exhaustive]`; defaults `Ignore`, no guard). A doc no longer at V gives `EditWithError::Session(Stale { expected, actual })` and nothing applies; the version is checked before the backlog, `f` and the claims. A host's own edit route (a tab's save, a CLI's direct edit) passes the version its text came from and needs no text comparison of its own. A whole-text replacement: `|_| Ok::<_, Infallible>(new_text)`. |
 | `edit(conn, Vec<Edit>, if_version)` | Hunks in byte offsets, at most one `Edit` per root. With `if_version: Some(V)`, a doc that has moved past V gives `Stale { expected, actual }` and nothing is applied (the same check as the edit verbs' `--if-version`, amendment 14). Invalid hunks (out of range, inside a character, overlapping) change nothing. |
 | `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`. Applies only what the caller changed since V. Overlap → `Conflicts(Vec<Conflict>)` and nothing applied; two different appends at the end of the text both land, the live one first (rule O5). Unknown or expired V → `BaseExpired` ("re-read and retry"). |
 | `replace_text(conn, root, text)` | Make a root equal `text` through a minimal diff. Last-writer-wins for that root: for people who mean "replace whatever is there" (`write --base live`). |
@@ -194,6 +195,23 @@ an empty `changed`.
 | **Clients sending hunks** (positions from a read or an editor) | `edit` + `if_version` | Positional hunks are only right at the version they were computed on. `Stale` means re-read and recompute. |
 | **Whole-file rewrites from an older read** (`write --base V`, `cat … \| tool \| write`) | `write_base` | The caller's changes since V merge with everyone else's, and overlaps are reported, never overwritten. |
 | `--base live` | `replace_text` | Deliberate last-writer-wins. Agents get a warning from the host. |
+| **A host's direct edit route** (new text computed from a read at V, under the host's claim policy) | `edit_with_options` | Both checks inside the lock: nothing lands between them and the apply. |
+
+### Writing a BOM file
+
+The doc text never holds a byte-order mark; the codec writes it back (`TextFilePack`: BOM and
+line endings restored). `cat` prints the file's bytes, **BOM included**, so an agent that
+pipes `cat` into `write` sends a body starting with U+FEFF. When the doc's codec writes a
+BOM in front of that root (`Pack::writes_bom(root, codec)`), `write --base V` and
+`write --base live` (`write_base`, `write_base_with`, `replace_text`, `replace_text_with`)
+take **that one leading U+FEFF** off the body before merging, so the file keeps exactly one
+BOM. Without a BOM in the file, a leading U+FEFF is the caller's text and stays. Other edit
+calls are unchanged (their text never comes from `cat` whole).
+
+`Pack::writes_bom` is a provided method: `TextFilePack` reads its settings; the default, for
+a pack whose schema is one text root, encodes that root empty with the codec and checks for
+the BOM's bytes (`codec::text_file::BOM`). So a pack delegating to `TextFilePack` (Markdown)
+or with its own BOM-writing encoder (a text pack) needs no change.
 
 `edit_with` rules: `f` runs **with the session locked**. It must be bounded (no I/O; regexes
 with size limits) and must not call back into the kit. A panic in `f` is re-raised to the
@@ -403,7 +421,9 @@ only reads: nothing in the doc, the store or presence changes.
   daemon's apply order, so this is the true most recent, immune to host clock skew: a later
   change stamped with an earlier host time still wins; `at_ms` is shown, never ranked).
   Characters whose change isn't recorded (inserted before v0.3.0) rank below every recorded
-  one; among only those, the line's first character decides.
+  one. **Ties** (characters of the same root change) go to a restored character when there
+  is one (the most recently restored, then the first), else to the first: a line only partly
+  put back by an undo, redo or revert still shows `restored_by` (v0.9.1).
 - **Undo, redo, revert** insert new elements (by the caller, in a new change), and the line
   blames to the **root**: the author, change, kind and time of the change that first inserted
   the text, with **`restored_by`** (the caller) and **`restored_in`** (the undo, redo or
@@ -464,8 +484,10 @@ order is by first join. Each `RosterEntry` has:
 - `last_edit_ms`: the latest across connections;
 - `stay`: `Held` if any connection is held;
 - `claims: Vec<ClaimInfo>`: their live claims, oldest first (amendment 13);
-- `last_edit: Option<LineRange>`: the lines their latest change touched, anchored (where
-  those lines are now), from the most active connection that has one. An agent's caret is at
+- `last_edit: Option<LineRange>`: the lines their latest change touched, where that text is
+  now, from the most active connection that has one. **Not expanding** (v0.9.1): text others
+  type at its edges stays out, and once its text is all deleted or replaced (an undo of it,
+  someone's rewrite) it is gone; it never names a line past the doc's end. An agent's caret is at
   the end of its last edit, so agents have carets in `cursor` too.
 
 Carets and views (per connection):
@@ -509,7 +531,7 @@ same lines. **Ephemeral awareness, not locking and not history:**
   ends builds that on the events below.
 - Visible to whoever can read the doc (the roster's rights).
 
-**Anchored ranges, expanding.** A claim's span (and a view's, and a last edit's) is a byte
+**Anchored ranges, expanding.** A claim's span (and a view's; not a last edit's, below) is a byte
 span carried through every change by `position::transform`: its start with `Bias::Before`
 (it sticks to the character before; Yrs `Assoc::Before`), its end with `Bias::After` (the
 character after; `Assoc::After`). Text typed at either edge lands inside; deleted text
@@ -517,6 +539,13 @@ collapses it to a point; it never inverts (the opposite convention inverts an em
 near-empty range on the first keystroke at its edge, which a test shows). The kit carries
 byte offsets as it does for carets, so the engine stays hidden (no Yrs `StickyIndex`);
 the rules are the same.
+
+**Last edits, not expanding** (v0.9.1). A participant's last-edit span (the roster's
+`last_edit`, `Edited` notes) is about text they wrote, so it is carried the other way: its
+start moves past text inserted at or replacing it, its end stays before it. A span that
+held text and holds none any more is dropped: what is there now is someone else's (before,
+an undo of A's line followed by B typing there gave "A edited" notes about B's line). Its
+lines are clamped to the text's lines.
 
 ### Claims
 
@@ -609,7 +638,8 @@ this off), so the owner can't grab it back before the waiter acts.
 ### The claim policy on edits
 
 `ClaimPolicy::{Ignore, Respect}` (default `Ignore`), chosen by the host per edit:
-`edit_with_policy(conn, root, policy, f)`, `replace_text_with(.., policy)`,
+`edit_with_policy(conn, root, policy, f)`, `edit_with_options(conn, root,
+&EditOptions::new().policy(p), f)` (with `if_version` too), `replace_text_with(.., policy)`,
 `write_base_with(.., policy) -> WriteReport`, and `run_tool_with(conn, root, argv, stdin,
 &ToolOptions::new().policy(p))`. The old calls (`edit_with`, `replace_text`, `write_base`,
 `run_tool`) are these with `Ignore`: behaviour unchanged. `edit`, undo, redo, revert and
@@ -1180,7 +1210,7 @@ folder and the workspace).
 | `RevertTooOld { seq }` | the change is outside the revert window; use `restore --version` | 8 (never retry) |
 | `NoSuchChange(n)` | no change (revert) or version (restore, show, diff, name) `n` | 4 |
 | `NotJoined { conn }` | The connection isn't in this doc: join again | 2 (or rejoin silently) |
-| `Stale { expected, actual }` | `edit(.., if_version)` or an edit verb's `--if-version` (amendment 14), but the doc moved; nothing applied. Displays as one line, `doc changed since {expected} (now {actual})`, with no doc text | 1 (re-read and retry) |
+| `Stale { expected, actual }` | `edit(.., if_version)`, `edit_with_options` with `if_version`, or an edit verb's `--if-version` (amendment 14), but the doc moved; nothing applied. Displays as one line, `doc changed since {expected} (now {actual})`, with no doc text | 1 (re-read and retry) |
 | `RateLimited { retry_after_ms }` | over the edit rate | 2 |
 | `Declined(Declined)` | file can't be live, or live editing is off | 4 or "opens as today" |
 | `NotFound` | no doc and no bytes | 4 |
@@ -1219,15 +1249,19 @@ editor, an agent can do through a verb, with the same effect.
   (a `compile_fail` doctest holds that).
 - **The verb registry** (K-PAR-2). `VerbSpec { name, kind: Read | Edit | History, needs:
   [Need], api: [Api], serves: [PersonAction], usage, exits, source: Kit | Pack, tiers:
-  [Tier] }` (`applies_to(tier)`; hosts classify verbs from it). Both tiers: `open`,
+  [Tier] }` (`applies_to(tier)`; hosts classify verbs from it).
+  `runs_through_run_tool()`: whether a host routes it to `run_tool` (a flag per verb, as
+  data: `RUN_TOOL_VERBS`, the kit's text tools, plus every pack verb; tests hold it to
+  `run_tool` itself, both ways). `alias_of()`: `ALIASES`, verbs that are another name for a
+  verb, the same row and binding (`approvals` = `log --pending`, P30, host-neutral). Both tiers: `open`,
   `leave`, `cat` (tier 0: the file's bytes), `who`, `write`, `status`, `flush`, `log`,
   `show --version`, `restore`, `version --name`, `mv`, `blame`, `approve`, `decline`,
-  `log --pending` (tier 0: by version); tier 0 only: `lease`,
+  `log --pending` and `approvals` (tier 0: by version); tier 0 only: `lease`,
   `lease --renew`, `lease --release`, `lease --break` (owner); every other verb is text.
   `KIT_VERBS` are the kit's (the tools, the session verbs: `open`, `leave`, `who`,
   `follow`, `cursor`, `write`, `undo` / `redo` / `undo --drop` / `undo --partial`,
   `status`, `flush`, `watch`, `tail -f`, `log`, `diff --version`, `show --version`,
-  `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `revert`,
+  `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `approvals`, `revert`,
   `blame`, `claim` / `claim --renew` / `claim --release` (P8), `activity` (P6), and tier
   0's lease verbs).
   `Registry::for_tier(tier)` is the kit's verbs of one tier; `Registry::kit()` is the text
@@ -1237,7 +1271,8 @@ editor, an agent can do through a verb, with the same effect.
   `log --pending`...), so a host's command table can be checked against the registry.
 - **A pack's list as data**: `ParityRow::live(action, verbs)`, `live_but(action, verbs,
   later)`, `deferred(action, later, until, why)`, `not_applicable(action, shown_by, absent,
-  reason)`.
+  reason)`. A list may name an alias under its row or leave it out; the kit's cases run
+  both names.
 - **The harness**, `parity::check(pack, rows, &registry, extra_cases) -> Result<Report,
   Vec<Failure>>`, collects every failure:
   1. exactly one row per action **of the registry's tier** (rows for other tiers' actions
@@ -1316,7 +1351,7 @@ editor, an agent can do through a verb, with the same effect.
 | P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)` (the native tab's grouping is G3) |
 | P28 | `purge` | later (redaction) |
 | P29 | `approve`, `decline` | `set_approval(conn, seq, Approved \| Declined)` (only the person it was made for); tier 0: `BlobSession::set_approval(conn, version, ..)` |
-| P30 | `log --pending --on-behalf-of me` | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals`; tier 0: `BlobSession::log` (`approval`) / `approvals` |
+| P30 | `log --pending --on-behalf-of me`, or its alias `approvals --on-behalf-of me` | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals`; tier 0: `BlobSession::log` (`approval`) / `approvals` |
 | P31 | `revert <change>` | `revert(conn, change, partial)` (author, the person, or owner; too old: exit 8) |
 
 ## Not in this slice
@@ -1608,6 +1643,20 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 15 (v0.9.1, additive): one guarded edit call, a `run_tool` flag, `approvals`, one BOM
+
+- **`Session::edit_with_options(conn, root, &EditOptions, f)`**: `edit_with` with the claim
+  policy and `if_version`, both under the lock ([Editing](#editing)).
+- **`VerbSpec::runs_through_run_tool()`** (data: `parity::RUN_TOOL_VERBS`, plus pack verbs)
+  and **`VerbSpec::alias_of()`** (`parity::ALIASES`).
+- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (P30), both
+  tiers. Pack lists may leave it out.
+- **`Pack::writes_bom(root, codec)`** (provided) and `codec::text_file::BOM`: a `write` body
+  read with `cat` no longer doubles the BOM ([Writing a BOM file](#writing-a-bom-file)).
+- **Fixed:** blame keeps `restored_by` on a partly restored line ([Blame](#blame): ties);
+  last-edit ranges no longer expand over others' text or point past the end
+  ([Last edits](#agent-presence-amendment-13)).
 
 ### Amendment 14 (v0.8.0): `--if-version` on edit verbs; claim ends carry lines and version
 

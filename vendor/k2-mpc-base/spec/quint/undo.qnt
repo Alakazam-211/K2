@@ -1,6 +1,6 @@
 // -*- mode: Bluespec; -*-
 //
-// undo: the kit's undo spec (docs/SPEC-UNDO.md, v1.8; U1–U23, O1–O5, O4a, I1, D1–D3) over abstract
+// undo: the kit's undo spec (docs/SPEC-UNDO.md, v1.9; U1–U23, O1–O5, O4a, I1, D1–D3) over abstract
 // text, for the model check `MC text-undo` (spec §8). Transcribed definition by definition
 // from the oracle of record, `spec_undo::model` (crates/spec-undo/src/model), and driven
 // by the same bounded world as the Rust enumerator (crates/spec-undo/src/bounded.rs), so a
@@ -31,8 +31,9 @@
 // - Undo, redo and revert merge EXACT hunk sets (U10, v1.7): ours, the inverse of the
 //   change's own hunk, and theirs, read off the live window BY ROOT at merge time (U8,
 //   v1.8: the greedy rule, `byRoot`; the v1.7 carried theirs is the oracle's cross-check,
-//   not state). O4 on (range, roots); O4a: a kept ours hunk that would put back a live root
-//   conflicts (overlap). Nothing is diffed, except by mutant "f3-rediff" (the old sides)
+//   not state). O4 on (range, roots); O4a: a kept ours hunk that would put back a root live
+//   in the text as the step merges it (after earlier steps), window included, conflicts
+//   (overlap). Nothing is diffed, except by mutant "f3-rediff" (the old sides)
 //   and mutant (i) on a tainted region; there the diff is undo_diff.qnt's.
 // - The cut: no state with a text longer than MAXLEN (at most 4). So the merge only diffs
 //   texts up to 4 long, where `undo_diff.qnt`'s pinned diff is the kit's diff::hunks
@@ -60,8 +61,10 @@
 //
 //   inv_own_only  hist.undo_own_only (U10a by root, v1.8): every character an undo, redo or
 //                 revert deletes has a root the change it reverses inserted (the base roots
-//                 its ours deletes). Enforced since v1.7 (F3 fixed by exact hunk sets).
-//   inv_I1        I1 (v1.8): at most one live element per root.
+//                 its ours deletes), over the regions the step applied (v1.9). Enforced
+//                 since v1.7 (F3 fixed by exact hunk sets).
+//   inv_I1        I1 (v1.8): at most one live element per root, in every state and after
+//                 every step of an undo or redo (v1.9: each step is its own change).
 //   inv_RT        restart transparency (U22a v1.6): a restart changes no revert's outcome
 //                 or text, for every record, all or nothing and --partial.
 //   inv_U9        a tainted region is never applied (U9).
@@ -81,7 +84,8 @@
 //   "vi-o5-every-window-end", "vii-o5-region-base", "skip-u19", "f3-rediff" (the merge's
 //   sides found by diffing strings), "restart-single-taint" (a restart reads a record
 //   region's one taint flag back at both edges), "x-provenance-ignored-in-o4" (v1.8: O4 on
-//   element identity, so restorations are never identical, and no O4a).
+//   element identity, so restorations are never identical, and no O4a), "xi-no-o4a" (v1.9:
+//   O4 on (range, roots) as specified, but no O4a).
 
 module undo {
   import undo_diff.* from "./undo_diff"
@@ -447,7 +451,9 @@ module undo {
                   edges: regions.foldl([], (l, g) => l.append({ s: g.start, e: g.end, ts: false, te: false })) }
       // who made a change (U18's notice reads it after a restart; state only with RESTARTS)
       val au = if (RESTARTS > 0) carried.authors.union(Set(author)) else carried.authors
-      { st: { ...carried, doc: doc, head: nh, records: carried.records.put(nh, rec), authors: au },
+      // I1 after every change (v1.9: an undo or redo step is one), into viol; nextOf keeps it
+      { st: { ...carried, doc: doc, head: nh, records: carried.records.put(nh, rec), authors: au,
+              viol: if (dup(rootsOf(doc))) carried.viol.union(Set("I1")) else carried.viol },
         changed: true, regions: regions, dels: ap.dels }
     }
 
@@ -474,8 +480,9 @@ module undo {
     else r.end == n and r.bdn
 
   /// merge_regions (U10, U11): the clean regions and the conflicting ones' reports. The
-  /// window read by root (U8, v1.8); O4 on (range, roots); then O4a against the live text.
-  /// Mutant (i) has no taint rule; mutant (x) judges O4 on identity and has no O4a
+  /// window read by root (U8, v1.8); O4 on (range, roots); then O4a against the live text as
+  /// the step merges it (after earlier steps), window included. Mutant (i) has no taint
+  /// rule; mutant (x) judges O4 on identity and has no O4a; mutant (xi) has no O4a
   def mergeRegions(st: St, rs: List[Region]): Merges = {
     val live = chars(st.doc)
     val lr = rootsOf(st.doc)
@@ -498,7 +505,7 @@ module undo {
             mergeE(r.after, withRoots(hunks(r.after, r.before), r.br), withRoots(hunks(r.after, win), wr), atEndFor(r, n), mode)
           else mergeE(r.after, withRoots(r.ours, r.br), exact, atEndFor(r, n), mode)
         // O4a (v1.8): a kept ours hunk would put back a root live in the text
-        val o4a = mode == "root" and m0.clean
+        val o4a = mode == "root" and MUTANT != "xi-no-o4a" and m0.clean
           and m0.edits.indices().exists(k => m0.edits[k].rts.indices().exists(j => has(lr, m0.edits[k].rts[j])))
         val m = if (o4a) { ...m0, clean: false, o5: false } else m0
         val nt2 = { ...nt, clean: m.clean, o5: m.o5, samePointEnd: m.samePointEnd, o4a: o4a }
@@ -518,9 +525,10 @@ module undo {
   }))
 
   /// own_roots (U10a by root, v1.8): the base roots the regions' ours deletes, the roots
-  /// the change a step reverses inserted
-  pure def ownRoots(rs: List[Region]): List[int] =
-    rs.foldl([], (l, r) => r.ours.foldl(l, (l2, h) => l2.concat(r.ar.slice(h.s, h.e))))
+  /// the change a step reverses inserted; over the regions the step applied (`applied`,
+  /// indices into `rs`; v1.9)
+  pure def ownRoots(rs: List[Region], applied: List[int]): List[int] =
+    applied.foldl([], (l, i) => rs[i].ours.foldl(l, (l2, h) => l2.concat(rs[i].ar.slice(h.s, h.e))))
   pure def foreignIn(dels: List[int], own: List[int]): bool = dels.indices().exists(k => not(has(own, dels[k])))
 
   /// apply_step: one undo or redo step's clean regions as one change by p; the regions for
@@ -605,7 +613,7 @@ module undo {
                       else { undo: dropLast(ws.undo), redo: ws.redo.append(inverse), cleared: false }
             { ...acc, work: { ...ap.st, stacks: ap.st.stacks.set(p, ws2) }, done: acc.done + 1,
               skipped: acc.skipped.concat(rep), notes: notes,
-              foreign: acc.foreign or foreignIn(ap.dels, ownRoots(batch)),
+              foreign: acc.foreign or foreignIn(ap.dels, ownRoots(batch, applied)),
               steps: acc.steps.append({ applied: applied, reports: rep, pushed: inverse.length() }) }
           }
         })
@@ -646,7 +654,7 @@ module undo {
       { ...res0, out: { ...OUT0, kind: "blocked", regions: m.conflicts } }
     else {
       val c = newBatch(st, p, stepEdits(rs, m.clean))
-      { ...res0, st: c.st, foreign: foreignIn(c.dels, ownRoots(rs)),
+      { ...res0, st: c.st, foreign: foreignIn(c.dels, ownRoots(rs, m.clean.foldl([], (l, q) => l.append(q._1)))),
         out: { ...OUT0, kind: "applied", steps: 1, skipped: m.conflicts } }
     }
   }
@@ -721,9 +729,9 @@ module undo {
   /// bounded::State::check: the rules this transition violates
   def checks(pre: St, a: Act, r: Res): Set[str] = {
     // own_only (U10a by root, v1.8): the request deleted a root the change it reverses
-    // didn't insert
+    // didn't insert in the regions applied (v1.9)
     val ownOnly = (a.kind == "undo" or a.kind == "redo" or a.kind == "revert") and r.foreign
-    // I1 (v1.8): at most one live element per root
+    // I1 (v1.8): at most one live element per root; after every step of an undo or redo (v1.9)
     val i1 = dup(rootsOf(r.st.doc))
     val u9 = r.notes.indices().exists(i => r.notes[i].tainted and not(r.notes[i].erased) and r.notes[i].clean)
     val o5 = r.notes.indices().exists(i => {
@@ -791,7 +799,8 @@ module undo {
   /// roots relabelled), the outcome, and whether the cut allows it
   def nextOf(st: St, a: Act): { ok: bool, st: St, out: Outcome } = {
     val r = perform(st, a)
-    val v = { ...r.st, viol: st.viol.union(checks(st, a, r)) }
+    // r.st.viol: st.viol, plus "I1" if a change the request made broke it (commit)
+    val v = { ...r.st, viol: r.st.viol.union(checks(st, a, r)) }
     val red = if (REDUCE and v.reverts == REVERTS) { ...v, records: Map(), head: 0 } else v
     { ok: r.st.doc.length() <= MAXLEN, st: relabel(red), out: r.out }
   }

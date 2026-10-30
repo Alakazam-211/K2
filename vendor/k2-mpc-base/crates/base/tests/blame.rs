@@ -570,6 +570,56 @@ fn blame_restored_text_is_its_roots_with_the_restorer() {
     );
 }
 
+/// A line only partly put back (a mid-sentence span) still says it was restored: its
+/// restored characters tie with the rest of the line on the root change, and a tie goes to
+/// a restored character. After an undo, and after a revert.
+#[test]
+fn blame_partly_restored_line_keeps_restored_by() {
+    let f = fx("partial-restore");
+    let s = f.open("p.md", "The quick brown fox jumps\nsecond line\n");
+    let alice = join(&s, person("alice"));
+    let obs = join(&s, person("obs"));
+    let import = line(&blame(&s, obs), 1).change;
+    // alice deletes a mid-sentence span, then undoes it
+    f.advance(10);
+    replace(&s, alice, "quick brown ", "");
+    f.advance(10);
+    let UndoOutcome::Applied { result, .. } = s.undo(alice, 1).unwrap() else {
+        panic!()
+    };
+    let l = line(&blame(&s, obs), 1).clone();
+    assert_eq!(l.text, "The quick brown fox jumps");
+    assert_eq!(
+        (
+            l.author.as_str(),
+            l.change,
+            l.restored_by.as_deref(),
+            l.restored_in
+        ),
+        ("kit:import", import, Some("alice"), Some(result.version))
+    );
+    // the untouched line has no restoration
+    assert_eq!(line(&blame(&s, obs), 2).restored_by, None);
+    // the same after a revert: alice deletes "fox ", reverts her change
+    f.advance(10);
+    let gone = replace(&s, alice, "fox ", "");
+    f.advance(10);
+    let UndoOutcome::Applied { result, .. } = s.revert(alice, gone, false).unwrap() else {
+        panic!()
+    };
+    let l = line(&blame(&s, obs), 1).clone();
+    assert_eq!(l.text, "The quick brown fox jumps");
+    assert_eq!(
+        (
+            l.author.as_str(),
+            l.change,
+            l.restored_by.as_deref(),
+            l.restored_in
+        ),
+        ("kit:import", import, Some("alice"), Some(result.version))
+    );
+}
+
 // ---------- erasure ----------
 
 /// A purged change's line is `erased` (its record's content is gone), with its id, time

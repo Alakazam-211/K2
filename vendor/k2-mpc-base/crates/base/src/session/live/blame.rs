@@ -28,8 +28,10 @@ use super::*;
 /// position: change ids increase in the daemon's apply order, so this is the true "most
 /// recent", immune to host clock skew; `at_ms` is shown, never ranked). Characters whose
 /// change the store can't name (text inserted before v0.3.0 recorded clock spans) rank
-/// below every named one; among only those, the line's first character decides. When that
-/// character was put back by an undo, redo or revert, [`BlameLine::restored_by`] and
+/// below every named one. Ties (characters with the same root change) go to a restored
+/// character if there is one (the most recently restored, then the first), else to the
+/// first; so a line only partly put back still says it was. When the chosen character was put back by an undo, redo or revert,
+/// [`BlameLine::restored_by`] and
 /// [`BlameLine::restored_in`] name the restoring change and its author (`restore`, a new
 /// edit, is not a restoration: its text is the restorer's).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -498,10 +500,16 @@ impl Session {
                 e.insert(store.client_owner(self.doc_id, c)?);
             }
         }
-        // change ids increase in apply order: the greatest is the most recent
-        let rank = |p: &Piece| match p.seq {
-            Some(s) => (true, s),
-            None => (false, 0),
+        // change ids increase in apply order: the greatest is the most recent. Among
+        // characters tied on it, a restored one wins, the most recently restored first (then
+        // the first such): a line partly put back by an undo, redo or revert says so,
+        // whichever of its characters with that root comes first
+        let rank = |p: &Piece| {
+            let restored = p.restorer.map(|(_, by)| by);
+            match p.seq {
+                Some(s) => (true, s, restored),
+                None => (false, 0, restored),
+            }
         };
         let mut k = 0;
         for (n, (s, e)) in spans.into_iter().enumerate() {

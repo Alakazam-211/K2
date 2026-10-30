@@ -1971,7 +1971,7 @@ impl Runner {
             return Err("I1: the oracle has two live elements with one root".into());
         }
         if let Some(before) = &chars_before {
-            self.own_only_kit(&step, &mo, reversed, before, &chars)
+            self.own_only_kit(&step, &mo, &hits, reversed, before, &chars)
                 .inspect_err(|_| self.prov_differs = true)?;
         }
         if self.verbose {
@@ -2327,11 +2327,15 @@ impl Runner {
     /// an undo of a batch, the roots the batch's change inserted (an edit's own text; for
     /// a batch a redo or revert made, the roots it put back); a redo, the roots its undo
     /// step put back; a revert of change C, the roots C inserted. A multi-step undo or redo
-    /// is checked against the union over its steps.
+    /// is checked against the union over its steps. **v1.9:** also over the regions the
+    /// request **applied** only (a region skipped under `--partial` excuses nothing): the
+    /// oracle's [`Hits::own_roots`](spec_undo::model::Hits::own_roots), mapped to the kit's
+    /// elements by the element correspondence.
     fn own_only_kit(
         &mut self,
         step: &Step,
         mo: &Outcome,
+        hits: &spec_undo::model::Hits,
         reversed: Vec<Entry>,
         before: &[Vec<KitChar>],
         after: &[Vec<KitChar>],
@@ -2354,6 +2358,19 @@ impl Runner {
                 }
             }
         }
+        // v1.9: over the regions applied only (a skipped region's roots excuse nothing): the
+        // oracle's own roots of its applied regions, as the kit's elements (the element
+        // correspondence; every root was seen live)
+        let mut own_applied: BTreeSet<KitId> = BTreeSet::new();
+        for p in &hits.own_roots {
+            let Some(k) = self.pt.corr.get(p) else {
+                return Err(format!(
+                    "own_only (U10a, applied regions): the oracle's root {p:?} was never seen \
+                     live (a runner bug)"
+                ));
+            };
+            own_applied.insert(*k);
+        }
         let live: BTreeSet<KitId> = after.iter().flatten().map(|k| k.id).collect();
         let mut removed = 0;
         let mut foreign_author = 0;
@@ -2370,6 +2387,14 @@ impl Runner {
                 return Err(format!(
                     "own_only (U10a by root) on the kit: {step:?} removed {:?} (element {:?}, \
                      root {:?} by {:?}), not a root the reversed change(s) {changes:?} inserted",
+                    k.ch, k.id, k.root, k.root_pid
+                ));
+            }
+            if !own_applied.contains(&k.root) {
+                return Err(format!(
+                    "own_only (U10a, v1.9: applied regions) on the kit: {step:?} removed {:?} \
+                     (element {:?}, root {:?} by {:?}), not a root an applied region of the \
+                     reversed change(s) {changes:?} inserted",
                     k.ch, k.id, k.root, k.root_pid
                 ));
             }

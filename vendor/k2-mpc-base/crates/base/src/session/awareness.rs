@@ -611,6 +611,67 @@ pub(crate) fn carry_span(s: usize, e: usize, hunks: &[Hunk]) -> (usize, usize) {
     (s2, e2)
 }
 
+/// Carry a participant's last-edit span through a change, **not expanding**: text inserted
+/// at either edge lands outside, a replaced or deleted edge moves inward past it. `None`
+/// when a span that held text holds none any more (its text was all removed or replaced:
+/// what is there now is someone else's). An empty span (an edit that left no text, a
+/// deletion) stays a point. Claims and views keep expanding anchors ([`carry_span`]).
+pub(crate) fn carry_edit_span(s: usize, e: usize, hunks: &[Hunk]) -> Option<(usize, usize)> {
+    // the first character still in the span: past anything inserted at or replacing `s`
+    let start = |pos: usize| -> usize {
+        let mut delta: isize = 0;
+        for h in hunks {
+            if pos < h.start {
+                break;
+            }
+            let grow = h.insert.len() as isize - (h.end - h.start) as isize;
+            if h.start < h.end && pos < h.end {
+                return (h.start as isize + delta) as usize + h.insert.len();
+            }
+            delta += grow;
+        }
+        (pos as isize + delta) as usize
+    };
+    // the end (exclusive): before anything inserted at or replacing up to `e`
+    let end = |pos: usize| -> usize {
+        let mut delta: isize = 0;
+        for h in hunks {
+            if pos <= h.start {
+                break;
+            }
+            let grow = h.insert.len() as isize - (h.end - h.start) as isize;
+            if pos <= h.end && h.start < h.end {
+                return (h.start as isize + delta) as usize;
+            }
+            delta += grow;
+        }
+        (pos as isize + delta) as usize
+    };
+    let (s2, e2) = (start(s), end(e));
+    if s < e {
+        (s2 < e2).then_some((s2, e2))
+    } else {
+        // a point: where an insertion at it leaves the text after it
+        Some((s2, s2))
+    }
+}
+
+/// The lines a last-edit span covers now, clamped to the lines the text has (never the
+/// empty line after a final `\n`); `None` for an empty text.
+pub(crate) fn edit_span_lines(root: &str, text: &str, s: usize, e: usize) -> Option<LineRange> {
+    if text.is_empty() {
+        return None;
+    }
+    let lines = position::line_of(text, text.len()) - usize::from(text.ends_with('\n'));
+    let first = position::line_of(text, s).min(lines);
+    let last = position::line_of(text, e).clamp(first, lines);
+    Some(LineRange {
+        root: root.to_owned(),
+        first,
+        last,
+    })
+}
+
 /// The byte span of lines `first..=last` of `text` (`last` clamped), or `None` when the
 /// lines don't exist.
 pub(crate) fn line_span(text: &str, first: usize, last: usize) -> Option<(usize, usize, usize)> {
@@ -695,6 +756,91 @@ mod tests {
             end,
             insert: insert.into(),
         }
+    }
+
+    /// Last-edit spans don't expand: text typed at an edge stays out, and a span whose text
+    /// is all removed or replaced is gone (finding F2: notes naming someone's newer text).
+    #[test]
+    fn edit_spans_do_not_expand() {
+        // "aaa|BBB|ccc": the span is BBB, bytes 3..6
+        let (s, e) = (3, 6);
+        assert_eq!(
+            carry_edit_span(s, e, &[h(3, 3, "xx")]),
+            Some((5, 8)),
+            "typed before"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(6, 6, "xx")]),
+            Some((3, 6)),
+            "typed after"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(4, 4, "xx")]),
+            Some((3, 8)),
+            "typed inside"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(0, 1, "")]),
+            Some((2, 5)),
+            "before it"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(7, 9, "")]),
+            Some((3, 6)),
+            "after it"
+        );
+        assert_eq!(carry_edit_span(s, e, &[h(3, 6, "")]), None, "all deleted");
+        assert_eq!(
+            carry_edit_span(s, e, &[h(3, 6, "YYY")]),
+            None,
+            "all replaced"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(2, 7, "Z")]),
+            None,
+            "replaced with more"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(2, 4, "zz")]),
+            Some((4, 6)),
+            "start replaced"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(5, 8, "zz")]),
+            Some((3, 5)),
+            "end replaced"
+        );
+        assert_eq!(
+            carry_edit_span(s, e, &[h(0, 0, "q"), h(3, 3, "r"), h(6, 6, "t")]),
+            Some((5, 8))
+        );
+        // a point stays a point, after text typed at it
+        assert_eq!(carry_edit_span(3, 3, &[h(3, 3, "xx")]), Some((5, 5)));
+        assert_eq!(carry_edit_span(3, 3, &[h(1, 5, "")]), Some((1, 1)));
+        // expanding claims, for contrast
+        assert_eq!(carry_span(s, e, &[h(6, 6, "xx")]), (3, 8));
+    }
+
+    /// Last-edit lines never name the empty line after a final newline, nor a line past
+    /// the end.
+    #[test]
+    fn edit_lines_stay_in_the_text() {
+        let t = "one\ntwo\n";
+        let l = |s, e| edit_span_lines("r", t, s, e).map(|r| (r.first, r.last));
+        assert_eq!(l(0, 3), Some((1, 1)));
+        assert_eq!(l(4, 7), Some((2, 2)));
+        assert_eq!(
+            l(4, 8),
+            Some((2, 2)),
+            "not the empty line after the last newline"
+        );
+        assert_eq!(l(8, 8), Some((2, 2)));
+        assert_eq!(l(50, 60), Some((2, 2)), "clamped");
+        assert_eq!(edit_span_lines("r", "", 0, 0), None);
+        assert_eq!(
+            edit_span_lines("r", "a\nb", 3, 3).map(|r| (r.first, r.last)),
+            Some((2, 2))
+        );
     }
 
     /// The expanding convention keeps an empty range valid and takes in text typed at its

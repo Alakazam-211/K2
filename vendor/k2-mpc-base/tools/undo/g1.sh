@@ -27,7 +27,8 @@ case ${PART:-exhaustive} in
     done
     timed "walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_RST:-1000000} --threads "$T"
     timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
-    timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4 ;;
+    timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4
+    timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant xi-no-o4a ;;
   long)
     run_g 3x2u2r0 --pids 3 --events 2 --undos 2 --reverts 0 --init abb --seed-depth 3 ;;
   *) echo "PART: exhaustive, walks or long" >&2; exit 2 ;;

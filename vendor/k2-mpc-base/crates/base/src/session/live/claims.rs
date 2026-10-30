@@ -786,7 +786,11 @@ impl Session {
             if let (Some((r, a, b)), Some(at)) = (&m.edited, m.last_edit_ms) {
                 let recent = edit_window.map_or(true, |w| now.saturating_sub(at) < w);
                 if r == root && recent && awareness::overlap((*a, *b), (s, e)) {
-                    out.push(note(&m.p.pid, &m.p.name, NoteKind::Edited, (*a, *b), at));
+                    if let Some(lines) = awareness::edit_span_lines(root, text, *a, *b) {
+                        let mut n = note(&m.p.pid, &m.p.name, NoteKind::Edited, (*a, *b), at);
+                        n.lines = lines;
+                        out.push(n);
+                    }
                 }
             }
             if m.p.kind == ParticipantKind::Person {

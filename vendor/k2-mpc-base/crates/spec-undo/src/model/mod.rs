@@ -1,4 +1,4 @@
-//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.8),
+//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.9),
 //! over plain strings and hunks. No engine, no store, no clock.
 //!
 //! **What it calls from the kit:** only the diff pipeline, D1–D2, where the spec still uses
@@ -28,12 +28,16 @@
 //!   (a debug assertion), and a window character counted as base by root only is a case
 //!   class ([`Hits::base_by_root`]).
 //! - **O4 on (range, roots)** ([`merge::Same::Root`]); `write --base` keeps hunk equality.
-//! - **O4a:** after O4, a kept ours edit that would put back a root live anywhere in its
-//!   root's text (the state the step merges against) makes the region conflict (overlap).
+//! - **O4a:** after O4, a kept ours edit that would put back a root live in its root's
+//!   text as the step merges it (after earlier steps of the request), window included,
+//!   makes the region conflict (overlap). Wording v1.9; the rule is v1.8's.
 //! - **U10a by root:** a step removes only characters whose root is one the change it
-//!   reverses inserted: the base roots its ours deletes (an undo of a batch, its inserted
-//!   roots; a redo, the roots the undo put back; a revert, the change's inserted roots).
-//! - **I1:** at most one live element per root, checked after every undo, redo and revert
+//!   reverses inserted **in the regions the step applies** (v1.9; v1.8 took every region of
+//!   the batch, skipped ones included, which only I1 made the same): the base roots their
+//!   ours deletes (an undo of a batch, its inserted roots; a redo, the roots the undo put
+//!   back; a revert, the change's inserted roots).
+//! - **I1:** at most one live element per root, checked after **every step** of an undo or
+//!   redo (each step is its own change, in the kit too) and after every revert
 //!   ([`Model::i1`], [`Hits::i1_violated`]).
 //!
 //! **State** ([`Model`]) is plain data, `Clone + Eq + Hash`, and every operation is a
@@ -407,6 +411,10 @@ pub struct Hits {
     /// An undo, redo or revert deleted a character whose root is not one the change it
     /// reverses inserted (U10a by root, v1.8). `hist.undo_own_only`, enforced.
     pub foreign_deleted: bool,
+    /// The roots an applied undo, redo or revert may remove (U10a, v1.9): over its steps, the
+    /// base roots the ours of each **applied** region deletes. Empty otherwise. The trace
+    /// test checks the kit's removals against it.
+    pub own_roots: BTreeSet<Prov>,
     /// v1.8: O4 took once an ours edit that inserts (two restorations of one root met).
     pub o4_restore: bool,
     /// v1.8: O4a made a region conflict (a kept ours edit would put back a live root).
@@ -416,7 +424,8 @@ pub struct Hits {
     pub base_by_root: bool,
     /// The case class "concurrent restores of one root" (§8, v1.8): any of the three above.
     pub concurrent_restore: bool,
-    /// I1 failed after the operation: two live elements share a root (v1.8).
+    /// I1 failed after the operation, or after any step of an undo or redo (v1.9): two live
+    /// elements share a root (v1.8).
     pub i1_violated: bool,
     /// A revert: U22a's property held (conflicts ⊇ undo's on the same state, same bounds,
     /// same text where both apply). `false` on anything but a revert.
@@ -829,6 +838,8 @@ impl Model {
         // plan on a scratch copy (U13): every step applied to it, carrying the rest
         let mut work = self.clone();
         let mut foreign = false;
+        let mut i1_failed = false;
+        let mut own_all = BTreeSet::new();
         let mut done = 0;
         let mut skipped = Vec::new();
         let mut blocked = None;
@@ -900,9 +911,13 @@ impl Model {
             skipped.extend(reported.iter().cloned());
             let edits = step_edits(&work.texts, &batch.regions, &clean);
             let (mut inverse, gone) = work.apply_step(pid, obo, &batch.regions, &clean);
-            // U10a by root (v1.8): only roots the change this step reverses inserted
-            let own = own_roots(&batch.regions);
+            // U10a by root (v1.8; v1.9: over the regions applied): only roots the change
+            // this step reverses inserted there
+            let own = own_roots(&batch.regions, &applied);
             foreign |= gone.iter().any(|x| !own.contains(&x.prov));
+            own_all.extend(own);
+            // I1 after every step (v1.9): each step is its own change
+            i1_failed |= !work.i1();
             // mutant (iv): the redo entry also carries the skipped regions (redo retries them)
             if !redo && mutant::active() == Mutant::RedoRetriesSkipped {
                 for &i in &skipped_idx {
@@ -959,9 +974,15 @@ impl Model {
             return (Outcome::Blocked { regions }, hits);
         }
         *self = work;
-        // hist.undo_own_only (enforced; U10a by root, v1.8)
+        // hist.undo_own_only (enforced; U10a by root, v1.8; over applied regions, v1.9)
         hits.foreign_deleted = foreign;
-        hits.i1_violated = !self.i1();
+        hits.own_roots = own_all;
+        // I1 after every step applied (v1.9); the last step's state is `self`
+        debug_assert!(
+            self.i1() || i1_failed,
+            "the last step's state is the request's"
+        );
+        hits.i1_violated = i1_failed;
         if done >= 2 {
             hits.steps_n = true;
         }
@@ -1036,9 +1057,12 @@ impl Model {
         }
         let edits = step_edits(&self.texts, &regions, &clean);
         let (_, deleted) = self.new_batch_del(pid, obo, edits);
-        // hist.undo_own_only (enforced; U10a by root, v1.8): only roots the change inserted
-        let own = own_roots(&regions);
+        // hist.undo_own_only (enforced; U10a by root, v1.8): only roots the change inserted,
+        // in the regions applied (v1.9)
+        let applied: Vec<usize> = clean.iter().map(|c| c.0).collect();
+        let own = own_roots(&regions, &applied);
         hits.foreign_deleted = deleted.iter().any(|x| !own.contains(&x.prov));
+        hits.own_roots = own;
         hits.i1_violated = !self.i1();
         (
             Outcome::Applied {
@@ -1177,10 +1201,12 @@ impl Model {
             note.theirs = exact;
             note.ours_roots = ours_roots;
             note.theirs_roots = exact_roots;
-            // O4a (v1.8): a root is put back at most once; mutant (x) has no O4a
+            // O4a (v1.8): a root is put back at most once, against the live text as the step
+            // merges it (after earlier steps), window included; mutants (x), (xi) have no O4a
             let m = match m {
                 Merged::Clean { provs, .. }
                     if same == merge::Same::Root
+                        && mutant::active() != Mutant::NoO4a
                         && provs.iter().flatten().any(|p| self.live(r.root, *p)) =>
                 {
                     note.o4a = true;
@@ -1500,10 +1526,13 @@ fn step_edits(texts: &[String], regions: &[Region], clean: &[Clean]) -> Change {
 
 /// U10a by root (v1.8): the roots a step reversing these regions may remove, the base
 /// roots their ours deletes: what the change it reverses inserted (an undo of a batch, its
-/// inserted roots; a redo, the roots the undo put back; a revert, the change's).
-fn own_roots(regions: &[Region]) -> BTreeSet<Prov> {
+/// inserted roots; a redo, the roots the undo put back; a revert, the change's). Over the
+/// regions the step **applied** only (`applied`, indices into `regions`; v1.9), so a skipped
+/// region's roots never excuse a removal elsewhere (v1.8 took every region, which only I1
+/// made the same).
+fn own_roots(regions: &[Region], applied: &[usize]) -> BTreeSet<Prov> {
     let mut out = BTreeSet::new();
-    for r in regions {
+    for r in applied.iter().map(|&i| &regions[i]) {
         for e in &r.ours {
             out.extend(&r.after_roots[hunk::chars_in(&r.after, e.start, e.end)]);
         }

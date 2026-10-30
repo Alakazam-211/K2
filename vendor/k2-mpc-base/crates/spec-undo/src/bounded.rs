@@ -55,8 +55,10 @@
 //! **Transition checks** (each a rule id; the Quint model checks the same, as invariants
 //! over its `viol` set): `own_only` (`hist.undo_own_only`, enforced since v1.7; by root
 //! since v1.8, U10a: every character an undo, redo or revert deletes has a root the change
-//! it reverses inserted), `I1` (v1.8: at most one live element per root), `RT` (restart transparency, U22a v1.6: a restart changes no
-//! revert's outcome or text, for every record, all or nothing and `--partial`),
+//! it reverses inserted, in the regions the step applied since v1.9), `I1` (v1.8: at most
+//! one live element per root; after every step of an undo or redo since v1.9), `RT`
+//! (restart transparency, U22a v1.6: a restart changes no revert's outcome or text, for
+//! every record, all or nothing and `--partial`),
 //! `U9` (a tainted region is never applied), `U13` (a refused all-or-nothing request or a
 //! blocked one changes nothing), `U15` (all or nothing's conflicts = `--partial`'s reports,
 //! first conflicting step), `U17` (a step pushes one region per region it applied),
@@ -509,14 +511,16 @@ impl State {
     fn check(&mut self, b: &Bound, pre: &State, a: &Act, out: &Outcome, hits: &Hits) {
         let mut hit: Vec<&'static str> = Vec::new();
         // own_only (hist.undo_own_only, enforced since v1.7; by root since v1.8, U10a: the
-        // oracle's Hits::foreign_deleted, from the roots it deleted)
+        // oracle's Hits::foreign_deleted, from the roots it deleted; over the regions each
+        // step applied since v1.9)
         if matches!(a, Act::Undo { .. } | Act::Redo { .. } | Act::Revert { .. })
             && hits.foreign_deleted
         {
             self.viol.insert("own_only");
         }
-        // I1 (v1.8): at most one live element per root, in every state
-        if !self.m.i1() {
+        // I1 (v1.8): at most one live element per root, in every state, and after every step
+        // of an undo or redo (v1.9: each step is its own change)
+        if !self.m.i1() || hits.i1_violated {
             self.viol.insert("I1");
         }
         // RT (U22a v1.6, restart transparency): a restart changes no revert's outcome or text

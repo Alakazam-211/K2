@@ -72,6 +72,48 @@ def corpus(path):
     return cases
 
 
+# grep's options that take a value (GNU grep 3.11): short letters, and the long names
+# (matched by unambiguous prefix, as getopt_long does, when given without `=VALUE`)
+GREP_SHORT_ARG = "efmABCdD"
+GREP_LONG_ARG = ("regexp", "file", "max-count", "after-context", "before-context", "context",
+                 "label", "binary-files", "devices", "directories", "exclude", "exclude-from",
+                 "exclude-dir", "include", "group-separator")
+
+
+def grep_has_pattern(args):
+    """True when grep's arguments name a pattern (an operand, `-e`/`-f` or their long forms).
+
+    With no pattern, GNU grep exits 2 with its usage message. The doc path must then not be
+    appended: grep would take it as the pattern and read stdin (case `grep-no-pattern`)."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            return i + 1 < len(args)
+        if a.startswith("--"):
+            name, eq, _ = a[2:].partition("=")
+            hits = [o for o in GREP_LONG_ARG if o.startswith(name)] if name else []
+            takes = len(hits) == 1 or name in GREP_LONG_ARG
+            full = name if name in GREP_LONG_ARG else (hits[0] if len(hits) == 1 else "")
+            if takes:
+                if full in ("regexp", "file"):
+                    return True
+                if not eq:
+                    i += 1
+        elif a.startswith("-") and a != "-":
+            for j, ch in enumerate(a[1:], 1):
+                if ch in GREP_SHORT_ARG:
+                    if ch in "ef":
+                        return True
+                    if j == len(a) - 1:
+                        i += 1  # the value is the next argument
+                    break  # the rest of the cluster is the value
+        else:
+            return True
+        i += 1
+    return False
+
+
 def run(cmd, cwd, stdin=b""):
     p = subprocess.run(cmd, cwd=cwd, input=stdin, capture_output=True)
     return p.stdout, p.returncode
@@ -89,7 +131,8 @@ def check(c):
         stdin = c["stdin"].encode("utf-8")
         if verb in ("cat", "head", "tail", "wc", "grep") or (verb == "sed" and not any(
                 a == "-i" or a.startswith("--in-place") for a in args)):
-            out, code = run([verb, *args, name], d)
+            files = [] if verb == "grep" and not grep_has_pattern(args) else [name]
+            out, code = run([verb, *args, *files], d)
             return out, code, None
         if verb == "view":
             spec = args[-1].split("=", 1)[-1]

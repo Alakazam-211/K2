@@ -54,9 +54,9 @@ pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScop
 pub use live::CharBlame;
 pub(crate) use live::Shown;
 pub use live::{
-    Blame, BlameLine, ChangeEvent, DiffOutput, EditResult, Joined, LogItem, LogQuery, NotReached,
-    PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, Status, UndoMode,
-    UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
+    Blame, BlameLine, ChangeEvent, DiffOutput, EditOptions, EditResult, Joined, LogItem, LogQuery,
+    NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, Status,
+    UndoMode, UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};

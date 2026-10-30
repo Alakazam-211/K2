@@ -39,11 +39,15 @@ pub enum Mutant {
     /// of one range still are), and no O4a. Two restorations of one root both land at the
     /// doc's end (O5), failing I1.
     ProvenanceIgnored,
+    /// (xi) `no-o4a` (v1.9): O4 judged on (range, roots), as specified, but no O4a. A kept
+    /// ours hunk that puts back a root live elsewhere in the text (at the doc's end beside a
+    /// foreign insertion, or in mid-text outside the region's window) applies, failing I1.
+    NoO4a,
 }
 
 impl Mutant {
     /// Every mutant, by its command-line name.
-    pub const ALL: [(&'static str, Mutant); 9] = [
+    pub const ALL: [(&'static str, Mutant); 10] = [
         ("i-no-taint", Mutant::NoTaint),
         ("iii-partial-hides-taint", Mutant::PartialHidesTaint),
         ("iv-redo-retries-skipped", Mutant::RedoRetriesSkipped),
@@ -53,6 +57,7 @@ impl Mutant {
         ("f3-rediff", Mutant::Rediff),
         ("restart-single-taint", Mutant::RestartSingleTaint),
         ("x-provenance-ignored-in-o4", Mutant::ProvenanceIgnored),
+        ("xi-no-o4a", Mutant::NoO4a),
     ];
 
     /// A mutant by its command-line name (`none` is the oracle).

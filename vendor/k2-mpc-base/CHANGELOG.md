@@ -1,5 +1,97 @@
 # Changelog
 
+## v0.9.1 (2026-10-28)
+
+A patch: small asks from a host's integration and the Markdown demo, the 32-participant soak, and
+the undo spec v1.9. **Additive**: no field added to a public struct, no new enum variant, no
+store format change (still 5), no new dependency. `docs/SESSIONS.md`, amendment 15.
+
+**The promise, corrected.** v0.9.0's wording said a conflicted undo applies what it cleanly can; a plain undo applies nothing (exit 1), and only `--partial` applies the clean parts. The promise, as it stands:
+
+Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, a plain undo applies nothing and reports the conflict; with --partial it applies the parts it cleanly can and reports the rest. It never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.
+
+**Added**
+- **`Session::edit_with_options(conn, root, &EditOptions, f)`**: `edit_with` with the claim
+  policy and a version guard, **both checked under the session lock**, as `run_tool_with`
+  checks them for edit verbs. `EditOptions::new().policy(p).if_version(v)`
+  (`#[non_exhaustive]`; defaults `Ignore`, no guard). A doc no longer at V gives
+  `EditWithError::Session(SessionError::Stale { expected, actual })` with nothing applied;
+  the order is admission, version, approvals backlog, `f`, claims.
+- **`VerbSpec::runs_through_run_tool()`**: whether a host routes a verb to `run_tool`. Data
+  (`parity::RUN_TOOL_VERBS`: the kit's text tools; every pack verb is one), held to
+  `Session::run_tool` by a test both ways (each flagged verb runs there, every other
+  registered verb is refused there with nothing applied).
+- **`approvals [--on-behalf-of me|P]`**: a host-neutral alias of `log --pending` (P30), both
+  tiers, the same row and binding (`parity::ALIASES`, `VerbSpec::alias_of()`). The kit's
+  parity harnesses run a case for each name. A pack's parity list may list it or leave it
+  out: **packs need no change**.
+- **`Pack::writes_bom(root, codec)`** (a provided method) and `codec::text_file::BOM`.
+
+**Fixed**
+- **Double BOM.** `cat` prints the file's bytes, BOM included; a `write` of those bytes
+  (`write --base V` or `--base live`) put the BOM into the text, and the file got two. Now,
+  when the doc's codec writes a BOM in front of that root, one leading U+FEFF is taken off a
+  `write` body. Without a BOM in the file, a leading U+FEFF is text and stays. The default
+  `writes_bom` (one text root: encode it empty and look for the BOM's bytes) covers a pack
+  delegating to `TextFilePack` (Markdown) and a pack with its own BOM codec (a text pack):
+  no pack change.
+- **Blame lost "restored by" on a partly restored line** (Markdown demo, F1). Characters tied
+  on the newest root change kept the line's first, usually not a restored one. Ties now go
+  to a restored character (the most recently restored, then the first).
+- **"Last edit" ranges grew over others' newer text** (Markdown demo, F2). A participant's
+  last-edit span was an expanding anchor, so after their text was undone and someone typed
+  there, notes and the roster said they had edited the other's line, sometimes a line past
+  the end. Last-edit spans no longer expand, are dropped once their text is all deleted or
+  replaced, and their lines are clamped to the text's. Claims and views keep expanding
+  anchors.
+
+**For hosts**
+- **A direct edit route** (a tab's save, a CLI edit from a read): pass the version the text
+  came from as `EditOptions::if_version` and the claim policy as `policy`, and drop any text
+  comparison of your own: the kit checks both under the lock. Map `Stale` to exit 1 (as
+  `--if-version`).
+- **Routing verbs:** `runs_through_run_tool()` says which verbs go to `run_tool` /
+  `run_tool_with`; the rest to their session calls (`VerbSpec::api`).
+- **`approvals`** can be offered beside `log --pending`; bind it the same way
+  (`LogQuery::pending()`, tier 0: `BlobSession::log` filtered to pending).
+- **Notes and the roster's `last_edit`** may now say less: no range for text that is gone,
+  never one past the end.
+- **Blame:** a line partly put back by an undo, redo or revert now shows `restored_by` /
+  `restored_in`.
+
+**Tests and tools**
+- **The 32-participant soak** (`tests/soak.rs`): 16 people and 16 agents on several
+  connections, a seeded mix of every session call (reads with `--for-edit`, every edit verb,
+  `write --base`, `edit_with_options`, undo / redo / `--partial`, claims, cursors, leave and
+  rejoin, ticks, flushes, restarts). Checked after every call: nothing acknowledged is lost
+  (every line is a token naming its writer; what appeared and went is explained by that call
+  alone; undo and redo remove only lines their participant's changes put there); store
+  reload equals live state; the file equals the doc after a flush; claims belong to live
+  connections and a new one never overlaps another participant's (carried overlaps are
+  counted: see "Found"); the roster is exactly who is connected; the kit's memory estimate
+  stays in budget. `soak_short` (5 s) runs in CI; `soak_32` (ignored) runs 10 minutes on a
+  node. **Run at this release (seed 1, 600 s, release build): passed.** 43,568 calls (21,477
+  changes applied, v22,576), 15 restarts each equal to live, 175 file and blame checks, 1,944
+  joins and 1,261 leaves, 0 carried claim overlaps; peak RSS 40 MB, peak kit estimate 16 MB
+  of a 256 MB budget. Memory grows with the edit history (RSS 9.5 → 38 MB, estimate 3.4 →
+  16 MB, the text staying near 300 lines) and the call rate falls with it (≈ 250/s in the
+  first 30 s, ≈ 43/s in the last 150 s): bounded by the budget, not flat.
+- **GNU parity:** `scripts/gnu-parity.py` no longer passes the doc path as grep's pattern
+  when a case has none (`grep-no-pattern`); live on a node: **314 of 314 cases match GNU**.
+- **`tools/test-bundle.sh`** and `tools/tests/` (the full suite in four parts, the soak, the
+  live GNU parity): jobs for nodes with no checkout, as an xz tarball in environment chunks,
+  sha256-checked; it stops with a clear message over 64 chunks (a runner refuses more than
+  about 66 variables). `tools/README.md`.
+
+**Undo spec suite (SPEC-UNDO v1.9; no change to the kit's behaviour).** From the model check's fidelity review of v1.8: U10a (`hist.undo_own_only`) is read over the regions a step **applies** (a region skipped under `--partial` no longer lends its roots), in the oracle, the Quint model, the enumerator and the trace test's kit-side check; **I1 is checked after every step** of an undo or redo (the kit commits each step as its own change); O4a's wording says the live root is looked for in the text as the step merges it, window included. New mutant **(xi) `xi-no-o4a`** (O4 on roots, no O4a) fails I1 at depth 4 on TLC and the enumerator (2 × 1 + 1 undo + 1 revert), its mid-text witness at depth 5 in `tests/mutants.rs`; it joins every mutant loop in `tools/undo`. TLC = enumerator at all seven small bounds with v1.8's counts, every violation set unchanged; trace test 256 traces + restart twin, 0 mismatches. The Quint model's IR is 19.87 MB of Apalache's 20 MB JSON limit; `smoke.sh` prints it.
+
+**Found, not fixed here**
+- **Two participants' claims can come to overlap.** Once the text between two claims is
+  deleted they share an edge, and text typed there lands in both (both anchors expand),
+  although a new claim overlapping another is refused. Reproduced by the soak and by
+  `tests/presence.rs::adjacent_claims_never_overlap_after_typing_at_their_shared_edge`
+  (ignored; it states the wanted behaviour). Who gets the shared edge is a design decision.
+
 ## v0.9.0 (2026-10-28)
 
 A minor release for two behaviour changes in undo, redo and revert: they **never remove
@@ -7,7 +99,7 @@ another participant's text**, and text they put back **keeps its provenance**. *
 5** (an in-place upgrade from 4; no downgrade). No new dependency. Undo spec v1.8
 (`docs/SPEC-UNDO.md`).
 
-**The promise.** Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.
+**The promise.** Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts. (corrected in v0.9.1)
 
 **Public API.** Additions only:
 - `text::merge::merge3_hunks` (a merge of two exact hunk sets) and `merge3_hunks_by` (the same

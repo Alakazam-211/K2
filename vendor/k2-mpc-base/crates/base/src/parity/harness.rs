@@ -1034,7 +1034,7 @@ impl Agent<'_> {
                 self.rx = Some(s.subscribe(c)?);
                 v(VerbValue::None)
             }
-            "log" | "log --pending" => {
+            "log" | "log --pending" | "approvals" => {
                 let mut q = LogQuery::default();
                 if let Ok(p) = arg_after(args, "--by") {
                     q = q.by(p);
@@ -1042,7 +1042,7 @@ impl Agent<'_> {
                 if let Ok(n) = arg_after(args, "-n") {
                     q = q.limit(num(&n)? as usize);
                 }
-                if form == "log --pending" {
+                if form == "log --pending" || form == "approvals" {
                     q = q.pending();
                 }
                 if let Ok(p) = arg_after(args, "--on-behalf-of") {
@@ -1662,8 +1662,8 @@ pub fn run_case(pack: &Arc<dyn Pack>, registry: &Registry, case: &Case) -> Vec<F
 ///
 /// 1. the list has exactly one row per [`PersonAction`];
 /// 2. the list and the registry agree both ways: every live row's verbs are registered and
-///    serve it, every registered verb is listed under every action it serves, and N/A or
-///    deferred verbs are **not** registered;
+///    serve it, every registered verb is listed under every action it serves (an alias,
+///    [`super::ALIASES`], may be left out), and N/A or deferred verbs are **not** registered;
 /// 3. every verb of every live (or N/A) row has a case — the kit's
 ///    ([`super::kit_cases`], one exhaustive `match`) or the pack's (`extra`) — and in every
 ///    case the agent's verb has the same effect as the person path: text, file, attribution,
@@ -1832,6 +1832,10 @@ pub(super) fn list_check(
         }
     }
     for spec in registry.verbs() {
+        // an alias may be listed or not: its verb's own row is what is checked
+        if spec.alias_of().is_some_and(|of| registry.get(of).is_some()) {
+            continue;
+        }
         for a in spec.serves {
             let listed = rows.iter().any(|r| {
                 r.action == *a

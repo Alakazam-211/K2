@@ -479,13 +479,17 @@ fn p30_person(p: &mut BlobPerson<'_>) -> R {
     })
 }
 fn p30_agent(a: &mut BlobAgent<'_>) -> R {
-    agent_step(
-        a.verb(&["log", "--pending", "--on-behalf-of", "me"], b"")?,
-        |o| match o {
-            VerbValue::BlobLog(l) => Output::value(l.iter().map(|e| e.id).collect::<Vec<_>>()),
-            v => other(v),
-        },
-    )
+    p30_agent_as(a, &["log", "--pending", "--on-behalf-of", "me"])
+}
+/// P30 through the alias (`approvals`, the same as `log --pending`).
+fn p30_alias_agent(a: &mut BlobAgent<'_>) -> R {
+    p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
+}
+fn p30_agent_as(a: &mut BlobAgent<'_>, argv: &[&str]) -> R {
+    agent_step(a.verb(argv, b"")?, |o| match o {
+        VerbValue::BlobLog(l) => Output::value(l.iter().map(|e| e.id).collect::<Vec<_>>()),
+        v => other(v),
+    })
 }
 
 /// The kit's tier-0 cases for `action` (empty for text-only actions, and for blob actions
@@ -692,14 +696,24 @@ pub fn kit_blob_cases(action: PersonAction) -> Vec<BlobCase> {
             )
             .setup(bot_writes_for_sam),
         ],
-        P::Pending => vec![c(
-            action,
-            "log --pending",
-            "waiting for me",
-            p30_person,
-            p30_agent,
-        )
-        .setup(p30_setup)],
+        P::Pending => vec![
+            c(
+                action,
+                "log --pending",
+                "waiting for me",
+                p30_person,
+                p30_agent,
+            )
+            .setup(p30_setup),
+            c(
+                action,
+                "approvals",
+                "waiting for me",
+                p30_person,
+                p30_alias_agent,
+            )
+            .setup(p30_setup),
+        ],
         // a blob doc has these, but no verb yet: a tier-0 list marks them deferred
         P::ViewRange | P::Watch | P::Purge => Vec::new(),
         // text docs only

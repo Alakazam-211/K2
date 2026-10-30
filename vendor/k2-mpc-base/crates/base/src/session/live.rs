@@ -110,6 +110,38 @@ impl WriteOutcome {
     }
 }
 
+/// The host's choices for one [`Session::edit_with_options`] call: the claim policy and the
+/// caller's version guard, both checked under the session lock (as
+/// [`crate::tools::ToolOptions`] and `--if-version` are for `run_tool_with`).
+/// `#[non_exhaustive]`: start from [`EditOptions::default`] (or `new`) and use the setters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EditOptions {
+    /// What an agent's edit does about others' claims (default [`ClaimPolicy::Ignore`]).
+    pub policy: ClaimPolicy,
+    /// Apply only if the doc is still at this version (default `None`: no guard).
+    pub if_version: Option<Seq>,
+}
+
+impl EditOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The claim policy ([`ClaimPolicy::Respect`]: an agent's edit touching another
+    /// participant's live claim is refused).
+    pub fn policy(mut self, policy: ClaimPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Apply only if the doc is at version `v` ([`SessionError::Stale`] otherwise).
+    pub fn if_version(mut self, v: Seq) -> Self {
+        self.if_version = Some(v);
+        self
+    }
+}
+
 /// Returned by [`Session::write_base_with`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -333,7 +365,8 @@ struct Member {
     /// Viewing range as a byte span of its root (carried: expanding), and when it was set.
     view: Option<(String, usize, usize)>,
     view_ms: Option<u64>,
-    /// The span its latest change touched, in the root's text now (carried: expanding).
+    /// The span its latest change touched, in the root's text now (carried: not expanding;
+    /// gone once its text is all removed or replaced, `awareness::carry_edit_span`).
     edited: Option<(String, usize, usize)>,
 }
 
@@ -1148,7 +1181,7 @@ impl Session {
             });
             entry.last_edit = conns.iter().find_map(|m| {
                 let (root, s, e) = m.edited.as_ref()?;
-                Some(awareness::span_lines(root, text(root)?, *s, *e))
+                awareness::edit_span_lines(root, text(root)?, *s, *e)
             });
             entry.claims = st
                 .aware
@@ -1506,6 +1539,28 @@ impl Session {
             .map(|(r, _)| r)
     }
 
+    /// [`Session::edit_with`] with the host's [`EditOptions`]: the claim policy (as
+    /// [`Session::edit_with_policy`]) and a version guard (as [`Session::edit`]'s
+    /// `if_version` and the edit verbs' `--if-version`, amendment 14). Both are checked
+    /// under the session lock, in the edit's critical section, as `run_tool_with` checks
+    /// them for edit verbs: nothing can land between the checks and the apply, so a host
+    /// needs no text comparison of its own. Order: admission, then the version
+    /// ([`SessionError::Stale`], nothing applied), the approvals backlog, `f`, the claims
+    /// ([`SessionError::Claimed`]).
+    ///
+    /// Whole-text replacement under a guard is `edit_with_options(conn, root, &opts, |_|
+    /// Ok::<_, Infallible>(new_text))`.
+    pub fn edit_with_options<E>(
+        &self,
+        conn: ConnId,
+        root: &str,
+        opts: &EditOptions,
+        f: impl FnOnce(&str) -> std::result::Result<String, E>,
+    ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
+        self.edit_with_impl(conn, root, opts.policy, opts.if_version, None, f)
+            .map(|(r, _)| r)
+    }
+
     /// `if_version: Some(V)` and the doc is not at V: [`SessionError::Stale`]. Called with
     /// the session locked, right after admission, so nothing can move the doc between this
     /// check and the apply; and before every other refusal (backlog, the computation's own
@@ -1573,7 +1628,9 @@ impl Session {
 
     /// Make `root` equal `new_text` through `conn`, through a minimal diff against the live
     /// text. This is last-writer-wins for that root (`write --base live`): use
-    /// [`Session::write_base`] when the text was derived from an earlier read.
+    /// [`Session::write_base`] when the text was derived from an earlier read. As for every
+    /// `write` body, one leading U+FEFF is taken off when the file has a BOM
+    /// ([`Pack::writes_bom`]).
     pub fn replace_text(&self, conn: ConnId, root: &str, new_text: &str) -> Result<EditResult> {
         self.replace_text_with(conn, root, new_text, ClaimPolicy::Ignore)
     }
@@ -1591,7 +1648,9 @@ impl Session {
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
         self.check_backlog(&st, i)?;
-        let new_text = self.pack.normalize_input(root, new_text);
+        let new_text = self
+            .pack
+            .normalize_input(root, self.write_body(&st, root, new_text));
         let live = self.text_of(&st, root)?.1;
         let hunks = lines::align_insertions(live, diff::hunks(live, &new_text));
         self.check_claims(&mut st, i, root, &hunks, policy, now)?;
@@ -1602,11 +1661,23 @@ impl Session {
         self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
+    /// A `write` body as the doc holds it: when the file starts with a byte-order mark
+    /// ([`Pack::writes_bom`]), one leading U+FEFF is the BOM `cat` printed, not text, and is
+    /// taken off. Without a BOM in the file, a leading U+FEFF is the caller's text and stays.
+    fn write_body<'a>(&self, st: &State, root: &str, text: &'a str) -> &'a str {
+        match text.strip_prefix('\u{feff}') {
+            Some(rest) if self.pack.writes_bom(root, &st.codec) => rest,
+            _ => text,
+        }
+    }
+
     /// `write --base V`: apply only what the caller changed between version `base` and
     /// `new_text`, three-way merged onto the live text. Overlap with a change made since
     /// `base` gives [`WriteOutcome::Conflicts`] and applies nothing, except that two
     /// appends at the end of the text both land, the live one first (merge rule O5). Valid
-    /// bases: the live version, recently read versions, and stored versions.
+    /// bases: the live version, recently read versions, and stored versions. When the file
+    /// has a BOM ([`Pack::writes_bom`]), one leading U+FEFF of `new_text` is taken off: it is
+    /// the BOM `cat` printed.
     pub fn write_base(
         &self,
         conn: ConnId,
@@ -1639,7 +1710,9 @@ impl Session {
         let Some(base_text) = self.base_text(st, root, base, now)? else {
             return Ok(WriteReport::of(WriteOutcome::BaseExpired));
         };
-        let ours = self.pack.normalize_input(root, new_text);
+        let ours = self
+            .pack
+            .normalize_input(root, self.write_body(st, root, new_text));
         match merge::merge3(&base_text, &ours, &live) {
             Merge::Conflicts(c) => {
                 self.expire_claims(st, now);
@@ -2461,8 +2534,14 @@ impl Session {
                 *s = position::transform(*s, hunks, Bias::Before);
                 *e = position::transform(*e, hunks, Bias::After).max(*s);
             }
-            if let Some((_, s, e)) = m.edited.as_mut().filter(|v| v.0 == root) {
-                (*s, *e) = awareness::carry_span(*s, *e, hunks);
+            if let Some((_, s, e)) = m.edited.as_ref().filter(|v| v.0 == root) {
+                match awareness::carry_edit_span(*s, *e, hunks) {
+                    Some(span) => {
+                        let ed = m.edited.as_mut().expect("just read");
+                        (ed.1, ed.2) = span;
+                    }
+                    None => m.edited = None,
+                }
             }
         }
         for c in st.aware.claims.iter_mut().filter(|c| c.root == root) {

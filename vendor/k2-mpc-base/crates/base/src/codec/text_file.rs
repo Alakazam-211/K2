@@ -6,7 +6,8 @@
 
 use std::fmt;
 
-const BOM: &[u8] = b"\xEF\xBB\xBF";
+/// The UTF-8 byte-order mark, as a file's first bytes.
+pub const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// Line-ending style of a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

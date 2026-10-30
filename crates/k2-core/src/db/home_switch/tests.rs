@@ -36,6 +36,8 @@ fn make_db(path: &Path, n: usize) {
     }
 }
 
+// Windows: only the unix rename tests count the moved rows.
+#[cfg(unix)]
 fn live_count(path: &Path) -> i64 {
     let conn = Connection::open(path).expect("open for count");
     conn.query_row(
@@ -46,6 +48,8 @@ fn live_count(path: &Path) -> i64 {
     .expect("count projects")
 }
 
+// Windows: only the unix rename tests check the moved file.
+#[cfg(unix)]
 fn integrity(path: &Path) -> String {
     let conn = Connection::open(path).expect("open for integrity");
     conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).expect("integrity_check")
@@ -65,6 +69,8 @@ fn quarantined(dir: &Path) -> Vec<String> {
     v
 }
 
+// Windows: no switch runs there, so no marker is written.
+#[cfg(unix)]
 fn marker(dir: &Path) -> serde_json::Value {
     serde_json::from_slice(&read(&dir.join(MARKER))).expect("marker is JSON")
 }
@@ -202,6 +208,8 @@ fn live_k2_db_keeps_and_stale_k2so_is_quarantined() {
 
 /// Both files hold workspaces: refuse. Nothing moves, today's pick stays,
 /// the note explains, and the owner notice is due exactly once.
+// Windows defers before these checks (see windows_defers_every_case_and_moves_nothing).
+#[cfg(unix)]
 #[test]
 fn both_live_refuses_and_moves_nothing() {
     let dir = scratch();
@@ -233,6 +241,8 @@ fn both_live_refuses_and_moves_nothing() {
 
 /// Another connection holds `k2so.db` open (a draining predecessor): the
 /// switch changes nothing and uses the file as it is.
+// Windows defers before these checks (see windows_defers_every_case_and_moves_nothing).
+#[cfg(unix)]
 #[test]
 fn in_use_defers_and_moves_nothing() {
     let dir = scratch();
@@ -549,6 +559,8 @@ fn a_hold_or_defer_never_masks_a_hot_old_name_journal() {
 }
 
 /// DB-A5: the owner's hold file defers the switch: nothing moves.
+// Windows defers before these checks (see windows_defers_every_case_and_moves_nothing).
+#[cfg(unix)]
 #[test]
 fn the_hold_file_defers_and_moves_nothing() {
     let dir = scratch();
@@ -669,4 +681,50 @@ fn home_db_status_after_a_rename() {
     assert!(s["reason"].is_null());
     assert!(s["markerAt"].as_str().is_some_and(|a| a.starts_with("20")), "{s}");
     assert_eq!(s.as_object().expect("object").len(), 4, "{s}");
+}
+
+/// Windows keeps today's file in 0.46.6: every case (two live files, an
+/// open connection, the owner's hold, a plain legacy file) defers with
+/// that reason and moves nothing.
+#[cfg(windows)]
+#[test]
+fn windows_defers_every_case_and_moves_nothing() {
+    let both = scratch();
+    make_db(&both.join(OLD_NAME), 3);
+    make_db(&both.join(NEW_NAME), 2);
+    let in_use = scratch();
+    make_db(&in_use.join(OLD_NAME), 2);
+    let other = Connection::open(in_use.join(OLD_NAME)).expect("other");
+    other.execute_batch("PRAGMA journal_mode = WAL;").expect("wal");
+    let held = scratch();
+    make_db(&held.join(OLD_NAME), 1);
+    make_db(&held.join(NEW_NAME), 0);
+    std::fs::write(held.join(HOLD_FILE), b"").expect("hold");
+    let legacy = scratch();
+    make_db(&legacy.join(OLD_NAME), 1);
+
+    for (case, dir) in [("both live", &both), ("in use", &in_use), ("held", &held), ("legacy only", &legacy)] {
+        let had_new = dir.join(NEW_NAME).exists();
+        let old_b = read(&dir.join(OLD_NAME));
+        let new_b = had_new.then(|| read(&dir.join(NEW_NAME)));
+        let rep = switch_home_db(dir, &opts());
+        assert_eq!(
+            rep.outcome,
+            Outcome::Deferred { reason: "Windows keeps today's file in 0.46.6".into() },
+            "{case}: {rep:?}"
+        );
+        assert_eq!(rep.path, dir.join(OLD_NAME), "{case}: today's pick");
+        assert_eq!(read(&dir.join(OLD_NAME)), old_b, "{case}: k2so.db untouched");
+        assert_eq!(dir.join(NEW_NAME).exists(), had_new, "{case}: k2.db neither made nor removed");
+        if let Some(b) = new_b {
+            assert_eq!(read(&dir.join(NEW_NAME)), b, "{case}: k2.db untouched");
+        }
+        assert!(quarantined(dir).is_empty(), "{case}: nothing quarantined");
+        assert!(!dir.join(MARKER).exists(), "{case}: no marker");
+        assert!(!dir.join(BLOCKED_NOTE).exists(), "{case}: no blocked note");
+        let s = status_json_for(dir, &rep);
+        assert_eq!(s["outcome"], "deferred", "{case}: {s}");
+        assert_eq!(s["file"], "k2so.db", "{case}: {s}");
+    }
+    drop(other);
 }

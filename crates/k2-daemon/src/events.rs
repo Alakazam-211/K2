@@ -595,6 +595,9 @@ mod tests {
     fn tunnel_subdomains_hook_mirrors_canonical_map_to_session_events_bus() {
         use crate::session_events::{SessionEvent, SubdomainTargetWire};
 
+        // The routing map is process-global: every test that stores it holds
+        // the env lock (see session_events' snapshot test).
+        let _env = k2_core::test_env::lock();
         // Land a sentinel map in the process-global cache (the same store
         // chokepoint the refresh loop uses) + attribute one label (0074).
         let primary = format!("probe-{}", std::process::id());

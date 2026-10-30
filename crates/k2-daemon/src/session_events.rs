@@ -1926,6 +1926,11 @@ mod tests {
     /// process-global caches can't false-positive.
     #[test]
     fn tunnel_subdomains_snapshot_overlays_attribution() {
+        // The routing map is process-global: every test that stores it holds
+        // the env lock. Without it, this test's `store` wiped the map under
+        // `nested_target_on_daemon_port_is_502_under_every_alias`, which then
+        // routed its label to the daemon (a 405, not the 502; soak 10-29).
+        let _env = k2_core::test_env::lock();
         let pid = std::process::id();
         let claimed = format!("snap-claimed-{pid}");
         let bare = format!("snap-bare-{pid}");

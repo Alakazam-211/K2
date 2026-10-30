@@ -144,7 +144,8 @@ export function HomesSyncSection(props: {
       <p className="text-xs text-[var(--color-text-muted)] mb-4">
         Your Homes stay in step between this computer and your phone through this computer’s K2 server. Every device keeps
         its own copy, so Home always opens, even offline; changes made while apart are combined when they meet again.
-        Which Home you’re looking at stays on each device.
+        Which Home you’re looking at stays on each device. Your prompt stash syncs the same way, with these devices; its
+        files stay on the device that saved them.
       </p>
 
       {!supported ? (

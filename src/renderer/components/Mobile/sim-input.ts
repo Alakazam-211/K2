@@ -5,14 +5,12 @@
 //  - Pointer: a short press that barely moves is a tap; anything else is a
 //    swipe from the press to the release. Coordinates are device points,
 //    scaled from the canvas box (`cx / canvas_w * wpt`).
-//  - Keys while the device has focus: ordinary keys go to the device. ⌘
-//    chords stay with K2, except ⌘⇧H (Home) and ⌘D (the dev menu / shake).
-//    Esc leaves the device's focus.
+//  - Keys: sim-keyboard.ts.
 //
 // S5 hook: `deviceRectToCanvas` is the inverse mapping the pick overlay
 // will use to outline tree elements on the canvas.
 
-import type { SimInput, SimKey, SimOrientation, SimPoint } from './sim-stream'
+import type { SimInput, SimOrientation, SimPoint } from './sim-stream'
 
 export interface BoxRect {
   left: number
@@ -74,49 +72,6 @@ export function nextOrientation(screen: ScreenPt): SimOrientation {
   return screen.widthPt > screen.heightPt ? 'portrait' : 'landscape-right'
 }
 
-export interface KeyLike {
-  key: string
-  metaKey: boolean
-  ctrlKey: boolean
-  altKey: boolean
-  shiftKey: boolean
-  isComposing?: boolean
-}
-
-const NAMED_KEYS: Readonly<Record<string, SimKey>> = {
-  Enter: 'enter',
-  Backspace: 'backspace',
-  Delete: 'delete',
-  Tab: 'tab',
-  ArrowUp: 'arrow-up',
-  ArrowDown: 'arrow-down',
-  ArrowLeft: 'arrow-left',
-  ArrowRight: 'arrow-right',
-}
-
-/**
- * What a keydown on the focused device means:
- *  - `{ send }` → goes to the device (the caller prevents the default);
- *  - `blur` → Esc: leave the device's focus;
- *  - `pass` → K2 keeps it (every other ⌘ chord, Ctrl chords, IME).
- */
-export function keyToSimInput(e: KeyLike): { send: SimInput } | 'blur' | 'pass' {
-  if (e.isComposing) return 'pass'
-  if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.altKey) return 'blur'
-  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
-  if (e.metaKey) {
-    if (e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'h') return { send: { t: 'button', button: 'home' } }
-    if (!e.shiftKey && !e.ctrlKey && !e.altKey && lower === 'd') return { send: { t: 'button', button: 'dev-menu' } }
-    return 'pass'
-  }
-  if (e.ctrlKey) return 'pass'
-  const named = NAMED_KEYS[e.key]
-  if (named) return { send: { t: 'key', key: named } }
-  // One printable character (Shift and Option change it already).
-  if ([...e.key].length === 1) return { send: { t: 'text', text: e.key } }
-  return 'pass'
-}
-
 // ── Live touch (research-mobile-pane-polish-v1 §4 item 3) ───────────────
 // While the finger drags, the device follows: `touch` down, move…, up
 // (stream::ViewerMsg::Touch; both lanes take it). A clean tap still goes as
@@ -166,11 +121,4 @@ export function liveTouchEnd(t: LiveTouch, up: PointerSample, box: BoxRect, scre
   if (!t.started) return [gestureFor(t.down, up, box, screen)]
   const p = canvasPointToDevice(up.clientX, up.clientY, box, screen)
   return [{ t: 'touch', phase: 'up', x: p.x, y: p.y }]
-}
-
-/** ⌘V (Ctrl+V off the Mac) while the device has focus: paste as text. */
-export function isPasteChord(e: KeyLike): boolean {
-  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
-  if (lower !== 'v' || e.shiftKey || e.altKey) return false
-  return e.metaKey !== e.ctrlKey
 }

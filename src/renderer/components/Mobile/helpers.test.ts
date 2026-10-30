@@ -26,14 +26,11 @@ import {
   canvasPointToDevice,
   deviceRectToCanvas,
   gestureFor,
-  isPasteChord,
-  keyToSimInput,
   liveTouchEnd,
   liveTouchHold,
   liveTouchMove,
   liveTouchStart,
   nextOrientation,
-  type KeyLike,
 } from './sim-input'
 import { simControlFor } from './useSimCanControl'
 
@@ -131,43 +128,9 @@ describe('gestures → device input (§2.4, §5; stream::ViewerMsg)', () => {
     ])
   })
 
-  it('⌘V (or Ctrl+V) is the paste chord; other V chords are not', () => {
-    const k = (mods: Partial<KeyLike>, key = 'v'): boolean =>
-      isPasteChord({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods })
-    expect(k({ metaKey: true })).toBe(true)
-    expect(k({ metaKey: true }, 'V')).toBe(true)
-    expect(k({ ctrlKey: true })).toBe(true)
-    expect(k({})).toBe(false)
-    expect(k({ metaKey: true, shiftKey: true })).toBe(false)
-    expect(k({ metaKey: true, ctrlKey: true })).toBe(false)
-    expect(k({ metaKey: true }, 'c')).toBe(false)
-  })
-
   it('rotate turns a quarter from what the frames show', () => {
     expect(nextOrientation({ widthPt: 412, heightPt: 915 })).toBe('landscape-right')
     expect(nextOrientation({ widthPt: 915, heightPt: 412 })).toBe('portrait')
-  })
-
-  it('keys: ordinary keys go to the device; ⌘ chords stay with K2 except ⌘⇧H and ⌘D; Esc leaves', () => {
-    const k = (key: string, mods: Partial<KeyLike> = {}): ReturnType<typeof keyToSimInput> =>
-      keyToSimInput({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods })
-    expect(k('a')).toEqual({ send: { t: 'text', text: 'a' } })
-    expect(k('A', { shiftKey: true })).toEqual({ send: { t: 'text', text: 'A' } })
-    expect(k('é')).toEqual({ send: { t: 'text', text: 'é' } })
-    expect(k(' ')).toEqual({ send: { t: 'text', text: ' ' } })
-    expect(k('Enter')).toEqual({ send: { t: 'key', key: 'enter' } })
-    expect(k('Backspace')).toEqual({ send: { t: 'key', key: 'backspace' } })
-    expect(k('ArrowLeft')).toEqual({ send: { t: 'key', key: 'arrow-left' } })
-    expect(k('H', { metaKey: true, shiftKey: true })).toEqual({ send: { t: 'button', button: 'home' } })
-    expect(k('d', { metaKey: true })).toEqual({ send: { t: 'button', button: 'dev-menu' } })
-    expect(k('Escape')).toBe('blur')
-    for (const chord of ['w', 't', 'k', 'l', ',', '1']) expect(k(chord, { metaKey: true })).toBe('pass')
-    expect(k('M', { metaKey: true, shiftKey: true })).toBe('pass')
-    expect(k('D', { metaKey: true, shiftKey: true })).toBe('pass')
-    expect(k('c', { ctrlKey: true })).toBe('pass')
-    expect(k('Shift', { shiftKey: true })).toBe('pass')
-    expect(k('F5')).toBe('pass')
-    expect(k('a', { isComposing: true })).toBe('pass')
   })
 })
 

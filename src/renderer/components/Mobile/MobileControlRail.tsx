@@ -63,6 +63,8 @@ export interface MobileControlRailProps {
   onFps(fps: number): void
   /** S5: the Select toggle. */
   extra?: React.ReactNode
+  /** The keyboard's ⌘ chords (in ⋯, above the device's name). */
+  keyboardHelp?: React.ReactNode
 }
 
 export function RailButton({
@@ -273,6 +275,7 @@ export function MobileControlRail(props: MobileControlRailProps): React.JSX.Elem
                   ))}
                 </div>
               ) : null}
+              {props.keyboardHelp}
               <div className="mt-1 border-t border-[var(--color-border)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-muted)]" data-mobile-about="">
                 <div className="text-xs text-[var(--color-text-primary)]">{props.deviceName}</div>
                 {props.deviceOs ? <div>{props.deviceOs}</div> : null}

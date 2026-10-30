@@ -8,7 +8,8 @@
 //  - a lane waiting on the owner (licence, KVM) says so and offers no Start;
 //  - a running device streams onto the canvas (the screen size from the
 //    frame header); each frame is acked, also while held (S5 hook);
-//  - taps, swipes and keys go to the device in points; ⌘ chords stay with K2;
+//  - taps and swipes go to the device in points; clicking the screen puts the
+//    keyboard on it (ring + hint; keys, IME commits, ⌘V paste; ⌘W stays K2's);
 //  - a watch-only login (remote Member) gets no input and says Watching;
 //  - a hidden tab closes its socket (it stops counting as a viewer);
 //  - Rotate / Home / Back / Take over send stream messages; Stop and
@@ -26,6 +27,12 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   readText: vi.fn(async () => 'hello from the clipboard'),
   writeText: vi.fn(async () => {}),
 }))
+
+// The keyboard's chord key is ⌘ on a Mac (jsdom's navigator is not one).
+vi.mock('@/lib/desktop-chrome', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/desktop-chrome')>('@/lib/desktop-chrome')
+  return { ...actual, isMacPlatform: () => true }
+})
 
 const daemon = vi.hoisted(() => ({
   status: null as unknown,
@@ -85,6 +92,7 @@ vi.mock('@/components/Design/DesignThreadColumn', () => ({
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { useTabsStore, type Tab } from '@/stores/tabs'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
+import { readText as readClipboardText } from '@tauri-apps/plugin-clipboard-manager'
 import { MobilePane } from './MobilePane'
 import { mobileSplitKey } from './mobile-split-sizes'
 import { createStubSimStream, type StubSimStream } from './sim-stream'
@@ -159,6 +167,18 @@ function screenEl(): HTMLElement {
   const el = document.querySelector('[data-mobile-screen]') as HTMLElement | null
   if (!el) throw new Error('no device screen')
   return el
+}
+
+/** The device's keyboard sink (a hidden textarea in the screen). */
+function keysEl(): HTMLElement {
+  const el = document.querySelector('[data-mobile-keys]') as HTMLElement | null
+  if (!el) throw new Error('no keyboard sink on the device screen')
+  return el
+}
+
+/** Click the device screen: the screen's focus goes on to the sink. */
+function focusDevice(): void {
+  act(() => screenEl().focus())
 }
 
 function tool(name: string): HTMLButtonElement {
@@ -536,7 +556,28 @@ describe('the running device', () => {
     expect(stub.inputs[0]).toMatchObject({ t: 'swipe', x1: 100, y1: 100, x2: 100, y2: 300 })
   })
 
-  it('⌘V and a paste event type the clipboard into the device as one text', async () => {
+  it('clicking the screen puts the keyboard on the device: a ring and a hint; Esc lets go', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    expect(document.querySelector('[data-mobile-focus-ring]')).toBeNull()
+    expect(document.querySelector('[data-mobile-typing-hint]')).toBeNull()
+    focusDevice()
+    expect(document.activeElement).toBe(keysEl())
+    expect(document.querySelector('[data-mobile-focus-ring]')).not.toBeNull()
+    expect(document.querySelector('[data-mobile-typing-hint]')?.textContent).toBe('Typing into the device · Esc to stop')
+    const esc = fireEvent.keyDown(keysEl(), { key: 'Escape' })
+    expect(esc).toBe(false)
+    expect(document.activeElement).not.toBe(keysEl())
+    expect(document.querySelector('[data-mobile-focus-ring]')).toBeNull()
+    expect(document.querySelector('[data-mobile-typing-hint]')).toBeNull()
+    expect(stub.inputs).toEqual([])
+  })
+
+  it('a mouse click on the screen puts the keyboard there (the tap still goes to the device)', async () => {
     const stub = createStubSimStream()
     renderMobile(stub)
     await flush()
@@ -544,35 +585,169 @@ describe('the running device', () => {
       stub.pushFrame()
     })
     const el = screenEl()
-    el.focus()
-    const cmdV = fireEvent.keyDown(el, { key: 'v', metaKey: true })
-    expect(cmdV).toBe(false)
-    await flush()
-    expect(stub.inputs).toEqual([{ t: 'text', text: 'hello from the clipboard' }])
-    fireEvent.paste(el, { clipboardData: { getData: (type: string) => (type === 'text/plain' ? 'pasted text' : '') } })
-    expect(stub.inputs[1]).toEqual({ t: 'text', text: 'pasted text' })
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
+    const md = fireEvent.mouseDown(el, { button: 0 })
+    expect(md).toBe(false) // the browser doesn't move focus off the keyboard
+    fireEvent.pointerUp(el, { clientX: 151, clientY: 101, button: 0, pointerId: 1 })
+    expect(document.activeElement).toBe(keysEl())
+    expect(document.querySelector('[data-mobile-typing-hint]')).not.toBeNull()
+    expect(stub.inputs).toEqual([{ t: 'tap', x: 100, y: 100 }])
   })
 
-  it('keys go to the device; ⌘W stays with K2; Esc leaves the device', async () => {
+  it('clicking outside the device lets the keyboard go', async () => {
     const stub = createStubSimStream()
     renderMobile(stub)
     await flush()
-    const el = screenEl()
-    el.focus()
+    focusDevice()
+    expect(document.querySelector('[data-mobile-typing-hint]')).not.toBeNull()
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    act(() => outside.focus())
+    expect(document.querySelector('[data-mobile-typing-hint]')).toBeNull()
+    expect(document.querySelector('[data-mobile-focus-ring]')).toBeNull()
+    fireEvent.keyDown(outside, { key: 'a' })
+    expect(stub.inputs).toEqual([])
+    outside.remove()
+  })
+
+  it('keys go to the device with Shift/Option; ⌘W and other K2 chords pass through untouched', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    focusDevice()
+    const el = keysEl()
     fireEvent.keyDown(el, { key: 'h' })
+    fireEvent.keyDown(el, { key: 'I', shiftKey: true })
     fireEvent.keyDown(el, { key: 'Enter' })
+    fireEvent.keyDown(el, { key: 'Backspace' })
+    fireEvent.keyDown(el, { key: 'ArrowLeft', shiftKey: true })
+    fireEvent.keyDown(el, { key: 'ArrowRight', altKey: true })
+    const tab = fireEvent.keyDown(el, { key: 'Tab' })
+    expect(tab).toBe(false) // Tab types into the device, focus stays
+    fireEvent.keyDown(el, { key: 'a', metaKey: true })
+    fireEvent.keyDown(el, { key: 'z', metaKey: true })
     fireEvent.keyDown(el, { key: 'H', metaKey: true, shiftKey: true })
-    const cmdW = fireEvent.keyDown(el, { key: 'w', metaKey: true })
-    expect(cmdW).toBe(true) // not prevented: K2 closes the tab as usual
+    for (const chord of ['w', 't', 'l', 'k', '1']) {
+      expect(fireEvent.keyDown(el, { key: chord, metaKey: true }), `⌘${chord} is not prevented`).toBe(true)
+    }
     expect(stub.inputs).toEqual([
       { t: 'text', text: 'h' },
+      { t: 'text', text: 'I' },
       { t: 'key', key: 'enter' },
+      { t: 'key', key: 'backspace' },
+      { t: 'key', key: 'arrow-left', shift: true },
+      { t: 'key', key: 'arrow-right', alt: true },
+      { t: 'key', key: 'tab' },
+      { t: 'edit', op: 'select-all' },
+      { t: 'edit', op: 'undo' },
       { t: 'button', button: 'home' },
     ])
     expect(document.activeElement).toBe(el)
-    fireEvent.keyDown(el, { key: 'Escape' })
-    expect(document.activeElement).not.toBe(el)
-    expect(stub.inputs).toHaveLength(3)
+  })
+
+  it('a ⌘ chord K2 keeps still reaches K2’s window handlers', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    focusDevice()
+    const seen: string[] = []
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.metaKey) seen.push(e.key)
+    }
+    window.addEventListener('keydown', onKey)
+    fireEvent.keyDown(keysEl(), { key: 'w', metaKey: true })
+    fireEvent.keyDown(keysEl(), { key: 'v', metaKey: true })
+    window.removeEventListener('keydown', onKey)
+    expect(seen).toEqual(['w'])
+  })
+
+  it('an input method composes in K2 and its commit goes to the device once', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    focusDevice()
+    const el = keysEl() as HTMLTextAreaElement
+    fireEvent.compositionStart(el, { data: '' })
+    const k1 = fireEvent.keyDown(el, { key: 'n', isComposing: true, keyCode: 229 })
+    expect(k1).toBe(true) // the IME keeps the key
+    fireEvent.compositionUpdate(el, { data: 'に' })
+    fireEvent.input(el, { target: { value: 'に' } })
+    fireEvent.keyDown(el, { key: 'Process', keyCode: 229 })
+    fireEvent.compositionUpdate(el, { data: '日本' })
+    fireEvent.input(el, { target: { value: '日本' } })
+    expect(stub.inputs).toEqual([]) // nothing half-composed
+    fireEvent.compositionEnd(el, { data: '日本' })
+    // Safari sends the committing Enter after compositionend with keyCode 229.
+    fireEvent.keyDown(el, { key: 'Enter', keyCode: 229 })
+    fireEvent.input(el, { target: { value: '日本' } })
+    expect(stub.inputs).toEqual([{ t: 'text', text: '日本' }])
+    expect(el.value).toBe('')
+    // A dead key (Option+E, then E) is a composition too.
+    fireEvent.keyDown(el, { key: 'Dead', altKey: true })
+    fireEvent.compositionStart(el, { data: '' })
+    fireEvent.compositionEnd(el, { data: 'é' })
+    expect(stub.inputs).toEqual([{ t: 'text', text: '日本' }, { t: 'text', text: 'é' }])
+    // A cancelled composition sends nothing.
+    fireEvent.compositionStart(el, { data: '' })
+    fireEvent.keyDown(el, { key: 'Escape', isComposing: true })
+    fireEvent.compositionEnd(el, { data: '' })
+    expect(stub.inputs).toHaveLength(2)
+    expect(document.activeElement).toBe(el)
+  })
+
+  it('the clipboard is read only on ⌘V, and goes to the device as one paste', async () => {
+    const clip = vi.mocked(readClipboardText)
+    clip.mockClear()
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    focusDevice()
+    const el = keysEl()
+    fireEvent.keyDown(el, { key: 'v' })
+    fireEvent.keyDown(el, { key: 'c', metaKey: true })
+    fireEvent.keyDown(el, { key: 'x', metaKey: true })
+    fireEvent.keyDown(el, { key: 'V', metaKey: true, shiftKey: true })
+    fireEvent.keyDown(el, { key: 'Enter' })
+    expect(clip).not.toHaveBeenCalled()
+    const cmdV = fireEvent.keyDown(el, { key: 'v', metaKey: true })
+    expect(cmdV).toBe(false)
+    await flush()
+    expect(clip).toHaveBeenCalledTimes(1)
+    expect(stub.inputs.slice(-1)).toEqual([{ t: 'paste', text: 'hello from the clipboard' }])
+    // The native paste event that may follow ⌘V is not a second paste.
+    fireEvent.paste(el, { clipboardData: { getData: () => 'hello from the clipboard' } })
+    expect(stub.inputs.filter((i) => i.t === 'paste')).toHaveLength(1)
+    expect(clip).toHaveBeenCalledTimes(1)
+  })
+
+  it('a menu Paste (no ⌘V) pastes what the browser hands over; too much is refused with a note', async () => {
+    const clip = vi.mocked(readClipboardText)
+    clip.mockClear()
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    focusDevice()
+    fireEvent.paste(keysEl(), { clipboardData: { getData: (type: string) => (type === 'text/plain' ? 'pasted text' : '') } })
+    expect(stub.inputs).toEqual([{ t: 'paste', text: 'pasted text' }])
+    expect(clip).not.toHaveBeenCalled()
+    clip.mockResolvedValueOnce('x'.repeat(64 * 1024 + 1))
+    fireEvent.keyDown(keysEl(), { key: 'v', metaKey: true })
+    await flush()
+    expect(stub.inputs).toHaveLength(1)
+    expect(document.querySelector('[data-mobile-key-notice]')?.textContent).toBe('The clipboard text is over 64 KB; paste less at a time.')
+  })
+
+  it('the ⋯ menu says what the keyboard does', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const help = openMore().querySelector('[data-mobile-keyboard-help]')?.textContent ?? ''
+    expect(help).toMatch(/Click the screen, then type/)
+    expect(help).toMatch(/Paste this computer’s clipboard/)
+    expect(help).toMatch(/Stop typing into the device/)
   })
 
   it('the rail (Rotate, Home, Back, Recents, Dark mode) and Take over / Hand back send stream messages', async () => {
@@ -674,6 +849,13 @@ describe('watching and visibility', () => {
     fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     fireEvent.pointerUp(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     fireEvent.keyDown(el, { key: 'a' })
+    expect(stub.inputs).toEqual([])
+    // No keyboard for a watcher: no sink to type into, no ring, no hint.
+    act(() => el.focus())
+    expect(document.querySelector('[data-mobile-keys]')).toBeNull()
+    fireEvent.keyDown(document.activeElement ?? el, { key: 'b' })
+    fireEvent.keyDown(document.activeElement ?? el, { key: 'v', metaKey: true })
+    expect(document.querySelector('[data-mobile-typing-hint]')).toBeNull()
     expect(stub.inputs).toEqual([])
     // No rail for a watcher: no device buttons, no screenshot, no Stop.
     expect(document.querySelector('[data-mobile-rail]')).toBeNull()

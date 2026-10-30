@@ -8,8 +8,9 @@
 //      u16 · 12..14 width pt u16 · 14..16 height pt u16 (all LE)
 //  - daemon → viewer, TEXT: JSON tagged by "t": hello, state, hold, error, fps;
 //  - viewer → daemon, TEXT: JSON tagged by "t": ack {seq} (one frame in
-//    flight), fps, touch, tap, swipe, text, key, button, rotate, appearance,
-//    open-url, take-over, hand-back. Input is in points.
+//    flight), fps, touch, tap, swipe, text, key (+shift/alt), paste, edit,
+//    button, rotate, appearance, open-url, take-over, hand-back. Input is in
+//    points.
 //  - close codes: 4401 login revoked, 4403 forbidden, 4410 device stopped.
 //
 // The pane talks to a `SimStreamConnection`; `createStubSimStream` stands in
@@ -48,6 +49,8 @@ export type SimKey =
   | 'arrow-down'
   | 'arrow-left'
   | 'arrow-right'
+/** `lane::EditOp`: a ⌘ / Ctrl editing chord inside the device. */
+export type SimEditOp = 'select-all' | 'undo' | 'redo' | 'cut' | 'copy'
 /** `lane::Button`. */
 export type SimButton = 'home' | 'back' | 'lock' | 'volume-up' | 'volume-down' | 'app-switch' | 'dev-menu'
 /** `lane::Orientation`. */
@@ -60,7 +63,9 @@ export type SimInput =
   | { t: 'swipe'; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
   | { t: 'touch'; phase: 'down' | 'move' | 'up'; x: number; y: number }
   | { t: 'text'; text: string }
-  | { t: 'key'; key: SimKey }
+  | { t: 'key'; key: SimKey; shift?: boolean; alt?: boolean }
+  | { t: 'paste'; text: string }
+  | { t: 'edit'; op: SimEditOp }
   | { t: 'button'; button: SimButton }
   | { t: 'rotate'; orientation: SimOrientation }
   | { t: 'appearance'; appearance: SimAppearance }

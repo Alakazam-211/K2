@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
-import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager'
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager'
 import { useToastStore } from '@/stores/toast'
 import { DevicePicker, type DevicePickerGroup } from './DevicePicker'
 import { MobileHoldPill, MobileNotice, type MobileNoticeTone } from './MobileNotice'
@@ -60,8 +60,6 @@ import {
 import {
   type BoxRect,
   gestureFor,
-  isPasteChord,
-  keyToSimInput,
   type LiveTouch,
   liveTouchEnd,
   liveTouchHold,
@@ -73,6 +71,7 @@ import {
   TAP_MAX_MS,
 } from './sim-input'
 import { defaultFps, type SimAppearance, type SimStreamConnector, wsSimStream } from './sim-stream'
+import { SimKeyboardHelp, useSimKeyboard } from './useSimKeyboard'
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
@@ -538,6 +537,8 @@ function MobileDevice({
   const screenRef = useRef<HTMLDivElement | null>(null)
   const downRef = useRef<PointerSample | null>(null)
   const interactive = canControl && live
+  // The computer's keyboard types into the device while its screen has focus.
+  const keyboard = useSimKeyboard({ interactive, send: stream.send })
   const box = (): BoxRect | null => {
     const r = canvasRef.current?.getBoundingClientRect()
     return r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
@@ -650,36 +651,6 @@ function MobileDevice({
     // A drag the device already follows must lift, or the finger sticks.
     const b = box()
     if (t?.started && b && screen) for (const m of liveTouchEnd(t, sample(e), b, screen)) stream.send(m)
-  }
-  const pasteText = (text: string): void => {
-    if (!interactive || !text) return
-    stream.send({ t: 'text', text })
-  }
-  const onPaste = (e: React.ClipboardEvent): void => {
-    if (!interactive) return
-    e.preventDefault()
-    pasteText(e.clipboardData.getData('text/plain') || e.clipboardData.getData('text'))
-  }
-  const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!interactive) return
-    if (isPasteChord(e)) {
-      // ⌘V types the clipboard into the device (one `text`, not key by key).
-      e.preventDefault()
-      e.stopPropagation()
-      readClipboardText()
-        .then((text) => pasteText(text ?? ''))
-        .catch((err: unknown) => console.warn('[mobile] paste:', err))
-      return
-    }
-    const r = keyToSimInput(e)
-    if (r === 'pass') return
-    e.preventDefault()
-    e.stopPropagation()
-    if (r === 'blur') {
-      screenRef.current?.blur()
-      return
-    }
-    stream.send(r.send)
   }
 
   // ── Loading screen (installing → booting → first frame) ───────────────
@@ -840,7 +811,7 @@ function MobileDevice({
           <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly} dimmed={reconnecting}>
             <div
               ref={screenRef}
-              tabIndex={interactive ? 0 : -1}
+              tabIndex={-1}
               role="application"
               aria-label={`${session?.profile?.name ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
               className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
@@ -849,8 +820,8 @@ function MobileDevice({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
+              onFocus={keyboard.onScreenFocus}
+              onMouseDown={keyboard.onScreenMouseDown}
               data-mobile-screen={interactive ? 'interactive' : 'watching'}
             >
               <canvas
@@ -891,6 +862,7 @@ function MobileDevice({
                   data-mobile-touch-dot={dot.down ? 'down' : 'up'}
                 />
               ) : null}
+              {keyboard.overlay}
             </div>
           </DeviceFrame>
         ) : bootScreen ? (
@@ -900,6 +872,7 @@ function MobileDevice({
             </div>
           </DeviceFrame>
         ) : null}
+        {running ? keyboard.hint : null}
         {showRail ? (
           <div className="absolute right-3 top-1/2 -translate-y-1/2">
             <MobileControlRail
@@ -928,6 +901,7 @@ function MobileDevice({
               onLiveTouch={setLiveTouch}
               onFps={onFps}
               extra={toolbarExtra}
+              keyboardHelp={<SimKeyboardHelp />}
             />
           </div>
         ) : null}

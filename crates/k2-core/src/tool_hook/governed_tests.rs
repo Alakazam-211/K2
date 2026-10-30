@@ -35,18 +35,9 @@ fn sql(q: &str, p: &[&dyn rusqlite::ToSql]) {
     skin::with_skin_conn(|c| c.execute(q, p).map(|_| ()).map_err(|e| e.to_string())).unwrap_or_else(|e| panic!("{q}: {e}"));
 }
 
-/// S1's table (its DDL per PRD §2.2) and one enabled key.
+/// One enabled key in S1's own `app_chat_keys` (its real schema).
 fn key(app: &str, max_level: &str, max_members: i64) {
-    sql(
-        "CREATE TABLE IF NOT EXISTS app_chat_keys (service_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, caps TEXT NOT NULL DEFAULT '[]',
-            max_level TEXT NOT NULL DEFAULT 'moderator', uploads INTEGER NOT NULL DEFAULT 1, max_members INTEGER NOT NULL DEFAULT 500,
-            granted_by TEXT, granted_at INTEGER, revoked_at INTEGER)",
-        &[],
-    );
-    sql(
-        "INSERT OR REPLACE INTO app_chat_keys (service_id, enabled, max_level, max_members) VALUES (?1, 1, ?2, ?3)",
-        &[&app, &max_level, &max_members],
-    );
+    hook::put_chat_key_for_tests(app, max_level, max_members).unwrap_or_else(|e| panic!("chat key {app}: {e}"));
 }
 
 fn role(name: &str, app: &str, rooms: &[&str]) {

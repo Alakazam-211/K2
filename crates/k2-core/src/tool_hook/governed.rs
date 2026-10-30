@@ -60,8 +60,8 @@
 //! unbinds are sent ([`want_service_owner_retired`]).
 //!
 //! **The chat key (S1) seam.** The sync runs only for a keyed App: an
-//! enabled row in `app_chat_keys` (S1 owns that table; [`chat_key`] reads
-//! it when it exists). Its `max_level` is the level ceiling.
+//! enabled row in `app_chat_keys` (S1 owns that table and its reads;
+//! [`chat_key`] goes through them). Its `max_level` is the level ceiling.
 //!
 //! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
@@ -191,38 +191,15 @@ pub struct KeyView {
     pub max_members: i64,
 }
 
-fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
-    conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)", params![name], |r| r.get(0))
-        .map_err(|e| format!("skin.db schema read: {e}"))
-}
-
-/// The App's chat key, when S1's `app_chat_keys` table exists and holds a
-/// row for it (`None`: no key). A revoked key reads `enabled: false`.
+/// The App's chat key, read from S1's `app_chat_keys` (always there: the
+/// skin.db open block creates it). `None`: no key. A revoked key reads
+/// `enabled: false`.
 pub fn chat_key(conn: &Connection, app_id: &str) -> Result<Option<KeyView>, String> {
-    if !table_exists(conn, "app_chat_keys")? {
-        return Ok(None);
-    }
-    conn.query_row(
-        "SELECT enabled, max_level, max_members, revoked_at FROM app_chat_keys WHERE service_id = ?1",
-        params![app_id],
-        |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<i64>>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-            ))
-        },
-    )
-    .optional()
-    .map_err(|e| format!("chat key read: {e}"))
-    .map(|o| {
-        o.map(|(enabled, level, max, revoked)| KeyView {
-            enabled: enabled == 1 && revoked.is_none(),
-            max_level: level.filter(|l| sew_wire::level_rank(l).is_some()).unwrap_or_else(|| DEFAULT_MAX_LEVEL.into()),
-            max_members: max.unwrap_or(500),
-        })
-    })
+    Ok(crate::skin::app_chat_key::get_in(conn, app_id)?.map(|k| KeyView {
+        enabled: k.enabled && k.revoked_at.is_none(),
+        max_level: k.max_level.as_str().to_string(),
+        max_members: i64::from(k.max_members),
+    }))
 }
 
 fn keyed(conn: &Connection, app_id: &str) -> Result<Option<KeyView>, String> {
@@ -242,9 +219,6 @@ pub fn clamp_level(level: &str, ceiling: &str) -> String {
 pub const AUTO_GRANT_PREFIX: &str = "chat-key:";
 
 fn keyed_apps(conn: &Connection) -> Result<Vec<(String, KeyView)>, String> {
-    if !table_exists(conn, "app_chat_keys")? {
-        return Ok(Vec::new());
-    }
     let mut st = conn.prepare("SELECT service_id FROM app_chat_keys ORDER BY service_id").map_err(|e| format!("chat keys: {e}"))?;
     let ids: Vec<String> = st
         .query_map([], |r| r.get(0))

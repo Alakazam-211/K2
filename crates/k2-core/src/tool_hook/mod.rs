@@ -1941,20 +1941,18 @@ pub fn chat_member_by_id(member_id: &str) -> Result<Option<members::MemberRow>, 
     crate::skin::with_skin_conn(|conn| members::by_member_id(conn, member_id))
 }
 
-/// Tests: an App's chat key as S1 stores it (`app_chat_keys`, PRD §2.2;
-/// S1 owns that DDL, this only stands in for it until S1 lands).
+/// Tests: an App's chat key, on, written into S1's own `app_chat_keys`
+/// (its real schema, created by the skin.db open block): `chat:read`,
+/// uploads on, the given level ceiling and member cap. No reconcile kick and
+/// no Sew settings row (the route's `app_chat_key::set` does both).
 #[cfg(any(test, feature = "test-util"))]
 pub fn put_chat_key_for_tests(app_id: &str, max_level: &str, max_members: i64) -> Result<(), String> {
+    let level = crate::skin::app_chat_key::Level::parse(max_level).ok_or_else(|| format!("chat key level {max_level}"))?;
     crate::skin::with_skin_conn(|conn| {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS app_chat_keys (service_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, caps TEXT NOT NULL DEFAULT '[]',
-                max_level TEXT NOT NULL DEFAULT 'moderator', uploads INTEGER NOT NULL DEFAULT 1, max_members INTEGER NOT NULL DEFAULT 500,
-                granted_by TEXT, granted_at INTEGER, revoked_at INTEGER)",
-        )
-        .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT OR REPLACE INTO app_chat_keys (service_id, enabled, max_level, max_members) VALUES (?1, 1, ?2, ?3)",
-            rusqlite::params![app_id, max_level, max_members],
+            "INSERT OR REPLACE INTO app_chat_keys (service_id, enabled, caps, max_level, uploads, max_members, granted_by, granted_at, revoked_at)
+             VALUES (?1, 1, '[\"chat:read\"]', ?2, 1, ?3, 'owner-token', 1, NULL)",
+            rusqlite::params![app_id, level.as_str(), max_members],
         )
         .map(|_| ())
         .map_err(|e| e.to_string())

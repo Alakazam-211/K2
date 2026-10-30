@@ -2082,6 +2082,8 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
         cleanup_domain("relayspf.example");
     }
 
+    // Server-only: hosted mail (Stalwart, Linux boxes) takes `/` file refs; not on Windows.
+    #[cfg(unix)]
     #[test]
     fn secret_ref_forms() {
         use crate::mail::secrets::resolve_secret_ref;

@@ -392,6 +392,8 @@ fn sew_row_admits_only_a_linked_k2_identity_install() {
 /// live mint source (`link::SewRow`) now reads the row status reads: the
 /// mint works right after enable, with or without voice, through an
 /// upgrade, and refuses again after uninstall and purge.
+// Server-only: Sew chat hosting runs on Linux boxes (its staged --tarball is a `/` path); not on Windows.
+#[cfg(unix)]
 mod live_row {
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;

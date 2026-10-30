@@ -676,6 +676,8 @@ mod tests {
         assert!(keep["steps"].as_array().unwrap().iter().all(|s| s != "apps podman install"));
     }
 
+    // Server-only: Podman install runs on Linux boxes, and its "/srv/k2" isn't absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn opts_parse_strictly() {
         assert_eq!(parse(&json!({})).ok(), Some(PodmanOpts::default()));

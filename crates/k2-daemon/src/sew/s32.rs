@@ -849,6 +849,10 @@ pub fn shipped_path(root: &str, install_id: &str, bundle_id: &str) -> PathBuf {
     Path::new(root).join(install_id).join(bundle_file(bundle_id))
 }
 
+// Server-only: every S32 test drives Sew hosting (Linux boxes; its staged
+// --tarball is a `/` path); not on Windows. (Two attributes: the frame
+// walk in routes/frame_walk.rs knows test files by a plain #[cfg(test)].)
 #[cfg(test)]
+#[cfg(unix)]
 #[path = "s32_tests.rs"]
 mod tests;

@@ -579,6 +579,8 @@ async fn a_slowloris_hello_is_cut_at_the_deadline_not_reset_per_byte() {
 
 /// The front's own cap: 2,000 spliced connections held open, the 2,001st
 /// is closed at once, and a freed slot is usable again.
+// Server-only: the box :443 front (and RLIMIT_NOFILE) isn't on Windows.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_thousand_connections_fill_the_cap_and_the_next_is_refused() {
     use std::sync::atomic::Ordering::Relaxed;

@@ -444,6 +444,8 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // Server-only: hosted mail (Stalwart, Linux boxes) takes `/` file refs; not on Windows.
+    #[cfg(unix)]
     #[test]
     fn scheme_refs_resolve_through_the_store_without_the_file_map() {
         let (store, dir) = temp_store();

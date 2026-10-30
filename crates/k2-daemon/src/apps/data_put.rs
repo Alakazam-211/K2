@@ -265,6 +265,8 @@ mod tests {
     /// machine against a scratch "data" folder (the commands are exactly
     /// what runs inside the App's wall): chunks, decode, untar, temp file
     /// gone; a bad unpack cleans up and fails loudly.
+    // Server-only: exec into an App container (podman, Linux boxes); not on Windows.
+    #[cfg(unix)]
     #[test]
     fn put_via_exec_lands_the_files_and_cleans_up() {
         let d = Scratch::new();

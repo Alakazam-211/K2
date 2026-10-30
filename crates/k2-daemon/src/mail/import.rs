@@ -556,6 +556,8 @@ mod tests {
         fs::write(path, body).unwrap();
     }
 
+    // Server-only: maildir import (Linux boxes); maildir names hold ':', which Windows forbids.
+    #[cfg(unix)]
     #[test]
     fn walk_maildir_walks_new_and_cur() {
         let dir = tmp_maildir("curnew");
@@ -575,6 +577,8 @@ mod tests {
         assert!(err.contains("not a directory"), "{err}");
     }
 
+    // Server-only: maildir import (Linux boxes); maildir names hold ':', which Windows forbids.
+    #[cfg(unix)]
     #[test]
     fn walk_maildir_plus_plus_counts_sent_skips_tmp_and_dovecot() {
         let dir = tmp_maildir("pp");

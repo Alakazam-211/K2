@@ -530,7 +530,7 @@ mod tests {
     }
 
     fn unique_ws(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        k2_core::test_env::stable_temp_dir().join(format!(
             "k2-v1hire-{}-{}-{}",
             label,
             std::process::id(),
@@ -553,6 +553,7 @@ mod tests {
 
     #[test]
     fn get_v1_w_is_405() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let r = handle_v1_w(&V1Principal::Owner, false, b"{}");
         assert_eq!(r.status, "405 Method Not Allowed", "body={}", r.body);
@@ -565,6 +566,7 @@ mod tests {
 
     #[test]
     fn owner_hire_seeds_wiki_and_project_row() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("owner-hire");
         let path = ws.to_string_lossy().into_owned();
@@ -602,6 +604,7 @@ mod tests {
 
     #[test]
     fn star_grant_without_hire_scope_cannot_create_t19() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let root = crate::hire_routes::test_support::ensure_test_root();
         let path = root.join(format!("t19-{}", Uuid::new_v4().simple())).to_string_lossy().into_owned();
@@ -615,6 +618,7 @@ mod tests {
 
     #[test]
     fn legacy_star_key_keeps_creating_but_only_under_the_root() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let root = crate::hire_routes::test_support::ensure_test_root();
         let key = minted_key("legacy-star", r#"["*"]"#, k2_core::api_keys::ApiCapabilities::new_key_default(), None);
@@ -653,6 +657,7 @@ mod tests {
 
     #[test]
     fn hire_scoped_key_creates_under_root_and_is_ledgered() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let root = crate::hire_routes::test_support::ensure_test_root();
         let limits = k2_core::hire::limits::HireLimits::default().to_json();
@@ -674,6 +679,7 @@ mod tests {
 
     #[test]
     fn key_db_access_needs_the_db_door() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let root = crate::hire_routes::test_support::ensure_test_root();
         let limits = k2_core::hire::limits::HireLimits::default().to_json();
@@ -689,6 +695,7 @@ mod tests {
 
     #[test]
     fn finite_list_new_path_is_403_usage() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("finite-new");
         let path = ws.to_string_lossy().into_owned();
@@ -708,6 +715,7 @@ mod tests {
 
     #[test]
     fn missing_host_sessions_cap_is_uniform_404() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("no-cap");
         let path = ws.to_string_lossy().into_owned();
@@ -735,6 +743,7 @@ mod tests {
 
     #[test]
     fn rehire_same_path_converges() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("rehire");
         let path = ws.to_string_lossy().into_owned();
@@ -768,6 +777,7 @@ mod tests {
 
     #[test]
     fn hire_wiki_notes_and_later_post() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("wiki-notes");
         let path = ws.to_string_lossy().into_owned();
@@ -795,6 +805,7 @@ mod tests {
 
     #[test]
     fn wiki_id_dotdot_and_abs_are_400_usage() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("wiki-jail");
         let path = ws.to_string_lossy().into_owned();
@@ -813,6 +824,7 @@ mod tests {
 
     #[test]
     fn hire_context_catalog_and_inline_layers() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("ctx");
         let path = ws.to_string_lossy().into_owned();
@@ -888,6 +900,7 @@ mod tests {
 
     #[test]
     fn existing_ungranted_path_is_uniform_404() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("exist-deny");
         fs::create_dir_all(&ws).expect("mkdir");
@@ -902,6 +915,7 @@ mod tests {
 
     #[test]
     fn existing_granted_by_basename_converges() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("exist-ok");
         fs::create_dir_all(&ws).expect("mkdir");
@@ -917,6 +931,7 @@ mod tests {
 
     #[test]
     fn wiki_and_context_mutations_are_post_only_405() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         assert_eq!(
             CliResponse::method_not_allowed().status,
@@ -945,6 +960,7 @@ mod tests {
 
     #[test]
     fn template_xor_persona() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("xor");
         let path = ws.to_string_lossy().into_owned();
@@ -961,6 +977,7 @@ mod tests {
 
     #[test]
     fn hire_template_writes_persona() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("tmpl");
         let path = ws.to_string_lossy().into_owned();
@@ -991,6 +1008,7 @@ mod tests {
 
     #[test]
     fn hire_db_access_write_persists_and_does_not_create_db() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws = unique_ws("db-access");
         let path = ws.to_string_lossy().into_owned();
@@ -1027,6 +1045,7 @@ mod tests {
 
     #[test]
     fn missing_path_is_400() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let r = handle_v1_hire(&V1Principal::Owner, b"{}");
         assert_eq!(r.status, "400 Bad Request", "body={}", r.body);
@@ -1034,6 +1053,7 @@ mod tests {
 
     #[test]
     fn relative_path_is_400() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let r = handle_v1_hire(&V1Principal::Owner, br#"{"path":"not/absolute"}"#);
         assert_eq!(r.status, "400 Bad Request", "body={}", r.body);

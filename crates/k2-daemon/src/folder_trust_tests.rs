@@ -481,7 +481,14 @@ fn leftover_trust_is_reported_and_forget_removes_it() {
     std::fs::create_dir_all(e.home.join(".codex")).unwrap();
     // A TOML basic string escapes '\' (a Windows path), as Codex writes it.
     let key = path.replace('\\', "\\\\");
-    std::fs::write(e.home.join(".codex/config.toml"), format!("[projects.\"{key}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    // Another folder's grant in the same file (a test that hires runs with
+    // whichever HOME is current): forget removes this folder's and only that.
+    let neighbour = "/k2-test/some-other-workspace";
+    std::fs::write(
+        e.home.join(".codex/config.toml"),
+        format!("[projects.\"{key}\"]\ntrust_level = \"trusted\"\n\n[projects.\"{neighbour}\"]\ntrust_level = \"trusted\"\n"),
+    )
+    .unwrap();
     let r = held(&ws);
     assert_eq!(r.leftover, vec![format!("Codex: {path} (~/.codex/config.toml)")]);
     assert!(r.message.contains(&gate::forget_hint(&path)), "{}", r.message);
@@ -497,7 +504,8 @@ fn leftover_trust_is_reported_and_forget_removes_it() {
     assert_eq!(v["removed"], serde_json::json!([format!("Codex: {path} (~/.codex/config.toml)")]));
     assert_eq!(v["status"]["trusted_by"], serde_json::json!([]));
     let toml = std::fs::read_to_string(e.home.join(".codex/config.toml")).unwrap();
-    assert!(!toml.contains("trusted"), "{toml}");
+    assert!(!toml.contains(&key), "this folder's grant is gone: {toml}");
+    assert!(toml.contains(neighbour), "another folder's grant stays: {toml}");
     assert!(held(&ws).leftover.is_empty());
 }
 

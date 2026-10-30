@@ -939,7 +939,7 @@ pub(crate) mod test_support {
     pub(crate) fn ensure_test_root() -> PathBuf {
         static ROOT: OnceLock<PathBuf> = OnceLock::new();
         ROOT.get_or_init(|| {
-            let base = std::env::temp_dir().join(format!("k2-hire-tests-{}", std::process::id()));
+            let base = k2_core::test_env::stable_temp_dir().join(format!("k2-hire-tests-{}", std::process::id()));
             let root = base.join("agents");
             std::fs::create_dir_all(&root).expect("mkdir hire test root");
             k2_core::hire::apply::set_trash_override(Some(base.join("trash")));

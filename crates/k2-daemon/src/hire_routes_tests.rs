@@ -73,6 +73,7 @@ fn count(sql: &str, arg: &str) -> i64 {
 
 #[test]
 fn owner_hires_one_agent_with_the_whole_recipe() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let handle = uniq("solo");
     let body = json!({
@@ -129,6 +130,7 @@ fn owner_hires_one_agent_with_the_whole_recipe() {
 
 #[test]
 fn idempotency_key_replays_conflicts_and_scopes() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let handle = uniq("idem");
     let body = json!({ "agent": { "handle": handle, "role": "worker" } });
@@ -157,6 +159,7 @@ fn idempotency_key_replays_conflicts_and_scopes() {
 
 #[test]
 fn team_hire_makes_group_poc_and_star_edges_and_dry_run_predicts() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let team = uniq("Desk");
     let body = json!({
@@ -209,6 +212,7 @@ fn team_hire_makes_group_poc_and_star_edges_and_dry_run_predicts() {
 
 #[test]
 fn a_failure_at_every_step_leaves_zero_residue() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     for fail_at in 0..=3usize {
         let team = uniq("Roll");
@@ -252,6 +256,7 @@ fn a_failure_at_every_step_leaves_zero_residue() {
 
 #[test]
 fn shape_refusals() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     // Folder lines on app logins aren't built (T17): unknown field → 400.
     let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "appLogin": { "app": "x", "folders": ["plans/"] } } }), None);
@@ -268,6 +273,7 @@ fn shape_refusals() {
 
 #[test]
 fn a_key_without_the_hire_scope_gets_the_uniform_404() {
+    let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let (_id, raw) = k2_core::api_keys::create_api_key("no-hire", None, Some("*"), None, None, Some(ApiCapabilities::all())).unwrap();
     let k = V1Principal::Api(k2_core::api_keys::resolve_api_key(&raw).unwrap());
@@ -285,6 +291,7 @@ fn a_key_without_the_hire_scope_gets_the_uniform_404() {
 
 #[test]
 fn key_hires_inside_its_folder_and_ceiling() {
+    let _home = k2_core::test_env::TempHome::new();
     let folder = uniq("acme");
     let k = hire_key(hire_only(), json!({ "folder": folder }), "[]");
     let (st, v) = call(V1_HIRE, &k, true, json!({ "agent": { "role": "plans" } , "onBehalfOf": "app-user" }), Some("k1"));
@@ -306,6 +313,7 @@ fn key_hires_inside_its_folder_and_ceiling() {
 
 #[test]
 fn key_ceiling_refusals_write_nothing() {
+    let _home = k2_core::test_env::TempHome::new();
     let k = hire_key(hire_only(), json!({ "maxMembersPerTeam": 2 }), "[]");
     let handle = uniq("ceil");
     let (st, v) = call(V1_HIRE, &k, true, json!({ "agent": { "handle": handle, "dbAccess": "read" } }), None);
@@ -331,6 +339,7 @@ fn key_ceiling_refusals_write_nothing() {
 
 #[test]
 fn quotas_are_counted_from_the_ledger() {
+    let _home = k2_core::test_env::TempHome::new();
     let k = hire_key(hire_only(), json!({ "maxMembersPerDay": 2, "maxLiveMembers": 5 }), "[]");
     let (st, v) = call(V1_HIRE, &k, true, json!({ "agent": {} }), None);
     assert_eq!(st, 200, "{v}");
@@ -347,6 +356,7 @@ fn quotas_are_counted_from_the_ledger() {
 
 #[test]
 fn key_retire_needs_the_scope_and_its_own_instance() {
+    let _home = k2_core::test_env::TempHome::new();
     let k = hire_key(hire_only(), json!({}), "[]");
     let (_, v) = call(V1_HIRE, &k, true, json!({ "agent": {} }), None);
     let inst = v["instance"].as_str().unwrap().to_string();
@@ -362,6 +372,7 @@ fn key_retire_needs_the_scope_and_its_own_instance() {
 
 #[test]
 fn reach_defaults_to_none_even_with_a_star_grant() {
+    let _home = k2_core::test_env::TempHome::new();
     let k = hire_key(ApiCapabilities { canonical_message: true, host_sessions: true, ..hire_only() }, json!({}), "*");
     let (_, v) = call(V1_HIRE, &k, true, json!({ "agent": {} }), None);
     let handle = v["members"][0]["handle"].as_str().unwrap().to_string();
@@ -385,6 +396,7 @@ fn connections(path: &str, action: &str, target: &str) -> Result<String, String>
 
 #[test]
 fn links_add_and_remove_only_their_own_edges() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let (_, desk) = call(V1_HIRE, &who, true, json!({ "team": { "name": uniq("Desk") }, "members": [{ "role": "lib", "lead": true }, { "role": "sme" }] }), None);
     let (_, job) = call(V1_HIRE, &who, true, json!({ "agent": { "role": "joblead" } }), None);
@@ -431,6 +443,7 @@ fn links_add_and_remove_only_their_own_edges() {
 
 #[test]
 fn key_links_only_what_it_created_or_was_named() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let (_, owners_desk) = call(V1_HIRE, &who, true, json!({ "agent": { "role": "desk" } }), None);
     let desk_ws = owners_desk["members"][0]["workspaceId"].as_str().unwrap().to_string();
@@ -457,6 +470,7 @@ fn key_links_only_what_it_created_or_was_named() {
 
 #[test]
 fn passport_converge_never_raises_db_access() {
+    let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let path = ensure_test_root().join(uniq("cli")).to_string_lossy().into_owned();
     let agent = Who::Agent { project_id: "some-ws".into(), session_id: "s".into() };
@@ -475,6 +489,7 @@ fn passport_converge_never_raises_db_access() {
 
 #[test]
 fn people_only_routes_refuse_passports_and_members() {
+    let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let agent = Who::Agent { project_id: "w".into(), session_id: "s".into() };
     for p in [CLI_INSTANCES_HIRE, CLI_INSTANCES_RETIRE, CLI_UNLINK] {
@@ -492,6 +507,7 @@ fn people_only_routes_refuse_passports_and_members() {
 
 #[test]
 fn minting_a_hire_key_needs_a_fresh_owner_confirm() {
+    let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let vault = crate::vault::ensure_test_vault();
     let body = json!({ "label": uniq("mint"), "hire": { "maxLiveMembers": 7 } });
@@ -527,6 +543,7 @@ fn minting_a_hire_key_needs_a_fresh_owner_confirm() {
 
 #[test]
 fn msg_who_answers_from_the_credential_not_the_body() {
+    let _home = k2_core::test_env::TempHome::new();
     let who = owner();
     let (_, a) = call(V1_HIRE, &who, true, json!({ "agent": { "role": "sender" } }), None);
     let (_, b) = call(V1_HIRE, &who, true, json!({ "agent": { "role": "receiver" } }), None);

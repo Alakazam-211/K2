@@ -34,6 +34,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import type { SettingEntry } from '../searchManifest'
 import { InboxAccessPanel } from './InboxAccessPanel'
+import { MailboxForwardingPanel } from './MailboxForwardingPanel'
 import {
   ENABLE_STEPS,
   SAMPLE_ADDRESSES,
@@ -84,7 +85,7 @@ import { SquareCheckbox } from '@/components/ui'
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
   { id: 'email-hosting.domains', section: 'email-hosting', label: 'Email Domains', description: 'Add domains and verify MX / SPF / DKIM / DMARC records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
-  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint', 'rotate', 'imap', 'smtp', 'password'] },
+  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement, forwarding', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint', 'rotate', 'imap', 'smtp', 'password', 'forward', 'forwarding', 'gmail', 'redirect'] },
   { id: 'email-hosting.approvals', section: 'email-hosting', label: 'Send Approvals', description: 'Approve or deny agent outbound email', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
   { id: 'email-hosting.send-mode', section: 'email-hosting', label: 'Send Mode & Relay', description: 'Direct send or smart-host relay, per domain', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
 ]
@@ -1095,6 +1096,9 @@ function AddressesPanel({
   const [busyKind, setBusyKind] = useState<'retire' | 'rotate' | null>(null)
   const [capNote, setCapNote] = useState<string | null>(null)
   const [onceCreds, setOnceCreds] = useState<RotatedMailboxPassword | null>(null)
+  // FW4: which mailbox's Forwarding panel is open (one at a time; the
+  // panel loads only when opened, never in sample mode).
+  const [forwardOpen, setForwardOpen] = useState<string | null>(null)
 
   useEffect(() => {
     if (sample) {
@@ -1334,6 +1338,16 @@ function AddressesPanel({
                       </div>
                       {r.status === 'active' && (
                         <>
+                          {!sample && (
+                            <button
+                              type="button"
+                              aria-expanded={forwardOpen === r.id}
+                              onClick={() => setForwardOpen((cur) => (cur === r.id ? null : r.id))}
+                              className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer flex-shrink-0"
+                            >
+                              Forwarding
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={!canMutate || busyId === r.id}
@@ -1355,6 +1369,9 @@ function AddressesPanel({
                         </>
                       )}
                     </div>
+                    {!sample && r.status === 'active' && forwardOpen === r.id && (
+                      <MailboxForwardingPanel address={r.address} canMutate={canMutate} />
+                    )}
                     {inbox && (
                       <div className="pt-1 border-t border-[var(--color-border)]">
                         <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />

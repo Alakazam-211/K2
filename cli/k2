@@ -8011,8 +8011,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
 
   Guests, roles, and tokens for apps on this box, and (Apps beta) hosting
   server Apps: k2 app deploy (k2 app validate --help, k2 study app-deploys).
-  A static UI is still k2 publish run --skin. Desktop binary updates are
-  k2 update --app. See k2 study apps (leftover: k2 study skins).
+  A site already on k2 publish run --skin keeps working; a new static UI is an
+  App (k2 app init --template static).
+  Desktop binary updates are k2 update --app. See k2 study apps (leftover: k2 study skins).
 
   Leftover aliases (still work): k2 skin …    k2 skin-token …
 
@@ -8181,10 +8182,11 @@ PER-APP LOGINS (0.45.5)
   POST /cli/skin/login with {"app": $K2_APP_ID}; no app = the box login.
   See k2 study apps.
 
-HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
-  k2 publish run <label> --skin --port N
-  Custom files: --skin <dir>. A server App (your own code with a port) is
-  k2 app install + k2 app deploy (Apps beta; k2 study app-deploys).
+HOST THE UI (k2 study apps)
+  A new App: k2 app init --template static for a folder of files, or
+  k2 app install + k2 app deploy for your own code with a port (Apps beta;
+  k2 study app-deploys). A site already on k2 publish run --skin keeps working;
+  --skin makes no new ones.
 
 Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
 thread:post (POST /cli/thread/post),
@@ -9379,6 +9381,15 @@ cmd_app_deploy() {
     _app_grace_done "$json_out"
     [ "$json_out" = 1 ] || _app_disk_notes
     [ "$json_out" = 1 ] || _app_seed_size_note
+    [ "$json_out" = 1 ] || printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+try:
+    site = json.load(sys.stdin).get("devSite")
+except ValueError:
+    site = None
+if site:
+    print("note: the dev site %s keeps running from this folder (k2 publish stop %s)." % (site, site))
+'
     _app_rt_deployment_exit "$json_out"
 }
 
@@ -10958,9 +10969,9 @@ grant waited on it.
      heaviest paths): keep your data, .env files and caches out with a
      .k2appignore at its root (gitignore syntax), e.g. var/ .env*
      node_modules/.cache .next/cache.
-     NO EDITING LIVE: a change is a new deploy. Mockups and pages you edit
-     by hand stay static: k2 publish run <label> --skin <dir> --port N
-     serves a folder as it is (there's no App dev mode yet).
+     NO EDITING LIVE: a change is a new deploy. For mockups and pages you
+     edit by hand, k2 publish run <label> --cmd "<a server>" --port N --dev
+     serves the live folder, private until you share it (k2 study publish-dev).
   4. Copy your data in (the App must be live):
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy
@@ -33188,10 +33199,14 @@ same pipe. This command does not start k2 tunnel.
 
 USAGE
   k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>]
-  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel] [--transfer] [--probe-timeout <dur>]
+  k2 publish run <name> --cmd <dev command> --port <n> --dev [--cwd <path>] [--idle 60m] [--mem 4G] [--cpus 2]
+  k2 publish run <name> --skin [<dir>] --port <n> ...   (only a site already on --skin; no new ones)
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
-  k2 publish ps|status [--json]       (ps = list)
+  k2 publish ps|status [--long] [--json]       (ps = list)
+  k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]
+  k2 publish open <name> [--path <p>] [--no-browser] [--json]
+  k2 publish sessions <name> [--revoke-all] [--json]
   k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
   k2 publish client-ip [<label> on|off] [--json]
@@ -33228,8 +33243,34 @@ run
                    run is rolled back (tunnel) or shows unhealthy (local,
                    still re-checked, so a late bind turns running).
 
-  --skin [<dir>]   Static HTML host (an app). Prefer Next in cwd for new apps.
-                   No dir = bundled UI. Dir = your static files + same BFF.
+  --dev            Run a dev server from the live folder, with hot reload through
+                   the site's address. Private until you share it. It stops after
+                   --idle (default 60m, off is for the owner and Admins) and starts
+                   again for the next visitor who passes K2's check. Not walled (a
+                   normal new --cmd service is), so an agent's first one waits for
+                   the owner. How: k2 study publish-dev
+
+  --skin [<dir>]   Keeps a site already on --skin running. A new <name> is refused
+                   (skin_retired). A folder of files is an App now:
+                   k2 app init --template static (k2 study app-deploys).
+
+visibility
+  Who may open a site. A new site is private. Sites from before 0.46.7 stay
+  public until someone changes them. No mode: show it. k2 study publish-visibility
+  private          only the owner and Admins, after K2 checks who they are
+  pin              the PIN first. A person gives it on stdin, or types it when
+                   asked (--pin is refused: it would land in shell history)
+  public           anyone with the address; needs --reason, and an owner or Admin
+  An agent can make its own site private. For pin or public, the same command
+  puts a card on the agent's Thread and exits 2 (waiting for a person); the person
+  answers it, and types any PIN into K2's own form, so the agent never sees it.
+  A dev server can't be asked for public (dev_public_person_only): ask for a PIN.
+  (Exit 2 = waiting for a person, or a usage error: the message says which.
+  Exit 3 = refused.)
+
+open       a one-time link to a private site, for a browser outside K2. K2's own
+           tabs need no link. Not for agents: test on the local port instead.
+sessions   who is signed in to a site, private or PIN; --revoke-all ends them all.
 
 start / stop
   start <name>: uses the saved --cmd/--port/--cwd. Do not pass them again.
@@ -33241,7 +33282,8 @@ rm
 
   <name> on run is the subdomain label. It cannot differ.
 
-ps     hosted processes for THIS workspace (running/stopped, port, URL if any)
+ps     hosted processes for THIS workspace (running/stopped, port, who may open
+       it, URL if any); --long adds why a site is public, and a dev server's caps
        [legacy env] = a service from before 0.45.4 that still inherits the
        daemon's whole environment (it keeps it; no end is set). Start it
        clean: k2 publish env <name> clean
@@ -33258,11 +33300,7 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   A name another workspace owns is refused before anything changes.
   create/point/claim --transfer: owner/admin only, audited.
 
-  Apps: official static host is `k2 publish run <label> --skin --port N`.
-    k2 publish run agents --skin --port 8788
-  → https://agents.<host>.k2.dev  (login + Thread; no grid)
-  Custom static files: --skin <dir> (workspace-relative). Labels `skin`,
-  `meet`, `chat` and `mail` are reserved (box front doors: Apps, K2 Meet, K2 chat, K2 webmail).
+  Labels `skin`, `meet`, `chat` and `mail` are reserved (box front doors: Apps, K2 Meet, K2 chat, K2 webmail).
   Off-platform custom domains are not created here.
   k2 app is guests/roles/tokens, and (Apps beta) hosts server Apps with
   deploys and rollback: k2 study app-deploys.
@@ -33315,6 +33353,11 @@ def fail(code, hint, exit_code=1):
     # The disk guard (0.46.3): a refusal is exit 3, like every k2 app verb.
     if code == "disk_low":
         exit_code = 3
+    # 0.46.7: K2's refusals of a dev server, and of a new --skin site.
+    if code in ("skin_retired", "idle_off_person_only"):
+        exit_code = 3
+    if code in ("dev_needs_cmd", "dev_needs_tunnel", "usage"):
+        exit_code = 2
     hint = hint if isinstance(hint, str) else str(hint)
     text = hint.rstrip("\n")
     if as_json:
@@ -33462,6 +33505,14 @@ if mode == "service" and verb == "run":
 # run/start of a legacy service: one stderr line, so --json stdout stays clean.
 if mode == "service" and verb in ("run", "start"):
     _s = d.get("service") if isinstance(d.get("service"), dict) else d
+    # DM-4: a dev server says what it shows, how it runs, and its box's limits.
+    if isinstance(_s, dict) and isinstance(_s.get("dev"), dict):
+        _dv = _s["dev"]
+        if d.get("devWarning"):
+            sys.stderr.write("warning: %s\n" % d["devWarning"])
+        sys.stderr.write("dev: live folder, not walled · caps: %s\n" % (_dv.get("caps") or "?"))
+        if _dv.get("warning"):
+            sys.stderr.write("warning: %s\n" % _dv["warning"])
     if env_legacy(_s):
         sys.stderr.write(env_warning(str(_s.get("name") or "?"), _s) + "\n")
     _c = d.get("crossover") if isinstance(d, dict) else None
@@ -33515,6 +33566,18 @@ def status_text(s):
         return "starting (waiting for port %s, %s left)" % (s.get("port"), fmt_left(s.get("startingLeftMs")))
     return st
 
+def vis_label(s):
+    # Who may open it. An App's own logins decide for an App; a --no-tunnel
+    # service has no address to open.
+    if not isinstance(s, dict):
+        return "-"
+    v = s.get("visibility")
+    if not isinstance(v, dict):
+        return "own logins" if s.get("cmd") == "(app)" else "-"
+    if v.get("enforced") is False:
+        return str(v.get("mode") or "?") + " (not enforced: E2E off)"
+    return str(v.get("mode") or "?") + (", dev" if v.get("dev") else "")
+
 def frame_label(s):
     # --skin: the policy K2 sends. --cmd: the App's own job.
     if not isinstance(s, dict):
@@ -33535,6 +33598,8 @@ if mode == "list":
         services = []
     rows = []
     warnings = []
+    details = []
+    long_view = os.environ.get("P_LONG") == "1"
     reasons = []
     legacy = []
     unwalled = []
@@ -33562,9 +33627,24 @@ if mode == "list":
             str(s.get("name") or "?"),
             status_text(s),
             port_s,
+            vis_label(s),
             frame_label(s),
             u,
         ))
+        if s.get("bindWarning"):
+            warnings.append((str(s.get("name") or "?"), str(s.get("bindWarning"))))
+        if long_view:
+            _v = s.get("visibility") if isinstance(s.get("visibility"), dict) else {}
+            if _v.get("mode") == "public" and _v.get("reason"):
+                details.append((str(s.get("name") or "?"), "public because: %s" % _v["reason"]))
+            if isinstance(s.get("dev"), dict):
+                _dv = s["dev"]
+                _idle = _dv.get("idleSecs")
+                details.append((str(s.get("name") or "?"), "dev: %s · caps: %s · idle stop: %s" % (
+                    _dv.get("lane") or "?", _dv.get("caps") or "?",
+                    "off" if _idle is None else "%dm" % (int(_idle) // 60))))
+                if _dv.get("warning"):
+                    warnings.append((str(s.get("name") or "?"), str(_dv["warning"])))
         if s.get("frameWarning"):
             warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
         if s.get("reason"):
@@ -33578,10 +33658,13 @@ if mode == "list":
     nw = max([len(r[0]) for r in rows] + [len("NAME")])
     sw = max([len(r[1]) for r in rows] + [len("STATUS")])
     pw = max([len(r[2]) for r in rows] + [len("PORT")])
-    fw = max([len(r[3]) for r in rows] + [len("FRAME")])
-    print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, "NAME", sw, "STATUS", pw, "PORT", fw, "FRAME", "URL/TARGET"))
-    for n, st, p, f, u in rows:
-        print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, fw, f, u))
+    vw = max([len(r[3]) for r in rows] + [len("VISIBILITY")])
+    fw = max([len(r[4]) for r in rows] + [len("FRAME")])
+    print("%-*s  %-*s  %-*s  %-*s  %-*s  %s" % (nw, "NAME", sw, "STATUS", pw, "PORT", vw, "VISIBILITY", fw, "FRAME", "URL/TARGET"))
+    for n, st, p, v, f, u in rows:
+        print("%-*s  %-*s  %-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, vw, v, fw, f, u))
+    for n, w in details:
+        print("%s: %s" % (n, w))
     for n, w in warnings:
         print("warning: %s: %s" % (n, w))
     # Why a service isn't serving (its exit code and last log line).
@@ -33623,6 +33706,17 @@ if url and url != "-":
     print("  %s" % url)
 if isinstance(svc, dict) and svc.get("hostnamePending"):
     print("  public URL is published once port %s answers (k2 publish status %s)" % (port, name))
+# 0.46.7: a new site is private, so a bare visit gets K2's private page.
+if verb == "run" and isinstance(svc, dict) and isinstance(svc.get("visibility"), dict):
+    _vm = svc["visibility"].get("mode")
+    if svc["visibility"].get("enforced") is False:
+        print("  %s, but K2's check can't see this site's traffic with E2E off: anyone with the address can open it" % _vm)
+    elif _vm == "private":
+        print("  private: open it in a K2 tab, or k2 publish open %s. Agents: test on http://127.0.0.1:%s (k2 study publish-visibility)" % (name, port))
+    elif _vm == "pin":
+        print("  behind a PIN (k2 publish visibility %s)" % name)
+if isinstance(d, dict) and d.get("visibilityNote"):
+    print("  %s" % d["visibilityNote"])
 if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
 if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
@@ -33701,6 +33795,15 @@ cmd_publish() {
         client-ip)
             cmd_publish_client_ip "$@"
             ;;
+        visibility)
+            cmd_publish_visibility "$@"
+            ;;
+        open)
+            cmd_publish_open "$@"
+            ;;
+        sessions)
+            cmd_publish_sessions "$@"
+            ;;
         # K2 vault (§10.5): secrets a published service gets at start.
         secret|secrets)
             local act="${1:-}" label="${2:-}" sname="${3:-}"
@@ -33748,8 +33851,22 @@ cmd_publish() {
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
     local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout="" dov=""
+    local dev=0 dev_idle="" dev_mem="" dev_cpus=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --dev) dev=1; shift ;;
+            --idle)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--idle needs a duration from 5m to 24h, or off"; exit 2; }
+                dev_idle="$2"; shift 2 ;;
+            --idle=*) dev_idle="${1#--idle=}"; shift ;;
+            --mem)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--mem needs an amount, like 4G"; exit 2; }
+                dev_mem="$2"; shift 2 ;;
+            --mem=*) dev_mem="${1#--mem=}"; shift ;;
+            --cpus)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--cpus needs a number of CPUs, like 2"; exit 2; }
+                dev_cpus="$2"; shift 2 ;;
+            --cpus=*) dev_cpus="${1#--cpus=}"; shift ;;
             --disk-override)
                 [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--disk-override needs a reason"; exit 2; }
                 dov="$2"; shift 2 ;;
@@ -33796,7 +33913,7 @@ cmd_publish_run() {
             --help|-h) _publish_usage; exit 0 ;;
             -*)
                 as_json="$as_json" _publish_err "usage" \
-                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>]"
+                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>] [--dev [--idle <dur>] [--mem <n>] [--cpus <n>]]"
                 exit 2 ;;
             *)
                 if [ -z "$name" ]; then
@@ -33809,6 +33926,18 @@ cmd_publish_run() {
     done
     if [ "$skin" = 1 ] && [ -n "$cmd" ]; then
         as_json="$as_json" _publish_err "usage" "--cmd and --skin are mutually exclusive"
+        exit 2
+    fi
+    if [ "$dev" = 1 ] && [ "$skin" = 1 ]; then
+        as_json="$as_json" _publish_err "dev_needs_cmd" "--dev runs a dev server, so it needs --cmd (--skin hosts static files)"
+        exit 2
+    fi
+    if [ "$dev" = 1 ] && [ "$no_tunnel" = 1 ]; then
+        as_json="$as_json" _publish_err "dev_needs_tunnel" "--dev puts a dev server behind K2's check at its address, so it can't use --no-tunnel. To run one for yourself only, run the command in a terminal"
+        exit 2
+    fi
+    if [ "$dev" != 1 ] && { [ -n "$dev_idle" ] || [ -n "$dev_mem" ] || [ -n "$dev_cpus" ]; }; then
+        as_json="$as_json" _publish_err "usage" "--idle, --mem and --cpus go with --dev"
         exit 2
     fi
     if [ "$skin" = 1 ] && [ -n "$cwd" ]; then
@@ -33864,13 +33993,19 @@ cmd_publish_run() {
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
-           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" P_DISK_OVERRIDE="$dov" python3 -c '
+           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" P_DISK_OVERRIDE="$dov" \
+           P_DEV="$dev" P_DEV_IDLE="$dev_idle" P_DEV_MEM="$dev_mem" P_DEV_CPUS="$dev_cpus" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
     "port": int(os.environ["P_PORT"]),
     "project": os.environ["P_PROJECT"],
 }
+if os.environ.get("P_DEV") == "1":
+    b["dev"] = True
+    for k, e in (("idle", "P_DEV_IDLE"), ("mem", "P_DEV_MEM"), ("cpus", "P_DEV_CPUS")):
+        if os.environ.get(e):
+            b[k] = os.environ[e]
 cmd = os.environ.get("P_CMD") or ""
 if cmd:
     b["cmd"] = cmd
@@ -34054,6 +34189,342 @@ print("Nested services with the client-IP rewrite: %s" % (", ".join(labels) if l
 '
 }
 
+# The code of a /cli/publish/* refusal in $RESP ("" when it isn't one).
+_publish_resp_code() {
+    RESP="$RESP" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ.get("RESP") or "")
+except Exception:
+    d = None
+print((d.get("code") or "") if isinstance(d, dict) else "")
+'
+}
+
+# Print a visibility / open / sessions answer. Env: RESP, AS_JSON, P_VERB.
+# Exit 0 done; 2 usage or held for a person; 3 refused.
+_publish_site_render() {
+    RESP="${RESP:-}" AS_JSON="${AS_JSON:-false}" P_VERB="${P_VERB:-}" python3 - <<'PY'
+import json, os, sys
+
+raw = os.environ.get("RESP") or ""
+as_json = os.environ.get("AS_JSON") == "true"
+verb = os.environ.get("P_VERB") or ""
+USAGE = ("usage", "pin_required", "pin_length", "pin_characters", "pin_days", "pin_in_argv", "reason_required",
+         "needs_yes", "dev_public_needs_flag", "bad_label", "bad_path")
+
+def bail(code, text, status):
+    if as_json:
+        sys.stderr.write(json.dumps({"error": {"code": code, "hint": text}}, separators=(",", ":")) + "\n")
+    else:
+        sys.stderr.write("Error: %s\n" % text)
+    sys.exit(status)
+
+try:
+    d = json.loads(raw)
+except Exception:
+    d = None
+if not isinstance(d, dict):
+    bail("unreachable", "no answer from the daemon: %s" % (raw.strip()[:200] or "(empty)"), 1)
+
+if d.get("status") == "held":
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    else:
+        print(d.get("message") or "This needs a person: K2 put a card on your Thread.")
+        if d.get("request"):
+            print("  request: %s" % d["request"])
+    sys.exit(2)
+
+err = d.get("error")
+if err:
+    if isinstance(err, dict):
+        code, text = err.get("code") or "error", err.get("hint") or err.get("message") or "refused"
+    else:
+        code, text = d.get("code") or "error", str(err)
+    if d.get("hint"):
+        text = "%s\n  %s" % (text, d["hint"])
+    bail(code, text, 2 if code in USAGE else 3)
+
+if as_json:
+    print(json.dumps(d, separators=(",", ":")))
+    sys.exit(0)
+
+def when(ts):
+    import datetime
+    try:
+        return datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "-"
+
+if verb == "visibility":
+    mode = d.get("mode") or "?"
+    print("%s: %s%s" % (d.get("label") or "?", mode, ", dev" if d.get("dev") else ""))
+    if d.get("url"):
+        print("  %s" % d["url"])
+    words = {
+        "private": "Only the owner and Admins can open it (k2 publish open %s)." % (d.get("label") or "<name>"),
+        "pin": "K2 asks for the PIN first. Send the address and the PIN separately.",
+        "public": "Anyone with the address can open it.",
+    }
+    if mode in words:
+        print("  %s" % words[mode])
+    if mode == "public" and d.get("reason"):
+        print("  Why: %s" % d["reason"])
+    for line in d.get("warnings") or []:
+        print("warning: %s" % line)
+elif verb == "open":
+    if d.get("opened"):
+        print("Opened %s in your browser." % (d.get("label") or "the site"))
+    else:
+        print(d.get("url") or "")
+        if d.get("oneTime"):
+            print("  This link works once, within %s seconds." % (d.get("expiresInSecs") or 60), file=sys.stderr)
+elif verb == "sessions":
+    if d.get("revoked") is not None:
+        print("Ended %s session%s on %s." % (d["revoked"], "" if d["revoked"] == 1 else "s", d.get("label") or "?"))
+    else:
+        rows = d.get("sessions") or []
+        if not rows:
+            print("Nobody is signed in to %s." % (d.get("label") or "?"))
+        else:
+            print("%-8s  %-24s  %-16s  %s" % ("KIND", "WHO", "STARTED", "ENDS"))
+            for r in rows:
+                print("%-8s  %-24s  %-16s  %s" % (r.get("kind") or "?", r.get("user") or "-", when(r.get("createdAt")), when(r.get("expiresAt"))))
+PY
+}
+
+# Read a PIN into _K2_PIN: asked twice with no echo in a terminal, else one line
+# from stdin. Never on argv. Non-zero when the two don't match.
+_publish_read_pin() {
+    _K2_PIN=""
+    if [ -t 0 ]; then
+        local again=""
+        printf 'PIN for %s (6 to 64 characters): ' "$1" >&2
+        IFS= read -rs _K2_PIN || _K2_PIN=""
+        echo >&2
+        printf 'The same PIN again: ' >&2
+        IFS= read -rs again || again=""
+        echo >&2
+        [ "$_K2_PIN" = "$again" ] || return 1
+    else
+        IFS= read -r _K2_PIN || true
+    fi
+    return 0
+}
+
+# `k2 publish visibility <label> [private|pin|public] ...` (prd-publish-
+# visibility-and-dev-mode-v1 PV-7, PV-10, PV-12, DM-3). The daemon decides who
+# may; this reads the PIN and asks the person to confirm.
+cmd_publish_visibility() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local label="" mode="" reason="" pin_days="" yes=0 dev_public=0 as_json=false
+    local usage="usage: k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --pin|--pin=*)
+                as_json="$as_json" _publish_err "pin_in_argv" "a PIN on the command line lands in your shell history and process lists. Pipe it, or leave it out and type it when asked: k2 publish visibility ${label:-<name>} pin < pin.txt"
+                exit 2 ;;
+            --reason)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--reason needs a few words on why"; exit 2; }
+                reason="$2"; shift 2 ;;
+            --reason=*) reason="${1#--reason=}"; shift ;;
+            --pin-days)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--pin-days needs a number from 1 to 30"; exit 2; }
+                pin_days="$2"; shift 2 ;;
+            --pin-days=*) pin_days="${1#--pin-days=}"; shift ;;
+            --yes|-y) yes=1; shift ;;
+            --dev-is-public) dev_public=1; shift ;;
+            --json) as_json=true; shift ;;
+            -*) as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"; exit 2 ;;
+            *)
+                if [ -z "$label" ]; then label="$1"
+                elif [ -z "$mode" ]; then mode="$1"
+                else as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$label" ] || { as_json="$as_json" _publish_err "usage" "$usage"; exit 2; }
+    local RESP
+    if [ -z "$mode" ]; then
+        RESP=$(cli_send cli_request "/cli/publish/visibility" "label=$(urlencode "$label")") || RESP=""
+        local AS_JSON="$as_json" P_VERB="visibility"
+        _publish_site_render
+        return $?
+    fi
+    case "$mode" in
+        private|pin|public) ;;
+        *) as_json="$as_json" _publish_err "usage" "the mode is private, pin or public — $usage"; exit 2 ;;
+    esac
+    case "$pin_days" in
+        ''|[0-9]|[0-9][0-9]) ;;
+        *) as_json="$as_json" _publish_err "usage" "--pin-days needs a number from 1 to 30"; exit 2 ;;
+    esac
+
+    # DM-3: public dev is loud. In a terminal the person types the name; --yes
+    # is only for a call with no terminal.
+    if [ "$mode" = public ] && [ "$dev_public" = 1 ]; then
+        if [ -t 0 ] && [ -t 2 ]; then
+            {
+                echo "$label is a dev server. Made public, anyone with the address can see its source maps,"
+                echo "error pages with file paths, and anything the dev server evaluates."
+                printf 'Type %s to make it public: ' "$label"
+            } >&2
+            local typed=""
+            IFS= read -r typed || typed=""
+            [ "$typed" = "$label" ] || { echo "Nothing changed." >&2; exit 2; }
+        elif [ "$yes" != 1 ]; then
+            as_json="$as_json" _publish_err "needs_yes" "public dev needs a person at a terminal, or --yes with no terminal"
+            exit 2
+        fi
+    fi
+
+    # Ask first, with no PIN: an agent gets its card and a person who can't set
+    # it gets refused, before anyone types one. The PIN then goes over TCP in
+    # a body (curl config on stdin), never on argv.
+    _publish_vis_body() {
+        P_LABEL="$label" P_MODE_V="$mode" P_REASON="$reason" P_PIN_DAYS="$pin_days" P_YES="$yes" \
+        P_DEV_PUBLIC="$dev_public" P_PROJECT="$PROJECT" P_CHECK="${1:-0}" python3 -c '
+import json, os, sys
+b = {"label": os.environ["P_LABEL"], "mode": os.environ["P_MODE_V"], "project": os.environ["P_PROJECT"]}
+if os.environ.get("P_REASON"):
+    b["reason"] = os.environ["P_REASON"]
+if os.environ.get("P_PIN_DAYS"):
+    b["pinDays"] = os.environ["P_PIN_DAYS"]
+if os.environ.get("P_YES") == "1":
+    b["yes"] = True
+if os.environ.get("P_DEV_PUBLIC") == "1":
+    b["devIsPublic"] = True
+if os.environ.get("P_CHECK") == "1":
+    b["check"] = True
+pin = sys.stdin.read()
+if pin:
+    b["pin"] = pin
+print(json.dumps(b))
+'
+    }
+    local check=0 code=""
+    [ "$mode" = pin ] && check=1
+    while :; do
+        RESP=$(printf '' | _publish_vis_body "$check" | { IFS= read -r b; cli_send cli_post_json "/cli/publish/visibility" "$b"; }) || RESP=""
+        code="$(_publish_resp_code)"
+        [ "$code" = needs_yes ] || break
+        # PV-3: moving a public site behind the gate changes how K2 carries it.
+        if [ -t 0 ] && [ -t 2 ]; then
+            RESP="$RESP" python3 -c 'import json,os; print(json.loads(os.environ["RESP"]).get("error",""))' >&2
+            printf 'Go ahead? [y/N] ' >&2
+            local answer=""
+            IFS= read -r answer || answer=""
+            case "$answer" in y|Y|yes|YES) yes=1 ;; *) echo "Nothing changed." >&2; exit 2 ;; esac
+        else
+            break
+        fi
+    done
+    if [ "$mode" = pin ] && [ -z "$code" ] && [ "$check" = 1 ] && RESP="$RESP" python3 -c 'import json,os,sys; sys.exit(0 if json.loads(os.environ["RESP"]).get("check") else 1)' 2>/dev/null; then
+        local _K2_PIN=""
+        if ! _publish_read_pin "$label"; then
+            as_json="$as_json" _publish_err "usage" "the two PINs don't match; nothing changed"
+            exit 2
+        fi
+        [ -n "$_K2_PIN" ] || { as_json="$as_json" _publish_err "pin_required" "no PIN on stdin; nothing changed"; exit 2; }
+        _K2_FORCE_TCP=1
+        RESP=$(printf '%s' "$_K2_PIN" | _publish_vis_body 0 | { IFS= read -r b; cli_post_json "/cli/publish/visibility" "$b"; }) || RESP=""
+        _K2_PIN=""
+    fi
+    local AS_JSON="$as_json" P_VERB="visibility"
+    _publish_site_render
+}
+
+# `k2 publish open <label> [--path p] [--no-browser] [--json]` (PV-5): a
+# one-time link from a signed-in K2 client. Agents are refused (person_only).
+cmd_publish_open() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local label="" path="" as_json=false no_browser=0
+    local usage="usage: k2 publish open <name> [--path <p>] [--no-browser] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --path)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--path needs a path, like /docs"; exit 2; }
+                path="$2"; shift 2 ;;
+            --path=*) path="${1#--path=}"; shift ;;
+            --no-browser) no_browser=1; shift ;;
+            --json) as_json=true; shift ;;
+            -*) as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"; exit 2 ;;
+            *)
+                if [ -z "$label" ]; then label="$1"
+                else as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$label" ] || { as_json="$as_json" _publish_err "usage" "$usage"; exit 2; }
+    local body RESP
+    body=$(P_LABEL="$label" P_PATH="$path" P_PROJECT="$PROJECT" python3 -c '
+import json, os
+b = {"label": os.environ["P_LABEL"], "project": os.environ["P_PROJECT"]}
+if os.environ.get("P_PATH"):
+    b["path"] = os.environ["P_PATH"]
+print(json.dumps(b))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/open" "$body") || RESP=""
+    # Open a browser only for a person at a terminal with one. A one-time link
+    # is spent once it opens, so it is printed only when it wasn't.
+    if [ "$as_json" = false ] && [ "$no_browser" = 0 ] && [ -t 1 ]; then
+        local url
+        url="$(RESP="$RESP" python3 -c 'import json,os
+try:
+    print(json.loads(os.environ["RESP"]).get("url") or "")
+except Exception:
+    print("")')"
+        if [ -n "$url" ]; then
+            local opener=""
+            case "$(uname -s)" in
+                Darwin) opener=open ;;
+                *) if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then opener=xdg-open; fi ;;
+            esac
+            if [ -n "$opener" ] && "$opener" "$url" >/dev/null 2>&1; then
+                RESP="$(RESP="$RESP" python3 -c 'import json,os; d=json.loads(os.environ["RESP"]); d["opened"]=True; print(json.dumps(d))')"
+            fi
+        fi
+    fi
+    local AS_JSON="$as_json" P_VERB="open"
+    _publish_site_render
+}
+
+# `k2 publish sessions <label> [--revoke-all] [--json]` (PV-5, PV-12).
+cmd_publish_sessions() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local label="" revoke=0 as_json=false
+    local usage="usage: k2 publish sessions <name> [--revoke-all] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --revoke-all) revoke=1; shift ;;
+            --json) as_json=true; shift ;;
+            -*) as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"; exit 2 ;;
+            *)
+                if [ -z "$label" ]; then label="$1"
+                else as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$label" ] || { as_json="$as_json" _publish_err "usage" "$usage"; exit 2; }
+    local RESP
+    if [ "$revoke" = 1 ]; then
+        local body
+        body=$(P_LABEL="$label" P_PROJECT="$PROJECT" python3 -c '
+import json, os
+print(json.dumps({"label": os.environ["P_LABEL"], "project": os.environ["P_PROJECT"]}))
+')
+        RESP=$(cli_send cli_post_json "/cli/publish/sessions/revoke" "$body") || RESP=""
+    else
+        RESP=$(cli_send cli_request "/cli/publish/sessions" "label=$(urlencode "$label")") || RESP=""
+    fi
+    local AS_JSON="$as_json" P_VERB="sessions"
+    _publish_site_render
+}
+
 cmd_publish_start() { _publish_named_post start "/cli/publish/start" "$@"; }
 cmd_publish_stop()  { _publish_named_post stop  "/cli/publish/stop"  "$@"; }
 
@@ -34101,23 +34572,24 @@ print(json.dumps(b))
 # `k2 publish ps [--json]` — this workspace's hosted processes (not Connect plan).
 cmd_publish_ps() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
-    local as_json=false
+    local as_json=false long=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --long|-l) long=1; shift ;;
             --help|-h) _publish_usage; exit 0 ;;
             -*)
-                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — usage: k2 publish ps [--json]"
+                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — usage: k2 publish ps [--long] [--json]"
                 exit 2 ;;
             *)
-                as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — usage: k2 publish ps [--json]"
+                as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — usage: k2 publish ps [--long] [--json]"
                 exit 2 ;;
         esac
     done
     local RESP
     RESP=$(cli_send cli_request "/cli/publish/list") || RESP=""
     local AS_JSON="$as_json" P_MODE="list" P_VERB="ps"
-    _publish_handle_resp
+    P_LONG="$long" _publish_handle_resp
 }
 
 # `k2 publish logs <name> [--tail]` — last N lines on GET (P17: not a live WS).
@@ -41500,24 +41972,62 @@ cmd_schema() {
     },
     {
       "name": "publish",
-      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|subdomain> ...",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|visibility|open|sessions|subdomain> ...",
       "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
     },
     {
       "name": "publish run",
-      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--json]",
-      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is a static HTML host (an app); prefer Next in cwd for new apps. Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--dev [--idle <dur>] [--mem <n>] [--cpus <n>]] [--json]",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin only keeps a site already on it running (new ones: skin_retired; a folder of files is an App, k2 app init --template static). Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
-        {"name": "--skin", "arg": "dir", "description": "Static HTML host (an app). Prefer Next in cwd for new apps. Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
+        {"name": "--skin", "arg": "dir", "description": "Keeps a site already on --skin running. A new name is refused (skin_retired): a folder of files is an App, k2 app init --template static. Optional dir = its static files; omit = its bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
         {"name": "--port", "arg": "n", "description": "Required listen port."},
+        {"name": "--dev", "arg": null, "description": "Run a dev server from the live folder, with hot reload through the site's address. Private until shared. Not walled, so an agent's first one waits for the owner. With --cmd only. k2 study publish-dev."},
+        {"name": "--idle", "arg": "dur", "description": "With --dev: stop after this long with no visits (default 60m, 5m to 24h; off for the owner and Admins). The next visit starts it again."},
+        {"name": "--mem", "arg": "n", "description": "With --dev: memory cap on Linux (default 4G). ps shows what applied."},
+        {"name": "--cpus", "arg": "n", "description": "With --dev: CPU cap on Linux (default 2). ps shows what applied."},
         {"name": "--probe-timeout", "arg": "dur", "description": "How long the service may take to open --port (default 15s, at most 15m; 90s, 10m, 1500ms; 'default' resets). Saved on the service for start/restart/boot. Status reads starting (waiting for port N, time left); with a tunnel the nested URL is published only once the port answers, and the run is rolled back if it never does."},
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
         {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
         {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
+      ]
+    },
+    {
+      "name": "publish visibility",
+      "usage": "k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]",
+      "description": "Who may open a site: private (the owner and Admins, after K2 checks who they are), pin (K2 asks for the PIN first; give it on stdin or type it when asked, never as a flag) or public (needs --reason, and an owner or Admin). A new site is private. No mode: show it. An agent can make a site private; for pin or public K2 puts a card on its Thread (exit 2). k2 study publish-visibility.",
+      "args": [{"name": "name", "required": true}, {"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--reason", "arg": "why", "description": "Why it is public. Required for public; shown in ps --long and Settings."},
+        {"name": "--pin-days", "arg": "n", "description": "How long a PIN sign-in lasts: 1 to 30 days (default 7)."},
+        {"name": "--yes", "arg": null, "description": "Confirm with no terminal: moving a public site behind K2's check, or public dev."},
+        {"name": "--dev-is-public", "arg": null, "description": "Required to make a dev server public. Owner or Admin only."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "publish open",
+      "usage": "k2 publish open <name> [--path <p>] [--no-browser] [--json]",
+      "description": "A one-time link (60 seconds, once) to a private site, for a browser outside K2. Owner and Admins only; an agent is refused (person_only) and tests on the local port.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "p", "description": "Where the link lands on the site."},
+        {"name": "--no-browser", "arg": null, "description": "Print the link instead of opening it."},
+        {"name": "--json", "arg": null, "description": "JSON {url, expiresAt}."}
+      ]
+    },
+    {
+      "name": "publish sessions",
+      "usage": "k2 publish sessions <name> [--revoke-all] [--json]",
+      "description": "Who is signed in to a private or PIN site. --revoke-all ends every session.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--revoke-all", "arg": null, "description": "End every session on this site."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {
@@ -42869,7 +43379,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -42889,7 +43399,7 @@ Topics:
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
   app-chat  chat-voice  chat-voice-rooms
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
-  compute  compute-shared  vault
+  publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  db-upgrade  jobs
   folder-trust  email-notifications  box-move
@@ -42939,6 +43449,8 @@ _study_title() {
         llm-tokens) echo "LLM tokens" ;;
         llm-accounts) echo "LLM tokens" ;;
         publish-framing) echo "Who may frame your App" ;;
+        publish-visibility) echo "Private, PIN or public: who may open your site" ;;
+        publish-dev) echo "Host a dev server with hot reload" ;;
         compute) echo "Compute nodes" ;;
         compute-shared) echo "Shared compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
@@ -43048,6 +43560,8 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   llm-tokens          LLM tokens: subscriptions and API tokens; Server default
   llm-accounts        leftover alias of llm-tokens
   publish-framing     Who may frame your App; the header for --cmd Apps
+  publish-visibility  Private, PIN or public: who may open your site
+  publish-dev         Host a dev server with hot reload: k2 publish run --dev
   compute             Run builds/tests on your owner's other machines; logs are data
   compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   vault               Secrets: fetch not paste; references; who sets what
@@ -43123,6 +43637,8 @@ _study_page() {
             _study_page_llm_tokens
             ;;
         publish-framing) _study_page_publish_framing ;;
+        publish-visibility) _study_page_publish_visibility ;;
+        publish-dev) _study_page_publish_dev ;;
         compute) _study_page_compute ;;
         compute-shared) _study_page_compute_shared ;;
         data-sources) _study_page_data_sources ;;
@@ -46033,10 +46549,11 @@ Not Connect users, not /v1 API keys, not a grid login, not a
 special hostname.
 
 HOW TO MAKE ONE (copy this)
-  1. Official site (bundled login + Thread):
-       k2 publish run <label> --skin --port N
-     Custom static files + the same BFF:
-       k2 publish run <label> --skin <dir> --port N
+  1. A new App: k2 app init --template static for a folder of files, or
+     k2 app install + k2 app deploy for your own server (k2 study app-deploys).
+     A site already on --skin keeps working, and re-runs the same way:
+       k2 publish run <label> --skin [<dir>] --port N
+     --skin makes no new sites (skin_retired).
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
      A --cmd server that builds before it listens: add
@@ -46331,8 +46848,7 @@ usually a wrong key, not a 403)
   Frames: {"doc":{"text":"…"}}. Same nesting as history.
   POST /cli/thread/post  {"addr":"<handle>","text":"…"}
     not {agent,text}.
-  Reference client: k2 publish run ref --skin --port N --no-tunnel
-  then read /assets/app.js.
+  Reference client: a site already on --skin serves it at /assets/app.js.
 
 FILES
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
@@ -47746,6 +48262,143 @@ CHANGING THE NODE'S OWNER (0.46.4)
   node that doesn't say this server owns it).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_publish_visibility() {
+    cat <<'EOF'
+k2 study publish-visibility — who may open your published site
+
+THE THREE MODES
+  Every site at https://<name>.<host>.k2.dev has one:
+    private   Only the server's owner and Admins. K2 checks who they are
+              before sending a byte of the site. This is the default for a
+              new site.
+    pin       Nothing loads until the visitor types the site's PIN.
+    public    A normal website: anyone with the address.
+  Sites from before 0.46.7 stay public until someone changes them. The owner
+  got one card listing them.
+
+SEE IT, CHANGE IT
+  k2 publish ps                               the VISIBILITY column
+  k2 publish visibility <name>                this site's mode
+  k2 publish visibility <name> private
+  k2 publish visibility <name> pin < pin.txt  (or type it when asked)
+  k2 publish visibility <name> public --reason "launch day"
+
+WHO MAY
+  Make a site private: an agent on its own site, or any person.
+  Set a PIN or make a site public: the server's owner, or a login with the Admin
+  role. An agent asks instead: the same command puts a card on its Thread (its
+  chat with its person) and exits 2, which means waiting for a person. The answer
+  arrives as a [permission:<id>] message in its chat. For a PIN, the person types
+  it into K2's own form, so the agent never sees it. Exit 3 means refused.
+
+OPEN A PRIVATE SITE
+  In a K2 tab: just go to the address. K2 signs you in.
+  In another browser: k2 publish open <name>  gives a link that works once,
+  within 60 seconds. Sign-in lasts 12 hours and ends within a minute if your role
+  changes. There is no password form on the site, on purpose. Anyone else who
+  opens a private site sees K2's "This site is private" page and nothing of it.
+  Agents: test on the local port (http://127.0.0.1:<port>). k2 publish open
+  refuses an agent (person_only).
+
+SHARE WITH A PIN
+  Send the address and the PIN separately. PIN: 6 to 64 characters. Under 8, K2
+  warns. A sign-in lasts 7 days (--pin-days 1 to 30). Changing the PIN or the mode
+  ends every PIN sign-in. There's no timer: to share for an hour, switch back to
+  private after it. Too many wrong tries wait 15 minutes per address, and an hour
+  per site; people already in stay in.
+  k2 publish sessions <name>                  who is signed in (private and PIN)
+  k2 publish sessions <name> --revoke-all     end all of them
+
+THE WARNING ABOUT LISTENING ON EVERY ADDRESS
+  K2's check sits at the site's address. If your program listens on 0.0.0.0 or a
+  LAN address, anyone who can reach this machine on that port gets the site
+  without the check. K2 says so in ps and visibility ("<name> listens on
+  0.0.0.0:3000: anyone who can reach this machine…"). The fix is your program's:
+  bind it to 127.0.0.1 and restart it. A public site doesn't get the warning.
+
+WHAT CAN'T BE PRIVATE OR PIN
+  A private or PIN site must speak HTTP/1.1, because K2 reads every request. A
+  raw-TCP service can stay public. K2 warns before it changes a public site, and
+  asks for --yes when there is no terminal.
+  K2 uses the path /_k2/site/ on a private or PIN site, so your site's own files
+  under that path aren't reachable there.
+  With K2 Connect's end-to-end encryption off, private and PIN are refused
+  (visibility_door_unsupported), because K2 can't check visitors on that path.
+  Apps are not covered: their own logins decide.
+EOF
+}
+
+_study_page_publish_dev() {
+    cat <<'EOF'
+k2 study publish-dev — host a dev server with hot reload
+
+START
+  k2 publish run web --cmd "npm run dev" --port 5173 --dev
+  It runs in your live workspace folder (or --cwd), so your edits hot reload, at
+  https://web.<host>.k2.dev. It is a normal k2 publish service: ps, logs, stop,
+  start, rm, visibility and open all work. To turn it back into a normal service,
+  run it again without --dev.
+
+WHAT YOUR SERVER GETS
+  HOST=127.0.0.1  PORT=<n>  K2_DEV_PUBLIC_HOST=web.<host>.k2.dev
+  K2_DEV_PUBLIC_PORT=443  K2_DEV_PUBLIC_PROTOCOL=wss
+
+CONFIGURE IT
+  Both block unknown hosts by default, and Vite's socket needs the public port.
+  Vite (vite.config.js):
+    server: {
+      host: process.env.HOST, port: Number(process.env.PORT),
+      allowedHosts: [process.env.K2_DEV_PUBLIC_HOST],
+      hmr: {
+        host: process.env.K2_DEV_PUBLIC_HOST,
+        clientPort: Number(process.env.K2_DEV_PUBLIC_PORT),
+        protocol: process.env.K2_DEV_PUBLIC_PROTOCOL,
+      },
+    }
+  Next (next.config.js):
+    allowedDevOrigins: [process.env.K2_DEV_PUBLIC_HOST],
+    and run: next dev -H 127.0.0.1 -p $PORT
+  tauri dev: publish its web side the same way (the Vite or Next server above),
+  and leave the native window on your own machine.
+
+WHO CAN SEE IT
+  It starts private. Open it in a K2 tab: you just see the site.
+  Pair programming: k2 publish visibility web pin. Your friend opens the address,
+  types the PIN and gets the same hot reload. Switching back to private cuts them
+  off. Send the address and the PIN separately.
+  Public dev needs an owner or Admin, --dev-is-public, a reason, and typing the
+  name to confirm. An agent can't do it or ask for it (dev_public_person_only): ask
+  for a PIN instead.
+
+WHAT IT SHOWS
+  A dev server shows more than a normal site: source maps, error pages with file
+  paths, and anything the dev server evaluates. Whoever can open it can see them.
+  Every answer carries X-K2-Mode: dev and X-Robots-Tag: noindex. K2 shows a PIN
+  visitor a one-screen notice first.
+
+IDLE STOP
+  With no visits for --idle (default 60m, 5m to 24h) K2 stops the server. ps says
+  idle-stopped, which isn't a crash. The next visitor who passes K2's check sees
+  "Starting the dev server…", and it comes back. An agent brings it back with
+  k2 publish start. --idle off is for the owner and Admins. A server someone
+  stops with k2 publish stop stays stopped until k2 publish start.
+
+WHERE IT RUNS
+  As your workspace's user, in your folder, with no wall (the sandbox Apps run
+  in) around it. So an agent's first --dev run of a name waits for the owner (exit
+  2), as a new --cmd service does.
+  Linux caps it (--mem, default 4G; --cpus, default 2) where systemd user scopes
+  exist. ps --long shows what applied, or "no caps". macOS has none.
+  K2 warns when the box's file-watch limit could stop hot reload silently.
+
+SHIP IT
+  --dev is the opposite of an App: live folder, no copy, no rollback, no wall. A
+  dev site never becomes an App. To ship, build it and make an App (k2 study
+  app-deploys). The App is separate: the dev site stays, under its own name and
+  idle stop, until you k2 publish rm it.
 EOF
 }
 
@@ -53200,7 +53853,11 @@ APPS (guests / roles / tokens for apps on this box; not desktop updates)
 PUBLISH (host a process on this machine, optionally a nested URL)
   publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
                                                 Daemon-owned process; default nested URL (Pro)
-  publish run <name> --skin [<dir>] --port <n>  Static HTML host (an app). Prefer Next in cwd for new apps.
+  publish run <name> --cmd <dev command> --port <n> --dev  A dev server with hot reload, private until shared
+  publish run <name> --skin [<dir>] --port <n>  Keeps a site already on --skin running; new ones are Apps
+  publish visibility <name> [private|pin|public]  Who may open a site
+  publish open <name>                           A one-time link to a private site
+  publish sessions <name> [--revoke-all]        Who is signed in to a site
   publish start|stop <name>                     Start/stop a saved service
   publish rm <name> [--keep-hostname]           Stop + forget (not: subdomain rm)
   publish ps [--json]                           Hosted processes for THIS workspace
@@ -72811,6 +73468,12 @@ The owner sees who gets in, to which App, with which role, and what that role le
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
 - Someone can't sign in to one of your Apps (locked out, lost their password): `k2 permission request apps.user-password-reset user=<username> --why "..."`. The owner or an admin gets the card; whoever allows it sees a new password once, on their own screen, and gives it to the person. You never see it. `mode=link` gives them a one-time link to choose their own; `mode=email` mails that link to their address on file.
+
+## Published sites
+
+- Making your own site private needs no card: `k2 publish visibility <name> private`.
+- To make it public, run `k2 publish visibility <name> public --reason "..."`. K2 puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
+- To put it behind a PIN, run `k2 publish visibility <name> pin`. K2 puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into K2's own form. You never see it, so never ask for it.
 
 ## The answer
 

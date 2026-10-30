@@ -149,7 +149,7 @@ assert_contains "schema leftover skin" "$schema" '"name": "skin"'
 assert_contains "schema leftover skin-token" "$schema" '"name": "skin-token"'
 assert_not_contains "schema has no app-token family" "$schema" '"name": "app-token"'
 assert_contains "schema --skin flag stays" "$schema" '"name": "--skin"'
-assert_contains "schema --skin sentence" "$schema" "Static HTML host (an app)"
+assert_contains "schema --skin sentence" "$schema" "Keeps a site already on --skin running"
 assert_contains "schema app user unlock" "$schema" '"name": "app user unlock"'
 assert_contains "schema skin user unlock" "$schema" '"name": "skin user unlock"'
 
@@ -159,7 +159,7 @@ pub_help="$(run_k2 publish --help 2>&1)"
 pub_run_help="$(run_k2 publish run --help 2>&1)"
 set -e
 assert_contains "publish --help --skin" "$pub_help" "--skin"
-assert_contains "publish --help static HTML" "$pub_help" "Static HTML host (an app)"
+assert_contains "publish --help --skin" "$pub_help" "Keeps a site already on --skin running"
 assert_contains "publish run --help --skin" "$pub_run_help" "--skin"
 assert_not_contains "publish has no --app flag" "$pub_help" "--app ["
 

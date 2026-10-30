@@ -1,0 +1,71 @@
+$ k2 study publish-dev
+exit: 0
+--- stdout
+k2 study publish-dev — host a dev server with hot reload
+
+START
+  k2 publish run web --cmd "npm run dev" --port 5173 --dev
+  It runs in your live workspace folder (or --cwd), so your edits hot reload, at
+  https://web.<host>.k2.dev. It is a normal k2 publish service: ps, logs, stop,
+  start, rm, visibility and open all work. To turn it back into a normal service,
+  run it again without --dev.
+
+WHAT YOUR SERVER GETS
+  HOST=127.0.0.1  PORT=<n>  K2_DEV_PUBLIC_HOST=web.<host>.k2.dev
+  K2_DEV_PUBLIC_PORT=443  K2_DEV_PUBLIC_PROTOCOL=wss
+
+CONFIGURE IT
+  Both block unknown hosts by default, and Vite's socket needs the public port.
+  Vite (vite.config.js):
+    server: {
+      host: process.env.HOST, port: Number(process.env.PORT),
+      allowedHosts: [process.env.K2_DEV_PUBLIC_HOST],
+      hmr: {
+        host: process.env.K2_DEV_PUBLIC_HOST,
+        clientPort: Number(process.env.K2_DEV_PUBLIC_PORT),
+        protocol: process.env.K2_DEV_PUBLIC_PROTOCOL,
+      },
+    }
+  Next (next.config.js):
+    allowedDevOrigins: [process.env.K2_DEV_PUBLIC_HOST],
+    and run: next dev -H 127.0.0.1 -p $PORT
+  tauri dev: publish its web side the same way (the Vite or Next server above),
+  and leave the native window on your own machine.
+
+WHO CAN SEE IT
+  It starts private. Open it in a K2 tab: you just see the site.
+  Pair programming: k2 publish visibility web pin. Your friend opens the address,
+  types the PIN and gets the same hot reload. Switching back to private cuts them
+  off. Send the address and the PIN separately.
+  Public dev needs an owner or Admin, --dev-is-public, a reason, and typing the
+  name to confirm. An agent can't do it or ask for it (dev_public_person_only): ask
+  for a PIN instead.
+
+WHAT IT SHOWS
+  A dev server shows more than a normal site: source maps, error pages with file
+  paths, and anything the dev server evaluates. Whoever can open it can see them.
+  Every answer carries X-K2-Mode: dev and X-Robots-Tag: noindex. K2 shows a PIN
+  visitor a one-screen notice first.
+
+IDLE STOP
+  With no visits for --idle (default 60m, 5m to 24h) K2 stops the server. ps says
+  idle-stopped, which isn't a crash. The next visitor who passes K2's check sees
+  "Starting the dev server…", and it comes back. An agent brings it back with
+  k2 publish start. --idle off is for the owner and Admins. A server someone
+  stops with k2 publish stop stays stopped until k2 publish start.
+
+WHERE IT RUNS
+  As your workspace's user, in your folder, with no wall (the sandbox Apps run
+  in) around it. So an agent's first --dev run of a name waits for the owner (exit
+  2), as a new --cmd service does.
+  Linux caps it (--mem, default 4G; --cpus, default 2) where systemd user scopes
+  exist. ps --long shows what applied, or "no caps". macOS has none.
+  K2 warns when the box's file-watch limit could stop hot reload silently.
+
+SHIP IT
+  --dev is the opposite of an App: live folder, no copy, no rollback, no wall. A
+  dev site never becomes an App. To ship, build it and make an App (k2 study
+  app-deploys). The App is separate: the dev site stays, under its own name and
+  idle stop, until you k2 publish rm it.
+--- stderr
+--- requests

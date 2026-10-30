@@ -58,9 +58,9 @@ grant waited on it.
      heaviest paths): keep your data, .env files and caches out with a
      .k2appignore at its root (gitignore syntax), e.g. var/ .env*
      node_modules/.cache .next/cache.
-     NO EDITING LIVE: a change is a new deploy. Mockups and pages you edit
-     by hand stay static: k2 publish run <label> --skin <dir> --port N
-     serves a folder as it is (there's no App dev mode yet).
+     NO EDITING LIVE: a change is a new deploy. For mockups and pages you
+     edit by hand, k2 publish run <label> --cmd "<a server>" --port N --dev
+     serves the live folder, private until you share it (k2 study publish-dev).
   4. Copy your data in (the App must be live):
        k2 app data put <app-id> <your-data-folder> [--to <dir>]
      Copies a file or folder of your workspace into $K2_APP_DATA. Copy

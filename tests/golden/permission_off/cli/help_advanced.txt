@@ -61,7 +61,11 @@ APPS (guests / roles / tokens for apps on this box; not desktop updates)
 PUBLISH (host a process on this machine, optionally a nested URL)
   publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
                                                 Daemon-owned process; default nested URL (Pro)
-  publish run <name> --skin [<dir>] --port <n>  Static HTML host (an app). Prefer Next in cwd for new apps.
+  publish run <name> --cmd <dev command> --port <n> --dev  A dev server with hot reload, private until shared
+  publish run <name> --skin [<dir>] --port <n>  Keeps a site already on --skin running; new ones are Apps
+  publish visibility <name> [private|pin|public]  Who may open a site
+  publish open <name>                           A one-time link to a private site
+  publish sessions <name> [--revoke-all]        Who is signed in to a site
   publish start|stop <name>                     Start/stop a saved service
   publish rm <name> [--keep-hostname]           Stop + forget (not: subdomain rm)
   publish ps [--json]                           Hosted processes for THIS workspace

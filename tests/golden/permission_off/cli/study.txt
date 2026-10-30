@@ -46,6 +46,8 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   llm-tokens          LLM tokens: subscriptions and API tokens; Server default
   llm-accounts        leftover alias of llm-tokens
   publish-framing     Who may frame your App; the header for --cmd Apps
+  publish-visibility  Private, PIN or public: who may open your site
+  publish-dev         Host a dev server with hot reload: k2 publish run --dev
   compute             Run builds/tests on your owner's other machines; logs are data
   compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   vault               Secrets: fetch not paste; references; who sets what

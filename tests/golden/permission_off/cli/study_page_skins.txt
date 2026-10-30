@@ -29,10 +29,11 @@ Not Connect users, not /v1 API keys, not a grid login, not a
 special hostname.
 
 HOW TO MAKE ONE (copy this)
-  1. Official site (bundled login + Thread):
-       k2 publish run <label> --skin --port N
-     Custom static files + the same BFF:
-       k2 publish run <label> --skin <dir> --port N
+  1. A new App: k2 app init --template static for a folder of files, or
+     k2 app install + k2 app deploy for your own server (k2 study app-deploys).
+     A site already on --skin keeps working, and re-runs the same way:
+       k2 publish run <label> --skin [<dir>] --port N
+     --skin makes no new sites (skin_retired).
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
      A --cmd server that builds before it listens: add
@@ -327,8 +328,7 @@ usually a wrong key, not a 403)
   Frames: {"doc":{"text":"…"}}. Same nesting as history.
   POST /cli/thread/post  {"addr":"<handle>","text":"…"}
     not {agent,text}.
-  Reference client: k2 publish run ref --skin --port N --no-tunnel
-  then read /assets/app.js.
+  Reference client: a site already on --skin serves it at /assets/app.js.
 
 FILES
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

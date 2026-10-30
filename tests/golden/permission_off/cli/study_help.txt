@@ -17,7 +17,7 @@ Topics:
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
   app-chat  chat-voice  chat-voice-rooms
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
-  compute  compute-shared  vault
+  publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  db-upgrade  jobs
   folder-trust  email-notifications  box-move

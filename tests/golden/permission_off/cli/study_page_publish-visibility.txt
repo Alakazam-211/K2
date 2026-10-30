@@ -1,0 +1,66 @@
+$ k2 study publish-visibility
+exit: 0
+--- stdout
+k2 study publish-visibility — who may open your published site
+
+THE THREE MODES
+  Every site at https://<name>.<host>.k2.dev has one:
+    private   Only the server's owner and Admins. K2 checks who they are
+              before sending a byte of the site. This is the default for a
+              new site.
+    pin       Nothing loads until the visitor types the site's PIN.
+    public    A normal website: anyone with the address.
+  Sites from before 0.46.7 stay public until someone changes them. The owner
+  got one card listing them.
+
+SEE IT, CHANGE IT
+  k2 publish ps                               the VISIBILITY column
+  k2 publish visibility <name>                this site's mode
+  k2 publish visibility <name> private
+  k2 publish visibility <name> pin < pin.txt  (or type it when asked)
+  k2 publish visibility <name> public --reason "launch day"
+
+WHO MAY
+  Make a site private: an agent on its own site, or any person.
+  Set a PIN or make a site public: the server's owner, or a login with the Admin
+  role. An agent asks instead: the same command puts a card on its Thread (its
+  chat with its person) and exits 2, which means waiting for a person. The answer
+  arrives as a [permission:<id>] message in its chat. For a PIN, the person types
+  it into K2's own form, so the agent never sees it. Exit 3 means refused.
+
+OPEN A PRIVATE SITE
+  In a K2 tab: just go to the address. K2 signs you in.
+  In another browser: k2 publish open <name>  gives a link that works once,
+  within 60 seconds. Sign-in lasts 12 hours and ends within a minute if your role
+  changes. There is no password form on the site, on purpose. Anyone else who
+  opens a private site sees K2's "This site is private" page and nothing of it.
+  Agents: test on the local port (http://127.0.0.1:<port>). k2 publish open
+  refuses an agent (person_only).
+
+SHARE WITH A PIN
+  Send the address and the PIN separately. PIN: 6 to 64 characters. Under 8, K2
+  warns. A sign-in lasts 7 days (--pin-days 1 to 30). Changing the PIN or the mode
+  ends every PIN sign-in. There's no timer: to share for an hour, switch back to
+  private after it. Too many wrong tries wait 15 minutes per address, and an hour
+  per site; people already in stay in.
+  k2 publish sessions <name>                  who is signed in (private and PIN)
+  k2 publish sessions <name> --revoke-all     end all of them
+
+THE WARNING ABOUT LISTENING ON EVERY ADDRESS
+  K2's check sits at the site's address. If your program listens on 0.0.0.0 or a
+  LAN address, anyone who can reach this machine on that port gets the site
+  without the check. K2 says so in ps and visibility ("<name> listens on
+  0.0.0.0:3000: anyone who can reach this machine…"). The fix is your program's:
+  bind it to 127.0.0.1 and restart it. A public site doesn't get the warning.
+
+WHAT CAN'T BE PRIVATE OR PIN
+  A private or PIN site must speak HTTP/1.1, because K2 reads every request. A
+  raw-TCP service can stay public. K2 warns before it changes a public site, and
+  asks for --yes when there is no terminal.
+  K2 uses the path /_k2/site/ on a private or PIN site, so your site's own files
+  under that path aren't reachable there.
+  With K2 Connect's end-to-end encryption off, private and PIN are refused
+  (visibility_door_unsupported), because K2 can't check visitors on that path.
+  Apps are not covered: their own logins decide.
+--- stderr
+--- requests

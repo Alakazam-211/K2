@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime app-push app-pairing skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces app-runtime app-push app-pairing skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute notifications projects hooks agent-hire garden-data garden-access garden-changes design"
 
 echo "== k2 study source (no daemon) =="
 set +e

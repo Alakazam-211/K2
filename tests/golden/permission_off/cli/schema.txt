@@ -2225,24 +2225,62 @@ exit: 0
     },
     {
       "name": "publish",
-      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|subdomain> ...",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|visibility|open|sessions|subdomain> ...",
       "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
     },
     {
       "name": "publish run",
-      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--json]",
-      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is a static HTML host (an app); prefer Next in cwd for new apps. Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--dev [--idle <dur>] [--mem <n>] [--cpus <n>]] [--json]",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin only keeps a site already on it running (new ones: skin_retired; a folder of files is an App, k2 app init --template static). Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
-        {"name": "--skin", "arg": "dir", "description": "Static HTML host (an app). Prefer Next in cwd for new apps. Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
+        {"name": "--skin", "arg": "dir", "description": "Keeps a site already on --skin running. A new name is refused (skin_retired): a folder of files is an App, k2 app init --template static. Optional dir = its static files; omit = its bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
         {"name": "--port", "arg": "n", "description": "Required listen port."},
+        {"name": "--dev", "arg": null, "description": "Run a dev server from the live folder, with hot reload through the site's address. Private until shared. Not walled, so an agent's first one waits for the owner. With --cmd only. k2 study publish-dev."},
+        {"name": "--idle", "arg": "dur", "description": "With --dev: stop after this long with no visits (default 60m, 5m to 24h; off for the owner and Admins). The next visit starts it again."},
+        {"name": "--mem", "arg": "n", "description": "With --dev: memory cap on Linux (default 4G). ps shows what applied."},
+        {"name": "--cpus", "arg": "n", "description": "With --dev: CPU cap on Linux (default 2). ps shows what applied."},
         {"name": "--probe-timeout", "arg": "dur", "description": "How long the service may take to open --port (default 15s, at most 15m; 90s, 10m, 1500ms; 'default' resets). Saved on the service for start/restart/boot. Status reads starting (waiting for port N, time left); with a tunnel the nested URL is published only once the port answers, and the run is rolled back if it never does."},
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
         {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
         {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
+      ]
+    },
+    {
+      "name": "publish visibility",
+      "usage": "k2 publish visibility <name> [private|pin|public] [--reason <why>] [--pin-days N] [--yes] [--dev-is-public] [--json]",
+      "description": "Who may open a site: private (the owner and Admins, after K2 checks who they are), pin (K2 asks for the PIN first; give it on stdin or type it when asked, never as a flag) or public (needs --reason, and an owner or Admin). A new site is private. No mode: show it. An agent can make a site private; for pin or public K2 puts a card on its Thread (exit 2). k2 study publish-visibility.",
+      "args": [{"name": "name", "required": true}, {"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--reason", "arg": "why", "description": "Why it is public. Required for public; shown in ps --long and Settings."},
+        {"name": "--pin-days", "arg": "n", "description": "How long a PIN sign-in lasts: 1 to 30 days (default 7)."},
+        {"name": "--yes", "arg": null, "description": "Confirm with no terminal: moving a public site behind K2's check, or public dev."},
+        {"name": "--dev-is-public", "arg": null, "description": "Required to make a dev server public. Owner or Admin only."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "publish open",
+      "usage": "k2 publish open <name> [--path <p>] [--no-browser] [--json]",
+      "description": "A one-time link (60 seconds, once) to a private site, for a browser outside K2. Owner and Admins only; an agent is refused (person_only) and tests on the local port.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "p", "description": "Where the link lands on the site."},
+        {"name": "--no-browser", "arg": null, "description": "Print the link instead of opening it."},
+        {"name": "--json", "arg": null, "description": "JSON {url, expiresAt}."}
+      ]
+    },
+    {
+      "name": "publish sessions",
+      "usage": "k2 publish sessions <name> [--revoke-all] [--json]",
+      "description": "Who is signed in to a private or PIN site. --revoke-all ends every session.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--revoke-all", "arg": null, "description": "End every session on this site."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
     {

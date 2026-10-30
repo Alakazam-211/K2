@@ -953,8 +953,9 @@ fn the_workbench_is_new_in_the_catalog_after_0466() {
         old.setup().expect("setup on 0.46.6");
         assert_eq!(old.news().expect("news on 0.46.6")["items"], json!([]), "0.46.6's catalog was seen at setup");
         assert!(old.read_news().catalog_seen.get("workbench").is_none(), "0.46.6 had no Workbench");
-        old.forget_boot();
-        (t, ZenFiles::new(&z))
+        // This build's set (with_defaults replaces the folder's override
+        // and forgets the boot, as a daemon restart does).
+        (t, ZenFiles::with_defaults(&z, fake_set(|_| {})))
     };
     let (_t, f) = on_0466("news-workbench");
     let news = f.news().expect("news after the upgrade");

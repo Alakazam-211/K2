@@ -253,7 +253,7 @@ export function settingsNav({
         // Email Notifications part 2, N8: senders, pauses, agent notices, suppressions.
         { id: 'email-notifications', label: 'Email Notifications' },
         // Sew, run on this box (Rosson 2026-10-15): the S32 K27 page (`k2 hostchat` headless).
-        { id: 'sew', label: 'Chat / Voice Hosting' },
+        { id: 'sew', label: 'Chat / Voice' },
         // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },

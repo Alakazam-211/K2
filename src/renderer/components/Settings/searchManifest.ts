@@ -176,7 +176,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'bots-dots': 'Dots',
   'email-hosting': 'Email Hosting',
   'email-notifications': 'Email Notifications',
-  sew: 'Chat / Voice Hosting',
+  sew: 'Chat / Voice',
   'email-link': 'Email Link',
   data: 'Database',
   'skin-access': 'Apps',

@@ -80,7 +80,7 @@ import { OnceSecret, SewStatusChip, TypeToConfirm, muted, secondary, typedMatche
 import { SewAgentsPanelStub, SewApprovalsPanelStub, SewDeliveriesPanelStub } from './SewStubs'
 
 export const SEW_MANIFEST: SettingEntry[] = [
-  { id: 'sew.status', section: 'sew', label: 'Chat / Voice Hosting', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
+  { id: 'sew.status', section: 'sew', label: 'Chat / Voice', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
   { id: 'sew.enable', section: 'sew', label: 'Enable Chat / Voice Hosting', description: 'Preflight and install chat and voice hosting (Linux)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice'] },
   { id: 'sew.upgrade', section: 'sew', label: 'Upgrade Sew', description: 'Upgrade or roll back the Sew server', keywords: ['sew', 'chat', 'upgrade', 'rollback', 'version'] },
   { id: 'sew.recovery-key', section: 'sew', label: 'Sew recovery key', description: 'Reveal the recovery key once (person confirm)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
@@ -677,7 +677,7 @@ function ServerPanel(props: PanelProps): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-4" data-settings-id="sew.status">
       <div className="flex items-center gap-2">
-        <Title>Chat / Voice Hosting</Title>
+        <Title>Chat / Voice</Title>
         <SewStatusChip state={status.state} />
       </div>
       {status.state !== 'not-installed' ? (

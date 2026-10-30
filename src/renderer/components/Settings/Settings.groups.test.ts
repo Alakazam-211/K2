@@ -155,8 +155,8 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     expect(SECTION_LABELS['email-notifications']).toBe('Email Notifications')
     // Chat Hosting is a real page since S32 K27 (was a SOON placeholder).
     const chat = group(nav, 'Cores').items[2]
-    expect(chat).toEqual({ id: 'sew', label: 'Chat / Voice Hosting' })
-    expect(SECTION_LABELS.sew).toBe('Chat / Voice Hosting')
+    expect(chat).toEqual({ id: 'sew', label: 'Chat / Voice' })
+    expect(SECTION_LABELS.sew).toBe('Chat / Voice')
     // Its tag matches the 3rd Party Bots SOON tag: same classes, right-justified.
     const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
     const tag =

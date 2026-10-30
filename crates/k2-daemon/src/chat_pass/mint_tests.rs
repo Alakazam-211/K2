@@ -1248,11 +1248,14 @@ fn a_keyed_apps_person_mints_through_the_gate_with_the_keys_caps() {
 fn the_key_never_makes_agents_or_box_users_people_of_an_app() {
     let _home = TempHome::new();
     let _db = k2_core::db::scoped_for_test();
-    {
+    // The agent's own workspace and its App (an agent's login is tied to
+    // its workspace, so it signs in only to that workspace's Apps).
+    let bot_svc = {
         let h = k2_core::db::shared();
         let conn = h.lock();
         conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('ws-bot', 'ws-bot', '/tmp/ws-bot', 'ws-bot')", []).expect("a workspace");
-    }
+        k2_core::published_services::insert(&conn, "ws-bot", "botapp", "node s.js", "/tmp", 4790, "local", "running", "cmd", "").expect("its App").id
+    };
     let r = ring("s2-refusals");
     key_on(KEYED_SVC, &["chat:read"], 50);
     let gate_calls = std::sync::Mutex::new(0usize);
@@ -1266,13 +1269,17 @@ fn the_key_never_makes_agents_or_box_users_people_of_an_app() {
     let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
     let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &gate };
 
-    // An agent's login (`k2 app user agent`) of the keyed App.
-    let bot = keyed_guest("bot", KEYED_SVC);
-    // Signed in first; the mark applies to live sessions from the next call.
-    let bot_s = k2_core::skin::create_app_session_token("bot", KEYED_SVC).expect("bot → keyed App");
+    // An agent's login (`k2 app user agent`) of a keyed App in its own
+    // workspace, signed in with a live session: authenticated, an App user
+    // of that App, no chat grant; the key never makes it a person.
+    key_on(&bot_svc, &["chat:read"], 50);
+    let bot = keyed_guest("bot", &bot_svc);
     k2_core::skin::set_principal_agent("bot", Some("ws-bot")).expect("mark as agent");
     assert_eq!(k2_core::skin::principal_agent_workspace(&bot).expect("mark"), Some("ws-bot".to_string()));
-    // AG-5 runs first: an agent's login is refused as an agent, key or not.
+    let bot_s = k2_core::skin::create_app_session_token("bot", &bot_svc).expect("bot → its own workspace's keyed App");
+    assert!(k2_core::skin::resolve_skin_token(&bot_s.raw).is_some(), "a live, authenticated session");
+    // AG-5 runs first: an agent's login is refused as an agent (403
+    // `agent_subject`), key or not; never a person's pass.
     assert_eq!(code(&mint::handle_pass_with(&req(Some(&bot_s.raw), b"{}"), &d)), "agent_subject");
     // A person who also holds the box login (a `host` grant).
     let both = keyed_guest("both", KEYED_SVC);
@@ -1283,6 +1290,10 @@ fn the_key_never_makes_agents_or_box_users_people_of_an_app() {
     let other = "svc-other-4444";
     key_on(other, &["chat:read"], 5);
     let eli = keyed_guest("eli", other);
+    // A chat grant goes through the grant hook: chat must be on.
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, true, Some("/tmp/k2-s2-sew.sock"), Some("/tmp/k2-s2-sew.token"), "owner-token")
+        .expect("enable chat");
     k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
         subject_kind: "principal".into(),
         subject_id: eli.clone(),

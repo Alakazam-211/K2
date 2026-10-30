@@ -1,0 +1,482 @@
+Multiplayer Markdown demo: 3 agents + 1 person on plan.md (host clock starts 2026-01-01 00:00:00 UTC)
+Legend: `who $ doc <verb> ...` is one call of the host's doc CLI; `| ` is stdout;
+`stderr:` is stderr; `event:` is a host event; agents' edits run under ClaimPolicy::Respect.
+
+=== Scene 1: join ===
+[00:00] agent-a joins (agent, via cli) at v1
+[00:00] agent-b joins (agent, via cli) at v1
+[00:00] agent-c joins (agent, via cli) at v1
+[00:00] sam joins (person, via tab) at v1
+[00:00] sam $ doc who plan.md
+  | Agent A (agent-a) agent viewing
+  | Agent B (agent-b) agent viewing
+  | Agent C (agent-c) agent viewing
+  | Sam (sam) person viewing
+  exit 0
+  plan.md at v1:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  
+    8  ## Timeline
+    9  
+   10  - week 1: spike
+   11  - week 2: engine
+   12  
+   13  ## Risks
+   14  
+   15  - memory on large docs (TODO: measure)
+   16  - licence not chosen (TODO: ask the owner)
+   17  
+   18  ## Notes
+   19  
+   20  Drafted by the team.
+   21  TODO: link the spike report.
+
+=== Scene 2: presence: reads, carets and heads-up notes ===
+-- agent-a reads Goals, agent-b reads Timeline: different sections, no notes.
+[00:01] agent-a $ doc view --lines 3,6 plan.md
+  | ## Goals
+  | 
+  | - ship the Markdown core
+  | - keep files plain
+  stderr: plan.md v1
+  exit 0
+[00:02] agent-b $ doc view --lines 8,11 plan.md
+  | ## Timeline
+  | 
+  | - week 1: spike
+  | - week 2: engine
+  stderr: plan.md v1
+  exit 0
+-- Sam puts a caret in Risks (line 15) from the editor.
+[00:03] sam moves the caret to line 15 (editor)
+-- agent-c reads lines 1–11, overlapping both agents' views: two notes on stderr.
+[00:04] agent-c $ doc view --lines 1,11 plan.md
+  | # Launch plan
+  | 
+  | ## Goals
+  | 
+  | - ship the Markdown core
+  | - keep files plain
+  | 
+  | ## Timeline
+  | 
+  | - week 1: spike
+  | - week 2: engine
+  stderr: plan.md v1
+  stderr: note: Agent B (agent-b) viewing lines 8–11 (2 s ago)
+  stderr: note: Agent A (agent-a) viewing lines 3–6 (3 s ago)
+  exit 0
+-- agent-c greps the TODOs 1 s later: Sam's caret is there, but the rate limit (one batch per 5 s) holds the note back.
+[00:05] agent-c $ doc grep -n TODO plan.md
+  | 15:- memory on large docs (TODO: measure)
+  | 16:- licence not chosen (TODO: ask the owner)
+  | 21:TODO: link the spike report.
+  stderr: plan.md v1
+  (host: 1 note(s) held back by the rate limit)
+  exit 0
+-- 5 s later the same grep gets the held note.
+[00:10] agent-c $ doc grep -n TODO plan.md
+  | 15:- memory on large docs (TODO: measure)
+  | 16:- licence not chosen (TODO: ask the owner)
+  | 21:TODO: link the spike report.
+  stderr: plan.md v1
+  stderr: note: Sam (sam) has a caret at line 15 (7 s ago)
+  exit 0
+-- Sam asks what the agents have been doing.
+[00:11] sam $ doc activity -n 10 plan.md
+  | [00:01] agent-a read view lines 3–6
+  | [00:02] agent-b read view lines 8–11
+  | [00:04] agent-c read view lines 1–11
+  | [00:05] agent-c read grep lines 15–21
+  | [00:10] agent-c read grep lines 15–21
+  exit 0
+[00:11] sam $ doc who plan.md
+  | Sam (sam) person editing, caret at line 15
+  | Agent A (agent-a) agent viewing, looking at lines 3–6
+  | Agent B (agent-b) agent viewing, looking at lines 8–11
+  | Agent C (agent-c) agent viewing, looking at lines 1–11
+  exit 0
+
+=== Scene 3: claims, a bounce, and a retry with --if-version ===
+-- agent-a reads Timeline for editing: an implicit 30 s claim on the lines shown.
+[00:13] agent-a $ doc view --lines 8,11 --for-edit plan.md
+  | ## Timeline
+  | 
+  | - week 1: spike
+  | - week 2: engine
+  stderr: plan.md v1
+  stderr: note: for-edit: claimed lines 8–11 for 30 s (claim-1)
+  stderr: note: Agent C (agent-c) viewing lines 1–11 (9 s ago)
+  stderr: note: Agent B (agent-b) viewing lines 8–11 (11 s ago)
+  exit 0
+  event: ClaimTaken claim-1 by agent-a: lines 8–11, 30 s, for-edit
+-- agent-b reads the doc (v1), then edits inside agent-a's claim: bounced, exit 5.
+[00:14] agent-b $ doc view --lines 10,11 plan.md
+  | - week 1: spike
+  | - week 2: engine
+  stderr: plan.md v1
+  stderr: note: Agent A (agent-a) claimed lines 8–11 (1 s ago, 29 s left)
+  stderr: note: Agent A (agent-a) viewing lines 8–11 (1 s ago)
+  stderr: note: Agent C (agent-c) viewing lines 1–11 (10 s ago)
+  exit 0
+[00:15] agent-b $ doc replace --old '- week 2: engine' --new '- week 2: sync protocol' plan.md
+  stderr: error: lines 8–11 claimed by Agent A (agent-a); 28000 ms left
+  (bounced: claim-1 by agent-a, lines 8–11, 28000 ms left)
+  exit 5
+-- Sam types a line inside the same claim: a person is never refused, whatever the policy.
+[00:16] sam $ doc insert --after 10 plan.md <<< '- week 1.5: review the spike'
+  stderr: edited plan.md line 11 (+1 −0) · v2
+  stderr: note: Agent A (agent-a) claimed lines 8–12 (3 s ago, 27 s left)
+  stderr: note: Agent B (agent-b) viewing lines 10–12 (2 s ago)
+  stderr: note: Agent A (agent-a) viewing lines 8–12 (3 s ago)
+  stderr: note: Agent C (agent-c) viewing lines 1–12 (12 s ago)
+  exit 0
+-- agent-a's own edit lands; its claim ends (edited) with the lines and the version.
+[00:18] agent-a $ doc replace --old '- week 1: spike' --new '- week 1: spike (done)' plan.md
+  stderr: edited plan.md line 10 (+1 −1) · v3
+  stderr: note: Agent B (agent-b) viewing lines 10–12 (4 s ago)
+  stderr: note: Agent C (agent-c) viewing lines 1–12 (14 s ago)
+  exit 0
+  event: ClaimEnded claim-1 by agent-a: edited; lines 8–12 free; doc at v3
+-- agent-b retries guarded by the version it read (v1): the doc moved on, so it is refused (exit 1).
+[00:19] agent-b $ doc replace --old '- week 2: engine' --new '- week 2: sync protocol' --if-version 1 plan.md
+  stderr: error: doc changed since 1 (now 3)
+  exit 1
+-- agent-b re-reads (as the 'free now' message says) and retries with --if-version: it lands.
+[00:20] agent-b $ doc view --lines 10,12 plan.md
+  | - week 1: spike (done)
+  | - week 1.5: review the spike
+  | - week 2: engine
+  stderr: plan.md v3
+  stderr: note: Sam (sam) has a caret at line 12 (17 s ago)
+  stderr: note: Agent A (agent-a) edited line 10 (2 s ago)
+  stderr: note: Sam (sam) edited line 11 (4 s ago)
+  stderr: note: Agent A (agent-a) viewing lines 8–12 (7 s ago)
+  stderr: note: Agent C (agent-c) viewing lines 1–12 (16 s ago)
+  exit 0
+[00:21] agent-b $ doc replace --old '- week 2: engine' --new '- week 2: sync protocol' --if-version 3 plan.md
+  stderr: edited plan.md line 12 (+1 −1) · v4
+  exit 0
+  plan.md at v4:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  
+    8  ## Timeline
+    9  
+   10  - week 1: spike (done)
+   11  - week 1.5: review the spike
+   12  - week 2: sync protocol
+   13  
+   14  ## Risks
+   15  
+   16  - memory on large docs (TODO: measure)
+   17  - licence not chosen (TODO: ask the owner)
+   18  
+   19  ## Notes
+   20  
+   21  Drafted by the team.
+   22  TODO: link the spike report.
+
+=== Scene 4: write --base: a clean three-way merge, then a conflict ===
+-- agent-c reads the whole doc, then works from that read.
+[00:23] agent-c $ doc cat plan.md
+  | # Launch plan
+  | 
+  | ## Goals
+  | 
+  | - ship the Markdown core
+  | - keep files plain
+  | 
+  | ## Timeline
+  | 
+  | - week 1: spike (done)
+  | - week 1.5: review the spike
+  | - week 2: sync protocol
+  | 
+  | ## Risks
+  | 
+  | - memory on large docs (TODO: measure)
+  | - licence not chosen (TODO: ask the owner)
+  | 
+  | ## Notes
+  | 
+  | Drafted by the team.
+  | TODO: link the spike report.
+  stderr: plan.md v4
+  stderr: note: Sam (sam) has a caret at line 12 (20 s ago)
+  stderr: note: Agent B (agent-b) edited line 12 (2 s ago)
+  stderr: note: Agent A (agent-a) edited line 10 (5 s ago)
+  stderr: note: Sam (sam) edited line 11 (7 s ago)
+  stderr: note: Agent B (agent-b) viewing lines 10–12 (3 s ago)
+  stderr: note: +1 more
+  exit 0
+-- Meanwhile Sam adds a goal from the editor.
+[00:24] sam types '- show agents' presence to people' after line 6 (editor) · v5
+-- agent-c writes its whole rewrite of Risks with --base v4: only its own change applies; Sam's goal stays.
+[00:26] agent-c $ doc write --base 4 plan.md < (its edited copy)
+  stderr: merged; edited plan.md line 19 (+1 −0) · v6
+  exit 0
+-- Conflict: agent-b claims the Notes line (hold) and edits it; agent-c then rewrites the same line from an older read.
+[00:28] agent-c $ doc cat plan.md
+  | # Launch plan
+  | 
+  | ## Goals
+  | 
+  | - ship the Markdown core
+  | - keep files plain
+  | - show agents' presence to people
+  | 
+  | ## Timeline
+  | 
+  | - week 1: spike (done)
+  | - week 1.5: review the spike
+  | - week 2: sync protocol
+  | 
+  | ## Risks
+  | 
+  | - memory on large docs (TODO: measure)
+  | - licence not chosen (TODO: ask the owner)
+  | - two agents rewriting one section
+  | 
+  | ## Notes
+  | 
+  | Drafted by the team.
+  | TODO: link the spike report.
+  stderr: plan.md v6
+  stderr: note: Sam (sam) has a caret at line 8 (25 s ago)
+  stderr: note: Sam (sam) edited line 7 (4 s ago)
+  stderr: note: Agent B (agent-b) edited line 13 (7 s ago)
+  stderr: note: Agent A (agent-a) edited line 11 (10 s ago)
+  stderr: note: Agent B (agent-b) viewing lines 11–13 (8 s ago)
+  stderr: note: +1 more
+  exit 0
+[00:29] agent-b $ doc claim --lines 23,23 --ttl 120000 --hold --note 'tightening the notes' plan.md
+  claimed line 23 for 120 s (claim-2)
+  exit 0
+  event: ClaimTaken claim-2 by agent-b: line 23, 120 s, hold
+[00:30] agent-b $ doc replace --old 'Drafted by the team.' --new 'Drafted by the team; reviewed by B.' plan.md
+  stderr: edited plan.md line 23 (+1 −1) · v7
+  exit 0
+[00:32] agent-c $ doc write --base 6 plan.md < (its edited copy)
+  stderr: conflict at line 23 of v6: yours " in 2026", now "; reviewed by B"
+  stderr: note: Agent B (agent-b) claimed line 23 "tightening the notes" (3 s ago, 1 min left)
+  stderr: note: Agent B (agent-b) edited line 23 (2 s ago)
+  stderr: nothing applied; re-read and retry
+  exit 1
+-- agent-b releases its claim; agent-c would re-read and redo its change by hand.
+[00:33] agent-b $ doc claim --release plan.md
+  released 1
+  exit 0
+  event: ClaimEnded claim-2 by agent-b: released; line 23 free; doc at v7
+  plan.md at v7:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  - show agents' presence to people
+    8  
+    9  ## Timeline
+   10  
+   11  - week 1: spike (done)
+   12  - week 1.5: review the spike
+   13  - week 2: sync protocol
+   14  
+   15  ## Risks
+   16  
+   17  - memory on large docs (TODO: measure)
+   18  - licence not chosen (TODO: ask the owner)
+   19  - two agents rewriting one section
+   20  
+   21  ## Notes
+   22  
+   23  Drafted by the team; reviewed by B.
+   24  TODO: link the spike report.
+
+=== Scene 5: exact replace: unique, then ambiguous ===
+-- agent-a replaces one exact piece of text: one match, it applies.
+[00:35] agent-a $ doc replace --old 'TODO: measure' --new 'measured: 3x the file size' plan.md
+  stderr: edited plan.md line 17 (+1 −1) · v8
+  exit 0
+-- agent-b tries 'TODO' alone: two matches, refused (exit 1) with their line numbers; nothing applied.
+[00:37] agent-b $ doc replace --old TODO --new DONE plan.md
+  | replace: --old matches 2 times in plan.md (at lines 18, 24); nothing applied
+  | to replace one, add surrounding text to --old until it matches once; to replace every match, add --all
+  stderr: nothing applied to plan.md · v8
+  exit 1
+  plan.md at v8:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  - show agents' presence to people
+    8  
+    9  ## Timeline
+   10  
+   11  - week 1: spike (done)
+   12  - week 1.5: review the spike
+   13  - week 2: sync protocol
+   14  
+   15  ## Risks
+   16  
+   17  - memory on large docs (measured: 3x the file size)
+   18  - licence not chosen (TODO: ask the owner)
+   19  - two agents rewriting one section
+   20  
+   21  ## Notes
+   22  
+   23  Drafted by the team; reviewed by B.
+   24  TODO: link the spike report.
+
+=== Scene 6: undo with provenance ===
+-- Each agent adds a line to Notes, one after the other.
+[00:39] agent-a $ doc append plan.md <<< '- A: links checked'
+  stderr: edited plan.md line 25 (+1 −0) · v9
+  exit 0
+[00:41] agent-b $ doc append plan.md <<< '- B: spelling checked'
+  stderr: edited plan.md line 26 (+1 −0) · v10
+  exit 0
+[00:43] agent-c $ doc append plan.md <<< '- C: dates checked'
+  stderr: edited plan.md line 27 (+1 −0) · v11
+  exit 0
+-- Each undoes its own line, in the order a, c, b: the others' lines survive every undo.
+[00:45] agent-a $ doc undo plan.md
+  undone: 1 step (+0 −1) · v12
+  exit 0
+[00:47] agent-c $ doc undo plan.md
+  undone: 1 step (+0 −1) · v13
+  exit 0
+[00:49] agent-b $ doc undo plan.md
+  undone: 1 step (+0 −1) · v14
+  exit 0
+-- agent-a writes a sentence; agent-b edits inside it, then undoes that.
+[00:51] agent-a $ doc append plan.md <<< 'Sync runs over one socket per doc.'
+  stderr: edited plan.md line 25 (+1 −0) · v15
+  exit 0
+[00:53] agent-b $ doc replace --old 'one socket' --new 'a shared socket' plan.md
+  stderr: edited plan.md line 25 (+1 −1) · v16
+  stderr: note: Agent A (agent-a) edited line 25 (2 s ago)
+  exit 0
+[00:54] sam $ doc blame plan.md -L 25,25
+  | 16 (Agent B 2026-01-01 00:00:53 25) Sync runs over a shared socket per doc.
+  exit 0
+[00:55] agent-b $ doc undo plan.md
+  undone: 1 step (+1 −1) · v17
+  exit 0
+-- Blame names agent-a, who first wrote the text; agent-b put 'one' back.
+[00:56] sam $ doc blame plan.md -L 25,25
+  | 15 (Agent A (restored by Agent B in 17) 2026-01-01 00:00:51 25) Sync runs over one socket per doc.
+  exit 0
+-- agent-a's undo still applies: the text agent-b put back counts as agent-a's.
+[00:58] agent-a $ doc undo plan.md
+  undone: 1 step (+0 −1) · v18
+  exit 0
+-- Sam deletes a whole line by mistake, then presses Ctrl+Z: the line comes back as the file's.
+[01:00] sam deletes the line 'TODO: link the spike report.' (editor) · v19
+[01:01] sam $ doc undo plan.md
+  undone: 1 step (+1 −0) · v20
+  exit 0
+[01:02] sam $ doc blame plan.md -L 24,24
+  | 1 ((file) (restored by Sam in 20) 2026-01-01 00:00:00 24) TODO: link the spike report.
+  exit 0
+  plan.md at v20:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  - show agents' presence to people
+    8  
+    9  ## Timeline
+   10  
+   11  - week 1: spike (done)
+   12  - week 1.5: review the spike
+   13  - week 2: sync protocol
+   14  
+   15  ## Risks
+   16  
+   17  - memory on large docs (measured: 3x the file size)
+   18  - licence not chosen (TODO: ask the owner)
+   19  - two agents rewriting one section
+   20  
+   21  ## Notes
+   22  
+   23  Drafted by the team; reviewed by B.
+   24  TODO: link the spike report.
+
+=== Scene 7: blame ===
+[01:04] sam $ doc blame plan.md
+  | 1 ((file)                         2026-01-01 00:00:00  1) # Launch plan
+  | 1 ((file)                         2026-01-01 00:00:00  2) 
+  | 1 ((file)                         2026-01-01 00:00:00  3) ## Goals
+  | 1 ((file)                         2026-01-01 00:00:00  4) 
+  | 1 ((file)                         2026-01-01 00:00:00  5) - ship the Markdown core
+  | 1 ((file)                         2026-01-01 00:00:00  6) - keep files plain
+  | 5 (Sam                            2026-01-01 00:00:24  7) - show agents' presence to people
+  | 1 ((file)                         2026-01-01 00:00:00  8) 
+  | 1 ((file)                         2026-01-01 00:00:00  9) ## Timeline
+  | 1 ((file)                         2026-01-01 00:00:00 10) 
+  | 3 (Agent A                        2026-01-01 00:00:18 11) - week 1: spike (done)
+  | 2 (Sam                            2026-01-01 00:00:16 12) - week 1.5: review the spike
+  | 4 (Agent B                        2026-01-01 00:00:21 13) - week 2: sync protocol
+  | 1 ((file)                         2026-01-01 00:00:00 14) 
+  | 1 ((file)                         2026-01-01 00:00:00 15) ## Risks
+  | 1 ((file)                         2026-01-01 00:00:00 16) 
+  | 8 (Agent A                        2026-01-01 00:00:35 17) - memory on large docs (measured: 3x the file size)
+  | 1 ((file)                         2026-01-01 00:00:00 18) - licence not chosen (TODO: ask the owner)
+  | 6 (Agent C                        2026-01-01 00:00:26 19) - two agents rewriting one section
+  | 1 ((file)                         2026-01-01 00:00:00 20) 
+  | 1 ((file)                         2026-01-01 00:00:00 21) ## Notes
+  | 1 ((file)                         2026-01-01 00:00:00 22) 
+  | 7 (Agent B                        2026-01-01 00:00:30 23) Drafted by the team; reviewed by B.
+  | 1 ((file) (restored by Sam in 20) 2026-01-01 00:00:00 24) TODO: link the spike report.
+  exit 0
+
+=== Scene 8: revert ===
+-- Sam (an owner) reverts agent-b's Timeline change, v4, from scene 3. The text it replaced comes back.
+[01:06] sam $ doc revert 4 plan.md
+  reverted: 1 step (+1 −1) · v21
+  exit 0
+[01:07] sam $ doc blame plan.md -L 13,13
+  | 1 ((file) (restored by Sam in 21) 2026-01-01 00:00:00 13) - week 2: engine
+  exit 0
+  plan.md at v21:
+    1  # Launch plan
+    2  
+    3  ## Goals
+    4  
+    5  - ship the Markdown core
+    6  - keep files plain
+    7  - show agents' presence to people
+    8  
+    9  ## Timeline
+   10  
+   11  - week 1: spike (done)
+   12  - week 1.5: review the spike
+   13  - week 2: engine
+   14  
+   15  ## Risks
+   16  
+   17  - memory on large docs (measured: 3x the file size)
+   18  - licence not chosen (TODO: ask the owner)
+   19  - two agents rewriting one section
+   20  
+   21  ## Notes
+   22  
+   23  Drafted by the team; reviewed by B.
+   24  TODO: link the spike report.
+
+Checks: every exit code as scripted; no participant's text lost; final text as expected.

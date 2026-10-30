@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 41
+export const CATALOG_VERSION = 42
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -1413,6 +1413,28 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"added":{"items":{"type":"string"},"type":"array"},"app":{"type":"string"},"channelId":{"type":"string"},"created":{"type":"boolean"},"name":{"type":"string"},"notAdded":{"items":{"additionalProperties":false,"properties":{"reason":{"type":"string"},"username":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"private":{"type":"boolean"},"skipped":{"items":{"type":"string"},"type":"array"},"slug":{"type":"string"},"spaceId":{"type":"string"}},"type":"object"},
+  },
+  'chat.channels': {
+    cap: 'chat:channels',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/sew/app/channels/bulk', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"ok":{"type":"boolean"},"results":{"items":{"additionalProperties":false,"properties":{"channel_id":{"type":["string","null"]},"created":{"type":"boolean"},"error":{"additionalProperties":false,"properties":{"code":{"type":"string"},"hint":{"type":"string"}},"type":"object"},"name":{"type":["string","null"]},"op":{"type":"string"},"slug":{"type":["string","null"]}},"type":"object"},"type":"array"},"spaceId":{"type":"string"}},"type":"object"},
+  },
+  'chat.setChannels': {
+    cap: 'chat:channels',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/sew/app/member-channels', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"changed":{"type":"integer"},"items":{"items":{"additionalProperties":false,"properties":{"error":{"type":"string"},"ok":{"type":"boolean"},"username":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"spaceId":{"type":"string"}},"type":"object"},
   },
   'project.list': {
     cap: 'thread:read',
@@ -3436,6 +3458,71 @@ export interface AppChatChannel {
   readonly spaceId: string
 }
 
+export interface AppChatChannelOp {
+  /** Sew's channel id, instead of the slug. */
+  readonly channel_id?: string
+  /** ensure: the name a new channel gets; rename: the new name. */
+  readonly name?: string
+  readonly op: 'ensure' | 'rename' | 'archive' | 'unarchive'
+  /** ensure only: a private channel. */
+  readonly private?: boolean
+  /** The channel's slug: a-z 0-9 and -, starting with a letter or digit. */
+  readonly slug?: string
+  /** ensure only (default text). */
+  readonly type?: 'text' | 'voice'
+  /** Voice: at most this many people (0: no limit). */
+  readonly user_limit?: number
+}
+
+export interface AppChatChannelOpError {
+  readonly code: string
+  readonly hint?: string
+}
+
+export interface AppChatChannelOpResult {
+  /** Sew's channel id. */
+  readonly channel_id?: string | null
+  readonly created: boolean
+  readonly error?: AppChatChannelOpError
+  /** The channel's current name (an ensure never renames). */
+  readonly name?: string | null
+  readonly op: string
+  readonly slug?: string | null
+}
+
+export interface AppChatChannelOps {
+  readonly app: string
+  readonly ok: boolean
+  /** One per op, in order. */
+  readonly results: AppChatChannelOpResult[]
+  readonly spaceId: string
+}
+
+export interface AppChatMemberChannels {
+  /** Up to 5000 channel slugs (made with chat.channels). An empty list clears the App's list. */
+  readonly channels: string[]
+  /** The person's level in those channels, at most the chat key's ceiling. */
+  readonly level?: 'member' | 'moderator' | 'admin'
+  /** One of this App's users. */
+  readonly username: string
+}
+
+export interface AppChatMemberChannelsItem {
+  /** not_found (not this App's user) or agent_subject (an agent's login). */
+  readonly error?: string
+  readonly ok: boolean
+  readonly username: string
+}
+
+export interface AppChatMemberChannelsResult {
+  readonly app: string
+  /** People whose list changed (the sync goes out within seconds). */
+  readonly changed: number
+  readonly items: AppChatMemberChannelsItem[]
+  readonly ok: boolean
+  readonly spaceId: string
+}
+
 export interface AppProjectMember {
   readonly handle: string
   /** The member agent's project id. */
@@ -3537,7 +3624,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'space_unbound', 'app_mismatch', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'not_a_repo'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'not_a_repo'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -3668,6 +3755,8 @@ export interface AppVerbs {
   'chat.member': { args: { app?: string; principal?: string; username?: string }; value: AppChatMember }
   'chat.whois': { args: { app?: string; memberIds: string[] }; value: AppChatWhois }
   'chat.createChannel': { args: { members?: string[]; name: string; private?: boolean; slug: string; space?: string }; value: AppChatChannel }
+  'chat.channels': { args: { ops: AppChatChannelOp[]; space?: string }; value: AppChatChannelOps }
+  'chat.setChannels': { args: { items: AppChatMemberChannels[]; space?: string }; value: AppChatMemberChannelsResult }
   'project.list': { args: Record<string, never>; value: AppProjectList }
   'project.read': { args: { afterSeq?: number; beforeSeq?: number; group: string; limit?: number }; value: AppProjectPage }
   'project.post': { args: { body: string; group: string }; value: AppProjectPosted }
@@ -3675,7 +3764,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3953,6 +4042,10 @@ export interface AppSurfaces {
     whois(args: { app?: string; memberIds: string[] }): Promise<AppChatWhois>
     /** Make a text channel in this App's own Sew Space (or find it: the same slug answers created: false) and put listed App users in it, adding them to the Space first. Needs Sew 0.5.0+. cap chat:channels · POST /cli/sew/app/channels. e.g. `const ch = await k2.asApp().chat.createChannel({slug: 'job-1042', name: 'Job 1042', private: true, members: ['dana', 'eli']})` */
     createChannel(args: { members?: string[]; name: string; private?: boolean; slug: string; space?: string }): Promise<AppChatChannel>
+    /** Make, rename, archive or unarchive channels in this App's own App-governed Space, many at once (Sew's bulk channel ops). Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.setChannels. cap chat:channels · POST /cli/sew/app/channels/bulk. e.g. `await k2.asApp().chat.channels({ops: [{op: 'ensure', slug: 'job-1042', name: 'Job 1042', type: 'text', private: true}]})` */
+    channels(args: { ops: AppChatChannelOp[]; space?: string }): Promise<AppChatChannelOps>
+    /** Set which of this App's private channels each of its users is in (the App's list, in full), in its own App-governed Space. Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.channels. cap chat:channels · POST /cli/sew/app/member-channels. e.g. `await k2.asApp().chat.setChannels({items: [{username: 'dana', channels: ['job-1042', 'job-1043']}]})` */
+    setChannels(args: { items: AppChatMemberChannels[]; space?: string }): Promise<AppChatMemberChannelsResult>
   }
   readonly project: {
     /** The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read. cap thread:read · GET /cli/skin/projects. e.g. `const {projects} = await k2.project.list()` */

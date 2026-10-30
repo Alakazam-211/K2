@@ -20563,7 +20563,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format)
                 skip_next=1
                 continue
                 ;;
@@ -20590,6 +20590,7 @@ cmd_thread() {
     local limit=""
     local all="false"
     local before_seq=""
+    local one_seq=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -20598,6 +20599,9 @@ cmd_thread() {
             --limit) limit="$2"; shift 2 ;;
             --all) all="true"; shift ;;
             --before-seq) before_seq="$2"; shift 2 ;;
+            --seq)
+                [[ -z "${2:-}" ]] && { echo "Error: --seq needs a message number (the [N] in k2 thread <addr>)" >&2; exit 1; }
+                one_seq="$2"; shift 2 ;;
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
@@ -20622,6 +20626,22 @@ cmd_thread() {
         echo "       k2 thread void <addr> <card-id>" >&2
         exit 1
     }
+
+    # --seq N: exactly message N, whole (a person's `↩ #N` reply names it).
+    # The plain read of the newest 1 below N+1; any other seq is "not here".
+    if [[ -n "$one_seq" ]]; then
+        if [[ ! "$one_seq" =~ ^[0-9]+$ ]] || [[ $((10#$one_seq)) -lt 1 ]]; then
+            echo "Error: --seq needs a whole number >= 1 (the [N] in k2 thread <addr>)" >&2
+            exit 1
+        fi
+        if [[ -n "$text" || ${#files[@]} -gt 0 || -n "$limit" || "$all" == "true" || -n "$before_seq" ]]; then
+            echo "Error: --seq reads one message: no text, --file, --limit, --all or --before-seq with it" >&2
+            exit 1
+        fi
+        one_seq=$((10#$one_seq))
+        before_seq=$((one_seq + 1))
+        limit=1
+    fi
 
     local from
     from="$(_thread_sender_from "$explicit_from")"
@@ -20694,11 +20714,13 @@ for a in d.get("attachments") or []:
     local response
     response=$(cli_send cli_request "/cli/thread" "$params")
     local rc=$?
-    if [[ "$json" == "true" ]]; then
+    if [[ "$json" == "true" && -z "$one_seq" ]]; then
         echo "$response"
         return $rc
     fi
     echo "$response" | python3 -c 'import json,sys
+want=int(sys.argv[1]) if sys.argv[1] else 0
+as_json=sys.argv[2]=="true"
 raw=sys.stdin.read()
 try:
     d=json.loads(raw)
@@ -20706,6 +20728,9 @@ except Exception:
     sys.stdout.write(raw)
     sys.exit(0)
 if d.get("ok") is not True:
+    if as_json:
+        print(raw.strip())
+        sys.exit(2)
     err=d.get("error") or d
     if isinstance(err, dict):
         sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
@@ -20713,6 +20738,16 @@ if d.get("ok") is not True:
         sys.stderr.write(str(err)+"\n")
     sys.exit(2)
 items=d.get("items") or []
+if want:
+    items=[it for it in items if it.get("seq")==want]
+    if not items:
+        sys.stderr.write("No message %d on this Thread (k2 thread %s lists them as [N]).\n" % (want, sys.argv[3]))
+        sys.exit(1)
+    if as_json:
+        d["items"]=items
+        d["has_more"]=False
+        print(json.dumps(d))
+        sys.exit(0)
 if not items:
     print("(empty)")
     sys.exit(0)
@@ -20742,7 +20777,7 @@ for it in items:
             line=":%s" % a["line"] + (("-%s" % a["lineEnd"]) if a.get("lineEnd") else "")
         tag="" if st == "ok" else " (%s)" % st
         print("  [file] %s%s (%s)%s" % (a.get("path",""), line, size(a.get("size")), tag))
-'
+' "$one_seq" "$json" "$target"
 }
 
 cmd_thread_ask() {
@@ -21149,6 +21184,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> "text" --file path[:line[-end]]  # attach a workspace file (repeatable, ≤10)
   k2 thread <addr> --file out/shot.png            # text is optional when a file rides
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
+  k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
@@ -40984,7 +41020,7 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); void your own card only when it is obsolete (k2 thread void <addr> <card-id>). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
@@ -40992,6 +41028,7 @@ cmd_schema() {
         {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 25, max 500)."},
         {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
+        {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},
@@ -47261,6 +47298,7 @@ NOT THESE
 THREAD
   `k2 thread <addr> "text"`     write overlay (not PTY; that's k2 msg)
   `k2 thread <addr>`            read / tail (default page 25)
+  `k2 thread <addr> --seq N`    read message N whole (the [N] in a read)
   `k2 thread ask <addr> "…" --options a,b,c [--expires 3d]`
                                 choice card; returns immediately
   `k2 thread secret <addr> --name NAME`
@@ -47299,6 +47337,13 @@ ATTACH THE FILES YOU MENTION
   If a message arrives prefixed `[thread:<addr>]`, the human wrote on
   the Thread tab. Reply with `k2 thread <addr> "your reply"`.
   Do not answer in this terminal — they are not looking at the TUI.
+
+REPLIES (↩ #N)
+  A person's message that starts `↩ #N <name>:` and `> ` lines is a
+  reply to message N on this same Thread (the [N] `k2 thread <addr>`
+  prints; <name> wrote it). `↩ part of #N` quotes only a piece of it.
+  A quote over 600 characters is cut and ends in "…".
+  Read message N whole: `k2 thread <addr> --seq N`.
 
 FEEDBACK
   `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`

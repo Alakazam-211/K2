@@ -302,6 +302,10 @@ export interface AgentRow {
   readonly working: boolean
 }
 
+export interface TerminalOpened {
+  readonly opened: boolean
+}
+
 export interface ThreadFile {
   /** file. */
   readonly kind: string
@@ -316,6 +320,33 @@ export interface ThreadFile {
   readonly size?: number
   /** ok, changed (since it was sent), gone (moved or deleted) or hidden (not shared with you: no name, type or size). */
   readonly state: string
+}
+
+export interface ThreadChangedFile {
+  readonly additions?: number | null
+  readonly deletions?: number | null
+  /** Relative to the agent's worktree. */
+  readonly file: string
+  /** The name before a rename. */
+  readonly oldFile?: string | null
+  /** added, modified, deleted, renamed or untracked. */
+  readonly status: string
+}
+
+export interface ThreadChanges {
+  readonly additions: number
+  readonly branch?: string | null
+  /** Commits the agent made during the turn. */
+  readonly commits: number
+  readonly deletions: number
+  readonly files: ThreadChangedFile[]
+  /** Short commit at the turn's start. */
+  readonly from?: string | null
+  /** Short commit at the turn's end. */
+  readonly to?: string | null
+  /** Files changed in the turn (files may list fewer: truncated). */
+  readonly total: number
+  readonly truncated: boolean
 }
 
 export interface CardAnswerer {
@@ -356,6 +387,8 @@ export interface ThreadDoc {
   /** Files that ride the message (thread-attachments-v1). Open one with thread.attachment / thread.open by its index. */
   readonly attachments?: ThreadFile[] | null
   readonly body?: string | null
+  /** K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item. */
+  readonly changes?: ThreadChanges
   readonly choice?: ChoiceCard | null
   /** The Board context that rode the person's post: a Garden widget's line, never their words. Absent on every other item. */
   readonly context?: ThreadContext
@@ -1410,8 +1443,175 @@ export interface RoomMembers {
   readonly workspace: string
 }
 
+export interface WorkRow {
+  /** The Garden row address: ws/name::local (agents.show, conversation.open, thread.* take it). */
+  readonly address: string
+  /** Commits on its branch that the base doesn't have. */
+  readonly ahead: number | null
+  /** The branch it is compared with (the workspace's default branch). */
+  readonly base: string | null
+  readonly behind: number | null
+  readonly branch: string | null
+  /** Files changed and not committed. */
+  readonly dirty: number | null
+  readonly harness: string | null
+  /** Short commit. */
+  readonly head: string | null
+  /** Seconds since the epoch. */
+  readonly landedAt: number | null
+  /** Its terminal is running now. */
+  readonly live: boolean
+  /** The sidecar's name. */
+  readonly name: string
+  /** Seconds since the epoch. */
+  readonly retiredAt: number | null
+  /** K2's own state when the daemon has it: needs-you, working, ready, landed or retired; null until then (the widget derives one). */
+  readonly taskState: string | null
+  /** The Thread address, ws/name (k2 thread ws/name ...). */
+  readonly thread: string
+  /** The parent workspace's handle. */
+  readonly workspace: string
+  readonly workspaceLabel: string
+  /** Its worktree folder relative to the workspace (.worktrees/k2-name), or null when it works at the workspace root. */
+  readonly worktree: string | null
+}
+
+export interface GitCounts {
+  readonly base: number
+  readonly conflicted: number
+  readonly staged: number
+  readonly total: number
+  readonly unstaged: number
+  readonly untracked: number
+}
+
+export interface GitChangedFile {
+  readonly additions: number | null
+  readonly binary: boolean
+  readonly deletions: number | null
+  /** Relative to the agent's worktree. */
+  readonly file: string
+  /** staged, unstaged, untracked or conflicted (not committed yet), or base (the whole branch vs its base: its commits plus uncommitted edits to tracked files; a file can be listed in both). */
+  readonly group: string
+  readonly oldFile: string | null
+  readonly status: string
+}
+
+export interface GitStatus {
+  readonly base: { ahead: number; behind: number; ref: string } | null
+  readonly branch: string | null
+  readonly counts: GitCounts
+  readonly files: GitChangedFile[]
+  /** Short commit. */
+  readonly head: string | null
+  /** Changes whenever the files change: poll and compare. */
+  readonly rev: string
+  /** clean, merging, rebasing, cherry-picking, … */
+  readonly state: string
+  readonly truncated: boolean
+}
+
+export interface GitDiffSide {
+  readonly binary: boolean
+  readonly exists: boolean
+  readonly size: number
+  readonly text: string | null
+  readonly tooLarge: boolean
+}
+
+export interface GitFileDiff {
+  readonly additions: number | null
+  readonly base: string | null
+  readonly binary: boolean
+  readonly deletions: number | null
+  readonly file: string
+  readonly new: GitDiffSide
+  readonly old: GitDiffSide
+  readonly oldFile: string | null
+  readonly tooLarge: boolean
+}
+
+export interface GitCommit {
+  /** Seconds since the epoch. */
+  readonly at: number
+  readonly author: string
+  readonly sha: string
+  readonly short: string
+  readonly subject: string
+}
+
+export interface GitLog {
+  readonly ahead: number
+  readonly base: string | null
+  readonly branch: string | null
+  readonly commits: GitCommit[]
+}
+
+export interface GitNoteIn {
+  /** Up to 4,000 characters. */
+  readonly body: string
+  /** Relative to the agent's worktree (as git.snapshot names it). */
+  readonly file: string
+  /** The line in the file now, from 1 (absent: the file as a whole). */
+  readonly line?: number
+}
+
+export interface WorkNoted {
+  readonly added: number
+  readonly sent: number
+}
+
+export interface WorkJob {
+  /** What it ran (up to 200 characters). */
+  readonly command: string
+  /** Short commit it ran. */
+  readonly commit: string | null
+  /** Seconds since the epoch. */
+  readonly createdAt: number
+  /** Seconds since the epoch. */
+  readonly endedAt: number | null
+  readonly exitCode: number | null
+  /** Short job id (k2 compute get <id>). */
+  readonly id: string
+  readonly node: string | null
+  /** How long it ran, in seconds (a duration). */
+  readonly secs: number | null
+  /** Seconds since the epoch. */
+  readonly startedAt: number | null
+  readonly state: string
+  readonly tag: string | null
+}
+
+export interface WorkStarted {
+  readonly address: string
+  readonly branch: string | null
+  readonly thread: string
+  readonly worktree: string | null
+}
+
+export interface WorkLanded {
+  /** The person pressed Cancel on K2's sheet: nothing changed. */
+  readonly cancelled: boolean
+  readonly commits: number
+  /** Files in conflict: nothing landed, the agent was told. */
+  readonly conflict: string[]
+  readonly head: string | null
+  readonly landed: boolean
+}
+
+export interface WorkSettled {
+  /** The person pressed Cancel on K2's sheet: nothing changed. */
+  readonly cancelled: boolean
+  readonly discarded: boolean
+  readonly settled: boolean
+}
+
+export interface WorkStopped {
+  readonly stopped: boolean
+}
+
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1424,7 +1624,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'blob_missing' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'no_chat_caps' | 'app_claim_invalid' | 'not_app_granted' | 'chat_off_for_person' | 'shared_person' | 'has_assistants' | 'chat_limit' | 'username_unusable' | 'chat_not_app_scoped' | 'no_chat_member' | 'sew_feature_missing' | 'space_unbound' | 'app_mismatch' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'pairing_off' | 'pairing_from_device' | 'reauth_required' | 'device_signin_off' | 'host_not_paired' | 'no_public_host' | 'pairing_not_served' | 'pair_code_invalid' | 'pairing_not_from_browser' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only' | 'edit_off' | 'type_refused' | 'type_mismatch' | 'bad_image' | 'agent_login' | 'email_off' | 'no_sender' | 'sender_not_granted' | 'system_sender' | 'recipient_out_of_scope' | 'header_not_allowed' | 'message_too_large' | 'domain_not_ready' | 'dmarc_missing' | 'relay_not_ready' | 'idempotency_conflict' | 'no_mail_path' | 'email_paused' | 'all_suppressed' | 'password_change_required' | 'password_unchanged'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'blob_missing' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'no_chat_caps' | 'app_claim_invalid' | 'not_app_granted' | 'chat_off_for_person' | 'shared_person' | 'has_assistants' | 'chat_limit' | 'username_unusable' | 'chat_not_app_scoped' | 'no_chat_member' | 'sew_feature_missing' | 'space_unbound' | 'app_mismatch' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined' | 'refresh_invalid' | 'refresh_reused' | 'person_pass_required' | 'wallet_off' | 'push_off' | 'not_for_host' | 'channel_unavailable' | 'push_devices_full' | 'push_not_configured' | 'too_many_recipients' | 'push_queue_full' | 'airgap' | 'vault_closed' | 'token_in_use' | 'pairing_off' | 'pairing_from_device' | 'reauth_required' | 'device_signin_off' | 'host_not_paired' | 'no_public_host' | 'pairing_not_served' | 'pair_code_invalid' | 'pairing_not_from_browser' | 'duplicate_label' | 'needs_editor' | 'retired' | 'card_person_only' | 'edit_off' | 'type_refused' | 'type_mismatch' | 'bad_image' | 'agent_login' | 'email_off' | 'no_sender' | 'sender_not_granted' | 'system_sender' | 'recipient_out_of_scope' | 'header_not_allowed' | 'message_too_large' | 'domain_not_ready' | 'dmarc_missing' | 'relay_not_ready' | 'idempotency_conflict' | 'no_mail_path' | 'email_paused' | 'all_suppressed' | 'password_change_required' | 'password_unchanged' | 'not_a_repo'
 
 /** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
 export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
@@ -1523,6 +1723,7 @@ export interface K2Verbs {
   'conversation.open': { args: [address: string]; value: null }
   'conversation.close': { args: []; value: null }
   'agents.show': { args: [addresses: string[] | null]; value: null }
+  'agents.openTerminal': { args: [address: string]; value: TerminalOpened }
   'presence.get': { args: [address: string]; value: Person[] }
   'presence.subscribe': { args: [address: string]; value: Person[] }
   'thread.read': { args: [address: string, opts?: { afterSeq?: number; beforeSeq?: number; limit?: number }]; value: ThreadPage }
@@ -1584,10 +1785,20 @@ export interface K2Verbs {
   'thread.onActivity': { args: [address: string]; value: ThreadActivityState }
   'activity.snapshot': { args: [args: { workspace: string }]; value: AppActivity }
   'room.members': { args: [args: { app?: string; workspace: string }]; value: RoomMembers }
+  'work.list': { args: []; value: WorkRow[] }
+  'git.snapshot': { args: [args: { address: string; base?: string }]; value: GitStatus }
+  'git.diffFile': { args: [args: { address: string; base?: string; file: string; oldFile?: string }]; value: GitFileDiff }
+  'git.log': { args: [args: { address: string; base?: string; limit?: number }]; value: GitLog }
+  'git.note': { args: [args: { address: string; notes: GitNoteIn[]; send?: boolean }]; value: WorkNoted }
+  'compute.jobs': { args: [args: { address: string; limit?: number }]; value: WorkJob[] }
+  'agents.start': { args: [args: { base?: string; brief: string; harness?: string; name: string; workspace: string }]; value: WorkStarted }
+  'git.land': { args: [args: { address: string }]; value: WorkLanded }
+  'agents.settle': { args: [args: { address: string; discard?: boolean }]; value: WorkSettled }
+  'agents.stop': { args: [args: { address: string }]; value: WorkStopped }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'thread.onActivity'
 
 export interface K2 {
@@ -1670,6 +1881,14 @@ export interface K2 {
     subscribe(handlers: K2Handlers<AgentRow[]>): () => void
     /** List mode: an Agents widget with list-from = this widget shows just these agents, in this order (rows agents.list() returns; never more reach). null clears. cap agents:read · local · zen-widgets-v1. e.g. `await k2.agents.show(rows.filter(onBoard).map((r) => r.address))` */
     show(addresses: string[] | null): Promise<null>
+    /** Leave the Garden for the agent's terminal in K2 (its workspace on the Agents page, where a sidecar's tab is), within 5 s of a press in the widget. Takes the address itself (not an object). K2's desktop only: check k2.can('agents.openTerminal') first. cap agents:read · local · workbench-v1. e.g. `await k2.agents.openTerminal(row.address)` */
+    openTerminal(address: string): Promise<TerminalOpened>
+    /** Start an agent in a new git worktree on branch k2/<name> (k2 sidecar new --worktree), within 5 s of a press in the widget. K2's sheet asks the person first; Cancel there answers declined. This computer only. cap agents:start · local · workbench-v1. e.g. `const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})` */
+    start(args: { base?: string; brief: string; harness?: string; name: string; workspace: string }): Promise<WorkStarted>
+    /** Retire an agent (within 5 s of a press): stop it, remove its worktree, delete its branch. Refused (conflict) while it has commits that aren't landed, unless discard. K2's sheet asks the person first; answers {settled, discarded, cancelled}. Its Thread stays. This computer only. caps agents:start + git:read · local · workbench-v1. e.g. `await k2.agents.settle({address: row.address, discard: true})` */
+    settle(args: { address: string; discard?: boolean }): Promise<WorkSettled>
+    /** Stop the agent's current turn (its harness's own interrupt key, never the process), within 5 s of a press in the widget. This computer only. cap agents:stop · local · workbench-v1. e.g. `await k2.agents.stop({address: row.address})` */
+    stop(args: { address: string }): Promise<WorkStopped>
   }
   readonly conversation: {
     /** Show this agent in the built-in Conversation that follows the widget. cap agents:read · local · zen-v1. e.g. `await k2.conversation.open(row.address)` */
@@ -1852,6 +2071,26 @@ export interface K2 {
   readonly room: {
     /** Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line. This computer only. cap room:members · portable · room-members-v1. e.g. `const {members} = await k2.room.members({workspace})` */
     members(args: { app?: string; workspace: string }): Promise<RoomMembers>
+  }
+  readonly work: {
+    /** Every sidecar on this computer (the Workbench's tasks): each row's address (pass it to the git.*, compute.jobs and agents.* rows), worktree, branch, ahead (commits not on its base yet) and dirty (uncommitted files). Pair with thread.onActivity for working / needs you. This computer only. cap git:read · local · workbench-v1. e.g. `const tasks = await k2.work.list()` */
+    list(): Promise<WorkRow[]>
+  }
+  readonly git: {
+    /** An agent's git status: its branch, changed files (uncommitted, and committed on the branch vs its base) with +/− counts. Paths are relative to its worktree. This computer only. cap git:read · local · workbench-v1. e.g. `const s = await k2.git.snapshot({address: row.address})` */
+    snapshot(args: { address: string; base?: string }): Promise<GitStatus>
+    /** One file's two sides (before and now) for a diff: draw it with the k2-diff kit (K2Diff.render). This computer only. cap git:read · local · workbench-v1. e.g. `const d = await k2.git.diffFile({address: row.address, file: 'src/app.ts', base: 'main'})` */
+    diffFile(args: { address: string; base?: string; file: string; oldFile?: string }): Promise<GitFileDiff>
+    /** The commits on an agent's branch that its base doesn't have, newest first (what Land would put on the base). This computer only. cap git:read · local · workbench-v1. e.g. `const {commits} = await k2.git.log({address: row.address})` */
+    log(args: { address: string; base?: string; limit?: number }): Promise<GitLog>
+    /** Ask for changes (within 5 s of a press): review notes on the agent's files (line is the file's line now, from 1; K2's Changes tab shows them too), sent to that agent's own Thread unless send is false. This computer only. cap git:notes · local · workbench-v1. e.g. `await k2.git.note({address: row.address, notes: [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}]})` */
+    note(args: { address: string; notes: GitNoteIn[]; send?: boolean }): Promise<WorkNoted>
+    /** Ask to land an agent's branch on its base (cherry-pick its commits), within 5 s of a press in the widget. K2's sheet shows the commits and files; only the person's Land there lands it. Answers {landed, commits, head, conflict, cancelled}: cancelled when the person pressed Cancel, conflict lists files when nothing could land. This computer only. caps agents:start + git:read · local · workbench-v1. e.g. `const r = await k2.git.land({address: row.address})` */
+    land(args: { address: string }): Promise<WorkLanded>
+  }
+  readonly compute: {
+    /** Recent compute jobs (k2 compute run) for an agent's branch: jobs its session sent, or that ran one of its branch's commits. Newest first. This computer only. cap compute:read · local · workbench-v1. e.g. `const jobs = await k2.compute.jobs({address: row.address})` */
+    jobs(args: { address: string; limit?: number }): Promise<WorkJob[]>
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>

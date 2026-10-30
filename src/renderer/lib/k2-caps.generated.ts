@@ -121,11 +121,36 @@ export const K2_CAPS = {
   'voice:video': { label: 'Turn on camera and share the screen in a call (with voice:join)', exposure: ['app'] },
   'guests:chat': { label: "Give its own guests chat (an owner grant per App, never a guest's)", exposure: ['app'] },
   'chat:channels': { label: 'Make chat channels in its own Space and add its users to them', exposure: ['app'] },
+  'git:read': {
+    label: "See the Workbench's git",
+    sentence: "See the branches, changed files, diffs and commits of the agents' worktrees on this computer (never their folders' paths).",
+    exposure: ['garden-local'],
+  },
+  'git:notes': {
+    label: 'Ask an agent for changes',
+    sentence: "Leave review notes on an agent's changed files and send them to that agent, only after you press a button in the widget.",
+    exposure: ['garden-local'],
+  },
+  'compute:read': {
+    label: 'See test runs on compute',
+    sentence: 'See the compute jobs the agents on this computer ran for their branches: node, state, exit code and commit (never their environment).',
+    exposure: ['garden-local'],
+  },
+  'agents:start': {
+    label: 'Start, land and discard worktree agents',
+    sentence: "Start an agent in a new git worktree, and ask to land or discard one. Each one asks you first, on K2's own sheet outside the widget.",
+    exposure: ['garden-local'],
+  },
+  'agents:stop': {
+    label: "Stop an agent's turn",
+    sentence: 'Stop what an agent on this computer is doing right now (like pressing Esc in its terminal), only after you press a button in the widget.',
+    exposure: ['garden-local'],
+  },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'uploads:pick', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'uploads:pick', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members', 'git:read', 'git:notes', 'compute:read', 'agents:start', 'agents:stop'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

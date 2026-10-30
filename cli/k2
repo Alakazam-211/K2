@@ -42696,7 +42696,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 38.
+From K2's verb catalog, version 40.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -73375,7 +73375,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 38.
+for at once (no review). From K2's verb catalog, version 40.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -73419,6 +73419,7 @@ agents:read (See agents)
   k2.conversation.open(address)                                                                                    local    zen-v1                 await k2.conversation.open(row.address)  [not_bound]
   k2.conversation.close()                                                                                          local    zen-v1                 await k2.conversation.close()
   k2.agents.show(addresses)                                                                                        local    zen-widgets-v1         await k2.agents.show(rows.filter(onBoard).map((r) => r.address))  [not_bound bad_args rate_limited]
+  k2.agents.openTerminal(address)                                                                                  local    workbench-v1           await k2.agents.openTerminal(row.address)  [not_bound bad_args rate_limited]
 presence:read (See who is looking)
   k2.presence.get(address)                                                                                         local    zen-v1                 const people = await k2.presence.get(row.address)  [not_bound]
   k2.presence.subscribe(address, cb)                                                                               local    zen-v1                 const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
@@ -73495,6 +73496,21 @@ activity:read (See when the agent is working)
   k2.activity.snapshot({workspace})                                                                                portable app-api-v1             const {status} = await k2.activity.snapshot({workspace})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
 room:members (See who has access to the room)
   k2.room.members({app, workspace})                                                                                portable room-members-v1        const {members} = await k2.room.members({workspace})  [pass_required pass_invalid pass_wrong_link skin_room not_bound not_found usage]
+git:read (See the Workbench's git)
+  k2.work.list()                                                                                                   local    workbench-v1           const tasks = await k2.work.list()  [author_unknown needs_editor stale_widget rate_limited]
+  k2.git.snapshot({address, base})                                                                                 local    workbench-v1           const s = await k2.git.snapshot({address: row.address})  [not_bound not_a_repo author_unknown needs_editor stale_widget rate_limited]
+  k2.git.diffFile({address, base, file, oldFile})                                                                  local    workbench-v1           const d = await k2.git.diffFile({address: row.address, file: 'src/app.ts', base: 'main'})  [not_bound not_a_repo author_unknown needs_editor stale_widget rate_limited not_found]
+  k2.git.log({address, base, limit})                                                                               local    workbench-v1           const {commits} = await k2.git.log({address: row.address})  [not_bound not_a_repo author_unknown needs_editor stale_widget rate_limited]
+git:notes (Ask an agent for changes)
+  k2.git.note({address, notes, send})                                                                              local    workbench-v1           await k2.git.note({address: row.address, notes: [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}]})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined]
+compute:read (See test runs on compute)
+  k2.compute.jobs({address, limit})                                                                                local    workbench-v1           const jobs = await k2.compute.jobs({address: row.address})  [not_bound not_a_repo author_unknown needs_editor stale_widget rate_limited]
+agents:start (Start, land and discard worktree agents)
+  k2.agents.start({base, brief, harness, name, workspace})                                                         local    workbench-v1           const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined confirm_required]
+  k2.git.land({address})                                                                                           local    workbench-v1           const r = await k2.git.land({address: row.address})  +git:read  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined conflict confirm_required]
+  k2.agents.settle({address, discard})                                                                             local    workbench-v1           await k2.agents.settle({address: row.address, discard: true})  +git:read  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined conflict confirm_required]
+agents:stop (Stop an agent's turn)
+  k2.agents.stop({address})                                                                                        local    workbench-v1           await k2.agents.stop({address: row.address})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined]
 
 Every call may also fail with cap_not_granted, verb_unavailable, failed.
 

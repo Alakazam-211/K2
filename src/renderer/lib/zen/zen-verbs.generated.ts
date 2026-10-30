@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 38
+export const ZEN_CATALOG_VERSION = 40
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -61,9 +61,9 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop' | null
   /** More caps the verb also needs (0.46.5); absent = `cap` alone. */
-  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members')[]
+  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop')[]
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -100,6 +100,7 @@ export const ZEN_CUSTOM_VERBS = {
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
   'conversation.close': { cap: 'agents:read', reach: 'local', kind: 'call' },
   'agents.show': { cap: 'agents:read', reach: 'local', kind: 'call' },
+  'agents.openTerminal': { cap: 'agents:read', reach: 'local', kind: 'call' },
   'presence.get': { cap: 'presence:read', reach: 'local', kind: 'call' },
   'presence.subscribe': { cap: 'presence:read', reach: 'local', kind: 'subscribe' },
   'thread.read': { cap: 'thread:read', reach: 'portable', kind: 'call' },
@@ -161,6 +162,16 @@ export const ZEN_CUSTOM_VERBS = {
   'thread.onActivity': { cap: 'activity:read', also: ['thread:read'], reach: 'portable', kind: 'subscribe' },
   'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
   'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
+  'work.list': { cap: 'git:read', reach: 'local', kind: 'call' },
+  'git.snapshot': { cap: 'git:read', reach: 'local', kind: 'call' },
+  'git.diffFile': { cap: 'git:read', reach: 'local', kind: 'call' },
+  'git.log': { cap: 'git:read', reach: 'local', kind: 'call' },
+  'git.note': { cap: 'git:notes', reach: 'local', kind: 'call' },
+  'compute.jobs': { cap: 'compute:read', reach: 'local', kind: 'call' },
+  'agents.start': { cap: 'agents:start', reach: 'local', kind: 'call' },
+  'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
+  'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
+  'agents.stop': { cap: 'agents:stop', reach: 'local', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 
 export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS

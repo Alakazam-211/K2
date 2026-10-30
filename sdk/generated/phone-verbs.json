@@ -1,10 +1,14 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 38,
+  "catalogVersion": 40,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
+    {"cap":"agents:read","feature":"workbench-v1","phone":"later","verb":"agents.openTerminal"},
+    {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"agents.settle"},
     {"cap":"agents:read","feature":"zen-widgets-v1","phone":"host","verb":"agents.show"},
+    {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"agents.start"},
+    {"cap":"agents:stop","feature":"workbench-v1","phone":"later","verb":"agents.stop"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.subscribe"},
     {"cap":null,"feature":"app-resources-v1","phone":"door","verb":"app.resources"},
     {"cap":null,"feature":"guests-rooms-v1","phone":"door","verb":"app.rooms"},
@@ -16,6 +20,7 @@
     {"cap":"store:write","feature":"garden-blobs-v1","phone":"door","verb":"blobs.put"},
     {"cap":null,"feature":"zen-widgets-v1","phone":"host","verb":"canvas.setHitRegions"},
     {"cap":"thread:post","feature":"zen-v1","phone":"later","verb":"compose.draft"},
+    {"cap":"compute:read","feature":"workbench-v1","phone":"door","verb":"compute.jobs"},
     {"cap":"agents:read","feature":"zen-v1","phone":"host","verb":"conversation.close"},
     {"cap":"agents:read","feature":"zen-v1","phone":"host","verb":"conversation.open"},
     {"cap":"thread:post","feature":"thread-context-v1","phone":"later","verb":"conversation.setContext"},
@@ -27,6 +32,11 @@
     {"cap":null,"feature":"zen-gardens-v1","phone":"host","verb":"gardens.current"},
     {"cap":null,"feature":"zen-gardens-v1","phone":"host","verb":"gardens.list"},
     {"cap":null,"feature":"zen-gardens-v1","phone":"host","verb":"gardens.switch"},
+    {"cap":"git:read","feature":"workbench-v1","phone":"door","verb":"git.diffFile"},
+    {"cap":"agents:start","feature":"workbench-v1","phone":"later","verb":"git.land"},
+    {"cap":"git:read","feature":"workbench-v1","phone":"door","verb":"git.log"},
+    {"cap":"git:notes","feature":"workbench-v1","phone":"later","verb":"git.note"},
+    {"cap":"git:read","feature":"workbench-v1","phone":"door","verb":"git.snapshot"},
     {"cap":"guests:rooms","feature":"guests-rooms-v1","phone":"door","verb":"guests.list"},
     {"cap":"guests:rooms","feature":"guests-rooms-v1","phone":"door","verb":"guests.rooms"},
     {"cap":"guests:rooms","feature":"guests-rooms-v1","phone":"later","verb":"guests.setRooms"},
@@ -88,6 +98,7 @@
     {"cap":"uploads:pick","feature":"zen-files-v1","phone":"later","verb":"uploads.pick"},
     {"cap":null,"feature":"garden-data-v1","phone":"door","verb":"viewer.get"},
     {"cap":null,"feature":"app-self-v1","phone":"door","verb":"widget.self"},
-    {"cap":null,"feature":"zen-widgets-v1","phone":"never","verb":"window.startDrag"}
+    {"cap":null,"feature":"zen-widgets-v1","phone":"never","verb":"window.startDrag"},
+    {"cap":"git:read","feature":"workbench-v1","phone":"door","verb":"work.list"}
   ]
 }

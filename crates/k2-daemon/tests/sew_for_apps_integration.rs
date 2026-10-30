@@ -283,6 +283,10 @@ async fn home_settings_follow_sews_feature_flags_never_its_version() {
     worker::reconcile_once().await.expect("sweep with home_client");
     drain(&env).await;
     assert_eq!(env.sew.home_client(), Some(Some(hearth.clone())));
+    // AG-21: the home client goes to Sew under the person who set it.
+    let hc: Vec<_> = env.sew.posts().into_iter().filter(|c| c.path == "/mgmt/v1/home-client").collect();
+    assert_eq!(hc.len(), 1, "{hc:?}");
+    assert_eq!(hc[0].actor.as_deref(), Some("owner-token"), "Sew-Actor = who set the home client");
     assert_eq!(env.sew.app_settings(&jobs), Some(serde_json::json!({"hidden_from_home": true, "display_name": "Jobs"})));
     assert!(hook::sew_has("home_client").unwrap() && !hook::sew_has("app_origin").unwrap());
 

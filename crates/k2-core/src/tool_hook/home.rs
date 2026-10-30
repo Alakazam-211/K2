@@ -116,6 +116,15 @@ pub fn set_app_origin(conn: &Connection, app_id: &str, origin: Option<&str>, dis
     merge(conn, &subject, f, actor, now)
 }
 
+/// Who last set `subject` (`updated_by`: `owner`, `login:<name>`,
+/// `shell:<ws>`), the home-client row's `Sew-Actor`. `None` = no row.
+pub fn set_by(conn: &Connection, subject: &str) -> Result<Option<String>, String> {
+    conn.query_row("SELECT updated_by FROM tool_sew_settings WHERE subject = ?1", params![subject], |r| r.get::<_, String>(0))
+        .optional()
+        .map(|o| o.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+        .map_err(|e| format!("sew settings read: {e}"))
+}
+
 /// The Apps with a settings row (their ids).
 pub fn apps(conn: &Connection) -> Result<Vec<String>, String> {
     let mut st = conn

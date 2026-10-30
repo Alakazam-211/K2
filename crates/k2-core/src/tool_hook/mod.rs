@@ -1041,9 +1041,16 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
             policy::note(&tx, v.as_ref(), now)?;
         }
         let busy = outbox::busy_subjects(&tx, kind)?;
-        let mut ops = home::plan(&tx, &busy)?;
+        // The home client goes under the person who set it (`Sew-Actor`,
+        // attribution only); the rest under the sweep.
+        let (home_ops, mut ops): (Vec<NewOp>, Vec<NewOp>) =
+            home::plan(&tx, &busy)?.into_iter().partition(|o| o.op == Op::HomeClient);
         ops.extend(policy::plan(&tx, &busy)?);
         let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
+        for o in home_ops {
+            let actor = home::set_by(&tx, &o.subject_key)?.unwrap_or_else(|| ACTOR_RECONCILE.to_string());
+            n += outbox::enqueue(&tx, std::slice::from_ref(&o), &actor, now)?.len();
+        }
         // Unbinds go under the actor who asked for each.
         n += app_space::queue_unbinds(&tx, now)?;
         tx.commit().map_err(|e| format!("settings commit: {e}"))?;

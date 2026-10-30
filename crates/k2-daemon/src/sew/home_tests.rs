@@ -80,3 +80,62 @@ fn bad_apps_and_non_managers_are_refused() {
     assert_eq!(stored.len(), 1, "only the owner's one by-name set; refusals store nothing: {stored:?}");
     assert_eq!(stored[0].body["hidden_from_home"], json!(false));
 }
+
+fn audit_text() -> String {
+    std::fs::read_to_string(k2_core::auth_audit::path()).unwrap_or_default()
+}
+
+/// AG-21: the home client is the owner's alone (the owner token, an Owner
+/// login or a K2 shell tab). An agent with Manage Sew can't name its own
+/// workspace's App the home client (that App's sessions would see every
+/// Space each person is in), nor clear it; an Admin or Member login can't
+/// either. Every change and refusal is audited; refusals store nothing.
+#[test]
+fn only_the_owner_sets_or_clears_the_home_client_ag21() {
+    let f = fx();
+    // The agent of ws-h13, which owns both Apps, with Manage Sew on.
+    k2_core::workspace::settings::set_agents_can_manage_chat("ws-h13", true).unwrap();
+    let agent = Who::Agent { project_id: "ws-h13".into(), session_id: "s-agent".into() };
+    assert!(need_manage(&agent).is_ok(), "the agent has Manage Sew");
+    let admin = Who::Login { username: "adm".into(), role: Role::Admin };
+    let member = Who::Login { username: "mem".into(), role: Role::Member };
+
+    for (who, label) in [(&agent, "agent with Manage Sew"), (&admin, "Admin login"), (&member, "Member login")] {
+        for app in [json!(f.jobs), json!(f.hearth), json!(null)] {
+            let (st, v) = call(who, HOME_CLIENT, json!({ "app": app }));
+            assert_eq!((st, v["code"].clone()), (403, json!("owner_only")), "{label} {app}: {v}");
+        }
+    }
+    let (_, v) = call(&agent, HOME_CLIENT, json!({"app": f.jobs}));
+    assert!(v["hint"].as_str().unwrap().contains("never an agent's"), "{v}");
+    assert!(k2_core::tool_hook::home_settings().unwrap().is_empty(), "a refusal stores nothing");
+    let audit = audit_text();
+    assert!(audit.contains("sew-home-client") && audit.contains(&format!("refused owner_only {}", f.jobs)), "{audit}");
+    assert!(audit.contains("agent:"), "the agent is named in the audit: {audit}");
+
+    // The owner token, an Owner login and a shell tab do it.
+    let owner_login = Who::Login { username: "boss".into(), role: Role::Owner };
+    let shell = Who::Shell { project_id: "ws-h13".into(), session_id: "s-tab".into() };
+    let (st, v) = call(&Who::Owner, HOME_CLIENT, json!({"app": f.hearth}));
+    assert_eq!((st, v["homeClient"].clone()), (200, json!(f.hearth)), "{v}");
+    let (st, v) = call(&owner_login, HOME_CLIENT, json!({"app": null}));
+    assert_eq!((st, v["homeClient"].clone()), (200, json!(null)), "{v}");
+    let (st, v) = call(&shell, HOME_CLIENT, json!({"app": f.jobs}));
+    assert_eq!((st, v["homeClient"].clone()), (200, json!(f.jobs)), "{v}");
+    let stored = k2_core::tool_hook::home_settings().unwrap();
+    let home = stored.iter().find(|s| s.subject == k2_core::tool_hook::home::HOME_SUBJECT).expect("home row");
+    assert_eq!(home.updated_by, shell.label(), "who set it (Sew-Actor)");
+    let audit = audit_text();
+    assert!(audit.contains(&format!("set {}", f.hearth)) && audit.contains("set none") && audit.contains(&format!("set {}", f.jobs)), "{audit}");
+
+    // App-only on only narrows: Manage Sew, the agent included. Off widens:
+    // a person (the owner or an Admin), never the agent.
+    let (st, v) = call(&agent, HOME_APP, json!({"app": f.jobs, "hidden": true}));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = call(&agent, HOME_APP, json!({"app": f.jobs, "hidden": false}));
+    assert_eq!((st, v["code"].clone()), (403, json!("owner_only")), "{v}");
+    let (st, v) = call(&member, HOME_APP, json!({"app": f.jobs, "hidden": false}));
+    assert_eq!((st, v["code"].clone()), (403, json!("owner_only")), "{v}");
+    let (st, v) = call(&admin, HOME_APP, json!({"app": f.jobs, "hidden": false}));
+    assert_eq!((st, v["apps"][0]["hiddenFromHome"].clone()), (200, json!(false)), "{v}");
+}

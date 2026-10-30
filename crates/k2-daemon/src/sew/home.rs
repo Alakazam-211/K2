@@ -15,16 +15,32 @@
 //! App needs) once it reports `app_origin` ([`refresh_origins`] keeps it
 //! current from the App's bindings on every sweep).
 //!
-//! Gates as S32's App Space routes: reads take any real credential; writes
-//! are Manage Sew (owner, an Owner/Admin login, an agent with
-//! `chat_manage`), POST-only, Admin floor in `route_policy`. Only the
-//! daemon talks to Sew: the settings are stored (`k2_core::tool_hook::home`)
-//! and the S27 worker's sweep delivers them over mgmt. An App names a
-//! published service (its id is the pass's `app` claim and the Space
-//! binding's `app_id`).
+//! Gates: reads take any real credential; writes are POST-only, Admin
+//! floor in `route_policy`, and:
+//! - **the home client** (set or clear) is the owner's: the owner token,
+//!   an Owner login or a K2 shell tab ([`need_owner_person`]). Never an
+//!   Admin login and never an agent passport, "Manage Sew" or not: the home
+//!   client's sessions see every Space each person is in (and Sew's A23
+//!   keeps the install role only for the home client), so an agent naming
+//!   its own App would hand that App every person's chat. Not requestable
+//!   (no card). Every change and every refusal is audited
+//!   (`sew-home-client`), and the change goes to Sew with `Sew-Actor` = who
+//!   made it. Sew 0.5.1's `home_client_owner_approval` (an owner pass on
+//!   the call) is later work (0.46.7).
+//! - **an App's "App-only" mark**: turning it on only narrows what the
+//!   home client sees, so Manage Sew (owner, an Owner/Admin login, an
+//!   agent with `chat_manage`) as before; turning it off widens it again,
+//!   so that is a person's (the owner token, an Owner/Admin login or a K2
+//!   shell tab), never an agent's.
+//!
+//! Only the daemon talks to Sew: the settings are stored
+//! (`k2_core::tool_hook::home`) and the S27 worker's sweep delivers them
+//! over mgmt. An App names a published service (its id is the pass's `app`
+//! claim and the Space binding's `app_id`).
 
 use std::collections::HashMap;
 
+use k2_core::connect_users::Role;
 use serde_json::{json, Value};
 
 use super::routes::{need_manage, Who};
@@ -75,6 +91,58 @@ pub fn resolve_app(token: &str) -> R<(String, String)> {
 
 fn app(id: &str) -> R<(String, String)> {
     resolve_app(id)
+}
+
+/// Where a person does what an agent is refused here.
+const PERSON_WHERE: &str = "Settings → Sew, or k2 hostchat home from a terminal outside K2 or a K2 shell tab";
+
+/// Audit event of every home-client change and refusal.
+pub const AUDIT_HOME_CLIENT: &str = "sew-home-client";
+
+fn agent_refusal(what: &str) -> super::supervisor::Fail {
+    no(
+        "owner_only",
+        403,
+        format!("{what} is a person's, never an agent's (Manage Sew does not cover it). A person does it: {PERSON_WHERE}"),
+    )
+}
+
+fn bad_credential(who: &Who) -> Option<super::supervisor::Fail> {
+    match who {
+        Who::Invalid => Some(no("forbidden", 403, "invalid or missing token")),
+        Who::Wrong => Some(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Sew")),
+        _ => None,
+    }
+}
+
+/// The home-client gate: the owner (the owner token, an Owner login or a
+/// K2 shell tab). An Admin login and every agent passport are refused.
+fn need_owner_person(who: &Who) -> R<()> {
+    if let Some(f) = bad_credential(who) {
+        return Err(f);
+    }
+    match who {
+        Who::Owner | Who::Login { role: Role::Owner, .. } | Who::Shell { .. } => Ok(()),
+        Who::Agent { .. } => Err(agent_refusal("the home client")),
+        _ => Err(no("owner_only", 403, "only the server's owner sets or clears the home client")),
+    }
+}
+
+/// Turning an App's "App-only" mark off: a person (the owner token, an
+/// Owner/Admin login or a K2 shell tab), never an agent.
+fn need_admin_person(who: &Who) -> R<()> {
+    if let Some(f) = bad_credential(who) {
+        return Err(f);
+    }
+    match who {
+        Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. } | Who::Shell { .. } => Ok(()),
+        Who::Agent { .. } => Err(agent_refusal("turning an App's App-only mark off")),
+        _ => Err(no("owner_only", 403, "only the server's owner or an admin turns an App's App-only mark off")),
+    }
+}
+
+fn audit_home_client(who: &Who, outcome: &str) {
+    crate::vault::auth_audit(AUDIT_HOME_CLIENT, &who.label(), outcome, "cli");
 }
 
 /// An App's Sew signalling origin: its primary public https origin as
@@ -164,6 +232,10 @@ fn set_client(who: &Who, v: &Value) -> R<Value> {
         Some(_) => return Err(no("bad_request", 400, "app is an App id, or null to clear")),
     };
     let changed = k2_core::tool_hook::set_home_client(id.as_deref(), &who.label()).map_err(|e| no("db_error", 500, e))?;
+    audit_home_client(
+        who,
+        &format!("{} {}", if changed { "set" } else { "unchanged" }, id.as_deref().unwrap_or("none")),
+    );
     super::s32::emit("home");
     let mut out = view()?;
     out["changed"] = json!(changed);
@@ -201,8 +273,23 @@ pub fn route(path: &str, who: &Who, body: &[u8], _params: &HashMap<String, Strin
             Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't read Sew settings")),
             _ => view(),
         },
-        HOME_CLIENT => need_manage(who).and_then(|()| set_client(who, &v)),
-        HOME_APP => need_manage(who).and_then(|()| set_app(who, &v)),
+        HOME_CLIENT => match need_owner_person(who) {
+            Ok(()) => set_client(who, &v),
+            Err(f) => {
+                let asked = match v.get("app") {
+                    Some(Value::String(s)) if !s.trim().is_empty() => s.trim().chars().take(64).collect::<String>(),
+                    _ => "none".to_string(),
+                };
+                audit_home_client(who, &format!("refused {} {asked}", f.code));
+                Err(f)
+            }
+        },
+        // App-only on narrows (Manage Sew); off widens (a person).
+        HOME_APP => match v.get("hidden") {
+            Some(Value::Bool(false)) => need_admin_person(who),
+            _ => need_manage(who),
+        }
+        .and_then(|()| set_app(who, &v)),
         _ => Err(no("not_found", 404, "no such Sew route")),
     })
 }

@@ -111,6 +111,12 @@ const FIREWALL_WHERE: &str =
 /// K2's front on :443 (`k2 front`): the owner, an Admin or a shell tab.
 const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over SSH or in a K2 shell tab";
 
+/// Sew's home client (AG-21): the owner's alone, never an agent's; an
+/// App's App-only mark off: the owner or an admin.
+const HOME_CLIENT_WHERE: &str = "the server's owner does this, with k2 hostchat home client from a terminal outside K2 or in a K2 shell tab";
+const HOME_APP_WHERE: &str =
+    "the owner or an admin turns App-only off, with k2 hostchat home app from a terminal outside K2 or in a K2 shell tab";
+
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
 /// the `to=off` twins (asked only, no wall), plus Garden access's three
@@ -244,6 +250,11 @@ pub(crate) const ROWS: &[Row] = &[
     // An agent's (or a K2 terminal's) emergency rollback: a person rolls
     // Sew back across a schema change; the owner answers on a card.
     row(ask("sew.rollback-data-loss", Floor::Owner), code(403, "rollback_needs_person"), "/cli/sew/server/rollback", POST),
+    // The home client (AG-21): its sessions see every Space each person is
+    // in, so no agent sets or clears it, Manage Sew or not: not requestable.
+    row(Target::Cannot { r#where: HOME_CLIENT_WHERE }, code(403, "owner_only"), "/cli/sew/home/client", POST),
+    // An App's App-only mark off widens the home client again.
+    row(Target::Cannot { r#where: HOME_APP_WHERE }, code(403, "owner_only"), "/cli/sew/home/app", POST),
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     // Workbench W1 (0.46.7): an agent's `k2 sidecar land` / `retire`; the
@@ -1174,6 +1185,8 @@ mod tests {
         // `k2 front status|disable` name the front's people (reads too); a
         // passthrough change keeps the firewall's.
         for (method, path, want) in [
+            ("POST", "/cli/sew/home/client", HOME_CLIENT_WHERE),
+            ("POST", "/cli/sew/home/app", HOME_APP_WHERE),
             ("GET", "/cli/front/status", FRONT_WHERE),
             ("POST", "/cli/front/disable", FRONT_WHERE),
             ("POST", "/cli/front/passthrough/add", FIREWALL_WHERE),

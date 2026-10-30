@@ -61647,8 +61647,11 @@ App Spaces (members: the App's users who also have chat; never Connect owners/ad
           releases it in Sew's own admin (until then that bind is refused: space_bound_elsewhere).
 Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
-  k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth)
+  k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth).
+                                                The owner only (owner token, Owner login or a K2 shell
+                                                tab); never an admin or an agent, Manage Sew or not
   k2 hostchat home app <app> --hidden on|off    "App-only": its Spaces never show in the home client
+                                                (on: Manage Sew; off: the owner or an admin, never an agent)
           The human output says "app-scoped sessions yes|no", "app origin yes|no" (Sew's flags
           app_scoped_sessions, app_origin): k2 study app-chat.
 Person only (outside K2, with Touch ID / your login / the vault password):

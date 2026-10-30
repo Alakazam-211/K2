@@ -383,7 +383,7 @@ fn work_row(t: &Target, with_git: bool) -> J {
             match k2_core::git_changes::snapshot(&t.dir, None).ok().and_then(|r| r.repo()) {
                 Some(snap) => {
                     let ahead = ahead_count(&t.dir, &base);
-                    let behind = git_out(&t.dir, &["rev-list", "--count", format!("HEAD..{base}").as_str(), "--"]).and_then(|s| s.parse().ok());
+                    let behind: Option<i64> = git_out(&t.dir, &["rev-list", "--count", format!("HEAD..{base}").as_str(), "--"]).and_then(|s| s.parse().ok());
                     let dirty = snap.counts.total as i64;
                     (snap.branch.clone(), Some(base), snap.head_oid.as_deref().map(short), ahead, behind, Some(dirty))
                 }

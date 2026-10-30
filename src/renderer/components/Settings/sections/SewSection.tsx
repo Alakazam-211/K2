@@ -83,7 +83,7 @@ export const SEW_MANIFEST: SettingEntry[] = [
   { id: 'sew.status', section: 'sew', label: 'Chat / Voice', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
   { id: 'sew.enable', section: 'sew', label: 'Enable Chat / Voice Hosting', description: 'Preflight and install chat and voice hosting (Linux)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice'] },
   { id: 'sew.upgrade', section: 'sew', label: 'Upgrade Sew', description: 'Upgrade or roll back the Sew server', keywords: ['sew', 'chat', 'upgrade', 'rollback', 'version'] },
-  { id: 'sew.recovery-key', section: 'sew', label: 'Sew recovery key', description: 'Reveal the recovery key once (person confirm)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
+  { id: 'sew.recovery-key', section: 'sew', label: 'Sew recovery key', description: 'Reveal the recovery key K2 keeps in the vault (person confirm)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
   { id: 'sew.backup', section: 'sew', label: 'Chat and voice backups', description: 'Back up now and see the bundles', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
   { id: 'sew.offbox', section: 'sew', label: 'Off-box copies', description: 'Backup destination and keyring mirror off this machine', keywords: ['sew', 'chat', 'offbox', 'off-box', 'mirror', 'ship', 'backup'] },
   { id: 'sew.public-url', section: 'sew', label: 'Sew public URL', description: "Where Sew's web app lives (setup links)", keywords: ['sew', 'chat', 'public url', 'host', 'setup link'] },
@@ -106,7 +106,7 @@ type Selection =
 const POLL_MS = 2000
 const EVENT_DEBOUNCE_MS = 250
 const RECOVERY_WARNING =
-  'This key plus a backup bundle plus the keyring mirror can read every message. Store it off this machine. If this box dies, it is the only way back.'
+  "This key plus a backup bundle plus the keyring mirror can read every message. K2 keeps it in the vault (sew-recovery-key), so the vault's own recovery key and backups cover it; keep any copy you make as safe."
 
 function isLive(state: string): boolean {
   return state === 'running' || state === 'degraded' || state === 'stopped'
@@ -358,14 +358,19 @@ function RecoveryKey({ status, sample, reload }: PanelProps): React.JSX.Element 
   return (
     <div className="space-y-2" data-settings-id="sew.recovery-key">
       <div className="text-xs font-medium text-[var(--color-text-primary)]">Keys</div>
-      {status.recoveryKeySaved === false && isLive(status.state) ? (
-        <Callout tone="warn">Save your recovery key now. Without it, a dead box means lost messages.</Callout>
+      {status.recoveryKeyInVault ? (
+        <div className="text-xs text-[var(--color-text-secondary)]" data-testid="sew-recovery-in-vault">
+          The recovery key is in the K2 vault as {status.recoveryKeyVaultName ?? 'sew-recovery-key'} (Settings → Vault → K2&rsquo;s own secrets). You don&rsquo;t need to copy it.
+        </div>
+      ) : status.recoveryKeySaved === false && isLive(status.state) ? (
+        <Callout tone="warn">The recovery key is not in the vault yet. K2 copies it on its own (at start, or when you reveal it).</Callout>
       ) : null}
       {key !== null ? (
         <OnceSecret
-          heading="Store this key now. K2 will not show it again unless you ask."
+          heading="Sew's recovery key. It stays in the K2 vault; copy it only if you want one outside K2."
           warning={RECOVERY_WARNING}
           secret={key}
+          needsAck={false}
           onDone={() => {
             setKey(null)
             void reload()
@@ -589,7 +594,7 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
       const ok = await useConfirmDialogStore.getState().confirm({
         title: 'Delete all chat and voice data?',
         message:
-          'Every message, file and key on this box is deleted. Off-box backups cannot be read without the recovery key. K2 does not delete off-box copies.',
+          'Every message, file and key on this box is deleted, including the recovery key in the K2 vault (sew-recovery-key). Off-box backups cannot be read without it: reveal and copy it first if you want to keep them readable. K2 does not delete off-box copies.',
         confirmLabel: 'Delete everything',
         destructive: true,
       })
@@ -969,8 +974,8 @@ function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Eleme
     <div className="max-w-2xl space-y-3" data-settings-id="sew.offbox">
       <Title>Off-box copies</Title>
       <p className={`text-[11px] ${secondary}`}>
-        Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from this box, and keep
-        the recovery key somewhere else again.
+        Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from this box. The
+        recovery key is in the K2 vault, so back the vault up off this box too (k2 vault backup &lt;dir&gt;).
       </p>
       <OffboxBlock
         title="Backup destination"

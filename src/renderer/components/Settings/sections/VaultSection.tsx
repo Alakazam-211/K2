@@ -1147,14 +1147,20 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
   )
 }
 
-/** K2's own secrets: metadata only, never actions or reveal. */
+/** K2's own secrets: metadata only, never actions. The one exception is a
+ *  secret the daemon marks `personReveal` (Sew's recovery key): the Owner or
+ *  an Admin may reveal it, with the same confirm as any reveal. */
 function SystemRow({ secret }: { secret: VaultSecret }): React.JSX.Element {
   return (
-    <div className="px-3 py-2 text-[11px] flex flex-wrap gap-x-3" data-testid="vault-system-row">
-      <span className="font-mono text-[var(--color-text-primary)]">{secret.name}</span>
-      <span className={muted}>{kindLabel(secret.kind)}</span>
-      <span className={muted}>v{secret.latestVersion}</span>
-      <span className={muted}>{secret.status}</span>
+    <div className="px-3 py-2 text-[11px] space-y-1.5" data-testid="vault-system-row">
+      <div className="flex flex-wrap gap-x-3">
+        <span className="font-mono text-[var(--color-text-primary)]">{secret.name}</span>
+        {secret.personReveal && secret.description ? <span className="text-[var(--color-text-primary)]">{secret.description}</span> : null}
+        <span className={muted}>{kindLabel(secret.kind)}</span>
+        <span className={muted}>v{secret.latestVersion}</span>
+        <span className={muted}>{secret.status}</span>
+      </div>
+      {secret.personReveal && secret.status === 'active' ? <RevealPanel secret={secret} /> : null}
     </div>
   )
 }

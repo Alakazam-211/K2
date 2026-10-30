@@ -280,6 +280,47 @@ describe('VaultSection', () => {
     expect(within(sys).queryByRole('button')).toBeNull()
   })
 
+  it("Sew's recovery key is the one system row with a Reveal (labelled; the usual confirm)", async () => {
+    systemCall = async () => ({
+      secrets: [
+        secret({ id: 'sys-1', name: 'mail.admin', namespace: 'system', scope: { kind: 'server' }, ref: null }),
+        secret({
+          id: 'sys-sew',
+          name: 'sew-recovery-key',
+          namespace: 'system',
+          scope: { kind: 'engine', id: 'sew' },
+          kind: 'password',
+          ref: null,
+          defaultDelivery: 'none',
+          deliveryCeiling: 'none',
+          description: 'Sew recovery key (chat/voice server)',
+          personReveal: true,
+        }),
+      ],
+    })
+    postHandler = (route) => {
+      if (route === 'vault/confirm/start') return { methods: ['vault-password'], expiresIn: 60 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-sew', expiresIn: 60 }
+      if (route === 'vault/reveal') return { valueB64: toBase64(VALUE), version: 1 }
+      return { ok: true }
+    }
+    await renderPage()
+    const sys = await screen.findByTestId('vault-system')
+    const rows = within(sys).getAllByTestId('vault-system-row')
+    const [mail, sew] = [rows.find((r) => r.textContent?.includes('mail.admin')), rows.find((r) => r.textContent?.includes('sew-recovery-key'))]
+    if (!mail || !sew) throw new Error('rows missing')
+    expect(within(mail).queryByRole('button')).toBeNull()
+    expect(sew.textContent).toContain('Sew recovery key (chat/voice server)')
+    fireEvent.click(within(sew).getByTestId('vault-reveal-start'))
+    const pw = (await within(sew).findByTestId('vault-reveal-password')) as HTMLInputElement
+    fireEvent.change(pw, { target: { value: 'correct horse' } })
+    fireEvent.click(within(sew).getByRole('button', { name: 'Confirm' }))
+    await within(sew).findByTestId('vault-reveal-panel')
+    expect(posts.map((p) => p.route)).toEqual(['vault/confirm/start', 'vault/confirm/finish', 'vault/reveal'])
+    expect(posts[0].body).toEqual({ action: 'reveal', secretId: 'sys-sew' })
+    expect(posts[2].body).toEqual({ id: 'sys-sew', confirmToken: 'tok-sew' })
+  })
+
   it('no system section for a list without system rows (a Member) or a refused one', async () => {
     systemCall = async () => ({ secrets: userRows })
     await renderPage()

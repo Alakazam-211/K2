@@ -60,20 +60,24 @@ export function typedMatches(typed: string, expect: string): boolean {
 const ONCE_SECRET_MS = 5 * 60 * 1000
 
 /** Shown-once secret: the value lives in the PARENT's component state only
- *  and the parent drops it on `onDone`. Done needs the checkbox. The box
- *  clears itself after 5 minutes. Never logged, toasted or stored. */
+ *  and the parent drops it on `onDone`. Done needs the checkbox unless
+ *  `needsAck` is false (a secret K2 already keeps, like Sew's recovery key
+ *  in the vault). The box clears itself after 5 minutes. Never logged,
+ *  toasted or stored. */
 export function OnceSecret({
   heading,
   secret,
   warning,
   onDone,
+  needsAck = true,
 }: {
   heading: string
   secret: string
   warning: string
   onDone: () => void
+  needsAck?: boolean
 }): React.JSX.Element {
-  const [stored, setStored] = useState(false)
+  const [stored, setStored] = useState(!needsAck)
   const [copied, setCopied] = useState(false)
   const doneRef = useRef(onDone)
   doneRef.current = onDone
@@ -100,10 +104,12 @@ export function OnceSecret({
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
-      <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <SquareCheckbox checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
-        I stored it off this machine
-      </label>
+      {needsAck ? (
+        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+          <SquareCheckbox checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
+          I stored it off this machine
+        </label>
+      ) : null}
       <Button variant="accent" disabled={!stored} onClick={onDone}>
         Done
       </Button>

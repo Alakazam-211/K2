@@ -127,7 +127,12 @@ export interface SewStatus {
   units?: { sewDb?: SewUnit; sew?: SewUnit }
   alarms?: string[]
   warnings?: SewWarning[]
+  /** The vault holds the current recovery key (same as `recoveryKeyInVault`
+   *  since 0.46.7; older daemons: it was revealed once). */
   recoveryKeySaved?: boolean
+  /** 0.46.7: Sew's recovery key is in the K2 vault (`recoveryKeyVaultName`). */
+  recoveryKeyInVault?: boolean
+  recoveryKeyVaultName?: string
   masterKeyAgeDays?: number | null
   rotationInProgress?: boolean
   backup?: SewBackupStatus
@@ -298,7 +303,7 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   drill_failed: { severity: 'error', title: 'The last restore drill failed', fix: `A backup could not be restored. Run ${cli('doctor')}.` },
   drill_stale: { severity: 'warn', title: 'No restore drill in 8 days', fix: 'Check sew-drill.timer.' },
   k2_mgmt_unreachable: { severity: 'error', title: 'K2 cannot reach Sew', fix: `The services run but K2 cannot talk to them. Run ${cli('doctor')}.` },
-  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key not saved', fix: 'Save it off this machine. It is the only way back if this box dies.', action: 'recovery-key' },
+  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key not in the vault yet', fix: 'K2 copies it into the vault on its own (at start, or when you reveal it). If this stays, check that the vault is open.', action: 'recovery-key' },
   k2_master_key_due: { severity: 'warn', title: 'Master key is due for rotation', fix: `Run ${cli('rotate-master')}.` },
   k2_vault_key_mismatch: { severity: 'error', title: "K2's key does not match Sew's", fix: `Do not change anything. Run ${cli('doctor')}.` },
   k2_helper_pin_mismatch: { severity: 'warn', title: 'Sew helper is out of date', fix: 'Update K2 on this box, then upgrade Sew.' },
@@ -656,7 +661,7 @@ export const SAMPLE_STATUS: SewStatus = {
     sewDb: { active: 'active', nRestarts: 0, memoryCurrent: 210 * 2 ** 20, memoryMax: 2 * 2 ** 30 },
     sew: { active: 'active', nRestarts: 0, memoryCurrent: 140 * 2 ** 20, memoryMax: 1 * 2 ** 30 },
   },
-  alarms: ['k2_recovery_key_not_saved', 'k2_backup_offbox_none', 'backup_stale'],
+  alarms: ['k2_backup_offbox_none', 'backup_stale'],
   warnings: [
     {
       code: 'no_offbox_key_copy',
@@ -664,7 +669,9 @@ export const SAMPLE_STATUS: SewStatus = {
       message: "no off-box key copy: backups can't be read after a disk loss without one",
     },
   ],
-  recoveryKeySaved: false,
+  recoveryKeySaved: true,
+  recoveryKeyInVault: true,
+  recoveryKeyVaultName: 'sew-recovery-key',
   masterKeyAgeDays: 12,
   backup: {
     ship: { kind: 'none', path: null },

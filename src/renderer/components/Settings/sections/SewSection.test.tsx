@@ -369,20 +369,23 @@ describe('enable wizard', () => {
 })
 
 describe('recovery key (person-only)', () => {
-  it('confirm → vault password → reveal → Done needs the checkbox; the key never reaches a log or toast', async () => {
+  it('confirm → vault password → reveal → Done (no "I stored it" checkbox: the key is in the vault); the key never reaches a log or toast', async () => {
     const SECRET = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde'
     const logs: unknown[] = []
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((k) =>
       vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logs.push(...a)),
     )
-    let status = running({ recoveryKeySaved: false, alarms: ['k2_recovery_key_not_saved'] })
+    const status = running({ recoveryKeySaved: true, recoveryKeyInVault: true, recoveryKeyVaultName: 'sew-recovery-key' })
     gets({ 'sew/status': () => status })
     posts({
       'vault/confirm/start': { methods: ['vault-password'], expiresIn: 60 },
       'vault/confirm/finish': { token: 'k2vc_tok', expiresIn: 60 },
-      'sew/server/recovery-key': () => ((status = running()), { ok: true, recoveryKey: SECRET, warning: 'w' }),
+      'sew/server/recovery-key': { ok: true, recoveryKey: SECRET, warning: 'w' },
     })
     await renderReady('Running')
+    // Rosson 2026-10-30: one line says where it is; nothing asks to save it.
+    expect(screen.getByTestId('sew-recovery-in-vault').textContent).toContain('in the K2 vault as sew-recovery-key')
+    expect(document.body.textContent).not.toContain('Save your recovery key')
     fireEvent.click(screen.getByRole('button', { name: 'Reveal recovery key' }))
     expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Reveal the recovery key?', confirmLabel: 'Reveal' }))
     const pw = (await screen.findByLabelText('Confirm password')) as HTMLInputElement
@@ -395,8 +398,7 @@ describe('recovery key (person-only)', () => {
     ])
     expect(postBodies('sew/server/recovery-key')).toEqual([{ confirmToken: 'k2vc_tok' }])
     const done = screen.getByRole('button', { name: 'Done' }) as HTMLButtonElement
-    expect(done.disabled).toBe(true)
-    fireEvent.click(screen.getByLabelText('I stored it off this machine'))
+    expect(screen.queryByLabelText('I stored it off this machine')).toBeNull()
     expect(done.disabled).toBe(false)
     fireEvent.click(done)
     await waitFor(() => expect(screen.queryByTestId('sew-once-secret')).toBeNull())

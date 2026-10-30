@@ -2,8 +2,9 @@
 //
 // Chat Hosting end to end against a scripted fake supervisor (S32 §16.3,
 // headless): not installed → preflight → Enable → the install advances one
-// step per status poll → Degraded with the two expected alarms → reveal the
-// recovery key with a person confirm → set the off-box backup destination
+// step per status poll → Degraded with the off-box alarm only (the recovery
+// key went into the vault with the enable) → reveal the recovery key with a
+// person confirm, nothing to tick → set the off-box backup destination
 // → Running with no alarms. The page only renders the fake's truth; every
 // state change comes from the fake daemon, never from the page.
 
@@ -31,7 +32,10 @@ const fake = vi.hoisted(() => {
       s.done.push(STEPS[s.done.length])
       if (s.done.length === STEPS.length) {
         s.state = 'degraded'
-        s.alarms = ['k2_recovery_key_not_saved', 'k2_backup_offbox_none']
+        // The recovery key went into the vault with the enable (Rosson
+        // 2026-10-30): only the off-box alarm is left.
+        s.recoverySaved = true
+        s.alarms = ['k2_backup_offbox_none']
       }
     }
     return {
@@ -46,6 +50,8 @@ const fake = vi.hoisted(() => {
       alarms: [...s.alarms],
       warnings: [],
       recoveryKeySaved: s.recoverySaved,
+      recoveryKeyInVault: s.recoverySaved,
+      recoveryKeyVaultName: 'sew-recovery-key',
       backup: { ship: { ...s.ship }, alarms: [] },
       drill: {},
       mirror: { kind: 'none', path: null },
@@ -86,10 +92,7 @@ const fake = vi.hoisted(() => {
       case 'sew/server/recovery-key': {
         const t = String(body.confirmToken ?? '')
         if (!s.tokens.delete(t)) throw new Error('owner_confirm_required')
-        s.recoverySaved = true
-        s.alarms = s.alarms.filter((a) => a !== 'k2_recovery_key_not_saved')
-        settle()
-        return { ok: true, recoveryKey: 'FLOW-RECOVERY-KEY', warning: 'store it' }
+        return { ok: true, recoveryKey: 'FLOW-RECOVERY-KEY', vaultName: 'sew-recovery-key', warning: 'in the vault' }
       }
       case 'sew/server/ship':
         if (body.kind !== 'dir' || body.path !== '/mnt/offbox/sew') throw new Error(`bad ship ${JSON.stringify(body)}`)
@@ -160,26 +163,25 @@ describe('Chat Hosting flow against a fake supervisor', () => {
     expect(fake.s.calls.filter((c) => c === 'GET sew/status').length).toBe(polls)
 
     fireEvent.click(screen.getByRole('button', { name: /^Alarms/ }))
-    expect(screen.getByTestId('sew-alarm-k2_recovery_key_not_saved')).toBeTruthy()
+    // The recovery key is in the vault from the enable: no alarm, no ask.
+    expect(screen.queryByTestId('sew-alarm-k2_recovery_key_not_saved')).toBeNull()
     expect(screen.getByTestId('sew-alarm-k2_backup_offbox_none')).toBeTruthy()
-    // Not only the off-box alarms yet: no "every box" note.
-    expect(screen.queryByText(OFFBOX_NOTE)).toBeNull()
+    expect(screen.getByText(OFFBOX_NOTE)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Save your recovery key')
 
-    // The recovery-key alarm's action leads to the server panel's Reveal.
-    fireEvent.click(screen.getByRole('button', { name: 'Reveal recovery key' }))
-    expect(screen.getByText('Save your recovery key now. Without it, a dead box means lost messages.')).toBeTruthy()
+    // Revealing it is still there (person confirm), with nothing to tick.
+    fireEvent.click(screen.getByTestId('sew-card-state'))
+    expect(screen.getByTestId('sew-recovery-in-vault').textContent).toContain('sew-recovery-key')
     fireEvent.click(screen.getByRole('button', { name: 'Reveal recovery key' }))
     await tick(10)
     expect(screen.getByTestId('sew-once-secret-value').textContent).toBe('FLOW-RECOVERY-KEY')
-    fireEvent.click(screen.getByLabelText('I stored it off this machine'))
+    expect(screen.queryByLabelText('I stored it off this machine')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await tick(10)
     expect(screen.queryByTestId('sew-once-secret')).toBeNull()
     expect(document.body.innerHTML).not.toContain('FLOW-RECOVERY-KEY')
 
     fireEvent.click(screen.getByRole('button', { name: /^Alarms/ }))
-    expect(screen.queryByTestId('sew-alarm-k2_recovery_key_not_saved')).toBeNull()
-    expect(screen.getByText(OFFBOX_NOTE)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Go to Off-box copies' }))
     fireEvent.click(screen.getByLabelText('Backup destination: a folder on another disk'))
     fireEvent.change(screen.getByLabelText('Backup destination path'), { target: { value: '/mnt/offbox/sew' } })

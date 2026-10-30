@@ -905,6 +905,9 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         .as_deref()
         .and_then(|r| env.secrets.resolve(r).ok().flatten())
         .ok_or(("master-key", "the vault lost Sew's master key".to_string()))?;
+    // The recovery key stays in the vault for the owner (`sew-recovery-key`,
+    // every enable: a new key, an adopted --recovery-key-file, or a re-run).
+    put_recovery_copy(env, &key).map_err(|e| ("master-key", e))?;
 
     // 2–3. stage + install-bin (marked; skipped when the pin is on disk).
     let st = box_status(env).ok_or(("stage", "engine sew status failed".to_string()))?;
@@ -1351,7 +1354,9 @@ pub fn reconcile(row: &str, db: &UnitInfo, sew: &UnitInfo, verdict: &str) -> Rec
 /// K2-side alarms (prefix `k2_`, S29 §12.3).
 pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> Vec<String> {
     let mut a = Vec::new();
-    if row.recovery_shown_at.is_none() && row.master_key_ref.is_some() {
+    // Rosson 2026-10-30: the recovery key lives in the vault; the alarm now
+    // means the vault's copy is missing or stale (K2 retries on its own).
+    if row.master_key_ref.is_some() && !recovery_in_vault(env, row) {
         a.push("k2_recovery_key_not_saved".into());
     }
     if row.master_key_created_at.is_some_and(|t| now - t > 180 * 86_400) {
@@ -1432,7 +1437,8 @@ pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>
             "code": "no_offbox_key_copy",
             "alarm": ALARM_KEYS_MIRROR_STALE,
             "message": "no off-box key copy: backups can't be read after a disk loss without one; \
-                        set a keyring mirror (keys.mirror) or keep the recovery key off the box",
+                        set a keyring mirror (keys.mirror) or back up the K2 vault off the box \
+                        (k2 vault backup <dir>; it holds the recovery key)",
         }));
     }
     w
@@ -1549,6 +1555,7 @@ fn status_body(env: &Env, with_health: bool) -> Value {
     let rec = reconcile(&row.status, &db, &sew, verdict);
     let installed = row.installed_version.clone();
     let upgrade_available = installed.as_deref().and_then(|v| version_cmp(v, pinned().version)) == Some(std::cmp::Ordering::Less);
+    let in_vault = row.master_key_ref.is_some() && !alarms.iter().any(|a| a == "k2_recovery_key_not_saved");
     let mut body = json!({
         "ok": true,
         "supported": true,
@@ -1569,7 +1576,11 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "reconfigure": reconfigure,
         "alarms": alarms,
         "warnings": warnings,
-        "recoveryKeySaved": row.recovery_shown_at.is_some(),
+        // Rosson 2026-10-30: "saved" = the vault holds the current key
+        // (`sew-recovery-key`); the owner no longer copies it by hand.
+        "recoveryKeySaved": in_vault,
+        "recoveryKeyInVault": in_vault,
+        "recoveryKeyVaultName": super::secrets::RECOVERY_NAME,
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),
         "backup": backup_status(&row, sew_status.as_ref()),
@@ -1754,6 +1765,22 @@ pub fn jwks_drift_check(env: &Env) -> Value {
     }
 }
 
+/// [`sync_recovery_copy`] at daemon start; `true` once it no longer needs
+/// to run in this process. Logs the outcome, never the key.
+pub(crate) fn backfill_recovery_at_start(env: &Env) -> bool {
+    match sync_recovery_copy(env) {
+        Ok(true) => {
+            k2_core::log_debug!("[sew] recovery key copied into the vault as {}", super::secrets::RECOVERY_NAME);
+            true
+        }
+        Ok(false) => true,
+        Err(e) => {
+            k2_core::log_debug!("[sew] recovery key not copied into the vault yet: {e}");
+            false
+        }
+    }
+}
+
 /// The 60 s health cadence (Linux only), plus the boot recovery of an
 /// upgrade or restore the last daemon died in.
 pub fn spawn_background() {
@@ -1772,11 +1799,18 @@ pub fn spawn_background() {
                 }
             }
         }
+        // Rosson 2026-10-30: an install from before the vault kept Sew's
+        // recovery key gets its `sew-recovery-key` once, at start (retried
+        // each tick until the vault is open and it succeeds).
+        let mut recovery_done = backfill_recovery_at_start(&env);
         // S29 §19: the JWKS check runs until it settles for this process
         // (the daemon port changes only with a restart).
         let mut jwks_done = false;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(60));
+            if !recovery_done {
+                recovery_done = backfill_recovery_at_start(&env);
+            }
             if let Some(s) = health_tick(&env) {
                 k2_core::log_debug!("[sew] state → {s}");
             }
@@ -2057,6 +2091,10 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
             return Err(no("vault_error", 500, format!("Sew was purged but the vault key could not be deleted: {e}")));
         }
     }
+    // Its recovery key goes with it (the purge's confirm covered it).
+    if let Err(e) = env.secrets.delete_recovery() {
+        return Err(no("vault_error", 500, format!("Sew was purged but the vault's sew-recovery-key could not be deleted: {e}")));
+    }
     *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
     store::delete().map_err(|e| no("db_error", 500, e))?;
     // Sew's config went with it: K2's records of what it set there (the
@@ -2086,8 +2124,8 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
         "backupsAt": backups_at,
         "voiceLeftovers": voice_left,
         "left": left,
-        "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept the recovery key. \
-                    K2 did not delete off-box copies.",
+        "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept a copy of the recovery key \
+                    (K2 deleted sew-recovery-key from the vault). K2 did not delete off-box copies.",
     });
     if teardown == "k2" {
         body["note"] = json!(
@@ -3298,14 +3336,24 @@ pub fn rotate_start(env: &Env) -> R<Value> {
         r.rotate_progress = Some(json!({"phase": "rewrapping", "jobId": job.get("job_id"), "startedAt": now}));
     })
     .map_err(|e| no("db_error", 500, e))?;
-    Ok(json!({
+    // The vault's recovery key follows the new master key (its old value
+    // stays an older version of `sew-recovery-key`).
+    let mut body = json!({
         "ok": true,
         "phase": "rewrapping",
         "jobId": job.get("job_id"),
         "kekId": want_kek,
-        "next": "when the rewrap job is done, a person drops the old key: k2 hostchat rotate-master drop-prev; \
-                 save the NEW recovery key (the old one no longer opens new data)",
-    }))
+        "next": "when the rewrap job is done, a person drops the old key: k2 hostchat rotate-master drop-prev. \
+                 The vault's sew-recovery-key now holds the new key (the old one no longer opens new data)",
+    });
+    if let Err(e) = put_recovery_copy(env, &key) {
+        k2_core::log_debug!("[sew] rotate: recovery key copy: {e}");
+        body["warning"] = json!(format!(
+            "the vault's sew-recovery-key still holds the old key ({e}); K2 copies the new one on its next start, \
+             or when a person reveals it (k2 hostchat recovery-key)"
+        ));
+    }
+    Ok(body)
 }
 
 /// Rotation phase 2 (person-only; the route checked the vault confirm).
@@ -3337,20 +3385,67 @@ pub fn rotate_drop_prev(env: &Env) -> R<Value> {
     Ok(json!({"ok": true, "dropped": true}))
 }
 
-pub const RECOVERY_WARNING: &str = "This key plus a backup bundle plus the keyring mirror can read every message. Store it off \
-     this machine. If this box dies, it is the only way back.";
+pub const RECOVERY_WARNING: &str = "This key plus a backup bundle plus the keyring mirror can read every message. K2 keeps it \
+     in the vault (sew-recovery-key), so the vault's own recovery key and backups cover it; keep any copy you make as safe.";
 
-/// The recovery key (person-only; the route checked the vault confirm).
-pub fn recovery_key(env: &Env) -> R<Value> {
+// ── the recovery key in the vault (Rosson 2026-10-30) ────────────────────
+
+/// Write `key` (the current master key) as the vault's `sew-recovery-key`.
+/// The same value again adds no version. Never logged.
+fn put_recovery_copy(env: &Env, key: &str) -> Result<(), String> {
+    env.secrets.put_recovery(key)
+}
+
+/// Does the vault's `sew-recovery-key` hold the current master key?
+fn recovery_in_vault(env: &Env, row: &Row) -> bool {
+    let Some(r) = row.master_key_ref.as_deref() else { return false };
+    match (env.secrets.resolve(r), env.secrets.recovery()) {
+        (Ok(Some(master)), Ok(Some(copy))) => master == copy,
+        _ => false,
+    }
+}
+
+/// Copy the current master key into the vault as `sew-recovery-key` when
+/// the copy is missing or stale (an install from before 0.46.7, or a
+/// rotation whose copy failed). `Ok(true)`: it wrote one. No install, or
+/// no master key yet: nothing to do. Runs at daemon start (retried each
+/// health tick until it succeeds once) and before a reveal.
+pub(crate) fn sync_recovery_copy(env: &Env) -> Result<bool, String> {
+    let Some(row) = store::load() else { return Ok(false) };
+    let Some(r) = row.master_key_ref.as_deref() else { return Ok(false) };
+    let master = env.secrets.resolve(r)?.ok_or_else(|| "the vault holds no Sew master key".to_string())?;
+    if env.secrets.recovery()?.as_deref() == Some(master.as_str()) {
+        return Ok(false);
+    }
+    put_recovery_copy(env, &master)?;
+    Ok(true)
+}
+
+/// The recovery key, for a person: the route checked the Sew confirm
+/// (owner or admin floor); the vault's own reveal checks the actor and the
+/// proof again and audits it. Never logged, never in an event.
+pub fn recovery_key(env: &Env, actor: &k2_vault::Actor, proof: &k2_vault::HumanProof) -> R<Value> {
     let row = need_row(true)?;
-    let r = row.master_key_ref.clone().ok_or_else(|| no("no_master_key", 404, "Sew has no master key yet"))?;
+    if row.master_key_ref.is_none() {
+        return Err(no("no_master_key", 404, "Sew has no master key yet"));
+    }
+    sync_recovery_copy(env).map_err(|e| no("vault_error", 500, e))?;
     let key = env
         .secrets
-        .resolve(&r)
-        .map_err(|e| no("vault_error", 500, e))?
-        .ok_or_else(|| no("no_master_key", 404, "the vault holds no Sew master key"))?;
+        .reveal_recovery(actor, proof)
+        .map_err(|(code, hint)| match code.as_str() {
+            "vault_closed" => no("vault_closed", 503, hint),
+            "vault_admin_required" | "vault_confirm_required" | "vault_system_namespace" => no("owner_confirm_required", 403, hint),
+            _ => no("vault_error", 500, format!("{code}: {hint}")),
+        })?
+        .ok_or_else(|| no("no_master_key", 404, "the vault holds no sew-recovery-key"))?;
     store::update(env.ops.now(), |row| row.recovery_shown_at = Some(env.ops.now())).map_err(|e| no("db_error", 500, e))?;
-    Ok(json!({"ok": true, "recoveryKey": key, "warning": RECOVERY_WARNING}))
+    Ok(json!({
+        "ok": true,
+        "recoveryKey": key,
+        "vaultName": super::secrets::RECOVERY_NAME,
+        "warning": RECOVERY_WARNING,
+    }))
 }
 
 pub fn doctor(env: &Env) -> R<Value> {

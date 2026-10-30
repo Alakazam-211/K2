@@ -2543,7 +2543,7 @@ impl LocalVault {
         let keys = self.keys.read();
         let conn = self.conn.lock();
         let row = self.find_row(&conn, &keys, sel)?;
-        if let Err(e) = policy::can_reveal(actor, row.meta.namespace, proof) {
+        if let Err(e) = policy::can_reveal_secret(actor, row.meta.namespace, &row.meta.scope, &row.meta.name, proof) {
             drop(conn);
             drop(keys);
             return Err(self.deny(Entry::new("reveal", &stamp, "deny").secret(&row.meta.id, None), e));

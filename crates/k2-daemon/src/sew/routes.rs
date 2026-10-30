@@ -739,7 +739,15 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/recovery-key" => {
             let v = json_body(body)?;
             let method = need_person(who, &v, CONFIRM_RECOVERY, &confirm_secret_id(), PersonFloor::Admin)?;
-            let r = sup::recovery_key(&env)?;
+            // The key lives in the vault (`sew-recovery-key`): the vault's
+            // own reveal checks this person and the proof again.
+            let actor = match who {
+                Who::Owner => k2_vault::Actor::Owner,
+                Who::Login { username, role } => k2_vault::Actor::Login { username: username.clone(), role: crate::vault::actor::role_of(*role) },
+                _ => return Err(no("owner_only", 403, "only the server's owner or an admin does this, with a confirm")),
+            };
+            let proof = k2_vault::HumanProof::Confirmed { method: method.clone() };
+            let r = sup::recovery_key(&env, &actor, &proof)?;
             crate::vault::auth_audit("sew-recovery-key", &who.label(), &format!("shown via {method}"), "cli");
             Ok(r)
         }

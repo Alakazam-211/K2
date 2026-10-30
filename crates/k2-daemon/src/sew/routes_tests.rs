@@ -179,6 +179,10 @@ fn person_only_steps_refuse_every_passport_and_need_the_owner_and_a_confirm() {
     let (st, v) = t.call(&Who::Owner, "/cli/sew/server/recovery-key", json!({"confirmToken": good}));
     assert_eq!(st, "200 OK", "{v}");
     assert!(k2_root_proto::sew::master_key_text_ok(v["recoveryKey"].as_str().unwrap()));
+    // It is the vault's sew-recovery-key (Rosson 2026-10-30).
+    let in_vault = crate::sew::secrets::SewSecrets::recovery(t.env.secrets).unwrap();
+    assert_eq!(v["recoveryKey"].as_str(), in_vault.as_deref(), "{v}");
+    assert_eq!(v["vaultName"], "sew-recovery-key");
     let (_, again) = t.call(&Who::Owner, "/cli/sew/server/recovery-key", json!({"confirmToken": good}));
     assert_eq!(code(&again), "owner_confirm_required", "a confirm works once");
     // An Owner login's confirm is stamped with its own name.

@@ -74,6 +74,10 @@ assert_contains "help: restart" "$out" "k2 hostchat restart [--json]"
 assert_contains "help: reconfigure" "$out" "k2 hostchat reconfigure [--json]"
 assert_contains "help: agents alias" "$out" "alias of k2 chat access"
 assert_contains "help: home client is the owner's" "$out" "never an admin or an agent, Manage Sew or not"
+# Rosson 2026-10-30: the recovery key lives in the vault; nobody copies it.
+assert_contains "help: recovery key in the vault" "$out" "K2 keeps it in the K2 vault as sew-recovery-key"
+assert_contains "help: no copy needed" "$out" "you don't need to copy it"
+assert_contains "help: recovery-key reads the vault" "$out" "shows the vault's sew-recovery-key"
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: hostchat tool id" "$(_cli_tool_id_for_verb hostchat)" "hostchat"
 assert_eq "catalog: hostchat is an id tool" "$(_cli_tool_default_mode hostchat)" "id"
@@ -172,6 +176,7 @@ class H(BaseHTTPRequestHandler):
             done = state["polls"] >= 2
             out = {"ok": True, "supported": True, "state": "running" if done else "installing", "identityProvider": "standalone",
                    "installedVersion": "0.1.0", "installId": "48831765147549701", "alarms": [], "warnings": [],
+                   "recoveryKeySaved": done, "recoveryKeyInVault": done, "recoveryKeyVaultName": "sew-recovery-key",
                    "enableProgress": {"current": None if done else "install"},
                    "voice": {"state": "running" if done else "installing", "publicUrl": "wss://hearth.box.example.test",
                              "turnHost": "turn-box.k2.dev", "nodeIp": "203.0.113.7", "cert": {"daysLeft": 89},
@@ -278,6 +283,12 @@ assert_contains "enable: identity is fixed (stderr)" "$err" "fixed for this inst
 assert_contains "enable waited for status" "$out" "running"
 assert_contains "enable: voice summary" "$out" "wss://hearth.box.example.test"
 assert_contains "enable: turn line" "$out" "turn-box.k2.dev:5349"
+# The recovery key: one line saying where it is and how to see it; nothing
+# asks the owner to save or copy it.
+assert_contains "enable: recovery key is in the vault" "$out" "recovery key:    in the K2 vault as sew-recovery-key; to see it: k2 hostchat recovery-key"
+for nag in "Save your recovery key" "save the recovery key" "Store it off" "copy it" "k2_recovery_key_not_saved"; do
+    assert_absent "enable: never asks to save it ($nag)" "$out$err" "$nag"
+done
 
 run owner hostchat enable --identity ldap
 assert_eq "bad identity → exit 2" "$rc" "2"

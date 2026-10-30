@@ -436,6 +436,7 @@ fn a_recovery_key_file_adopts_existing_data_and_never_replaces_a_vault_key() {
     enable_machine(&env, &req).unwrap();
     drop(l);
     assert_eq!(t.master_key(), key);
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(key.as_str()), "a brought key is kept in the vault too");
     // A different file later: refused, the vault key stays.
     let other = crate::sew::secrets::generate_master_key().unwrap();
     t.ops.files.lock().unwrap().insert("/home/k2/recovery.txt".into(), other.into_bytes());
@@ -516,10 +517,11 @@ fn status_envelope_alarms_and_degraded_verdict() {
     t.enabled();
     let s = status(&t.env(), false);
     assert_eq!(s["ok"], true, "the envelope");
-    // No off-box backups and a recovery key never shown: alarmed (G18).
+    // No off-box backups: alarmed (G18). The recovery key is in the vault
+    // from the enable, so it never alarms (Rosson 2026-10-30).
     let alarms: Vec<String> = serde_json::from_value(s["alarms"].clone()).unwrap();
     assert!(alarms.contains(&"k2_backup_offbox_none".to_string()), "{alarms:?}");
-    assert!(alarms.contains(&"k2_recovery_key_not_saved".to_string()));
+    assert!(!alarms.contains(&"k2_recovery_key_not_saved".to_string()), "{alarms:?}");
     assert_eq!(s["state"], "degraded");
     assert!(s.get("health").is_none(), "health only with ?health=1");
     assert_eq!(status(&t.env(), true)["health"]["mgmt"], "ok");
@@ -618,9 +620,12 @@ fn purge_checks_the_hostname_first_and_deletes_vault_keys_last() {
     t.ops.queue(&format!("engine sew purge {INSTALL_ID}"), Ok(json!({"sewExit": 3, "sew": {"error": {"message": "confirm mismatch"}}})));
     assert_eq!(purge(&t.env(), "lztek", false).unwrap_err().code, "purge_failed");
     assert!(t.secrets.resolve(&key_ref).unwrap().is_some());
+    assert!(t.secrets.recovery().unwrap().is_some(), "a failed purge keeps the vault's recovery key");
     assert_eq!(t.row().status, "error");
     t.ops.clear();
     let r = purge(&t.env(), "lztek", true).unwrap();
+    assert_eq!(t.secrets.recovery().unwrap(), None, "the purge removes the vault's sew-recovery-key");
+    assert!(r["warning"].as_str().unwrap().contains("K2 deleted sew-recovery-key from the vault"), "{r}");
     assert_eq!(r["purged"], true);
     assert_eq!(r["teardown"], "sew", "a known binary: Sew's own purge, unchanged");
     assert!(r.get("note").is_none());
@@ -1499,6 +1504,13 @@ fn rotation_swaps_refs_resets_the_recovery_alarm_and_keeps_the_key_on_stdin() {
     assert!(row.recovery_shown_at.is_none(), "the new key must be saved again");
     let new_key = t.master_key();
     assert_eq!(r["kekId"], kek_id(&new_key).unwrap());
+    // The vault's recovery key follows the new master key; nothing asks a
+    // person to save it.
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(new_key.as_str()), "rotation updates sew-recovery-key");
+    assert_eq!(t.secrets.recovery_writes.lock().unwrap().len(), 2, "enable + rotation");
+    assert!(r.get("warning").is_none(), "{r}");
+    assert!(!r["next"].as_str().unwrap().contains("save the NEW"), "{r}");
+    assert!(!status(&t.env(), false)["alarms"].as_array().unwrap().iter().any(|a| a == "k2_recovery_key_not_saved"));
     let call = t.ops.calls.lock().unwrap().iter().find(|c| c.argv == "engine sew rotate-master").cloned().unwrap();
     assert_eq!(call.stdin.unwrap(), format!("{new_key}\n").into_bytes());
     assert!(t.ops.mgmt_calls.lock().unwrap().iter().any(|c| c == "POST /mgmt/v1/keys/rotate-master"));
@@ -1514,14 +1526,87 @@ fn rotation_swaps_refs_resets_the_recovery_alarm_and_keeps_the_key_on_stdin() {
     assert!(t.row().master_prev_ref.is_none());
 }
 
+fn confirmed() -> k2_vault::HumanProof {
+    k2_vault::HumanProof::Confirmed { method: "vault-password".into() }
+}
+
+/// `k2 hostchat recovery-key` reads the vault's `sew-recovery-key` through
+/// the vault's own reveal rule: the Owner or an Admin with a confirm; an
+/// agent or a Member never, even past the route.
 #[test]
-fn the_recovery_key_is_the_vault_key_and_marks_it_saved() {
+fn the_recovery_key_is_revealed_from_the_vault_with_a_person_confirm() {
     let t = t();
     t.enabled();
-    let r = recovery_key(&t.env()).unwrap();
+    let r = recovery_key(&t.env(), &k2_vault::Actor::Owner, &confirmed()).unwrap();
     assert_eq!(r["recoveryKey"], t.master_key());
-    assert!(r["warning"].as_str().unwrap().contains("only way back"));
+    assert_eq!(r["vaultName"], "sew-recovery-key");
+    assert!(r["warning"].as_str().unwrap().contains("in the vault (sew-recovery-key)"), "{r}");
     assert!(t.row().recovery_shown_at.is_some());
+    let admin = k2_vault::Actor::Login { username: "ana".into(), role: k2_vault::Role::Admin };
+    assert_eq!(recovery_key(&t.env(), &admin, &confirmed()).unwrap()["recoveryKey"], t.master_key());
+    // The vault's rule, not just the route's: no confirm, a Member, an agent.
+    assert_eq!(recovery_key(&t.env(), &k2_vault::Actor::Owner, &k2_vault::HumanProof::None).unwrap_err().code, "owner_confirm_required");
+    let member = k2_vault::Actor::Login { username: "m".into(), role: k2_vault::Role::Member };
+    assert_eq!(recovery_key(&t.env(), &member, &confirmed()).unwrap_err().code, "owner_confirm_required");
+    let agent = k2_vault::Actor::Agent(k2_vault::AgentActor { workspace_id: "w".into(), session_id: None, shell: false, vault_manage: true });
+    assert_eq!(recovery_key(&t.env(), &agent, &confirmed()).unwrap_err().code, "owner_confirm_required");
+    // A missing copy (an older install the start has not reached yet) is
+    // written first, then revealed from the vault.
+    *t.secrets.recovery.lock().unwrap() = None;
+    assert_eq!(recovery_key(&t.env(), &k2_vault::Actor::Owner, &confirmed()).unwrap()["recoveryKey"], t.master_key(), "missing copy: written, then revealed");
+    assert_eq!(t.secrets.recovery().unwrap(), Some(t.master_key()));
+}
+
+/// Rosson 2026-10-30: enable keeps Sew's recovery key in the vault, so
+/// status never asks the owner to save it, and the key never leaves by
+/// argv (only `sew install`'s stdin carries it).
+#[test]
+fn enable_keeps_the_recovery_key_in_the_vault_and_status_never_asks_to_save_it() {
+    let t = t();
+    t.enable().unwrap();
+    let key = t.master_key();
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(key.as_str()), "enable wrote sew-recovery-key");
+    assert_eq!(*t.secrets.recovery_writes.lock().unwrap(), vec![key.clone()], "one write");
+    let s = status(&t.env(), false);
+    assert_eq!(s["recoveryKeyInVault"], true, "{s}");
+    assert_eq!(s["recoveryKeySaved"], true, "{s}");
+    assert_eq!(s["recoveryKeyVaultName"], "sew-recovery-key", "{s}");
+    assert!(!s["alarms"].as_array().unwrap().iter().any(|a| a == "k2_recovery_key_not_saved"), "{s}");
+    assert!(!s.to_string().contains(&key), "the key never rides the status");
+    for c in t.ops.calls.lock().unwrap().iter() {
+        assert!(!c.argv.contains(&key), "key in argv: {}", c.argv);
+    }
+    // A re-run of enable writes no new version.
+    store::update(1, |r| r.enable_progress = None).unwrap();
+    enable_machine(&t.env(), &t.req()).unwrap();
+    assert_eq!(t.secrets.recovery_writes.lock().unwrap().len(), 1, "same key, no new version");
+}
+
+/// An install from before the vault kept the recovery key: the daemon's
+/// start copies it in once; later starts write nothing. With the vault
+/// closed it waits (and the status alarm says so) instead of failing.
+#[test]
+fn an_existing_install_backfills_the_recovery_key_once_at_start() {
+    let t = t();
+    t.enabled();
+    // As an older K2 left it: master key in the vault, no recovery copy.
+    *t.secrets.recovery.lock().unwrap() = None;
+    t.secrets.recovery_writes.lock().unwrap().clear();
+    assert!(status(&t.env(), false)["alarms"].as_array().unwrap().iter().any(|a| a == "k2_recovery_key_not_saved"));
+    assert_eq!(status(&t.env(), false)["recoveryKeyInVault"], false);
+    // Vault closed at start: not yet, retried.
+    *t.secrets.fail_store.lock().unwrap() = true;
+    assert!(!backfill_recovery_at_start(&t.env()), "retry while the vault is closed");
+    *t.secrets.fail_store.lock().unwrap() = false;
+    assert!(backfill_recovery_at_start(&t.env()));
+    assert_eq!(t.secrets.recovery().unwrap(), Some(t.master_key()));
+    assert!(backfill_recovery_at_start(&t.env()));
+    assert!(backfill_recovery_at_start(&t.env()));
+    assert_eq!(*t.secrets.recovery_writes.lock().unwrap(), vec![t.master_key()], "exactly one write");
+    assert_eq!(status(&t.env(), false)["recoveryKeyInVault"], true);
+    // No install: nothing to do.
+    store::delete().unwrap();
+    assert_eq!(sync_recovery_copy(&t.env()), Ok(false));
 }
 
 #[test]

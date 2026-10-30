@@ -76,6 +76,9 @@ export interface VaultSecret {
   updatedAt?: string
   ref?: string | null
   agentCanSee: boolean
+  /** One of K2's own secrets the Owner or an Admin may reveal with a
+   *  confirm (Sew's recovery key, `sew-recovery-key`). */
+  personReveal?: boolean
   /** The workspace's handle, for workspace scope. */
   workspace?: string
   hostsDisplay?: VaultHostDisplay[]

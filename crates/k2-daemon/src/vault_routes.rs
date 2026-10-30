@@ -341,6 +341,11 @@ pub fn meta_json(m: &SecretMeta) -> Value {
     if let Value::Object(o) = &mut v {
         o.insert("ref".into(), json!(crate::vault::display_ref(m)));
         o.insert("agentCanSee".into(), json!(m.agent_can_see()));
+        // One of K2's own secrets a person may reveal (Sew's recovery key):
+        // Settings → Vault offers Reveal on its row.
+        if k2_vault::policy::person_revealable(m.namespace, &m.scope, &m.name) {
+            o.insert("personReveal".into(), json!(true));
+        }
         if m.scope.kind == ScopeKind::Workspace {
             o.insert("workspace".into(), json!(crate::vault::workspace_label(&m.scope.id)));
         }

@@ -48,6 +48,78 @@ fn engine_credentials_mint_once_and_rotate_only_when_accepted() {
     assert!(v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).is_err());
 }
 
+/// Sew's recovery key (Rosson 2026-10-30): a system secret K2 writes, that
+/// the Owner or an Admin may reveal with a confirm. An agent (even an IT
+/// agent) never sees it, can't read it, grant it or change it; nothing
+/// delivers it; Sew's other engine secrets stay never shown.
+#[test]
+fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
+    let t = TestDir::new("sew-recovery");
+    let (v, _) = open(&t, "v");
+    let key = "k2test-sew-recovery-key-value-0123456789abc";
+    let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), "sew-recovery-key", Kind::Password);
+    r.default_delivery = Some(Delivery::None);
+    r.delivery_ceiling = Some(Delivery::None);
+    r.description = "Sew recovery key (chat/voice server)".into();
+    // A person can't create it; K2 can.
+    assert_eq!(v.put(r.clone(), SecretBytes::from_slice(key.as_bytes()), &Actor::Owner).expect_err("person").code, "vault_system_namespace");
+    v.put(r, SecretBytes::from_slice(key.as_bytes()), &Actor::System("sew".into())).expect("system put");
+    v.engine_ensure("sew", "db-password", Gen::Random32).expect("ensure");
+    let sel = Selector::system(Scope::engine("sew"), "sew-recovery-key");
+
+    let tok = v.confirm.mint("reveal", None, "owner", "test");
+    let proof = v.confirm.take(&tok, "reveal", None, "owner").expect("proof");
+    assert_eq!(v.reveal(&sel, &Actor::Owner, &proof).expect("owner reveals").expose(), key.as_bytes());
+    let admin = Actor::Login { username: "ana".into(), role: Role::Admin };
+    assert_eq!(v.reveal(&sel, &admin, &proof).expect("admin reveals").expose(), key.as_bytes());
+    assert_eq!(v.reveal(&sel, &Actor::Owner, &HumanProof::None).expect_err("no confirm").code, "vault_confirm_required");
+    let member = Actor::Login { username: "m".into(), role: Role::Member };
+    assert!(v.reveal(&sel, &member, &proof).is_err());
+    assert_eq!(
+        v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).expect_err("never").code,
+        "vault_system_namespace"
+    );
+
+    for manage in [false, true] {
+        let a = Actor::Agent(AgentActor { workspace_id: "ws1".into(), session_id: Some("s1".into()), shell: false, vault_manage: manage });
+        assert!(v.reveal(&sel, &a, &proof).is_err(), "agent reveal (manage={manage})");
+        assert!(v.meta(&sel, &a).is_err(), "agent sees metadata (manage={manage})");
+        let all = v.list(&ListFilter { include_system: true, ..Default::default() }, &a).expect("list");
+        assert!(all.iter().all(|m| m.name != "sew-recovery-key"), "agent lists it (manage={manage})");
+        let g = GrantRequest {
+            selector: sel.clone(),
+            consumer: Consumer::workspace("ws1"),
+            delivery: Delivery::Fetch,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        };
+        assert!(v.grant(g, &a).is_err(), "agent grant (manage={manage})");
+        assert!(v.destroy(&sel, &a).is_err(), "agent destroy (manage={manage})");
+        for u in [Use::Api, Use::Env, Use::File] {
+            let who = Requester::Session { workspace_id: "ws1".into(), session_id: Some("s1".into()) };
+            assert!(v.resolve(&sel, u, &who).is_err(), "agent resolve {u:?}");
+        }
+    }
+    // Nor can the owner grant it to a workspace.
+    let g = GrantRequest {
+        selector: sel.clone(),
+        consumer: Consumer::workspace("ws1"),
+        delivery: Delivery::Fetch,
+        env_name: None,
+        file_name: None,
+        hosts_narrowed: None,
+        expires_at: None,
+        version: None,
+    };
+    assert_eq!(v.grant(g, &Actor::Owner).expect_err("owner grant").code, "vault_system_namespace");
+    let m = v.meta(&sel, &Actor::Owner).expect("owner sees metadata");
+    assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::None, Delivery::None));
+    assert_eq!(m.description, "Sew recovery key (chat/voice server)");
+}
+
 fn item(name: &str, value: &str) -> CarryItem {
     CarryItem {
         scope_kind: "workspace".into(),

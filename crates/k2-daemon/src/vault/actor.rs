@@ -80,7 +80,7 @@ impl VaultCaller {
     }
 }
 
-fn role_of(r: k2_core::connect_users::Role) -> Role {
+pub(crate) fn role_of(r: k2_core::connect_users::Role) -> Role {
     use k2_core::connect_users::Role as R;
     match r {
         R::Owner => Role::Owner,

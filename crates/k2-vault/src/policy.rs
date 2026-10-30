@@ -358,6 +358,32 @@ pub fn can_grant(actor: &Actor, f: &Facts<'_>, consumer: &Consumer, delivery: De
     }
 }
 
+/// K2's own secrets a person may still reveal (Owner/Admin, with a
+/// confirm), as `(engine, name)` in scope `engine:<engine>`. Only K2 can
+/// create a `system` secret, so nobody else can put a value under one of
+/// these names; like every system secret they are never delivered,
+/// granted or listed to an agent. Today one: Sew's recovery key (Rosson
+/// 2026-10-30: "move that to the vault"), the copy of Sew's master key the
+/// owner used to save by hand.
+pub const PERSON_REVEALABLE_SYSTEM: &[(&str, &str)] = &[("sew", "sew-recovery-key")];
+
+/// Is this one of [`PERSON_REVEALABLE_SYSTEM`]?
+pub fn person_revealable(ns: Namespace, scope: &Scope, name: &str) -> bool {
+    ns == Namespace::System
+        && scope.kind == ScopeKind::Engine
+        && PERSON_REVEALABLE_SYSTEM.iter().any(|(e, n)| scope.id == *e && name == *n)
+}
+
+/// [`can_reveal`] for one secret: a [`PERSON_REVEALABLE_SYSTEM`] secret
+/// follows the `user` rule (Owner/Admin with a confirm); every other system
+/// secret is still never shown.
+pub fn can_reveal_secret(actor: &Actor, ns: Namespace, scope: &Scope, name: &str, proof: &HumanProof) -> Result<()> {
+    if person_revealable(ns, scope, name) {
+        return can_reveal(actor, Namespace::User, proof);
+    }
+    can_reveal(actor, ns, proof)
+}
+
 /// Reveal (print a `user` value to a person): Owner/Admin with a confirm.
 pub fn can_reveal(actor: &Actor, ns: Namespace, proof: &HumanProof) -> Result<()> {
     if ns == Namespace::System {
@@ -536,6 +562,40 @@ mod tests {
         assert!(can_reveal(&agent("w", true), Namespace::User, &c).is_err());
         let m = Actor::Login { username: "m".into(), role: Role::Member };
         assert!(can_reveal(&m, Namespace::User, &c).is_err());
+    }
+
+    /// Sew's recovery key is the one system secret a person may reveal:
+    /// Owner/Admin with a confirm; never an agent, a Member, or without a
+    /// confirm. Any other system secret (or that name in another scope)
+    /// stays never shown.
+    #[test]
+    fn only_the_listed_system_secret_is_person_revealable() {
+        let c = HumanProof::Confirmed { method: "password".into() };
+        let sew = Scope::engine("sew");
+        can_reveal_secret(&Actor::Owner, Namespace::System, &sew, "sew-recovery-key", &c).expect("owner");
+        let admin = Actor::Login { username: "a".into(), role: Role::Admin };
+        can_reveal_secret(&admin, Namespace::System, &sew, "sew-recovery-key", &c).expect("admin");
+        let m = Actor::Login { username: "m".into(), role: Role::Member };
+        assert_eq!(can_reveal_secret(&m, Namespace::System, &sew, "sew-recovery-key", &c).expect_err("member").code, "vault_admin_required");
+        assert!(can_reveal_secret(&agent("w", true), Namespace::System, &sew, "sew-recovery-key", &c).is_err());
+        assert_eq!(
+            can_reveal_secret(&Actor::Owner, Namespace::System, &sew, "sew-recovery-key", &HumanProof::None).expect_err("no confirm").code,
+            "vault_confirm_required"
+        );
+        let others = [
+            (sew.clone(), "db-password"),
+            (sew.clone(), "sewsec_master_0123"),
+            (Scope::engine("stalwart"), "sew-recovery-key"),
+            (Scope::server(), "sew-recovery-key"),
+        ];
+        for (scope, name) in others {
+            assert_eq!(
+                can_reveal_secret(&Actor::Owner, Namespace::System, &scope, name, &c).expect_err("never").code,
+                "vault_system_namespace",
+                "{scope:?} {name}"
+            );
+        }
+        assert!(!person_revealable(Namespace::User, &sew, "sew-recovery-key"));
     }
 
     #[test]

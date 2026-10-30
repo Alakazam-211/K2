@@ -64681,6 +64681,10 @@ Server:
          --identity picks how people sign in. It is fixed for the life of an
          install: changing it later means a fresh install (k2 hostchat purge,
          then enable). Default k2; standalone = Sew's own password logins.
+         Sew's recovery key: K2 keeps it in the K2 vault as sew-recovery-key,
+         so you don't need to copy it (see it: k2 hostchat recovery-key).
+         --recovery-key-file FILE brings an existing key (to reuse Sew data
+         already on this box); K2 keeps that one in the vault too.
          Where Sew comes from: with no --tarball, enable and upgrade (and voice)
          download the release this K2 pins from
          github.com/Alakazam-211/sew-releases into ~/.k2/cache/sew, or reuse
@@ -64786,7 +64790,8 @@ Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's pub
 Person only (outside K2, with Touch ID / your login / the vault password):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
-  k2 hostchat recovery-key                  (the owner or an admin)
+  k2 hostchat recovery-key                  (the owner or an admin; shows the vault's sew-recovery-key,
+                                             also in Settings → Vault → K2's own secrets)
   k2 hostchat rotate-master --drop-prev     (the owner or an admin)
   k2 hostchat open [--print]                (the owner)
          a one-time 60 s link to Sew's web app as its install owner. You
@@ -64918,6 +64923,8 @@ if verb in ("status",):
     mi = v.get("mirror") or {}
     if mi.get("kind"):
         line("key mirror", mi.get("path") if mi.get("kind") == "dir" else "none")
+    if v.get("recoveryKeyInVault"):
+        line("recovery key", "in the K2 vault as %s; to see it: k2 hostchat recovery-key" % (v.get("recoveryKeyVaultName") or "sew-recovery-key"))
     mt = v.get("meet") or {}
     if mt.get("app"):
         line("meet", "%s → App %s" % (mt.get("url"), mt.get("app")))

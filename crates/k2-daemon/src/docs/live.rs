@@ -75,7 +75,6 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
-use k2_mpc_base::errors::Refusal;
 use k2_mpc_base::session::position::{At, LineRange};
 use k2_mpc_base::session::{
     ChangeEvent, ClaimPolicy, ConnId, EditOptions, RosterEvent, Session, SessionError, Stay,
@@ -908,7 +907,7 @@ mod tests {
     #[test]
     fn people_only_and_never_an_app_pass_or_an_agent() {
         use crate::sidecar_routes::Caller;
-        assert_eq!(person_for(Caller::Owner, false).expect("owner").pid(), "person:owner");
+        assert_eq!(person_for(Caller::Owner, false).ok().expect("owner").pid(), "person:owner");
         let code = |r: Result<DocCaller, CliResponse>| {
             let r = r.expect_err("refused");
             assert_eq!(r.status, "403 Forbidden");

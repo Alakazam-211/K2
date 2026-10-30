@@ -24,7 +24,7 @@
 
 use serde_json::{json, Value};
 
-use k2_mpc_base::errors::{ErrorReport, Refusal};
+use k2_mpc_base::errors::ErrorReport;
 use k2_mpc_base::session::{
     ChangeEvent, CursorAt, LeaveReason, Participant, ParticipantKind, Rights, Role, RosterEntry, RosterEvent,
     RosterMember, SessionError, UndoOutcome, Who,

@@ -19,7 +19,7 @@
 //! | Subject | Op | Sew call | Body (any subset per call) |
 //! |---|---|---|---|
 //! | `home-client` | `home_client` | `POST /mgmt/v1/home-client` | `{app_id: "<service id>" \| null}` |
-//! | `app:<id>` | `app_settings` | `POST /mgmt/v1/apps/{app_id}/settings` | `{hidden_from_home, display_name, origin}` |
+//! | `app:<id>` | `app_settings` | `POST /mgmt/v1/apps/{app_id}/settings` | `{hidden_from_home, display_name, origin, max_level, uploads}` |
 //!
 //! **Feature flags, never versions** ([`super::features`]): the home
 //! client, `hidden_from_home` and `display_name` go only once Sew reports
@@ -28,6 +28,11 @@
 //! sweep plans exactly the fields Sew can take and sends again whenever
 //! that subset changes (a flag appeared, the owner changed a setting, the
 //! App's origin moved); a new install owes everything again.
+//!
+//! **The chat key (App-governed Spaces S1, Sew 0.6.0 I7):** an App's
+//! `max_level` (`member | moderator | admin`) and `uploads` (bool) come
+//! from its chat key ([`set_app_chat`]) and go only once Sew reports
+//! `app_governed_spaces`.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -125,6 +130,14 @@ pub fn set_by(conn: &Connection, subject: &str) -> Result<Option<String>, String
         .map_err(|e| format!("sew settings read: {e}"))
 }
 
+/// Record an App's chat-key ceiling for Sew (I7): `max_level` and
+/// `uploads`. Merged into the App's row; the sweep sends them once Sew
+/// reports `app_governed_spaces`.
+pub fn set_app_chat(conn: &Connection, app_id: &str, max_level: &str, uploads: bool, actor: &str, now: i64) -> Result<bool, String> {
+    let subject = format!("{APP_PREFIX}{app_id}");
+    merge(conn, &subject, obj(json!({ "max_level": max_level, "uploads": uploads })), actor, now)
+}
+
 /// The Apps with a settings row (their ids).
 pub fn apps(conn: &Connection) -> Result<Vec<String>, String> {
     let mut st = conn
@@ -170,6 +183,13 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
             }
             if let Some(v) = body.get("display_name") {
                 out.insert("display_name".into(), v.clone());
+            }
+        }
+        if has(features::APP_GOVERNED_SPACES) {
+            for k in ["max_level", "uploads"] {
+                if let Some(v) = body.get(k) {
+                    out.insert(k.into(), v.clone());
+                }
             }
         }
         if out.is_empty() {
@@ -314,6 +334,14 @@ mod tests {
         let home = obj(json!({"app_id": null}));
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["app_origin"])), None);
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["home_client"])), Some(json!({"app_id": null})));
+        // The chat key's ceiling (I7) waits for `app_governed_spaces`.
+        let keyed = obj(json!({"display_name": "Jobs", "max_level": "moderator", "uploads": false}));
+        assert_eq!(sendable("app:x", &keyed, &f(&["home_client"])), Some(json!({"display_name": "Jobs"})));
+        assert_eq!(sendable("app:x", &obj(json!({"max_level": "admin", "uploads": true})), &f(&["home_client", "app_origin"])), None);
+        assert_eq!(
+            sendable("app:x", &keyed, &f(&["app_governed_spaces"])),
+            Some(json!({"max_level": "moderator", "uploads": false}))
+        );
         assert_eq!(app_settings_path("abc"), "/mgmt/v1/apps/abc/settings");
         assert_eq!(path_for(Op::AppSettings, "app:abc").as_deref(), Some("/mgmt/v1/apps/abc/settings"));
         assert_eq!(path_for(Op::HomeClient, HOME_SUBJECT).as_deref(), Some(MGMT_HOME_CLIENT));

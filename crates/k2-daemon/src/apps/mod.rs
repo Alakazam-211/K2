@@ -89,6 +89,9 @@ pub mod grants;
 pub mod origins;
 pub mod guarded;
 pub mod guest_rooms;
+/// App-governed Spaces S1 (0.46.7): an App's chat key (`k2 app grant <app>
+/// --kind chat-key`), served through `guest_rooms`' dispatch.
+pub mod chat_key_routes;
 /// Switch-1 default limits (§4.3).
 pub mod limits;
 pub mod open;

@@ -2035,6 +2035,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // apps open an App's sign-in codes, every caller (the owner token
     // included: agents can read it). `secretId` = the service id.
     crate::app_pairing::CONFIRM_ACTION,
+    // App-governed Spaces S1 (0.46.7): giving an App a chat key or widening
+    // it (vs-live AG-6), every caller, the owner token included (agents can
+    // read it). `secretId` = the service id.
+    crate::apps::chat_key_routes::CONFIRM_ACTION,
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",
@@ -2179,6 +2183,10 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::app_pairing::confirm_reason(action, b.secret_id.as_deref()) {
         // App phone pairing: the same rule (V22).
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::apps::chat_key_routes::confirm_reason(action, b.secret_id.as_deref()) {
+        // App-governed Spaces S1: the sheet names the App from its record.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::email_notify::confirm_reason(action, b.secret_id.as_deref()) {

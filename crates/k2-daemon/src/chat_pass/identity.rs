@@ -19,6 +19,17 @@
 //! session, this one included (intended). It never gets a `connect` grant
 //! or a `k2:connect` member.
 //!
+//! **Keyed Apps (App-governed Spaces S2, 0.46.7).** When the session's App
+//! holds an enabled chat key (`k2 app grant <app> --kind chat-key`), a K2
+//! App user of THAT App needs no chat grant of their own: the mint's gate
+//! writes one (`created_by chat-key:<service id>`) and waits for Sew to
+//! confirm the member (`503 chat_member_pending`). Never for a login marked
+//! as an agent's, nor for a principal who also holds the box login: they
+//! keep today's rule. Caps are the key's caps ∩ the App's approved
+//! manifest chat caps (`chat:read` always in), never the role's. The sub
+//! stays `k2:principal:<id>` with the `app` claim. A grant a key made
+//! counts only while that key is on.
+//!
 //! Refused: an App session without a `chat` grant (403 `no_chat_grant`),
 //! an App login the owner marked as an agent's (`k2 app user agent`; 403
 //! `agent_subject`: an agent is its workspace in chat, `k2:workspace:`,
@@ -191,6 +202,28 @@ pub fn narrow_to_app(role_chat: &[String], ceiling: &AppChatCeiling) -> Result<V
     }
 }
 
+/// S2 (`prd-app-governed-spaces-k2-v1` §5.5): a keyed App's pass caps =
+/// the key's caps ∩ the App's approved manifest chat caps (a `--cmd`
+/// service or a manifest that declares no chat cap: the key's own, which
+/// the owner set in person), with `chat:read` always in, in
+/// [`super::CHAT_CAPS`] order. `Err(())` = nothing left (a suspended App,
+/// caps waiting for approval, a key that shares none): refuse
+/// `no_chat_caps`, never an uncapped pass.
+pub fn keyed_caps(key_caps: &[String], ceiling: &AppChatCeiling) -> Result<Vec<String>, ()> {
+    let left: Vec<&String> = match ceiling {
+        AppChatCeiling::NotManaged | AppChatCeiling::NotDeclared => key_caps.iter().collect(),
+        AppChatCeiling::Declared(allowed) => key_caps.iter().filter(|c| allowed.contains(c)).collect(),
+    };
+    if left.is_empty() {
+        return Err(());
+    }
+    Ok(super::CHAT_CAPS
+        .iter()
+        .filter(|c| **c == super::CAP_CHAT_READ || left.iter().any(|l| l.as_str() == **c))
+        .map(|c| c.to_string())
+        .collect())
+}
+
 /// A Connect login's identity under the ruling `owner_connect_is_k2_owner`.
 pub fn connect_identity(
     username: &str,
@@ -271,14 +304,26 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
         };
         let actor = format!("principal:{}", pass.username);
         // Before the grant and the tie: an agent's login is never a person,
-        // whatever grants it holds.
+        // whatever grants it holds (a chat key never makes it one either).
         match k2_core::skin::principal_agent_workspace(&principal_id) {
             Ok(None) => {}
             Ok(Some(_)) => return Err(Refusal::AgentSubject { actor }),
             Err(e) => return Err(Refusal::Unavailable(e)),
         }
-        match k2_core::skin::principal_has_chat_grant(&principal_id) {
+        // S2: the App's chat key, if it holds one that is on.
+        let key = if pass.app == k2_core::skin::HOST_APP_ID {
+            None
+        } else {
+            k2_core::skin::app_chat_key::enabled(&pass.app).map_err(Refusal::Unavailable)?
+        };
+        match k2_core::skin::app_chat_key::principal_has_counting_chat_grant(&principal_id) {
             Ok(true) => {}
+            // A keyed App's own person: the mint's gate makes their member.
+            Ok(false) if key.is_some() => match k2_core::skin::app_chat_key::keyed_eligible(&principal_id, &pass.app) {
+                Ok(true) => {}
+                Ok(false) => return Err(Refusal::NoChatGrant { actor }),
+                Err(e) => return Err(Refusal::Unavailable(e)),
+            },
             Ok(false) => return Err(Refusal::NoChatGrant { actor }),
             Err(e) => return Err(Refusal::Unavailable(e)),
         }
@@ -287,13 +332,18 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
             Ok(Some(_)) => return Err(Refusal::TiedPendingReset { actor }),
             Err(e) => return Err(Refusal::Unavailable(e)),
         }
-        // A1: the role's chat caps under the App's own manifest ceiling.
+        // A1: the role's chat caps under the App's own manifest ceiling;
+        // S2: a keyed App's key caps under it instead.
         let ceiling = if pass.app == k2_core::skin::HOST_APP_ID {
             AppChatCeiling::NotManaged
         } else {
             crate::apps::grants::chat_ceiling(&pass.app).map_err(Refusal::Unavailable)?
         };
-        let Ok(caps) = narrow_to_app(&chat_caps_of(&pass.caps), &ceiling) else {
+        let caps = match &key {
+            Some(k) => keyed_caps(&k.caps, &ceiling),
+            None => narrow_to_app(&chat_caps_of(&pass.caps), &ceiling),
+        };
+        let Ok(caps) = caps else {
             return Err(Refusal::NoChatCaps { actor });
         };
         return Ok(PassIdentity {

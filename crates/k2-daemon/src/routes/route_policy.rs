@@ -220,6 +220,12 @@ pub const ROUTES: &[Route] = &[
     // 0.46.3 F8: undo box prep.
     post("/cli/app/box/unprep", Owner),
     post("/cli/app/build", Admin),
+    // App-governed Spaces S1 (0.46.7): an App's chat key. Read: Admin and
+    // the App's agent; on / widen: the owner in person (an Admin within
+    // the defaults) with a vault confirm; narrow and revoke: Admin or the
+    // App's own agent (handler).
+    split("/cli/app/chat-key", Admin, Admin),
+    post("/cli/app/chat-key/revoke", Admin),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
     // off is held unless the owner turns it off.
     post("/cli/app/clean-mode", Admin),

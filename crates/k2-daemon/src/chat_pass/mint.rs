@@ -30,6 +30,13 @@
 //!    mint answers 503 `chat_member_pending` + `Retry-After: 2`; a blocked
 //!    provision → 503 `chat_member_blocked`; its grant switched off → 403
 //!    `no_chat_grant`.
+//! 5c. An App session (App-governed Spaces S2): when its App holds an
+//!    enabled chat key, the same gate for the person's `k2:principal:<id>`
+//!    member ([`keyed_gate_refusal`]): no chat grant yet → K2 writes one
+//!    (`created_by chat-key:<service id>`, within the key's
+//!    `max_members`, else 403 `chat_limit`) and answers 503
+//!    `chat_member_pending` + `Retry-After: 2` until Sew confirms it. A
+//!    keyless App's session (Hearth, Meet) mints exactly as before.
 //! 6. Rate limit per `sid` and per daemon → 429 `rate_limited` +
 //!    `Retry-After`.
 //! 7. Install id ([`super::link`]) → else 503 `chat_unavailable`.
@@ -64,7 +71,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use k2_core::tool_hook::ConnectChatGate;
+use k2_core::tool_hook::{ConnectChatGate, KeyedChatGate};
 use k2_vault::{Actor, Role, VaultError};
 
 use super::handoff::{self, RedeemError};
@@ -135,10 +142,16 @@ pub struct Deps<'a> {
     /// A Connect login's member gate (`(id, username)` →
     /// [`ConnectChatGate`]); live: [`k2_core::tool_hook::connect_chat_gate`].
     pub connect_gate: &'a ConnectGateFn<'a>,
+    /// An App session's keyed-App gate (`(principal id, service id,
+    /// username)` → [`KeyedChatGate`]); live:
+    /// [`k2_core::tool_hook::keyed_chat_gate`].
+    pub keyed_gate: &'a KeyedGateFn<'a>,
 }
 
 /// See [`Deps::connect_gate`].
 pub type ConnectGateFn<'a> = dyn Fn(&str, &str) -> Result<ConnectChatGate, String> + 'a;
+/// See [`Deps::keyed_gate`].
+pub type KeyedGateFn<'a> = dyn Fn(&str, &str, &str) -> Result<KeyedChatGate, String> + 'a;
 
 /// Seconds a BFF waits before retrying a mint whose member is queued.
 pub const MEMBER_PENDING_RETRY_SECS: i64 = 2;
@@ -184,6 +197,53 @@ fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_
         Err(e) => {
             super::keyring::klog(format!("pass mint: connect member gate: {e}"));
             refuse(503, "chat_unavailable", "K2 could not check this login's chat account")
+        }
+    }
+}
+
+/// App-governed Spaces S2: a keyed App's person needs no chat grant of
+/// their own, so K2 makes their `k2:principal:<id>` member itself and
+/// mints only once Sew confirmed it (C6: a pass never creates a member).
+/// A keyless App's session passes straight through
+/// ([`KeyedChatGate::NotKeyed`]).
+fn keyed_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_>) -> Option<Reply> {
+    if ident.provenance != Provenance::AppSession {
+        return None;
+    }
+    let app = ident.app.as_deref().filter(|a| *a != k2_core::skin::HOST_APP_ID)?;
+    let pid = ident.sub.strip_prefix("k2:principal:")?;
+    let username = ident.actor.strip_prefix("principal:").unwrap_or(&ident.actor);
+    let refuse = |status: u16, code: &str, hint: &str, details: Option<Value>| -> Option<Reply> {
+        audit("chat-pass", &ident.actor, code, req.ingress, req.ip);
+        Some(error(status, code, hint, details).into())
+    };
+    match (d.keyed_gate)(pid, app, username) {
+        Ok(KeyedChatGate::Ready | KeyedChatGate::NotKeyed) => None,
+        Ok(KeyedChatGate::Pending) => {
+            audit("chat-pass", &ident.actor, "chat_member_pending", req.ingress, req.ip);
+            Some(Reply {
+                response: error(
+                    503,
+                    "chat_member_pending",
+                    "K2 is adding this person to chat for this App; retry shortly",
+                    Some(json!({ "retry_after_ms": MEMBER_PENDING_RETRY_SECS * 1000 })),
+                ),
+                retry_after_secs: Some(MEMBER_PENDING_RETRY_SECS),
+            })
+        }
+        Ok(KeyedChatGate::Blocked(why)) => refuse(503, "chat_member_blocked", &format!("this person's chat account is stuck: {why}"), None),
+        Ok(KeyedChatGate::Disabled) => refuse(403, "no_chat_grant", "this person's chat access is switched off (grant kind chat)", None),
+        Ok(KeyedChatGate::NoGrant) => refuse(403, "no_chat_grant", "this person has no chat access (grant kind chat)", None),
+        Ok(KeyedChatGate::Limit(max)) => refuse(
+            403,
+            "chat_limit",
+            &format!("this App's chat key already gave chat to {max} people, its ceiling (the owner raises it: k2 app grant <app> --kind chat-key --max N)"),
+            Some(json!({ "maxMembers": max })),
+        ),
+        Ok(KeyedChatGate::Off) => refuse(503, "chat_unavailable", "Sew is not enabled on this box", None),
+        Err(e) => {
+            super::keyring::klog(format!("pass mint: keyed member gate: {e}"));
+            refuse(503, "chat_unavailable", "K2 could not check this person's chat account", None)
         }
     }
 }
@@ -297,6 +357,7 @@ pub fn handle_pass(req: &PassRequest<'_>) -> Reply {
             limiter: &ratelimit::MINTS,
             codes: &handoff::CODES,
             connect_gate: &k2_core::tool_hook::connect_chat_gate,
+            keyed_gate: &k2_core::tool_hook::keyed_chat_gate,
         },
     )
 }
@@ -396,6 +457,9 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                     // Before the rate limit: a "retry shortly" answer must
                     // not spend the BFF's mint budget.
                     if let Some(r) = connect_gate_refusal(&i, d, req) {
+                        return r;
+                    }
+                    if let Some(r) = keyed_gate_refusal(&i, d, req) {
                         return r;
                     }
                     if let Err(ms) = d.limiter.check_and_record(&i.sid, d.now) {

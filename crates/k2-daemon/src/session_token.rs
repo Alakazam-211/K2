@@ -1054,6 +1054,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/grant/copy-host",
         "/cli/app/grant/revoke",
         "/cli/app/guest/rooms",
+        // App-governed Spaces S1 (0.46.7): an agent reads its own App's
+        // chat key and narrows or revokes it ("Build and run Apps"); turning
+        // it on or widening it is the owner's in person (the handler
+        // answers `owner_only`).
+        "/cli/app/chat-key",
+        "/cli/app/chat-key/revoke",
         // prd-app-caps-0464-v1 AC4 (0.46.4): its own App's ceiling, and its
         // guests under the grant (reads).
         "/cli/app/guest/ceiling",

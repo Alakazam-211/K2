@@ -47,6 +47,10 @@ pub enum SewSessionRevoke {
     /// `cu_…` sid). That is intended: one person, one member. To end just
     /// one of those, revoke its `K2Sid` (`cu_…`) instead.
     ExternalId(String),
+    /// End every Sew session whose pass carried this `app` claim (Sew
+    /// 0.6.0 I8, flag `app_governed_spaces`): an App's chat key was
+    /// revoked, or the App was uninstalled. Never sent on a key rotation.
+    AppId(String),
 }
 
 impl SewSessionRevoke {
@@ -55,6 +59,7 @@ impl SewSessionRevoke {
         match self {
             SewSessionRevoke::K2Sid(s) => json!({ "k2_sid": s }),
             SewSessionRevoke::ExternalId(e) => json!({ "external_id": e }),
+            SewSessionRevoke::AppId(a) => json!({ "app_id": a }),
         }
     }
 
@@ -64,6 +69,7 @@ impl SewSessionRevoke {
         match self {
             SewSessionRevoke::K2Sid(s) => format!("k2_sid={s}"),
             SewSessionRevoke::ExternalId(e) => format!("external_id={e}"),
+            SewSessionRevoke::AppId(a) => format!("app_id={a}"),
         }
     }
 }
@@ -135,6 +141,7 @@ mod tests {
             SewSessionRevoke::ExternalId("k2:principal:p".into()).payload(),
             json!({"external_id": "k2:principal:p"})
         );
+        assert_eq!(SewSessionRevoke::AppId("svc".into()).payload(), json!({"app_id": "svc"}));
         assert_eq!(skin_sid("abc"), "skn_abc");
         assert_eq!(principal_external_id("p1"), "k2:principal:p1");
     }

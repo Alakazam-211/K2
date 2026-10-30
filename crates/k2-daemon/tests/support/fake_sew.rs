@@ -22,7 +22,14 @@
 //!   deactivating a person deactivates assistants pinned to them.
 //! - owner/set naming the current owner → 200 `changed:false` (G6).
 //! - sessions/revoke (S28 §12): `k2_sid` and/or `external_id`; an unknown
-//!   `external_id` → 404; else `200 {revoked: n}`.
+//!   `external_id` → 404; else `200 {revoked: n}`. Sew 0.6.0 I8 (flag
+//!   `app_governed_spaces`): `app_id` ends every session of that App; a fake
+//!   without the flag refuses the field like an older Sew (400, recorded in
+//!   `bad_bodies`).
+//! - App settings (decision 13 + Sew 0.6.0 I7): `hidden_from_home`,
+//!   `display_name`, `origin`; with `app_governed_spaces` also `max_level`
+//!   (`member | moderator | admin`) and `uploads` (bool). `max_level` on the
+//!   home-client App → 409 `conflict` reason `home_client_cannot_govern`.
 //! - provision is DECLARATIVE (A8, live Sew): absent optional profile
 //!   fields (`email`, `title`, `pronouns`) are cleared; `update` takes a
 //!   ProfilePatch (omitted = kept).
@@ -833,12 +840,23 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
         Err(e) => return bad_body(s, "app settings", e, body),
     };
     // Any subset per call (Sew 2026-10-28); origin is a wss:// URL, or
-    // null to clear it (Sew I7, App-governed Spaces).
-    let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| ["hidden_from_home", "display_name", "origin"].contains(&k.as_str())));
+    // null to clear it (Sew I7, App-governed Spaces). Sew 0.6.0 (I7, flag
+    // `app_governed_spaces`): max_level and uploads.
+    let governed = s.features.iter().any(|f| f == "app_governed_spaces");
+    let mut known = vec!["hidden_from_home", "display_name", "origin"];
+    if governed {
+        known.extend(["max_level", "uploads"]);
+    }
+    let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| known.contains(&k.as_str())));
     let ok_types = v.get("hidden_from_home").is_none_or(Value::is_boolean)
-        && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(|o| o.starts_with("wss://")));
+        && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(|o| o.starts_with("wss://")))
+        && v.get("max_level").is_none_or(|l| matches!(l.as_str(), Some("member" | "moderator" | "admin")))
+        && v.get("uploads").is_none_or(Value::is_boolean);
     if app.is_empty() || !ok_keys || !ok_types {
-        return bad_body(s, "app settings", "fields: hidden_from_home (bool), display_name, origin (wss://)", body);
+        return bad_body(s, "app settings", "fields: hidden_from_home (bool), display_name, origin (wss://), max_level, uploads (bool; app_governed_spaces)", body);
+    }
+    if v.get("max_level").is_some() && s.home_client.clone().flatten().as_deref() == Some(app.as_str()) {
+        return err(409, "conflict", "the home client can't govern", json!({"reason": "home_client_cannot_govern"}));
     }
     let entry = s.app_settings.entry(app.clone()).or_insert_with(|| json!({}));
     for (k, x) in v.as_object().cloned().unwrap_or_default() {
@@ -1442,8 +1460,11 @@ fn sessions_revoke(s: &mut State, body: &str) -> (u16, String) {
         Ok(r) => r,
         Err(e) => return bad_body(s, "sessions/revoke", e, body),
     };
-    if req.external_id.is_none() && req.k2_sid.is_none() {
-        return bad_body(s, "sessions/revoke", "send external_id, k2_sid, or both", body);
+    if req.external_id.is_none() && req.k2_sid.is_none() && req.app_id.is_none() {
+        return bad_body(s, "sessions/revoke", "send external_id, k2_sid, app_id", body);
+    }
+    if req.app_id.is_some() && !s.features.iter().any(|f| f == "app_governed_spaces") {
+        return bad_body(s, "sessions/revoke", "unknown field app_id (this Sew has no app_governed_spaces)", body);
     }
     if let Some(ext) = &req.external_id {
         if !s.members.contains_key(&ext.to_string()) {

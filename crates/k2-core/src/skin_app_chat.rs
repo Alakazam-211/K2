@@ -808,6 +808,9 @@ pub fn app_removed(service_id: &str, actor: &str) -> Result<usize, String> {
         super::set_grant_enabled_as(id, false, actor)?;
     }
     revoke(svc, actor)?;
+    // App-governed Spaces S1/S6: its chat key goes off and Sew ends its
+    // sessions by `app_id` (I8), on a Sew with `app_governed_spaces`.
+    super::app_chat_key::app_removed(svc, actor)?;
     if !off.is_empty() {
         crate::log_debug!("[skin] App {svc} removed: chat switched off for {} people whose only App it was", off.len());
     }

@@ -12,7 +12,12 @@
 //! GET  /cli/app/guest/list     ?app=&cursor=&limit=        the App's guests with their rooms (guests.list)
 //! GET  /cli/app/guest/chat     ?username=[&app=]           one person's chat (Sew for Apps A2)
 //! POST /cli/app/guest/chat     {username, scope, app?}     set it: member | guest | none
+//! GET  /cli/app/chat-key       ?app=                       the App's chat key (App-governed Spaces S1)
+//! POST /cli/app/chat-key       {app, caps?, maxLevel?, uploads?, maxMembers?, confirmToken?}
+//! POST /cli/app/chat-key/revoke {app}
 //! ```
+//!
+//! The chat-key routes' rules live in `super::chat_key_routes`.
 //!
 //! **Chat (Sew for Apps A2, 0.46.6).** `POST /cli/app/grant {app, kind:
 //! "guests-chat", maxMembers?}` is the owner's only (an agent's is
@@ -67,8 +72,11 @@ pub const ROUTES: &[&str] = &[
     GUEST_LIST,
     GUEST_CHAT,
     super::agent_grants::COPY_HOST,
+    super::chat_key_routes::KEY,
+    super::chat_key_routes::REVOKE,
 ];
-pub const POST_ROUTES: &[&str] = &["/cli/app/grant", "/cli/app/grant/revoke", super::agent_grants::COPY_HOST];
+pub const POST_ROUTES: &[&str] =
+    &["/cli/app/grant", "/cli/app/grant/revoke", super::agent_grants::COPY_HOST, super::chat_key_routes::REVOKE];
 /// `/cli/app/guest/rooms` takes GET (read) and POST (set).
 pub const GUEST_ROOMS: &str = "/cli/app/guest/rooms";
 /// `k2 app guest ceiling <app>` (GET only).
@@ -91,6 +99,9 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         (GUEST_LIST, false) => guest_list(who, params),
         (GUEST_CHAT, false) => chat_read(who, params),
         (GUEST_CHAT, true) => chat_set(who, body),
+        (super::chat_key_routes::KEY, false) => super::chat_key_routes::read(who, params),
+        (super::chat_key_routes::KEY, true) => super::chat_key_routes::set(who, body),
+        (super::chat_key_routes::REVOKE, _) => super::chat_key_routes::revoke(who, body),
         (GUEST_CEILING | GUEST_LIST, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
         _ => Err(no("not_found", 404, "no such App route")),
     };
@@ -163,6 +174,11 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let mut grants: Vec<J> = gr::get_grant(&t.service_id).map_err(store)?.iter().map(|g| grant_json(&t, g)).collect();
     if let Some(g) = ac::get_grant(&t.service_id).map_err(store)? {
         grants.push(chat_grant_json(&g));
+    }
+    // App-governed Spaces S1: the chat key (on, or off with its kept
+    // settings: `enabled`).
+    if let Some(k) = k2_core::skin::app_chat_key::get(&t.service_id).map_err(store)? {
+        grants.push(super::chat_key_routes::key_json(&k));
     }
     Ok(json!({ "ok": true, "app": app_json(&t), "grants": grants }))
 }

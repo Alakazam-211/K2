@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use k2_core::tool_hook::ConnectChatGate;
+use k2_core::tool_hook::{ConnectChatGate, KeyedChatGate};
 use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::{Actor, AgentActor, KeyStore, LocalVault, Role, VaultError};
 use serde_json::{json, Value};
@@ -62,6 +62,11 @@ fn ready_gate(_: &str, _: &str) -> Result<ConnectChatGate, String> {
     Ok(ConnectChatGate::Ready)
 }
 
+/// The keyed-App gate for a keyless App (tests of other gates).
+fn not_keyed(_: &str, _: &str, _: &str) -> Result<KeyedChatGate, String> {
+    Ok(KeyedChatGate::NotKeyed)
+}
+
 fn req<'a>(bearer: Option<&'a str>, body: &'a [u8]) -> PassRequest<'a> {
     PassRequest { ingress: "loopback", ip: "127.0.0.1", browser: false, bearer, owner_token: OWNER, body, link: None }
 }
@@ -73,7 +78,7 @@ fn with_deps<R>(r: &Ring, now: i64, flip: bool, f: impl FnOnce(&Deps<'_>) -> R) 
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, now);
-    f(&Deps { now, owner_connect_is_k2_owner: flip, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate })
+    f(&Deps { now, owner_connect_is_k2_owner: flip, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &not_keyed })
 }
 
 fn audit_text() -> String {
@@ -309,7 +314,7 @@ fn a_sew_that_is_not_ready_refuses_the_mint_with_its_state() {
         "state": "stopping", "since": null, "retryAfterMs": 15000,
         "hint": crate::sew::health::hint("stopping"),
     }));
-    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &stopping, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &stopping, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &not_keyed };
     let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
     assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "sew_unavailable"));
     let b = body(&x);
@@ -340,7 +345,7 @@ fn install_id_is_asked_every_mint_validated_and_missing_is_503() {
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
-    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &dead, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &dead, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &not_keyed };
     let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
     assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_unavailable"));
     // Keys unavailable → 503 too.
@@ -478,6 +483,7 @@ mod live_row {
                 limiter: &limiter,
                 codes: &codes,
                 connect_gate: &ready_gate,
+                keyed_gate: &not_keyed,
             };
             mint::handle_pass_with(&req(Some(OWNER), b""), &d)
         }
@@ -604,7 +610,7 @@ fn handoff_redeem_single_use_expiry_cap_and_bearer_exclusive() {
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
-    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &not_keyed };
 
     let c = codes.mint(T0, "owner-token").expect("mint");
     let b = serde_json::json!({ "handoff": c }).to_string();
@@ -972,6 +978,7 @@ fn connect_login_mints_only_after_its_member_is_delivered() {
         limiter: &limiter,
         codes: &codes,
         connect_gate: &gate,
+        keyed_gate: &not_keyed,
     };
     let mint = || mint::handle_pass_with(&req(Some(&tok), b"{}"), &d);
 
@@ -1130,4 +1137,230 @@ fn s0_box_logins_never_mint_through_an_app_and_a_same_name_app_user_is_itself() 
     let z_ident = identity::classify(&z_s.raw, OWNER).expect("App user classifies");
     assert_eq!(z_ident.sew_role, SewRole::Member);
     assert_eq!(z_ident.provenance, Provenance::AppSession);
+}
+
+// ── App-governed Spaces S2: a keyed App's people ─────────────────────
+
+const KEYED_SVC: &str = "svc-keyed-3333";
+
+fn key_on(svc: &str, caps: &[&str], max: u32) {
+    let w = k2_core::skin::app_chat_key::Want {
+        caps: caps.iter().map(|c| c.to_string()).collect(),
+        max_level: k2_core::skin::app_chat_key::Level::Moderator,
+        uploads: true,
+        max_members: max,
+    };
+    k2_core::skin::app_chat_key::set(svc, &w, "owner").expect("chat key on");
+}
+
+/// A K2 App user of `svc` only (no box login) with NO chat grant of their
+/// own; returns its id. (`add_principal` alone would give a box login.)
+fn keyed_guest(name: &str, svc: &str) -> String {
+    let p = k2_core::skin::add_principal_for_app(name, None, svc, None, "test").expect("principal");
+    k2_core::skin::set_principal_password(name, Some("s3cret-horse-battery")).expect("pw");
+    p.id
+}
+
+/// S2 (§3.4, §5.3, §5.5): a keyed App's person needs no chat grant; the
+/// mint asks the keyed gate (before the rate limit) and answers "retry
+/// shortly" until Sew confirmed the member; the pass names the person
+/// (`k2:principal:<id>`, never a box identity) with the `app` claim and the
+/// key's caps (chat:read always in), never the role's.
+#[test]
+fn a_keyed_apps_person_mints_through_the_gate_with_the_keys_caps() {
+    let _home = TempHome::new();
+    let r = ring("s2-keyed");
+    let kim = keyed_guest("kim", KEYED_SVC);
+    let kim_s = k2_core::skin::create_app_session_token("kim", KEYED_SVC).expect("kim → keyed App");
+    let status = FixedStatus(Ok(INSTALL.into()));
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    let seen = std::sync::Mutex::new(Vec::<(String, String, String)>::new());
+    let state = std::sync::Mutex::new(KeyedChatGate::Pending);
+    let gate = |pid: &str, svc: &str, user: &str| -> Result<KeyedChatGate, String> {
+        seen.lock().unwrap().push((pid.to_string(), svc.to_string(), user.to_string()));
+        Ok(state.lock().unwrap().clone())
+    };
+    let d = Deps {
+        now: T0,
+        owner_connect_is_k2_owner: false,
+        status: &status,
+        sign: &sign,
+        limiter: &limiter,
+        codes: &codes,
+        connect_gate: &ready_gate,
+        keyed_gate: &gate,
+    };
+    let mint = || mint::handle_pass_with(&req(Some(&kim_s.raw), b"{}"), &d);
+
+    // No key: today's rule, no chat grant → refused, the gate never asked
+    // about a grant it could write.
+    assert_eq!(code(&mint()), "no_chat_grant");
+    assert!(seen.lock().unwrap().is_empty(), "classify refused before the gate");
+
+    key_on(KEYED_SVC, &["chat:post", "voice:join"], 50);
+    for _ in 0..PER_SID + 2 {
+        let x = mint();
+        assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_member_pending"));
+        assert_eq!(x.retry_after_secs, Some(mint::MEMBER_PENDING_RETRY_SECS));
+        assert!(!x.response.body.contains("\"pass\""), "{}", x.response.body);
+    }
+    assert_eq!(seen.lock().unwrap()[0], (kim.clone(), KEYED_SVC.to_string(), "kim".to_string()));
+    for (g, st, c) in [
+        (KeyedChatGate::Blocked("stuck".into()), "503 Service Unavailable", "chat_member_blocked"),
+        (KeyedChatGate::Disabled, "403 Forbidden", "no_chat_grant"),
+        (KeyedChatGate::NoGrant, "403 Forbidden", "no_chat_grant"),
+        (KeyedChatGate::Limit(50), "403 Forbidden", "chat_limit"),
+        (KeyedChatGate::Off, "503 Service Unavailable", "chat_unavailable"),
+    ] {
+        *state.lock().unwrap() = g.clone();
+        let x = mint();
+        assert_eq!((x.response.status, code(&x).as_str()), (st, c), "{g:?}: {}", x.response.body);
+    }
+    *state.lock().unwrap() = KeyedChatGate::Limit(50);
+    assert_eq!(body(&mint())["error"]["details"]["maxMembers"], 50);
+
+    // Confirmed: the pass, with the key's caps and chat:read.
+    *state.lock().unwrap() = KeyedChatGate::Ready;
+    let x = mint();
+    assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+    let b = body(&x);
+    assert_eq!(b["sub"], format!("k2:principal:{kim}"));
+    assert_eq!((b["app"].as_str(), b["provenance"].as_str(), b["sewRole"].as_str()), (Some(KEYED_SVC), Some("app-session"), Some("member")));
+    assert_eq!(b["caps"], json!(["chat:read", "chat:post", "voice:join"]));
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+    let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
+    assert_eq!((c.app.as_deref(), c.sub.as_str()), (Some(KEYED_SVC), format!("k2:principal:{kim}").as_str()));
+
+    // Revoked: the person is back to today's rule (no grant of their own).
+    k2_core::skin::app_chat_key::revoke(KEYED_SVC, "owner").expect("revoke");
+    let n = seen.lock().unwrap().len();
+    assert_eq!(code(&mint()), "no_chat_grant");
+    assert_eq!(seen.lock().unwrap().len(), n, "a keyless App's person without chat never reaches the gate");
+}
+
+/// S2 security: the key never gives a person pass to a login marked as an
+/// agent's, nor to a principal who also holds the box login, nor through a
+/// grant a revoked key made; on the App's link no box credential (owner
+/// token, a Connect login) ever gets a pass.
+#[test]
+fn the_key_never_makes_agents_or_box_users_people_of_an_app() {
+    let _home = TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('ws-bot', 'ws-bot', '/tmp/ws-bot', 'ws-bot')", []).expect("a workspace");
+    }
+    let r = ring("s2-refusals");
+    key_on(KEYED_SVC, &["chat:read"], 50);
+    let gate_calls = std::sync::Mutex::new(0usize);
+    let gate = |_: &str, _: &str, _: &str| -> Result<KeyedChatGate, String> {
+        *gate_calls.lock().unwrap() += 1;
+        Ok(KeyedChatGate::Ready)
+    };
+    let status = FixedStatus(Ok(INSTALL.into()));
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &gate };
+
+    // An agent's login (`k2 app user agent`) of the keyed App.
+    let bot = keyed_guest("bot", KEYED_SVC);
+    // Signed in first; the mark applies to live sessions from the next call.
+    let bot_s = k2_core::skin::create_app_session_token("bot", KEYED_SVC).expect("bot → keyed App");
+    k2_core::skin::set_principal_agent("bot", Some("ws-bot")).expect("mark as agent");
+    assert_eq!(k2_core::skin::principal_agent_workspace(&bot).expect("mark"), Some("ws-bot".to_string()));
+    // AG-5 runs first: an agent's login is refused as an agent, key or not.
+    assert_eq!(code(&mint::handle_pass_with(&req(Some(&bot_s.raw), b"{}"), &d)), "agent_subject");
+    // A person who also holds the box login (a `host` grant).
+    let both = keyed_guest("both", KEYED_SVC);
+    app_grant(&both, k2_core::skin::HOST_APP_ID);
+    let both_s = k2_core::skin::create_app_session_token("both", KEYED_SVC).expect("both → keyed App");
+    assert_eq!(code(&mint::handle_pass_with(&req(Some(&both_s.raw), b"{}"), &d)), "no_chat_grant");
+    // A grant another (now revoked) key made counts for nothing.
+    let other = "svc-other-4444";
+    key_on(other, &["chat:read"], 5);
+    let eli = keyed_guest("eli", other);
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: eli.clone(),
+        kind: "chat".into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("member".into()),
+        created_by: Some(k2_core::skin::app_chat_key::marker(other)),
+    })
+    .expect("the other key's grant");
+    k2_core::skin::app_chat_key::revoke(other, "owner").expect("revoke the other key");
+    let eli_s = k2_core::skin::create_app_session_token("eli", other).expect("eli → other");
+    assert_eq!(code(&mint::handle_pass_with(&req(Some(&eli_s.raw), b"{}"), &d)), "no_chat_grant");
+    assert_eq!(*gate_calls.lock().unwrap(), 0, "none of them reached the keyed gate");
+
+    // On the keyed App's link: only its own guest sessions mint.
+    k2_core::connect_users::add_user("adm", "password-for-tests-1").expect("add login");
+    let adm = k2_core::connect_users::create_session("adm");
+    let link = mint::OnLink { app_id: "keyed", service_id: KEYED_SVC, link_id: "gw:38609" };
+    for (bearer, who) in [(OWNER.to_string(), "the owner token"), (adm, "a Connect login")] {
+        let mut q = req(Some(&bearer), b"{}");
+        q.ingress = "app-link";
+        q.link = Some(link);
+        let x = mint::handle_pass_with(&q, &d);
+        assert_eq!((x.response.status, code(&x).as_str()), ("403 Forbidden", "pass_wrong_link"), "{who}");
+    }
+}
+
+/// §7: a keyless App's session (Hearth) mints exactly today's pass with the
+/// LIVE keyed gate: the same fields, the role's caps, no gate refusal; a
+/// key on ANOTHER App changes nothing for it.
+#[test]
+fn a_keyless_apps_pass_is_unchanged_by_the_live_keyed_gate() {
+    let _home = TempHome::new();
+    let r = ring("s2-hearth");
+    app_guest("hana", &[HEARTH_SVC]);
+    let hana_h = k2_core::skin::create_app_session_token("hana", HEARTH_SVC).expect("hana → Hearth");
+    key_on(KEYED_SVC, &["chat:read", "chat:post", "voice:join", "voice:video"], 50);
+    let status = FixedStatus(Ok(INSTALL.into()));
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    let d = Deps {
+        now: T0,
+        owner_connect_is_k2_owner: false,
+        status: &status,
+        sign: &sign,
+        limiter: &limiter,
+        codes: &codes,
+        connect_gate: &ready_gate,
+        keyed_gate: &k2_core::tool_hook::keyed_chat_gate,
+    };
+    let x = mint::handle_pass_with(&req(Some(&hana_h.raw), b"{}"), &d);
+    assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+    let b = body(&x);
+    let mut keys: Vec<&str> = b.as_object().expect("object").keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["app", "caps", "expiresAt", "expiresInMs", "jti", "ok", "pass", "personProof", "provenance", "sewRole", "sid", "sub"],
+        "today's answer, field for field"
+    );
+    assert_eq!(b["caps"], json!(["chat:read"]), "the role's caps (none: the floor), never another App's key");
+    assert_eq!(b["app"], HEARTH_SVC);
+}
+
+#[test]
+fn keyed_caps_are_the_key_under_the_apps_approved_manifest() {
+    use identity::AppChatCeiling as C;
+    let v = |c: &[&str]| c.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(identity::keyed_caps(&v(&["voice:join"]), &C::NotManaged), Ok(v(&["chat:read", "voice:join"])));
+    assert_eq!(identity::keyed_caps(&v(&["chat:post", "voice:join"]), &C::NotDeclared), Ok(v(&["chat:read", "chat:post", "voice:join"])));
+    assert_eq!(
+        identity::keyed_caps(&v(&["chat:read", "chat:post", "voice:join", "voice:video"]), &C::Declared(v(&["chat:read", "voice:join"]))),
+        Ok(v(&["chat:read", "voice:join"])),
+        "the manifest as the owner approved it binds"
+    );
+    assert_eq!(identity::keyed_caps(&v(&["voice:video"]), &C::Declared(v(&["chat:read"]))), Err(()), "nothing shared: refuse");
+    assert_eq!(identity::keyed_caps(&v(&["chat:read"]), &C::Declared(vec![])), Err(()), "a suspended App: refuse");
+    assert_eq!(identity::keyed_caps(&[], &C::NotManaged), Err(()));
 }

@@ -648,6 +648,7 @@ pub fn revoke_subject_key(op: &crate::sew_revoke::SewSessionRevoke) -> String {
     match op {
         R::K2Sid(sid) => format!("revoke:k2_sid:{sid}"),
         R::ExternalId(ext) => format!("revoke:{ext}"),
+        R::AppId(app) => format!("revoke:app:{app}"),
     }
 }
 
@@ -813,7 +814,17 @@ pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGat
         Step::Grant(g) => g,
     };
     let subject = sew_wire::ExternalId::K2Connect(user_id.to_string()).to_string();
-    let ctx = HookCtx::load(&actor, &[]);
+    member_delivered_gate(&subject, &grant, &actor)
+}
+
+/// The second half of a pass gate (Connect logins, and K2 App users of a
+/// keyed App): an enabled chat grant whose member `subject` (the outbox
+/// key, its external id) must be delivered before a pass is minted. An
+/// open row is pending (blocked: [`ConnectChatGate::Blocked`]); a delivered
+/// provision or update is ready; no row (pruned) or a delivered
+/// deprovision queues a fresh provision (`pass_mint`) and answers pending.
+fn member_delivered_gate(subject: &str, grant: &SkinGrant, actor: &str) -> Result<ConnectChatGate, String> {
+    let ctx = HookCtx::load(actor, &[]);
     let now = outbox::now_secs();
     let gate = crate::skin::with_skin_conn(|conn| {
         let open: Option<(String, Option<String>)> = conn
@@ -825,7 +836,7 @@ pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGat
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
-            .map_err(|e| format!("connect chat gate: {e}"))?;
+            .map_err(|e| format!("chat member gate: {e}"))?;
         match open {
             Some((s, e)) if s == outbox::STATE_BLOCKED => {
                 return Ok(ConnectChatGate::Blocked(
@@ -844,7 +855,7 @@ pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGat
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
-            .map_err(|e| format!("connect chat gate: {e}"))?;
+            .map_err(|e| format!("chat member gate: {e}"))?;
         match newest.as_ref().map(|(o, s)| (o.as_str(), s.as_str())) {
             Some(("provision" | "update", outbox::STATE_DONE)) => {
                 return Ok(ConnectChatGate::Ready)
@@ -859,17 +870,124 @@ pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGat
         }
         let tx = conn
             .unchecked_transaction()
-            .map_err(|e| format!("connect chat gate begin: {e}"))?;
-        let op = chat::provision_op(&tx, &grant, &ctx, Cause::PassMint)?;
+            .map_err(|e| format!("chat member gate begin: {e}"))?;
+        let op = chat::provision_op(&tx, grant, &ctx, Cause::PassMint)?;
         outbox::enqueue(&tx, &[op], &ctx.actor, now)?;
         tx.commit()
-            .map_err(|e| format!("connect chat gate commit: {e}"))?;
+            .map_err(|e| format!("chat member gate commit: {e}"))?;
         Ok(ConnectChatGate::Pending)
     })?;
     if gate == ConnectChatGate::Pending {
         kick();
     }
     Ok(gate)
+}
+
+// ── App-governed Spaces S2: K2 App users of a keyed App ──────────────
+
+/// May a K2 App user's chat pass for a **keyed** App be minted now
+/// (prd-app-governed-spaces-k2-v1 §3.4, §5.3)? The person needs no chat
+/// grant of their own: K2 writes one for them (scope `member`,
+/// `created_by = chat-key:<service id>`) within the key's `max_members`,
+/// and the S27 hook provisions their `k2:principal:<id>` member. Until Sew
+/// confirms it the mint answers "retry shortly" (the Connect gate's rule:
+/// a pass never creates a member, C6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyedChatGate {
+    /// Their member was delivered: mint.
+    Ready,
+    /// Their provision is queued or in flight (this call may have written
+    /// the grant): answer "retry shortly".
+    Pending,
+    /// Their provision is blocked or was skipped (owner action needed).
+    Blocked(String),
+    /// Someone switched this person's chat grant off; the key doesn't
+    /// switch it back on.
+    Disabled,
+    /// Chat (the Sew target) is not enabled on this box.
+    Off,
+    /// The key's `max_members` people already got chat through it.
+    Limit(u32),
+    /// The App holds no enabled chat key: today's rules stand (the person
+    /// holds a chat grant that counts).
+    NotKeyed,
+    /// The App holds no enabled chat key and the person holds no chat
+    /// grant that counts for a pass (the key was revoked meanwhile).
+    NoGrant,
+}
+
+impl From<ConnectChatGate> for KeyedChatGate {
+    fn from(g: ConnectChatGate) -> Self {
+        match g {
+            ConnectChatGate::Ready => KeyedChatGate::Ready,
+            ConnectChatGate::Pending => KeyedChatGate::Pending,
+            ConnectChatGate::Blocked(w) => KeyedChatGate::Blocked(w),
+            ConnectChatGate::Disabled => KeyedChatGate::Disabled,
+            ConnectChatGate::Off => KeyedChatGate::Off,
+        }
+    }
+}
+
+/// The keyed pass gate for principal `principal_id` (a K2 App user of the
+/// App `service_id`; the caller checked who they are). Writes their chat
+/// grant when they have none, never re-enables one that is off.
+pub fn keyed_chat_gate(principal_id: &str, service_id: &str, username: &str) -> Result<KeyedChatGate, String> {
+    enum Step {
+        Off,
+        NotKeyed,
+        NoCountingGrant,
+        Limit(u32),
+        NoGrant,
+        Grant(SkinGrant),
+    }
+    if !skin_store_exists() {
+        return Ok(KeyedChatGate::NotKeyed);
+    }
+    let svc = service_id.trim();
+    let step = crate::skin::with_skin_conn(|conn| {
+        // The key first: a keyless App's mint keeps today's path exactly
+        // (Hearth's passes never change).
+        let Some(key) = crate::skin::app_chat_key::enabled_in(conn, svc)? else {
+            let counts = crate::skin::app_chat_key::principal_has_counting_chat_grant_in(conn, principal_id)?;
+            return Ok(if counts { Step::NotKeyed } else { Step::NoCountingGrant });
+        };
+        if !outbox::target_enabled(conn, CHAT_KIND)? {
+            return Ok(Step::Off);
+        }
+        Ok(match chat::person_grant(conn, principal_id)? {
+            Some(g) => Step::Grant(g),
+            None if crate::skin::app_chat_key::members_made(conn, svc)? >= key.max_members => Step::Limit(key.max_members),
+            None => Step::NoGrant,
+        })
+    })?;
+    let actor = format!("principal:{username}");
+    let grant = match step {
+        Step::Off => return Ok(KeyedChatGate::Off),
+        Step::NotKeyed => return Ok(KeyedChatGate::NotKeyed),
+        Step::NoCountingGrant => return Ok(KeyedChatGate::NoGrant),
+        Step::Limit(max) => return Ok(KeyedChatGate::Limit(max)),
+        Step::NoGrant => {
+            let w = SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: principal_id.into(),
+                kind: CHAT_KIND.into(),
+                target_id: String::new(),
+                role: None,
+                scope: Some("member".into()),
+                created_by: Some(crate::skin::app_chat_key::marker(svc)),
+            };
+            return match crate::skin::create_grant(&w) {
+                Ok(_) => Ok(KeyedChatGate::Pending),
+                // A concurrent mint wrote it first: its row is queued.
+                Err(e) if e.starts_with("grant already exists") => Ok(KeyedChatGate::Pending),
+                Err(e) => Err(e),
+            };
+        }
+        Step::Grant(g) if !g.enabled => return Ok(KeyedChatGate::Disabled),
+        Step::Grant(g) => g,
+    };
+    let subject = sew_wire::ExternalId::K2Principal(principal_id.to_string()).to_string();
+    member_delivered_gate(&subject, &grant, &actor).map(KeyedChatGate::from)
 }
 
 /// S29 waits on this after enable (S27-A10).

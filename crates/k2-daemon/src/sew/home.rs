@@ -231,6 +231,17 @@ fn set_client(who: &Who, v: &Value) -> R<Value> {
         Some(Value::String(s)) => Some(app(s)?.0),
         Some(_) => return Err(no("bad_request", 400, "app is an App id, or null to clear")),
     };
+    // App-governed Spaces (Sew I7): the home client is never App-scoped and
+    // never governs, so an App holding a chat key can't become it.
+    if let Some(id) = id.as_deref() {
+        if crate::apps::chat_key_routes::keyed(id).map_err(|r| no("db_error", 500, r.hint))? {
+            return Err(no(
+                "home_client_cannot_govern",
+                409,
+                "this App holds a chat key (it can govern Spaces), so it can't be the home client; revoke its key first (k2 app grant <app> --kind chat-key --revoke)",
+            ));
+        }
+    }
     let changed = k2_core::tool_hook::set_home_client(id.as_deref(), &who.label()).map_err(|e| no("db_error", 500, e))?;
     audit_home_client(
         who,

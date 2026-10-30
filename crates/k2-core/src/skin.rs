@@ -103,6 +103,10 @@ pub mod guest_rooms;
 /// chat under the owner's grant.
 #[path = "skin_app_chat.rs"]
 pub mod app_chat;
+/// App-governed Spaces S1 (0.46.7): an App's chat key, the owner's grant
+/// that lets K2 sign chat passes for that App's users up to a ceiling.
+#[path = "skin_app_chat_key.rs"]
+pub mod app_chat_key;
 /// Sew for Apps A9 (0.46.6): `chat.createChannel`, an App makes a text
 /// channel in its own bound Sew Space (Sew 0.5.0, flag
 /// `app_channel_create`).
@@ -1644,6 +1648,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // Sew for Apps A2 (0.46.6): the owner's per-App guests-chat grants.
     // Additive, no numbered step.
     app_chat::ensure_schema(&conn)?;
+    // App-governed Spaces S1 (0.46.7): per-App chat keys. Additive, no
+    // numbered step.
+    app_chat_key::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;

@@ -427,8 +427,10 @@ pub struct DeprovisionResponse {
 }
 
 /// `POST /mgmt/v1/sessions/revoke` — S28's `sew_session_revoke` op
-/// (S27-A12). K2 sends exactly one of the two fields
-/// ([`crate::sew_revoke::SewSessionRevoke::payload`]).
+/// (S27-A12). K2 sends exactly one of the fields
+/// ([`crate::sew_revoke::SewSessionRevoke::payload`]). `app_id` is Sew
+/// 0.6.0's I8 (flag `app_governed_spaces`): every session whose `app`
+/// claim is that App.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RevokeSessionsRequest {
@@ -436,6 +438,8 @@ pub struct RevokeSessionsRequest {
     pub external_id: Option<ExternalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k2_sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
 }
 
 /// `POST /mgmt/v1/owner/set`.

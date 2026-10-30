@@ -12,6 +12,7 @@
 //! | [`K2_MANAGED_AVATAR`] | K2's picture is pushed with `force` (it replaces one the member set), and K2 sets the org policy `identity.managed_fields` to `[display_name, title, pronouns, avatar]` ([`super::policy`]) |
 //! | [`SPACE_UNBIND`] | an App removed from the box has its Spaces unbound in Sew too (`POST /mgmt/v1/spaces/unbind`; [`super::app_space`]) |
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
+//! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), and the rest of App-governed Spaces. Without it the chat key is refused `sew_feature_missing` |
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -21,6 +22,8 @@ pub const APP_ORIGIN: &str = "app_origin";
 pub const K2_MANAGED_AVATAR: &str = "k2_managed_avatar";
 pub const APP_CHANNEL_CREATE: &str = "app_channel_create";
 pub const SPACE_UNBIND: &str = "space_unbind";
+/// Sew 0.6.0 (sew-55 v2.4, `features_060`): App-governed Spaces.
+pub const APP_GOVERNED_SPACES: &str = "app_governed_spaces";
 
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {

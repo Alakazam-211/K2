@@ -600,6 +600,12 @@ QUARANTINED = e("MPC-E518", "quarantined", Store, 3, "K-SEC-5", ANY,
      and not loaded. Nothing changed. Don't retry: report it to the host's operator.")
     .indirect("a stored doc set aside for review");
 
+CLOSED = e("MPC-E519", "closed", Store, 1, "K-OFF-2", ANY,
+    "the host closed this doc's live session ({reason})",
+    "The host closed this doc's live session (its reason code says why: a file type switched \
+     off, for instance). Everything acknowledged was kept and written to the file. The host \
+     decides when it opens again.");
+
 // ---------------------------------------------------------------- 6xx erasure
 
 PURGE_CURRENT = e("MPC-E601", "purge_current_version", Erasure, 2, "K-T0-9, K-PURGE-1",

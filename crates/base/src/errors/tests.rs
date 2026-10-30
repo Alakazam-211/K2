@@ -169,6 +169,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::Unloaded,
         S::Released,
         S::Deleted,
+        S::Closed { reason: "core_off" },
         S::Broken(x.into()),
     ];
     for code in [

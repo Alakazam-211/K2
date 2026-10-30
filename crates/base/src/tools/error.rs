@@ -145,6 +145,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::Pack(_)
         | SessionError::Unloaded
         | SessionError::Released
+        | SessionError::Closed { .. }
         | SessionError::Broken(_) => exit::NO,
     }
 }
@@ -226,6 +227,7 @@ mod tests {
                 1,
             ),
             (SessionError::Unloaded, 1),
+            (SessionError::Closed { reason: "core_off" }, 1),
             (SessionError::BadApproval("x".into()), 2),
             (
                 SessionError::NotJoined {

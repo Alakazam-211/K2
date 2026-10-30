@@ -1,5 +1,94 @@
 # Changelog
 
+## v0.9.7.2 (2026-10-30)
+
+A note and a fix on v0.9.7.1: an outside save that may have removed someone's text now tells them,
+and gives them the text; and a revert of an outside save or of a promoted version puts back the
+roots it removed. No merge change, no store or wire format change, no new dependency. A new roster
+event, so a host matching `RosterEvent::Snapshot` exhaustively needs `..`.
+
+The crate version is `0.9.7+2`; the git tag is v0.9.7.2.
+
+**Fixed**
+- **A revert of an outside save, or of a version promoted from tier 0, put the text back as
+  new text instead of what the change removed** (undo spec U23; affected: **outside saves from
+  v0.9.0, which added provenance (store format 5), and promotions from v0.9.2, through
+  v0.9.7.1**). The change's revert record kept no roots,
+  so its revert's characters were their own roots: blame credited the reverter instead of
+  the text's author, and the rules that read roots (O4a, I1, U10a, U8) couldn't see that the
+  text was already live under its own root, so the same line could land twice (found by the
+  32-participant soak's history arm, seed 1, call 43,002: the owner's revert of an outside
+  delete beside a restored copy of the line). Both records now keep, per hunk, the roots it
+  deleted and the elements it inserted, as an edit's always did, so the revert, its undo and
+  its redo put back the removed roots. No store format change: records written before this
+  release still hold no roots and revert as before. An outside save whose identity map was
+  dropped (an `IdentityMismatch` event) still keeps none.
+
+**Added**
+- **When an outside save removes someone's text, they're told** (`docs/SESSIONS.md`, "When an
+  outside save removes someone's text"). A writer holding older text saves it plus its own change;
+  the kit reads that as the file deleting what others wrote since, and until now their line left the
+  live doc with `Ingested`, no conflict, and nothing said to them, a person's acknowledged typing
+  included. The rule covers **authors who wrote through the kit**: each character's own author, and
+  the person an assistant acted for (only the text made on their behalf). It applies to text written
+  since the last outside save or within `Config::outside_note_window_ms` (24 h). Whitespace-only
+  changes, and adding to a line, say nothing.
+- **The note carries the author's own removed text**, exact, at most 16 KiB, and never someone
+  else's from the same block, so they can paste it back with an ordinary edit. With the history
+  right it names the version that holds it; without it, it never points at a version they can't
+  open, and says who can restore what was cut. The words are "may have": a moved line reads as
+  removed. No single call restores the text and keeps the saver's change; `restore` of the version
+  replaces it, and the note says so.
+- **Delivery to people and agents:** `RosterEvent::Overwritten` (with `Snapshot.overwritten`), the
+  next verb's `Notes`, `Session::take_notes`; `NoteKind::Overwritten`, `Overwrite`, `OverwriteCell`;
+  `AuditEvent::OutsideOverride`, line numbers only. `Debug` prints no text. No read right, nothing
+  delivered. A purge takes the text; erasing a participant takes their notes.
+- **Held across an unload**, text included, in the manager's memory: agents working one verb at a
+  time usually come back after it. 24 h (`Config::outside_note_text_keep_ms`), 1 MiB of text per doc
+  and 64 MiB across docs, oldest first; past those the note says the text is no longer held.
+
+- **The host can close a doc's live session, members or not** (`docs/SESSIONS.md`, "Closing a
+  doc's live session"): `SessionManager::close(key, reason)` and `close_where(reason, |key, pack|
+  ..)`, for a host switching a file type off. A pending write-back is written first; every
+  roster subscription gets `RosterEvent::Closed { reason }` last; the host gets
+  `AuditEvent::SessionClosed { key, connections, reason }`; every later call, `file_changed`
+  included, fails with the new `SessionError::Closed { reason }` (`MPC-E519`, exit 1). Outside
+  saves stop merging until the host opens the doc again, which takes them in as usual; waiting
+  notes are kept for that open. All additive: `SessionError`, `RosterEvent` and `AuditEvent`
+  are `#[non_exhaustive]`.
+
+**Known limits**
+- Text past 32 places in one note isn't carried (it is counted, and the note says so).
+- Roll-ups carry no text: past 64 waiting notes per person per doc, the rest are a count.
+- Typing in flight at the start of a removed line lands on the next line with no signal.
+- Notes are lost on a daemon restart (the version, the log and the audit row remain).
+- **File-tool text has no author to tell:** text that came in through a file save is `kit:external`,
+  so two agents overwriting each other through their own file tools get no note, only an audit row.
+
+**Tests**
+- `tests/revert_external.rs`: a revert of an outside save (a typed line; a line an undo had
+  put back), with and without `--partial`, with and without a restart between the save and
+  the revert, each followed by an undo and a redo of the revert, checked by roots
+  (`char_blame`), blame's `restored_by` and I1; the control, a revert of an edit. On v0.9.7.1
+  the two outside-save tests fail on U23 and the control passes.
+- `tests/promote.rs`: a revert of a promoted deletion (the same checks); fails on v0.9.7.1.
+- `crates/spec-undo/tests/revert_external_property.rs`: seeded scripts through a real
+  session on a file (agents' edits, undo and redo, whole-text outside saves through the real
+  ingest, the owner's revert of any recent change with its undo and redo, restores, a planted
+  secret purged, restarts) against `spec_undo::model`: after every step the same text, every
+  live character's root on the same change and restored by the same participant, and blame's
+  `restored_by` per line by blame's documented rule (the newest root change; on a tie a
+  restored character). 300 scripts of 40 steps.
+- A planted fault, `differential::ProvMutant::OutsideSaveKeepsNoRoots` (test builds only),
+  drops the roots again; the named tests and the property each catch it.
+- Test builds only: `crates/base`'s dev-dependency on itself also enables the `conformance`
+  feature (`Session::char_blame`); the feature only adds functions.
+
+**Evidence scope.** The undo model check's G1 runs (724.6M states) and the trace test have
+no outside-save step and no promotion, so they say nothing for or against this path; the
+property above is the kit-vs-oracle check for it. An outside-save step in the trace
+generator is a follow-up.
+
 ## v0.9.7.1 (2026-10-30)
 
 A hotfix on v0.9.7: two fixes, one to `write --base` (possible text corruption, every

@@ -35,6 +35,55 @@ pub enum GroupMutant {
     NeverClosesOnBoundary,
 }
 
+/// A planted fault in the outside-save notes (`tests/outside_removal_notes.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteMutant {
+    /// No note is queued.
+    DropAll,
+    /// The roll-up is not kept: past the bound a note is just dropped.
+    DropRollup,
+    /// Every note goes to the first author of the save, whoever wrote the text.
+    WrongAuthor,
+    /// The host's edit calls (`edit_with`...) take waiting notes and drop them (the bug the
+    /// soak found before v0.9.7.2 shipped).
+    EditWithDrains,
+}
+
+thread_local! {
+    static NOTE_REMOVAL_COST: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// How long the last outside save on this thread spent working out whose text it removes, under
+/// the session's lock (the measurement in `tests/outside_removal_notes.rs`).
+pub fn last_removal_cost() -> std::time::Duration {
+    NOTE_REMOVAL_COST.with(|c| c.get())
+}
+
+pub(crate) fn note_removal_cost(d: std::time::Duration) {
+    NOTE_REMOVAL_COST.with(|c| c.set(d));
+}
+
+thread_local! {
+    static NOTE_MUTANT: std::cell::Cell<Option<NoteMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The notes fault planted on this thread, if any.
+pub fn note_mutant() -> Option<NoteMutant> {
+    NOTE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_note_mutant<R>(mutant: NoteMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<NoteMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            NOTE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(NOTE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 thread_local! {
     static GROUP_MUTANT: std::cell::Cell<Option<GroupMutant>> = const { std::cell::Cell::new(None) };
 }
@@ -464,6 +513,10 @@ pub enum ProvMutant {
     /// An undo, redo or revert's restored elements are recorded as their own roots, so blame
     /// names the restorer instead of the root's author.
     RestoredAsRestorer,
+    /// v0.9.7.1 and before (undo spec U23): an outside save's revert record, and a promoted
+    /// version's, keeps no roots, so a revert of it puts back fresh text instead of the roots
+    /// the change removed. Planted in the record, not the map.
+    OutsideSaveKeepsNoRoots,
 }
 
 thread_local! {

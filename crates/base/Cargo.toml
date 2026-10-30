@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.9.7+1"
+version = "0.9.7+2"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -44,7 +44,8 @@ redb = "2"
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "perf", "unicode", "meta", "hybrid", "nfa-pikevm", "nfa-backtrack", "dfa-onepass"] }
 
 [dev-dependencies]
-k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential"] }
+k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential", "conformance"] }
+# (conformance: `Session::char_blame` for the tests that read roots; test builds only, the feature only adds functions)
 proptest = "1"
 rand = { version = "0.8", features = ["small_rng"] }
 # Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible): the same copy.

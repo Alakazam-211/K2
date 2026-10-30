@@ -263,6 +263,21 @@ pub enum AuditEvent {
     /// [`crate::session::EXTERNAL_PID`]). For a tier-0 blob doc, `seq` is the version the
     /// save became.
     ExternalEdit { key: DocKey, seq: crate::store::Seq },
+    /// Outside save `change` may have removed or replaced text `by` wrote, within the rule's
+    /// bound (`docs/SESSIONS.md`, "When an outside save removes someone's text"). `region` is
+    /// line numbers only: no document text. `rule`: `removed_text`, `replaced_text`,
+    /// `not_computed` (the removal couldn't be read: the save still applied; `by` is `None`),
+    /// `notes_dropped` (the unload hand-off's bound went: `region` says how many). `by` can be
+    /// `kit:external` or `kit:import`: an audit row, but nobody to tell. `version` holds
+    /// the text as it was.
+    OutsideOverride {
+        key: DocKey,
+        change: crate::store::Seq,
+        rule: &'static str,
+        region: String,
+        by: Option<String>,
+        version: Option<crate::store::VersionId>,
+    },
     /// The file is gone (deleted, replaced by a folder...). Write-back stops; the doc is
     /// kept. `unflushed`: it had changes the file never got. Tell participants.
     FileMissing { key: DocKey, unflushed: bool },
@@ -338,6 +353,16 @@ pub enum AuditEvent {
     DocDeleted {
         key: DocKey,
         connections: Vec<(ConnId, String)>,
+    },
+    /// The host closed the session of the doc at `key` ([`crate::session::SessionManager::close`],
+    /// `reason` its code): `connections` (each with its pid) were in it and are gone, with their
+    /// subscriptions (each told by [`crate::session::RosterEvent::Closed`]) and any lease;
+    /// later calls on it fail with [`crate::session::SessionError::Closed`]. A pending write-back
+    /// was written first.
+    SessionClosed {
+        key: DocKey,
+        connections: Vec<(ConnId, String)>,
+        reason: &'static str,
     },
     /// The tier-0 blob doc at `key` became a text doc, keeping its key and its history
     /// (v0.9.2, [`crate::session::SessionManager::promote_blob_file`]). Its blob session

@@ -106,7 +106,7 @@ tools/test-bundle.sh [--rev REV] [--env NAME=VALUE]... <commands file> <out dir>
 | Commands file | Fallback ships | Length | What |
 |---|---|---|---|
 | `tests/full.sh` | `tools/tests/full-paths.sh $PART` | ≈ 1–4 min a part (build included; [Build settings](#build-settings)) | the workspace's tests (debug; under nextest when the node has it) in ten parts, `--env PART=`: `base-a1` (the kit's unit tests and doctests; the `disk`, `if_version` and `blame` integration tests were here from exports P0, when base-a2 reached 117,788 of a job's 120,000 inline characters, until the v0.9.7 merge put base-a1 at 130,240: they are base-d's now) and `base-a2` (every other integration test but tier 0's, base-c's, base-d's and errors', `client_vectors` among them; on the kit without its unit-test modules): one part, `base-a`, until the v0.9.5 merge put it over a job's limit, `base-b` (tier 0's, promotion's, both parity harnesses and erasure; live_edit since v0.9.8), `base-c` (the soak's CI variant, `edit_paths`, `edit_cost`, history, presence, sessions, roster, app_view, overflow; v0.9.3), `base-d` (disk, `if_version`, blame, `blame_incremental` (v0.9.7), `blame_cost`, and `position_index` with its planted engine bugs; v0.9.7), `errors` (`error_ids`, `tools_session`, `pack_verbs`, the `mpc` example; v0.10), `conformance` and `spec-undo` (with its mutant tests; both `INLINE=120000` since v0.10, `STRIP_DOCS=1` since v0.9.7; `base-c` too since v0.9.7, when the K5 `run_tool` test put it 600 characters past 120,000 inline), `evidence` (`tools/evidence/`'s self-test and check of `docs/evidence/`; Python, no cargo), `wire-guard` (`tools/tests/wire-guard.sh`, v0.9.8: the `untrusted-wire` feature refused without `--cfg k2_mpc_untrusted_wire_ack`, in the repo and as a host builds; `docs/HOST-WIRE.md`). The whole workspace is over one job's limit (about 61 of 64 chunks a part) |
-| `tests/soak.sh` | `tools/tests/full-paths.sh soak` | `SOAK_SECS` + build (default 10 min) | the 32-participant soak in release (`crates/base/tests/soak.rs`: progress every 30 s, a summary with peak memory), then its CI variant |
+| `tests/soak.sh` | `tools/tests/full-paths.sh soak` | `SOAK_SECS` + build (default 10 min) | the 32-participant soak in release (`crates/base/tests/soak.rs`: progress every 30 s, a summary with peak memory), then its CI variant (`soak_short`), then the D1 replay regression (`soak_replay_seed_3_no_d1`: seed 3, 27,000 calls, no known D1 violation; about a minute) |
 | `tests/gnu-parity.sh` | `scripts/gnu-parity.py crates/base/tests/golden` | < 1 min | the golden corpus's `gnu: same` cases against the real GNU tools (K-PAR-7); needs python3 and the GNU tools, no Rust |
 
 A run, **always with an explicit `--mem`**. Run cargo with the host's `K2_*`/`K2SO_*`
@@ -127,6 +127,11 @@ k2 compute run <node> --needs rust@stable+clippy+rustfmt --cpus 4 --mem 8G --tim
 k2 compute run <node> --needs rust@stable --cpus 4 --mem 8G --timeout 40m \
   --env SOAK_SECS=600 --detach -- sh tools/job.sh tools/tests/soak.sh
 ```
+
+**A release soak runs `tools/tests/soak.sh` whole** (the command above: `soak_32`, `soak_short`
+and the seed-3 replay), never `soak_32` alone by hand. v0.9.7 and v0.9.7.1's soaks ran
+`soak_32` only, so the replay's stale expectation (its D1 violation, gone since v0.9.7) went
+unseen until a later full run.
 
 The GNU parity job is the same with `tools/tests/gnu-parity.sh` and `--needs python@3.12`.
 `--needs cargo-nextest` has the node install nextest into its own toolchain home before the

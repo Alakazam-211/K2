@@ -751,6 +751,12 @@ fn walk() -> Seen {
     let x = f.agent(&s, "x", Rights::editor());
     f.mgr.delete_doc(&key("d.md")).unwrap();
     seen.res(s.read(x)); // E516
+
+    // the host closes a doc's live session, members or not (v0.9.7.2)
+    let s = f.open("c.md", b"c\n");
+    let x = f.agent(&s, "x", Rights::editor());
+    f.mgr.close(&key("c.md"), "core_off").unwrap();
+    seen.res(s.read(x)); // E519
                          // a blob doc promoted to text: the old handle is unloaded
     let p = f.ws().join("n.md");
     std::fs::write(&p, b"notes\n").unwrap();

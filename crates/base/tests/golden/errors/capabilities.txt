@@ -1,4 +1,4 @@
-k2-mpc-base 0.9.7+1
+k2-mpc-base 0.9.7+2
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -268,7 +268,7 @@ Verbs (after the doc path):
     exits:  0 1
     serves: P34
     errors: MPC-E106
-  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
+  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E519 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
 
 Verbs with no doc:
   explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
@@ -367,6 +367,8 @@ Limits in effect:
   memory_budget_bytes = 268435456
   memory_factor = 20
   idle_unload_ms = 600000
+  outside_note_window_ms = 86400000
+  outside_note_text_keep_ms = 86400000
   write_quiet_ms = 1000
   write_max_delay_ms = 5000
   disk_poll_ms = 3000

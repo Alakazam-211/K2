@@ -201,6 +201,7 @@ fn snapshot_first_then_joins_and_leaves() {
         version,
         members,
         watching,
+        ..
     } = &first[0]
     {
         assert_eq!(*watching, 0);

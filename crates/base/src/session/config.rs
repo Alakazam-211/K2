@@ -223,6 +223,13 @@ pub struct Config {
     pub memory_factor: u64,
     /// A session with no participants unloads after this long unused. Default 10 min.
     pub idle_unload_ms: u64,
+    /// An outside save that removes or replaces text written through the kit tells its author
+    /// when the text was written since the last outside save, or within this long. 0: only
+    /// since the last outside save. Default 24 h.
+    pub outside_note_window_ms: u64,
+    /// How long a waiting note keeps the text it carries, loaded or not. Past it the note says
+    /// the text is no longer held; the fact stays for the revert window. Default 24 h.
+    pub outside_note_text_keep_ms: u64,
 
     // --- disk sync (sessions opened with SessionManager::open_file) ---
     /// Write the file back once the doc has been quiet this long... Default 1 s.
@@ -322,6 +329,8 @@ impl Config {
             memory_budget_bytes,
             memory_factor,
             idle_unload_ms,
+            outside_note_window_ms,
+            outside_note_text_keep_ms,
             write_quiet_ms,
             write_max_delay_ms,
             disk_poll_ms,
@@ -393,6 +402,8 @@ impl Config {
             ("memory_budget_bytes", *memory_budget_bytes),
             ("memory_factor", *memory_factor),
             ("idle_unload_ms", *idle_unload_ms),
+            ("outside_note_window_ms", *outside_note_window_ms),
+            ("outside_note_text_keep_ms", *outside_note_text_keep_ms),
             ("write_quiet_ms", *write_quiet_ms),
             ("write_max_delay_ms", *write_max_delay_ms),
             ("disk_poll_ms", *disk_poll_ms),
@@ -478,6 +489,8 @@ impl Default for Config {
             memory_budget_bytes: 256 << 20,
             memory_factor: 20,
             idle_unload_ms: 10 * 60_000,
+            outside_note_window_ms: 24 * 60 * 60_000,
+            outside_note_text_keep_ms: 24 * 60 * 60_000,
             write_quiet_ms: 1_000,
             write_max_delay_ms: 5_000,
             disk_poll_ms: 3_000,

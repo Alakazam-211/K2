@@ -118,6 +118,7 @@ impl Refusal for SessionError {
             S::Unloaded => rep(&r::UNLOADED, msg),
             S::Released => rep(&r::RELEASED, msg),
             S::Deleted => rep(&r::DELETED, msg),
+            S::Closed { reason } => rep(&r::CLOSED, msg).with("reason", *reason),
             S::Broken(_) => rep(&r::BROKEN, msg),
         }
     }

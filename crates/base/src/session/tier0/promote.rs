@@ -20,6 +20,7 @@ use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
 use crate::hash::file_hash;
 use crate::session::live::{fresh_client, ordered_roots, record_root};
 use crate::session::pack::Pack;
+use crate::session::prov::{elem_ids, Ids};
 use crate::session::summary;
 use crate::store::{
     fresh_key, ChangeInfo, ChangeKind, ClockSpan, LogEntry, NewChange, PromoteRows, RevertRecord,
@@ -227,6 +228,10 @@ impl BlobSession {
             // the roots D1 widened, with their widened hunks (the change as the engine
             // makes it)
             let mut widened: Vec<(String, Vec<diff::Hunk>)> = Vec::new();
+            // each changed root's element IDs before the change: the promoted doc has no
+            // restored text, so they are its roots (U23), which the revert record keeps
+            // (v0.9.7.2; before, it kept none and a revert put back fresh text)
+            let mut ids_before: Vec<(String, Option<Ids>)> = Vec::new();
             for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
                 let hunks = lines::edit_hunks(old, t);
                 if hunks.is_empty() {
@@ -238,6 +243,10 @@ impl BlobSession {
                 // promoted doc has no restored text, so an element's root is itself and its
                 // owner its client's author.
                 let runs = doc.blame_runs(root)?;
+                ids_before.push((
+                    root.clone(),
+                    elem_ids(old, &runs).map(|v| Ids::from_chars(old, &v)),
+                ));
                 let mut spans = Vec::with_capacity(runs.len());
                 let mut at = 0;
                 for r in &runs {
@@ -299,14 +308,46 @@ impl BlobSession {
                         let (a, r) = summary::line_counts(old, &new, &hunks);
                         info.lines_added += a as u64;
                         info.lines_removed += r as u64;
-                        // a diff of the texts, as an outside edit's record: no roots; where
-                        // D1 widened the root, the widened hunks (the elements), and the
-                        // diff's beside them as the authored ones (v0.9.7)
+                        // a diff of the texts; where D1 widened the root, the widened hunks
+                        // (the elements), and the diff's beside them as the authored ones
+                        // (v0.9.7). Its roots (v0.9.7.2): each hunk's deleted elements and
+                        // inserted ones, read off the IDs before and after
                         let elems = widened
                             .iter()
                             .find(|(r, _)| r == root)
                             .map_or(&hunks, |(_, w)| w);
-                        record.push(record_root(root, old, new.is_empty(), elems, None));
+                        let old_ids = ids_before
+                            .iter()
+                            .find(|(r, _)| r == root)
+                            .and_then(|(_, i)| i.clone());
+                        let new_ids = elem_ids(&new, &doc.blame_runs(root)?)
+                            .map(|v| Ids::from_chars(&new, &v));
+                        let pairs: Option<Vec<(Ids, Ids)>> = old_ids.zip(new_ids).map(|(o, n)| {
+                            let mut delta: isize = 0;
+                            elems
+                                .iter()
+                                .map(|h| {
+                                    let at = (h.start as isize + delta) as usize;
+                                    delta += h.insert.len() as isize - (h.end - h.start) as isize;
+                                    (
+                                        o.slice(old, h.start, h.end),
+                                        n.slice(&new, at, at + h.insert.len()),
+                                    )
+                                })
+                                .collect()
+                        });
+                        #[cfg(any(test, feature = "differential"))]
+                        let pairs = pairs.filter(|_| {
+                            crate::differential::prov_mutant()
+                                != Some(crate::differential::ProvMutant::OutsideSaveKeepsNoRoots)
+                        });
+                        record.push(record_root(
+                            root,
+                            old,
+                            new.is_empty(),
+                            elems,
+                            pairs.as_deref(),
+                        ));
                         authored.push((root.clone(), hunks));
                     }
                     changes.push(NewChange {

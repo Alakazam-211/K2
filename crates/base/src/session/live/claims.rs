@@ -819,6 +819,7 @@ impl Session {
             claim: None,
             claim_note: None,
             remaining_ms: None,
+            overwrite: None,
         };
         let mut out: Vec<Note> = Vec::new();
         for c in &st.aware.claims {
@@ -885,7 +886,36 @@ impl Session {
     /// per (reader, other, kind, lines) within [`Config::note_repeat_ms`], at most one
     /// batch per reader per [`Config::note_interval_ms`], at most
     /// [`Config::note_batch_max`] per batch.
+    ///
+    /// Notes waiting for this reader (an outside save may have removed their text) always come
+    /// first, whatever the lines, the interval or the batch size: any verb that returns notes
+    /// delivers them.
     pub(super) fn notes_for(
+        &self,
+        st: &mut State,
+        i: usize,
+        root: &str,
+        lines: Option<(usize, usize)>,
+        now: u64,
+    ) -> Notes {
+        let waiting = self.drain_notes(st, i, now);
+        let mut out = self.fresh_notes(st, i, root, lines, now);
+        if !waiting.is_empty() {
+            let waiting = match Self::app_viewer(st, i) {
+                Some(v) => {
+                    let mut l = st.handles.lens(&v);
+                    waiting.into_iter().map(|n| l.note(n)).collect()
+                }
+                None => waiting,
+            };
+            let mut notes: Vec<Note> = waiting;
+            notes.append(&mut out.notes);
+            out.notes = notes;
+        }
+        out
+    }
+
+    pub(super) fn fresh_notes(
         &self,
         st: &mut State,
         i: usize,

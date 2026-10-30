@@ -52,7 +52,9 @@ pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
 pub(crate) use awareness::pair_text;
 pub use awareness::{
     ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ForEdit, Note,
-    NoteKind, Notes, ReservationEnd, ReservationInfo, Waiting,
+    NoteKind, Notes, Overwrite, OverwriteCell, ReservationEnd, ReservationInfo, Waiting,
+    OVERWRITE_CELLS_MAX, OVERWRITE_DOC_TEXT_MAX, OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX,
+    OVERWRITE_VALUE_MAX,
 };
 pub use config::{
     Config, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,

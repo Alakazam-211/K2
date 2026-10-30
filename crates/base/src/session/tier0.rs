@@ -1997,6 +1997,31 @@ impl BlobSession {
         st.lease = None;
     }
 
+    /// The host closes this session ([`super::SessionManager::close`]), members or not: the
+    /// audit names the connections, then it closes (a pending write-back written, any lease
+    /// ended); later calls fail with [`SessionError::Closed`].
+    pub(crate) fn close_by_host(&self, reason: &'static str) {
+        {
+            let Ok(st) = self.lock_any() else {
+                return;
+            };
+            if st.closed.is_some() {
+                return;
+            }
+            let connections = st
+                .members
+                .iter()
+                .map(|m| (m.conn, m.p.pid.clone()))
+                .collect();
+            self.emit(AuditEvent::SessionClosed {
+                key: st.key.clone(),
+                connections,
+                reason,
+            });
+        }
+        self.close(SessionError::Closed { reason });
+    }
+
     pub(crate) fn close(&self, reason: SessionError) {
         let Ok(mut st) = self.lock_any() else {
             return;

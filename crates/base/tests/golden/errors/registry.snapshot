@@ -88,6 +88,7 @@ MPC-E515 broken exit=1 live
 MPC-E516 deleted exit=4 live
 MPC-E517 pack_error exit=1 live
 MPC-E518 quarantined exit=3 live
+MPC-E519 closed exit=1 live
 MPC-E601 purge_current_version exit=2 live
 MPC-E602 purged_version exit=4 live
 MPC-E701 leased exit=5 live

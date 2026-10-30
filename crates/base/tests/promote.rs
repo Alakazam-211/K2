@@ -770,3 +770,97 @@ fn promotion_widens_each_version_so_a_revert_never_changes_another_authors_word(
         "without D1: {out:?}, {after:?}"
     );
 }
+
+/// A promoted version that deleted a line, reverted after promotion: the revert puts back the
+/// deleted line's roots (undo spec U23; fixed in v0.9.7.2: the promoted change's record kept
+/// no roots, so its revert put back fresh text). Then the revert undone and redone.
+fn promoted_deletion_reverted() -> Result<(), String> {
+    let fx = fx("prov");
+    let agent = |pid: &str| Participant::new(pid, pid, "#336699", ParticipantKind::Agent, "cli");
+    fx.grant("p16", Rights::full());
+    let s = fx
+        .mgr
+        .open_blob(Arc::new(AnyFile), &key("pr.md"), Some(&mut &b"a\nc\n"[..]))
+        .unwrap();
+    let p16 = join_blob(&s, agent("p16"));
+    fx.advance(1_000);
+    s.write_bytes(p16, b"a\nb\nc\n", 1).unwrap();
+    fx.advance(1_000);
+    s.write_bytes(p16, b"a\nc\n", 2).unwrap();
+    let (t, done) = fx.mgr.promote_blob(md(), &key("pr.md")).unwrap();
+    let change = |vid: u64| {
+        let (_, _, c, _) = text_of(&done.versions.iter().find(|(v, _)| *v == vid).unwrap().1);
+        c.expect("a change")
+    };
+    let (added, deleted) = (change(2), change(3));
+    let c = t.join(alice(), Stay::Held).unwrap().conn;
+    let b_roots = |t: &k2_mpc_base::session::Session| -> Vec<Option<u64>> {
+        t.char_blame(TextFilePack::ROOT)
+            .unwrap()
+            .iter()
+            .filter(|x| x.ch == 'b')
+            .map(|x| x.root_change)
+            .collect()
+    };
+    let restored_by = |t: &k2_mpc_base::session::Session| {
+        t.blame(c, TextFilePack::ROOT, None)
+            .unwrap()
+            .lines
+            .iter()
+            .find(|l| l.text == "b")
+            .and_then(|l| l.restored_by.clone())
+    };
+    for partial in [false, true] {
+        let out = t.revert(c, deleted, partial).unwrap();
+        if text(&t, c) != "a\nb\nc\n" {
+            return Err(format!("partial {partial}: {out:?}, {:?}", text(&t, c)));
+        }
+        if b_roots(&t) != vec![Some(added)] {
+            return Err(format!(
+                "partial {partial}: b's root change {:?}, not {added} (U23)",
+                b_roots(&t)
+            ));
+        }
+        if restored_by(&t).as_deref() != Some("alice") {
+            return Err(format!(
+                "partial {partial}: blame's restored_by {:?}",
+                restored_by(&t)
+            ));
+        }
+        t.undo(c, 1).unwrap();
+        if text(&t, c) != "a\nc\n" {
+            return Err(format!(
+                "partial {partial}: undo of the revert: {:?}",
+                text(&t, c)
+            ));
+        }
+        t.redo(c, 1).unwrap();
+        if b_roots(&t) != vec![Some(added)] || restored_by(&t).as_deref() != Some("alice") {
+            return Err(format!(
+                "partial {partial}: after the redo: {:?}",
+                b_roots(&t)
+            ));
+        }
+        t.undo(c, 1).unwrap();
+    }
+    Ok(())
+}
+
+#[test]
+fn a_revert_of_a_promoted_deletion_puts_back_its_roots() {
+    if let Err(e) = promoted_deletion_reverted() {
+        panic!("{e}");
+    }
+}
+
+/// The planted fault (`ProvMutant::OutsideSaveKeepsNoRoots`, which also drops a promoted
+/// change's roots) fails it.
+#[test]
+fn a_promoted_deletion_without_roots_is_caught() {
+    use k2_mpc_base::differential::{with_prov_mutant, ProvMutant};
+    let r = with_prov_mutant(
+        ProvMutant::OutsideSaveKeepsNoRoots,
+        promoted_deletion_reverted,
+    );
+    assert!(r.is_err(), "the planted fault went unseen");
+}

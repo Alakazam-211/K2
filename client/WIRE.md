@@ -80,10 +80,53 @@ text root of one doc. The host chooses the transport (a WebSocket, say) and impl
   members, watching}` (always first; a later one replaces everything), `joined {who,
   participant: {name, colour, kind}}`, `left {who}`, `rights {who, rights}`, `role {who, role}`,
   `away {who, away}`, `cursor {who, cursor | null}`, `claim_started`, `claim_ended`, `note`,
-  `watching {count}`. `who` is `Who::Pid` or `Who::Handle` as a string. Claims, notes and rights
+  `overwritten` (below), `watching {count}`, `closed {reason}` (the host closed the doc's live session: the last event, then the subscription ends; `reason` is the host's code). `who` is `Who::Pid` or `Who::Handle` as a string. Claims, notes and rights
   reach the host through `onRosterEvent`; the rest also update `roster`.
 - **A caret's `version`:** the doc version its offsets are in (the kit adds it to
   `RosterEvent::Cursor`). Without one, the client takes its own version when the frame arrives.
+
+## The `overwritten` event
+
+An outside save may have removed or replaced text you wrote through the kit. It goes only to its
+author's own subscriptions (and the person an assistant acted for), at the next roster flush, and
+is never coalesced. It carries the person's own text so they can paste it back: no single call
+restores the text and keeps the saver's change.
+
+```ts
+{ kind: "overwritten", to: Handle,
+  change: number,               // the save
+  version: number | null,       // the version holding the text, THAT THIS READER CAN OPEN: link from this only
+  restore_from: number | null,  // the same version, to tell someone with history access; never a link for this reader
+  source: "an outside save",
+  rule: "removed_text" | "replaced_text" | "rollup",
+  row: null,                    // a grid's row key; null on a text doc
+  line: number | null,          // first line, in the text before the save
+  cells: [ { region: string,    // "L12" or "L12–L14"
+             col: null,
+             yours: string,     // this person's own removed characters, exactly, newlines included
+             file: string,      // those lines now, at most 256 bytes
+             cut: boolean } ],
+  more: number,                 // places not listed
+  not_shown: number,            // characters of their own text the note doesn't carry
+  withheld: boolean,            // the text is no longer held: a purge, the 24 h hold, the doc's cap
+  no_history: boolean,          // this reader has no history right
+  message: string }             // the note's one line, ready to show; holds the text
+```
+
+- **"May have".** The kit can't tell a removal from a move, so `message` never says the text is
+  gone. See `docs/SESSIONS.md`, "When an outside save removes someone's text".
+- **Only their own text.** `yours` never holds someone else's characters from the same block.
+- **Sizes.** At most 16 KiB of text a note (`OVERWRITE_TEXT_MAX`), 32 places (`OVERWRITE_CELLS_MAX`),
+  the rest counted in `not_shown` and `more`.
+- **Roll-up.** A participant has at most 64 waiting notes on a doc; past that the last is
+  `rule: "rollup"`, `cells: []`, `more: N`. It carries no text. A note is never dropped silently.
+- **Pending notes are also in `snapshot`,** as `overwritten: [...]`, this subscriber's own. A push
+  doesn't consume a note: it waits until `take_notes` or a verb delivers it. Clients dedupe on
+  `(change, row)`; a save makes one note per person.
+- **Someone who can't read the doc gets nothing, not even a count.** The note stays and arrives if
+  they can read again.
+- **Logs.** The kit's `Debug` doesn't print `yours`, `file` or `message`'s text; don't log
+  `message` yourself. The audit entry holds no content.
 
 ## What the client guarantees
 

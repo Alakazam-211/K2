@@ -236,8 +236,10 @@ impl Lens<'_> {
                 version,
                 members,
                 watching,
+                overwritten,
             } => RosterEvent::Snapshot {
                 version,
+                overwritten,
                 members: members
                     .into_iter()
                     .map(|m| RosterMember {
@@ -331,7 +333,12 @@ impl Lens<'_> {
                 lines,
                 claim,
             },
+            RosterEvent::Overwritten { to, overwrite } => RosterEvent::Overwritten {
+                to: self.who(to),
+                overwrite,
+            },
             w @ RosterEvent::Watching { .. } => w,
+            c @ RosterEvent::Closed { .. } => c,
         }
     }
 }

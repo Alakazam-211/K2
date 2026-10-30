@@ -780,6 +780,22 @@ pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
 /// `GET /cli/push/device` carry `e2e` (or `null`) and no vendor token.
 /// K2 Companion sends `e2e` only to a server with this key.
 pub const FEATURE_PUSH_E2E: &str = "push-e2e-v1";
+/// Bigger sealed buckets (push-e2e-v2, 0.46.7, migration 0251): register
+/// `e2e.v: 2` to say the phone opens format-2 blobs (byte 0 = `0x02`,
+/// 2880-byte alert / 1024-byte nudge plaintext; relay `data.v: "2"`). The
+/// reply's `e2e` gains `format` (1 or 2: what the phone is sent now) and
+/// `alertBytes` / `nudgeBytes` follow it. A daemon without this key
+/// answers `e2e.v: 2` with 400 `usage`: send 2 only when it is listed.
+/// Format 2 goes out only once the relay also advertises `s2`.
+pub const FEATURE_PUSH_E2E_V2: &str = "push-e2e-v2";
+/// Stale hints on silent pushes (push-content-available-v1, 0.46.7): a
+/// person's badge push (and, in format 2, the sealed nudge) may carry
+/// `stale` = `"<conversationId>:<seq>,…"` (newest first, at most 8; `seq`
+/// = that chat's newest seq when sent) and `staleMore: "1"`, naming the
+/// chats that changed with no alert to that person (muted, viewed on the
+/// desktop, over budget, a person's post, a closed card). Ids and seqs
+/// only. No SQL migration.
+pub const FEATURE_PUSH_CONTENT_AVAILABLE: &str = "push-content-available-v1";
 
 /// Unread counts (thread-read-v1, 0.46.1, migration 0190): per-person read
 /// cursors and mutes for Threads and project chats — `GET
@@ -867,6 +883,14 @@ pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
 /// Thread changed since (0.46.3). Threads only: project chats still need a
 /// normal call.
 pub const FEATURE_CATCHUP_UNCHANGED: &str = "catchup-unchanged-v1";
+/// The phone inbox stream (inbox-stream-v1, 0.46.7;
+/// `contract-phone-inbox-stream-0462.md` §2): on `/cli/sessions/events` a
+/// login sends `{"t":"inbox","conversationIds":[…],"addrs":[…]}` (at most
+/// 200, or `all:true`, or `off:true`) and gets `inbox_subscribed`, then
+/// `thread_message` (the overlay doc, capped at 32 KiB), `thread_moved`,
+/// `thread_address` and `inbox_reset` frames for that set. Logins only
+/// (App guests use `/cli/thread/stream`). No SQL migration.
+pub const FEATURE_INBOX_STREAM: &str = "inbox-stream-v1";
 
 /// App mobile access (app-mobile-access-v1, 0.46.3): the agent access
 /// list on `GET /cli/skin/me` (`agents`, `serverId`, `publicHost`,
@@ -956,6 +980,22 @@ fn thread_push_ready() -> bool {
 }
 
 /// Migration 0211 ran: `push_device_keys` exists.
+/// Migration 0251 ran: `push_device_keys.v` exists.
+fn push_e2e_v2_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| {
+            db.lock()
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('push_device_keys') WHERE name = 'v'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
 fn push_e2e_ready() -> bool {
     k2_core::db::try_shared()
         .map(|db| {
@@ -1025,7 +1065,11 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_PUSH_PREVIEWS);
         if push_e2e_ready() {
             out.push(FEATURE_PUSH_E2E);
+            if push_e2e_v2_ready() {
+                out.push(FEATURE_PUSH_E2E_V2);
+            }
         }
+        out.push(FEATURE_PUSH_CONTENT_AVAILABLE);
     }
     if thread_read_ready() {
         out.push(FEATURE_THREAD_READ);
@@ -1036,6 +1080,7 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
         out.push(FEATURE_CATCHUP_UNCHANGED);
+        out.push(FEATURE_INBOX_STREAM);
     }
     if thread_read_ready() {
         out.push(FEATURE_APP_THREAD_PARITY);
@@ -1161,10 +1206,13 @@ mod tests {
                 "thread-push-v1",
                 "push-previews-v1",
                 "push-e2e-v1",
+                "push-e2e-v2",
+                "push-content-available-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
                 "inbox-catchup-v1",
                 "catchup-unchanged-v1",
+                "inbox-stream-v1",
                 "app-thread-parity-v1",
                 "app-read-state-v1",
                 "garden-person-rows-v1",

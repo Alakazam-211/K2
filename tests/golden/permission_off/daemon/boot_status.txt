@@ -46,10 +46,13 @@ features:
   thread-push-v1
   push-previews-v1
   push-e2e-v1
+  push-e2e-v2
+  push-content-available-v1
   thread-read-v1
   homes-sync-v1
   inbox-catchup-v1
   catchup-unchanged-v1
+  inbox-stream-v1
   app-thread-parity-v1
   app-read-state-v1
   garden-person-rows-v1

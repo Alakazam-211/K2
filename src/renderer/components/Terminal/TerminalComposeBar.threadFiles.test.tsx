@@ -62,6 +62,7 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { useContextMenuStore } from '@/stores/context-menu'
 
 const WS = '/Users/me/ai/sales'
 
@@ -108,8 +109,12 @@ function threadPosts(): unknown[] {
 
 async function pick(paths: string[]): Promise<void> {
   h.picked.push(paths)
+  // "+" opens its menu (attach, then Save to stash); pick attach.
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Attach or save' }))
+  })
+  await act(async () => {
+    useContextMenuStore.getState().selectItem('attach')
   })
 }
 

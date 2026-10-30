@@ -40,6 +40,7 @@ import { STASH_CAP } from '@/lib/prompt-stash/record'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { usePromptStashStore, type StashSaveResult } from '@/stores/prompt-stash'
+import { useContextMenuStore } from '@/stores/context-menu'
 
 const chrome: SessionViewChromeValue = {
   viewTab: 'thread',
@@ -183,6 +184,74 @@ describe('Cmd+S with text', () => {
     expect(box().value).toBe('the 51st')
     expect(usePromptStashStore.getState().items).toHaveLength(STASH_CAP)
     expect(usePromptStashStore.getState().items.some((r) => r.text === 'p0')).toBe(true)
+  })
+})
+
+describe('"Save to stash" in the "+" menu', () => {
+  function openPlus(): void {
+    act(() => {
+      fireEvent.click(screen.getByTestId('compose-plus'))
+    })
+    if (!useContextMenuStore.getState().isOpen) throw new Error('"+" did not open its menu')
+  }
+  function row(id: string) {
+    const r = useContextMenuStore.getState().items.find((i) => i.id === id)
+    if (!r) throw new Error(`the "+" menu has no ${id} row`)
+    return r
+  }
+  afterEach(() => {
+    act(() => useContextMenuStore.getState().close())
+  })
+
+  it.each([
+    ['the Thread box', renderThreadBar],
+    ['the terminal compose bar', renderPtyBar],
+  ])('in %s: attach first, then Save to stash, dimmed on an empty box', (_where, renderBar) => {
+    renderBar()
+    openPlus()
+    const items = useContextMenuStore.getState().items
+    expect(items.map((i) => i.id)).toEqual(['attach', 'sep', 'stash'])
+    expect(row('stash').label).toBe('Save to stash')
+    expect(row('stash').enabled).toBe(false)
+    expect(row('stash').shortcut).toBe(isMacPlatform() ? '⌘S' : 'Ctrl+S')
+    expect(screen.getByTestId('compose-plus').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('with text it is enabled, and picking it saves, then clears the box', async () => {
+    renderThreadBar()
+    type('stash me from the menu')
+    openPlus()
+    expect(row('stash').enabled).toBe(true)
+    act(() => useContextMenuStore.getState().selectItem('stash'))
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['stash me from the menu'])
+    expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (1 item)')
+    expect(screen.getByTestId('compose-plus').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('in the terminal compose bar it saves and clears too', async () => {
+    renderPtyBar()
+    type('pty from the menu')
+    openPlus()
+    act(() => useContextMenuStore.getState().selectItem('stash'))
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['pty from the menu'])
+  })
+
+  it('a dimmed row can\'t be picked: nothing is saved', async () => {
+    renderThreadBar()
+    openPlus()
+    act(() => useContextMenuStore.getState().selectItem('stash'))
+    expect(useContextMenuStore.getState().isOpen).toBe(true)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(usePromptStashStore.getState().items).toEqual([])
+  })
+
+  it('the stash tab on the box\'s top edge is 44 px wide', () => {
+    renderThreadBar()
+    expect(screen.getByTestId('stash-button').style.width).toBe('44px')
   })
 })
 

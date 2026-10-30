@@ -3,6 +3,8 @@
 //     top edge, just right of the activity bar (the Zen ear's look);
 //   - `StashSquareButton`: the same button in the terminal compose bar's
 //     square look, beside Send;
+//   - `composePlusMenuItems`: the composer "+" menu's rows, its attach
+//     choice then "Save to stash" (the phone's + menu; Rosson 2026-10-30);
 //   - `StashDrawer`: the list, newest first; each row has a preview, its
 //     source, its age, an attachment badge and ✕. ↑/↓ move, Enter picks,
 //     Esc closes, Delete / ⌘⌫ remove the row.
@@ -10,6 +12,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { stashAge, stashPreview, stashSourceLabel, type StashRecord } from '@/lib/prompt-stash/record'
+import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
 
 /** Slide length (ms), the activity drawer's. */
@@ -61,9 +64,48 @@ function useCountPop(count: number): boolean {
   return pop
 }
 
+/** The composer "+" menu: the attach choice (when the composer has one),
+ *  then "Save to stash", which does what the chord does (save, then clear)
+ *  and is dimmed while there is nothing typed or attached. */
+export function composePlusMenuItems({
+  attach,
+  canStash,
+  chord,
+}: {
+  attach: boolean
+  canStash: boolean
+  chord: string
+}): ContextMenuItemDef[] {
+  const items: ContextMenuItemDef[] = []
+  if (attach) {
+    items.push({ id: 'attach', label: 'Attach a file or image', icon: <PaperclipGlyph size={12} /> })
+    items.push({ id: 'sep', label: '', type: 'separator' })
+  }
+  items.push({
+    id: 'stash',
+    label: 'Save to stash',
+    icon: <StashGlyph size={12} />,
+    shortcut: chord,
+    enabled: canStash,
+    tooltip: canStash ? undefined : 'Type or attach something to save it',
+  })
+  return items
+}
+
+/** About how tall `composePlusMenuItems` draws (ContextMenu rows and
+ *  separators), to open it above the "+" at the bottom of the window. */
+export function composePlusMenuHeight(items: readonly ContextMenuItemDef[]): number {
+  let h = 10
+  for (const i of items) h += i.type === 'separator' ? 9 : 27
+  return h
+}
+
 function stashButtonLabel(count: number): string {
   return count === 1 ? 'Stash (1 item)' : `Stash (${count} items)`
 }
+
+/** The stash tab's width (px), the phone's. */
+export const STASH_TAB_WIDTH = 44
 
 /** The Thread box's stash button: an ear on the box's top edge. */
 export function StashTab({
@@ -91,11 +133,13 @@ export function StashTab({
       // Keep the caret in the message box.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onToggle}
-      className="inline-flex flex-none cursor-pointer items-center"
+      className="inline-flex flex-none cursor-pointer items-center justify-center"
       style={{
         gap: 4,
+        // 44 wide, the phone's tab (Rosson 2026-10-30; was its padding).
+        width: STASH_TAB_WIDTH,
         height: 26,
-        padding: '0 9px',
+        padding: 0,
         fontSize: 12,
         lineHeight: '18px',
         color: open ? 'var(--zen-accent)' : 'var(--zen-text-muted)',

@@ -232,11 +232,11 @@ describe('the Thread\'s message box (Zen look)', () => {
     const field = bar?.querySelector('[data-zen-compose-box]') as HTMLElement
     expect(field).not.toBeNull()
     expect(field.contains(box())).toBe(true)
-    expect(field.contains(screen.getByRole('button', { name: 'Attach file' }))).toBe(true)
+    expect(field.contains(screen.getByRole('button', { name: 'Attach or save' }))).toBe(true)
     expect(field.contains(screen.getByTestId('compose-slash-button'))).toBe(true)
     // Rosson: the "+" to "/" gap equals the field's edge to "+" (visible ink).
     const tools = field.querySelector('[data-compose-tools]') as HTMLElement
-    const plus = screen.getByRole('button', { name: 'Attach file' })
+    const plus = screen.getByRole('button', { name: 'Attach or save' })
     const slash = screen.getByTestId('compose-slash-button')
     expect(tools.contains(plus) && tools.contains(slash)).toBe(true)
     const px = (v: string): number => {
@@ -526,7 +526,7 @@ describe('chamfered corners in K2\'s square Style', () => {
                   : e.outerHTML.slice(0, 60),
     )
     expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stop'])
-    for (const small of [screen.getByRole('button', { name: 'Attach file' }), screen.getByTestId('compose-slash-button')]) {
+    for (const small of [screen.getByRole('button', { name: 'Attach or save' }), screen.getByTestId('compose-slash-button')]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
     // Scaled like Send (5px at 32px): Stop 20px → 3px, "Earlier messages" 22px → 3.5px.
@@ -554,7 +554,7 @@ describe('chamfered corners in K2\'s square Style', () => {
       expect(cut(el(sel)), sel).toBe(true)
     }
     // "+" and "/" have no fill: left as they are.
-    expect(cut(screen.getByRole('button', { name: 'Attach file' }))).toBe(false)
+    expect(cut(screen.getByRole('button', { name: 'Attach or save' }))).toBe(false)
     expect(cut(screen.getByTestId('compose-slash-button'))).toBe(false)
     // The rule flattens the radius and paints the cut shape behind the content.
     expect(THREAD_CHAMFER_CSS).toMatch(/\[data-chamfer\] \{ border-radius: 0 !important;/)

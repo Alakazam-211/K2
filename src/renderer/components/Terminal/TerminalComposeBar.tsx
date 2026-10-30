@@ -106,7 +106,14 @@ import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
 import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
-import { StashDrawer, StashSquareButton, StashTab } from '@/components/PromptStash/PromptStash'
+import {
+  StashDrawer,
+  StashSquareButton,
+  StashTab,
+  composePlusMenuHeight,
+  composePlusMenuItems,
+} from '@/components/PromptStash/PromptStash'
+import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -621,6 +628,28 @@ export function TerminalComposeBar({
       setStashing(false)
     }
   }, [agentName, draft, pendingFiles, scope, sessionChrome?.displayName, stashing, threadAddr, workspacePath])
+
+  // The "+" menu (the phone's): attach, then "Save to stash" (what the
+  // chord does), dimmed while there is nothing to save. It opens above the
+  // "+", which sits at the bottom of the window.
+  const plusBtnRef = useRef<HTMLButtonElement>(null)
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  const canStashDraft = !stashing && (draft.trim().length > 0 || pendingFiles.length > 0)
+  const openPlusMenu = useCallback(() => {
+    const items = composePlusMenuItems({ attach: true, canStash: canStashDraft, chord: stashChord })
+    const r = plusBtnRef.current?.getBoundingClientRect()
+    const x = r ? clientToCssPx(r.left) : 0
+    const y = r ? Math.max(4, clientToCssPx(r.top) - composePlusMenuHeight(items) - 4) : 0
+    setPlusMenuOpen(true)
+    void useContextMenuStore
+      .getState()
+      .show(x, y, items)
+      .then((picked) => {
+        setPlusMenuOpen(false)
+        if (picked === 'attach') handleAttachClick()
+        else if (picked === 'stash') void stashDraft()
+      })
+  }, [canStashDraft, handleAttachClick, stashChord, stashDraft])
 
   // Put a stash into the box: below any text, its files attached again
   // (uploaded to this composer's server). It stays in the stash unless
@@ -1276,10 +1305,13 @@ export function TerminalComposeBar({
             style={{ gap: toolLayout.boxGap, marginLeft: toolLayout.marginLeft }}
           >
           <ThreadRoundButton
-            label="Attach file"
-            title="Attach a file or image"
+            label="Attach or save"
+            title="Attach a file, or save to stash"
             lightable
-            onClick={handleAttachClick}
+            menuOpen={plusMenuOpen}
+            buttonRef={plusBtnRef}
+            onClick={openPlusMenu}
+            data={{ 'aria-haspopup': 'menu', 'aria-expanded': plusMenuOpen, 'data-testid': 'compose-plus' }}
             style={tool}
           >
             <ComposePlusGlyph />
@@ -1356,10 +1388,14 @@ export function TerminalComposeBar({
       )}
       <div className="flex min-w-0 w-full items-end gap-1 px-1">
       <button
+        ref={plusBtnRef}
         type="button"
-        aria-label="Attach file"
-        title="Attach a file or image"
-        onClick={handleAttachClick}
+        aria-label="Attach or save"
+        title="Attach a file, or save to stash"
+        aria-haspopup="menu"
+        aria-expanded={plusMenuOpen}
+        data-testid="compose-plus"
+        onClick={openPlusMenu}
         className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-border)] transition-colors"
         style={{
           borderRadius: 0,

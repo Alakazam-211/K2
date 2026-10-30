@@ -58,6 +58,10 @@ ${CHAMFER_SCOPE} [data-stash-row] { border-radius: 0 !important; clip-path: ${ch
 
 /** The tab's (and the drawer's) top corners on the Thread box. */
 const STASH_EAR_RADIUS = 'calc(var(--zen-radius) + 2px)'
+/** The tab's own top corners: half the drawer's, for its half width. */
+const STASH_TAB_RADIUS = 'calc(var(--zen-radius) / 2 + 1px)'
+/** The tab's chamfer: the drawer's cut scaled to its width (5px at 44). */
+const STASH_TAB_CUT = CHAMFER_CUT.button
 
 export function StashGlyph({ size = 12 }: { size?: number }): JSX.Element {
   return (
@@ -132,7 +136,7 @@ function stashButtonLabel(count: number): string {
 }
 
 /** The stash tab's width (px), the phone's. */
-export const STASH_TAB_WIDTH = 44
+export const STASH_TAB_WIDTH = 22
 
 /** The Thread box's stash button: an ear on the box's top edge. */
 export function StashTab({
@@ -178,7 +182,8 @@ export function StashTab({
       className="inline-flex flex-none cursor-pointer items-center justify-center"
       style={{
         gap: 4,
-        // 44 wide, the phone's tab (Rosson 2026-10-30; was its padding).
+        // 22 wide (Rosson 2026-10-30: half the phone's 44); 26 tall, so the
+        // hit area stays comfortable.
         width: STASH_TAB_WIDTH,
         height: 26,
         padding: 0,
@@ -188,10 +193,10 @@ export function StashTab({
         background: ZEN_DRAWER_EAR_FILL,
         border: '1px solid var(--zen-border)',
         borderBottom: 'none',
-        borderRadius: `${STASH_EAR_RADIUS} ${STASH_EAR_RADIUS} 0 0`,
+        borderRadius: `${STASH_TAB_RADIUS} ${STASH_TAB_RADIUS} 0 0`,
         visibility: concealed ? 'hidden' : undefined,
         ...chamferVars({
-          cut: [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0],
+          cut: [STASH_TAB_CUT, STASH_TAB_CUT, 0, 0],
           fill: ZEN_DRAWER_EAR_FILL,
           edge: 'var(--zen-border)',
           border: 1,
@@ -200,14 +205,14 @@ export function StashTab({
       }}
     >
       {closer ? (
-        <span data-stash-close="" aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>
+        <span data-stash-close="" aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>
           ✕
         </span>
       ) : (
         // No count on the tab (Rosson 2026-10-30); the label still says how
         // many, and the icon pops when a save lands.
         <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
-          <StashGlyph size={12} />
+          <StashGlyph size={11} />
         </span>
       )}
     </button>

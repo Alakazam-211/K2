@@ -249,9 +249,10 @@ describe('"Save to stash" in the "+" menu', () => {
     expect(usePromptStashStore.getState().items).toEqual([])
   })
 
-  it('the stash tab on the box\'s top edge is 44 px wide', () => {
+  it('the stash tab on the box\'s top edge is 22 px wide, 26 tall', () => {
     renderThreadBar()
-    expect(screen.getByTestId('stash-button').style.width).toBe('44px')
+    expect(screen.getByTestId('stash-button').style.width).toBe('22px')
+    expect(screen.getByTestId('stash-button').style.height).toBe('26px')
   })
 
   it('the stash tab shows the icon, no count (the label still says how many); closed, it keeps the bookmark', async () => {
@@ -440,7 +441,7 @@ describe('the drawer and its tab (Rosson 2026-10-30)', () => {
     expect(handle.querySelector('[data-stash-icon]')).toBeNull()
     expect(within(drawer).getAllByRole('button', { name: 'Close stash' })).toEqual([handle])
     expect(drawer.querySelectorAll('svg path[d^="M19 21l-7-5-7 5V5"]')).toHaveLength(0)
-    expect(handle.style.width).toBe('44px')
+    expect(handle.style.width).toBe('22px')
     const slot = handle.parentElement as HTMLElement
     expect(slot.style.position).toBe('absolute')
     expect(slot.style.bottom).toBe('calc(100% - 1px)')
@@ -461,7 +462,7 @@ describe('the drawer and its tab (Rosson 2026-10-30)', () => {
     renderThreadBar()
     const edgeTab = screen.getByTestId('stash-button')
     expect(edgeTab.hasAttribute('data-chamfer')).toBe(true)
-    expect(['tl', 'tr', 'br', 'bl'].map((k) => edgeTab.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '0px', '0px'])
+    expect(['tl', 'tr', 'br', 'bl'].map((k) => edgeTab.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '0px', '0px'])
     fireEvent.click(edgeTab)
     const drawer = await screen.findByTestId('stash-drawer')
     expect(drawer.hasAttribute('data-chamfer')).toBe(true)

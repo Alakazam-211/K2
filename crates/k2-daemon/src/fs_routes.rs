@@ -1046,20 +1046,37 @@ pub fn lexically_in_agent_config(rel: &str, ancestors: bool) -> bool {
 /// not-yet-created tail kept as written. `None` when an existing prefix
 /// can't be resolved (a dangling symlink): callers fail closed.
 fn resolve_existing_prefix(abs: &Path) -> Option<PathBuf> {
+    resolve_existing_prefix_seam(abs, |_| {})
+}
+
+/// [`resolve_existing_prefix`], with `between` run after a failed
+/// canonicalize and before the existence check: the window a parallel
+/// request can create the folder in. `between` must be a no-op in
+/// production (only [`resolve_existing_prefix`] calls this outside tests);
+/// tests create a folder or a link there.
+fn resolve_existing_prefix_seam(abs: &Path, mut between: impl FnMut(&Path)) -> Option<PathBuf> {
+    let with_tail = |mut out: PathBuf, tail: &[std::ffi::OsString]| {
+        for seg in tail.iter().rev() {
+            out.push(seg);
+        }
+        out
+    };
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = abs.to_path_buf();
     loop {
         match dunce::canonicalize(&cur) {
-            Ok(mut out) => {
-                for seg in tail.iter().rev() {
-                    out.push(seg);
-                }
-                return Some(out);
-            }
+            Ok(out) => return Some(with_tail(out, &tail)),
             Err(_) => {
+                between(&cur);
                 if std::fs::symlink_metadata(&cur).is_ok() {
-                    // Exists but won't resolve: a dangling or looping link.
-                    return None;
+                    // Something is there now: it appeared after the
+                    // canonicalize (a parallel upload making the guest's
+                    // drop folder), or it is a dangling or looping link.
+                    // Resolve it exactly once more and return only what
+                    // that says; the caller runs the whole protected-path
+                    // decision on it (a link into `.k2` is refused there).
+                    // Still unresolvable: fail closed.
+                    return dunce::canonicalize(&cur).ok().map(|out| with_tail(out, &tail));
                 }
                 let name = cur.file_name()?.to_owned();
                 let parent = cur.parent()?.to_path_buf();
@@ -4169,5 +4186,89 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── The drop-folder race (0.46.7): one re-resolve, then the full check ──
+
+    /// A room with `.k2/agent` and `Inbox/`, canonical.
+    fn race_room(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("k2-race-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(".k2").join("agent")).expect("agent dir");
+        std::fs::create_dir_all(dir.join("Inbox")).expect("inbox dir");
+        dunce::canonicalize(&dir).expect("canon room")
+    }
+
+    /// The protected-path verdict the upload doors take on a resolved
+    /// target: `true` = refused as the agent's config (or unresolvable).
+    fn refused(root: &Path, resolved: Option<&Path>) -> bool {
+        resolved_in_agent_config(&root.to_string_lossy(), resolved, false)
+    }
+
+    /// (1) A real dangling link is still refused: nothing to resolve, even
+    /// with the one retry.
+    #[test]
+    fn a_dangling_link_still_fails_closed() {
+        let root = race_room("dangle");
+        let link = root.join("Inbox").join("gone");
+        k2_core::test_env::symlink(root.join("no-such-folder"), &link).expect("dangling link");
+        let got = resolve_existing_prefix(&link.join("f.bin"));
+        assert_eq!(got, None, "a dangling link resolves to nothing");
+        assert!(refused(&root, got.as_deref()), "and is refused");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (2) A link loop is still refused.
+    #[test]
+    fn a_link_loop_still_fails_closed() {
+        let root = race_room("loop");
+        let (a, b) = (root.join("Inbox").join("a"), root.join("Inbox").join("b"));
+        k2_core::test_env::symlink(&b, &a).expect("a -> b");
+        k2_core::test_env::symlink(&a, &b).expect("b -> a");
+        let got = resolve_existing_prefix(&a.join("f.bin"));
+        assert_eq!(got, None, "a loop resolves to nothing");
+        assert!(refused(&root, got.as_deref()), "and is refused");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (3) A link into `.k2` made between the failed canonicalize and the
+    /// existence check: the retry resolves it into `.k2`, and the decision
+    /// on that path refuses it.
+    #[test]
+    fn a_link_into_k2_made_in_the_window_is_refused() {
+        let root = race_room("k2link");
+        let target = root.join("Inbox").join("guest");
+        let mut made = 0;
+        let got = resolve_existing_prefix_seam(&target, |cur| {
+            if cur == target.as_path() && made == 0 {
+                made += 1;
+                k2_core::test_env::symlink(root.join(".k2").join("agent"), &target).expect("racing link into .k2");
+            }
+        });
+        assert_eq!(made, 1, "the seam ran in the window");
+        let got = got.expect("the new link resolves");
+        assert!(got.starts_with(root.join(".k2")), "resolved into .k2: {}", got.display());
+        assert!(refused(&root, Some(&got)), "a link into .k2 is refused");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (4) The guest's drop folder made by a parallel request in the same
+    /// window: the retry resolves it, and it is allowed (it was refused as
+    /// "agent_config_protected" before 0.46.7).
+    #[test]
+    fn a_folder_made_in_the_window_is_resolved_and_allowed() {
+        let root = race_room("mkdir");
+        let target = root.join("Inbox").join("guest");
+        let mut made = 0;
+        let got = resolve_existing_prefix_seam(&target.join("f.bin"), |cur| {
+            if cur == target.as_path() && made == 0 {
+                made += 1;
+                std::fs::create_dir(&target).expect("racing mkdir");
+            }
+        });
+        assert_eq!(made, 1, "the seam ran in the window");
+        let got = got.expect("the new folder resolves");
+        assert_eq!(got, root.join("Inbox").join("guest").join("f.bin"));
+        assert!(!refused(&root, Some(&got)), "an ordinary drop folder is allowed");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -163,16 +163,33 @@ rm -f "$notes"
 
 # ── Check what clients will read ──
 check="$(mktemp -d "${TMPDIR:-/tmp}/k2-win-check.XXXXXX")"
-curl -fsSL "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/latest.json" -o "$check/latest.json"
-python3 -I - "$check/latest.json" "$VERSION" "$WIN_ASSET" <<'PY'
+# latest.json is read through the GitHub API (the release asset itself), not
+# the public download URL: GitHub's CDN can serve the copy from before the
+# re-upload for a while. A few tries cover the API catching up; it stays a
+# hard check (the script fails if the asset never shows windows-x86_64).
+check_latest_json() {
+    rm -f "$check/latest.json"
+    gh release download "$TAG" --repo "$RELEASE_REPO" --pattern latest.json --dir "$check" --clobber || return 1
+    python3 -I - "$check/latest.json" "$VERSION" "$WIN_ASSET" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-w = d["platforms"]["windows-x86_64"]
+w = d["platforms"].get("windows-x86_64")
+assert w, "no windows-x86_64 entry yet; platforms: " + ", ".join(sorted(d["platforms"]))
 assert d["version"] == sys.argv[2], d["version"]
 assert w["url"].endswith("/" + sys.argv[3]), w["url"]
 assert w["signature"] and len(w["k2_signatures"]) == 1, w
 print("latest.json platforms:", ", ".join(sorted(d["platforms"])))
 PY
+}
+tries=5
+for i in $(seq 1 "$tries"); do
+    if check_latest_json; then
+        break
+    fi
+    [ "$i" -lt "$tries" ] || die "${TAG}'s latest.json (read through the GitHub API, $tries tries) still has no good windows-x86_64 entry; clients won't see the Windows setup. Check the asset with: gh release download $TAG --repo $RELEASE_REPO --pattern latest.json"
+    say "latest.json check $i/$tries failed; trying again in 10 s"
+    sleep 10
+done
 curl -fsSL "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/${WIN_ASSET}" -o "$check/$WIN_ASSET"
 [ "$(shasum -a 256 "$check/$WIN_ASSET" | awk '{print $1}')" = "$HAVE" ] || die "the published $WIN_ASSET differs from the signed bytes"
 rm -rf "$check"

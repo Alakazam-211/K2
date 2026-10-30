@@ -2262,11 +2262,9 @@ pub(crate) fn access_counts(app: &AppRow) -> R<J> {
     Ok(out)
 }
 
-fn refuse_if_access_would_drop(app: &AppRow) -> R<()> {
-    let c = access_counts(app)?;
-    if c["total"].as_u64().unwrap_or(0) == 0 {
-        return Ok(());
-    }
+/// What [`access_counts`] found, in words: `["3 App logins", "1 chat Space
+/// bound to it"]` (only the counts above zero).
+pub(crate) fn loss_parts(c: &J) -> Vec<String> {
     let n = |k: &str| c[k].as_u64().unwrap_or(0);
     let mut parts: Vec<String> = Vec::new();
     for (k, one, many) in [
@@ -2283,6 +2281,15 @@ fn refuse_if_access_would_drop(app: &AppRow) -> R<()> {
             x => parts.push(format!("{x} {many}")),
         }
     }
+    parts
+}
+
+fn refuse_if_access_would_drop(app: &AppRow) -> R<()> {
+    let c = access_counts(app)?;
+    if c["total"].as_u64().unwrap_or(0) == 0 {
+        return Ok(());
+    }
+    let parts = loss_parts(&c);
     let mut r = no(
         UNINSTALL_DROPS_ACCESS,
         409,

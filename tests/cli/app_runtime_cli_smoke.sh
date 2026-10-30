@@ -242,6 +242,24 @@ expect_eq "uninstall with an App login is refused (exit 3)" "$rc" "3"
 expect_has "it names the code" "$(cat "$SANDBOX/out")" "uninstall_drops_access"
 expect_has "and the count" "$(cat "$SANDBOX/out")" "1 App login"
 expect_has "still installed" "$(k2 app list)" "smoke"
+# Release and workspace remove: all or nothing, every App listed.
+set +e
+k2 app release "$WS" --apps uninstall > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "release --apps uninstall with an App login is refused (exit 3)" "$rc" "3"
+expect_has "  nothing was released" "$(cat "$SANDBOX/out")" "nothing was released"
+expect_has "  it lists the App and its count" "$(cat "$SANDBOX/out")" "smoke: 1 App login"
+set +e
+k2 workspace remove "$WS" --apps uninstall > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "workspace remove --apps uninstall is refused too (exit 3)" "$rc" "3"
+expect_has "  same refusal" "$(cat "$SANDBOX/out")" "uninstall_drops_access"
+expect_has "the App is still installed" "$(k2 app list)" "smoke"
+expect_has "the workspace is still registered" "$(curl -s "http://127.0.0.1:$PORT/cli/projects/list?token=$OWNER_TOKEN")" "$WS"
+set +e
+k2 app release "$WS" --apps park --drop-access > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "--drop-access only goes with --apps uninstall (exit 2)" "$rc" "2"
 expect_has "uninstall --drop-access" "$(k2 app uninstall smoke --drop-access)" "App smoke uninstalled"
 expect_has "list is empty" "$(k2 app list)" "No Apps on this box"
 

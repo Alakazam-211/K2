@@ -36,12 +36,49 @@ use serde_json::{json, Value as J};
 use crate::cli_response::CliResponse;
 
 use super::handover_guard;
-use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, ws_by_token, Who, Ws, R};
+use super::routes::{actor, app_for, b, db_err, json_body, need_credential, no, s, ws_by_token, Who, Ws, R};
 
 pub const WORKSPACE_HAS_APPS: &str = "workspace_has_apps";
 pub const APP_PARKED: &str = "app_parked";
 pub const NOT_PARKED: &str = "not_parked";
 pub const RELEASE_INCOMPLETE: &str = "release_incomplete";
+/// `forRemoval` and the workspace is a project group's Point of Contact:
+/// nothing is released (the removal would be refused after it).
+pub const POC_BLOCKS_REMOVAL: &str = "poc_of_projects";
+
+/// `release --apps uninstall` without `dropAccess`: every App that would
+/// drop people's access, in one `409 uninstall_drops_access`, before any
+/// App is touched.
+fn refuse_if_any_access_would_drop(ws_id: &str, apps: &[AppRow]) -> R<()> {
+    let mut losing: Vec<J> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    for app in apps {
+        let c = super::routes::access_counts(app)?;
+        if c["total"].as_u64().unwrap_or(0) > 0 {
+            lines.push(format!("{}: {}", app.app_id, super::routes::loss_parts(&c).join(", ")));
+            losing.push(json!({ "app": app.app_id, "wouldDrop": c }));
+        }
+    }
+    if losing.is_empty() {
+        return Ok(());
+    }
+    let handle = super::routes::ws_handle(ws_id);
+    let mut r = no(
+        super::routes::UNINSTALL_DROPS_ACCESS,
+        409,
+        format!(
+            "nothing was released: uninstalling {} of {} App{} would drop people's access ({}). A reinstall is a new App and \
+             gets none of it back. To uninstall anyway: k2 app release {handle} --apps uninstall --drop-access \
+             (k2 workspace remove … --apps uninstall --drop-access)",
+            losing.len(),
+            apps.len(),
+            if apps.len() == 1 { "" } else { "s" },
+            lines.join("; ")
+        ),
+    );
+    r.extra = Some(json!({ "apps": losing, "released": [] }));
+    Err(r)
+}
 
 pub const ROUTES: &[&str] = &["/cli/app/handover", "/cli/app/park", "/cli/app/unpark", "/cli/app/release"];
 
@@ -402,6 +439,30 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
     let ws_raw = s(&v, "workspace").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace (workspace)"))?;
     let ws = ws_by_token(ws_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{ws_raw}'")))?;
     let apps = owned_apps(&ws.id).map_err(|e| no("db_error", 500, e))?;
+    let drop_access = b(&v, "dropAccess");
+    // App-governed Spaces S7 follow-up: all or nothing. Every refusal is
+    // decided here, before any App is released.
+    // - `forRemoval` (k2 workspace remove --apps, Settings' Remove
+    //   workspace): the workspace's own removal guard (Point of Contact)
+    //   runs first, so its Apps never go while the workspace stays.
+    if b(&v, "forRemoval") {
+        let display = k2_core::workspace::display::agent_display_name(&ws.path);
+        if let Some(resp) = crate::project_group_routes::poc_removal_block(&ws.id, &display) {
+            let body: J = serde_json::from_str(&resp.body).unwrap_or(J::Null);
+            let mut r = no(
+                POC_BLOCKS_REMOVAL,
+                409,
+                body["error"]["hint"].as_str().map(str::to_string).unwrap_or_else(|| "the workspace can't be removed yet".into()),
+            );
+            r.extra = Some(json!({ "released": [] }));
+            return Err(r);
+        }
+    }
+    // - uninstall: every App that would drop people's access is listed in
+    //   one refusal unless `dropAccess` (PRD §9.2, Q4).
+    if way == "uninstall" && !drop_access {
+        refuse_if_any_access_would_drop(&ws.id, &apps)?;
+    }
     if let Some(to_raw) = handover_to.filter(|_| super::handover::mode() == super::handover::Mode::Legacy) {
         // K2_APP_HANDOVER=legacy (0.46.4's guard): every App must be safe
         // to move before any moves, then one owner confirm covers the
@@ -435,7 +496,7 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
     let mut failed = 0;
     let mut held = 0;
     for app in &apps {
-        let one = json!({ "app": app.app_id }).to_string();
+        let one = json!({ "app": app.app_id, "dropAccess": drop_access }).to_string();
         let r = match handover_to {
             Some(to) => match super::handover::mode() {
                 // K2_APP_HANDOVER=legacy: 0.46.4's guarded move (one confirm

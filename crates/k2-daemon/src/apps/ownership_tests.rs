@@ -346,6 +346,63 @@ fn release_uninstall_removes_the_apps_then_the_workspace() {
     assert!(st.starts_with("200"), "{st} {v}");
 }
 
+fn svc_of(app: &str) -> String {
+    row(app).service_id
+}
+
+/// App-governed Spaces S7 follow-up: `release --apps uninstall` is all or
+/// nothing. Apps that would drop people's access are listed in ONE
+/// refusal (each with its counts) before any App is uninstalled, even
+/// the ones that would drop nothing; `dropAccess` goes through for all.
+#[test]
+fn release_uninstall_refuses_and_lists_every_app_that_would_drop_access() {
+    let f = fx("rdrop");
+    k2_core::skin::add_principal_for_app("rdrop-u1", None, &svc_of(&f.a1), None, "owner").unwrap();
+    k2_core::skin::add_principal_for_app("rdrop-u2", None, &svc_of(&f.a1), None, "owner").unwrap();
+    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": "uninstall" }));
+    assert_eq!((st, code(&v)), (409, super::routes::UNINSTALL_DROPS_ACCESS), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap();
+    assert!(hint.starts_with("nothing was released"), "{hint}");
+    assert!(hint.contains(&format!("{}: 2 App logins", f.a1)), "{hint}");
+    assert!(hint.contains("--drop-access"), "{hint}");
+    let listed = v["error"]["apps"].as_array().expect("apps");
+    assert_eq!(listed.len(), 1, "only the App that would lose something: {v}");
+    assert_eq!((listed[0]["app"].as_str(), listed[0]["wouldDrop"]["logins"].as_u64()), (Some(f.a1.as_str()), Some(2)));
+    assert_eq!(v["error"]["released"], json!([]));
+    assert!(exists(&f.a1) && exists(&f.a2), "nothing was uninstalled, not even the App with nothing to lose");
+    // The workspace can't go while its Apps are there.
+    let (st, _) = remove_ws(&f.a);
+    assert!(st.starts_with("409"), "{st}");
+
+    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": "uninstall", "dropAccess": true }));
+    assert_eq!(st, 200, "{v}");
+    assert!(!exists(&f.a1) && !exists(&f.a2), "uninstalled, both");
+    assert!(exists(&f.b1));
+    let (st, v) = remove_ws(&f.a);
+    assert!(st.starts_with("200"), "{st} {v}");
+}
+
+/// `forRemoval` (k2 workspace remove --apps, Settings): a workspace that
+/// is a project group's Point of Contact can't be removed, so none of its
+/// Apps is released either (parked or uninstalled), whatever dropAccess.
+#[test]
+fn release_for_removal_releases_nothing_when_the_workspace_cannot_go() {
+    let f = fx("rpoc");
+    let g = k2_core::project_groups::create_group("rpoc-group").unwrap();
+    k2_core::project_groups::add_member(&g.id, &f.a).unwrap();
+    k2_core::project_groups::set_poc(&g.id, &f.a).unwrap();
+    for way in ["uninstall", "park"] {
+        let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": way, "forRemoval": true, "dropAccess": true }));
+        assert_eq!((st, code(&v)), (409, "poc_of_projects"), "{way}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("Point of Contact for: rpoc-group"), "{v}");
+        assert!(exists(&f.a1) && exists(&f.a2), "{way}: nothing released");
+        assert_ne!(row(&f.a1).state, store::STATE_PARKED, "{way}: nothing parked");
+    }
+    // Without forRemoval, release alone still works (the CLI's k2 app release).
+    let (st, v) = call("/cli/app/release", &Who::Owner, json!({ "workspace": f.a, "apps": "park" }));
+    assert_eq!(st, 200, "{v}");
+}
+
 #[test]
 fn the_boot_sweep_parks_orphans_and_tells_the_owner_once() {
     let f = fx("sweep");

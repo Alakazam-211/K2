@@ -8531,9 +8531,15 @@ See and run it:
                                        owner (no agent maintains it).
   k2 app unpark <app-id> --to WS       Owner: give a parked App to a workspace
                                        (the same handover card).
-  k2 app release <workspace> --apps handover:<ws>|uninstall|park
+  k2 app release <workspace> --apps handover:<ws>|uninstall|park [--drop-access]
                                        One way out for every App a workspace
                                        maintains (before k2 workspace remove).
+                                       uninstall is all or nothing: if any App
+                                       would lose people's logins, grants,
+                                       shared secrets or chat Spaces, nothing
+                                       is uninstalled and every such App is
+                                       listed (exit 3); --drop-access goes
+                                       ahead for all of them.
   k2 app config <app-id> [--memory 8G|512M|none] [--cpu-weight N] [--tasks N]
                  [--disk 2G] [--egress add|rm HOST:PORT] [--egress-mode allowlist|broad]
                  [--port add|rm 5000/udp] [--recycle-every 24h] [--recycle-at 85%]
@@ -10320,10 +10326,11 @@ cmd_app_ownership() {
 
 # k2 app release <workspace> --apps handover:<ws>|uninstall|park [--json]
 cmd_app_release() {
-    local ws="" apps="" json_out=0
+    local ws="" apps="" drop=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --apps) apps="${2:-}"; shift 2 ;;
+            --drop-access) drop=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -10331,10 +10338,14 @@ cmd_app_release() {
         esac
     done
     if [ -z "$ws" ] || [ -z "$apps" ]; then
-        echo "usage: k2 app release <workspace> --apps handover:<workspace>|uninstall|park" >&2
+        echo "usage: k2 app release <workspace> --apps handover:<workspace>|uninstall|park [--drop-access]" >&2
         exit 2
     fi
-    _app_post_confirming /cli/app/release "Give $ws's Apps to ${apps#handover:}" K2_CJ_workspace="$ws" K2_CJ_apps="$apps"
+    if [ "$drop" = 1 ] && [ "$apps" != "uninstall" ]; then
+        echo "usage: --drop-access goes with --apps uninstall" >&2
+        exit 2
+    fi
+    _app_post_confirming /cli/app/release "Give $ws's Apps to ${apps#handover:}" K2_CJ_workspace="$ws" K2_CJ_apps="$apps" K2_CJ_dropAccess_b="$drop"
     case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; [ "$_CP_STATUS" = "202" ] && return 2; return 0; fi
     if [ "$_CP_STATUS" = "202" ]; then
@@ -39193,7 +39204,7 @@ cmd_workspace_preview() {
 }
 
 cmd_workspace_remove() {
-    local target_path="" mode="" apps_way=""
+    local target_path="" mode="" apps_way="" drop=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --mode) mode="$2"; shift 2 ;;
@@ -39202,6 +39213,7 @@ cmd_workspace_remove() {
             # handover:<ws> (owner) | uninstall | park (k2 app release).
             --apps) apps_way="${2:-}"; shift 2 ;;
             --apps=*) apps_way="${1#--apps=}"; shift ;;
+            --drop-access) drop=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
             *) if [ -z "$target_path" ]; then target_path="$1"; fi; shift ;;
         esac
@@ -39218,6 +39230,12 @@ cmd_workspace_remove() {
         echo "  --apps handover:<ws>|uninstall|park" >&2
         echo "                           First release the Apps this workspace maintains (a" >&2
         echo "                           workspace with Apps is never removed under them)." >&2
+        echo "                           All or nothing: if the workspace can't be removed, or" >&2
+        echo "                           an App would lose people's access (uninstall), no App" >&2
+        echo "                           is released and the reasons are listed (exit 3)." >&2
+        echo "  --drop-access            With --apps uninstall: uninstall even Apps whose users" >&2
+        echo "                           would lose their logins, grants, shared secrets or" >&2
+        echo "                           chat Spaces." >&2
         exit 1
     fi
     # Resolve to absolute path
@@ -39241,8 +39259,14 @@ except Exception:
         exit 4
     fi
     target_path="$resolved"
+    if [ "$drop" = 1 ] && [ "$apps_way" != "uninstall" ]; then
+        echo "usage: --drop-access goes with --apps uninstall" >&2
+        exit 2
+    fi
     if [ -n "$apps_way" ]; then
-        _app_post_confirming /cli/app/release "Give this workspace's Apps to ${apps_way#handover:}" K2_CJ_workspace="$target_path" K2_CJ_apps="$apps_way"
+        # forRemoval: the daemon refuses before releasing anything when the
+        # workspace itself can't go (all or nothing).
+        _app_post_confirming /cli/app/release "Give this workspace's Apps to ${apps_way#handover:}" K2_CJ_workspace="$target_path" K2_CJ_apps="$apps_way" K2_CJ_dropAccess_b="$drop" K2_CJ_forRemoval_b=1
         [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     fi
     local resp

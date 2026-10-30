@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.2 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.8.2** (the revert fix: a revert's conflicts no longer change across a host restart). `Cargo.lock` only; no pack change.
+
 ## v0.6.1 (2026-10-28)
 
 **Requires `k2-mpc-base` v0.8.1** (the undo fix: undo, redo and revert remove only their own text). `Cargo.lock` only; no pack change.

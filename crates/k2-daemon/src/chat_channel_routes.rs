@@ -20,7 +20,9 @@
 //!   worker's client, `Sew-Actor` = the App, attribution only): first
 //!   `spaces/members/add` for listed users not yet in the Space (K31's
 //!   ledger), then `channels/create` with the users now in it. Sew's 409s
-//!   map to `space_unbound` / `app_mismatch`.
+//!   map to `space_unbound` / `app_mismatch`, and Sew 0.6.0's
+//!   `channel_type_mismatch` (the slug is already a voice channel; 0.5.0
+//!   answered 200) to `409 channel_type_mismatch`, never retried.
 //! - The rules (who goes in, the ledger, the audit row, 60/min) are
 //!   `k2_core::skin::app_channels`.
 
@@ -48,6 +50,7 @@ pub fn refusal(r: &Refusal) -> CliResponse {
     let extra = match r {
         Refusal::RateLimited { retry_after_ms } => Some(json!({ "retryAfterMs": retry_after_ms, "limit": cc::RATE_PER_MIN })),
         Refusal::FeatureMissing => Some(json!({ "feature": hook::features::APP_CHANNEL_CREATE })),
+        Refusal::TypeMismatch { slug, existing_type } => Some(json!({ "slug": slug, "existingType": existing_type })),
         _ => None,
     };
     error(r.status(), r.code(), r.hint(), extra)
@@ -67,7 +70,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, Refusal> + Se
 }
 
 /// Sew's answer to a mgmt POST, as a refusal when it isn't a 2xx.
-fn sew_refusal(r: &MgmtResponse, space: &str) -> Refusal {
+fn sew_refusal(r: &MgmtResponse, space: &str, slug: &str) -> Refusal {
     let e = r.error();
     let code = e.as_ref().map(|e| e.error.code.clone()).unwrap_or_default();
     let reason = e
@@ -82,6 +85,15 @@ fn sew_refusal(r: &MgmtResponse, space: &str) -> Refusal {
         409 if is("app_mismatch") => {
             Refusal::AppMismatch(format!("Sew says Space {space} belongs to another App; an App makes channels in its own Space only"))
         }
+        // Sew 0.6.0 (0.5.0 answered 200): the slug is a channel of another
+        // type. Refused as it is, never retried under another slug.
+        409 if is(sew_wire::reasons::CHANNEL_TYPE_MISMATCH) => Refusal::TypeMismatch {
+            slug: slug.to_string(),
+            existing_type: e
+                .as_ref()
+                .and_then(|e| e.error.details.get("existing_type").and_then(|x| x.as_str()).map(str::to_string))
+                .unwrap_or_default(),
+        },
         404 => Refusal::NotFound(format!("Sew has no Space {space} (k2 hostchat app-space list)")),
         400 => Refusal::Usage(format!("Sew refused the request: {}", r.error_line())),
         401 => Refusal::Unreachable("Sew refused K2's mgmt token".into()),
@@ -90,12 +102,19 @@ fn sew_refusal(r: &MgmtResponse, space: &str) -> Refusal {
     }
 }
 
-async fn post<T: serde::de::DeserializeOwned>(client: &MgmtClient, path: &str, body: &impl serde::Serialize, actor: &str, space: &str) -> Result<T, Refusal> {
+async fn post<T: serde::de::DeserializeOwned>(
+    client: &MgmtClient,
+    path: &str,
+    body: &impl serde::Serialize,
+    actor: &str,
+    space: &str,
+    slug: &str,
+) -> Result<T, Refusal> {
     let bytes = serde_json::to_vec(body).map_err(|e| Refusal::Store(format!("body: {e}")))?;
     let key = format!("k2ch_{}", uuid::Uuid::new_v4().simple());
     let r = client.post(path, &bytes, &key, &hook::sew_actor_header(actor)).await.map_err(|e| Refusal::Unreachable(e.0))?;
     if !r.is_success() {
-        return Err(sew_refusal(&r, space));
+        return Err(sew_refusal(&r, space, slug));
     }
     serde_json::from_slice(&r.body).map_err(|e| Refusal::Unreachable(format!("{path}: unexpected answer ({e})")))
 }
@@ -109,15 +128,16 @@ async fn create(app: String, link: Option<OnLink>, ask: Ask) -> Result<cc::Creat
     let client = MgmtClient::new(&target.socket, &target.token_file);
     let actor = actor(&app, link.as_ref());
     let space = prep.space_id.clone();
+    let slug = prep.ask.slug.clone();
     if let Some(body) = prep.space_add() {
-        let resp: sew_wire::SpaceMembersAddResponse = post(&client, sew_wire::MGMT_SPACE_MEMBERS_ADD, &body, &actor, &space).await?;
+        let resp: sew_wire::SpaceMembersAddResponse = post(&client, sew_wire::MGMT_SPACE_MEMBERS_ADD, &body, &actor, &space, &slug).await?;
         prep = blocking(move || {
             let mut p = prep;
             cc::after_space_add(&mut p, &resp).map(|()| p)
         })
         .await?;
     }
-    let resp: sew_wire::ChannelCreateResponse = post(&client, sew_wire::MGMT_CHANNELS_CREATE, &prep.channel_create(), &actor, &space).await?;
+    let resp: sew_wire::ChannelCreateResponse = post(&client, sew_wire::MGMT_CHANNELS_CREATE, &prep.channel_create(), &actor, &space, &slug).await?;
     let via = if link.is_some() { "link" } else { "remote" };
     blocking(move || cc::finish(prep, resp, &actor, via)).await
 }

@@ -343,6 +343,119 @@ async fn a_lost_public_url_clears_the_origin_in_sew() {
     env.sew.assert_clean();
 }
 
+fn home_posts(env: &Env) -> Vec<fake_sew::Call> {
+    env.sew.posts().into_iter().filter(|c| c.path == "/mgmt/v1/home-client").collect()
+}
+
+fn home_row() -> hook::outbox::OutboxRow {
+    rows().into_iter().filter(|r| r.op == "home_client").last().expect("a home-client row")
+}
+
+/// Sew 0.6.0 A23 (flag `home_client_owner_approval`): every home-client
+/// write the owner made carries the install owner's approval, a fresh
+/// `k2:owner` chat pass K2's keys signed for the LIVE install (new `jti`
+/// and `Idempotency-Key` per send), on a set, a clear and after a
+/// reinstall. A value someone else stored is never vouched for (blocked,
+/// Sew never asked); Sew's `409 home_client_cannot_govern` is a clear
+/// error the owner's next choice replaces; a send that went out before K2
+/// read the flag retries with the approval once the flags are read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn home_client_carries_a_fresh_owner_approval_on_sew_060() {
+    use serde_json::json;
+    let env = setup().await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let hearth = uuid::Uuid::new_v4().to_string();
+    let jobs = uuid::Uuid::new_v4().to_string();
+    let owner = k2_daemon::compute_routes::Who::Owner;
+
+    // The flag appears after the row is planned: the first send goes
+    // without the approval, Sew refuses, K2 reads the flags and retries.
+    env.sew.set_features(&["home_client"]);
+    assert!(hook::set_home_client(Some(&hearth), "owner").unwrap());
+    worker::reconcile_once().await.expect("sweep with home_client");
+    env.sew.set_features(&["home_client", "home_client_owner_approval"]);
+    hook::force_due_for_tests().unwrap();
+    worker::pass_once(&cfg()).await.expect("pass");
+    let r = home_row();
+    assert_eq!((r.state.as_str(), r.last_status), ("pending", Some(403)), "{r:?}");
+    assert!(r.last_error.as_deref().is_some_and(|e| e.contains("owner_approval_required")), "{r:?}");
+    assert_eq!(env.sew.home_client(), None, "refused: nothing set");
+    worker::reconcile_once().await.expect("sweep reads the flag");
+    drain(&env).await;
+    assert_eq!(env.sew.home_client(), Some(Some(hearth.clone())));
+
+    // The owner clears it from a K2 shell tab; a reinstall owes it again.
+    assert!(hook::set_home_client(None, "shell:ws-1").unwrap());
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(env.sew.home_client(), Some(None));
+    env.sew.reinstall("555555555");
+    env.sew.set_features(&["home_client", "home_client_owner_approval"]);
+    worker::reconcile_once().await.expect("sweep after reinstall");
+    drain(&env).await;
+    assert_eq!(env.sew.home_client(), Some(None), "the new install got the owner's setting");
+
+    // Three approved sends: each pass verifies against K2's own JWKS for
+    // the install it was sent to, names k2:owner, carries no caps and no
+    // App, and is new (jti and Idempotency-Key).
+    let jwks = k2_daemon::chat_pass::public_jwks().expect("K2's chat-pass keys");
+    let now = k2_core::tool_hook::outbox::now_secs();
+    let approved: Vec<_> = home_posts(&env).into_iter().filter(|c| c.body.get("approval").is_some()).collect();
+    assert_eq!(approved.len(), 3, "{approved:?}");
+    let mut jtis = std::collections::BTreeSet::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for (c, aud) in approved.iter().zip(["sew:1001", "sew:1001", "sew:555555555"]) {
+        assert_eq!(c.body["approval"]["kind"], json!("owner_pass"), "{c:?}");
+        assert_eq!(c.body.as_object().unwrap().len(), 2, "exactly {{app_id, approval}}: {c:?}");
+        let pass = c.body["approval"]["pass"].as_str().expect("a pass");
+        let claims = k2_daemon::chat_pass::verify_with_jwks(pass, &jwks, aud, now).expect("a pass K2 signed for this install");
+        assert_eq!((claims.sub.as_str(), claims.caps.clone(), claims.app.clone()), ("k2:owner", None, None));
+        assert!(jtis.insert(claims.jti.clone()), "a fresh jti per send");
+        let key = c.key.clone().expect("an Idempotency-Key");
+        assert!(key.starts_with("k2hca_") && keys.insert(key.clone()), "a fresh key per send: {key}");
+    }
+    assert_eq!(env.sew.home_approvals().len(), 3);
+    let unapproved: Vec<_> = home_posts(&env).into_iter().filter(|c| c.body.get("approval").is_none()).collect();
+    assert_eq!(unapproved.len(), 1, "only the one send before K2 read the flag: {unapproved:?}");
+
+    // A value an Admin stored before AG-21 (no such owner login): K2 never
+    // vouches for it; Sew is not asked.
+    let before = home_posts(&env).len();
+    assert!(hook::set_home_client(Some(&jobs), "login:adm").unwrap());
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    let r = home_row();
+    assert_eq!(r.state, "blocked", "{r:?}");
+    assert!(r.last_error.as_deref().is_some_and(|e| e.contains("not this server's owner")), "{r:?}");
+    assert_eq!(home_posts(&env).len(), before, "Sew never asked");
+
+    // The owner makes the same choice: it supersedes the blocked row, goes
+    // with the approval, and Sew refuses it (jobs governs a Space): a clear
+    // error, shown by k2 hostchat home.
+    env.sew.set_governing(&jobs);
+    assert!(hook::set_home_client(Some(&jobs), "owner").unwrap(), "the owner's choice re-queues the same value");
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    let r = home_row();
+    assert_eq!((r.state.as_str(), r.last_status), ("blocked", Some(409)), "{r:?}");
+    let e = r.last_error.clone().unwrap_or_default();
+    assert!(e.contains("home_client_cannot_govern") && e.contains(&jobs), "{e}");
+    let v = match k2_daemon::sew::home::route(k2_daemon::sew::home::HOME, &owner, b"", &Default::default()).expect("a home route") {
+        Ok(v) => v,
+        Err(f) => panic!("GET home: {} {}", f.code, f.hint),
+    };
+    assert_eq!((v["homeClientDelivered"].clone(), v["homeClientError"].clone()), (json!(false), json!(e)), "{v}");
+    assert_eq!(env.sew.home_client(), Some(None), "unchanged in Sew");
+
+    // The owner's next choice replaces it and goes.
+    assert!(hook::set_home_client(Some(&hearth), "owner").unwrap());
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(env.sew.home_client(), Some(Some(hearth.clone())));
+    assert_eq!(home_row().state, "done");
+    env.sew.assert_clean();
+}
+
 /// Rule 3 (Sew 2026-10-28): until Sew reports `app_scoped_sessions`, an App
 /// may not give its users chat (it would see all chat they can); the owner
 /// still can.
@@ -486,6 +599,37 @@ async fn an_app_makes_a_channel_in_its_own_space() {
     assert_eq!(v["notAdded"], json!([{"username": "eli", "reason": "not_space_member"}]), "{v}");
     assert_eq!(channel_posts(&env)[before..], ["/mgmt/v1/channels/create"], "no Space add: everyone listed is in, out or banned");
     assert_eq!(env.sew.channel(SPACE, "job-1042").unwrap().name, "Job 1042");
+    env.sew.assert_clean();
+}
+
+/// Sew 0.6.0: `channels/create` on a slug that is already a voice channel
+/// answers `409 channel_type_mismatch` (0.5.0 answered 200). K2 refuses
+/// with that code and Sew's `existing_type`, asks Sew once (no retry, no
+/// other slug), and nothing is written or audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slug_of_another_type_is_refused_with_channel_type_mismatch() {
+    use serde_json::json;
+    let env = setup().await;
+    let f = channel_fx();
+    env.sew.add_app_space(SPACE, &f.svc);
+    hook::app_space_bind(&f.svc, SPACE, "owner-token").unwrap();
+    env.sew.set_features(&["app_channel_create"]);
+    worker::reconcile_once().await.expect("sweep with the flag");
+    env.sew.add_voice_channel(SPACE, "standup");
+
+    let before = channel_posts(&env).len();
+    let (st, v) = create_channel(&f.pass, json!({"slug": "standup", "name": "Standup"})).await;
+    assert_eq!((st, err_code(&v).as_str()), (409, "channel_type_mismatch"), "{v}\n{}", env.sew.log());
+    assert_eq!((v["error"]["slug"].clone(), v["error"]["existingType"].clone()), (json!("standup"), json!("voice")), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("a hint");
+    assert!(hint.contains("standup") && hint.contains("voice") && hint.contains("another slug"), "{hint}");
+    assert_eq!(channel_posts(&env)[before..], ["/mgmt/v1/channels/create"], "asked once, never retried");
+    assert_eq!(env.sew.channel(SPACE, "standup").expect("still there").kind, "voice", "nothing changed in Sew");
+    assert!(skin::app_channels::audit_rows(&f.svc, 5).unwrap().is_empty(), "a refusal is not audited as a channel");
+
+    // A text slug beside it still works.
+    let (st, v) = create_channel(&f.pass, json!({"slug": "standup-notes", "name": "Standup notes"})).await;
+    assert_eq!((st, v["created"].clone()), (200, json!(true)), "{v}");
     env.sew.assert_clean();
 }
 

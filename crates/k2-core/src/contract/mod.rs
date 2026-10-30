@@ -692,6 +692,8 @@ mod tests {
                 "sew_refused",
                 "space_unbound",
                 "app_mismatch",
+                // Sew 0.6.0: chat.createChannel on a slug of another type.
+                "channel_type_mismatch",
                 "chat_unavailable",
                 // RS-A15 guest rooms (both transports).
                 "app_pass_required",

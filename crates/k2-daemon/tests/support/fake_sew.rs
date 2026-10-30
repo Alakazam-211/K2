@@ -123,7 +123,8 @@ pub struct Channel {
     pub private: bool,
     /// External ids.
     pub members: std::collections::BTreeSet<String>,
-    /// Sew 0.6.0 I6: `text` | `voice` (empty = text).
+    /// Sew 0.6.0 I6: `text` | `voice` (empty = text). A voice channel is
+    /// made in Sew (A9b); K2's `channels/create` makes text only.
     pub kind: String,
     pub archived: bool,
 }
@@ -201,6 +202,12 @@ struct State {
     /// and the install's home client.
     app_settings: BTreeMap<String, Value>,
     home_client: Option<Option<String>>,
+    /// Sew 0.6.0 A23: every owner pass a home-client write carried, in
+    /// order (accepted or not), and the `jti`s spent.
+    home_approvals: Vec<String>,
+    spent_jti: Vec<String>,
+    /// Sew 0.6.0 S55: Apps that govern a Space (never the home client).
+    governing: Vec<String>,
     /// The status `features` (default none).
     features: Vec<String>,
     /// Sew 0.5.0: org policies K2 may read and set over mgmt (only
@@ -421,6 +428,16 @@ impl FakeSew {
         });
     }
 
+    /// A voice channel at `slug` in a Space (made in Sew, not by K2).
+    pub fn add_voice_channel(&self, space_id: &str, slug: &str) {
+        self.with(|s| {
+            s.next_id += 1;
+            let id = 900_000 + s.next_id;
+            let sp = s.spaces.get_mut(space_id).expect("the Space exists");
+            sp.channels.insert(slug.into(), Channel { id, name: slug.into(), private: false, kind: "voice".into(), ..Default::default() });
+        })
+    }
+
     /// SW13: ban `ext` in a Space (HC2: adds come back `skipped`).
     pub fn ban_in_space(&self, space_id: &str, ext: &str) {
         self.with(|s| {
@@ -513,6 +530,16 @@ impl FakeSew {
     /// D13: the home client K2 set (`None` = never sent).
     pub fn home_client(&self) -> Option<Option<String>> {
         self.with(|s| s.home_client.clone())
+    }
+
+    /// Sew 0.6.0 A23: the owner passes home-client writes carried.
+    pub fn home_approvals(&self) -> Vec<String> {
+        self.with(|s| s.home_approvals.clone())
+    }
+
+    /// Sew 0.6.0 S55: `app` governs a Space.
+    pub fn set_governing(&self, app: &str) {
+        self.with(|s| s.governing.push(app.into()))
     }
 
     pub fn member(&self, ext: &str) -> Option<Member> {
@@ -911,6 +938,48 @@ fn home_client(s: &mut State, body: &str) -> (u16, String) {
         Some(Value::String(a)) => Some(a.clone()),
         _ => return bad_body(s, "home-client", "app_id is a string or null", body),
     };
+    // Sew 0.6.0 A23 (flag home_client_owner_approval): the install owner's
+    // approval on every write, checked first. Without the flag the body is
+    // exactly {app_id} (Sew 0.5.0 denies unknown fields).
+    let approval_flag = s.features.iter().any(|f| f == "home_client_owner_approval");
+    let keys_ok = v.as_object().is_some_and(|o| o.keys().all(|k| k == "app_id" || (approval_flag && k == "approval")));
+    if !keys_ok {
+        return bad_body(s, "home-client", "unknown field (this Sew takes {app_id} only)", body);
+    }
+    if approval_flag {
+        let refuse = || {
+            err(
+                403,
+                "missing_permission",
+                "changing the home client needs the current install owner's approval",
+                json!({"reason": "owner_approval_required"}),
+            )
+        };
+        let Some(a) = v.get("approval") else { return refuse() };
+        if a.get("kind").and_then(Value::as_str) != Some("owner_pass") || a.as_object().map(|o| o.len()) != Some(2) {
+            return bad_body(s, "home-client", "approval is {kind: owner_pass, pass}", body);
+        }
+        let pass = a.get("pass").and_then(Value::as_str).unwrap_or("").to_string();
+        s.home_approvals.push(pass.clone());
+        let claims = pass_claims(&pass);
+        let jti = claims.get("jti").and_then(Value::as_str).unwrap_or("").to_string();
+        let ok = claims.get("sub").and_then(Value::as_str) == Some("k2:owner")
+            && claims.get("aud").and_then(Value::as_str) == Some(format!("sew:{}", s.install_id).as_str())
+            && !jti.is_empty()
+            && !s.spent_jti.contains(&jti);
+        if !ok {
+            return refuse();
+        }
+        s.spent_jti.push(jti);
+    }
+    if app.as_ref().is_some_and(|a| s.governing.contains(a)) {
+        return err(
+            409,
+            "conflict",
+            "the home client never governs a Space, and this App governs one",
+            json!({"reason": "home_client_cannot_govern", "field": "app_id"}),
+        );
+    }
     s.home_client = Some(app.clone());
     (200, json!({"home_client": app}).to_string())
 }
@@ -1496,6 +1565,17 @@ fn space_create(s: &mut State, body: &str) -> (u16, String) {
     )
 }
 
+/// A chat pass's claims, unverified (the test checks the signature
+/// against K2's JWKS itself); `{}` when it isn't a JWT.
+fn pass_claims(pass: &str) -> Value {
+    use base64::Engine;
+    pass.split('.')
+        .nth(1)
+        .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
 fn bad_body(s: &mut State, what: &str, e: impl std::fmt::Display, body: &str) -> (u16, String) {
     s.bad_bodies.push(format!("{what}: {e}: {body}"));
     err(400, "validation_failed", &e.to_string(), json!({}))
@@ -1752,6 +1832,16 @@ fn channel_create(s: &mut State, body: &str) -> (u16, String) {
             return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch", "field": "app_id"}))
         }
         _ => {}
+    }
+    // Sew 0.6.0: a repeat on a slug of the other type (K2 sends no `type`:
+    // text) writes nothing (0.5.0 answered 200).
+    if sp.channels.get(&req.slug).is_some_and(|c| c.kind == "voice") {
+        return err(
+            409,
+            "conflict",
+            "a channel of another type already has this slug",
+            json!({"reason": "channel_type_mismatch", "field": "type", "existing_type": "voice"}),
+        );
     }
     let created = !sp.channels.contains_key(&req.slug);
     let space_members = sp.members.clone();

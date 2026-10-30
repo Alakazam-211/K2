@@ -74,6 +74,10 @@ pub enum Refusal {
     AppMismatch(String),
     /// Sew has no such Space: `404 not_found`.
     NotFound(String),
+    /// Sew 0.6.0: the slug already holds a channel of another type (a voice
+    /// channel; K2 makes text ones): `409 channel_type_mismatch`, nothing
+    /// written. `existing_type` is Sew's (`voice`), or empty when absent.
+    TypeMismatch { slug: String, existing_type: String },
     /// Sew didn't answer (down, 5xx, a refused token): `503 chat_unavailable`.
     Unreachable(String),
     /// Sew refused for another reason (a quota, an archived channel): `409 failed`.
@@ -89,7 +93,12 @@ impl Refusal {
         match self {
             Refusal::Usage(_) => 400,
             Refusal::NotFound(_) => 404,
-            Refusal::FeatureMissing | Refusal::ChatOff | Refusal::SpaceUnbound(_) | Refusal::AppMismatch(_) | Refusal::Sew(_) => 409,
+            Refusal::FeatureMissing
+            | Refusal::ChatOff
+            | Refusal::SpaceUnbound(_)
+            | Refusal::AppMismatch(_)
+            | Refusal::TypeMismatch { .. }
+            | Refusal::Sew(_) => 409,
             Refusal::RateLimited { .. } => 429,
             Refusal::Store(_) => 500,
             Refusal::Unreachable(_) => 503,
@@ -104,6 +113,7 @@ impl Refusal {
             Refusal::SpaceUnbound(_) => "space_unbound",
             Refusal::AppMismatch(_) => "app_mismatch",
             Refusal::NotFound(_) => "not_found",
+            Refusal::TypeMismatch { .. } => "channel_type_mismatch",
             Refusal::Sew(_) | Refusal::Store(_) => "failed",
             Refusal::RateLimited { .. } => "rate_limited",
         }
@@ -117,6 +127,10 @@ impl Refusal {
             | Refusal::NotFound(m)
             | Refusal::Sew(m)
             | Refusal::Store(m) => m.clone(),
+            Refusal::TypeMismatch { slug, existing_type } => format!(
+                "{slug} is already a {} channel in this Space, and chat.createChannel makes text channels: use another slug (nothing changed)",
+                if existing_type.is_empty() { "non-text" } else { existing_type.as_str() }
+            ),
             Refusal::FeatureMissing => NEEDS_SEW.into(),
             Refusal::ChatOff => "Chat / Voice Hosting is not enabled on this server: the owner runs k2 hostchat enable".into(),
             Refusal::Unreachable(m) => format!("Sew didn't answer ({m}); retry in a moment (k2 hostchat status)"),

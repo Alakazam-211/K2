@@ -95,7 +95,9 @@ the manifest: the owner approves it once (k2 app approvals; the
 Chat / Voice Hosting core doesn't cover it; until then 403
 cap_not_granted). No requires change: K2
 checks Sew's app_channel_create flag itself. A bad slug or name is 400
-usage. Chat the owner gave counts; no guests-chat grant is needed.
+usage. A slug that is already a voice channel is 409
+channel_type_mismatch: nothing changes; use another slug. Chat the owner
+gave counts; no guests-chat grant is needed.
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret, /etc/sew or
 Sew-On-Behalf-Of. Agents never join calls (k2 chat for them).
@@ -107,7 +109,8 @@ no_chat_member · no_chat_grant · no_chat_caps · not_app_granted ·
 chat_off_for_person · shared_person · has_assistants · chat_limit ·
 username_unusable (2–64 a-z 0-9 _ -, not here/channel/everyone/all) ·
 chat_unavailable · rate_limited (60/min per App) · sew_feature_missing ·
-space_unbound (no Space bound: step 2) · app_mismatch (not your Space).
+space_unbound (no Space bound: step 2) · app_mismatch (not your Space) ·
+channel_type_mismatch (the slug is a voice channel).
 
 HOME. The owner's home client (k2 hostchat home client <app>, usually
 Hearth) sees every Space a person is in; k2 hostchat home app <app>

@@ -1716,6 +1716,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // `push_relay_caps.s2`. Additive columns; renumber freely on a slip
         // (and edit the migration-order tests).
         ("0252_push_e2e_v2", include_str!("../../drizzle_sql/0252_push_e2e_v2.sql")),
+        // 0253 — `k2 publish` visibility (prd-publish-visibility-and-dev-mode-v1
+        // PV-1, vs-live PA-6/PA-13, 0.46.7): `site_visibility` (no row =
+        // private), sessions, one-time codes, PIN limits; today's tunnelled
+        // services stay public. New tables only; renumber freely on a slip
+        // (and edit the migration-order tests). The store is
+        // `crate::site_visibility`.
+        ("0253_site_visibility", include_str!("../../drizzle_sql/0253_site_visibility.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2379,7 +2386,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0252_push_e2e_v2",
+            last_name, "0253_site_visibility",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2485,6 +2492,8 @@ mod tests {
                 "0251_sidecar_worktrees",
                 // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
                 "0252_push_e2e_v2",
+                // 0.46.7: `k2 publish` visibility modes.
+                "0253_site_visibility",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2598,6 +2607,8 @@ mod tests {
                 "0251_sidecar_worktrees",
                 // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
                 "0252_push_e2e_v2",
+                // 0.46.7: `k2 publish` visibility modes.
+                "0253_site_visibility",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2825,7 +2836,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0252_push_e2e_v2", "0252 (0.46.7) runs last");
+        assert_eq!(top, "0253_site_visibility", "0253 (0.46.7) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2864,9 +2875,10 @@ mod tests {
                 "0248_email_notify_queue",
                 "0250_workspace_mobile_tab",
                 "0251_sidecar_worktrees",
-                "0252_push_e2e_v2"
+                "0252_push_e2e_v2",
+                "0253_site_visibility"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251 and 0252)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252 and 0253)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3708,6 +3720,9 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
+            // 0253 (publish visibility, 0.46.7) is the newest: its record
+            // goes (its tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0253_site_visibility'", []).unwrap();
             // 0252 (push-e2e-v2, 0.46.7) is newer still: its record goes
             // (re-adding its two columns is skipped as duplicates).
             conn.execute("DELETE FROM _migrations WHERE name = '0252_push_e2e_v2'", []).unwrap();

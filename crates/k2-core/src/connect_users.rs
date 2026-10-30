@@ -528,7 +528,7 @@ pub fn reserved_name_doctor_line(users: &[String]) -> Option<String> {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Hash a password with argon2id + a fresh per-user random salt.
-fn hash_password(password: &str) -> Result<String, String> {
+pub(crate) fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -537,7 +537,7 @@ fn hash_password(password: &str) -> Result<String, String> {
 }
 
 /// Verify a plaintext password against a stored argon2 PHC hash.
-fn verify_hash(password: &str, hash: &str) -> bool {
+pub(crate) fn verify_hash(password: &str, hash: &str) -> bool {
     let parsed = match PasswordHash::new(hash) {
         Ok(h) => h,
         Err(_) => return false,
@@ -1184,6 +1184,19 @@ pub fn role_for_user(username: &str) -> Option<Role> {
         .iter()
         .find(|u| u.username == normalized)
         .map(|u| u.role)
+}
+
+/// Is `username` a live account that is an Owner or an Admin right now? `false`
+/// for a disabled or removed account, a Member, and a store that can't be read
+/// (fail closed).
+pub fn is_active_owner_or_admin(username: &str) -> bool {
+    let Ok(normalized) = normalize_username(username) else {
+        return false;
+    };
+    let Ok(store) = load_store() else {
+        return false;
+    };
+    store.users.iter().any(|u| u.username == normalized && !u.disabled && matches!(u.role, Role::Owner | Role::Admin))
 }
 
 /// The current account-state needed to re-assert a persisted session on

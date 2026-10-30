@@ -326,6 +326,8 @@ pub mod project_groups;
 pub mod projects_ops;
 /// Daemon-owned published services (`published_services` / migration 0104).
 pub mod published_services;
+/// `k2 publish` visibility: private, PIN, public (migration 0253).
+pub mod site_visibility;
 /// Who may frame a K2 web page: the one `frame-ancestors` policy for the
 /// daemon, the App gateway helper and the Caddy front door.
 pub mod frame_policy;

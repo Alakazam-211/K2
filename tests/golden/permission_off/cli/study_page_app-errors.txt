@@ -71,6 +71,9 @@ DEPLOY (validate, build, deploy, rollback)
       build and deploy again.
   seed_not_found (exit 3)
       fix: Build one and use the hash it prints: k2 app build <folder>
+  uninstall_drops_access (exit 3)
+      fix: To add a public URL, don't reinstall: k2 app expose <app-id>
+      --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access
 
 RUNTIME (the App engine, the box, health)
   crashlooping (exit 1)
@@ -393,6 +396,8 @@ CHAT (an App's chat key and the Spaces it governs)
   provider_is_standalone (exit 3)
       fix: Run Sew under K2 to use chat keys (k2 study app-chat). Until then
       the App's chat goes through Sew's own logins.
+  sew_feature_missing (exit 3)
+      fix: The owner upgrades Sew: k2 hostchat upgrade. Then try again.
 
 LINKS (iOS and Android link files)
   link_path_dropped (exit 3)
@@ -418,8 +423,12 @@ UPDATES (a desktop app's update feed)
       updater public key, then upload again.
   signing_node_not_owner (exit 3)
       fix: Run it on this server's own node (k2 compute nodes lists them).
+  staging_failed (exit 3)
+      fix: Check the box's disk (k2 app resources), then push again.
   updates_host_unavailable (exit 3)
       fix: Wait and try again later; nothing to change on the App.
+  upload_spawn_failed (exit 3)
+      fix: Push again in a moment; if it keeps failing, restart K2.
   version_not_newer (exit 3)
       fix: Give the release a higher semver version than the channel's
       current one, then publish again.

@@ -75,6 +75,14 @@ $1"; }
 cores_json() { curl -s "$BASE/cli/docs/cores?token=$DTOKEN"; }
 
 echo "== daemon =="
+# The agent's pinned chat runs this shim, which records its env: the real
+# passport (K2_HOOK_TOKEN) and cell socket (K2_HOOK_SOCK) K2 hands an agent.
+cat >"$SB/shim/claude" <<EOF
+#!/bin/sh
+env > "$SB/claude.env"
+exec /bin/cat > /dev/null
+EOF
+chmod +x "$SB/shim/claude"
 DAEMON_BIN=""
 for root in "${CARGO_TARGET_DIR:-}" "$PROJECT_ROOT/target"; do
     [ -n "$root" ] || continue
@@ -134,13 +142,40 @@ cli -- doc cores on
 want_rc 2 "on without a core"
 ok "an unknown core or a bad action exits 2"
 
-echo "== an agent: person_only, no call =="
-# The daemon is out of reach for this call (port 1): person_only must
-# stop it before any request is made.
-cli K2_PORT=1 K2_HOOK_TOKEN=k2hook_not_real K2_HOOK_SOCK="$WORK/nope.sock" -- doc cores on markdown
+echo "== an agent (a real passport): lists, never switches =="
+AG="$WORK/agentws"
+mkdir -p "$AG"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+git -c init.defaultBranch=main -C "$AG" init -q || fail "git init $AG"
+reg="$(curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$AG")" \
+    "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
+case "$reg" in *'"error"'*) fail "register $AG: $reg" ;; *"$AG"*) ;; *) fail "register $AG: $reg" ;; esac
+resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' \
+    --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$AG")")"
+case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
+for _ in $(seq 1 400); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
+SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
+[ -n "$PASSPORT" ] || fail "the agent's pinned chat got no passport"
+for _ in $(seq 1 200); do [ -S "$SOCK" ] && break; sleep 0.05; done
+[ -S "$SOCK" ] || fail "the agent's cell socket is missing: '$SOCK'"
+ok "an agent with a real passport and cell socket"
+AGENT_ENV=(K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$AG")
+cli "${AGENT_ENV[@]}" -- doc cores --json
+want_rc 0 "agent list"
+jok "$OUT" 'j["canChange"] is False and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file"] and not any(c["on"] for c in j["cores"])' "an agent lists the cores (canChange false)"
+settings_before="$(cat "$SB/.k2/settings.json" 2>/dev/null || echo none)"
+audit_before="$(cat "$SB"/.k2/*audit*.jsonl 2>/dev/null | grep -c '"doc-core-switch"' || true)"
+cli "${AGENT_ENV[@]}" -- doc cores on markdown
 want_rc 3 "agent on"
 has "$ERR" "Error [person_only]: k2 doc cores on|off is for people" "person_only"
-jok "$(cores_json)" 'not any(c["on"] for c in j["cores"])' "an agent's on|off makes no call (every core still off)"
+cli "${AGENT_ENV[@]}" -- doc cores off text --json
+want_rc 3 "agent off --json"
+has "$ERR" '"code": "person_only"' "person_only JSON line"
+[ "$(cat "$SB/.k2/settings.json" 2>/dev/null || echo none)" = "$settings_before" ] || fail "an agent's on|off changed settings.json"
+[ "$(cat "$SB"/.k2/*audit*.jsonl 2>/dev/null | grep -c '"doc-core-switch"' || true)" = "$audit_before" ] || fail "an agent's on|off flipped a core (audit)"
+jok "$(cores_json)" 'not any(c["on"] for c in j["cores"])' "an agent's on|off is refused before any call: settings, audit and the cores unchanged"
 [ ! -e "$SB/.k2/docs.redb" ] || fail "the docs store was opened"
 
 echo "== on =="

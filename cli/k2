@@ -46617,9 +46617,11 @@ TALK TO ONE
 PAST CONVERSATIONS (this workspace's folder and its .worktrees/ only)
   k2 sessions --past [--search "<words>"] [--days N] [--cli <cli>]
   k2 sessions show <id>          first ask, last messages (facts, no summary)
-  <id>: the short id --past prints (6+ characters), the full id, or an address.
-  Search reads titles, then message text, newest first, within 400 files /
-  64 MB / 5 s; past that it says "search stopped" (narrow with --days, --cli).
+  <id>: the short id --past prints (6+ characters), the full id, or an address;
+  a prefix that fits several is refused (id_ambiguous) with the candidates.
+  Search matches the whole phrase (any case) in titles, then message text,
+  newest first, within 400 files / 64 MB / 5 s; past that it says "search
+  stopped" (narrow with --days, --cli).
   CLIs: claude, codex, grok, gemini, cursor, pi, hermes. Cursor keeps no cwd
   (worktree chats are not found) and no message text (show lists facts only).
 

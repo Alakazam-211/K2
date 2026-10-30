@@ -55,6 +55,7 @@ exit: 0
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--summary", "arg": "text", "description": "One line saying what you need or what you did, for people (Chatter, the Projects view, phones, k2 inbox list). Pass it for anything longer than ~3 lines; over ~600 characters without one prints a hint. Never injected: the agent gets the whole message."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
+        {"name": "--session", "arg": "id", "description": "A conversation in this workspace by id (k2 sessions --past; 6+ characters) instead of an address: whoever holds it gets the message; a past one is reopened (same history) with the message as its first turn."},
         {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (one or more file paths, or --title/--body). Multi-file → one package. Does NOT notify."},
         {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
         {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
@@ -135,9 +136,72 @@ exit: 0
       ]
     },
     {
+      "name": "sessions",
+      "usage": "k2 sessions [--all] [--json]",
+      "description": "Who is working in this workspace: the main agent, sidecars, chat tabs and heartbeat runs, each with an address for k2 msg (* = you). Same as k2 sessions list.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Also the asleep ones (a message wakes them)."},
+        {"name": "--workspace", "arg": "ws", "description": "Owner: another workspace."},
+        {"name": "--json", "arg": null, "description": "The roster JSON (GET /cli/sessions/roster)."}
+      ]
+    },
+    {
+      "name": "sessions --past",
+      "usage": "k2 sessions --past [--search <text>] [--days N] [--cli <cli>] [--limit N] [--json]",
+      "description": "Past conversations in this workspace (its folder and .worktrees/), newest first, across claude, codex, grok, gemini, cursor, pi and hermes. NOW says when one is already held (message its address instead).",
+      "args": [],
+      "flags": [
+        {"name": "--search", "arg": "text", "description": "Titles, then message text, newest first (bounded: 400 files / 64 MB / 5 s)."},
+        {"name": "--days", "arg": "N", "description": "How far back (default 14, max 365)."},
+        {"name": "--cli", "arg": "cli", "description": "One CLI only."},
+        {"name": "--limit", "arg": "N", "description": "Rows (default 20, max 200)."},
+        {"name": "--json", "arg": null, "description": "JSON."}
+      ]
+    },
+    {
+      "name": "sessions show",
+      "usage": "k2 sessions show <id|address> [--tail N] [--json]",
+      "description": "What a conversation was about: its first ask and last messages (user and assistant text; tool calls counted, not shown).",
+      "args": [{"name": "id", "required": true, "description": "Short id from --past (6+ characters), full id, or an address."}],
+      "flags": [
+        {"name": "--tail", "arg": "N", "description": "Last N messages (default 6, max 40)."},
+        {"name": "--json", "arg": null, "description": "JSON."}
+      ]
+    },
+    {
+      "name": "sessions open",
+      "usage": "k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text \"...\"] [--force] [--json]",
+      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Allow hiring and managing agents.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "Its address name (else a number, <ws>/<n>)."},
+        {"name": "--brief", "arg": "file", "description": "A brief to hand it (needs --name)."},
+        {"name": "--force", "arg": null, "description": "Open even though it was written in the last 120 s (it is closed elsewhere)."},
+        {"name": "--json", "arg": null, "description": "JSON."}
+      ]
+    },
+    {
+      "name": "sessions new",
+      "usage": "k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text \"...\"] [--json]",
+      "description": "Start a new sidecar (k2 sidecar new); default CLI: your own. Prints its address.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--cli", "arg": "cli", "description": "claude, codex, grok, gemini, cursor, pi or hermes."},
+        {"name": "--brief", "arg": "file", "description": "Brief file, or - for stdin."}
+      ]
+    },
+    {
+      "name": "sessions stop",
+      "usage": "k2 sessions stop <name|address> [--force]",
+      "description": "Stop a sidecar (k2 sidecar stop); its history stays and k2 msg or open wakes it.",
+      "args": [{"name": "name", "required": true}],
+      "flags": []
+    },
+    {
       "name": "sessions live",
       "usage": "k2 sessions live <workspace> [--json|--count]",
-      "description": "List the daemon's currently-open live v2 sessions for a workspace (each row has a sessionId UUID).",
+      "description": "Owner: the daemon's raw live PTY sessions for a workspace (each row has a sessionId UUID). Agents use k2 sessions.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Raw daemon JSON."},

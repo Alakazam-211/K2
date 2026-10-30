@@ -1,0 +1,13 @@
+$ k2 sessions open 8c1f2a9e
+exit: 3
+--- stdout
+--- stderr
+owner_only: only the server's owner may do this
+--- requests
+> POST /cli/sessions/open?token=passport-golden
+> Host: 127.0.0.1:<PORT>
+> User-Agent: curl/<VERSION>
+> Accept: */*
+> Content-Type: application/json
+> Content-Length: 54+1x<SANDBOX>
+> body: {"workspace": "<SANDBOX>/ws", "id": "8c1f2a9e", "force": false}

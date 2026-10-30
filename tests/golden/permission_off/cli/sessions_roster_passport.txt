@@ -1,0 +1,11 @@
+$ k2 sessions
+exit: 3
+--- stdout
+--- stderr
+owner_only: only the server's owner may do this
+--- requests
+> GET /cli/sessions/roster?token=passport-golden&workspace=<SANDBOX>%2Fws
+> Host: 127.0.0.1:<PORT>
+> User-Agent: curl/<VERSION>
+> Accept: */*
+> body: 

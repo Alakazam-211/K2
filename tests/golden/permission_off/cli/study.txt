@@ -40,6 +40,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   ticket-brief        The HTML brief every agent ticket carries
   zen                 Zen Gardens: the one rule; the guide is k2 zen guide
   sidecars            Open, list and stop sidecars; the brief; who may
+  sessions            Who works in this workspace; past conversations; reopen; one runner
   llm-tokens          LLM tokens: subscriptions and API tokens; Server default
   llm-accounts        leftover alias of llm-tokens
   publish-framing     Who may frame your App; the header for --cmd Apps

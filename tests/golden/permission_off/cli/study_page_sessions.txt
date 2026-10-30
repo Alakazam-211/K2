@@ -1,0 +1,58 @@
+$ k2 study sessions
+exit: 0
+--- stdout
+k2 study sessions — who is working in this workspace, and past conversations
+
+WHO IS HERE
+  k2 sessions            live sessions: address, role, CLI, state, what it is on
+  k2 sessions --all      also the asleep ones (a message wakes them)
+  k2 connections         shows the same list first ("This workspace")
+  Roles: main (the pinned chat, address <ws>), sidecar (opened by k2 sessions
+  new/open or k2 sidecar), chat (a tab a person opened), heartbeat (a
+  scheduled run). * marks you. States: working and waiting (needs a person)
+  are busy; idle is free; asleep wakes when messaged.
+  Addresses for k2 msg: <ws> is main (this workspace's name), <ws>/<name> a
+  named one, <ws>/<n> (a number) an unnamed one.
+
+TALK TO ONE
+  k2 msg <address> "…"          live or asleep (it wakes); never yourself
+  Same workspace is always allowed. Replies arrive in your terminal as
+  [from <address>] …; answer with k2 msg <address>.
+
+PAST CONVERSATIONS (this workspace's folder and its .worktrees/ only)
+  k2 sessions --past [--search "<words>"] [--days N] [--cli <cli>]
+  k2 sessions show <id>          first ask, last messages (facts, no summary)
+  <id>: the short id --past prints (6+ characters), the full id, or an address.
+  Search reads titles, then message text, newest first, within 400 files /
+  64 MB / 5 s; past that it says "search stopped" (narrow with --days, --cli).
+  CLIs: claude, codex, grok, gemini, cursor, pi, hermes. Cursor keeps no cwd
+  (worktree chats are not found) and no message text (show lists facts only).
+
+REOPEN (same history)
+  k2 msg --session <id> "…"      held: delivered to its holder; past: reopened,
+                                 and your message is its first turn
+  k2 sessions open <id> [--name <name>]   reopen without a message; prints the address
+  One conversation never runs twice: if something holds it, you get its address.
+  Refused, exit 1: conversation_recently_active (written in the last 120 s,
+  maybe in a terminal outside K2: --force if it is closed), sidecar_cap (8
+  live), name_differs, folder_gone/worktree_gone (410), folder_trust_pending.
+
+START AND STOP HELPERS
+  k2 sessions new <name> --brief <file> [--cli <cli>]   prints <ws>/<name>; default: your CLI
+  k2 sessions stop <name>        stop is sleep; open or msg brings it back
+  In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
+  your checkout: for a separate branch, tell it to make its own git worktree.
+
+WHO MAY
+  Reading (list, past, show): any session, its own workspace only. A
+  sandboxed session sees the list only.
+  Opening, starting, stopping: the main session only, with "Allow hiring and
+  managing agents" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
+  An agent never opens a session with more power than itself.
+
+EXIT CODES
+  0 ok · 1 conflict (409/410) · 2 usage · 3 refused · 4 not found
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

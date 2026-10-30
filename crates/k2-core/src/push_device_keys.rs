@@ -109,7 +109,7 @@ pub struct StoredKey {
     pub created_at: i64,
     pub expires_at: i64,
     pub updated_at: i64,
-    /// The highest sealed format the phone can open (migration 0251).
+    /// The highest sealed format the phone can open (migration 0252).
     pub v: u32,
 }
 

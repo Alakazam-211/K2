@@ -780,7 +780,7 @@ pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
 /// `GET /cli/push/device` carry `e2e` (or `null`) and no vendor token.
 /// K2 Companion sends `e2e` only to a server with this key.
 pub const FEATURE_PUSH_E2E: &str = "push-e2e-v1";
-/// Bigger sealed buckets (push-e2e-v2, 0.46.7, migration 0251): register
+/// Bigger sealed buckets (push-e2e-v2, 0.46.7, migration 0252): register
 /// `e2e.v: 2` to say the phone opens format-2 blobs (byte 0 = `0x02`,
 /// 2880-byte alert / 1024-byte nudge plaintext; relay `data.v: "2"`). The
 /// reply's `e2e` gains `format` (1 or 2: what the phone is sent now) and
@@ -980,7 +980,7 @@ fn thread_push_ready() -> bool {
 }
 
 /// Migration 0211 ran: `push_device_keys` exists.
-/// Migration 0251 ran: `push_device_keys.v` exists.
+/// Migration 0252 ran: `push_device_keys.v` exists.
 fn push_e2e_v2_ready() -> bool {
     k2_core::db::try_shared()
         .map(|db| {

@@ -1,4 +1,4 @@
--- 0251 — bigger sealed push buckets (push-e2e-v2, 0.46.7). Additive only.
+-- 0252 — bigger sealed push buckets (push-e2e-v2, 0.46.7). Additive only.
 --
 -- `push_device_keys.v`: the sealed format the phone said it can open when
 -- it registered its key (`e2e.v`): 1 = today's buckets (1536-byte alert,

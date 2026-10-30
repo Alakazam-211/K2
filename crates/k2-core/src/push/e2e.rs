@@ -175,7 +175,7 @@ fn relay_map() -> std::sync::MutexGuard<'static, Option<CapsMap>> {
 /// status). A response without `s1` (a rollback, or a failover to an
 /// older relay) sends the next dispatch back to today's path; one without
 /// `s2` sends format-2 phones back to format 1. A change is persisted
-/// (`push_relay_caps`, migrations 0211 + 0251) so the first push after a
+/// (`push_relay_caps`, migrations 0211 + 0252) so the first push after a
 /// restart is sealed too.
 pub fn note_relay_caps(gateway_url: &str, s1: bool, s2: bool) {
     let caps = RelayCaps { s1, s2 };

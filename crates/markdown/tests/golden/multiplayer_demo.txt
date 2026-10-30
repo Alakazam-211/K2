@@ -312,7 +312,7 @@ Legend: `who $ doc <verb> ...` is one call of the host's doc CLI; `| ` is stdout
 [00:37] agent-b $ doc replace --old TODO --new DONE plan.md
   | replace: --old matches 2 times in plan.md (at lines 18, 24); nothing applied
   | to replace one, add surrounding text to --old until it matches once; to replace every match, add --all
-  stderr: nothing applied to plan.md · v8
+  stderr: nothing applied to plan.md · v8 (MPC-E126)
   exit 1
   plan.md at v8:
     1  # Launch plan

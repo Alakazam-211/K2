@@ -197,6 +197,16 @@ impl ChatPassClaims {
         if self.sub.is_empty() || self.sub.len() > 256 {
             return Err("sub must be 1-256 characters".into());
         }
+        // Sew 0.6.0 refuses every pass whose `sub` is an `app:` id (an App's
+        // service owner never signs in), and a box user's pass (`k2:owner`,
+        // `k2:connect:`) through an App other than the home client. K2 mints
+        // neither: an App claim rides App sessions (`k2:principal:`) only.
+        if self.sub.starts_with("app:") {
+            return Err("sub is never an app: id (Sew refuses every such pass)".into());
+        }
+        if self.app.is_some() && (self.sub == identity::OWNER_SUB || self.sub.starts_with("k2:connect:")) {
+            return Err("a box user's pass (k2:owner, k2:connect:) never carries an app claim".into());
+        }
         if !is_sid(&self.sid) {
             return Err("sid must match [A-Za-z0-9_.-]{1,128}".into());
         }

@@ -137,6 +137,41 @@ fn claims_with_a_bad_shape_are_refused_before_signing() {
     assert!(matches!(r.sign(&c, T0), Err(KeyError::BadClaims(_))));
 }
 
+/// Sew 0.6.0 refuses every pass whose `sub` is an `app:` id, and a box
+/// user's pass through a non-home App. K2 never builds either: the claims
+/// refuse them before signing, and every identity the mint classifies keeps
+/// the App claim to App sessions (`k2:principal:`).
+#[test]
+fn no_app_sub_and_no_app_claim_on_a_box_users_pass() {
+    let app = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    assert!(ChatPassClaims::new(INSTALL, &format!("app:{app}"), "skn_1", T0).is_err(), "an app: sub");
+    for sub in ["k2:owner", "k2:connect:6f1e2d3c-4b5a-4968-8776-655443322110"] {
+        let c = ChatPassClaims::new(INSTALL, sub, "own_1", T0).expect("a box user's pass").with_caps(vec!["chat:read".into()]).expect("caps");
+        assert!(c.clone().with_app(None).is_ok(), "{sub} without an App");
+        assert!(c.with_app(Some(app)).is_err(), "{sub} through an App");
+    }
+    let p = ChatPassClaims::new(INSTALL, &format!("k2:principal:{app}"), "skn_1", T0)
+        .and_then(|c| c.with_caps(vec!["chat:read".into()]))
+        .and_then(|c| c.with_app(Some(app)))
+        .expect("an App session's pass");
+    assert_eq!(p.app.as_deref(), Some(app));
+
+    // What the mint classifies: only an App session gets an `app` claim,
+    // and its sub is a principal.
+    use super::identity::{connect_identity, owner_linked_identity, Provenance, SewRole};
+    use super::mint::app_claim;
+    let owner_linked = owner_linked_identity("boss", "k2cs_session");
+    let connect = connect_identity("ana", k2_core::connect_users::Role::Owner, "6f1e2d3c-4b5a-4968-8776-655443322110", "k2cs_s2", false);
+    let mut with_app = owner_linked.clone();
+    with_app.app = Some(app.into()); // even if a box user's identity named an App
+    for ident in [&owner_linked, &connect, &with_app] {
+        assert_ne!(ident.provenance, Provenance::AppSession);
+        assert_eq!(app_claim(ident), None, "{ident:?}");
+        assert!(!ident.sub.starts_with("app:"));
+    }
+    assert_eq!(connect.sew_role, SewRole::Member, "an Owner-role Connect login is never Sew's install owner");
+}
+
 // ── JWKS + sign/verify ──────────────────────────────────────────────
 
 #[test]

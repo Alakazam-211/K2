@@ -87,6 +87,11 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
 /// side that wrote its last line ([`end_is_open`]). A conflict's ranges are on `base`, its
 /// line numbers in `base`, ours and theirs ([`Conflict`]).
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
+    let planted = mutant();
+    if planted == Some(Planted::CharSides) {
+        let (a, b) = (diff::hunks(base, ours), diff::hunks(base, theirs));
+        return merge_sets(base, &a, &b, theirs, at_end, |i, j| a[i] == b[j]);
+    }
     let (cb, ct) = (closed(base), closed(theirs));
     let (a, b) = write_base_sides(base, ours, theirs);
     match merge_sets(&cb, &a, &b, &ct, at_end, |i, j| a[i] == b[j]) {
@@ -96,7 +101,11 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merg
                 .collect(),
         ),
         Merge::Clean(c) => {
-            let open = end_is_open(base, ours, theirs, &a, &b, &c.hunks, &c.text);
+            let open = if planted == Some(Planted::EndFollowsTheirs) {
+                is_open(theirs)
+            } else {
+                end_is_open(base, ours, theirs, &a, &b, &c.hunks, &c.text)
+            };
             let mut text = c.text;
             if open {
                 text.pop();
@@ -645,6 +654,30 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
             }
         })
         .collect()
+}
+
+/// The planted faults, as this module names them: the kit's own copy of
+/// [`crate::differential::MergeMutant`], which exists only in test builds and with the
+/// `differential` feature (a host's build has neither: every fault is then absent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Planted {
+    CharSides,
+    EndFollowsTheirs,
+}
+
+#[cfg(any(test, feature = "differential"))]
+fn mutant() -> Option<Planted> {
+    use crate::differential::MergeMutant as M;
+    crate::differential::merge_mutant().map(|m| match m {
+        M::CharSides => Planted::CharSides,
+        M::EndFollowsTheirs => Planted::EndFollowsTheirs,
+    })
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+#[inline(always)]
+fn mutant() -> Option<Planted> {
+    None
 }
 
 #[cfg(test)]

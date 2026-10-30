@@ -8,9 +8,9 @@
 | [redb](https://github.com/cberner/redb) | MIT OR Apache-2.0 | The store (embedded key-value database) |
 
 **Yrs, modified.** `vendor/yrs` is Yrs v0.28.0 with changes by Alakazam Labs (k2-yrs, tag
-`k2-yrs-0.28.0-k2.6.3`), under the same MIT terms: Yrs's licence and copyright are in
+`k2-yrs-0.28.0-k2.6.5`), under the same MIT terms: Yrs's licence and copyright are in
 `vendor/yrs/LICENSE`, and what was changed is in `vendor/yrs/NOTICE` (`Doc::transact_mut_as`; a position index for text; per-transaction
-work proportional to the clients touched; hardening; warning-free).
+work proportional to the clients touched; deleted-block runs in text walks; a one-client state-vector read; hardening; warning-free).
 See `docs/YRS-FORK.md`.
 
 Transitive dependencies are all MIT, Apache-2.0, BSD, ISC or Zlib (checked by

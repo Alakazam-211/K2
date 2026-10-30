@@ -54,6 +54,10 @@ harness = false
 name = "id_set"
 harness = false
 
+[[bench]]
+name = "text_soak"
+harness = false
+
 [lib]
 doctest = true
 bench = true

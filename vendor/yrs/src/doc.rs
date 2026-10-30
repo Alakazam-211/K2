@@ -208,6 +208,19 @@ impl Doc {
         store.position_index.enabled = enabled;
     }
 
+    /// k2, test-only: the oracle for the position index's runs of deleted blocks. On (the
+    /// default), lookups and edits in a text cross a run of deleted blocks by its recorded end;
+    /// off, they step through every deleted block, as upstream does. Both find the same places,
+    /// so give the same updates; the differential test in `tests/deleted_runs.rs` runs twin
+    /// docs, one each way, and compares.
+    ///
+    /// Takes the doc's write lock, so it waits for (or, on the thread that holds it, deadlocks
+    /// with) an open transaction.
+    #[doc(hidden)]
+    pub fn set_deleted_runs(&self, on: bool) {
+        self.store.write_blocking().position_index.runs = on;
+    }
+
     /// k2: counters of the text position index: lookups, marker hits, walks, shadow checks,
     /// mismatches.
     pub fn position_index_stats(&self) -> crate::PositionIndexStats {

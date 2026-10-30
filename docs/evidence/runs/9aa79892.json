@@ -1,0 +1,30 @@
+{
+ "job": "9aa79892",
+ "collected": "2026-10-29",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "9aa79892",
+   "run": "soak_32",
+   "tool": "soak",
+   "status": "VIOLATION",
+   "secs": 600,
+   "calls": 106843,
+   "applied": 51163,
+   "version": 57406,
+   "restarts": 36,
+   "first_calls_per_s": 822,
+   "tail_calls_per_s": 83,
+   "slowdown_percent": 996,
+   "max_slowdown_percent": 200,
+   "peak_rss_kb": 88176,
+   "peak_estimate_bytes": 39706480,
+   "shadow": false,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

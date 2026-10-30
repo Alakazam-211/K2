@@ -105,6 +105,39 @@ pub fn with_group_mutant<R>(mutant: GroupMutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in `write --base`'s merge, so the trace classes can show they catch it.
+/// Installed per thread by [`with_merge_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MergeMutant {
+    /// (i) v0.9.7's merge: sides diffed to the character on the texts as they are. Lines that
+    /// share a start pair one line off, and two lines can join at the end of the text.
+    CharSides,
+    /// (ii) The final line break always as theirs left it, whoever wrote the last line.
+    EndFollowsTheirs,
+}
+
+thread_local! {
+    static MERGE_MUTANT: std::cell::Cell<Option<MergeMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The merge fault planted on this thread, if any.
+pub fn merge_mutant() -> Option<MergeMutant> {
+    MERGE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_merge_mutant<R>(mutant: MergeMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<MergeMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            MERGE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(MERGE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// How an edit becomes an engine change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]

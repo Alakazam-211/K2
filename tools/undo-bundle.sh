@@ -53,7 +53,7 @@ cd "$ROOT"
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/base/Cargo.toml | head -1)
 THISERROR=$(sed -n 's/^thiserror = "\(.*\)"$/\1/p' crates/base/Cargo.toml | head -1)
 FILES="Cargo.toml Cargo.lock crates/base/src/text crates/spec-undo/Cargo.toml crates/spec-undo/src crates/spec-undo/tests/mutants.rs tools/undo $CMDS $*"
-[ "$KIND" = quint ] && FILES="$FILES spec/quint tools/quint"
+[ "$KIND" = quint ] && FILES="$FILES spec/quint tools/quint tools/quint-jvm"
 COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude target --exclude '*.itf.json' \
   -czf "$OUT/bundle.tgz" $FILES 2>/dev/null \
   || COPYFILE_DISABLE=1 tar --exclude target --exclude '*.itf.json' -czf "$OUT/bundle.tgz" $FILES

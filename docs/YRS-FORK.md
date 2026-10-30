@@ -4,7 +4,7 @@ The kit's engine is **Yrs v0.28.0 plus the k2 patches**, from the private repo `
 and reviewed by the engine's maintainers), vendored at a tag into `vendor/yrs`. The kit depends
 on it by path; nothing else in the kit sees an engine type (ARCHITECTURE rule 1).
 
-## What the fork changes (tag `k2-yrs-0.28.0-k2.6.3`)
+## What the fork changes (tag `k2-yrs-0.28.0-k2.6.5`)
 
 | Patch | Why | Tests (in k2-yrs) |
 |---|---|---|
@@ -15,6 +15,8 @@ on it by path; nothing else in the kit sees an engine type (ARCHITECTURE rule 1)
 | A decode-only API for refusing subdocument content (`k2.2.1`) | the kit refuses client updates carrying content it never uses (subdocuments) before applying anything, and quarantines a stored doc holding such content (v0.9.5) | in k2-yrs |
 | Warning-free (`k2.6.1`) | the engine builds warning-free under `RUSTFLAGS='-D warnings'` (default features, `weak` and the test-only features), with no change in behaviour | the whole suite |
 | Wording (`k2.6.2`, `k2.6.3`) | hardening entries in the fork's NOTICE and its comments; no code change | – |
+| Deleted-block runs (`k2.6.4`): a walk that steps through two or more deleted blocks in a row records the run's ends (unit IDs, per text), and later walks go from one end to the other; a live block linked in between drops the text's runs; the position index's shadow check steps through what the runs cross (with a step budget) instead of the full walk; `Doc::set_deleted_runs` (test-only) keeps the old stepping | a text lookup or edit still stepped through every deleted block between a marker and its target, so the cost grew with the text's history (the soak's young docs: a replica or a doc just loaded, with no markers yet). The same places are found, so updates are byte-identical | `yrs/tests/deleted_runs.rs`, `src/position_index.rs`'s unit tests; bench `yrs/benches/text_soak.rs` |
+| `ReadTxn::client_state(&ClientID)` (`k2.6.5`): one client's entry of the state vector (0 for a client the doc has never seen), one lookup | the kit reads one client's clock at least twice per edit (`clock_of`); building the whole state vector for it cost O(clients), and a doc's clients grow with its joins | `yrs/tests/client_state.rs` |
 
 `transact_mut_as` swaps the store's client ID for the transaction's life; new blocks and redone
 items take that client's ID and next clocks. The doc's own ID is restored at commit, before

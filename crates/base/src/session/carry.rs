@@ -418,6 +418,14 @@ impl RevertIndex {
         self.records.len()
     }
 
+    /// Test-only (feature `differential`; `tests/perf_kit.rs`): records held, and nodes in
+    /// every root's trees (dead ones included).
+    #[cfg(any(test, feature = "differential"))]
+    pub fn sizes_for_tests(&self) -> (usize, usize) {
+        let nodes = self.records.values().map(Vec::len).sum::<usize>() + self.dead;
+        (self.records.len(), nodes)
+    }
+
     /// Nodes visited so far, over every tree (the complexity measure).
     #[cfg(test)]
     pub fn work(&self) -> u64 {

@@ -359,6 +359,10 @@ pub(crate) fn fresh_key() -> Result<[u8; 32], StoreError> {
     crate::hash::random32().map_err(|e| StoreError::NoRandom(e.to_string()))
 }
 
+/// A write-back in flight as [`DocStore::set_pending_sync`] stored it (its encoded row).
+#[derive(Debug)]
+pub(crate) struct PendingSync(Vec<u8>);
+
 fn enc_sync(s: &SyncState) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1).bytes(&s.hash).u64(s.seq).bytes(&s.state);
@@ -886,11 +890,19 @@ fn enc_snapshot(seq: Seq, state: &[u8]) -> Vec<u8> {
 }
 
 fn dec_snapshot(b: &[u8]) -> Result<(Seq, Vec<u8>), StoreError> {
+    let (seq, state) = dec_snapshot_ref(b)?;
+    Ok((seq, state.to_vec()))
+}
+
+/// [`dec_snapshot`] without copying the state: the same checks, the state borrowed from `b`.
+/// A commit needs only the snapshot's position (v0.9.8: copying a state of megabytes on every
+/// commit was O(the doc's history) per change).
+fn dec_snapshot_ref(b: &[u8]) -> Result<(Seq, &[u8]), StoreError> {
     let mut r = R::new(b, "snapshot");
     if r.u8()? != 1 {
         return Err(StoreError::Corrupt("snapshot version"));
     }
-    let v = (r.u64()?, r.bytes()?);
+    let v = (r.u64()?, r.bytes_ref()?);
     r.end()?;
     Ok(v)
 }
@@ -1008,6 +1020,26 @@ impl DocStore {
     pub fn unsynced_for_tests(&self) {
         self.unsynced
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Test-only (feature `differential`; `tests/perf_kit.rs`, the store's cost as a doc's
+    /// history grows): redb's statistics of this file, read in a write transaction that is
+    /// dropped uncommitted (nothing is written).
+    #[cfg(any(feature = "conformance", feature = "differential"))]
+    #[doc(hidden)]
+    pub fn redb_stats_for_tests(&self) -> Result<Vec<(&'static str, u64)>, StoreError> {
+        let w = self.begin_write()?;
+        let s = w.stats()?;
+        Ok(vec![
+            ("redb_tree_height", u64::from(s.tree_height())),
+            ("redb_allocated_pages", s.allocated_pages()),
+            ("redb_leaf_pages", s.leaf_pages()),
+            ("redb_branch_pages", s.branch_pages()),
+            ("redb_stored_bytes", s.stored_bytes()),
+            ("redb_metadata_bytes", s.metadata_bytes()),
+            ("redb_fragmented_bytes", s.fragmented_bytes()),
+            ("redb_page_size", s.page_size() as u64),
+        ])
     }
 
     /// Open, retrying while another process (a daemon handing off) still holds the lock.
@@ -1196,7 +1228,7 @@ impl DocStore {
         };
         // after a compaction the log may be empty; never reuse a snapshot's position
         if let Some(v) = w.open_table(SNAPSHOTS)?.get(id)? {
-            next = next.max(dec_snapshot(v.value())?.0 + 1);
+            next = next.max(dec_snapshot_ref(v.value())?.0 + 1);
         }
         let mut seqs = Vec::with_capacity(entries.len());
         for e in entries {
@@ -1439,10 +1471,43 @@ impl DocStore {
 
     /// Record a write-back about to happen (before the file is renamed into place), so a
     /// crash right after the rename can still tell the file is the kit's own write.
-    pub(crate) fn set_pending_sync(&self, id: DocId, s: &SyncState) -> Result<(), StoreError> {
+    /// Returns the bytes written, for [`DocStore::promote_written_sync`].
+    pub(crate) fn set_pending_sync(
+        &self,
+        id: DocId,
+        s: &SyncState,
+    ) -> Result<PendingSync, StoreError> {
+        let b = enc_sync(s);
         let w = self.begin_write()?;
-        w.open_table(SYNC)?
-            .insert((id, PENDING), enc_sync(s).as_slice())?;
+        w.open_table(SYNC)?.insert((id, PENDING), b.as_slice())?;
+        w.commit()?;
+        Ok(PendingSync(b))
+    }
+
+    /// [`DocStore::promote_pending_sync`] of the write-back this session just recorded
+    /// (`p`, what [`DocStore::set_pending_sync`] wrote, under the same session lock): the same
+    /// rows result, but the synced row is written from `p` instead of reading the pending
+    /// row back and copying it (v0.9.8: a whole engine state read and copied per write-back).
+    pub(crate) fn promote_written_sync(
+        &self,
+        id: DocId,
+        meta: &DocMeta,
+        p: &PendingSync,
+    ) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        {
+            let mut t = w.open_table(SYNC)?;
+            if t.remove((id, PENDING))?.is_none() {
+                return Err(StoreError::Corrupt("no write-back in flight"));
+            }
+            t.insert((id, SYNCED), p.0.as_slice())?;
+            let mut docs = w.open_table(DOCS)?;
+            let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
+            if old.key != meta.key {
+                return Err(StoreError::KeyChange);
+            }
+            docs.insert(id, enc_meta(meta).as_slice())?;
+        }
         w.commit()?;
         Ok(())
     }

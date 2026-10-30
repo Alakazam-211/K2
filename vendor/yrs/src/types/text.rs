@@ -1,6 +1,7 @@
 use crate::block::{Block, EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::position_index::{
-    resolve, scan, scan_from, Located, Marker, Markers, PositionMismatch, Stop, MAX_MARKERS,
+    cross_right, resolve, scan, scan_from, Located, Marker, Markers, PositionMismatch, Steps, Stop,
+    MAX_MARKERS, SHADOW_STEPS,
 };
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -9,7 +10,7 @@ use crate::types::{
 };
 use crate::utils::OptionExt;
 use crate::*;
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
@@ -223,14 +224,7 @@ pub trait Text: AsRef<Branch> + Sized {
         if let Some(mut pos) = find_position(this, txn, index) {
             let markers = take_markers(this);
             let value = crate::block::PrelimString(chunk.into());
-            while let Some(right) = pos.right.as_ref() {
-                if right.is_deleted() {
-                    // skip over deleted blocks, just like Yjs does
-                    pos.forward();
-                } else {
-                    break;
-                }
-            }
+            skip_deleted(this, txn, &mut pos);
             let item = txn.create_item(&pos, value, None);
             restore_after_insert(this, txn, markers, index, item);
         } else {
@@ -795,10 +789,12 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
         return find_position_walk(this, txn, index);
     }
     let encoding = store.offset_kind;
+    let runs_on = store.position_index.uses_runs();
     let mut this = this;
 
     // the marker path
-    let mut from: Option<(usize, Marker)> = None;
+    // the marker used, and the block its scan started from (with that block's content index)
+    let mut from: Option<(usize, Marker, ItemPtr, u32)> = None;
     let mut found: Option<Located> = None;
     if index > 0 {
         if let Some(markers) = this.markers.as_deref() {
@@ -812,11 +808,19 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
                     // a character boundary); else it is stale, and the lookup walks
                     let resolved = resolve(&store.blocks, this, &m, encoding)
                         .ok_or(Stop::Invalid)
-                        .and_then(|(anchor, start)| scan_from(anchor, start, index, encoding));
+                        .and_then(|(anchor, start)| {
+                            let steps = if runs_on {
+                                Steps::Runs(this, &store.blocks)
+                            } else {
+                                Steps::All
+                            };
+                            let l = scan_from(anchor, start, index, encoding, steps)?;
+                            Ok((l, anchor, start))
+                        });
                     match resolved {
-                        Ok(l) => {
+                        Ok((l, anchor, start)) => {
                             found = Some(l);
-                            from = Some((i, m));
+                            from = Some((i, m, anchor, start));
                         }
                         // a live format item without the branch's formatting flag: walk the
                         // formatting-aware way
@@ -825,7 +829,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
                             store.position_index.stats.walks += 1;
                             return find_position_walk(this, txn, index);
                         }
-                        Err(Stop::Invalid) => {
+                        Err(Stop::Invalid | Stop::Budget) => {
                             store.position_index.stats.stale_markers += 1;
                             this.markers = None;
                         }
@@ -836,12 +840,43 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     }
 
     let located = match (found, from) {
-        (Some(l), Some((i, m))) => {
+        (Some(l), Some((i, m, anchor, start))) => {
             let pi = &mut store.position_index;
             pi.stats.marker_hits += 1;
             if pi.sample() {
                 pi.stats.shadow_checks += 1;
-                let walk = scan(None, this.start, index, 0, encoding);
+                // k2: with runs, two checks, neither costing time in proportion to the text's
+                // history: the marker's scan again, stepping through every block up to
+                // SHADOW_STEPS of them (checks the runs it crossed, when it is that short), and
+                // the walk from the start, crossing runs (checks the marker). Only on a mismatch
+                // does the walk from the start step through every block.
+                let agrees = runs_on && {
+                    let budget = Cell::new(SHADOW_STEPS);
+                    let plain = scan_from(anchor, start, index, encoding, Steps::Budget(&budget));
+                    let walk = scan(
+                        None,
+                        this.start,
+                        index,
+                        0,
+                        encoding,
+                        Steps::Runs(this, &store.blocks),
+                    );
+                    match (plain, walk) {
+                        (Ok(p), Ok(w)) => p.same_place(&l) && w.same_place(&l),
+                        (Err(Stop::Budget), Ok(w)) => w.same_place(&l),
+                        _ => false,
+                    }
+                };
+                let walk = if agrees {
+                    Ok(l)
+                } else {
+                    if runs_on {
+                        // a disagreement may be the runs' (in the walk from the start): they go
+                        this.runs = None;
+                    }
+                    // the shadow walk steps through every block (no runs)
+                    scan(None, this.start, index, 0, encoding, Steps::All)
+                };
                 match walk {
                     Ok(w) if w.same_place(&l) => {
                         if let Some(markers) = this.markers.as_deref_mut() {
@@ -850,6 +885,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
                         Some((l, Some(i), true))
                     }
                     Ok(w) => {
+                        this.runs = None;
                         pi.stats.mismatches += 1;
                         if let Some(hook) = pi.hook.as_ref() {
                             hook(&PositionMismatch {
@@ -867,6 +903,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
                     // handle, as it always has)
                     Err(_) => {
                         this.markers = None;
+                        this.runs = None;
                         None
                     }
                 }
@@ -882,7 +919,12 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
             if index == 0 {
                 return find_position_walk(this, txn, index);
             }
-            match scan(None, this.start, index, 0, encoding) {
+            let steps = if runs_on {
+                Steps::Runs(this, &store.blocks)
+            } else {
+                Steps::All
+            };
+            match scan(None, this.start, index, 0, encoding, steps) {
                 Ok(w) => Some((w, None, true)),
                 Err(_) => None,
             }
@@ -926,6 +968,87 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
         pos.right = Some(right);
     }
     Some(pos)
+}
+
+/// k2: moves `pos` past the deleted blocks at its right, as `ItemPosition::forward` would one
+/// by one (Yjs skips them the same way before an insert): deleted blocks change neither the
+/// index nor the attributes in force. With the position index's runs on, a run is crossed by its
+/// recorded end ([cross_right]).
+fn skip_deleted(this: BranchPtr, txn: &mut TransactionMut, pos: &mut ItemPosition) {
+    match pos.right {
+        Some(right) if right.is_deleted() => {
+            if txn.store().position_index.uses_runs() {
+                let last = cross_checked(this, txn, right, pos.index);
+                pos.left = Some(last);
+                pos.right = last.right;
+            } else {
+                while let Some(right) = pos.right.as_ref() {
+                    if right.is_deleted() {
+                        pos.forward();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// k2: [cross_right] for an edit (an insert's skip, a removal), with the shadow check: on its
+/// sample (the position index's shadow rate, counted over crossings) the run is also stepped
+/// through block by block, up to [SHADOW_STEPS] blocks, and the two ends compared. On a
+/// difference the hook is called (`marker` holds the content index and the run's first block),
+/// the stepped end is used, and the text's runs and markers are dropped.
+fn cross_checked(
+    mut this: BranchPtr,
+    txn: &mut TransactionMut,
+    first: ItemPtr,
+    index: u32,
+) -> ItemPtr {
+    let store = txn.store_mut();
+    let last = cross_right(this, &store.blocks, first);
+    let pi = &mut store.position_index;
+    if !pi.sample_crossing() {
+        return last;
+    }
+    pi.stats.run_checks += 1;
+    let mut stepped = first;
+    let mut budget = SHADOW_STEPS;
+    loop {
+        match stepped.right {
+            Some(next) if next.is_deleted() => {
+                if budget == 0 {
+                    return last; // too long to check here
+                }
+                budget -= 1;
+                stepped = next;
+            }
+            _ => break,
+        }
+    }
+    if stepped == last {
+        return last;
+    }
+    pi.stats.mismatches += 1;
+    if let Some(hook) = pi.hook.as_ref() {
+        let at = |b: ItemPtr| crate::TextPosition {
+            left: Some(b.last_id()),
+            right: b.right.map(|r| r.id),
+            left_start: 0,
+            missing: 0,
+        };
+        hook(&PositionMismatch {
+            branch: this.id(),
+            index,
+            marker: (index, first.id),
+            marker_result: at(last),
+            walk_result: at(stepped),
+        });
+    }
+    this.runs = None;
+    this.markers = None;
+    stepped
 }
 
 /// k2: takes a text's markers out for a local edit to keep (see [restore_markers]): if the edit
@@ -1063,6 +1186,11 @@ fn find_position_walk(
 
 fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
     let encoding = txn.store().offset_kind;
+    // k2: the text whose runs of deleted blocks this removal crosses, when they are on
+    let runs = match pos.parent {
+        TypePtr::Branch(b) if txn.store().position_index.uses_runs() => Some(b),
+        _ => None,
+    };
     let mut remaining = len;
     let start = pos.right.clone();
     let start_attrs = pos.current_attrs.clone();
@@ -1071,7 +1199,15 @@ fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
             break;
         }
 
-        if !item.is_deleted() {
+        if item.is_deleted() {
+            // k2: the deleted blocks here count for nothing: cross them at once
+            if let Some(this) = runs {
+                let last = cross_checked(this, txn, pos.right.unwrap(), pos.index);
+                pos.left = Some(last);
+                pos.right = last.right;
+                continue;
+            }
+        } else {
             match &item.content {
                 ItemContent::Embed(_) | ItemContent::String(_) | ItemContent::Type(_) => {
                     let content_len = item.content_len(encoding);

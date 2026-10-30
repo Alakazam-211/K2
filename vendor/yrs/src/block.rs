@@ -1036,6 +1036,16 @@ impl<'doc> TransactionMut<'doc> {
                 parent.start.replace(item_ptr)
             };
         }
+        // k2: a live block between two deleted ones splits the run they were in
+        if let (Some(l), Some(r)) = (item.left, item.right) {
+            if l.is_deleted()
+                && r.is_deleted()
+                && !item.is_deleted()
+                && !self.store.position_index.keeps_runs_on_interior()
+            {
+                crate::position_index::drop_runs(parent);
+            }
+        }
         if let Some(mut right) = item.right {
             right.left = Some(item_ptr);
         } else if let Some(parent_sub) = item.parent_sub.as_ref() {

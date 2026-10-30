@@ -26,8 +26,9 @@
 // - Edits are explicit canonical hunks: insert a letter, delete one, replace one with the
 //   other letter, delete two, and (MULTI) two single-letter deletes or replacements at
 //   least one letter apart. A purge (PURGE) deletes every live copy of a letter as the
-//   purger's batch, one hunk per copy (touching hunks are not joined: purge_text builds
-//   them itself), then clears the stacks (U19).
+//   purger's batch, its hunks canonical (copies that touch are one hunk, D2; so one region,
+//   U8, and a deletion across another region's edge taints it, U9; as purge_text builds
+//   them), then clears the stacks (U19).
 // - Undo, redo and revert merge EXACT hunk sets (U10, v1.7): ours, the inverse of the
 //   change's own hunk, and theirs, read off the live window BY ROOT at merge time (U8,
 //   v1.8: the greedy rule, `byRoot`; the v1.7 carried theirs is the oracle's cross-check,
@@ -660,10 +661,11 @@ module undo {
   }
 
   /// purge_text (U19, R9) of a one-letter secret: every live copy deleted as one batch by p
-  /// (a hunk per copy), then every stack cleared (mutant skip-u19: not)
+  /// (canonical: copies that touch are one hunk, D2), then every stack cleared (mutant
+  /// skip-u19: not)
   def purge(st: St, p: int, secret: int): Res = {
     val t = chars(st.doc)
-    val es = range(0, t.length()).foldl([], (l, i) => if (t[i] == secret) l.append({ s: i, e: i + 1, ins: [], rts: [] }) else l)
+    val es = canonicalR(range(0, t.length()).foldl([], (l, i) => if (t[i] == secret) l.append({ s: i, e: i + 1, ins: [], rts: [] }) else l))
     val c = newBatch(st, p, es)
     val cleared = if (MUTANT == "skip-u19") c.st
       else { ...c.st, stacks: c.st.stacks.keys().mapBy(k => {

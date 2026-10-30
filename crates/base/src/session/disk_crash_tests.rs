@@ -260,3 +260,72 @@ fn a_poisoned_doc_is_reloaded_never_encoded() {
     mgr.release().unwrap();
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// v0.9.8 (the disk replica decoded on first need): a stored sync state that doesn't decode
+/// is no longer found at the open but at the first disk need after it. It must be as loud
+/// and as safe there: the open's error (the same variant, the same error id) from every
+/// write-back and outside save, and nothing written to the file or the store (no write in
+/// flight, the synced row as it was, no change logged by the disk path).
+#[test]
+fn a_damaged_sync_state_fails_the_first_write_back_as_the_open_did() {
+    let (dir, store, host) = setup("damaged-sync");
+    let (ws, file) = (dir.join("ws"), dir.join("ws/a.md"));
+    fs::write(&file, b"a\n").unwrap();
+    let p = || Participant::new("agent", "A", "#000", ParticipantKind::Agent, "cli");
+    let id = {
+        let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
+        let s = mgr.open_file(Arc::new(MD), &key(), &file, &ws).unwrap();
+        let c = s.join(p(), Stay::Held).unwrap().conn;
+        s.replace_text(c, TextFilePack::ROOT, "ab\n").unwrap();
+        s.flush(c).unwrap();
+        drop(s);
+        mgr.release().unwrap();
+        store.find(&key()).unwrap().unwrap()
+    };
+    // the synced row damaged through the store's API: the file's hash kept (so the open
+    // sees no outside edit), its engine state not one
+    let mut synced = store.sync_states(id).unwrap().0.unwrap();
+    synced.state = vec![0xff; 16];
+    let meta = store.meta(id).unwrap();
+    store.rekey_sync(id, &meta, &synced).unwrap();
+    // what the open gave before v0.9.8: the kit's guarded decoder refusing these bytes
+    let want = SessionError::from(
+        Doc::load(MD.schema(), &synced.state)
+            .err()
+            .expect("these bytes don't decode"),
+    );
+    let rows = || (store.sync_states(id).unwrap(), store.log_size(id).unwrap());
+    let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
+    let s = mgr.open_file(Arc::new(MD), &key(), &file, &ws).unwrap();
+    let c = s.join(p(), Stay::Held).unwrap().conn;
+    // an edit (the doc itself is sound), then the write-back
+    s.replace_text(c, TextFilePack::ROOT, "abc\n").unwrap();
+    let before = rows();
+    for _ in 0..2 {
+        let e = s.flush(c).unwrap_err();
+        assert_eq!(e, want, "the open's error");
+        assert_eq!(e.report().id(), want.report().id(), "the same error id");
+        assert_eq!(fs::read(&file).unwrap(), b"ab\n", "the file untouched");
+        assert_eq!(rows(), before, "nothing written to the store");
+        assert_eq!(rows().0 .1, None, "no write in flight");
+    }
+    // the host's tick reports it, and writes nothing either
+    host.0.fetch_add(10_000, Ordering::SeqCst);
+    let rep = mgr.tick().unwrap();
+    assert!(
+        rep.errors.iter().any(|(_, e)| *e == want),
+        "the tick reports it: {:?}",
+        rep.errors
+    );
+    assert_eq!(fs::read(&file).unwrap(), b"ab\n");
+    assert_eq!(rows(), before);
+    // an outside save: refused the same way, nothing merged or logged
+    fs::write(&file, b"ab\nz\n").unwrap();
+    let e = s.file_changed().unwrap_err();
+    assert_eq!(e, want);
+    assert_eq!(rows(), before);
+    assert_eq!(s.read(c).unwrap().text_by_root[0].1, "abc\n");
+    drop(s);
+    drop(mgr);
+    let _ = fs::remove_dir_all(&dir);
+}

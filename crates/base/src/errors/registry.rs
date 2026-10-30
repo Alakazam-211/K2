@@ -160,7 +160,8 @@ WRITE_CONFLICT = e("MPC-E111", "write_conflict", Session, 1, "K-BR-2, K-BR-3 (O1
      the same place), so nothing was applied; a write never merges inside a line. Run cat \
      to read the current text (the message and details.current give its version), make \
      your change again on that text, and write it with write --base <that version>. Or \
-     change only the lines you need with replace --lines or patch. details.conflicts has \
+     change only the lines you need with replace --lines or patch, each with \
+     --if-version <that version> (they take --if-version, not --base). details.conflicts has \
      each region's your_lines (in your text), current_lines (in the current text), base, \
      ours and theirs.");
 

@@ -1016,6 +1016,45 @@ fn roster_roles_away_and_idle_expiry() {
     );
 }
 
+/// v0.9.8: once the snapshot is large next to the log, a compaction waits for the log's bytes
+/// to reach a quarter of it, and never for more than 8 x `compact_entries` entries; the doc
+/// reloads the same.
+#[test]
+fn compaction_follows_the_state_size_up_to_a_hard_bound() {
+    let mut c = burst(10_000);
+    c.compact_entries = 10;
+    let dir = TmpDir::new("compact-ratio");
+    let host = TestHost::new();
+    host.grant("a", Rights::editor());
+    let big: String = (0..2_000).map(|i| format!("seed line {i}\n")).collect();
+    let text_before = {
+        let store = Arc::new(DocStore::open(dir.db()).unwrap());
+        let mgr = SessionManager::new(store.clone(), host.clone(), c.clone());
+        let s = mgr
+            .open(pack(), &key("big.md"), Some(big.as_bytes()))
+            .unwrap();
+        let a = s.join(agent("a"), Stay::UntilIdle).unwrap().conn;
+        // the import's large update is in the log: the first compaction at 10 entries
+        for i in 0..9 {
+            s.edit(a, ins(0, &format!("a{i}\n")), None).unwrap();
+        }
+        assert_eq!(s.status().unwrap().log_entries, 0, "the first compaction");
+        // now the snapshot is large: small edits wait for the hard bound (80 entries)
+        for i in 1..=80u64 {
+            s.edit(a, ins(0, &format!("b{i}\n")), None).unwrap();
+            let want = if i < 80 { i } else { 0 };
+            assert_eq!(s.status().unwrap().log_entries, want, "after {i} edits");
+        }
+        s.edit(a, ins(0, "c\n"), None).unwrap();
+        text(&s, a)
+    };
+    let store = Arc::new(DocStore::open(dir.db()).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), c);
+    let s = mgr.open(pack(), &key("big.md"), None).unwrap();
+    let a = s.join(agent("a"), Stay::UntilIdle).unwrap().conn;
+    assert_eq!(text(&s, a), text_before);
+}
+
 #[test]
 fn edits_persist_and_compaction_keeps_them() {
     let mut c = burst(1_000);

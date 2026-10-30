@@ -208,7 +208,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 ### MPC-E111 `write_conflict`
 
 - **Message:** `your write touches lines someone else changed since version {base}: {count} region(s), your {lines} (now {lines} of version {current}); nothing applied. To retry: read the current text again (cat; it is version {current}), redo your change on it, then write --base {current}`
-- **Next:** Someone else changed the same lines after the version you read (or added lines at the same place), so nothing was applied; a write never merges inside a line. Run cat to read the current text (the message and details.current give its version), make your change again on that text, and write it with write --base <that version>. Or change only the lines you need with replace --lines or patch. details.conflicts has each region's your_lines (in your text), current_lines (in the current text), base, ours and theirs.
+- **Next:** Someone else changed the same lines after the version you read (or added lines at the same place), so nothing was applied; a write never merges inside a line. Run cat to read the current text (the message and details.current give its version), make your change again on that text, and write it with write --base <that version>. Or change only the lines you need with replace --lines or patch, each with --if-version <that version> (they take --if-version, not --base). details.conflicts has each region's your_lines (in your text), current_lines (in the current text), base, ours and theirs.
 - **Rule:** K-BR-2, K-BR-3 (O1–O5)
 - **Exit:** 1
 

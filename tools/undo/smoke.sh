@@ -1,15 +1,18 @@
 # Smoke (one short job, <= 15 min): typecheck; a tiny simulator run exported as ITF and
-# replayed into spec_undo::model (also with a restart); TLC's exact count at a tiny bound
-# against the enumerator's; TLC on every mutant at the same bound, and on the restart mutant
-# and mutants (x), (xi) at their own bounds (each must violate its rule).
+# replayed into spec_undo::model (also with a restart), and the ITF regression traces
+# (tools/undo/itf-regress); TLC's exact count at a tiny bound against the enumerator's; TLC
+# on every mutant at the same bound, and on the restart mutant and mutants (x), (xi) at
+# their own bounds (each must violate its rule).
 B="2 1 1 0 4"            # pids events undos reverts maxlen
 I="0, 1, 1"              # the seed text abb
 EB="--pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb"
 timed "typecheck undo" q typecheck undo.qnt
 inst u_tiny $B "$I" true true none
 timed "typecheck u_tiny" q typecheck u_tiny.qnt
-# Apalache reads the model's IR as one JSON string of at most 20,000,000 characters (Jackson's
-# default); v1.9's is about 19.85 MB, so a change that grows it past the limit shows here
+# Apalache reads the model's IR as one JSON string, by default of at most 20,000,000 characters
+# (Jackson's); the job's servers raise that limit (tools/quint-jvm), and the size still shows
+# here (v1.9's u_tiny about 19.85 MB; the export check's instance, with its step and
+# invariants, is larger)
 q compile --target json --main=u_tiny u_tiny.qnt > u_tiny.json && echo "=== IR size: $(wc -c < u_tiny.json) bytes (Apalache's limit 20000000)"
 itfinst itf_tiny 2 1 1 1 4 "$I" true true none
 mkdir -p "$ROOT/itf"
@@ -44,3 +47,5 @@ mkdir -p "$ROOT/itf_rst"
 timed "simulate + ITF (with a restart, 300 traces)" q run itf_rst.qnt --main=itf_rst --init=winit --step=wstep \
   --max-samples=300 --n-traces=300 --max-steps=5 --out-itf="$ROOT/itf_rst/t_{seq}.itf.json" --verbosity=1
 timed "ITF replay (restart)" R --pids 2 --events 1 --undos 1 --reverts 1 --restarts 1 --maxlen 4 --init abb "$ROOT/itf_rst"
+# the ITF regression traces (tools/undo/itf-regress): each must replay with 0 mismatches
+. "$ROOT/tools/undo/itf-regress/replay.sh"

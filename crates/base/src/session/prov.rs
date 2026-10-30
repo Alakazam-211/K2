@@ -655,6 +655,20 @@ impl Prov {
         (self.lineage, self.applied)
     }
 
+    /// Test-only (feature `differential`; `tests/perf_kit.rs`): the map's size, `(runs,
+    /// chunks, live restorations by root)` over every text root. Changes nothing.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn sizes_for_tests(&self) -> (usize, usize, usize) {
+        let runs = self
+            .texts
+            .iter()
+            .flat_map(|(_, m)| &m.chunks)
+            .map(|c| c.runs.len())
+            .sum();
+        let chunks = self.texts.iter().map(|(_, m)| m.chunks.len()).sum();
+        (runs, chunks, self.by_root.0.len())
+    }
+
     /// Does it map text root `root`?
     pub fn has(&self, root: &str) -> bool {
         self.map(root).is_some()

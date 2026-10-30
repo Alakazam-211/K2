@@ -1,13 +1,16 @@
 # Changelog
 
-## v0.9.7.2 (2026-10-30)
+## v0.9.8.1 (2026-10-30)
 
-A note and a fix on v0.9.7.1: an outside save that may have removed someone's text now tells them,
-and gives them the text; and a revert of an outside save or of a promoted version puts back the
-roots it removed. No merge change, no store or wire format change, no new dependency. A new roster
+v0.9.8 plus what v0.9.7.2 added to v0.9.7.1 (the same commits, ported): an outside save that may
+have removed someone's text now tells them, and gives them the text; and a revert of an outside
+save or of a promoted version puts back the roots it removed. No merge change, no store or wire format change, no new dependency. A new roster
 event, so a host matching `RosterEvent::Snapshot` exhaustively needs `..`.
 
-The crate version is `0.9.7+2`; the git tag is v0.9.7.2.
+The crate version is `0.9.8+1` (Cargo takes three numbers; the build metadata resolves as
+0.9.8); the git tag is v0.9.8.1. It closes v0.9.8's known issue "stale outside saves remove
+text with no note" for text written through the kit (the limits below remain), and its
+known issue "revert of an outside save loses roots".
 
 **Fixed**
 - **A revert of an outside save, or of a version promoted from tier 0, put the text back as
@@ -89,6 +92,102 @@ no outside-save step and no promotion, so they say nothing for or against this p
 property above is the kit-vs-oracle check for it. An outside-save step in the trace
 generator is a follow-up.
 
+## v0.9.8 (2026-10-30)
+
+**`write --base` stays whole-line, as in v0.9.7.1:** two changes to one line are a
+conflict, and a clean merge holds only lines someone wrote.
+
+**Changed**
+- **`Doc::replace_text_as` pairs lines first**, as the session's edits have since v0.9.7.1
+  (`lines::edit_hunks`): a line deleted or inserted next to a line with the same start is that
+  line, so the neighbour keeps its elements. One text applied to the text it replaces; nothing
+  merges.
+- **MPC-E111's explain text** names `--if-version` for `replace --lines` and `patch`, which take
+  no `--base`. Only the text changes; hosts that pin it re-read the golden.
+
+**Host notes**
+- `k2 doc write --base` help, one line (K2's wording): "If the text changed at its end while
+  you were writing, K2 keeps your new last line separate from theirs (it never joins two
+  lines)."
+- When an agent's line lands after a last line someone left open, that line's blame names the
+  agent, because the line break ending it is the agent's. The person's characters and their
+  undo are unaffected.
+
+**Known issues** (found after this release's code was fixed; both are in v0.9.7.1 as well)
+- **A revert of an outside save puts the text back as new text.** The outside save's record
+  keeps no roots, so the revert can't say which text it restores (U23): the line can end up
+  twice, and blame credits the reverter. Nothing is lost. Fixed in the next release.
+- **Undo or revert can leave a line twice** when someone put the same text back next to the
+  undone region in the meantime. Undo again to remove it. A spec change, planned.
+- An outside save from a stale buffer can remove text written since, with no note to its
+  author. The next release tells the author what was removed and which version holds it.
+
+**Tests**
+- `tests/write_base_end.rs`: the end of the text (amendment O5 end-of-text r3) through a
+  session: its table, with the shapes that showed a character merge's faults; the writer's
+  undo and revert removing the line break; the live window; D1's word case with its control; a
+  CRLF document.
+- Trace classes `end_break_a`…`end_break_d`, `write_base_shared_start`,
+  `write_base_shared_start_was_conflict`, `write_base_words_same_line` and
+  `write_base_multiline_rewrite`, with two planted faults (`differential::MergeMutant`: v0.9.7's
+  character merge, and the final line break always as the live side left it).
+- `tools/tests/soak.sh`: the throughput guard defaults to 8x (a value set in the environment
+  wins); the throughput check runs last in the soak, so it never hides another check.
+- `tools/README.md`: the gate, one green job at a round's exact head before the round.
+- `docs/design/write-base-word-gate.md`: merging inside a line, deferred, with its reasons.
+- The soak's D1 replay regression is `soak_replay_seed_3_no_d1` (was
+  `soak_replay_seed_3_known_d1`): seed 3's one known D1 violation (call 25,877) has been gone
+  since v0.9.7's D1 amendment (`84ebc1d`; its parent `351e237` still has it), so the replay
+  now pins that it stays gone. It had failed since v0.9.7 unseen: the v0.9.7 and v0.9.7.1
+  soaks ran `soak_32` alone, not `tools/tests/soak.sh`.
+- `SOAK_KNOWN_D1` defaults to 0: a D1 mismatch fails the soak (600 s soaks at seeds 1, 3, 4
+  and 5 saw none); 1 turns the tolerance back on.
+- `tools/README.md`: a release soak runs `tools/tests/soak.sh` whole.
+
+### The kit's cost as a doc's history grows
+
+No store format change; no exit code change; no new dependency; no public API change.
+Measured with `tests/perf_kit.rs` at 10k, 50k and 100k versions
+(`docs/evidence/perf-kit-v0.9.8.md`, "v0.9.8 quick fixes").
+
+**Changed**
+- A commit reads the snapshot's log position in place instead of copying the whole engine
+  state: the store's part of a commit no longer grows with the doc's history.
+- The history tick checks the revert window's oldest record first and stops there when
+  nothing can leave the window. It no longer reads every record each minute.
+- A write-back writes the synced row from the bytes it just recorded instead of reading
+  them back. A re-sync is one transaction. The stored rows are the same.
+- Compaction: from `Config::compact_entries` entries, once the log's bytes reach a quarter
+  of the snapshot's; always at 8 × `compact_entries` entries or at `compact_bytes`. A small
+  doc compacts where it did.
+- A reopened doc keeps its disk replica encoded until the disk path first needs it.
+- Reading one participant's clock (twice per edit and once per undo) reads that client's
+  state-vector entry (`ReadTxn::client_state`, k2.6.5) instead of building the whole vector,
+  O(clients). A doc's clients grow with its joins.
+  - In the 32-participant soak, the edit path's `apply_local` went from 107 → 988 µs per edit
+    (v10k → v90k) to 69 → 408 µs.
+  - These figures are rough: one run each, one after another, on a shared node.
+- A damaged sync state is reported at the first write-back after a reopen, not at open. It is
+  the same error with the same id. Every write-back and outside save then fails the same way,
+  and nothing is written to the file or the store.
+
+- **Engine:** k2-yrs k2.6.5 (`k2-yrs-0.28.0-k2.6.5`).
+  - **k2.6.4:** a text walk crosses a run of deleted blocks in one step, so a lookup or edit
+    on a doc with a long history (a doc just loaded, the disk replica) no longer steps through
+    every deleted block. Updates are byte-identical.
+  - **k2.6.5:** adds `ReadTxn::client_state`, one client's state-vector entry read with one
+    lookup. No behaviour change.
+  - Vendored without the engine's own `yrs/tests/` (`docs/YRS-FORK.md`).
+
+**Host notes**
+- After a crash, reopening a doc may replay up to 8,000 log entries (8 × `compact_entries`,
+  the new hard bound) instead of at most 1,000. So the first open after a crash on a large doc
+  can take longer. A clean unload still compacts (`unload_compact_entries`), so a normal
+  restart is unaffected.
+- A doc whose stored sync state is damaged now opens. Its first write-back (`flush`, or the
+  tick's) or outside save fails with the error opening used to return. Treat that error as the
+  open's: the doc is not synced with its file.
+
 ## v0.9.7.1 (2026-10-30)
 
 A hotfix on v0.9.7: two fixes, one to `write --base` (possible text corruption, every
@@ -100,8 +199,9 @@ The crate version is `0.9.7+1` (Cargo takes three numbers; the build metadata re
 
 **Fixed**
 - **An agent's `write --base` could splice two different lines that start alike into one
-  garbled line** (possible text corruption; affected: **v0.1.0 through v0.9.7**). No text
-  was deleted, but the merged line was wrong. `write --base` merged the agent's text and the
+  garbled line** (possible text corruption; affected: **v0.1.0 through v0.9.7**). The merged
+  lines were wrong: what the two lines said is gone from the live text (earlier versions keep
+  it). `write --base` merged the agent's text and the
   live text through sides diffed to the character, which pairs lines that share their first
   characters one line off: when one side inserted a line between two lines the other
   rewrote into one (`p26:95` / `p05:90` became `p20:90`), the merge came out "clean" as
@@ -135,8 +235,9 @@ The crate version is `0.9.7+1` (Cargo takes three numbers; the build metadata re
   message, details and `next` changed). It names the conflicting lines in the agent's text
   and in the current text, the current version, and the retry: read it again with `cat`,
   redo the change on it, then `write --base <that version>`. `details.current`, and each
-  conflict's `your_lines` and `current_lines`. A fresh agent given only the refusal
-  re-read and retried correctly (`docs/evidence/write-conflict-blind.md`).
+  conflict's `your_lines` and `current_lines`. Two fresh agents, given only the refusal and
+  asked what they would do next, each described the re-read and the retry
+  (`docs/evidence/write-conflict-blind.md`: their answers, nothing was run).
 - A clean `write --base` applies the verb edits' diff from the live text to the merged text
   (`lines::edit_hunks`), so it names only the characters it changed; blame and undo of a
   write are as for `replace_text`.

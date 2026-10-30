@@ -43,7 +43,8 @@ state `st` is exactly a `bounded::View`, so:
 - **Events** per pid (`EVENTS`): an edit or a purge. Edits are explicit canonical hunks: insert
   a letter, delete one, replace one with the other letter, delete two, and (`MULTI`) two
   single-letter deletes or replacements at least one letter apart (two regions). A purge
-  deletes every live copy of a letter as the purger's batch, then clears the stacks (U19).
+  deletes every live copy of a letter as the purger's batch (canonical hunks: copies that
+  touch are one hunk), then clears the stacks (U19).
 - **Undos** (`UNDOS`, shared): `undo` all or nothing or `--partial`, `--steps` 1 or 2;
   `undo --drop`; `redo` all or nothing or `--partial`. A request spends one whatever it finds.
 - **Reverts** (`REVERTS`, shared): any recorded change, by any pid, all or nothing or `--partial`.
@@ -112,8 +113,15 @@ appears.
 ## Readings
 
 The oracle's readings (R1–R10, U22a; `crates/spec-undo/src/model/mod.rs`) carry over. Added
-here: a request spends the undo budget whatever it finds; a purge's hunks are one per copy,
-not joined (as `purge_text` builds them).
+here: a request spends the undo budget whatever it finds. A purge's hunks are **canonical**:
+copies that touch are one hunk (D2), so one region (U8), and that hunk taints another
+region whose edge it deletes across (U9), as `purge_text` and the kit build them. **The
+earlier, per-copy reading** (a purge's removal as one hunk per copy of the letter, touching
+hunks not joined, so one region each and no taint between them) held in the oracle until
+`04487c5` and in the model until the model revision of 2026-10-29 (`cd9840c`). Every count
+and walk at a bound with a purge and a revert taken before those commits is under that
+reading; the exact counts and the G1 exhaustive pair were re-run under the canonical one
+(`docs/evidence/g1-undo.md`).
 
 ## Findings
 

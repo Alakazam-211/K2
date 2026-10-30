@@ -18,7 +18,8 @@
 #   from the public crate and checked, as tools/test-bundle.sh does) and `fuzz/`; any other
 #   repo ships whole. Full-line comments are blanked (strip-comments.py: line numbers kept).
 # - **The corpus** travels in env chunks: `<corpus root>/<target>/corpus/*` (smallest files
-#   first, as many as fit). It is private: it never enters a repo.
+#   first, as many as fit in MAX_CHUNKS, from SEED_CAP bytes per target, default 64 MB, down
+#   by a third until they do). It is private: it never enters a repo.
 # - **The environment limit (hard check):** a runner caps a job at 64 environment pairs
 #   (k2-node 0.46.6, `env_too_many`); the job's only pairs are the chunks, and the bundler
 #   never writes more than ENV_LIMIT (60): the corpus is cut to fit, and when the source
@@ -82,7 +83,9 @@ pack() {
   echo $(( ( $(wc -c < "$OUT/b.txz") * 4 / 3 + CHUNK - 1 ) / CHUNK ))
 }
 for t in $TARGETS; do mkdir -p "$OUT/s/corpus/$t"; done
-CAP=1000000
+# seeds per target: all of them, unless the env limit cuts them (the loop below); the source
+# no longer shares the chunks (FUZZ_SHIP=repo)
+CAP=${SEED_CAP:-64000000}
 while :; do
   for t in $TARGETS; do
     rm -rf "$OUT/s/corpus/$t"; mkdir -p "$OUT/s/corpus/$t"

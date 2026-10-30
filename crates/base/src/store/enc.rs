@@ -81,6 +81,11 @@ impl<'a> R<'a> {
         let n = self.u32()? as usize;
         Ok(self.take(n)?.to_vec())
     }
+    /// A [`R::bytes`] field read in place: checked the same way, nothing copied.
+    pub fn bytes_ref(&mut self) -> Result<&'a [u8], StoreError> {
+        let n = self.u32()? as usize;
+        self.take(n)
+    }
     pub fn str(&mut self) -> Result<String, StoreError> {
         String::from_utf8(self.bytes()?).map_err(|_| StoreError::Corrupt(self.what))
     }

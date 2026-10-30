@@ -648,7 +648,7 @@ struct Disk {
     /// the doc itself (same elements, not only the same text): [`Session::resync_replica`]
     /// (v0.9.4), which K-AUD-1 checks. After a save the doc holds more than, it holds a
     /// client the doc never has ([`Session::replica_to_file`]).
-    replica: Doc,
+    replica: Replica,
     replica_bytes: u64,
     /// The keyed hash of the file's bytes as last synced (empty: unknown, after a purge).
     synced_hash: Vec<u8>,
@@ -681,6 +681,51 @@ struct Disk {
     /// Times the replica was brought forward by the catch-up list and passed the check (no
     /// reload), for the tests.
     caught_up: u64,
+}
+
+/// The disk replica, decoded on first need (v0.9.8). Opening a doc with a file decoded the
+/// stored synced state at once, a second full decode on every load besides the doc's own; it
+/// stays encoded until the disk path first reads or changes it ([`Replica::get`]), and
+/// decodes then exactly as before (the same state, the same runtime-check settings).
+enum Replica {
+    Doc(Doc),
+    Stored {
+        state: Vec<u8>,
+        schema: Schema,
+        /// The runtime checks' settings (`Session::checked`): every, scale, position.
+        checks: (u32, u64, u32),
+    },
+}
+
+impl Replica {
+    /// The replica, decoded now if it wasn't yet.
+    fn get(&mut self) -> std::result::Result<&mut Doc, DocError> {
+        if let Replica::Stored {
+            state,
+            schema,
+            checks,
+        } = &*self
+        {
+            let mut d = Doc::load(*schema, state)?;
+            d.set_edit_check_every(checks.0);
+            d.set_edit_check_scale(checks.1);
+            d.set_position_check_every(checks.2);
+            *self = Replica::Doc(d);
+        }
+        match self {
+            Replica::Doc(d) => Ok(d),
+            Replica::Stored { .. } => unreachable!("decoded above"),
+        }
+    }
+
+    /// The replica if it was decoded (what only a decoded replica can have: runtime-check
+    /// findings, a cross-check).
+    fn loaded(&mut self) -> Option<&mut Doc> {
+        match self {
+            Replica::Doc(d) => Some(d),
+            Replica::Stored { .. } => None,
+        }
+    }
 }
 
 /// Tests only: (the live doc's state, the disk replica's, whether it is in step, the stored
@@ -1173,8 +1218,8 @@ impl Session {
     /// during change `change` (v0.9.3). Metadata only: no content.
     fn report_engine_checks(&self, st: &mut State, change: Seq) {
         let mut found = st.doc.take_engine_checks();
-        if let Some(d) = st.disk.as_mut() {
-            found.extend(d.replica.take_engine_checks());
+        if let Some(r) = st.disk.as_mut().and_then(|d| d.replica.loaded()) {
+            found.extend(r.take_engine_checks());
         }
         for f in found {
             self.emit(match f {
@@ -2621,6 +2666,68 @@ impl Session {
             .map_or((0, 0), |h| (h.undo.len(), h.redo.len())))
     }
 
+    /// Test-only (feature `differential`; `tests/perf_kit.rs`, the kit's cost as history
+    /// grows): the sizes of the session's per-doc structures and the store's revert window,
+    /// by name. Reads only; changes nothing (a structure not built is reported as 0, and
+    /// `*_built` says which).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn perf_sizes_for_tests(&self) -> Result<Vec<(&'static str, u64)>> {
+        let st = self.lock()?;
+        let rs = self.store(&st)?.revert_stats(self.doc_id)?;
+        let n = |x: usize| x as u64;
+        let (mut undo, mut redo, mut regions, mut bytes) = (0, 0, 0, 0);
+        for h in st.hist.values() {
+            undo += h.undo.len();
+            redo += h.redo.len();
+            regions += h
+                .undo
+                .iter()
+                .chain(&h.redo)
+                .map(|b| b.regions.len())
+                .sum::<usize>();
+            bytes += h.bytes;
+        }
+        let (rix, rnodes) = st
+            .reverts
+            .as_ref()
+            .map_or((0, 0), RevertIndex::sizes_for_tests);
+        let (pruns, pchunks, pby) = st.prov.as_ref().map_or((0, 0, 0), Prov::sizes_for_tests);
+        let text: usize = st.texts.iter().map(|(_, t)| t.len()).sum();
+        let lines: usize = st.texts.iter().map(|(_, t)| position::line_count(t)).sum();
+        Ok(vec![
+            ("version", st.version),
+            ("log_entries", st.log_entries),
+            ("log_bytes", st.log_bytes),
+            ("state_bytes", st.state_bytes),
+            ("text_bytes", n(text)),
+            ("text_lines", n(lines)),
+            ("members", n(st.members.len())),
+            ("undo_batches", n(undo)),
+            ("redo_batches", n(redo)),
+            ("undo_regions", n(regions)),
+            ("undo_bytes", n(bytes)),
+            ("authors_kept", n(st.authors.len())),
+            ("read_bases", n(st.read_bases.len())),
+            ("revert_records", rs.count),
+            ("revert_bytes", rs.bytes),
+            ("revert_index_built", u64::from(st.reverts.is_some())),
+            ("revert_index_records", n(rix)),
+            ("revert_index_nodes", n(rnodes)),
+            ("prov_built", u64::from(st.prov.is_some())),
+            ("prov_runs", n(pruns)),
+            ("prov_chunks", n(pchunks)),
+            ("prov_by_root", n(pby)),
+            (
+                "catch_up",
+                n(st.disk
+                    .as_ref()
+                    .and_then(|d| d.catch_up.as_ref())
+                    .map_or(0, Vec::len)),
+            ),
+        ])
+    }
+
     /// Clear every stack; returns the batches dropped.
     fn clear_stacks(st: &mut State) -> u64 {
         let mut n = 0;
@@ -3302,7 +3409,10 @@ impl Session {
         let broken = |why: &str| SessionError::Doc(DocError::Apply(format!("provenance: {why}")));
         let mut built = Vec::with_capacity(texts.len());
         for (root, text) in texts {
-            let runs = doc.blame_runs(root)?;
+            let runs = {
+                prof!("prov.blame_runs");
+                doc.blame_runs(root)?
+            };
             let mut q = Vec::with_capacity(runs.len());
             let mut at = 0usize;
             for r in &runs {
@@ -3316,7 +3426,10 @@ impl Session {
             if at != text.len() {
                 return Err(broken("the engine's runs don't cover the text"));
             }
-            let rows = store.provenance_rows(doc_id, &q)?;
+            let rows = {
+                prof!("prov.rows");
+                store.provenance_rows(doc_id, &q)?
+            };
             built.push((
                 *root,
                 text.as_str(),
@@ -3562,8 +3675,7 @@ impl Session {
     }
 
     fn maybe_compact(&self, st: &mut State) {
-        let c = &self.config;
-        if st.log_entries >= c.compact_entries || st.log_bytes >= c.compact_bytes {
+        if compact_due(&self.config, st.log_entries, st.log_bytes, st.state_bytes) {
             self.compact(st);
         }
     }
@@ -3709,7 +3821,11 @@ impl Session {
     /// present connections' clients.
     #[cfg(test)]
     pub(crate) fn writers_for_tests(&self) -> Result<super::one_writer_tests::Writers> {
-        let st = self.lock()?;
+        let mut st = self.lock()?;
+        let replica = match st.disk.as_mut() {
+            Some(d) => Some(d.replica.get()?.clocks_for_tests()),
+            None => None,
+        };
         let store = self.store(&st)?.clone();
         let live = st
             .doc
@@ -3719,7 +3835,7 @@ impl Session {
             .collect::<Result<Vec<_>>>()?;
         Ok(super::one_writer_tests::Writers {
             live,
-            replica: st.disk.as_ref().map(|d| d.replica.clocks_for_tests()),
+            replica,
             external: st.disk.as_ref().and_then(|d| d.external_client),
             external_owned: store.client_owned_by(self.doc_id, EXTERNAL_PID)?,
             members: st
@@ -3736,11 +3852,11 @@ impl Session {
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]
     pub fn disk_memory_for_tests(&self) -> Result<Vec<Vec<u8>>> {
-        let st = self.lock()?;
-        let Some(d) = st.disk.as_ref() else {
+        let mut st = self.lock()?;
+        let Some(d) = st.disk.as_mut() else {
             return Ok(Vec::new());
         };
-        let mut out = vec![d.replica.encode_state()?];
+        let mut out = vec![d.replica.get()?.encode_state()?];
         out.extend(d.catch_up.iter().flatten().cloned());
         Ok(out)
     }
@@ -3762,10 +3878,10 @@ impl Session {
     /// in step (its catch-up list known), and the stored synced state.
     #[cfg(test)]
     pub(crate) fn writeback_state_for_tests(&self) -> Result<WritebackState> {
-        let st = self.lock()?;
+        let mut st = self.lock()?;
         let live = st.doc.encode_state()?;
-        let replica = match st.disk.as_ref() {
-            Some(d) => Some(d.replica.encode_state()?),
+        let replica = match st.disk.as_mut() {
+            Some(d) => Some(d.replica.get()?.encode_state()?),
             None => None,
         };
         let known = st.disk.as_ref().is_some_and(|d| d.catch_up.is_some());
@@ -4061,22 +4177,25 @@ impl Session {
     /// First, in any disk state (v0.9.5): neither the doc nor the replica may hold an
     /// update it couldn't integrate ([`SyncDrift::Pending`]; O(1)).
     pub fn audit_disk_sync(&self) -> Result<Vec<SyncDrift>> {
-        let st = self.lock()?;
+        let mut st = self.lock()?;
+        let st = &mut *st;
         let mut out = Vec::new();
         if st.doc.unresolved() {
             out.push(SyncDrift::Pending { replica: false });
         }
-        let Some(d) = st.disk.as_ref() else {
+        let clean = matches!(Self::disk_state(st), Some(DiskState::Clean));
+        let Some(d) = st.disk.as_mut() else {
             return Ok(out);
         };
-        if d.replica.unresolved() {
+        let replica = d.replica.get()?;
+        if replica.unresolved() {
             out.push(SyncDrift::Pending { replica: true });
         }
-        if !out.is_empty() || !matches!(Self::disk_state(&st), Some(DiskState::Clean)) {
+        if !out.is_empty() || !clean {
             return Ok(out);
         }
         for (root, text) in &st.texts {
-            if d.replica.text(root)? != *text {
+            if replica.text(root)? != *text {
                 out.push(SyncDrift::Text {
                     root: (*root).to_owned(),
                 });
@@ -4087,7 +4206,7 @@ impl Session {
                     .ok()
                     .and_then(|runs| super::prov::elem_ids(text, &runs))
             };
-            match (ids(&st.doc), ids(&d.replica)) {
+            match (ids(&st.doc), ids(replica)) {
                 (Some(a), Some(b)) if a == b => {}
                 _ => out.push(SyncDrift::Elements {
                     root: (*root).to_owned(),
@@ -4216,7 +4335,7 @@ impl Session {
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
-        let old = d.replica.text(root)?;
+        let old = d.replica.get()?.text(root)?;
         let hunks = vec![Hunk {
             start: 0,
             end: old.len(),
@@ -4228,7 +4347,7 @@ impl Session {
                 break c;
             }
         };
-        d.replica.edit_as(
+        d.replica.get()?.edit_as(
             client,
             &[Edit::Text {
                 root: root.to_owned(),
@@ -4262,18 +4381,26 @@ impl Session {
         }
         let store = self.store(st)?.clone();
         let (synced, pending) = store.sync_states(self.doc_id)?;
-        let (replica, replica_bytes, hash, seq) = match synced {
-            Some(s) => (
-                self.checked(Doc::load(self.schema, &s.state)?),
-                s.state.len() as u64,
-                s.hash,
-                s.seq,
+        // the replica stays encoded until the disk path first needs it (v0.9.8)
+        let stored = |state: Vec<u8>| Replica::Stored {
+            state,
+            schema: self.schema,
+            checks: (
+                self.config.edit_check_every,
+                self.config.edit_check_scale_units,
+                self.config.position_check_every,
             ),
+        };
+        let (replica, replica_bytes, hash, seq) = match synced {
+            Some(s) => {
+                let n = s.state.len() as u64;
+                (stored(s.state), n, s.hash, s.seq)
+            }
             // a doc from before disk sync: take its content as what the file held
             None => {
                 let state = st.doc.encode_state()?;
                 (
-                    self.checked(Doc::load(self.schema, &state)?),
+                    Replica::Doc(self.checked(Doc::load(self.schema, &state)?)),
                     state.len() as u64,
                     file_hash(&st.hash_key, &self.render(st)?),
                     st.version,
@@ -4325,7 +4452,7 @@ impl Session {
                 meta.synced_hash = Some(p.hash.clone());
                 meta.synced_seq = p.seq;
                 store.promote_pending_sync(self.doc_id, &meta)?;
-                d.replica = self.checked(Doc::load(self.schema, &p.state)?);
+                d.replica = Replica::Doc(self.checked(Doc::load(self.schema, &p.state)?));
                 d.replica_bytes = p.state.len() as u64;
                 d.synced_hash = p.hash;
                 d.synced_seq = p.seq;
@@ -4352,6 +4479,7 @@ impl Session {
     /// [`Config::disk_poll_ms`]), and the write-back when due. Returns what the check found
     /// (if it ran) and whether the file was written.
     pub(crate) fn disk_tick(&self) -> Result<(Option<DiskCheck>, bool)> {
+        prof!("disk.tick");
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -4611,7 +4739,13 @@ impl Session {
         // the merge's own hunks, whole lines (for the notes: `live/removed.rs`)
         let mut merge_sides: Vec<(String, Vec<Hunk>)> = Vec::new();
         for (root, Neutral::Text(t)) in &roots {
-            let synced = st.disk.as_ref().expect("has disk").replica.text(root)?;
+            let synced = st
+                .disk
+                .as_mut()
+                .expect("has disk")
+                .replica
+                .get()?
+                .text(root)?;
             let saved = diff::hunks(&synced, t);
             if saved.is_empty() {
                 continue;
@@ -5092,13 +5226,16 @@ impl Session {
     /// can't bring the old one back; if storing fails it is reported, and the next load,
     /// which runs this again, heals it.
     fn resync_replica(&self, st: &mut State) -> Result<()> {
-        let Some(d) = st.disk.as_ref() else {
+        let Some(d) = st.disk.as_mut() else {
             return Ok(());
         };
         if d.synced_seq == st.version {
             // the cross-check: synced at this version, the replica holds the doc's inserts
+            // (when decoded: one not decoded yet is the stored synced state)
             debug_assert!(
-                d.replica.same_state_vector(&st.doc),
+                d.replica
+                    .loaded()
+                    .map_or(true, |r| r.same_state_vector(&st.doc)),
                 "the disk replica synced at the doc's version holds other inserts"
             );
             return Ok(());
@@ -5121,12 +5258,13 @@ impl Session {
             seq: st.version,
             state,
         };
+        // one transaction (v0.9.8): no file is written here, so there is no write in flight to
+        // record first; the rows are the same as recording it and promoting it at once
         let stored = self.store(st).and_then(|store| {
-            store.set_pending_sync(self.doc_id, &sync)?;
             let mut meta = store.meta(self.doc_id)?;
             meta.synced_hash = Some(sync.hash.clone());
             meta.synced_seq = sync.seq;
-            store.promote_pending_sync(self.doc_id, &meta)?;
+            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
             Ok(())
         });
         if let Err(e) = stored {
@@ -5179,13 +5317,13 @@ impl Session {
         if !file_edits.is_empty() {
             let own = loop {
                 let c = random_client();
-                if c > 1 && st.doc.clock_of(c) == 0 && d.replica.clock_of(c) == 0 {
+                if c > 1 && st.doc.clock_of(c) == 0 && d.replica.get()?.clock_of(c) == 0 {
                     break c;
                 }
             };
-            d.replica.edit_as(own, file_edits)?;
+            d.replica.get()?.edit_as(own, file_edits)?;
         }
-        Ok((d.replica.encode_state()?, false))
+        Ok((d.replica.get()?.encode_state()?, false))
     }
 
     /// Write the doc to its file if the file doesn't hold it. Merges an outside edit first,
@@ -5201,7 +5339,10 @@ impl Session {
             DiskCheck::OwnWrite => true,
             _ => false,
         };
-        let bytes = self.render(st)?;
+        let bytes = {
+            prof!("wb.render");
+            self.render(st)?
+        };
         let h = file_hash(&st.hash_key, &bytes);
         let d = st.disk.as_mut().expect("has disk");
         if h == d.synced_hash && !stale {
@@ -5211,6 +5352,10 @@ impl Session {
             self.resync_replica(st)?;
             return Ok(false);
         }
+        // the disk replica, decoded now if a reopen left it encoded (v0.9.8): a stored sync
+        // state that doesn't decode fails the write-back here, before anything is written,
+        // with the error opening the doc gave before v0.9.8
+        d.replica.get()?;
         let real = match disk::probe(&d.path, &d.root) {
             Ok(Probe::File { real, .. }) => real,
             Ok(_) => {
@@ -5222,7 +5367,11 @@ impl Session {
                 return Err(self.disk_error(st, &p, e));
             }
         };
-        let state = match st.doc.encode_state() {
+        let encoded = {
+            prof!("wb.encode_state");
+            st.doc.encode_state()
+        };
+        let state = match encoded {
             Ok(s) => s,
             Err(e) => {
                 self.recover(st, &e.to_string());
@@ -5235,8 +5384,15 @@ impl Session {
             seq: st.version,
             state,
         };
-        store.set_pending_sync(self.doc_id, &pending)?;
-        let stat = match disk::atomic_write(&real, &bytes) {
+        let recorded = {
+            prof!("wb.set_pending_sync");
+            store.set_pending_sync(self.doc_id, &pending)?
+        };
+        let written = {
+            prof!("wb.atomic_write");
+            disk::atomic_write(&real, &bytes)
+        };
+        let stat = match written {
             Ok((stat, dir_sync)) => {
                 if let Some(e) = dir_sync {
                     self.disk_error(st, "fsync of the file's folder", e);
@@ -5250,16 +5406,24 @@ impl Session {
         };
         // the file is in place: memory follows whatever the store does (if recording it
         // fails, the next load sees the file matches the write in flight and promotes it)
-        let promoted = store.meta(self.doc_id).and_then(|mut meta| {
+        let promoted = {
+            prof!("wb.promote");
+            store.meta(self.doc_id)
+        }
+        .and_then(|mut meta| {
+            prof!("wb.promote");
             meta.synced_hash = Some(h.clone());
             meta.synced_seq = st.version;
-            store.promote_pending_sync(self.doc_id, &meta)
+            store.promote_written_sync(self.doc_id, &meta, &recorded)
         });
         if let Err(e) = promoted {
             self.disk_error(st, "recording the write-back", e);
         }
         // the file and the store are done: memory follows them, then any failure is reported
-        let replica = self.replica_to(st, &pending.state);
+        let replica = {
+            prof!("wb.replica_to");
+            self.replica_to(st, &pending.state)
+        };
         let d = st.disk.as_mut().expect("has disk");
         d.replica_bytes = pending.state.len() as u64;
         d.synced_hash = h.clone();
@@ -5290,15 +5454,19 @@ impl Session {
         let version = st.version;
         let every = u64::from(self.config.writeback_check_every);
         let d = st.disk.as_mut().expect("has disk");
+        // a replica a reopen left encoded is decoded first (v0.9.8): a stored sync state that
+        // doesn't decode is an error, never replaced unseen by the reload below
+        d.replica.get()?;
         d.writebacks += 1;
         #[cfg(any(test, feature = "differential"))]
         let old_path = crate::differential::full_writeback();
         #[cfg(not(any(test, feature = "differential")))]
         let old_path = false;
         let caught_up = match d.catch_up.take() {
-            Some(updates) if !old_path => updates
-                .iter()
-                .try_for_each(|u| d.replica.apply_trusted(u))
+            Some(updates) if !old_path => d
+                .replica
+                .get()
+                .and_then(|r| updates.iter().try_for_each(|u| r.apply_trusted(u)))
                 .is_ok(),
             _ => false,
         };
@@ -5307,9 +5475,11 @@ impl Session {
         // foreign insert shows); one in `every`, O(doc): the same deletions and texts too (a
         // lost delete). Not the encodings: upstream may split equal content into blocks
         // differently on the two docs.
+        let sampled = every != 0 && d.writebacks % every == 0;
         if caught_up
-            && (!d.replica.same_state_vector(&st.doc)
-                || (every != 0 && d.writebacks % every == 0 && !d.replica.same_content(&st.doc)))
+            && d.replica.loaded().is_some_and(|r| {
+                !r.same_state_vector(&st.doc) || (sampled && !r.same_content(&st.doc))
+            })
         {
             reload = true;
             self.emit(AuditEvent::DiskReplicaMismatch { key, version });
@@ -5321,7 +5491,7 @@ impl Session {
             match Doc::load(self.schema, state) {
                 Ok(r) => {
                     let d = st.disk.as_mut().expect("has disk");
-                    d.replica = self.checked(r);
+                    d.replica = Replica::Doc(self.checked(r));
                 }
                 // never on a correct stream; the next sync tries again from scratch
                 Err(e) => {
@@ -5350,7 +5520,7 @@ impl Session {
         }
         if let (Some(d), Ok((Some(s), _))) = (st.disk.as_mut(), store.sync_states(self.doc_id)) {
             if let Ok(r) = Doc::load(self.schema, &s.state).map(|d| self.checked(d)) {
-                d.replica = r;
+                d.replica = Replica::Doc(r);
                 d.replica_bytes = s.state.len() as u64;
                 d.synced_hash = s.hash;
                 d.synced_seq = s.seq;
@@ -5455,4 +5625,71 @@ struct Applied {
     added: usize,
     removed: usize,
     last_end: Option<(String, usize)>,
+}
+
+/// The log's bytes, times this, must reach the snapshot's for a compaction past
+/// [`Config::compact_entries`] (v0.9.8): a compaction encodes and stores the whole state, so
+/// spacing them by the log's size relative to the state's keeps their cost per change constant
+/// as the history grows, instead of one per `compact_entries` changes whatever the state.
+pub(crate) const COMPACT_STATE_RATIO: u64 = 4;
+/// The log never holds more than [`Config::compact_entries`] times this many entries (v0.9.8):
+/// a load replays the log, so its length stays bounded whatever the state's size.
+pub(crate) const COMPACT_ENTRIES_MAX_FACTOR: u64 = 8;
+
+/// Whether the log is due for a compaction after an append ([`Config::compact_entries`],
+/// [`Config::compact_bytes`]; v0.9.8). `state_bytes` is the snapshot's bytes plus the log's.
+/// - Never before `compact_entries` entries, unless the log reaches `compact_bytes`.
+/// - From `compact_entries` entries on, once the log's bytes are at least a
+///   [`COMPACT_STATE_RATIO`]th of the snapshot's (a small doc, or no snapshot yet: at
+///   `compact_entries`, as before v0.9.8).
+/// - Always at `compact_entries` x [`COMPACT_ENTRIES_MAX_FACTOR`] entries or at
+///   `compact_bytes` bytes, whichever comes first (the hard bounds).
+pub(crate) fn compact_due(c: &Config, entries: u64, log_bytes: u64, state_bytes: u64) -> bool {
+    if log_bytes >= c.compact_bytes
+        || entries >= c.compact_entries.saturating_mul(COMPACT_ENTRIES_MAX_FACTOR)
+    {
+        return true;
+    }
+    let snapshot = state_bytes.saturating_sub(log_bytes);
+    entries >= c.compact_entries && log_bytes.saturating_mul(COMPACT_STATE_RATIO) >= snapshot
+}
+
+#[cfg(test)]
+mod compact_due_tests {
+    use super::{compact_due, Config, COMPACT_ENTRIES_MAX_FACTOR};
+
+    fn c() -> Config {
+        Config {
+            compact_entries: 100,
+            compact_bytes: 1 << 20,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn a_small_snapshot_compacts_at_compact_entries_as_before() {
+        // no snapshot yet: the state is the log
+        assert!(!compact_due(&c(), 99, 5_000, 5_000));
+        assert!(compact_due(&c(), 100, 5_000, 5_000));
+        // a snapshot smaller than four logs
+        assert!(compact_due(&c(), 100, 5_000, 5_000 + 20_000));
+    }
+
+    #[test]
+    fn a_large_snapshot_waits_for_a_quarter_of_it_up_to_the_hard_bound() {
+        let snapshot = 400_000;
+        assert!(!compact_due(&c(), 100, 5_000, snapshot + 5_000));
+        assert!(!compact_due(&c(), 500, 99_999, snapshot + 99_999));
+        assert!(compact_due(&c(), 500, 100_000, snapshot + 100_000));
+        // the entries bound, whatever the sizes
+        let max = 100 * COMPACT_ENTRIES_MAX_FACTOR;
+        assert!(!compact_due(&c(), max - 1, 5_000, snapshot + 5_000));
+        assert!(compact_due(&c(), max, 5_000, snapshot + 5_000));
+    }
+
+    #[test]
+    fn the_byte_bound_holds_at_any_entry_count() {
+        assert!(compact_due(&c(), 1, 1 << 20, (1 << 20) + 10_000_000));
+        assert!(!compact_due(&c(), 1, (1 << 20) - 1, (1 << 20) + 10_000_000));
+    }
 }

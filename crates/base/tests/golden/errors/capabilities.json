@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.9.7+2",
+  "version": "0.9.8+1",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",

@@ -95,11 +95,7 @@ pub fn check(base: &str, ours: &str, theirs: &str) {
                     "theirs' append first: {:?}",
                     x.text
                 );
-                assert!(
-                    yt.ends_with(&format!("{eo}{et}")),
-                    "swapped: {:?}",
-                    y.text
-                );
+                assert!(yt.ends_with(&format!("{eo}{et}")), "swapped: {:?}", y.text);
                 assert_eq!(
                     &xt[..xt.len() - tail],
                     &yt[..yt.len() - tail],
@@ -223,7 +219,8 @@ fn check_union(base: &str, ours: &str, theirs: &str, at_end: bool, c: &Clean) {
     }
     out.push_str(&base[at..]);
     assert_eq!(
-        merge::closed(&c.text), out,
+        merge::closed(&c.text),
+        out,
         "a clean merge (at_end {at_end}) holds both sides' changes: ours {a:?}, theirs {b:?}"
     );
 }

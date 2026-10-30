@@ -445,7 +445,7 @@ impl Session {
             if st.disk.is_some() || stored.is_some() {
                 not_reached.push(NotReached::File);
             }
-            match (&st.disk, stored) {
+            match (st.disk.as_mut(), stored) {
                 // the file's text stays (purge can't reach the file); its state is re-encoded
                 (Some(d), _) => {
                     let bytes = disk::probe(&d.path, &d.root).ok().and_then(|p| match p {
@@ -460,7 +460,7 @@ impl Session {
                     Some(SyncState {
                         hash: bytes.map_or_else(Vec::new, |b| file_hash(&key, &b)),
                         seq: d.synced_seq,
-                        state: d.replica.encode_state()?,
+                        state: d.replica.get()?.encode_state()?,
                     })
                 }
                 (None, Some(s)) => Some(SyncState {
@@ -502,7 +502,7 @@ impl Session {
         st.log_bytes = 0;
         st.state_bytes = state.len() as u64;
         if let (Some(d), Some(s)) = (st.disk.as_mut(), &sync) {
-            d.replica = self.checked(Doc::load(self.schema, &s.state)?);
+            d.replica = Replica::Doc(self.checked(Doc::load(self.schema, &s.state)?));
             d.replica_bytes = s.state.len() as u64;
             d.synced_hash = s.hash.clone();
             d.synced_seq = s.seq;

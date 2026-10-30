@@ -1457,7 +1457,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `roster_interval_ms` | 250 ms | the roster push's coalescing interval (at most one delivery per doc per interval) |
 | `roster_queue` | 256 | roster events per subscriber, and recorded between two deliveries; past it, a fresh `Snapshot` |
 | `participants_max` | 32 | distinct participants with presence per doc; a new pid past it watches (read-only, counted, `MPC-E305` on edit) until the host promotes it |
-| `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append at either threshold |
+| `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append: from `compact_entries` entries once the log's bytes are at least a quarter of the snapshot's (v0.9.8: its cost per change stays constant as the state grows), always at 8 × `compact_entries` entries or at `compact_bytes` bytes |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
 | `write_quiet_ms` / `write_max_delay_ms` | 1 s / 5 s | write-back after this much quiet, or this long after the first unwritten change |

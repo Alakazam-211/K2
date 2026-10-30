@@ -38,6 +38,19 @@ pub trait ReadTxn: Sized {
         self.store().blocks.get_state_vector()
     }
 
+    /// k2: one client's entry of the [state vector](ReadTxn::state_vector), read without
+    /// building the whole vector: `self.client_state(c) == self.state_vector().get(c)` for
+    /// every client, so `0` for a client this document has no blocks from.
+    ///
+    /// Like the state vector, it is the clock up to which the client's blocks are known
+    /// without a gap: when an update arrived ahead of one it depends on, the entry stops at
+    /// the start of the client's first missing range.
+    ///
+    /// The cost is one map lookup, where building the state vector visits every client.
+    fn client_state(&self, client: &ClientID) -> u32 {
+        self.store().blocks.get_state(client).unwrap_or(0)
+    }
+
     /// Returns a snapshot which describes a current state of updates and removals made within
     /// the corresponding document.
     fn snapshot(&self) -> Snapshot {

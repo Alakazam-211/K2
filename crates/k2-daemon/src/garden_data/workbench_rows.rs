@@ -243,7 +243,12 @@ fn git_out(dir: &str, args: &[&str]) -> Option<String> {
 /// The branch a workspace integrates on: its main checkout's branch (W1's
 /// recorded base wins when it has one).
 fn default_base(t: &Target) -> String {
-    if let Some(b) = t.sidecar.as_ref().and_then(|s| w1::task_facts(&t.project_id, s.pane_group_id.as_deref().unwrap_or("")).base) {
+    let recorded = t.sidecar.as_ref().and_then(|s| s.pane_group_id.as_deref()).and_then(|pg| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::worktree_task::store::get(&conn, &t.project_id, pg).and_then(|m| m.base_ref)
+    });
+    if let Some(b) = recorded {
         return b;
     }
     git_out(&t.ws_path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty()).unwrap_or_else(|| "main".to_string())
@@ -350,19 +355,6 @@ fn log_commits(dir: &str, base: &str, limit: usize) -> Result<Vec<J>, CliRespons
         .collect())
 }
 
-/// Files the branch's commits change since it left `base`, with +/−.
-fn committed_files(dir: &str, base: &str) -> Vec<J> {
-    git_out(dir, &["diff", "--numstat", "--no-renames", format!("{base}...HEAD").as_str(), "--"])
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let mut p = l.splitn(3, '\t');
-            let (add, del, file) = (p.next()?, p.next()?, p.next()?);
-            Some(json!({ "file": file, "additions": add.parse::<i64>().ok(), "deletions": del.parse::<i64>().ok() }))
-        })
-        .collect()
-}
-
 fn ahead_count(dir: &str, base: &str) -> Option<i64> {
     git_out(dir, &["rev-list", "--count", format!("{base}..HEAD").as_str(), "--"]).and_then(|s| s.parse().ok())
 }
@@ -372,7 +364,13 @@ fn ahead_count(dir: &str, base: &str) -> Option<i64> {
 /// One sidecar as a Workbench task row (WorkRow).
 fn work_row(t: &Target, with_git: bool) -> J {
     let s = t.sidecar.as_ref().expect("a sidecar");
-    let facts = w1::task_facts(&t.project_id, s.pane_group_id.as_deref().unwrap_or(""));
+    // W1's facts (its task state, patch-id `ahead`) cost a git read: only
+    // on the git path, never on the reach route.
+    let facts = if with_git {
+        w1::task_facts(&t.project_id, &t.ws_path, &t.ws_handle, s.pane_group_id.as_deref().unwrap_or(""), s.agent_name.as_deref())
+    } else {
+        w1::TaskFacts::default()
+    };
     let live = s.live();
     let worktree = t.worktree();
     // Git facts only for an agent in its own worktree: a sidecar at the
@@ -382,7 +380,8 @@ fn work_row(t: &Target, with_git: bool) -> J {
             let base = default_base(t);
             match k2_core::git_changes::snapshot(&t.dir, None).ok().and_then(|r| r.repo()) {
                 Some(snap) => {
-                    let ahead = ahead_count(&t.dir, &base);
+                    // W1 counts by patch-id (a landed cherry-pick is not ahead).
+                    let ahead = facts.ahead.or_else(|| ahead_count(&t.dir, &base));
                     let behind: Option<i64> = git_out(&t.dir, &["rev-list", "--count", format!("HEAD..{base}").as_str(), "--"]).and_then(|s| s.parse().ok());
                     let dirty = snap.counts.total as i64;
                     (snap.branch.clone(), Some(base), snap.head_oid.as_deref().map(short), ahead, behind, Some(dirty))
@@ -638,29 +637,49 @@ fn sidecar_of<'a>(t: &'a Target, verb: &str) -> Result<&'a str, CliResponse> {
     t.handle().ok_or_else(|| bad_args(format!("{verb} is for a sidecar (ws/name), not a workspace's main agent")))
 }
 
+/// W1's Land sheet read, for a sidecar that works in its own worktree.
+fn review_of(t: &Target, verb: &str) -> Result<(String, J), CliResponse> {
+    let name = sidecar_of(t, verb)?.to_string();
+    let r = w1::review(&t.ws_handle, &name)?;
+    Ok((name, r))
+}
+
+/// Land: K2's sheet shows W1's review (the commits not on `onto` by
+/// patch-id, the files, uncommitted files that won't land); the person's
+/// press there runs W1's Land bound to the tips the sheet showed.
 fn land(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliResponse> {
     let t = target(str_arg(args, "address"))?;
-    let name = sidecar_of(&t, "git.land")?.to_string();
-    if t.worktree().is_none() {
-        return Err(bad_args(format!("{} works in its workspace's own folder, not a worktree: nothing to land", t.thread())));
-    }
+    let (name, r) = review_of(&t, "git.land")?;
     match b.confirm_token.as_deref().filter(|s| !s.is_empty()) {
         None => {
-            let base = default_base(&t);
-            let commits = log_commits(&t.dir, &base, 50)?;
-            if commits.is_empty() {
-                return Err(no(409, "conflict", format!("{} has no commits that {base} doesn't have: nothing to land", t.thread())));
+            if let Some(code) = r["blocked"].as_str() {
+                let why = match code {
+                    "already_landed" => "every commit is already on its base: nothing to land".to_string(),
+                    "main_has_uncommitted_changes" => "the main checkout has uncommitted changes: commit or stash them first".to_string(),
+                    "has_merge" => "its branch has a merge commit, which Land doesn't take".to_string(),
+                    "wrong_branch" => "the main checkout isn't on the branch Land goes to".to_string(),
+                    "operation_in_progress" => "a merge, rebase or cherry-pick is in progress in the main checkout".to_string(),
+                    other => other.replace('_', " "),
+                };
+                return Err(no(409, "conflict", format!("{} can't land now: {why}", t.thread())));
             }
-            let status = status_json(&t, &base)?;
-            // What Land carries: the committed files only (base...HEAD).
-            let files = committed_files(&t.dir, &base);
-            let onto = git_out(&t.ws_path, &["rev-parse", base.as_str()]).unwrap_or_default();
-            let tip = git_out(&t.dir, &["rev-parse", "HEAD"]).unwrap_or_default();
-            let dirty = status["counts"]["total"].as_i64().unwrap_or(0) - status["counts"]["base"].as_i64().unwrap_or(0);
+            let commits: Vec<J> = r["commits"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    let sha = c["sha"].as_str().unwrap_or_default();
+                    json!({ "sha": sha, "short": short(sha), "subject": c["subject"] })
+                })
+                .collect();
+            let files: Vec<J> =
+                r["files"].as_array().into_iter().flatten().map(|f| json!({ "file": f["path"], "status": f["status"] })).collect();
+            let onto = r["ontoHead"].as_str().unwrap_or_default().to_string();
+            let tip = r["tip"].as_str().unwrap_or_default().to_string();
             let change = json!({
                 "kind": "land", "address": t.address(), "thread": t.thread(), "workspace": t.ws_label, "name": name,
-                "branch": status["branch"], "base": base, "ahead": commits.len(), "commits": commits, "files": files,
-                "uncommitted": dirty, "onto": short(&onto), "tip": short(&tip),
+                "branch": r["branch"], "base": r["onto"], "ahead": commits.len(), "commits": commits, "files": files,
+                "uncommitted": r["dirty"].as_array().map(Vec::len).unwrap_or(0), "onto": short(&onto), "tip": short(&tip),
             });
             Err(ask(w, &b.verb, args, change, json!({ "onto": onto, "tip": tip })))
         }
@@ -671,41 +690,39 @@ fn land(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliRespons
     }
 }
 
+/// Retire or Discard, always through W1's retire (never a tab close: that
+/// would orphan the worktree). Retire refuses work that isn't landed;
+/// Discard says on K2's sheet what goes.
 fn settle(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliResponse> {
     let t = target(str_arg(args, "address"))?;
-    let name = sidecar_of(&t, "agents.settle")?.to_string();
     let discard = args.get("discard").and_then(J::as_bool).unwrap_or(false);
+    let (name, r) = review_of(&t, "agents.settle")?;
     match b.confirm_token.as_deref().filter(|s| !s.is_empty()) {
         None => {
-            let worktree = t.worktree();
-            let (branch, base, ahead, dirty) = if worktree.is_some() {
-                let base = default_base(&t);
-                let s = status_json(&t, &base).ok();
-                let dirty = s.as_ref().map(|s| s["counts"]["total"].as_i64().unwrap_or(0) - s["counts"]["base"].as_i64().unwrap_or(0));
-                (s.as_ref().map(|s| s["branch"].clone()).unwrap_or(J::Null), Some(base.clone()), ahead_count(&t.dir, &base), dirty)
-            } else {
-                (J::Null, None, None, None)
-            };
-            if !discard && ahead.unwrap_or(0) > 0 {
+            if r["retiredAt"].as_i64().is_some() {
+                return Err(no(409, "conflict", format!("{} is already retired", t.thread())));
+            }
+            let unlanded = r["commits"].as_array().map(Vec::len).unwrap_or(0);
+            let dirty = r["dirty"].as_array().map(Vec::len).unwrap_or(0);
+            if !discard && (unlanded > 0 || dirty > 0) {
                 return Err(no(
                     409,
                     "conflict",
-                    format!("{} has {} commit(s) that aren't landed: Land them first, or Discard", t.thread(), ahead.unwrap_or(0)),
+                    format!(
+                        "{} has {unlanded} commit(s) that aren't landed and {dirty} uncommitted file(s): Land first, or Discard",
+                        t.thread()
+                    ),
                 ));
             }
             let change = json!({
                 "kind": "settle", "discard": discard, "address": t.address(), "thread": t.thread(), "workspace": t.ws_label,
-                "name": name, "worktree": worktree, "branch": branch, "base": base, "unlanded": ahead, "uncommitted": dirty,
+                "name": name, "worktree": r["dir"], "branch": r["branch"], "base": r["onto"], "unlanded": unlanded, "uncommitted": dirty,
             });
             Err(ask(w, &b.verb, args, change, json!({})))
         }
         Some(token) => {
             confirmed(w, &b.verb, args, token)?;
-            let mut v = w1::settle(&t.ws_handle, &name, discard)?;
-            if v.get("discarded").is_none() {
-                v["discarded"] = json!(discard);
-            }
-            Ok(v)
+            w1::settle(&t.ws_handle, &name, discard)
         }
     }
 }
@@ -735,7 +752,7 @@ fn start(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliRespon
             let excerpt: String = brief.chars().take(600).collect();
             let change = json!({
                 "kind": "start", "workspace": t.ws_label, "workspaceAddress": t.address(), "name": name,
-                "harness": harness, "base": base, "branch": format!("k2/{name}"), "worktree": format!(".worktrees/k2-{name}"),
+                "harness": harness.as_deref().unwrap_or(w1::DEFAULT_HARNESS), "base": base, "branch": format!("k2/{name}"), "worktree": format!(".worktrees/k2-{name}"),
                 "brief": excerpt, "briefChars": brief.chars().count(),
             });
             Err(ask(w, &b.verb, args, change, json!({})))
@@ -823,7 +840,7 @@ fn answer(row: &VerbRow, w: &Placed, args: &Map<String, J>, b: &CallBody) -> Res
         "git.note" => note(&target(str_arg(args, "address"))?, args),
         "agents.stop" => {
             let t = target(str_arg(args, "address"))?;
-            let name = sidecar_of(&t, "agents.stop").map(str::to_string).unwrap_or_default();
+            let name = sidecar_of(&t, "agents.stop")?.to_string();
             w1::stop(&t.ws_handle, &name)
         }
         // GTC-5: a closed answer; Cancel on K2's sheet is the renderer's

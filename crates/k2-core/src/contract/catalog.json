@@ -25887,7 +25887,7 @@
             },
             "harness": {
               "type": "string",
-              "description": "A harness preset (default: the workspace's)."
+              "description": "A harness preset, as k2 preset list names it (default: claude)."
             },
             "base": {
               "type": "string",

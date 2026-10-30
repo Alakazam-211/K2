@@ -1,36 +1,51 @@
-//! The Workbench's one door to Lane W1's daemon core (0.46.7, vs-live
-//! B1–B3: worktree sidecars, Stop, Land, Retire, migration 0251).
+//! The Workbench's one door to Lane W1's daemon core (0.46.7,
+//! `.k2/prds/workbench-w1-contract.md`: worktree sidecars, Stop, Review,
+//! Land, Retire, migration 0251).
 //!
 //! **Every Workbench action goes through this file and nothing else.** The
 //! Garden rows (`workbench_rows`) check the widget, the press, the caps and
-//! K2's sheet; this file only runs the action, as the person (the owner) on
-//! this computer. Until W1's routes are on this branch each action answers
-//! `verb_unavailable` with words a person can act on, so wiring them later
-//! is a change to this file only (`.k2/prds/workbench-w1-contract.md`).
+//! K2's sheet; this file runs W1's own `/cli/sidecar/*` route as the person
+//! (the owner) on this computer, so the floors, the per-repo Land lock, the
+//! Thread posts and the rollbacks are W1's, never a second copy.
 //!
-//! Agent parity: each action is a W1 CLI verb an agent runs with its own
-//! passport (`k2 sidecar new --worktree`, `k2 interrupt`, `k2 land`,
-//! `k2 sidecar retire`); an agent never confirms its own Land.
+//! Discard is always `POST /cli/sidecar/retire {discard: true}`, never a
+//! tab close (closing a worktree agent's tab would orphan its worktree).
+//!
+//! Agent parity: each action is a W1 CLI verb (`k2 sidecar new --worktree`,
+//! `k2 sidecar interrupt`, `k2 sidecar land`, `k2 sidecar retire
+//! [--discard]`); an agent never lands or retires (403 `land_needs_person` /
+//! `retire_needs_person`, which the `git.land` / `sidecar.retire` cards ask).
 
-use serde_json::Value as J;
+use std::collections::HashMap;
 
-use super::person_rows::no;
+use serde_json::{json, Value as J};
+
+use super::person_rows::passthrough;
 use crate::cli_response::CliResponse;
+use crate::sidecar_routes::Caller;
 
-/// Whether W1's routes are wired here. Tests and the widget's own copy read
-/// the refusal, never this flag.
-pub const WIRED: bool = false;
+/// Whether W1's routes are wired here.
+pub const WIRED: bool = true;
 
-/// What K2 says while an action isn't wired yet.
-pub fn not_yet(action: &str) -> CliResponse {
-    no(
-        503,
-        "verb_unavailable",
-        format!(
-            "{action} arrives with K2's worktree agents (Workbench lane W1). Until then, ask the agent in its Thread, \
-             or run it yourself in a terminal."
-        ),
-    )
+/// The preset a New task uses when the person names none.
+pub const DEFAULT_HARNESS: &str = "claude";
+
+/// The audit ingress for Garden calls.
+const INGRESS: &str = "garden";
+
+fn post(path: &str, body: J) -> Result<J, (u16, J, CliResponse)> {
+    let r = crate::sidecar_routes::handle(path, Caller::Owner, body.to_string().as_bytes(), &HashMap::new(), INGRESS);
+    let code: u16 = r.status.split(' ').next().and_then(|c| c.parse().ok()).unwrap_or(500);
+    let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
+    if code == 200 {
+        Ok(v)
+    } else {
+        Err((code, v, r))
+    }
+}
+
+fn short(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 /// A worktree agent to start (`POST /cli/sidecar/new {worktree: true}`).
@@ -46,42 +61,119 @@ pub struct StartReq {
 
 /// `{address, thread, branch, worktree}` (the catalog's WorkStarted).
 pub fn start(req: &StartReq) -> Result<J, CliResponse> {
-    let _ = req;
-    Err(not_yet("Starting an agent in a new worktree"))
+    // W1's `sidecar new` needs a preset; the Workbench's default is Claude.
+    let harness = req.harness.as_deref().unwrap_or(DEFAULT_HARNESS);
+    let mut body = json!({ "workspace": req.workspace_handle, "name": req.name, "brief": req.brief, "worktree": true, "harness": harness });
+    if let Some(b) = &req.base {
+        body["base"] = json!(b);
+    }
+    let v = post("/cli/sidecar/new", body).map_err(|(_, _, r)| passthrough(r))?;
+    let thread = v["address"].as_str().unwrap_or_default().to_string();
+    Ok(json!({
+        "address": format!("{thread}::local"),
+        "thread": thread,
+        "branch": v["worktree"]["branch"],
+        "worktree": v["worktree"]["dir"],
+    }))
 }
 
-/// Stop the agent's current turn (`POST /cli/session/interrupt`).
+/// Stop the agent's current turn (`POST /cli/sidecar/interrupt`).
 pub fn stop(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {
-    let _ = (workspace_handle, sidecar);
-    Err(not_yet("Stop"))
+    let v = post("/cli/sidecar/interrupt", json!({ "workspace": workspace_handle, "name": sidecar })).map_err(|(_, _, r)| passthrough(r))?;
+    Ok(json!({ "stopped": v["interrupted"].as_bool().unwrap_or(false) }))
 }
 
-/// Land `branch` onto the base the sheet showed (`POST /cli/git/land`,
-/// bound to the tips the person saw: a moved tip is `conflict`).
+/// W1's Land sheet read (`GET /cli/sidecar/review`): the commits, files,
+/// tips and why Land would refuse.
+pub fn review(workspace_handle: &str, sidecar: &str) -> Result<J, CliResponse> {
+    let mut params = HashMap::new();
+    params.insert("workspace".to_string(), workspace_handle.to_string());
+    params.insert("name".to_string(), sidecar.to_string());
+    let r = crate::sidecar_routes::handle("/cli/sidecar/review", Caller::Owner, b"", &params, INGRESS);
+    if r.status != "200 OK" {
+        return Err(passthrough(r));
+    }
+    serde_json::from_str(&r.body).map_err(|e| super::person_rows::no(500, "failed", format!("sidecar review: {e}")))
+}
+
+/// Land onto the base the sheet showed (`POST /cli/sidecar/land`, bound to
+/// the tips the person saw: a moved tip is W1's `stale`). A conflict is an
+/// answer, not a refusal: the widget hears `{landed: false, conflict}`.
 pub fn land(workspace_handle: &str, sidecar: &str, expect_onto: &str, expect_tip: &str) -> Result<J, CliResponse> {
-    let _ = (workspace_handle, sidecar, expect_onto, expect_tip);
-    Err(not_yet("Land"))
+    let mut body = json!({ "workspace": workspace_handle, "name": sidecar, "expectTip": expect_tip, "retire": true });
+    if !expect_onto.is_empty() {
+        body["expectOnto"] = json!(expect_onto);
+    }
+    match post("/cli/sidecar/land", body) {
+        Ok(v) => Ok(json!({
+            "landed": true,
+            "commits": v["count"].as_i64().unwrap_or(0),
+            "head": v["to"].as_str().map(short),
+            "conflict": [],
+        })),
+        Err((409, v, _)) if v["error"]["code"] == "conflict" => Ok(json!({
+            "landed": false,
+            "commits": 0,
+            "head": J::Null,
+            "conflict": v["error"]["files"].as_array().cloned().unwrap_or_default(),
+        })),
+        Err((_, _, r)) => Err(passthrough(r)),
+    }
 }
 
 /// Retire (or discard) a worktree agent (`POST /cli/sidecar/retire`).
 pub fn settle(workspace_handle: &str, sidecar: &str, discard: bool) -> Result<J, CliResponse> {
-    let _ = (workspace_handle, sidecar, discard);
-    Err(not_yet(if discard { "Discard" } else { "Retire" }))
+    let v = post("/cli/sidecar/retire", json!({ "workspace": workspace_handle, "name": sidecar, "discard": discard }))
+        .map_err(|(_, _, r)| passthrough(r))?;
+    Ok(json!({ "settled": v["retired"].as_bool().unwrap_or(false), "discarded": v["how"] == "discarded" }))
 }
 
-/// W1's own facts on a sidecar (0251: `base_ref`, `landed_at`,
-/// `retired_at`, and E9's `taskState`), when it has them.
+/// W1's own facts on a sidecar (0251's columns and the daemon's task
+/// state), in the Workbench's words: needs-you, working, ready, landed,
+/// retired, or null for a new task.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskFacts {
     pub base: Option<String>,
+    pub branch: Option<String>,
+    pub dir: Option<String>,
+    /// Commits not on `onto`, by patch-id.
+    pub ahead: Option<i64>,
     pub task_state: Option<String>,
     pub landed_at: Option<i64>,
     pub retired_at: Option<i64>,
 }
 
-pub fn task_facts(project_id: &str, pane_group_id: &str) -> TaskFacts {
-    let _ = (project_id, pane_group_id);
-    TaskFacts::default()
+/// W1's `taskState` (+ activity) → the Workbench's.
+pub fn workbench_state(task_state: &str, activity: Option<&str>) -> Option<&'static str> {
+    match task_state {
+        "working" if activity == Some("waiting") => Some("needs-you"),
+        "working" => Some("working"),
+        "review" => Some("ready"),
+        "landed" => Some("landed"),
+        "discarded" => Some("retired"),
+        _ => None,
+    }
+}
+
+pub fn task_facts(ws_id: &str, ws_path: &str, ws_handle: &str, pane_group_id: &str, agent_name: Option<&str>) -> TaskFacts {
+    if pane_group_id.is_empty() {
+        return TaskFacts::default();
+    }
+    let ws = crate::sidecar_routes::Workspace { id: ws_id.to_string(), path: ws_path.to_string(), handle: ws_handle.to_string() };
+    let session = agent_name.and_then(crate::v2_session_map::lookup_by_agent_name).filter(|s| s.is_child_alive());
+    let Some(x) = crate::sidecar_worktree::list_extras(&ws, pane_group_id, session.as_deref()) else {
+        return TaskFacts::default();
+    };
+    let w = &x["worktree"];
+    TaskFacts {
+        base: w["onto"].as_str().map(str::to_string),
+        branch: w["branch"].as_str().map(str::to_string),
+        dir: w["dir"].as_str().filter(|_| w["retiredAt"].is_null()).map(str::to_string),
+        ahead: w["ahead"].as_i64(),
+        task_state: x["taskState"].as_str().and_then(|t| workbench_state(t, x["activity"].as_str())).map(str::to_string),
+        landed_at: w["landedAt"].as_i64(),
+        retired_at: w["retiredAt"].as_i64(),
+    }
 }
 
 #[cfg(test)]
@@ -89,23 +181,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_action_says_it_is_not_wired_yet() {
-        assert!(!WIRED);
-        let req = StartReq {
-            workspace_id: "p".into(),
-            workspace_handle: "k2".into(),
-            name: "fix".into(),
-            brief: "b".into(),
-            harness: None,
-            base: None,
-        };
-        for r in [start(&req), stop("k2", "fix"), land("k2", "fix", "a", "b"), settle("k2", "fix", true)] {
-            let e = r.expect_err("not wired");
-            assert_eq!(e.status, "503 Service Unavailable");
-            let v: J = serde_json::from_str(&e.body).expect("json");
-            assert_eq!(v["error"]["code"], "verb_unavailable");
-            assert!(v["error"]["hint"].as_str().expect("hint").contains("W1"), "{}", e.body);
-        }
-        assert_eq!(task_facts("p", "pg"), TaskFacts::default());
+    fn w1_states_read_in_the_workbenchs_words() {
+        assert_eq!(workbench_state("working", Some("waiting")), Some("needs-you"));
+        assert_eq!(workbench_state("working", Some("working")), Some("working"));
+        assert_eq!(workbench_state("review", None), Some("ready"));
+        assert_eq!(workbench_state("landed", None), Some("landed"));
+        assert_eq!(workbench_state("discarded", None), Some("retired"));
+        assert_eq!(workbench_state("new", None), None);
+        assert!(WIRED);
+        assert_eq!(task_facts("p", "/nowhere", "k2", "", None), TaskFacts::default());
     }
 }

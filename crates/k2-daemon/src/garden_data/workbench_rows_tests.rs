@@ -64,14 +64,7 @@ fn bench(caps: &[&str]) -> Bench {
     std::fs::write(repo.join(".gitignore"), ".worktrees/\n").expect("ignore");
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "base"]);
-    git(&repo, &["worktree", "add", "-q", ".worktrees/k2-fix", "-b", "k2/fix", "main"]);
-    let wt = repo.join(".worktrees/k2-fix");
-    std::fs::write(wt.join("a.txt"), "hello <img src=x onerror=alert(1)>\n").expect("a");
-    git(&wt, &["add", "a.txt"]);
-    git(&wt, &["commit", "-q", "-m", "Add a greeting"]);
-    std::fs::write(wt.join("b.txt"), "one\nTWO\n").expect("b changed");
     let repo = dunce::canonicalize(&repo).expect("canonical");
-    let wt = dunce::canonicalize(&wt).expect("canonical wt");
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -80,17 +73,29 @@ fn bench(caps: &[&str]) -> Bench {
             rusqlite::params![repo.to_string_lossy()],
         )
         .expect("workspace");
+    }
+    // A worktree sidecar as W1's `sidecar new --worktree` leaves it, minus
+    // the process: W1's own worktree, workspaces row, name and 0251 stamp.
+    let c = k2_core::worktree_task::create(&repo, "fix", None).expect("W1 makes the worktree");
+    let wt = std::path::PathBuf::from(&c.path);
+    std::fs::write(wt.join("a.txt"), "hello <img src=x onerror=alert(1)>\n").expect("a");
+    git(&wt, &["add", "a.txt"]);
+    git(&wt, &["commit", "-q", "-m", "Add a greeting"]);
+    std::fs::write(wt.join("b.txt"), "one\nTWO\n").expect("b changed");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Workspace::create(&conn, "wsrow-wb-fix", "w-wb", None, "worktree", Some(&c.branch), &c.branch, 5, Some(&c.path))
+            .expect("workspaces row");
         conn.execute(
-            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, cwd, last_seen_at) \
-             VALUES ('w-wb', 'pane-wb-fix', 'tab-pane-wb-fix', 'conv-wb-fix', 'claude', ?1, unixepoch())",
-            rusqlite::params![wt.to_string_lossy()],
+            "INSERT INTO workspace_tab_sessions (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at, created_by) \
+             VALUES ('w-wb', 'pane-wb-fix', 'tab-pane-wb-fix', 'conv-wb-fix', 'claude', '[]', ?1, unixepoch(), 'owner')",
+            rusqlite::params![c.path],
         )
         .expect("sidecar tab row");
-        conn.execute(
-            "INSERT INTO chat_session_names (provider, session_id, custom_name) VALUES ('claude', 'conv-wb-fix', 'fix')",
-            [],
-        )
-        .expect("sidecar name");
+        k2_core::sidecar::bind_name(&conn, "w-wb", "claude", "conv-wb-fix", "fix", "fix").expect("bind name");
+        k2_core::worktree_task::store::stamp_new(&conn, "w-wb", "pane-wb-fix", "wsrow-wb-fix", &c.branch, &c.dir, c.base.onto.as_deref())
+            .expect("0251 stamp");
     }
     let b = Bench { _env: e, f, garden, repo };
     b.set(caps);
@@ -192,7 +197,7 @@ fn reads_answer_a_worktree_agent_in_relative_paths() {
     assert_eq!(row["ahead"], 1);
     assert_eq!(row["dirty"], 1, "b.txt is changed and not committed");
     assert_eq!(row["live"], false);
-    assert_eq!(row["taskState"], Value::Null, "W1's state isn't here yet");
+    assert_eq!(row["taskState"], "ready", "W1: a commit not on main → review → ready");
 
     let s = b.call("git.snapshot", json!([{ "address": SIDECAR }]));
     assert_eq!(s["branch"], "k2/fix");
@@ -241,7 +246,7 @@ fn only_this_computers_agents_and_plain_refs() {
 }
 
 #[test]
-fn land_settle_and_start_ask_k2s_sheet_once_then_reach_w1() {
+fn land_settle_and_start_ask_k2s_sheet_once_then_run_w1s_routes() {
     let b = bench(&ALL);
     let args = json!([{ "address": SIDECAR }]);
     let (code, err) = b.refuse("git.land", args.clone());
@@ -250,44 +255,60 @@ fn land_settle_and_start_ask_k2s_sheet_once_then_reach_w1() {
     assert_eq!(err["change"]["branch"], "k2/fix");
     assert_eq!(err["change"]["base"], "main");
     assert_eq!(err["change"]["commits"][0]["subject"], "Add a greeting");
-    assert_eq!(err["change"]["files"][0]["file"], "a.txt");
+    assert_eq!(err["change"]["files"], json!([{ "file": "a.txt", "status": "A" }]));
+    assert_eq!(err["change"]["uncommitted"], 1, "b.txt stays in the worktree");
     let token = err["secretId"].as_str().expect("secretId").to_string();
 
-    // Another address can't use this answer.
-    let (c, other) = b.raw("git.land", json!([{ "address": "wb-room::local" }]), Some(&token));
-    assert_ne!(c, 200);
+    // Another address can't use this answer, and a made-up one is declined.
+    let (_, other) = b.raw("git.land", json!([{ "address": "wb-room::local" }]), Some(&token));
     assert_eq!(other["error"]["code"], "bad_args", "the main agent has nothing to land: {other}");
-    // The real one reaches W1's door (a stub until W1 lands).
+    let (_, forged) = b.raw("git.land", args.clone(), Some("not-a-token"));
+    assert_eq!(forged["error"]["code"], "declined");
+    // The person's press on the sheet: W1 cherry-picks onto main.
     let (c, v) = b.raw("git.land", args.clone(), Some(&token));
-    assert_eq!(c, 503, "{v}");
-    assert_eq!(v["error"]["code"], "verb_unavailable");
+    assert_eq!(c, 200, "{v}");
+    assert_eq!(v["result"]["landed"], true, "{v}");
+    assert_eq!(v["result"]["commits"], 1);
+    assert_eq!(v["result"]["cancelled"], false);
+    assert!(b.repo.join("a.txt").is_file(), "a.txt is on main now");
     // One answer, once.
     let (_, again) = b.raw("git.land", args.clone(), Some(&token));
     assert_eq!(again["error"]["code"], "declined");
-    let (_, forged) = b.raw("git.land", args, Some("not-a-token"));
-    assert_eq!(forged["error"]["code"], "declined");
 
-    // Retire refuses commits that aren't landed; Discard asks first.
+    // Land's auto-retire refused (b.txt is uncommitted): Retire refuses too,
+    // Discard asks K2's sheet, then W1 retires it with discard.
     assert_eq!(b.refuse("agents.settle", json!([{ "address": SIDECAR }])).0, "conflict");
     let (code, err) = b.refuse("agents.settle", json!([{ "address": SIDECAR, "discard": true }]));
     assert_eq!(code, "confirm_required");
     assert_eq!(err["change"]["kind"], "settle");
-    assert_eq!(err["change"]["unlanded"], 1);
+    assert_eq!(err["change"]["uncommitted"], 1);
     // A token for discard isn't one for retire.
     let (_, v) = b.raw("agents.settle", json!([{ "address": SIDECAR }]), err["secretId"].as_str());
     assert_eq!(v["error"]["code"], "declined");
+    let (code, err) = b.refuse("agents.settle", json!([{ "address": SIDECAR, "discard": true }]));
+    assert_eq!(code, "confirm_required");
+    let (c, v) = b.raw("agents.settle", json!([{ "address": SIDECAR, "discard": true }]), err["secretId"].as_str());
+    assert_eq!(c, 200, "{v}");
+    assert_eq!(v["result"], json!({ "settled": true, "discarded": true, "cancelled": false }));
+    assert!(!b.repo.join(".worktrees/k2-fix").exists(), "the worktree went to the Trash");
+    let row = b.call("work.list", json!([])).as_array().expect("rows").iter().find(|r| r["address"] == SIDECAR).cloned().expect("row stays");
+    assert_eq!(row["taskState"], "retired", "{row}");
 
     let start = json!([{ "workspace": "wb-room::local", "name": "Fix Login", "brief": "Make login keep the cookie." }]);
-    let (code, err) = b.refuse("agents.start", start.clone());
+    let (code, err) = b.refuse("agents.start", start);
     assert_eq!(code, "confirm_required");
     assert_eq!(err["change"]["name"], "fix-login");
     assert_eq!(err["change"]["branch"], "k2/fix-login");
     assert_eq!(err["change"]["base"], "main");
-    let (c, v) = b.raw("agents.start", start, err["secretId"].as_str());
-    assert_eq!(c, 503, "{v}");
     assert_eq!(b.refuse("agents.start", json!([{ "workspace": SIDECAR, "name": "x", "brief": "y" }])).0, "bad_args");
+}
 
-    assert_eq!(b.refuse("agents.stop", json!([{ "address": SIDECAR }])).0, "verb_unavailable");
+#[test]
+fn stop_reaches_w1s_interrupt() {
+    let b = bench(&ALL);
+    // Asleep: W1 answers interrupted false, the process isn't touched.
+    assert_eq!(b.call("agents.stop", json!([{ "address": SIDECAR }])), json!({ "stopped": false }));
+    assert_eq!(b.refuse("agents.stop", json!([{ "address": "wb-room::local" }])).0, "bad_args");
 }
 
 #[test]

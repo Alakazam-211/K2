@@ -163,6 +163,12 @@ class H(BaseHTTPRequestHandler):
                 "hookError": "validation_failed: bad",
             }]}))
             return
+        if path == "/cli/skin/grants/own":
+            # An agent's list (app.login-grant): the logins on its own Apps.
+            self._send(200, json.dumps({"grants": [{
+                "id": "g9", "username": "ada", "app": "booking", "role": "guest", "enabled": True,
+            }], "scope": "your workspace's Apps"}))
+            return
         ZERO = {"provisioned": 0, "updated": 0, "deprovisioned": 0, "skippedBusy": 0, "skippedHeld": 0,
                 "ignoredLocal": 0, "ignoredOther": 0, "orphansRemoved": 0}
         if path == "/cli/skin/grant-hooks":
@@ -279,8 +285,12 @@ for _i in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 set +e
-list_out="$(run_k2 app grant list 2>/dev/null)"
+# The owner's list: a terminal outside K2 (no passport; the owner token on
+# disk). With a passport the CLI asks for the agent's own Apps' logins.
+list_out="$(env -u K2_HOOK_TOKEN -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK HOME="$HOME" K2_HOST="${K2_HOST}" K2_PORT="${K2_PORT}" "$K2_CLI" app grant list 2>/dev/null)"
 list_rc=$?
+own_out="$(run_k2 app grant list 2>/dev/null)"
+own_rc=$?
 add_out="$(run_k2 app grant add --subject-kind principal --subject p-ada --kind app --target booking --role guest 2>/dev/null)"
 add_rc=$?
 rm_out="$(run_k2 app grant rm --subject-kind workspace --subject ws-1 --kind mailbox --target inbox 2>/dev/null)"
@@ -337,6 +347,8 @@ assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
 assert_contains "list prints subject" "$list_out" "principal p-ada"
 assert_contains "list prints kind" "$list_out" "app booking"
+assert_eq "agent grant list exit 0" "$own_rc" "0"
+assert_contains "agent list is its own Apps' logins" "$own_out" "g9  ada on booking  role guest"
 assert_eq "grant add exit 0" "$add_rc" "0"
 assert_contains "add prints id" "$add_out" "g-new"
 assert_eq "grant rm exit 0" "$rm_rc" "0"

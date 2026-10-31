@@ -3219,6 +3219,31 @@ mod tests {
         std::fs::remove_dir_all(&outside).expect("clean outside");
     }
 
+    /// The route refuses every non-URL target for every caller (the
+    /// handler opens nothing but allow-listed URLs, so an agent's token
+    /// can't make this machine open a path, an app or a UNC share), and
+    /// no `open_url` event goes out for one either.
+    #[test]
+    fn open_external_refuses_paths_and_other_schemes_for_any_caller() {
+        for target in [
+            "/Applications/Calculator.app",
+            "/bin/sh",
+            r"C:\Windows\System32\calc.exe",
+            r"\\host\share\x.exe",
+            "file:///etc/passwd",
+            "ssh://-oProxyCommand=calc/x",
+            "search-ms:query=x",
+            "ms-msdt:/id x",
+            "shell:startup",
+            "javascript:alert(1)",
+        ] {
+            let body = serde_json::json!({ "target": target }).to_string();
+            let resp = handle_open_external(body.as_bytes());
+            assert_eq!(resp.status, "400 Bad Request", "{target}: {}", resp.body);
+            assert!(resp.body.contains("only http, https and mailto"), "{target}: {}", resp.body);
+        }
+    }
+
     /// 0.40.34 viewer-aware open-external: with ≥1 live events-bus
     /// subscriber, an http(s) target is BROADCAST (`open_url`, source
     /// "terminal-link") and the daemon-local open/xdg-open shell-out is

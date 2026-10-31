@@ -1217,17 +1217,52 @@ fn explorer_select_arg(path: &str) -> String {
     format!("/select,\"{}\"", path.replace('/', "\\").trim_end_matches('\\'))
 }
 
-/// Open a URL in the system default browser. Same K2SO Connect caveat
-/// as `open_in_finder` — opens on the daemon's machine.
-pub fn open_external(url: &str) -> Result<String, String> {
-    let clean: String = url
-        .chars()
-        .filter(|c| !c.is_control() && *c != '\0')
-        .collect();
-    let clean = clean.trim().to_string();
+/// The URL schemes K2 hands to the OS opener (`open`, `xdg-open`,
+/// ShellExecute). Everything else is refused: a file path or `file:` URL
+/// (the opener would run an .app, .exe, .command or script), a UNC path
+/// (Windows authenticates to that host), `ssh:` (option injection in
+/// old clients), and protocol handlers known to run code (`search-ms:`,
+/// `ms-msdt:`, `shell:`, `javascript:`).
+pub const OPEN_EXTERNAL_SCHEMES: &[&str] = &["http", "https", "mailto"];
+
+/// Longest URL the opener accepts.
+const OPEN_EXTERNAL_MAX: usize = 4096;
+
+/// `raw` as a URL the OS opener may open, normalized; `Err` names why
+/// not. Control characters are dropped first (as before); then the URL
+/// must parse, use an allow-listed scheme, and (http/https) name a host.
+pub fn open_external_target(raw: &str) -> Result<String, String> {
+    let clean: String = raw.chars().filter(|c| !c.is_control() && *c != '\0').collect();
+    let clean = clean.trim();
     if clean.is_empty() {
         return Err("URL is empty after cleaning".to_string());
     }
+    if clean.len() > OPEN_EXTERNAL_MAX {
+        return Err(format!("URL too long (max {OPEN_EXTERNAL_MAX} characters)"));
+    }
+    if clean.starts_with("\\\\") || clean.starts_with("//") || clean.chars().any(char::is_whitespace) {
+        return Err("only http, https and mailto links can be opened".to_string());
+    }
+    let url = url::Url::parse(clean).map_err(|_| "only http, https and mailto links can be opened".to_string())?;
+    let scheme = url.scheme().to_ascii_lowercase();
+    if !OPEN_EXTERNAL_SCHEMES.contains(&scheme.as_str()) {
+        return Err(format!("only http, https and mailto links can be opened (not {scheme}:)"));
+    }
+    if (scheme == "http" || scheme == "https") && url.host_str().is_none_or(str::is_empty) {
+        return Err("the link has no host".to_string());
+    }
+    if scheme == "mailto" && url.path().is_empty() {
+        return Err("the mailto link has no address".to_string());
+    }
+    Ok(url.as_str().to_string())
+}
+
+/// Open an http(s) or mailto URL in the system default handler, on the
+/// daemon's machine (K2 Connect caveat as `open_in_finder`). Only what
+/// [`open_external_target`] accepts reaches the opener, on every OS and
+/// for every caller: agents and people alike get URLs, never a path.
+pub fn open_external(url: &str) -> Result<String, String> {
+    let clean = open_external_target(url)?;
     #[cfg(target_os = "macos")]
     {
         let output = crate::bg_proc::command("/usr/bin/open")
@@ -1248,6 +1283,21 @@ pub fn open_external(url: &str) -> Result<String, String> {
             .output()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
         return Ok(format!("Opened: {clean}"));
+    }
+    #[cfg(windows)]
+    {
+        // The registered handler for the (validated) URL: no shell, no
+        // arguments, no working folder, so a path can never get here.
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        const SW_SHOWNORMAL: i32 = 1;
+        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let (verb, target) = (wide("open"), wide(&clean));
+        // SAFETY: NUL-terminated wide strings that outlive the call.
+        let r = unsafe {
+            ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+        };
+        // ShellExecute reports success as a value above 32.
+        return if r as isize > 32 { Ok(format!("Opened: {clean}")) } else { Err(format!("open failed (ShellExecute {})", r as isize)) };
     }
     #[allow(unreachable_code)]
     Err("Unsupported platform".to_string())
@@ -1807,6 +1857,61 @@ mod tests {
     }
 
     // ── open_external (input sanitization only) ────────────────────
+
+    /// The allow-list, on every OS: http, https and mailto pass
+    /// (normalized); every other class is refused before any opener runs.
+    #[test]
+    fn open_external_target_allows_web_and_mail_links_only() {
+        assert_eq!(open_external_target(" https://k2.dev/a?b=1 ").unwrap(), "https://k2.dev/a?b=1");
+        assert_eq!(open_external_target("HTTP://Example.COM").unwrap(), "http://example.com/");
+        assert_eq!(open_external_target("mailto:a@b.co").unwrap(), "mailto:a@b.co");
+        for bad in [
+            // paths and launchers
+            "/Applications/Calculator.app",
+            "/usr/bin/env",
+            "./run.sh",
+            "~/x.command",
+            r"C:\Windows\System32\calc.exe",
+            r"C:\x\y.lnk",
+            "C:/x/y.bat",
+            r"script.ps1",
+            "Thing.desktop",
+            // UNC
+            r"\\host\share\x.exe",
+            "//host/share/x",
+            // other schemes
+            "file:///etc/passwd",
+            "file:///C:/x.exe",
+            "FILE://host/share",
+            "ssh://-oProxyCommand=calc/x",
+            "ftp://example.com/x",
+            "search-ms:query=x&crumb=location:\\\\h\\s",
+            "ms-msdt:/id PCWDiagnostic",
+            "shell:startup",
+            "javascript:alert(1)",
+            "vscode://file/x",
+            "data:text/html,x",
+            // malformed
+            "https://",
+            "http://",
+            "mailto:",
+            "https://a b.com",
+            "",
+        ] {
+            assert!(open_external_target(bad).is_err(), "must refuse {bad:?}: {:?}", open_external_target(bad));
+        }
+        assert!(open_external_target(&format!("https://k2.dev/{}", "a".repeat(5000))).is_err());
+    }
+
+    /// No caller, an agent included, gets a file path opened: the opener
+    /// itself refuses it on every OS (nothing is started).
+    #[test]
+    fn open_external_never_opens_a_path() {
+        for path in ["/bin/sh", "/Applications/Calculator.app", r"C:\Windows\notepad.exe", r"\\h\s\x.exe", "file:///bin/sh"] {
+            let err = open_external(path).expect_err("a path is refused");
+            assert!(err.contains("only http, https and mailto"), "{path}: {err}");
+        }
+    }
 
     #[test]
     fn open_external_rejects_url_that_becomes_empty_after_cleaning() {

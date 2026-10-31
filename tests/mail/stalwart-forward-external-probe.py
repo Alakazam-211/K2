@@ -317,7 +317,8 @@ def main():
                f"Message-ID: <{mid}@sender.example>\r\nDate: {time.strftime('%a, %d %b %Y %H:%M:%S +0000', time.gmtime())}\r\n"
                f"{extra_headers}MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n{body}")
         with smtplib.SMTP("127.0.0.1", args.smtp_port, local_hostname="sender.example", timeout=30) as s:
-            s.sendmail(mail_from, [alice_addr], msg.encode())
+            refused = s.sendmail(mail_from, [alice_addr], msg.encode())
+        info(f"inject {mid}", f"refused {refused}")
 
     def kept(mid):
         n, a = svc.call("Email/query", {"accountId": alice, "filter": {"header": ["Message-ID", f"<{mid}@sender.example>"]}}, using=(CORE, MAIL))
@@ -339,6 +340,14 @@ def main():
         check("X2 the forwarded copy carries this box's marker", f"X-K2-Forwarded: {args.host}" in got[0]["data"], "")
         check("X2 the original From is untouched", "From: Sender <sender@sender.example>" in got[0]["data"], "")
     check("X2 the mailbox keeps its copy (keep on)", kept_eventually(mid), "")
+    if not got or kept(mid) <= 0:
+        # Diagnostics: what the mailbox holds, what the queue holds.
+        n, a = svc.call("Email/query", {"accountId": alice}, using=(CORE, MAIL))
+        info("diag alice Email/query", f"{n} {json.dumps(a)[:400]}")
+        n, q = admin.call("x:QueuedMessage/query", {})
+        ids = (q.get("ids") or [])[:10]
+        n, g = admin.call("x:QueuedMessage/get", {"ids": ids, "properties": ["id", "returnPath", "recipients"]}) if ids else (n, q)
+        info("diag queue", f"{n} {json.dumps(g)[:800]}")
 
     for step, mid, frm, hdr, body in [
         ("X3 a bounce (empty MAIL FROM) stays home", f"x3-{tag}", "", "", "Delivery failed.\r\n"),

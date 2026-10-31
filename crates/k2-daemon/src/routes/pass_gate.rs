@@ -361,6 +361,15 @@ mod tests {
                 vec![crate::governed_app_routes::MEMBER_CHANNELS, crate::governed_app_routes::CHANNELS_BULK],
             ),
             ("crate::app_push::guest_routes::PASS_ROUTES", crate::app_push::guest_routes::PASS_ROUTES.to_vec()),
+            // Sew for Apps A6/A9 (0.46.6), their own arms since S8 (0.46.7):
+            // chat.member, chat.whois, chat.createChannel (catalog rows).
+            ("crate::chat_map_routes::MEMBER", vec![crate::chat_map_routes::MEMBER]),
+            ("crate::chat_map_routes::WHOIS", vec![crate::chat_map_routes::WHOIS]),
+            ("crate::chat_channel_routes::ROUTE", vec![crate::chat_channel_routes::ROUTE]),
+            // Live docs (0.46.7): the Live socket and its auth probe; both
+            // refuse an App pass (REFUSING_ARMS).
+            ("crate::docs::live::LIVE_CHECK_PATH", vec![crate::docs::live::LIVE_CHECK_PATH]),
+            ("crate::docs::live::LIVE_WS_PATH", vec![crate::docs::live::LIVE_WS_PATH]),
             ("crate::app_pairing::guest_routes::PASS_ROUTES", crate::app_pairing::guest_routes::PASS_ROUTES.to_vec()),
             // app-user-profile (0.46.5): a person's own profile and sessions.
             ("crate::app_profile_routes::PASS_ROUTES", crate::app_profile_routes::PASS_ROUTES.to_vec()),
@@ -400,12 +409,24 @@ mod tests {
         // A pass on the read-state arm's project route only gets
         // not_a_person (a guest's project read state is App project chat's).
         "/cli/project-group/read",
+        // Live docs (0.46.7): an App pass is refused before the upgrade
+        // (the App surface comes later, K6).
+        "/cli/docs/live",
+        "/cli/docs/live/check",
     ];
 
     /// Prefix arms (a route family matched with `starts_with`) that touch a
     /// pass inside: the family's exact routes are covered by the gate and
     /// [`every_policy_route_is_closed_to_a_pass_unless_it_is_a_catalog_row`].
-    const PREFIX_ARMS: &[&str] = &["/cli/thread/", "/cli/skin", "/cli/db/"];
+    const PREFIX_ARMS: &[&str] = &["/cli/thread/", "/cli/skin", "/cli/db/", "/cli/docs/"];
+
+    /// Family prefixes an arm head names by constant (`p.starts_with(CONST)`),
+    /// which [`prefixes`] can't read: (the expression, its value).
+    fn prefix_consts() -> Vec<(&'static str, &'static str)> {
+        // Live docs (0.46.7): the docs family refuses an App pass
+        // (`docs::caller::app_pass_refused`); none of its routes is a row.
+        vec![("crate::docs::routes::PREFIX", crate::docs::routes::PREFIX)]
+    }
 
     fn indent(l: &str) -> usize {
         l.len() - l.trim_start().len()
@@ -567,7 +588,8 @@ mod tests {
                 if !routes.is_empty() {
                     break;
                 }
-                if let Some(p) = prefixes(&head).into_iter().find(|p| p.starts_with("/cli/")) {
+                let named = prefix_consts().into_iter().filter(|(e, _)| head.contains(e)).map(|(_, v)| v.to_string());
+                if let Some(p) = prefixes(&head).into_iter().chain(named).find(|p| p.starts_with("/cli/")) {
                     family = Some(p);
                     break;
                 }

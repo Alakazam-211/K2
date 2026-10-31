@@ -24,7 +24,7 @@ use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::Hunk;
 use k2_mpc_base::MAX_CLIENT_ID;
 
-use super::{change, report, roster_event};
+use super::{change, report, roster_event, roster_event_for};
 
 const ROOT: &str = TextFilePack::ROOT;
 const DOC: &str = "# Notes\n\none\ntwo\nthree\n";
@@ -277,8 +277,10 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     };
     let ada_file = lens("Ada", &ros, &end, &mut st);
     let app_file = lens("Widget", &ros_app, &end_app, &mut st);
-    same("roster_events.json", ROSTER_EVENTS, &ada_file);
-    same("roster_events_app.json", ROSTER_EVENTS_APP, &app_file);
+    // A roster's members are a set (K2 Cores, ahead of v0.9.8.2): compared
+    // by handle, never by position. Every other byte as is.
+    same("roster_events.json", &members_by_who(ROSTER_EVENTS), &members_by_who(&ada_file));
+    same("roster_events_app.json", &members_by_who(ROSTER_EVENTS_APP), &members_by_who(&app_file));
 
     let got = file(Value::obj(errors.iter().map(|(n, r)| (n.to_string(), r.to_value())).collect::<Vec<_>>()));
     // Errors are keyed on their id, never on their `next`: that is the
@@ -291,6 +293,210 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     };
     assert_eq!(ids(&got), ids(ERRORS), "errors.json: the same error ids, in order");
     same("errors.json (next aside)", &without_next(ERRORS), &without_next(&got));
+}
+
+/// A JSON value with its object keys in file order (serde_json's own map
+/// sorts them), as the kit's [`Value`], so a re-print is the kit's bytes.
+struct InOrder(Value);
+
+impl<'de> serde::Deserialize<'de> for InOrder {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = InOrder;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("JSON without fractions")
+            }
+            fn visit_unit<E>(self) -> Result<InOrder, E> {
+                Ok(InOrder(Value::Null))
+            }
+            fn visit_bool<E>(self, b: bool) -> Result<InOrder, E> {
+                Ok(InOrder(Value::Bool(b)))
+            }
+            fn visit_i64<E>(self, n: i64) -> Result<InOrder, E> {
+                Ok(InOrder(Value::Int(n)))
+            }
+            fn visit_u64<E>(self, n: u64) -> Result<InOrder, E> {
+                Ok(InOrder(Value::UInt(n)))
+            }
+            fn visit_str<E>(self, s: &str) -> Result<InOrder, E> {
+                Ok(InOrder(Value::Str(s.to_owned())))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut a: A) -> Result<InOrder, A::Error> {
+                let mut v = Vec::new();
+                while let Some(InOrder(x)) = a.next_element()? {
+                    v.push(x);
+                }
+                Ok(InOrder(Value::List(v)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut a: A) -> Result<InOrder, A::Error> {
+                let mut v = Vec::new();
+                while let Some((k, InOrder(x))) = a.next_entry::<String, InOrder>()? {
+                    v.push((k, x));
+                }
+                Ok(InOrder(Value::Obj(v)))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// Pretty JSON with every roster's `members` sorted by `who`.
+fn members_by_who(pretty: &str) -> String {
+    fn sort(v: &mut Value) {
+        match v {
+            Value::Obj(pairs) => {
+                for (k, val) in pairs.iter_mut() {
+                    if let (true, Value::List(items)) = (k == "members", &mut *val) {
+                        items.sort_by(|a, b| {
+                            let who = |m: &Value| m.get("who").and_then(Value::as_str).expect("a member's who").to_owned();
+                            who(a).cmp(&who(b))
+                        });
+                    }
+                    sort(val);
+                }
+            }
+            Value::List(items) => items.iter_mut().for_each(sort),
+            _ => {}
+        }
+    }
+    let InOrder(mut v) = serde_json::from_str(pretty).expect("roster file JSON");
+    sort(&mut v);
+    file(v)
+}
+
+/// A pretty file whose `members` came in another order is the same roster.
+#[test]
+fn rosters_compare_by_handle_not_position() {
+    let a = "{\n  \"members\": [\n    {\n      \"who\": \"b\",\n      \"n\": 2\n    },\n    {\n      \"who\": \"a\",\n      \"n\": 1\n    }\n  ]\n}\n";
+    let b = "{\n  \"members\": [\n    {\n      \"who\": \"a\",\n      \"n\": 1\n    },\n    {\n      \"who\": \"b\",\n      \"n\": 2\n    }\n  ]\n}\n";
+    assert_eq!(members_by_who(a), members_by_who(b));
+    assert_eq!(members_by_who(b), b, "a sorted file prints back byte for byte");
+    let c = b.replace("\"n\": 2", "\"n\": 3");
+    assert_ne!(members_by_who(a), members_by_who(&c), "a member's fields still count");
+}
+
+// ── `overwritten` (kit v0.9.7.2): an outside save may have removed text ──
+
+const OW_V0: &str = "intro\nmiddle\nend\n";
+const OW_LINE: &str = "ada's line\n";
+
+/// A file-backed doc: Ada types a line through the kit, it reaches the file,
+/// then an editor holding the old text saves it plus a line of its own.
+/// Returns Ada's roster events after the save, and the session for a late
+/// subscription.
+fn stale_save_over_ada() -> (PathBuf, SessionManager, Arc<Session>, ConnId, Vec<RosterEvent>) {
+    let dir = std::env::temp_dir().join(format!("k2-live-wire-ow-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(dir.join("ws")).expect("dir");
+    let file_path = dir.join("ws/notes.md");
+    std::fs::write(&file_path, OW_V0).expect("file");
+    let host = Arc::new(TestHost { now: AtomicU64::new(1_700_000_000_000), rights: Mutex::new(HashMap::new()) });
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("store"));
+    let mgr = SessionManager::new(store, host.clone(), Config::default());
+    let key = DocKey { space: "ws".into(), path: "notes.md".into() };
+    let s = mgr.open_file(Arc::new(TextFilePack::new("markdown", 4 << 20)), &key, &file_path, &dir.join("ws")).expect("open");
+    let ada = s.join(Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held).expect("join").conn;
+    let roster = s.subscribe_roster(ada).expect("roster");
+    let argv: Vec<String> = vec!["insert".into(), "--line".into(), "2".into()];
+    s.run_tool(ada, ROOT, &argv, OW_LINE.as_bytes()).expect("ada's line");
+    s.flush(ada).expect("written back");
+    host.now.fetch_add(10_000, Ordering::SeqCst);
+    std::fs::write(&file_path, format!("{OW_V0}edited in the editor\n")).expect("stale save");
+    s.file_changed().expect("taken in");
+    host.now.fetch_add(1_000, Ordering::SeqCst);
+    s.flush_roster().expect("roster flush");
+    let evs = drain(&roster);
+    (dir, mgr, s, ada, evs)
+}
+
+/// The live `overwritten` event: the kit's `Overwrite` field for field, its
+/// first place and `also` as `cells`, and `message` its Display text.
+#[test]
+fn overwritten_events_carry_the_kits_overwrite() {
+    let (dir, _mgr, s, ada, evs) = stale_save_over_ada();
+    let (to, o) = evs
+        .iter()
+        .find_map(|e| match e {
+            RosterEvent::Overwritten { to, overwrite, .. } => Some((to.to_string(), overwrite.clone())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Ada was told: {evs:?}"));
+    assert_eq!(o.yours, OW_LINE, "the scenario removed Ada's own line");
+    assert!(!o.is_rollup());
+    let ev = evs.iter().find(|e| matches!(e, RosterEvent::Overwritten { .. })).expect("the event");
+    let got = roster_event(ev).expect("encoded").to_json();
+    let opt = |v: Option<u64>| v.map_or(Value::Null, Value::from);
+    let mut cells = vec![Value::obj([
+        ("region", Value::from(o.region.as_str())),
+        ("col", o.col.map_or(Value::Null, Value::from)),
+        ("yours", Value::from(o.yours.as_str())),
+        ("file", Value::from(o.file.as_str())),
+        ("cut", Value::from(o.cut)),
+    ])];
+    for c in &o.also {
+        cells.push(Value::obj([
+            ("region", Value::from(c.region.as_str())),
+            ("col", c.col.map_or(Value::Null, Value::from)),
+            ("yours", Value::from(c.yours.as_str())),
+            ("file", Value::from(c.file.as_str())),
+            ("cut", Value::from(c.cut)),
+        ]));
+    }
+    let want = Value::obj([
+        ("kind", Value::from("overwritten")),
+        ("to", Value::from(to.as_str())),
+        ("change", Value::from(o.change)),
+        ("version", opt(o.version)),
+        ("restore_from", opt(o.restore_from)),
+        ("source", Value::from(o.source)),
+        ("rule", Value::from(o.rule)),
+        ("row", o.row.as_deref().map_or(Value::Null, Value::from)),
+        ("line", o.line.map_or(Value::Null, Value::from)),
+        ("cells", Value::List(cells)),
+        ("more", Value::from(o.more)),
+        ("not_shown", Value::from(o.not_shown)),
+        ("withheld", Value::from(o.withheld)),
+        ("no_history", Value::from(o.no_history)),
+        ("message", Value::from(o.to_string())),
+    ])
+    .to_json();
+    assert_eq!(got, want);
+    let message = o.to_string();
+    assert!(message.starts_with("An outside save may have removed your text"), "{message}");
+    assert!(message.contains("ada's line"), "the message holds Ada's text: {message}");
+    drop((s, ada));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A snapshot's waiting notes: the kit's bare `Overwrite` list, each encoded
+/// as the live event is (with `kind` and `to`, the subscriber), so a client
+/// handles both the same way; a snapshot without notes has no
+/// `overwritten` key (the kit's golden bytes).
+#[test]
+fn snapshot_entries_take_the_live_events_shape() {
+    let (dir, _mgr, s, ada, evs) = stale_save_over_ada();
+    let live = evs
+        .iter()
+        .find(|e| matches!(e, RosterEvent::Overwritten { .. }))
+        .map(|e| roster_event(e).expect("encoded").to_json())
+        .unwrap_or_else(|| panic!("Ada was told: {evs:?}"));
+    // A push doesn't consume the note: a late subscription's snapshot has it.
+    let late = drain(&s.subscribe_roster(ada).expect("late roster"));
+    let snap = roster_event_for(&late[0], Value::from("ada")).expect("snapshot");
+    assert_eq!(snap.get("kind").and_then(Value::as_str), Some("snapshot"));
+    match snap.get("overwritten") {
+        Some(Value::List(entries)) => {
+            assert_eq!(entries.len(), 1, "{}", snap.to_json());
+            assert_eq!(entries[0].to_json(), live, "a snapshot entry is the live event");
+        }
+        other => panic!("no overwritten list: {other:?} in {}", snap.to_json()),
+    }
+    // Someone else's snapshot holds none, and no key at all.
+    let bob = s.join(Participant::new("bob", "Bob", "#16a34a", ParticipantKind::Person, "tab"), Stay::Held).expect("bob").conn;
+    let bobs = drain(&s.subscribe_roster(bob).expect("bob's roster"));
+    let snap = roster_event_for(&bobs[0], Value::from("bob")).expect("snapshot");
+    assert!(snap.get("overwritten").is_none(), "{}", snap.to_json());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Pretty JSON without its `"next": …` lines (each is one line: JSON strings

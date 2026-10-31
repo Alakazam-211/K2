@@ -4,7 +4,7 @@ exit: 0
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew),
-powered by Sew; this K2 pins Sew 0.5.0. Your App gets ONE Space, bound to
+powered by Sew; this K2 pins Sew 0.6.0. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
 encrypted. Hearth (Sew's own client) is optional: nothing here needs it;

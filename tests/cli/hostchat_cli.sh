@@ -73,7 +73,7 @@ assert_contains "help: on-behalf" "$out" "on-behalf approve <act_…|msg_…>"
 assert_contains "help: restart" "$out" "k2 hostchat restart [--json]"
 assert_contains "help: reconfigure" "$out" "k2 hostchat reconfigure [--json]"
 assert_contains "help: agents alias" "$out" "alias of k2 chat access"
-assert_contains "help: home client is the owner's" "$out" "never an admin or an agent, Manage Sew or not"
+assert_contains "help: home client is the owner's" "$out" "never an admin or an agent, even with Manage Chat / Voice Hosting"
 # Rosson 2026-10-30: the recovery key lives in the vault; nobody copies it.
 assert_contains "help: recovery key in the vault" "$out" "K2 keeps it in the K2 vault as sew-recovery-key"
 assert_contains "help: no copy needed" "$out" "you don't need to copy it"

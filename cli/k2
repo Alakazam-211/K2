@@ -64999,9 +64999,9 @@ Home client (each App session sees only its own App's Spaces once Sew has app_sc
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
   k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth).
                                                 The owner only (owner token, Owner login or a K2 shell
-                                                tab); never an admin or an agent, Manage Sew or not
+                                                tab); never an admin or an agent, even with Manage Chat / Voice Hosting
   k2 hostchat home app <app> --hidden on|off    "App-only": its Spaces never show in the home client
-                                                (on: Manage Sew; off: the owner or an admin, never an agent)
+                                                (on: Manage Chat / Voice Hosting; off: the owner or an admin, never an agent)
           The human output says "app-scoped sessions yes|no", "app origin yes|no" (Sew's flags
           app_scoped_sessions, app_origin): k2 study app-chat.
 Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's published keys):

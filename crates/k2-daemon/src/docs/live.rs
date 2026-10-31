@@ -201,6 +201,16 @@ struct Handle {
     dead: Arc<AtomicBool>,
 }
 
+/// What a socket that found its core off heard from the flip.
+enum Flip {
+    /// [`close_core`]'s details.
+    Off { by: Option<String>, on_disk: Option<bool> },
+    /// A reconnect or a rename ended it meanwhile: this frame.
+    Other(Closed),
+    /// Nothing within [`FLIP_WAIT`].
+    None,
+}
+
 enum Ctl {
     /// A reconnect from the same tab retired this connection (`prev`).
     Replaced,
@@ -800,9 +810,18 @@ impl Worker {
                 next_gate = Instant::now() + GATE_EVERY;
                 if !core_is_on(self.core) {
                     // The switch went off: the flip's close and its details
-                    // (who, written) follow at once; without them (a flip
-                    // that closed nothing here), this socket writes back.
-                    return Stop::Close(self.core_off_from_flip());
+                    // (who, written) follow at once. Without them, and with
+                    // the switch on again (a blip: nothing closed this doc,
+                    // and the session is still live), the socket stays;
+                    // still off, it writes back itself and ends.
+                    match self.wait_for_flip() {
+                        Flip::Off { by, on_disk } => return Stop::Close(self.core_off(by, on_disk)),
+                        Flip::Other(c) => return Stop::Close(c),
+                        Flip::None if core_is_on(self.core) && self.session.touch(self.conn).is_ok() => {
+                            log_debug!("[docs/live] the {} core was off for a moment and nothing closed {}; the socket stays", self.core, host::key_label(&self.key));
+                        }
+                        Flip::None => return Stop::Close(self.core_off(None, None)),
+                    }
                 }
             }
             match self.inbox.recv_timeout(POLL) {
@@ -970,14 +989,25 @@ impl Worker {
     /// close wrote the doc back) come right after its close, so wait up to
     /// [`FLIP_WAIT`] for them; without them the socket writes back itself.
     fn core_off_from_flip(&self) -> Closed {
+        match self.wait_for_flip() {
+            Flip::Off { by, on_disk } => self.core_off(by, on_disk),
+            Flip::Other(c) => c,
+            Flip::None => self.core_off(None, None),
+        }
+    }
+
+    /// Up to [`FLIP_WAIT`] for the flip's [`close_core`]. A reconnect or a
+    /// rename meanwhile ends the socket its own way.
+    fn wait_for_flip(&self) -> Flip {
         let deadline = Instant::now() + FLIP_WAIT;
-        loop {
-            match self.ctl.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(Ctl::CoreOff { by, on_disk }) => return self.core_off(by, on_disk),
-                // A reconnect or a rename meanwhile: the core-off frame stands.
-                Ok(_) => {}
-                Err(_) => return self.core_off(None, None),
-            }
+        match self.ctl.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Ctl::CoreOff { by, on_disk }) => Flip::Off { by, on_disk },
+            Ok(Ctl::Replaced) => Flip::Other(Closed::new(CloseReason::Left)),
+            Ok(Ctl::Moved { path }) => Flip::Other(Closed {
+                path: Some(path.clone()),
+                ..Closed::k2(CloseReason::Moved, "moved", format!("the file was renamed to {path}; open it there"))
+            }),
+            Err(_) => Flip::None,
         }
     }
 

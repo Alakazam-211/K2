@@ -700,7 +700,18 @@ async fn the_live_socket_end_to_end() {
     assert_eq!(c["code"], "core_off", "{c}");
     assert_eq!(c["core"], "markdown", "{c}");
     assert_eq!(frame.map(|f| u16::from(f.code)), Some(1000), "refused before any join");
+    // Held off past one gate check (1 s), so A and B both see it; then on
+    // again before the flip's wait ends, with nothing closed: a blip, and
+    // both sockets stay live (they'd end only on a close or a switch still
+    // off after the wait).
+    tokio::time::sleep(Duration::from_millis(1_300)).await;
     MARKDOWN_ON.store(true, Ordering::SeqCst);
+    let (vb, _) = daemon_text(port, &doc);
+    for (sock, who, op) in [(&mut a, "A", 70), (&mut b, "B", 71)] {
+        sock.send(json!({"type":"since","op":op,"version":vb})).await;
+        let (r, _) = sock.until(&format!("{who} still live after the blip"), |f| f["op"] == op).await;
+        assert_eq!(ty(&r), "events", "{who}: {r}");
+    }
 
     // An outside save from a stale buffer removes A's typed line (kit
     // v0.9.7.2): the merge takes it, and A, the line's author, is told on

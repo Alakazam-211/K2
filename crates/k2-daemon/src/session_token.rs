@@ -518,6 +518,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.6: the read-only Sieve audit lists every mailbox's scripts
         // (owner/admin only).
         "/cli/mail/sieve-audit",
+        // 0.46.7: a mailbox's own PERSON's forward routes (owner token or a
+        // Connect login); agents use `/cli/mail/forward` with mail-manage.
+        "/cli/mail/self/",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/oauth-config",
@@ -2394,6 +2397,9 @@ mod tests {
             "/cli/mail/dav",
             "/cli/mail/profile",
             "/cli/mail/sieve-audit",
+            // 0.46.7: a person's own forward routes.
+            "/cli/mail/self/forward",
+            "/cli/mail/self/forward/unset",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/oauth-config",

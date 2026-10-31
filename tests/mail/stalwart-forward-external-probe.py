@@ -146,6 +146,7 @@ class Sink:
 
     def __init__(self):
         self.got = []
+        self.conns = 0
         self.lock = threading.Lock()
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -160,6 +161,8 @@ class Sink:
                 c, _ = self.srv.accept()
             except OSError:
                 return
+            with self.lock:
+                self.conns += 1
             threading.Thread(target=self._one, args=(c,), daemon=True).start()
 
     def _one(self, c):
@@ -301,6 +304,13 @@ def main():
     n, a = admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
     info("sandbox: reload", f"{n} {json.dumps(a)[:120]}")
 
+    def cleanup():
+        admin.call("x:MtaOutboundStrategy/set", {"update": {"singleton": {"route": old_route}}})
+        for r in routes:
+            admin.call("x:MtaRoute/set", {"destroy": [r]})
+        for aid in made:
+            admin.call("x:Account/set", {"destroy": [aid]})
+
     def golden(name, dest, host):
         src = open(os.path.join(GOLDENS, name)).read()
         return src.replace(GOLDEN_HOST, host).replace(GOLDEN_DEST, dest).replace("sales@brand.test", alice_addr)
@@ -384,13 +394,24 @@ def main():
     mid = f"x0-{tag}"
     inject(mid, "sender@sender.example", to=bob_addr)
     got = wait_for(lambda: sink.with_id(mid))
-    check("X0 control: an unguarded redirect reaches the loopback sink", len(got) == 1,
-          f"{len(got)} at the sink; bob kept {kept(mid, bob)}; headers {json.dumps(stored_headers(mid, bob))[:300]}")
-    if not got:
+    if len(got) != 1:
+        # The sandbox can't reach its own "outside": nothing below would say
+        # anything about forwarding. Record why and stop (exit 2).
+        info("X0 control: an unguarded redirect did NOT reach the loopback sink",
+             f"{len(got)} at the sink; sink connections {sink.conns}; bob kept {kept(mid, bob)}; headers {json.dumps(stored_headers(mid, bob))[:300]}")
         n, q = admin.call("x:QueuedMessage/query", {})
         ids = (q.get("ids") or [])[:10]
         n, g = admin.call("x:QueuedMessage/get", {"ids": ids}) if ids else (n, q)
         info("diag queue after X0", f"{n} {json.dumps(g)[:1200]}")
+        n, g = admin.call("x:MtaOutboundStrategy/get", {"ids": ["singleton"]})
+        info("diag outbound route read back", json.dumps((g.get("list") or [{}])[0].get("route"))[:600])
+        n, g = admin.call("x:MtaRoute/get", {"ids": routes})
+        info("diag sink route object", json.dumps(g)[:600])
+        cleanup()
+        print("== environment: control failed (the loopback sink got nothing from an unguarded redirect); "
+              "no forward checks ran ==", flush=True)
+        sys.exit(2)
+    check("X0 control: an unguarded redirect reaches the loopback sink", True, f"1 at the sink; sink connections {sink.conns}")
     # bob forwards nothing more (alice's vacation reply to bob would reach the sink).
     put_script(bob, "keep;\n")
 
@@ -485,12 +506,7 @@ def main():
     else:
         info("X9 throttles", "tests/mail/forward-throttles.json not present; skipped")
 
-    # ── cleanup ─────────────────────────────────────────────────────
-    admin.call("x:MtaOutboundStrategy/set", {"update": {"singleton": {"route": old_route}}})
-    for r in routes:
-        admin.call("x:MtaRoute/set", {"destroy": [r]})
-    for aid in made:
-        admin.call("x:Account/set", {"destroy": [aid]})
+    cleanup()
     print(f"== outside forwards: {len(FAILED)} failed check(s): {FAILED} ==", flush=True)
     sys.exit(1 if FAILED else 0)
 

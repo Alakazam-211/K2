@@ -45,9 +45,11 @@ def elf(extra):
     return bytes(head) + extra
 files = {}
 ptyd = hashlib.sha256(b"ptyd").hexdigest()
+# The daemon embeds k2-export too (build-linux-bins.sh records its hash).
+export = hashlib.sha256(b"export").hexdigest()
 v = "1.0.0" if tamper == "marker_version" else version
 if kind == "linux-bins":
-    files[f"k2-daemon-linux-{arch}"] = elf(b"daemon " + ptyd.encode())
+    files[f"k2-daemon-linux-{arch}"] = elf(b"daemon " + ptyd.encode() + b" " + export.encode())
     node = b"node K2_NODE_BUILD v=%s proto=3 os=linux arch=%s;" % (v.encode(), arch.encode())
     if tamper == "test_keys":
         node += b" K2_NODE_TEST_KEYS_ENABLED"
@@ -69,7 +71,7 @@ for n, data in files.items():
 info = {"kind": kind, "version": "0.0.1" if tamper == "info_version" else version, "arch": arch,
         "commit": commit, "tree": tree, "files": meta}
 if kind == "linux-bins":
-    info.update(oauth="placeholder", ptyd_sha256=ptyd)
+    info.update(oauth="placeholder", ptyd_sha256=ptyd, export_sha256=export)
 json.dump(info, open(os.path.join(out, "dist", "build-info.json"), "w"))
 PY
 

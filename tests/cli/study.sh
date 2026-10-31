@@ -786,7 +786,7 @@ cr_out="$("$K2" study chat-voice-rooms)"
 assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
 for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \
     "include_archived=true" "{\"perms\":\"991743\"}" "forward only the" "VoiceChannelMembers" \
-    "controller.join(channelId)" "proj-<id>-voice" "There is NO delete" "TEXT channels only" "Sew 0.5.1"; do
+    "controller.join(channelId)" "proj-<id>-voice" "There is NO delete" "TEXT channels only" "Sew 0.6.0, this K2's" "carries 0.5.1's fixes"; do
     assert_contains "chat-voice-rooms: $needle" "$cr_out" "$needle"
 done
 for absent in "chat:structure" "--manager" "--voice"; do

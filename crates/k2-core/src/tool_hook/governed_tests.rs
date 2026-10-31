@@ -371,6 +371,51 @@ fn a_deprovisioned_person_is_held_and_never_reactivated_by_a_sync() {
     );
 }
 
+/// Sew A11: `skipped: quota_exceeded` (the Space is at the App's member
+/// limit) is a hold with its reason. It goes again when the person's list
+/// changes, when someone leaves that Space, or QUOTA_RETRY_SECS after the
+/// hold, never on every sweep.
+#[test]
+fn a_full_space_holds_the_person_and_tries_again_when_room_may_have_freed() {
+    let _env = setup();
+    let (est, off) = ready();
+    plan();
+    let body = r#"{"external_id":"x","member_id":"9","added":[],"removed":[],"unchanged":[],"unknown_channel_ids":[],"skipped":"quota_exceeded","queued":false}"#;
+    assert_eq!(verdict_ok(&serde_json::from_str(body).unwrap()), Verdict::Held(WHY_QUOTA.into()));
+    let hold = || {
+        let r = sync_rows().into_iter().find(|r| r.subject_key.ends_with(&pext(&est))).expect("estella's sync row");
+        hook::record_held(&r.id, 200, body, WHY_QUOTA).unwrap();
+        assert_eq!(ledger(&pext(&est)), (HELD.to_string(), Some(WHY_QUOTA.to_string())));
+    };
+    hold();
+    // Not re-sent by the next sweep while nothing changed.
+    plan();
+    assert!(!sync_rows().iter().any(|r| r.subject_key.ends_with(&pext(&est))), "a quota hold waits");
+    // QUOTA_RETRY_SECS after the hold: tried again.
+    sql(
+        "UPDATE tool_app_space_member_channels SET held_at = held_at - ?1 WHERE external_id = ?2",
+        &[&(QUOTA_RETRY_SECS + 1), &pext(&est)],
+    );
+    plan();
+    assert!(sync_rows().iter().any(|r| r.subject_key.ends_with(&pext(&est))), "tried again after the retry time");
+    // Held again; then someone leaves the Space (oscar loses his login):
+    // tried again in the same sweep.
+    hold();
+    plan();
+    assert!(!sync_rows().iter().any(|r| r.subject_key.ends_with(&pext(&est))), "held again");
+    for r in sync_rows() {
+        hook::record_done(&r.id, 200, r#"{"added":[],"removed":[],"unchanged":[],"unknown_channel_ids":[],"queued":false}"#).unwrap();
+    }
+    sql("DELETE FROM grants WHERE kind = 'app' AND subject_id = ?1", &[&off.id]);
+    plan();
+    assert!(sync_rows().iter().any(|r| r.subject_key.ends_with(&pext(&est))), "someone left: room may have freed");
+    // A list change sends it too.
+    hold();
+    sql("UPDATE grants SET role_id = (SELECT id FROM roles WHERE name = 'office') WHERE kind = 'app' AND subject_id = ?1", &[&est.id]);
+    plan();
+    assert!(sync_rows().iter().any(|r| r.subject_key.ends_with(&pext(&est))), "a new list goes");
+}
+
 #[test]
 fn the_owner_is_skipped_and_a_queued_job_is_read_back_next_sweep() {
     let _env = setup();

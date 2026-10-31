@@ -57,12 +57,20 @@
 //!   `details.external_ids`; the switch makes `app:<app>` the owner and a
 //!   box-user former owner leaves); I4 single `spaces/{id}/members/{ext}/
 //!   channels` and bulk `spaces/{id}/members/channels` (1–500, answered
-//!   per item `{external_id, status?, error?, …}`): the answer is `{added,
-//!   removed, unchanged, level, unknown_channel_ids, skipped}` (+ `queued:
-//!   true` over 1,000 changes); 409 `app_mismatch` / `not_app_governed`;
-//!   422 `box_user_not_allowed`, `level_above_ceiling` (the App's
-//!   `max_level`, default moderator), `agent_level`, `member_not_provisioned`;
-//!   `skipped`: `owner`, `deprovisioned`, `banned`; I6 `channels/bulk`
+//!   per item `{external_id, status, answer}` or `{external_id, status,
+//!   error}`), Sew 0.6.0's exact shapes (`sew-proto` `mgmt/member_channels.rs`):
+//!   the answer is `{external_id, member_id, added, removed, unchanged,
+//!   level?, unknown_channel_ids, skipped?, queued, job_id?}` (`level` absent
+//!   when skipped; `queued` + `job_id` over 1,000 changes); listed ids that
+//!   aren't live private channels of the Space (a public one too) come back
+//!   in `unknown_channel_ids` and the rest applies; checks in Sew's order:
+//!   409 `app_mismatch` / `not_app_governed`; 422 `invalid_state`
+//!   `box_user_not_allowed`, `level_above_ceiling` (the App's `max_level`,
+//!   default moderator), `agent_level`, `member_not_provisioned` (field
+//!   `external_id`), then `skipped: owner`, `skipped: deprovisioned`, 422
+//!   `target_not_eligible` (assistants, guests, service owners), then the
+//!   Space join: `skipped: banned`, `skipped: quota_exceeded` (the App's
+//!   member limit, [`FakeSew::set_member_quota`]); I6 `channels/bulk`
 //!   (`ensure` with `channel_type_mismatch`, `rename`, `archive`,
 //!   `unarchive`); `spaces/create` with `owner: "app:<app_id>"` (§3a; makes
 //!   the service owner member; another App's → 409 `app_mismatch`).
@@ -223,6 +231,8 @@ struct State {
     profile_clears: Vec<String>,
     /// Sew 0.6.0: I4 bulk calls answered.
     bulk_calls: usize,
+    /// Sew 0.6.0 A11: an App's `members_per_space_max` (absent: no limit).
+    member_quota: BTreeMap<String, usize>,
 }
 
 pub struct FakeSew {
@@ -471,6 +481,15 @@ impl FakeSew {
         });
     }
 
+    /// A moderator made a channel public (or private) in Sew by hand: a
+    /// sync that still lists it gets its id back in `unknown_channel_ids`.
+    pub fn set_channel_private(&self, space_id: &str, slug: &str, private: bool) {
+        self.with(|s| {
+            let c = s.spaces.get_mut(space_id).and_then(|sp| sp.channels.get_mut(slug)).expect("channel");
+            c.private = private;
+        });
+    }
+
     /// Sew 0.6.0: `n` private channels made in Sew (by the App) as
     /// `job-<i>`; returns `(slug, id)`.
     pub fn add_channels(&self, space_id: &str, n: usize) -> Vec<(String, String)> {
@@ -500,6 +519,20 @@ impl FakeSew {
     /// Sew 0.6.0: I4 bulk calls answered so far.
     pub fn bulk_calls(&self) -> usize {
         self.with(|s| s.bulk_calls)
+    }
+
+    /// Sew 0.6.0 A11: an App's member limit per Space (`None`: no limit).
+    /// A sync item for someone not yet in a full Space answers
+    /// `skipped: quota_exceeded`.
+    pub fn set_member_quota(&self, app: &str, max: Option<usize>) {
+        self.with(|s| match max {
+            Some(n) => {
+                s.member_quota.insert(app.to_string(), n);
+            }
+            None => {
+                s.member_quota.remove(app);
+            }
+        });
     }
 
     /// A moderator removed `ext` from a Space by hand (K2's ledger still
@@ -1301,45 +1334,65 @@ fn space_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     (200, json!({"space_id": space, "governance": req.governance}).to_string())
 }
 
-/// One I4 item, applied: `Ok(answer)` or `Err((status, code, reason))`.
-fn member_channels_item(s: &mut State, space: &str, app: &str, ext: &str, ids: &[String], level: &str) -> Result<Value, (u16, &'static str, &'static str)> {
+/// One I4 item's refusal: `(status, code, reason, field)`.
+type ItemRefusal = (u16, &'static str, &'static str, &'static str);
+
+/// A `skipped` answer (Sew's `skipped()`: no level, empty lists).
+fn skipped_answer(ext: &str, member_id: u64, why: &str) -> Value {
+    json!({"external_id": ext, "member_id": member_id.to_string(), "added": [], "removed": [], "unchanged": [],
+           "unknown_channel_ids": [], "skipped": why, "queued": false})
+}
+
+/// One I4 item, applied in Sew 0.6.0's order (`member_sync.rs` `item`):
+/// `Ok(answer)` or `Err((status, code, reason, field))`.
+fn member_channels_item(s: &mut State, space: &str, app: &str, ext: &str, ids: &[String], level: &str) -> Result<Value, ItemRefusal> {
     let ceiling = s.app_settings.get(app).and_then(|v| v.get("max_level")).and_then(Value::as_str).unwrap_or("moderator").to_string();
+    let quota = s.member_quota.get(app).copied();
     let member = s.members.get(ext).cloned();
-    let Some(sp) = s.spaces.get_mut(space) else { return Err((404, "not_found", "")) };
-    if sp.app_id.as_deref() != Some(app) {
-        return Err((409, "conflict", "app_mismatch"));
-    }
-    if sp.governance.as_deref() != Some("app") {
-        return Err((409, "conflict", "not_app_governed"));
+    let Some(sp) = s.spaces.get_mut(space) else { return Err((404, "not_found", "space_not_found", "space_id")) };
+    if sp.app_id.as_deref() != Some(app) || sp.governance.as_deref() != Some("app") {
+        return Err((409, "conflict", if sp.app_id.as_deref() != Some(app) { "app_mismatch" } else { "not_app_governed" }, "space_id"));
     }
     if is_box_user(ext) {
-        return Err((422, "invalid_state", "box_user_not_allowed"));
-    }
-    if sp.owner.as_deref() == Some(ext) {
-        return Ok(json!({"added": [], "removed": [], "unchanged": [], "level": level, "unknown_channel_ids": [], "skipped": "owner"}));
+        return Err((422, "invalid_state", "box_user_not_allowed", "external_id"));
     }
     let rank = |l: &str| sew_wire::level_rank(l).unwrap_or(9);
     if rank(level) > rank(&ceiling) {
-        return Err((422, "invalid_state", "level_above_ceiling"));
+        return Err((422, "invalid_state", "level_above_ceiling", "level"));
     }
     if ext.starts_with("k2:workspace:") && level != "member" {
-        return Err((422, "invalid_state", "agent_level"));
+        return Err((422, "invalid_state", "agent_level", "level"));
     }
-    let Some(m) = member else { return Err((422, "invalid_state", "member_not_provisioned")) };
+    let Some(m) = member else { return Err((422, "invalid_state", "member_not_provisioned", "external_id")) };
+    if sp.owner.as_deref() == Some(ext) {
+        return Ok(skipped_answer(ext, m.member_id, "owner"));
+    }
     if m.deactivated {
-        return Ok(json!({"added": [], "removed": [], "unchanged": [], "level": level, "unknown_channel_ids": [], "skipped": "deprovisioned"}));
+        return Ok(skipped_answer(ext, m.member_id, "deprovisioned"));
     }
-    if sp.banned.contains(ext) {
-        return Ok(json!({"added": [], "removed": [], "unchanged": [], "level": level, "unknown_channel_ids": [], "skipped": "banned"}));
+    if m.guest || m.agent_kind == Some(sew_wire::AgentKind::Assistant) || ext.starts_with("app:") {
+        return Err((422, "invalid_state", "target_not_eligible", "external_id"));
     }
-    let known: BTreeMap<String, String> = sp.channels.iter().map(|(slug, c)| (c.id.to_string(), slug.clone())).collect();
-    let unknown: Vec<String> = ids.iter().filter(|i| !known.contains_key(*i)).cloned().collect();
-    if !unknown.is_empty() {
-        return Ok(json!({"added": [], "removed": [], "unchanged": [], "level": level, "unknown_channel_ids": unknown, "skipped": null}));
+    // The Space join (if needed): the ban skip, then the App's member quota.
+    if !sp.members.contains(ext) {
+        if sp.banned.contains(ext) {
+            return Ok(skipped_answer(ext, m.member_id, "banned"));
+        }
+        if quota.is_some_and(|q| sp.members.len() >= q) {
+            return Ok(skipped_answer(ext, m.member_id, "quota_exceeded"));
+        }
+    } else if sp.banned.contains(ext) {
+        return Ok(skipped_answer(ext, m.member_id, "banned"));
     }
-    let want: std::collections::BTreeSet<String> = ids.iter().cloned().collect();
+    // Listed ids that aren't live private channels of this Space (unknown,
+    // archived, public): reported; the rest of the list applies.
+    let private: BTreeMap<String, String> =
+        sp.channels.iter().filter(|(_, c)| c.private && !c.archived).map(|(slug, c)| (c.id.to_string(), slug.clone())).collect();
+    let mut unknown: Vec<String> = ids.iter().filter(|i| !private.contains_key(*i)).cloned().collect();
+    unknown.sort();
+    let want: std::collections::BTreeSet<String> = ids.iter().filter(|i| private.contains_key(*i)).cloned().collect();
     let (mut added, mut removed, mut unchanged) = (vec![], vec![], vec![]);
-    for c in sp.channels.values_mut().filter(|c| c.private) {
+    for c in sp.channels.values_mut().filter(|c| c.private && !c.archived) {
         let id = c.id.to_string();
         match (want.contains(&id), c.members.contains(ext)) {
             (true, true) => unchanged.push(id),
@@ -1357,10 +1410,16 @@ fn member_channels_item(s: &mut State, space: &str, app: &str, ext: &str, ids: &
     }
     sp.members.insert(ext.to_string());
     sp.levels.insert(ext.to_string(), level.to_string());
-    let queued = added.len() + removed.len() > sew_wire::MEMBER_CHANNELS_JOB_THRESHOLD;
-    let mut a = json!({"added": added, "removed": removed, "unchanged": unchanged, "level": level, "unknown_channel_ids": [], "skipped": null});
-    if queued {
+    let mut a = json!({"external_id": ext, "member_id": m.member_id.to_string(), "added": added, "removed": removed,
+                       "unchanged": unchanged, "level": level, "unknown_channel_ids": unknown, "queued": false});
+    if a["added"].as_array().map_or(0, Vec::len) + a["removed"].as_array().map_or(0, Vec::len) > sew_wire::MEMBER_CHANNELS_JOB_THRESHOLD {
+        // A job: the lists are empty and `job_id` names it (the change is
+        // applied here at once; Sew runs it in the background).
+        a["added"] = json!([]);
+        a["removed"] = json!([]);
+        a["unchanged"] = json!([]);
         a["queued"] = json!(true);
+        a["job_id"] = json!(format!("{}", 900_000 + s.bulk_calls as u64));
     }
     Ok(a)
 }
@@ -1388,7 +1447,7 @@ fn member_channels_one(s: &mut State, path: &str, body: &str) -> (u16, String) {
     }
     match member_channels_item(s, space, &req.app_id, &ext, &req.channel_ids, &req.level) {
         Ok(v) => (200, v.to_string()),
-        Err((st, code, reason)) => err(st, code, "refused", json!({"reason": reason})),
+        Err((st, code, reason, field)) => err(st, code, "refused", json!({"reason": reason, "field": field})),
     }
 }
 
@@ -1413,11 +1472,9 @@ fn member_channels_bulk(s: &mut State, path: &str, body: &str) -> (u16, String) 
     for it in &req.items {
         let ext = it.external_id.to_string();
         match member_channels_item(s, &space, &req.app_id, &ext, &it.channel_ids, &it.level) {
-            Ok(mut v) => {
-                v["external_id"] = json!(ext);
-                items.push(v);
-            }
-            Err((st, code, reason)) => items.push(json!({"external_id": ext, "status": st, "error": {"code": code, "hint": "refused", "details": {"reason": reason}}})),
+            Ok(v) => items.push(json!({"external_id": ext, "status": 200, "answer": v})),
+            Err((st, code, reason, field)) => items.push(json!({"external_id": ext, "status": st,
+                "error": {"code": code, "hint": "refused", "details": {"reason": reason, "field": field}}})),
         }
     }
     (200, json!({"items": items}).to_string())

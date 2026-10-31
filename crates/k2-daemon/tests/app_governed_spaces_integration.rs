@@ -346,6 +346,78 @@ async fn a_large_change_is_queued_by_sew_and_read_back_next_sweep() {
     env.sew.assert_clean();
 }
 
+/// Sew 0.6.0's exact I4 shapes, end to end (bulk items carry
+/// `{external_id, status, answer}`): a Space at the App's member limit
+/// answers `skipped: quota_exceeded`, which K2 holds with that reason and
+/// doesn't re-send on a sweep; once the limit is raised, the person's next
+/// list goes and they join. A channel made public in Sew comes back in
+/// `unknown_channel_ids` while the rest of the list (and the level)
+/// applies; K2 holds the person and says which channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_full_space_holds_people_and_a_public_channel_is_unknown_while_the_rest_applies() {
+    let env = setup(&[governed_flag()]).await;
+    let (est, off) = bound_space(&env).await;
+    hook::set_space_governance(APP, SPACE, "app", "owner-token").unwrap();
+    settle(&env).await;
+    let person = |ext: &str| {
+        let v = hook::governed_view(APP).expect("view");
+        v.spaces[0].people.iter().find(|p| p.external_id == ext).map(|p| (p.state.clone(), p.why.clone())).unwrap_or_else(|| panic!("{ext} in the view"))
+    };
+
+    // Oscar left the Space in Sew, and it is full for this App now. Both
+    // people's lists change in one sweep: one bulk call; estella (still in)
+    // syncs, oscar is skipped.
+    env.sew.remove_from_space(SPACE, &pext(&off));
+    let full = env.sew.space(SPACE).expect("space").members.len();
+    env.sew.set_member_quota(APP, Some(full));
+    let lists = vec![
+        governed::AppList { principal_id: est.id.clone(), space_id: SPACE.into(), slugs: vec!["office-only".into()], level: None },
+        governed::AppList { principal_id: off.id.clone(), space_id: SPACE.into(), slugs: vec![], level: Some("member".into()) },
+    ];
+    assert_eq!(hook::set_app_member_lists(APP, &lists, "app:test").unwrap(), 2);
+    let bulk_before = env.sew.bulk_calls();
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert_eq!(env.sew.bulk_calls(), bulk_before + 1, "both in one bulk call: {}", env.sew.log());
+    assert_eq!(person(&pext(&off)), (governed::HELD.to_string(), Some(governed::WHY_QUOTA.to_string())));
+    assert_eq!(person(&pext(&est)).0, governed::SYNCED, "the bulk item's nested answer is read");
+    assert_eq!(
+        env.sew.member_channels(SPACE, &pext(&est)).0,
+        BTreeSet::from([channel_id(&env, "plans-desk"), channel_id(&env, "office-only")])
+    );
+    assert!(!env.sew.space(SPACE).unwrap().members.contains(&pext(&off)), "skipped: not joined");
+    // A sweep with nothing changed doesn't send oscar again.
+    let syncs = sync_posts(&env);
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert_eq!(sync_posts(&env), syncs, "a quota hold waits");
+    // The limit goes; oscar's list changes: he joins.
+    env.sew.set_member_quota(APP, None);
+    let lists = vec![governed::AppList { principal_id: off.id.clone(), space_id: SPACE.into(), slugs: vec![], level: Some("moderator".into()) }];
+    assert_eq!(hook::set_app_member_lists(APP, &lists, "app:test").unwrap(), 1);
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert_eq!(person(&pext(&off)).0, governed::SYNCED, "{}", env.sew.log());
+    assert!(env.sew.space(SPACE).unwrap().members.contains(&pext(&off)));
+
+    // A moderator makes office-only public in Sew. Estella's next list
+    // still names it (K2's manifest says private): Sew reports that id as
+    // unknown and applies the rest, her new level included.
+    env.sew.set_channel_private(SPACE, "office-only", false);
+    let office_only = channel_id(&env, "office-only");
+    let lists = vec![governed::AppList { principal_id: est.id.clone(), space_id: SPACE.into(), slugs: vec!["office-only".into()], level: Some("moderator".into()) }];
+    assert_eq!(hook::set_app_member_lists(APP, &lists, "app:test").unwrap(), 1);
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    let (state, why) = person(&pext(&est));
+    assert_eq!(state, governed::HELD);
+    assert_eq!(why.as_deref(), Some(format!("unknown channels: {office_only}").as_str()));
+    let (ids, level) = env.sew.member_channels(SPACE, &pext(&est));
+    assert!(ids.contains(&channel_id(&env, "plans-desk")), "the rest of the list applied: {ids:?}");
+    assert_eq!(level.as_deref(), Some("moderator"), "the level applied too");
+    env.sew.assert_clean();
+}
+
 /// Without Sew's flag nothing is switched, synced or ensured.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_the_flag_nothing_is_sent() {

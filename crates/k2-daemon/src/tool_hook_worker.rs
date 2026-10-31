@@ -62,7 +62,7 @@
 //! |---|---|---|
 //! | `space_settings` (subject `space:<id>`) | `POST /mgmt/v1/spaces/{id}/settings {governance}` | 409 `box_users_present` → K31 removes of exactly the listed box users, the switch goes again after; 409 `no_governing_app` → blocked (bind again) |
 //! | `channels_bulk` (subject `chans:<id>`) | `POST /mgmt/v1/channels/bulk` | per op, slug → id; 409 `not_app_governed` → retry |
-//! | `space_member_channels` (subject `chan:<id>:<ext>`) | one due row: `POST …/members/{ext}/channels`; more in one Space: `POST …/members/channels` (≤ 500, key from the rows' keys) | per item ([`send_sync_group`]): `skipped` / `unknown_channel_ids` → held; `queued` → done (read back next sweep); 422 `member_not_provisioned` → provisioned again, then synced again |
+//! | `space_member_channels` (subject `chan:<id>:<ext>`) | one due row: `POST …/members/{ext}/channels`; more in one Space: `POST …/members/channels` (≤ 500, key from the rows' keys) | per item ([`send_sync_group`]; bulk items are `{external_id, status, answer}` or `{…, error}`): `skipped` (`banned`, `deprovisioned`, `quota_exceeded`) / `unknown_channel_ids` → held; `skipped: owner` → done; `queued` → done (read back next sweep); 422 `member_not_provisioned` → provisioned again, then synced again |
 //! Sew 0.6.0 `home_client` rows (A23, flag `home_client_owner_approval`):
 //! each send carries the install owner's approval, a fresh `k2:owner` chat
 //! pass under its own `Idempotency-Key` ([`home_client_send`]), and only
@@ -546,13 +546,23 @@ async fn send_sync_group(
         for (row, ext, _) in chunk {
             let outcome = match (res.as_ref(), answers.as_ref()) {
                 (Ok(r), Some(a)) if r.is_success() => match a.items.iter().find(|i: &&MemberChannelsBulkItem| i.external_id == *ext) {
-                    Some(item) => {
-                        let item_body = serde_json::to_string(item).unwrap_or_default();
-                        match &item.error {
-                            Some(e) => sync_outcome(cfg, row, item.status.unwrap_or(422), item_body, hook::governed::verdict_err(item.status.unwrap_or(422), &e.code, e.reason(), &format!("{} {}", e.code, e.hint))),
-                            None => sync_outcome(cfg, row, r.status, item_body, verdict_ok(&item.result)),
+                    // Sew 0.6.0: `{external_id, status, answer}` or
+                    // `{external_id, status, error}`. The row's result is
+                    // the person's own answer (what a single sync answers).
+                    Some(item) => match (&item.answer, &item.error) {
+                        (_, Some(e)) => {
+                            let item_body = serde_json::to_string(item).unwrap_or_default();
+                            sync_outcome(cfg, row, item.status, item_body, hook::governed::verdict_err(item.status, &e.code, e.reason(), &format!("{} {}", e.code, e.hint)))
                         }
-                    }
+                        (Some(answer), None) => {
+                            let answer_body = serde_json::to_string(answer).unwrap_or_default();
+                            sync_outcome(cfg, row, item.status, answer_body, verdict_ok(answer))
+                        }
+                        (None, None) => Outcome::Blocked {
+                            status: Some(item.status),
+                            error: format!("Sew's bulk item for {ext} has neither an answer nor an error (status {})", item.status),
+                        },
+                    },
                     None => Outcome::Blocked { status: Some(r.status), error: format!("Sew's bulk answer named no item for {ext}") },
                 },
                 (Ok(r), None) if r.is_success() => Outcome::Blocked { status: Some(r.status), error: "Sew's answer is not a bulk channel sync answer".into() },

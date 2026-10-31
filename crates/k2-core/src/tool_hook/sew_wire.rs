@@ -872,7 +872,8 @@ pub struct MemberChannelsBulkRequest {
     pub items: Vec<MemberChannelsItem>,
 }
 
-/// `skipped` values of an I4 answer.
+/// `skipped` values of an I4 answer (`MgmtMemberChannelsSkip`: exactly one,
+/// and only when the item changed nothing for its person).
 pub mod skipped {
     /// Banned in that Space: bans win; K2 holds the item.
     pub const BANNED: &str = "banned";
@@ -880,28 +881,40 @@ pub mod skipped {
     pub const DEPROVISIONED: &str = "deprovisioned";
     /// The Space owner (the App's service owner): a sync never changes it.
     pub const OWNER: &str = "owner";
+    /// Sew A11: the Space is at its App's `members_per_space_max`, so the
+    /// person could not join. K2 holds the item until room may have freed.
+    pub const QUOTA_EXCEEDED: &str = "quota_exceeded";
 }
 
-/// I4 answer for one person, read leniently:
-/// `{added, removed, unchanged, level, unknown_channel_ids, skipped}`, plus
-/// `queued: true` when the item ran as a Sew job (over
-/// [`MEMBER_CHANNELS_JOB_THRESHOLD`] channel changes).
+/// I4 answer for one person (Sew 0.6.0 `MgmtMemberChannelsResponse`), read
+/// leniently: `{external_id, member_id, added, removed, unchanged, level?,
+/// unknown_channel_ids, skipped?, queued, job_id?}`. `level` is absent when
+/// `skipped`. `unknown_channel_ids` lists ids that are not live private
+/// channels of the Space (a public channel's id too); the rest of the list
+/// applied. `queued: true` (with `job_id`) when the item ran as a Sew job
+/// (over [`MEMBER_CHANNELS_JOB_THRESHOLD`] channel changes).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberChannelsResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<String>,
     #[serde(default)]
     pub added: Value,
     #[serde(default)]
     pub removed: Value,
     #[serde(default)]
     pub unchanged: Value,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
     #[serde(default)]
     pub unknown_channel_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped: Option<String>,
     #[serde(default)]
     pub queued: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
 }
 
 /// An error inside a per-item answer (bulk I4, I6), read leniently.
@@ -922,17 +935,18 @@ impl ItemError {
     }
 }
 
-/// One answered I4 bulk item: the result, or that item's own error (with
-/// its status: 409, 422 …).
+/// One answered I4 bulk item (Sew 0.6.0 `MgmtMemberChannelsItemResult`):
+/// `{external_id, status, answer}` on success (status 200), else
+/// `{external_id, status, error}` with the error body a single sync would
+/// answer (409, 422 …). The answer is nested, never flattened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberChannelsBulkItem {
     pub external_id: ExternalId,
+    pub status: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
+    pub answer: Option<MemberChannelsResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ItemError>,
-    #[serde(flatten)]
-    pub result: MemberChannelsResponse,
 }
 
 /// I4 bulk answer, one entry per item.
@@ -1206,5 +1220,48 @@ mod tests {
             "deactivated":false,"created_at":"2026-10-15T00:00:00Z"}],"has_more":false}"#;
         let page: MgmtPrincipalPage = serde_json::from_str(raw).unwrap();
         assert_eq!(page.items[0].install_role, InstallRole::Unknown);
+    }
+
+    /// Sew 0.6.0's exact I4 bulk answer (`sew-proto` `mgmt/member_channels.rs`,
+    /// as `serde_json` writes `MgmtMemberChannelsBulkResponse`): each item is
+    /// `{external_id, status, answer}` or `{external_id, status, error}`; the
+    /// answer is nested (K2 read it flattened before 0.46.7's S8, so every
+    /// answer read as an empty success).
+    #[test]
+    fn i4_bulk_items_nest_the_answer_or_carry_the_error() {
+        let a = "k2:principal:0f8fad5b-d9cb-469f-a165-70867728950e";
+        let b = "k2:principal:1f8fad5b-d9cb-469f-a165-70867728950e";
+        let c = "k2:principal:2f8fad5b-d9cb-469f-a165-70867728950e";
+        let raw = format!(
+            r#"{{"items":[
+            {{"external_id":"{a}","status":200,"answer":{{"external_id":"{a}","member_id":"41","added":["301"],"removed":[],"unchanged":["302"],"level":"member","unknown_channel_ids":["299"],"queued":false}}}},
+            {{"external_id":"{b}","status":200,"answer":{{"external_id":"{b}","member_id":"42","added":[],"removed":[],"unchanged":[],"unknown_channel_ids":[],"skipped":"quota_exceeded","queued":false}}}},
+            {{"external_id":"{c}","status":422,"error":{{"code":"invalid_state","hint":"no provisioned member has this external id: provision it first","details":{{"reason":"member_not_provisioned","field":"external_id"}}}}}}
+            ]}}"#
+        );
+        let r: MemberChannelsBulkResponse = serde_json::from_str(&raw).expect("Sew's bulk answer");
+        assert_eq!(r.items.len(), 3);
+        let one = r.items[0].answer.as_ref().expect("an answer");
+        assert_eq!((r.items[0].status, r.items[0].error.is_none()), (200, true));
+        assert_eq!((one.member_id.as_deref(), one.level.as_deref()), (Some("41"), Some("member")));
+        assert_eq!(one.unknown_channel_ids, vec!["299".to_string()], "a public or unknown id, the rest applied");
+        assert_eq!(one.added, serde_json::json!(["301"]));
+        let two = r.items[1].answer.as_ref().expect("an answer");
+        assert_eq!((two.skipped.as_deref(), two.level.as_deref()), (Some(skipped::QUOTA_EXCEEDED), None), "skipped: no level");
+        let three = &r.items[2];
+        assert!(three.answer.is_none());
+        let e = three.error.as_ref().expect("the item's own error");
+        assert_eq!((three.status, e.code.as_str(), e.reason()), (422, codes::INVALID_STATE, reasons::MEMBER_NOT_PROVISIONED));
+        assert_eq!(e.details.get("field").and_then(Value::as_str), Some("external_id"));
+        // A queued item: empty lists, job_id names the job.
+        let q: MemberChannelsResponse = serde_json::from_str(&format!(
+            r#"{{"external_id":"{a}","member_id":"41","added":[],"removed":[],"unchanged":[],"level":"member","unknown_channel_ids":[],"queued":true,"job_id":"9001"}}"#
+        ))
+        .expect("a queued answer");
+        assert_eq!((q.queued, q.job_id.as_deref()), (true, Some("9001")));
+        // What K2 stores as a row's result round-trips (skipped fields stay out).
+        let back: MemberChannelsResponse = serde_json::from_str(&serde_json::to_string(two).unwrap()).unwrap();
+        assert_eq!(&back, two);
+        assert!(!serde_json::to_string(two).unwrap().contains("\"level\""));
     }
 }

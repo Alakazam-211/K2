@@ -43,7 +43,8 @@
 //! | `skipped: owner` | `synced` (the owner is never touched) |
 //! | `skipped: banned` | `held` for good: bans win (cleared only by [`clear_banned`]) |
 //! | `skipped: deprovisioned` | `held` until their chat grant changes: never reactivated by a sync |
-//! | `unknown_channel_ids` | `held` (reported); those channels are ensured again, once |
+//! | `skipped: quota_exceeded` | `held` (the Space is at the App's member limit): sent again when their list changes, someone leaves that Space, or [`QUOTA_RETRY_SECS`] after the hold |
+//! | `unknown_channel_ids` (the rest applied) | `held` (reported); those channels are ensured again, once |
 //! | 422 `member_not_provisioned` | provisioned again, then synced again ([`reprovision`]) |
 //! | 409 `not_app_governed` | retried with backoff |
 //! | 422 `box_user_not_allowed` / `level_above_ceiling` / `agent_level` | `held`, logged loudly (a K2 bug) |
@@ -96,6 +97,16 @@ pub const QUEUED: &str = "queued";
 /// Held reasons ([`after_held`]). Banned is sticky.
 pub const WHY_BANNED: &str = "skipped: banned in this Space";
 pub const WHY_DEPROVISIONED: &str = "skipped: deprovisioned in chat (a sync never reactivates anyone)";
+/// Sew A11: the Space is full for this App. Sent again when the person's
+/// list changes, someone leaves that Space (room may have freed), or
+/// [`QUOTA_RETRY_SECS`] after the hold (room freed outside K2, or a leaver's
+/// removal that reached Sew after the retry).
+pub const WHY_QUOTA: &str =
+    "skipped: quota_exceeded (the Space is at this App's member limit in chat: someone must leave it, or the limit be raised, before this person can join)";
+
+/// A quota hold is tried again at most this often while nothing else
+/// changes (the reconcile sweep runs every 10 min).
+pub const QUOTA_RETRY_SECS: i64 = 600;
 
 /// Channel states.
 pub const CH_WANTED: &str = "wanted";
@@ -142,6 +153,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             why         TEXT,
             grant_rev   TEXT,
             updated_at  INTEGER NOT NULL,
+            held_at     INTEGER,
             PRIMARY KEY (space_id, external_id)
          );
          CREATE TABLE IF NOT EXISTS tool_app_member_lists (
@@ -169,7 +181,17 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             queued_at INTEGER
          );",
     )
-    .map_err(|e| format!("skin.db governed spaces schema: {e}"))
+    .map_err(|e| format!("skin.db governed spaces schema: {e}"))?;
+    // S8: a ledger made before `held_at` (a dev box on an S4 build).
+    let has_held_at: bool = conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('tool_app_space_member_channels') WHERE name = 'held_at'", [], |r| r.get::<_, i64>(0))
+        .map_err(|e| format!("skin.db governed spaces schema (held_at): {e}"))?
+        > 0;
+    if !has_held_at {
+        conn.execute_batch("ALTER TABLE tool_app_space_member_channels ADD COLUMN held_at INTEGER")
+            .map_err(|e| format!("skin.db governed spaces schema (held_at): {e}"))?;
+    }
+    Ok(())
 }
 
 fn sha_hex(s: &str) -> String {
@@ -1232,17 +1254,18 @@ struct LedgerRow {
     state: String,
     why: Option<String>,
     grant_rev: Option<String>,
+    held_at: Option<i64>,
 }
 
 fn member_ledger(conn: &Connection, space_id: &str) -> Result<Vec<(String, LedgerRow)>, String> {
     let mut st = conn
-        .prepare("SELECT external_id, body_hash, sent_hash, state, why, grant_rev FROM tool_app_space_member_channels WHERE space_id = ?1")
+        .prepare("SELECT external_id, body_hash, sent_hash, state, why, grant_rev, held_at FROM tool_app_space_member_channels WHERE space_id = ?1")
         .map_err(|e| format!("member channels ledger: {e}"))?;
     let rows = st
         .query_map(params![space_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                LedgerRow { body_hash: r.get(1)?, sent_hash: r.get(2)?, state: r.get(3)?, why: r.get(4)?, grant_rev: r.get(5)? },
+                LedgerRow { body_hash: r.get(1)?, sent_hash: r.get(2)?, state: r.get(3)?, why: r.get(4)?, grant_rev: r.get(5)?, held_at: r.get(6)? },
             ))
         })
         .map_err(|e| format!("member channels ledger: {e}"))?;
@@ -1317,6 +1340,12 @@ pub fn plan_members(conn: &Connection, busy: &HashSet<String>, now: i64) -> Resu
         }
         let mut have: HashMap<String, LedgerRow> = member_ledger(conn, space)?.into_iter().collect();
         let waiting_agents: HashSet<String> = waiting.agents.iter().map(|w| format!("k2:workspace:{w}")).collect();
+        // Someone K2 had in this Space isn't wanted any more (K31 takes them
+        // out): room may have freed, so a quota hold is tried again.
+        let wanted_ext: HashSet<String> = wanted.iter().map(|w| w.ext.to_string()).collect();
+        let someone_leaves = have.iter().any(|(ext, l)| {
+            !wanted_ext.contains(ext) && !waiting_agents.contains(ext) && !(l.state == HELD && l.why.as_deref() == Some(WHY_BANNED))
+        });
         for w in &wanted {
             s.wanted += 1;
             let ext = w.ext.to_string();
@@ -1335,6 +1364,13 @@ pub fn plan_members(conn: &Connection, busy: &HashSet<String>, now: i64) -> Resu
                             s.held_kept += 1;
                         }
                         changed
+                    }
+                    HELD if l.why.as_deref() == Some(WHY_QUOTA) => {
+                        let again = someone_leaves || l.body_hash != hash || l.held_at.is_none_or(|t| now - t >= QUOTA_RETRY_SECS);
+                        if !again {
+                            s.held_kept += 1;
+                        }
+                        again
                     }
                     HELD => {
                         let changed = l.body_hash != hash;
@@ -1361,6 +1397,7 @@ pub fn plan_members(conn: &Connection, busy: &HashSet<String>, now: i64) -> Resu
                     body_hash = excluded.body_hash, grant_rev = excluded.grant_rev,
                     state = COALESCE(?9, tool_app_space_member_channels.state),
                     why = CASE WHEN ?9 IS NULL THEN tool_app_space_member_channels.why ELSE NULL END,
+                    held_at = CASE WHEN ?9 IS NULL THEN tool_app_space_member_channels.held_at ELSE NULL END,
                     updated_at = excluded.updated_at",
                 params![
                     space,
@@ -1430,6 +1467,7 @@ pub fn verdict_ok(resp: &MemberChannelsResponse) -> Verdict {
     match resp.skipped.as_deref() {
         Some(sew_wire::skipped::BANNED) => return Verdict::Held(WHY_BANNED.into()),
         Some(sew_wire::skipped::DEPROVISIONED) => return Verdict::Held(WHY_DEPROVISIONED.into()),
+        Some(sew_wire::skipped::QUOTA_EXCEEDED) => return Verdict::Held(WHY_QUOTA.into()),
         Some(sew_wire::skipped::OWNER) => return Verdict::Synced,
         Some(other) => return Verdict::Held(format!("skipped: {other}")),
         None => {}
@@ -1497,7 +1535,7 @@ pub fn after_held(conn: &Connection, row_id: &str, why: &str, result: &str, now:
         super::kick_reconcile();
     }
     conn.execute(
-        "UPDATE tool_app_space_member_channels SET state = 'held', why = ?3, grant_rev = COALESCE(?4, grant_rev), updated_at = ?5
+        "UPDATE tool_app_space_member_channels SET state = 'held', why = ?3, grant_rev = COALESCE(?4, grant_rev), updated_at = ?5, held_at = ?5
          WHERE space_id = ?1 AND external_id = ?2",
         params![space, ext.to_string(), why, row.grant_rev, now],
     )

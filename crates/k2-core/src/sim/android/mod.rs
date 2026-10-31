@@ -391,15 +391,24 @@ impl SimLane for AndroidLane {
     }
 
     fn probe(&self) -> LaneProbe {
-        let mut p = LaneProbe { lane: LaneKind::Android, usable: false, ready: false, needs: vec![], detail: None, versions: vec![] };
+        let mut p = LaneProbe { lane: LaneKind::Android, usable: false, ready: false, needs: vec![], detail: None, versions: vec![], setup: None };
         if let Err((why, need)) = Self::kvm_check() {
             p.detail = Some(why);
             p.needs.extend(need);
             return p;
         }
         p.usable = true;
-        if !crate::sim::licence::accepted_ids(LaneKind::Android).iter().any(|l| l == sdk::LICENCE_ID) {
-            p.needs.push(LaneNeed::Licence { id: sdk::LICENCE_ID.into(), title: sdk::LICENCE_TITLE.into() });
+        // Every licence the packages still to download use, from Google's
+        // metadata as last downloaded (no network here). Before the first
+        // download there is none to read: the SDK licence, and the card
+        // (which reads the metadata) lists the rest.
+        let needed = match sdk::cached_repo(&self.sdk) {
+            Some(r) => sdk::licences_needed(&self.sdk, &r).unwrap_or_else(|_| vec![sdk::LICENCE_ID.to_string()]),
+            None => vec![sdk::LICENCE_ID.to_string()],
+        };
+        let accepted = crate::sim::licence::accepted_ids(LaneKind::Android);
+        for id in needed.into_iter().filter(|id| !accepted.contains(id)) {
+            p.needs.push(LaneNeed::Licence { title: sdk::licence_title(&id), id });
         }
         let missing = self.sdk.missing();
         if !missing.is_empty() {
@@ -423,13 +432,13 @@ impl SimLane for AndroidLane {
         sdk::licence(&self.sdk, id)
     }
 
+    fn pending_licences(&self) -> Result<Vec<LicenceText>, LaneError> {
+        sdk::pending_licences(&self.sdk, &crate::sim::licence::accepted_ids(LaneKind::Android))
+    }
+
     fn install(&self, licence_accepted: &[String], progress: &(dyn Fn(u64, u64) + Sync)) -> Result<(), LaneError> {
-        if !licence_accepted.iter().any(|l| l == sdk::LICENCE_ID) {
-            return Err(LaneError::NeedsSetup {
-                message: "the server's owner hasn't accepted the Android SDK licence".into(),
-                needs: vec![LaneNeed::Licence { id: sdk::LICENCE_ID.into(), title: sdk::LICENCE_TITLE.into() }],
-            });
-        }
+        // sdk::install checks every package's licence from the metadata
+        // (and names every one missing) before anything downloads.
         std::fs::create_dir_all(&self.sdk.root).map_err(|e| LaneError::tool(format!("mkdir {}: {e}", self.sdk.root.display())))?;
         sdk::install(&self.sdk, licence_accepted, progress)
     }

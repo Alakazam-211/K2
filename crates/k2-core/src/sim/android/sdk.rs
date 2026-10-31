@@ -196,17 +196,81 @@ fn fetch_xml(sdk: &Sdk, base: &str, name: &str) -> Result<String, LaneError> {
     Ok(body)
 }
 
-/// Both repositories, merged.
-pub fn repo(sdk: &Sdk) -> Result<Repo, LaneError> {
-    let mut a = parse_repo(&fetch_xml(sdk, REPO_BASE, REPO_XML)?, REPO_BASE).map_err(|e| LaneError::tool(format!("{REPO_XML}: {e}")))?;
-    let b = parse_repo(&fetch_xml(sdk, SYS_BASE, SYS_XML)?, SYS_BASE).map_err(|e| LaneError::tool(format!("{SYS_XML}: {e}")))?;
+fn merge(mut a: Repo, b: Repo) -> Repo {
     a.packages.extend(b.packages);
     for l in b.licences {
         if !a.licences.iter().any(|(id, _)| *id == l.0) {
             a.licences.push(l);
         }
     }
-    Ok(a)
+    a
+}
+
+/// Both repositories, merged.
+pub fn repo(sdk: &Sdk) -> Result<Repo, LaneError> {
+    let a = parse_repo(&fetch_xml(sdk, REPO_BASE, REPO_XML)?, REPO_BASE).map_err(|e| LaneError::tool(format!("{REPO_XML}: {e}")))?;
+    let b = parse_repo(&fetch_xml(sdk, SYS_BASE, SYS_XML)?, SYS_BASE).map_err(|e| LaneError::tool(format!("{SYS_XML}: {e}")))?;
+    Ok(merge(a, b))
+}
+
+/// The repositories as last downloaded (whatever their age), with no
+/// network: the probe's view. `None` before the first download.
+pub fn cached_repo(sdk: &Sdk) -> Option<Repo> {
+    let read = |name: &str| std::fs::read_to_string(sdk.cache().join(name)).ok();
+    let a = parse_repo(&read(REPO_XML)?, REPO_BASE).ok()?;
+    let b = parse_repo(&read(SYS_XML)?, SYS_BASE).ok()?;
+    Some(merge(a, b))
+}
+
+/// What people read for a licence id from Google's metadata. The ids
+/// always come from the metadata; one K2 has no title for shows as itself.
+pub fn licence_title(id: &str) -> String {
+    match id {
+        LICENCE_ID => LICENCE_TITLE.to_string(),
+        "android-sdk-preview-license" => "Android SDK Preview License Agreement".to_string(),
+        other => format!("Android SDK licence '{other}'"),
+    }
+}
+
+fn licence_url(id: &str) -> Option<String> {
+    (id == LICENCE_ID).then(|| LICENCE_URL.to_string())
+}
+
+/// The packages K2 still has to download (no install marker yet).
+fn todo(sdk: &Sdk, repo: &Repo) -> Result<Vec<(Package, PathBuf)>, LaneError> {
+    Ok(wanted(repo)?.into_iter().filter(|(_, rel)| !sdk.root.join(rel).join(".k2-package.json").is_file()).collect())
+}
+
+/// Every licence id the packages still to download use (each package's
+/// `uses-license` in the repository metadata, for this host's archives and
+/// image ABI), in package order, each once. Installed packages need none.
+pub fn licences_needed(sdk: &Sdk, repo: &Repo) -> Result<Vec<String>, LaneError> {
+    let mut ids: Vec<String> = Vec::new();
+    for (p, _) in todo(sdk, repo)? {
+        if let Some(l) = p.licence {
+            if !ids.contains(&l) {
+                ids.push(l);
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// Every licence the setup still needs that isn't in `accepted`, with its
+/// text from the metadata (one owner action covers them all).
+pub fn pending_licences(sdk: &Sdk, accepted: &[String]) -> Result<Vec<LicenceText>, LaneError> {
+    let r = repo(sdk)?;
+    licences_needed(sdk, &r)?.into_iter().filter(|id| !accepted.contains(id)).map(|id| licence_text(&r, &id)).collect()
+}
+
+fn licence_text(r: &Repo, id: &str) -> Result<LicenceText, LaneError> {
+    let text = r
+        .licences
+        .iter()
+        .find(|(lid, _)| lid == id)
+        .map(|(_, t)| t.trim().to_string())
+        .ok_or_else(|| LaneError::invalid(format!("no licence '{id}' in Google's repository")))?;
+    Ok(LicenceText { id: id.to_string(), title: licence_title(id), sha1: crate::sim::licence::text_sha1(&text), text, url: licence_url(id) })
 }
 
 /// The three packages K2 installs, from the repository.
@@ -227,37 +291,29 @@ pub fn wanted(repo: &Repo) -> Result<Vec<(Package, PathBuf)>, LaneError> {
 
 /// The licence text for the card.
 pub fn licence(sdk: &Sdk, id: &str) -> Result<LicenceText, LaneError> {
-    let r = repo(sdk)?;
-    let text = r
-        .licences
-        .iter()
-        .find(|(lid, _)| lid == id)
-        .map(|(_, t)| t.trim().to_string())
-        .ok_or_else(|| LaneError::invalid(format!("no licence '{id}' in Google's repository")))?;
-    Ok(LicenceText {
-        id: id.to_string(),
-        title: LICENCE_TITLE.to_string(),
-        sha1: crate::sim::licence::text_sha1(&text),
-        text,
-        url: Some(LICENCE_URL.to_string()),
-    })
+    licence_text(&repo(sdk)?, id)
 }
 
 /// Download, verify and extract everything that is missing. `accepted`
-/// are licence ids the box owner accepted; a package under any other
-/// licence is refused.
+/// are licence ids the box owner accepted; while any package still to
+/// download uses another licence, nothing downloads and the error names
+/// every licence missing (never one at a time).
 pub fn install(sdk: &Sdk, accepted: &[String], progress: &(dyn Fn(u64, u64) + Sync)) -> Result<(), LaneError> {
     let r = repo(sdk)?;
-    let todo: Vec<(Package, PathBuf)> = wanted(&r)?.into_iter().filter(|(_, rel)| !sdk.root.join(rel).join(".k2-package.json").is_file()).collect();
-    for (p, _) in &todo {
-        if let Some(l) = &p.licence {
-            if !accepted.contains(l) {
-                return Err(LaneError::NeedsSetup {
-                    message: format!("{} needs the licence '{l}', which the owner hasn't accepted", p.path),
-                    needs: vec![crate::sim::lane::LaneNeed::Licence { id: l.clone(), title: LICENCE_TITLE.into() }],
-                });
-            }
-        }
+    let todo = todo(sdk, &r)?;
+    let missing: Vec<String> = licences_needed(sdk, &r)?.into_iter().filter(|l| !accepted.contains(l)).collect();
+    if !missing.is_empty() {
+        let lines: Vec<String> = missing
+            .iter()
+            .map(|l| {
+                let pkgs: Vec<&str> = todo.iter().filter(|(p, _)| p.licence.as_deref() == Some(l.as_str())).map(|(p, _)| p.path.as_str()).collect();
+                format!("{} {} the licence '{l}'", pkgs.join(", "), if pkgs.len() == 1 { "needs" } else { "need" })
+            })
+            .collect();
+        return Err(LaneError::NeedsSetup {
+            message: format!("{}, which the owner hasn't accepted", lines.join("; ")),
+            needs: missing.iter().map(|l| crate::sim::lane::LaneNeed::Licence { id: l.clone(), title: licence_title(l) }).collect(),
+        });
     }
     let total: u64 = todo.iter().map(|(p, _)| p.size).sum();
     let mut done = 0u64;
@@ -285,11 +341,16 @@ pub fn install(sdk: &Sdk, accepted: &[String], progress: &(dyn Fn(u64, u64) + Sy
             .map_err(|e| LaneError::tool(format!("write marker: {e}")))?;
         progress(done, total);
     }
-    // sdkmanager's own licence files, so the SDK's tools agree it was accepted.
-    if let Ok(t) = licence(sdk, LICENCE_ID) {
-        let dir = sdk.root.join("licenses");
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(LICENCE_ID), format!("\n{}", t.sha1));
+    // sdkmanager's own licence files, so the SDK's tools agree each one the
+    // owner accepted for these packages was accepted.
+    let used: Vec<String> = wanted(&r)?.into_iter().filter_map(|(p, _)| p.licence).collect();
+    let plain = |id: &str| !id.is_empty() && !id.starts_with('.') && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    for id in accepted.iter().filter(|a| used.contains(a) && plain(a)) {
+        if let Ok(t) = licence_text(&r, id) {
+            let dir = sdk.root.join("licenses");
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(dir.join(id), format!("\n{}", t.sha1));
+        }
     }
     Ok(())
 }
@@ -435,6 +496,97 @@ mod tests {
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             assert_eq!(p.sha1, "aaaa", "sha1 is lower-cased");
         }
+    }
+
+    /// A repository pair shaped like Google's: the tools under the SDK
+    /// licence, this host's system image under a second one (the arm64
+    /// image's `android-sdk-arm-dbt-license` on Apple silicon).
+    fn fixture_xml() -> (String, String) {
+        let host = format!("<host-os>{}</host-os><host-arch>{}</host-arch>", host_os(), host_arch());
+        let repo = format!(
+            r#"<?xml version="1.0"?>
+<sdk:sdk-repository xmlns:sdk="http://schemas.android.com/sdk/android/repo/repository2/03">
+  <license id="android-sdk-license" type="text">SDK terms.</license>
+  <remotePackage path="platform-tools"><revision><major>36</major></revision><uses-license ref="android-sdk-license"/><channelRef ref="channel-0"/>
+    <archives><archive><complete><size>1</size><checksum type="sha1">aa</checksum><url>pt.zip</url></complete>{host}</archive></archives>
+  </remotePackage>
+  <remotePackage path="emulator"><revision><major>37</major></revision><uses-license ref="android-sdk-license"/><channelRef ref="channel-0"/>
+    <archives><archive><complete><size>1</size><checksum type="sha1">bb</checksum><url>emu.zip</url></complete>{host}</archive></archives>
+  </remotePackage>
+</sdk:sdk-repository>"#
+        );
+        let sys = format!(
+            r#"<?xml version="1.0"?>
+<sdk:sdk-sys-img xmlns:sdk="http://schemas.android.com/sdk/android/repo/sys-img2/03">
+  <license id="android-sdk-arm-dbt-license" type="text">ARM DBT terms.</license>
+  <remotePackage path="system-images;android-{API};google_apis;{abi}"><revision><major>9</major></revision><uses-license ref="android-sdk-arm-dbt-license"/>
+    <archives><archive><complete><size>1</size><checksum type="sha1">cc</checksum><url>img.zip</url></complete></archive></archives>
+  </remotePackage>
+</sdk:sdk-sys-img>"#,
+            abi = host_abi()
+        );
+        (repo, sys)
+    }
+
+    fn need_ids(needs: &[crate::sim::lane::LaneNeed]) -> Vec<String> {
+        needs.iter().filter_map(|n| if let crate::sim::lane::LaneNeed::Licence { id, .. } = n { Some(id.clone()) } else { None }).collect()
+    }
+
+    /// Every licence the setup needs comes from the metadata, up front: the
+    /// probe's cached view, the card's texts and the install's refusal (which
+    /// names them all and downloads nothing). No network: the cache is fresh.
+    #[test]
+    fn every_licence_the_missing_packages_use_comes_from_the_metadata() {
+        let tmp = std::env::temp_dir().join(format!("k2-sdk-licences-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let sdk = Sdk::new(tmp.join("sdk"));
+        assert!(cached_repo(&sdk).is_none(), "no metadata before the first download");
+        let (repo_xml, sys_xml) = fixture_xml();
+        std::fs::create_dir_all(sdk.cache()).expect("cache dir");
+        std::fs::write(sdk.cache().join(REPO_XML), &repo_xml).expect("repo xml");
+        std::fs::write(sdk.cache().join(SYS_XML), &sys_xml).expect("sys xml");
+
+        let r = cached_repo(&sdk).expect("the cached metadata parses");
+        assert_eq!(licences_needed(&sdk, &r).expect("needed"), vec!["android-sdk-license", "android-sdk-arm-dbt-license"]);
+
+        let p = pending_licences(&sdk, &[]).expect("pending");
+        let got: Vec<(&str, &str, Option<&str>)> = p.iter().map(|t| (t.id.as_str(), t.title.as_str(), t.url.as_deref())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("android-sdk-license", LICENCE_TITLE, Some(LICENCE_URL)),
+                ("android-sdk-arm-dbt-license", "Android SDK licence 'android-sdk-arm-dbt-license'", None)
+            ]
+        );
+        assert_eq!((p[1].text.as_str(), p[1].sha1.clone()), ("ARM DBT terms.", crate::sim::licence::text_sha1("ARM DBT terms.")));
+        let p = pending_licences(&sdk, &["android-sdk-license".to_string()]).expect("pending");
+        assert_eq!(p.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["android-sdk-arm-dbt-license"]);
+
+        let no_progress = |_: u64, _: u64| {};
+        match install(&sdk, &[], &no_progress) {
+            Err(LaneError::NeedsSetup { message, needs }) => {
+                assert_eq!(need_ids(&needs), vec!["android-sdk-license", "android-sdk-arm-dbt-license"], "{message}");
+                assert!(message.contains("platform-tools, emulator need the licence 'android-sdk-license'"), "{message}");
+            }
+            other => panic!("expected NeedsSetup for both licences, got {other:?}"),
+        }
+        match install(&sdk, &["android-sdk-license".to_string()], &no_progress) {
+            Err(LaneError::NeedsSetup { message, needs }) => {
+                assert_eq!(need_ids(&needs), vec!["android-sdk-arm-dbt-license"]);
+                assert_eq!(
+                    message,
+                    format!("system-images;android-{API};google_apis;{} needs the licence 'android-sdk-arm-dbt-license', which the owner hasn't accepted", host_abi())
+                );
+            }
+            other => panic!("expected NeedsSetup for the image's licence, got {other:?}"),
+        }
+        assert!(!sdk.root.join(".k2-cache").join("downloads").exists(), "nothing downloaded");
+
+        // An installed image needs no licence any more.
+        std::fs::create_dir_all(sdk.image_dir()).expect("image dir");
+        std::fs::write(sdk.image_dir().join(".k2-package.json"), "{}").expect("marker");
+        assert_eq!(licences_needed(&sdk, &r).expect("needed"), vec!["android-sdk-license"]);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

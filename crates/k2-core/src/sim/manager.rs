@@ -74,11 +74,14 @@ pub struct SimError {
     /// Exit code the CLI should use (2 held, 3 needs a person).
     pub exit: u8,
     pub needs: Vec<LaneNeed>,
+    /// The lane `needs` belong to (a boot that needs setup), for the
+    /// owner's licence card. Not in the body.
+    pub lane: Option<LaneKind>,
 }
 
 impl SimError {
     pub fn new(status: u16, code: &'static str, message: impl Into<String>) -> SimError {
-        SimError { status, code, message: message.into(), exit: 1, needs: vec![] }
+        SimError { status, code, message: message.into(), exit: 1, needs: vec![], lane: None }
     }
     pub fn exit(mut self, e: u8) -> SimError {
         self.exit = e;
@@ -111,7 +114,7 @@ impl From<LaneError> for SimError {
             LaneError::NeedsSetup { needs, .. } => needs.clone(),
             _ => vec![],
         };
-        SimError { status: e.http_status(), code: e.code(), message: e.message().to_string(), exit, needs }
+        SimError { status: e.http_status(), code: e.code(), message: e.message().to_string(), exit, needs, lane: None }
     }
 }
 
@@ -159,6 +162,9 @@ struct SetupState {
     done: u64,
     total: u64,
     error: Option<String>,
+    /// The licences the last setup failed on (a lane that found one only
+    /// while installing). Folded into the lane's needs until accepted.
+    needs: Vec<LaneNeed>,
 }
 
 pub struct Manager {
@@ -367,6 +373,7 @@ impl Manager {
             limits: limits::current(),
             agents_allowed,
             can_control: false,
+            can_setup: false,
             disk,
         })
     }
@@ -392,7 +399,8 @@ impl Manager {
             }
         }
         let lane = self.pick_lane(req.platform.as_deref())?;
-        let probe = lane.probe();
+        let mut probe = lane.probe();
+        self.fold_setup(&mut probe);
         if !probe.ready {
             let mut e = SimError::new(
                 409,
@@ -405,6 +413,7 @@ impl Manager {
             )
             .exit(3);
             e.needs = probe.needs.clone();
+            e.lane = Some(lane.kind());
             return Err(e);
         }
         // Box limits and disk.
@@ -1016,53 +1025,80 @@ impl Manager {
         Ok(l.licence(id)?)
     }
 
-    /// The box owner's setup (the card, Settings, or the owner token):
-    /// record the accepted licence (bound to its text's sha1), then run the
-    /// lane's first-use install in the background. `by` must already be
-    /// checked to be the owner (owner token or an Owner login); agents
-    /// never reach this (M-A23).
-    pub fn start_setup(&self, lane_kind: LaneKind, accept: Option<(&str, &str)>, by: &str) -> R<()> {
+    /// Every licence the lane's setup still needs that the owner hasn't
+    /// accepted, with its text: what the lane's metadata says the planned
+    /// packages use, plus any licence the last setup failed on. One owner
+    /// action covers them all, before anything downloads.
+    pub fn pending_licences(&self, lane_kind: LaneKind) -> R<Vec<LicenceText>> {
+        let lane = super::lane(lane_kind).ok_or_else(|| SimError::new(404, "sim_unavailable", format!("no {lane_kind} lane here")))?;
+        let mut out = lane.pending_licences()?;
+        let accepted = super::licence::accepted_ids(lane_kind);
+        for id in self.failed_licence_ids(lane_kind) {
+            if !accepted.contains(&id) && !out.iter().any(|t| t.id == id) {
+                out.push(lane.licence(&id)?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn failed_licence_ids(&self, lane_kind: LaneKind) -> Vec<String> {
+        self.setup
+            .lock()
+            .get(&lane_kind)
+            .filter(|st| !st.running)
+            .map(|st| st.needs.iter().filter_map(|n| if let LaneNeed::Licence { id, .. } = n { Some(id.clone()) } else { None }).collect())
+            .unwrap_or_default()
+    }
+
+    /// The box owner's setup (the card, the Mobile tab, or the owner
+    /// token): accept every pending licence at once (each bound to its
+    /// text's sha1; all or nothing), then run the lane's first-use install
+    /// in the background. With nothing pending it is the retry. `by` must
+    /// already be checked to be the owner (owner token or an Owner login);
+    /// agents never reach this (M-A23).
+    pub fn start_setup(&'static self, lane_kind: LaneKind, accept: &[(String, String)], by: &str) -> R<()> {
         let lane = super::lane(lane_kind).ok_or_else(|| SimError::new(404, "sim_unavailable", format!("no {lane_kind} lane here")))?;
         let probe = lane.probe();
         if !probe.usable {
             return Err(SimError::new(503, "sim_unavailable", probe.detail.unwrap_or_else(|| format!("the {lane_kind} lane can't run here"))));
         }
-        for need in &probe.needs {
-            if let LaneNeed::Licence { id, .. } = need {
-                let text = lane.licence(id)?;
-                match accept {
-                    Some((aid, sha)) if aid == id && sha == text.sha1 => {
-                        super::licence::record(super::licence::Accepted {
-                            lane: lane_kind,
-                            id: id.clone(),
-                            sha1: text.sha1.clone(),
-                            by: by.to_string(),
-                            at: now(),
-                        })
-                        .map_err(|e| SimError::new(500, "sim_io", e))?;
-                        let db = crate::db::shared();
-                        let conn = db.lock();
-                        store::audit(&conn, now(), by, None, Some(lane_kind), "licence_accept", json!({ "licence": id, "sha1": text.sha1 }));
-                    }
-                    Some((aid, sha)) if aid == id => {
-                        return Err(SimError::new(
-                            409,
-                            "sim_licence_changed",
-                            format!("the {id} text changed since the card was shown (now {}, card {sha}). Read it again and accept the new text.", text.sha1),
-                        ));
-                    }
-                    _ => {
-                        let mut e = SimError::new(
-                            409,
-                            "sim_needs_setup",
-                            format!("the server's owner must accept \"{}\" first (licence {id}, sha1 {})", text.title, text.sha1),
-                        )
-                        .exit(3);
-                        e.needs = probe.needs.clone();
-                        return Err(e);
-                    }
+        let pending = self.pending_licences(lane_kind)?;
+        let mut missing: Vec<&LicenceText> = Vec::new();
+        for t in &pending {
+            match accept.iter().find(|(id, _)| *id == t.id) {
+                Some((_, sha)) if *sha == t.sha1 => {}
+                Some((_, sha)) => {
+                    return Err(SimError::new(
+                        409,
+                        "sim_licence_changed",
+                        format!("the {} text changed since the card was shown (now {}, card {sha}). Read it again and accept the new text.", t.id, t.sha1),
+                    ));
                 }
+                None => missing.push(t),
             }
+        }
+        if !missing.is_empty() {
+            let names: Vec<String> = missing.iter().map(|t| format!("\"{}\" (licence {}, sha1 {})", t.title, t.id, t.sha1)).collect();
+            let mut e = SimError::new(
+                409,
+                "sim_needs_setup",
+                format!(
+                    "the server's owner must accept {} first: {}. Nothing was accepted.",
+                    if missing.len() == 1 { "this licence".to_string() } else { format!("all {} licences", missing.len()) },
+                    names.join("; ")
+                ),
+            )
+            .exit(3);
+            e.needs = missing.iter().map(|t| LaneNeed::Licence { id: t.id.clone(), title: t.title.clone() }).collect();
+            e.lane = Some(lane_kind);
+            return Err(e);
+        }
+        for t in &pending {
+            super::licence::record(super::licence::Accepted { lane: lane_kind, id: t.id.clone(), sha1: t.sha1.clone(), by: by.to_string(), at: now() })
+                .map_err(|e| SimError::new(500, "sim_io", e))?;
+            let db = crate::db::shared();
+            let conn = db.lock();
+            store::audit(&conn, now(), by, None, Some(lane_kind), "licence_accept", json!({ "licence": t.id, "sha1": t.sha1 }));
         }
         {
             let mut s = self.setup.lock();
@@ -1076,7 +1112,7 @@ impl Manager {
         std::thread::Builder::new()
             .name(format!("k2-sim-setup-{lane_kind}"))
             .spawn(move || {
-                let m = manager();
+                let m = self;
                 let progress = |done: u64, total: u64| {
                     let mut s = m.setup.lock();
                     if let Some(st) = s.get_mut(&lane_kind) {
@@ -1087,11 +1123,21 @@ impl Manager {
                 let t0 = Instant::now();
                 let res = lane.install(&accepted, &progress);
                 let err = res.as_ref().err().map(|e| crate::redaction::redact(e.message()));
+                // A licence the lane found only while installing: kept, so
+                // the next status, Start and card ask the owner for it.
+                let needs: Vec<LaneNeed> = match &res {
+                    Err(LaneError::NeedsSetup { needs, .. }) => needs.iter().filter(|n| matches!(n, LaneNeed::Licence { .. })).cloned().collect(),
+                    _ => vec![],
+                };
+                // Probe again BEFORE the setup reads as finished, so no
+                // status read sees "done" beside the probe from before.
+                m.refresh_probes();
                 {
                     let mut s = m.setup.lock();
                     if let Some(st) = s.get_mut(&lane_kind) {
                         st.running = false;
                         st.error = err.clone();
+                        st.needs = needs;
                     }
                 }
                 let db = crate::db::shared();
@@ -1106,32 +1152,59 @@ impl Manager {
                     json!({ "secs": t0.elapsed().as_secs(), "error": err }),
                 );
                 drop(conn);
-                m.refresh_probes();
                 emit("sim_state", json!({ "lane": lane_kind, "state": if err.is_none() { "setup-done" } else { "setup-failed" } }));
             })
             .map_err(|e| SimError::new(500, "sim_io", format!("spawn setup: {e}")))?;
         Ok(())
     }
 
-    /// Probes with any running setup's progress folded into `detail`.
-    pub fn probes_with_setup(&self, refresh: bool) -> Vec<LaneProbe> {
-        let mut v = if refresh { self.refresh_probes() } else { self.probes() };
+    /// Fold the owner's setup into a lane's probe: a running setup's
+    /// progress, or the last one's failure, as `setup` and `detail`; and any
+    /// licence that setup failed on (not accepted since) as a need, so the
+    /// tab, the CLI and the next Start ask the owner for it.
+    fn fold_setup(&self, p: &mut LaneProbe) {
         let s = self.setup.lock();
-        for p in &mut v {
-            if let Some(st) = s.get(&p.lane) {
-                if st.running {
+        let Some(st) = s.get(&p.lane) else { return };
+        if st.running {
+            p.ready = false;
+            p.detail = Some(if st.total > 0 {
+                format!("installing: {}% of {:.1} GB", st.done * 100 / st.total.max(1), st.total as f64 / 1e9)
+            } else {
+                "installing…".to_string()
+            });
+            p.setup = Some(SetupView { running: true, done: st.done, total: st.total, error: None });
+            return;
+        }
+        let Some(e) = &st.error else { return };
+        p.detail = Some(format!("the last setup failed: {e}"));
+        p.setup = Some(SetupView { running: false, done: st.done, total: st.total, error: Some(e.clone()) });
+        let accepted = super::licence::accepted_ids(p.lane);
+        for n in &st.needs {
+            if let LaneNeed::Licence { id, .. } = n {
+                let listed = p.needs.iter().any(|x| matches!(x, LaneNeed::Licence { id: have, .. } if have == id));
+                if !accepted.contains(id) && !listed {
+                    // Licences first: the owner's card comes before the download.
+                    let at = p.needs.iter().take_while(|x| matches!(x, LaneNeed::Licence { .. })).count();
+                    p.needs.insert(at, n.clone());
                     p.ready = false;
-                    p.detail = Some(if st.total > 0 {
-                        format!("installing: {}% of {:.1} GB", st.done * 100 / st.total.max(1), st.total as f64 / 1e9)
-                    } else {
-                        "installing…".to_string()
-                    });
-                } else if let Some(e) = &st.error {
-                    p.detail = Some(format!("the last setup failed: {e}"));
                 }
             }
         }
+    }
+
+    /// Probes with the owner's setup folded in ([`Self::fold_setup`]).
+    pub fn probes_with_setup(&self, refresh: bool) -> Vec<LaneProbe> {
+        let mut v = if refresh { self.refresh_probes() } else { self.probes() };
+        for p in &mut v {
+            self.fold_setup(p);
+        }
         v
+    }
+
+    /// Forget every lane's setup state (tests, beside clearing the lanes).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn clear_setup_for_tests(&self) {
+        self.setup.lock().clear();
     }
 
     /// Measure `~/.k2/sim` (tools vs device data, per lane). Walks the

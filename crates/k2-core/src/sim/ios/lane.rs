@@ -467,7 +467,7 @@ impl SimLane for IosLane {
     }
 
     fn probe(&self) -> LaneProbe {
-        let mut p = LaneProbe { lane: LaneKind::Ios, usable: false, ready: false, needs: vec![], detail: None, versions: vec![] };
+        let mut p = LaneProbe { lane: LaneKind::Ios, usable: false, ready: false, needs: vec![], detail: None, versions: vec![], setup: None };
         if !cfg!(target_os = "macos") {
             p.detail = Some("The iOS Simulator needs a Mac with Xcode.".into());
             return p;

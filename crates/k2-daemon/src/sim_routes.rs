@@ -187,6 +187,7 @@ pub(crate) fn sim_test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 pub(crate) fn clear_lanes_for_tests() {
     k2_core::sim::clear_lanes();
+    manager::manager().clear_setup_for_tests();
     let left = manager::manager().refresh_probes();
     assert!(left.is_empty(), "no lane may answer a probe after clear_lanes: {left:?}");
 }
@@ -308,6 +309,7 @@ fn route(path: &str, c: &Caller, is_post: bool, body: &[u8], params: &HashMap<St
             let ws = resolve_ws(c, param(params, "workspace"))?;
             let mut st = m.status(&ws, flag(params, "refresh"))?;
             st.can_control = can_control(c);
+            st.can_setup = box_owner(c).is_ok();
             Ok(ok(&st))
         }
         DEVICES => {
@@ -402,12 +404,13 @@ fn route(path: &str, c: &Caller, is_post: bool, body: &[u8], params: &HashMap<St
             people_only(c)?;
             let by = box_owner(c)?;
             let req: SetupReq = parse(body)?;
-            let accept = match (&req.accept_licence, &req.licence_sha1) {
-                (Some(id), Some(sha)) => Some((id.as_str(), sha.as_str())),
+            let mut accept: Vec<(String, String)> = req.accept.iter().map(|a| (a.id.clone(), a.sha1.clone())).collect();
+            match (&req.accept_licence, &req.licence_sha1) {
+                (Some(id), Some(sha)) => accept.push((id.clone(), sha.clone())),
                 (Some(_), None) => return Err(SimError::new(400, "bad_request", "acceptLicence needs licenceSha1 (the text the owner read)")),
-                _ => None,
-            };
-            m.start_setup(req.lane, accept, &by)?;
+                _ => {}
+            }
+            m.start_setup(req.lane, &accept, &by)?;
             Ok(ok(&json!({ "ok": true, "lane": req.lane, "lanes": m.probes_with_setup(false) })))
         }
         LICENCE => {
@@ -469,48 +472,95 @@ fn resolve_secret(c: &Caller, _ws: &Ws, name: &str) -> Result<SimText, SimError>
 
 // ── the owner's licence card ─────────────────────────────────────────
 
-/// Put "Accept the Android SDK licence on this server" on the workspace's
-/// Thread (for a person; only the box owner's answer counts). Deduped per
-/// lane + licence, so repeated boots don't stack cards.
+/// The owner's licence card: every licence the lane's setup still needs,
+/// each with its title, id, text hash, link (when Google publishes one) and
+/// full text, so the one "Accept and install" covers them all.
+#[derive(Debug, Clone)]
+pub(crate) struct LicenceCard {
+    pub prompt: String,
+    pub params: Value,
+    pub dedupe: String,
+}
+
+/// Markdown-safe licence text, quoted: the text reads as written (no
+/// emphasis, links, HTML or headings from it).
+fn quote_text(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let mut out = String::with_capacity(line.len() + 2);
+            for (i, ch) in line.chars().enumerate() {
+                if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '|' | '~') || (i == 0 && ch == '#') {
+                    out.push('\\');
+                }
+                out.push(ch);
+            }
+            if out.trim().is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {out}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn licence_card(lane: LaneKind, handle: &str) -> Result<LicenceCard, String> {
+    let texts = manager::manager().pending_licences(lane).map_err(|e| e.message)?;
+    if texts.is_empty() {
+        return Err(format!("the {lane} lane needs no licence"));
+    }
+    let n = texts.len();
+    let mut prompt = format!(
+        "{handle} wants to run an {} device on this server. That needs the server's owner to accept {} from Google. \
+         \"{CARD_ACCEPT}\" accepts {} and downloads the {} tools and one system image (about 5 GB) into ~/.k2/sim, and lets \
+         agents with \"Allow mobile devices\" boot devices here. Only the owner's answer counts.",
+        lane.platform(),
+        if n == 1 { "this licence".to_string() } else { format!("these {n} licences") },
+        if n == 1 { "it" } else { "all of them" },
+        lane.platform(),
+    );
+    for (i, t) in texts.iter().enumerate() {
+        prompt.push_str(&format!(
+            "\n\n**{}. {}** (`{}`, sha1 `{}`){}\n\n{}",
+            i + 1,
+            t.title,
+            t.id,
+            &t.sha1[..12.min(t.sha1.len())],
+            t.url.as_deref().map(|u| format!(": {u}")).unwrap_or_default(),
+            quote_text(&t.text),
+        ));
+    }
+    Ok(LicenceCard {
+        prompt,
+        params: json!({ "lane": lane, "licences": texts.iter().map(|t| json!({ "id": t.id, "sha1": t.sha1 })).collect::<Vec<_>>() }),
+        dedupe: format!("sim-licence-{lane}"),
+    })
+}
+
+/// Put the owner's licence card on the workspace's Thread (for a person;
+/// only the box owner's answer counts): one card listing every licence the
+/// setup still needs. One waiting card per lane: a newer one replaces it.
 fn present_licence_card(ws: &Ws, e: &SimError) {
-    let Some((lane, id, title)) = e.needs.iter().find_map(|n| match n {
-        LaneNeed::Licence { id, title } => Some((licence_lane(e), id.clone(), title.clone())),
-        _ => None,
-    }) else {
+    if !e.needs.iter().any(|n| matches!(n, LaneNeed::Licence { .. })) {
         return;
-    };
-    let Some(lane) = lane else { return };
-    let text = match manager::manager().licence(lane, &id) {
-        Ok(t) => t,
+    }
+    let Some(lane) = e.lane.or_else(|| licence_lane(e)) else { return };
+    let card = match licence_card(lane, &ws.handle) {
+        Ok(c) => c,
         Err(err) => {
-            k2_core::log_debug!("[sim] licence card: {}", err.message);
+            k2_core::log_debug!("[sim] licence card: {err}");
             return;
         }
     };
+    // The card read the lane's metadata (a first one downloads it): the
+    // status the tab reads now lists the same licences as the card.
+    manager::manager().refresh_probes();
     let Some(conversation) = pinned_conversation(&ws.id) else { return };
-    let url = text.url.clone().unwrap_or_default();
-    let prompt = format!(
-        "{} wants to run an {} device on this server. That needs the server's owner to accept the {} (sha1 {}){}. \
-         Accepting downloads the {} tools and one system image (about 5 GB) into ~/.k2/sim and lets agents with \
-         \"Allow mobile devices\" boot devices here. Only the owner's answer counts.",
-        ws.handle,
-        lane.platform(),
-        title,
-        &text.sha1[..12.min(text.sha1.len())],
-        if url.is_empty() { String::new() } else { format!(": {url}") },
-        lane.platform(),
-    );
-    let action = k2_core::overlay::CardAction {
-        id: CARD_ACTION.to_string(),
-        params: json!({ "lane": lane, "licence": id, "sha1": text.sha1 }),
-        dedupe: format!("sim-licence-{lane}-{id}"),
-        result: None,
-        view: None,
-    };
+    let action = k2_core::overlay::CardAction { id: CARD_ACTION.to_string(), params: card.params, dedupe: card.dedupe, result: None, view: None };
     match crate::overlay_routes::present_action_card(
         Some(&conversation),
         &ws.id,
-        &prompt,
+        &card.prompt,
         &[CARD_ACCEPT, CARD_NOT_NOW],
         action,
         true,
@@ -522,12 +572,12 @@ fn present_licence_card(ws: &Ws, e: &SimError) {
     }
 }
 
-/// Which lane a `sim_needs_setup` came from: the first lane whose probe
-/// lists that need.
+/// Which lane a `sim_needs_setup` came from (when the error doesn't say):
+/// the first lane whose probe, with its setup folded in, lists that need.
 fn licence_lane(e: &SimError) -> Option<LaneKind> {
     let ids: Vec<&str> = e.needs.iter().filter_map(|n| if let LaneNeed::Licence { id, .. } = n { Some(id.as_str()) } else { None }).collect();
     manager::manager()
-        .probes()
+        .probes_with_setup(false)
         .into_iter()
         .find(|p| p.needs.iter().any(|n| matches!(n, LaneNeed::Licence { id, .. } if ids.contains(&id.as_str()))))
         .map(|p| p.lane)
@@ -545,7 +595,9 @@ fn pinned_conversation(project_id: &str) -> Option<String> {
 }
 
 /// The card's answer (`action_cards::run`). `by` is `owner` or a login
-/// name; only the box owner may accept.
+/// name; only the box owner may accept. The card's `licences` (every one it
+/// showed, `{id, sha1}`) are accepted together; an older card carries one
+/// `licence` + `sha1`.
 pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String> {
     if answer != CARD_ACCEPT {
         return Ok(json!({ "ok": true, "message": "Not accepted. Devices stay off until the owner accepts." }));
@@ -558,10 +610,27 @@ pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String>
         return Err("Only the server's owner can accept this licence.".to_string());
     };
     let lane = params.get("lane").and_then(Value::as_str).and_then(LaneKind::parse).ok_or("the card has no lane")?;
-    let id = params.get("licence").and_then(Value::as_str).ok_or("the card has no licence id")?;
-    let sha = params.get("sha1").and_then(Value::as_str).ok_or("the card has no licence hash")?;
-    manager::manager().start_setup(lane, Some((id, sha)), &who).map_err(|e| e.message)?;
-    Ok(json!({ "ok": true, "message": format!("Accepted. K2 is downloading the {} tools; devices can boot when it finishes.", lane.platform()) }))
+    let accept: Vec<(String, String)> = match params.get("licences").and_then(Value::as_array) {
+        Some(list) => list
+            .iter()
+            .map(|l| {
+                let id = l.get("id").and_then(Value::as_str).ok_or("the card has a licence with no id")?;
+                let sha = l.get("sha1").and_then(Value::as_str).ok_or("the card has a licence with no hash")?;
+                Ok((id.to_string(), sha.to_string()))
+            })
+            .collect::<Result<_, String>>()?,
+        None => {
+            let id = params.get("licence").and_then(Value::as_str).ok_or("the card has no licence id")?;
+            let sha = params.get("sha1").and_then(Value::as_str).ok_or("the card has no licence hash")?;
+            vec![(id.to_string(), sha.to_string())]
+        }
+    };
+    if accept.is_empty() {
+        return Err("the card names no licence".to_string());
+    }
+    manager::manager().start_setup(lane, &accept, &who).map_err(|e| e.message)?;
+    let what = if accept.len() == 1 { "Accepted".to_string() } else { format!("Accepted all {} licences", accept.len()) };
+    Ok(json!({ "ok": true, "message": format!("{what}. K2 is downloading the {} tools; devices can boot when it finishes.", lane.platform()) }))
 }
 
 // ── daemon lifecycle ─────────────────────────────────────────────────

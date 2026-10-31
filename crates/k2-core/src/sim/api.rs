@@ -129,6 +129,10 @@ pub struct StatusResp {
     /// not the tab, so false.
     #[serde(default)]
     pub can_control: bool,
+    /// Is THIS caller the box owner (owner token or an Owner login), who
+    /// alone accepts a lane's licences and starts or retries its setup?
+    #[serde(default)]
+    pub can_setup: bool,
     /// Disk used by mobile dev on this server (measured by the reaper
     /// sweep; `None` until the first sweep). Added after the S1 stub.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,17 +318,28 @@ pub struct HoldReq {
     pub action: HoldAction,
 }
 
-/// Owner / Admin: accept a lane's licence on the card and start its
-/// first-use install. `acceptLicence` must name the licence id the card
-/// showed (and its text hash), so a changed licence needs a new card.
+/// The box owner: accept a lane's licences and start (or retry) its
+/// first-use install. `accept` names every licence the card showed, each
+/// with its text hash (all the setup needs, or nothing is accepted), so a
+/// changed licence needs a new card. `acceptLicence` + `licenceSha1` is the
+/// older one-licence form. No licence at all: retry the setup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupReq {
     pub lane: LaneKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accept: Vec<LicenceAccept>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept_licence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub licence_sha1: Option<String>,
+}
+
+/// One licence the owner read: its id and the sha1 of its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LicenceAccept {
+    pub id: String,
+    pub sha1: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

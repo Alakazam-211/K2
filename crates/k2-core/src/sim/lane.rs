@@ -113,6 +113,25 @@ pub struct LaneProbe {
     /// Tool versions found (`emulator`, `adb`, `xcode`, `axe`…).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<(String, String)>,
+    /// The owner's first-use setup while it runs, or the last one's failure
+    /// (the manager fills it; a lane's own probe leaves it `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<SetupView>,
+}
+
+/// The owner's setup of a lane as clients see it: running (with bytes), or
+/// the last run's failure. Absent when none ran or the last one finished.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupView {
+    pub running: bool,
+    #[serde(default)]
+    pub done: u64,
+    #[serde(default)]
+    pub total: u64,
+    /// Why the last setup failed (redacted, for a person).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// A step between "usable" and "ready".
@@ -726,6 +745,23 @@ pub trait SimLane: Send + Sync + 'static {
     /// stub; a default method, so existing lanes need no change.)
     fn licence(&self, id: &str) -> Result<LicenceText, LaneError> {
         Err(LaneError::unsupported(format!("the {} lane has no licence '{id}'", self.kind())))
+    }
+
+    /// Every licence the lane's setup still needs that the owner hasn't
+    /// accepted, with its text, so one owner action covers them all before
+    /// anything downloads. May read the lane's package metadata (a small
+    /// download); never downloads a package. Default: the probe's licence
+    /// needs, each through [`SimLane::licence`].
+    fn pending_licences(&self) -> Result<Vec<LicenceText>, LaneError> {
+        let mut out: Vec<LicenceText> = Vec::new();
+        for n in self.probe().needs {
+            if let LaneNeed::Licence { id, .. } = n {
+                if !out.iter().any(|t| t.id == id) {
+                    out.push(self.licence(&id)?);
+                }
+            }
+        }
+        Ok(out)
     }
 }
 

@@ -83055,14 +83055,24 @@ for l in lanes:
     if l.get("detail"):
         line += " (%s)" % l["detail"]
     print("lane " + line)
-    for n in l.get("needs") or []:
+    needs = l.get("needs") or []
+    licences = [n for n in needs if n.get("kind") == "licence"]
+    for n in needs:
         k = n.get("kind")
         if k == "licence":
-            print("  the owner must accept the %s (a card; never you)" % n.get("title", n.get("id")))
+            title, lid = n.get("title") or n.get("id"), n.get("id") or ""
+            print("  the owner must accept the %s%s (a card; never you)" % (title, "" if lid in title else " [%s]" % lid))
         elif k == "install":
             print("  first use downloads %s" % n.get("what"))
         elif k == "owner-step":
             print("  owner step: %s: %s" % (n.get("what"), n.get("command")))
+    if len(licences) > 1:
+        print("  one card covers all %d licences; the owner accepts them together" % len(licences))
+    setup = l.get("setup") or {}
+    if setup.get("running"):
+        print("  setup running; k2 sim status again to follow it")
+    elif setup.get("error") and not licences:
+        print("  setup failed; the server's owner retries it (Retry setup on the Mobile tab), never you")
 s = v.get("sim")
 if not s or s.get("state") in ("stopped", "failed"):
     ready = any(l.get("ready") for l in lanes)

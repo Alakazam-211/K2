@@ -1,6 +1,11 @@
 //! A fake lane for tests (core and daemon): an in-memory "device" with a
 //! small settings screen. Tapping the Save button adds a `"Saved"` text;
 //! typing sets the focused field's value. Records every action.
+//!
+//! Licences: [`FakeLane::licences`] are the ones its plan knows up front
+//! (the probe lists each one not yet accepted); [`FakeLane::hidden_licences`]
+//! are ones only the install finds (an install that fails for a licence the
+//! owner was never asked for). The install needs every one of both.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,6 +25,13 @@ pub struct FakeLane {
     pub email: Mutex<String>,
     pub boots: AtomicU64,
     pub fail_boot: AtomicBool,
+    /// `(id, title)` the probe knows before setup.
+    pub licences: Mutex<Vec<(String, String)>>,
+    /// `(id, title)` only the install finds.
+    pub hidden_licences: Mutex<Vec<(String, String)>>,
+    /// The install fails as a tool error (a download that broke).
+    pub fail_install: AtomicBool,
+    pub installs: AtomicU64,
 }
 
 impl FakeLane {
@@ -33,7 +45,22 @@ impl FakeLane {
             email: Mutex::new(String::new()),
             boots: AtomicU64::new(0),
             fail_boot: AtomicBool::new(false),
+            licences: Mutex::new(vec![("fake-license".into(), "Fake SDK licence".into())]),
+            hidden_licences: Mutex::new(Vec::new()),
+            fail_install: AtomicBool::new(false),
+            installs: AtomicU64::new(0),
         }
+    }
+
+    /// The text of a fake licence (its sha1 is what an acceptance binds).
+    pub fn licence_text(id: &str, title: &str) -> String {
+        format!("{title}: the terms of {id}.")
+    }
+
+    fn all_licences(&self) -> Vec<(String, String)> {
+        let mut v = self.licences.lock().clone();
+        v.extend(self.hidden_licences.lock().iter().cloned());
+        v
     }
 
     pub fn profile() -> DeviceProfile {
@@ -67,22 +94,46 @@ impl SimLane for FakeLane {
 
     fn probe(&self) -> LaneProbe {
         let ready = self.ready.load(Ordering::SeqCst);
-        LaneProbe {
-            lane: self.kind,
-            usable: true,
-            ready,
-            needs: if ready { vec![] } else { vec![LaneNeed::Licence { id: "fake-license".into(), title: "Fake SDK licence".into() }] },
-            detail: None,
-            versions: vec![],
+        let mut needs = Vec::new();
+        if !ready {
+            let accepted = super::licence::accepted_ids(self.kind);
+            for (id, title) in self.licences.lock().iter() {
+                if !accepted.contains(id) {
+                    needs.push(LaneNeed::Licence { id: id.clone(), title: title.clone() });
+                }
+            }
+            needs.push(LaneNeed::Install { what: "the fake tools".into(), bytes: Some(1_000_000) });
         }
+        LaneProbe { lane: self.kind, usable: true, ready, needs, detail: None, versions: vec![], setup: None }
     }
 
     fn install(&self, licence_accepted: &[String], _progress: &(dyn Fn(u64, u64) + Sync)) -> Result<(), LaneError> {
-        if !licence_accepted.iter().any(|l| l == "fake-license") {
-            return Err(LaneError::NeedsSetup { message: "accept the fake licence".into(), needs: vec![] });
+        self.installs.fetch_add(1, Ordering::SeqCst);
+        let missing: Vec<LaneNeed> = self
+            .all_licences()
+            .into_iter()
+            .filter(|(id, _)| !licence_accepted.contains(id))
+            .map(|(id, title)| LaneNeed::Licence { id, title })
+            .collect();
+        if !missing.is_empty() {
+            let ids: Vec<String> = missing.iter().filter_map(|n| if let LaneNeed::Licence { id, .. } = n { Some(format!("'{id}'")) } else { None }).collect();
+            return Err(LaneError::NeedsSetup { message: format!("the fake tools need the licence {}, which the owner hasn't accepted", ids.join(", ")), needs: missing });
+        }
+        if self.fail_install.load(Ordering::SeqCst) {
+            return Err(LaneError::tool("download https://fake.invalid/tools.zip: connection reset"));
         }
         self.ready.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn licence(&self, id: &str) -> Result<LicenceText, LaneError> {
+        let (id, title) = self
+            .all_licences()
+            .into_iter()
+            .find(|(lid, _)| lid == id)
+            .ok_or_else(|| LaneError::invalid(format!("no fake licence '{id}'")))?;
+        let text = Self::licence_text(&id, &title);
+        Ok(LicenceText { sha1: super::licence::text_sha1(&text), id, title, text, url: None })
     }
 
     fn profiles(&self) -> Result<Vec<DeviceProfile>, LaneError> {

@@ -638,10 +638,15 @@ mod tests {
 
     #[test]
     fn a_too_new_store_says_there_is_no_way_back() {
-        let m = store_open_error(&k2_mpc_base::store::StoreError::Newer { found: 6 });
-        assert!(m.contains("store format 6"), "{m}");
+        let m = store_open_error(&k2_mpc_base::store::StoreError::Newer { found: 7 });
+        assert!(m.contains("store format 7; this K2 reads up to 6"), "{m}");
         assert!(m.contains("can't go back to an older K2"), "{m}");
-        assert_eq!(k2_mpc_base::store::STORE_FORMAT, 5, "0.46.7 ships store format 5 (WHATS_NEW says so)");
+        // Kit v0.10.0.x reads up to format 6 (structured docs). A store is
+        // created at 5 and stamped 6 only by its first structured doc (a
+        // grid), which K2 0.46.7 never opens (no CSV grid core): every
+        // store 0.46.7 writes stays format 5 (WHATS_NEW says so).
+        assert_eq!(k2_mpc_base::store::STORE_FORMAT, 6, "0.46.7 reads up to store format 6");
+        assert_eq!(k2_mpc_base::store::STORE_FORMAT_BASE, 5, "0.46.7 writes store format 5");
     }
 
     #[test]

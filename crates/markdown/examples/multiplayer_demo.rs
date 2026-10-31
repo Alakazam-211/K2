@@ -620,7 +620,7 @@ fn scene_2(d: &mut Demo) -> R {
     let sam = d.conn("sam")?;
     let at = At::Line(LineCol { line: 15, col: 3 });
     d.session
-        .set_cursor(sam, ROOT, at, at)
+        .set_cursor(sam, ROOT, at.clone(), at)
         .map_err(|e| format!("cursor: {e}"))?;
     d.say(format!(
         "{} sam moves the caret to line 15 (editor)",

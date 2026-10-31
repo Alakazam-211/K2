@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.7
+
+### Chat (Sew)
+- **K2 now installs and upgrades to Sew 0.6.0, which lets an App govern its own chat Space** (App-governed Spaces need it); upgrade an existing chat server with `k2 hostchat upgrade`, and note that going back to 0.5.0 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.6.0 changes Sew's data.
+
 ## 0.46.6 — A phone beside your agent
 
 0.46.6 puts a phone beside your agent: a Mobile tab with a live Android emulator or iOS Simulator, and `k2 sim` so agents can drive it.

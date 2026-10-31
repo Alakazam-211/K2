@@ -14,6 +14,13 @@
 //! | [`HOME_CLIENT_OWNER_APPROVAL`] | every `POST /mgmt/v1/home-client` carries the install owner's approval (a fresh `k2:owner` chat pass); without the flag the body stays `{app_id}` (Sew 0.5.0 refuses an unknown field) |
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
+//!
+//! The pin (Sew 0.6.0) reports twenty flags: 0.5.0's twelve, 0.5.1's
+//! `app_session_member_role`, `app_voice_channel_create`,
+//! `home_client_owner_approval` and `k2_managed_guard`, and 0.6.0's
+//! `app_controls`, `app_governed_spaces`, `app_member_channels` and
+//! `app_mode_gate`. A flag K2 doesn't gate on is kept in the list and
+//! otherwise ignored.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -77,4 +84,61 @@ pub fn list(conn: &Connection, kind: &str) -> Result<Vec<String>, String> {
 /// Did Sew report `flag` for `kind`?
 pub fn has(conn: &Connection, kind: &str, flag: &str) -> Result<bool, String> {
     Ok(list(conn, kind)?.iter().any(|f| f == flag))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sew 0.6.0's `features`, exactly as `sew_proto::mgmt::FEATURES` at
+    /// the v0.6.0 tag (`a8c0b652…6116`) lists them: 0.5.0's twelve, 0.5.1's
+    /// four (folded into 0.6.0) and 0.6.0's own four.
+    const SEW_0_6_0: [&str; 20] = [
+        "app_channel_create",
+        "app_controls",
+        "app_governed_spaces",
+        "app_member_channels",
+        "app_mode_gate",
+        "app_origin",
+        "app_quotas",
+        "app_scoped_sessions",
+        "app_session_member_role",
+        "app_voice_channel_create",
+        "home_client",
+        "home_client_owner_approval",
+        "k2_managed_avatar",
+        "k2_managed_guard",
+        "member_external_id",
+        "person_notifications",
+        "principal_relink",
+        "private_spaces",
+        "space_unbind",
+        "voice_video_cap",
+    ];
+
+    /// The pinned Sew (0.6.0) reports every flag K2 gates on: what it
+    /// reports is kept as reported (sorted, nothing dropped, unknown flags
+    /// included), and each gate answers yes.
+    #[test]
+    fn sew_0_6_0_flags_pass_every_k2_gate() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let reported: Vec<String> = SEW_0_6_0.iter().rev().map(|s| s.to_string()).collect();
+        assert!(note(&conn, "chat", &reported, 1).unwrap(), "a first list is a change");
+        assert_eq!(list(&conn, "chat").unwrap(), SEW_0_6_0.to_vec(), "kept sorted, all twenty");
+        for flag in [
+            APP_SCOPED_SESSIONS,
+            HOME_CLIENT,
+            APP_ORIGIN,
+            K2_MANAGED_AVATAR,
+            APP_CHANNEL_CREATE,
+            SPACE_UNBIND,
+            APP_GOVERNED_SPACES,
+            HOME_CLIENT_OWNER_APPROVAL,
+        ] {
+            assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
+        }
+        assert!(!note(&conn, "chat", &reported, 2).unwrap(), "the same list again is no change");
+        assert!(!has(&conn, "chat", "not_a_sew_flag").unwrap());
+    }
 }

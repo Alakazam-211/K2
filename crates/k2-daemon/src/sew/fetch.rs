@@ -40,7 +40,7 @@ pub const RELEASES_URL: &str = "https://github.com/Alakazam-211/sew-releases/rel
 /// GitHub redirects release assets to.
 pub const GITHUB_HOSTS: [&str; 3] = ["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// A whole download (Sew 0.5.0 is 24.7 MB; a slow line still finishes).
+/// A whole download (Sew 0.6.0 is 24.9 MB; a slow line still finishes).
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// A preflight reachability check (HEAD).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(6);
@@ -122,7 +122,7 @@ pub struct ReleaseFile {
     /// The sha256 pinned in K2's code: the only one that counts.
     pub sha256: String,
     pub cap: u64,
-    /// "Sew 0.5.0", "sew-media 0.5.0", "Sew's App kit 0.5.0".
+    /// "Sew 0.6.0", "sew-media 0.6.0", "Sew's App kit 0.6.0".
     pub label: String,
 }
 

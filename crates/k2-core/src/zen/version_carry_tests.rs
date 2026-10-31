@@ -92,6 +92,9 @@ fn agent(p: &str) -> MadeBy {
 /// key) changes, so the frame reloads. A wording edit keeps the version.
 #[test]
 fn a_manifest_only_disk_edit_is_a_new_unsigned_version() {
+    // `ga::add` writes an Access Audit line under $HOME: a temp HOME (and its
+    // env lock) keeps it out of a parallel test's audit file.
+    let _home = crate::test_env::TempHome::new();
     let (_t, f) = set_up("disk");
     let conn = db();
     f.new_widget("board", Some("hello")).expect("new");
@@ -493,6 +496,10 @@ fn the_carry_logs_a_frozen_copy_whose_manifest_differs_from_its_history() {
 /// stamp isn't "signed".
 #[test]
 fn version_changes_ignores_planted_snapshots_and_unlisted_signers() {
+    // `ga::add` writes an Access Audit line under $HOME: a temp HOME (and its
+    // env lock) keeps it out of a parallel test's audit file (soak 2026-10-31:
+    // garden_access's add/remove test counted this test's line).
+    let _home = crate::test_env::TempHome::new();
     let (_t, f) = set_up("planted");
     let conn = db();
     f.new_widget("board", Some("hello")).expect("new");

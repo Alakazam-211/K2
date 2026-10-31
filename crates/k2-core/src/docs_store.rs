@@ -111,9 +111,10 @@ mod tests {
         assert_eq!(b.parent(), store_path().parent(), "{b:?} is not beside the store");
         assert_eq!(b.file_name().and_then(|n| n.to_str()), Some(BLOBS_DIR));
         let other = std::env::temp_dir().join(format!("k2-blobs-{}", uuid::Uuid::new_v4()));
-        std::env::set_var(ENV_BLOBS, &other);
-        let got = blobs_path();
-        std::env::remove_var(ENV_BLOBS);
+        let got = {
+            let _blobs = crate::test_env::EnvVar::set(ENV_BLOBS, &other);
+            blobs_path()
+        };
         assert_eq!(got, other);
     }
 
@@ -122,9 +123,10 @@ mod tests {
     fn test_blobs_in_the_real_home_panic() {
         let _env = crate::test_env::lock();
         let home = crate::test_isolation::real_home().expect("this test needs the uid's real home from the password database");
-        std::env::set_var(ENV_BLOBS, home.join(".k2").join(BLOBS_DIR));
-        let r = std::panic::catch_unwind(blobs_path);
-        std::env::remove_var(ENV_BLOBS);
+        let r = {
+            let _blobs = crate::test_env::EnvVar::set(ENV_BLOBS, home.join(".k2").join(BLOBS_DIR));
+            std::panic::catch_unwind(blobs_path)
+        };
         if let Err(e) = r {
             std::panic::resume_unwind(e);
         }

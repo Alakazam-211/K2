@@ -94,6 +94,11 @@
 #                       compares the files with the GitHub-built assets
 #                       (Step 10.7, the shadow report). Publishes and signs
 #                       nothing from compute; a compute problem only warns.
+#                       Step 7.9c waits K2_COMPUTE_WAIT_MIN (default 60);
+#                       jobs still running then are left alone and
+#                       collected at Step 10.7 (up to K2_COMPUTE_LATE_WAIT_MIN
+#                       more, default 60), so a slow node never holds the
+#                       release up longer than the first wait.
 #                       Needs this Mac's K2 as a server on the nodes with a
 #                       grant (k2 compute nodes). Settings and node names:
 #                       scripts/lib/compute-release.sh. Audit:
@@ -318,6 +323,7 @@ case "$K2_LINUX_BUILDS" in
 esac
 K2_SHADOW_STATE=""
 K2_SHADOW_NOTE=""
+K2_SHADOW_LATE=0
 
 k2_shadow_warn() {
     echo "  ⚠ shadow (K2 Compute): $*" >&2
@@ -360,7 +366,13 @@ k2_shadow_collect() {
     fi
     local t0
     t0=$(date +%s)
-    k2cr_wait "${K2_COMPUTE_WAIT_MIN:-60}" || k2_shadow_warn "jobs not done in ${K2_COMPUTE_WAIT_MIN:-60} min"
+    if ! k2cr_wait "${K2_COMPUTE_WAIT_MIN:-60}"; then
+        # Shadow never holds the release up: collect at Step 10.7 instead,
+        # after GitHub's builds (one node runs the jobs one after another).
+        echo "  compute jobs still running after ${K2_COMPUTE_WAIT_MIN:-60} min; collected at Step 10.7 instead."
+        K2_SHADOW_LATE=1
+        return 0
+    fi
     k2cr_collect || k2_shadow_warn "not every compute build verified (see ${K2_SHADOW_STATE}/summary.txt)"
     echo "  waited $(( ($(date +%s) - t0) / 60 )) min after the Mac build."
 }
@@ -383,6 +395,11 @@ k2_shadow_report() {
     [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
     echo ""
     echo "Step 10.7: Shadow report, K2 Compute vs GitHub Linux assets..."
+    if [ "$K2_SHADOW_LATE" = "1" ] && [ -n "$K2_SHADOW_STATE" ]; then
+        echo "  collecting the compute jobs Step 7.9c left running (up to ${K2_COMPUTE_LATE_WAIT_MIN:-60} min more)..."
+        k2cr_wait "${K2_COMPUTE_LATE_WAIT_MIN:-60}" || k2_shadow_warn "jobs still not done after ${K2_COMPUTE_LATE_WAIT_MIN:-60} more min"
+        k2cr_collect || k2_shadow_warn "not every compute build verified (see ${K2_SHADOW_STATE}/summary.txt)"
+    fi
     if [ -z "$K2_SHADOW_STATE" ] || [ "${K2CR_COLLECTED:-0}" != "1" ]; then
         k2_shadow_warn "nothing collected; no report"
     else

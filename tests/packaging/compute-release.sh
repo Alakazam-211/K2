@@ -224,20 +224,20 @@ rc="$(run_case ok)"
 [ "$rc" = 0 ] && pass "collect verifies L1 and L3" || fail "collect rc=$rc" "$(cat "$tmp/ok.collect")"
 [ "$(wc -l < "$tmp/ok/jobs.tsv" | tr -d ' ')" = 2 ] && pass "two jobs (L1 x86 bins, L3 app)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
 grep -q 'L2 aarch64: no ARM node yet' "$tmp/ok.submit" && pass "aarch64 seam is named" || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
-run_line="$(grep -m1 'k2 compute run k2n4-vin' "$tmp/calls-ok" || true)"
-for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
+run_line="$(grep -m1 'k2 compute run k2n9-vin .*build-linux-bins.sh x86_64' "$tmp/calls-ok" || true)"
+for want in "--sha $COMMIT" "--gate" "--detach" "--artifact dist/*" "--queue-timeout 2h" "--env BUILD_COMMIT=$COMMIT" "--env BUILD_OAUTH=placeholder" "-- bash scripts/ci/build-linux-bins.sh x86_64"; do
     [[ "$run_line" == *"$want"* ]] && pass "L1 submit has $want" || fail "L1 submit lacks $want" "$run_line"
 done
 ! grep -qE -- '--env (K2_|K2SO_)' "$tmp/calls-ok" && pass "no K2_* name in --env (nodes refuse them: env_k2_reserved)" \
     || fail "K2_* env" "$(grep -- '--env K2' "$tmp/calls-ok")"
-grep -q 'k2 compute run k2n5-vin .*bun@1.2.*sys:libwebkit2gtk-4.1-dev.*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
-    && pass "L3 goes to k2n5-vin with bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
+grep -q 'k2 compute run k2n9-vin .*bun@1.2.*sys:libwebkit2gtk-4.1-dev.*-- bash scripts/ci/build-linux-app.sh' "$tmp/calls-ok" \
+    && pass "L3 goes to k2n9-vin (the 0.46.7 default: Yrs rule) with bun + GTK packages" || fail "L3 submit" "$(cat "$tmp/calls-ok")"
 grep -q 'k2 compute fetch .* --over-relay --json' "$tmp/calls-ok" && pass "fetch passes --over-relay (AppImage > 100 MB)" || fail "fetch flags" "$(cat "$tmp/calls-ok")"
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n4-vin", v' "$tmp/ok/L1.verdict.json" \
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["oauth"]=="placeholder" and v["node"]=="k2n9-vin", v' "$tmp/ok/L1.verdict.json" \
     && pass "L1 verdict: ok, node, oauth mode recorded" || fail "L1 verdict" "$(cat "$tmp/ok/L1.verdict.json")"
 
 echo "one OAuth mode and path remap for every Linux builder (0.46.6):"
-export K2_COMPUTE_VERIFY_NODE=k2n6-hil
+export K2_COMPUTE_VERIFY_NODE=k2n7-vin
 rc="$(run_case remap)"
 ! grep -q 'BUILD_REMAP' "$tmp/calls-remap" && pass "no per-job BUILD_REMAP (the build script always remaps)" \
     || fail "BUILD_REMAP still passed" "$(grep BUILD_REMAP "$tmp/calls-remap")"
@@ -245,7 +245,7 @@ rc="$(run_case remap)"
     || fail "oauth per job" "$(cat "$tmp/calls-remap")"
 export K2_COMPUTE_OAUTH=secret K2_COMPUTE_OAUTH_SECRETS="gmail-id,gmail-secret"
 rc="$(run_case secret)"
-l1="$(grep -m1 'k2 compute run k2n4-vin' "$tmp/calls-secret" || true)"
+l1="$(grep -m1 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-secret" || true)"
 for want in "--secret gmail-id=BUILD_GMAIL_CLIENT_ID" "--secret gmail-secret=BUILD_GMAIL_CLIENT_SECRET"; do
     [[ "$l1" == *"$want"* ]] && pass "secret mode: L1 has $want" || fail "secret mode lacks $want" "$l1"
 done
@@ -253,8 +253,8 @@ done
 [ "$(grep -c -- '--secret gmail-id=BUILD_GMAIL_CLIENT_ID' "$tmp/calls-secret")" = 2 ] && pass "secret mode: V1 too" \
     || fail "secret mode V1" "$(cat "$tmp/calls-secret")"
 ! grep -q 'build-linux-app.sh.*--secret\|--secret.*build-linux-app' "$tmp/calls-secret" \
-    && ! grep 'k2n5-vin' "$tmp/calls-secret" | grep -q -- '--secret' && pass "secret mode: the app job gets no OAuth" \
-    || fail "app job secrets" "$(grep k2n5-vin "$tmp/calls-secret")"
+    && ! grep 'build-linux-app.sh' "$tmp/calls-secret" | grep -q -- '--secret' && pass "secret mode: the app job gets no OAuth" \
+    || fail "app job secrets" "$(grep build-linux-app.sh "$tmp/calls-secret")"
 export K2_COMPUTE_OAUTH=bogus
 rc="$(run_case badmode)"
 grep -q 'K2_COMPUTE_OAUTH must be placeholder, env or secret' "$tmp/badmode.submit" && pass "an unknown OAuth mode is refused" \
@@ -291,7 +291,7 @@ export K2_COMPUTE_REQUIRE_BAKED_OAUTH=1; check_tamper t-oauth "a placeholder-OAu
 unset K2_COMPUTE_REQUIRE_BAKED_OAUTH
 
 echo "dual build (V1, G12):"
-export K2_COMPUTE_VERIFY_NODE=k2n6-hil
+export K2_COMPUTE_VERIFY_NODE=k2n7-vin
 rc="$(run_case v-same)"
 [ "$rc" = 0 ] && grep -q 'identical in both builds' "$tmp/v-same.collect" && pass "V1 identical to L1 passes" \
     || fail "V1 same" "rc=$rc $(cat "$tmp/v-same.collect")"
@@ -303,13 +303,78 @@ rc="$(
     cd "$repo"
     source "$ROOT/scripts/lib/compute-release.sh"
     k2cr_init "$VERSION" "$COMMIT" "$tmp/v-diff" "$tmp/v-diff-files"
-    k2cr_submit L1 k2n4-vin linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
-    GEN_SALT=other k2cr_submit V1 k2n6-hil linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+    k2cr_submit L1 k2n9-vin linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
+    GEN_SALT=other k2cr_submit V1 k2n7-vin linux-bins x86_64 rust@stable -- bash scripts/ci/build-linux-bins.sh x86_64 >/dev/null
     r=0; k2cr_collect >"$tmp/v-diff.collect" 2>&1 || r=$?; echo "$r"
 )"
 [ "$rc" != 0 ] && grep -q 'k2-node-linux-x86_64: the two builds differ' "$tmp/v-diff.collect" && pass "V1 differing from L1 fails" \
     || fail "V1 diff" "rc=$rc $(cat "$tmp/v-diff.collect")"
 unset K2_COMPUTE_VERIFY_NODE
+
+echo "nodes (0.46.7: the Ryzens, Yrs rule):"
+export K2_COMPUTE_NODE=k2-arch
+rc="$(run_case one-node)"
+[ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2-arch ' "$tmp/calls-one-node")" = 2 ] \
+    && pass "K2_COMPUTE_NODE moves L1 and L3 together (and k2-arch is a release node)" || fail "K2_COMPUTE_NODE" "rc=$rc $(cat "$tmp/calls-one-node")"
+export K2_COMPUTE_X86_NODE=k2n9-vin
+rc="$(run_case split-node)"
+grep -q 'k2 compute run k2n9-vin .*build-linux-bins.sh' "$tmp/calls-split-node" && grep -q 'k2 compute run k2-arch .*build-linux-app.sh' "$tmp/calls-split-node" \
+    && pass "K2_COMPUTE_X86_NODE beats K2_COMPUTE_NODE for L1 only" || fail "per-job node" "$(cat "$tmp/calls-split-node")"
+unset K2_COMPUTE_NODE K2_COMPUTE_X86_NODE
+! grep -q -- '--cpus' "$tmp/calls-ok" && pass "no --cpus unless K2_COMPUTE_CPUS is set" || fail "default cpus" "$(cat "$tmp/calls-ok")"
+export K2_COMPUTE_QUEUE_TIMEOUT=3h K2_COMPUTE_CPUS=8
+rc="$(run_case qt)"
+[ "$(grep -c -- '--queue-timeout 3h' "$tmp/calls-qt")" = 2 ] && pass "K2_COMPUTE_QUEUE_TIMEOUT reaches every job" || fail "queue timeout" "$(cat "$tmp/calls-qt")"
+[ "$(grep -c -- '--cpus 8 ' "$tmp/calls-qt")" = 2 ] && pass "K2_COMPUTE_CPUS reaches every job" || fail "cpus" "$(cat "$tmp/calls-qt")"
+unset K2_COMPUTE_QUEUE_TIMEOUT K2_COMPUTE_CPUS
+for gone in k2n4-vin k2n5-vin k2n6-hil; do
+    export K2_COMPUTE_X86_NODE="$gone"; check_tamper "t-gone-$gone" "$gone (gone) is not a release node" "not a release node"
+done
+unset K2_COMPUTE_X86_NODE
+
+echo "--shadow-only <sha> (dry run: submit, fetch, verify; nothing else):"
+repo2="$tmp/repo2"
+mkdir -p "$repo2/crates/k2-daemon"
+git -C "$repo2" init -q
+printf '[package]\nname = "k2-daemon"\nversion = "%s"\n' "$VERSION" > "$repo2/crates/k2-daemon/Cargo.toml"
+git -C "$repo2" add -A
+git -C "$repo2" -c user.email=t@t -c user.name=t commit -q -m candidate
+C2="$(git -C "$repo2" rev-parse HEAD)"
+T2="$(git -C "$repo2" rev-parse 'HEAD^{tree}')"
+export STUB_DIR="$tmp/stub-so" STUB_CALLS="$tmp/calls-so"
+rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; : > "$STUB_CALLS"
+so_rc=0
+(cd "$repo2" && STUB_COMMIT="$C2" STUB_TREE="$T2" K2_RELEASE_AUDIT_DIR="$tmp/audit" \
+    bash "$ROOT/scripts/lib/compute-release.sh" --shadow-only "${C2:0:9}" --wait-min 1) > "$tmp/so.out" 2>&1 || so_rc=$?
+so_state="$tmp/audit/shadow-${C2:0:12}/compute"
+[ "$so_rc" = 0 ] && pass "shadow-only: exit 0 when every job verifies" || fail "shadow-only rc=$so_rc" "$(cat "$tmp/so.out")"
+[ "$(wc -l < "$so_state/jobs.tsv" | tr -d ' ')" = 2 ] && grep -q "^version 9.9.9" "$so_state/summary.txt" \
+    && pass "shadow-only: the release set, version read from the commit" || fail "shadow-only state" "$(cat "$so_state/summary.txt" "$so_state/jobs.tsv")"
+grep -q "commit  $C2" "$so_state/summary.txt" && grep -q -- "--sha $C2" "$STUB_CALLS" \
+    && pass "shadow-only: the short sha is resolved to the full commit" || fail "shadow-only sha" "$(cat "$STUB_CALLS")"
+python3 -c 'import json,sys; [json.load(open(p))["ok"] or sys.exit(1) for p in sys.argv[1:]]' "$so_state/L1.verdict.json" "$so_state/L3.verdict.json" \
+    && pass "shadow-only: receipts fetched and verified (L1, L3)" || fail "shadow-only verdicts" "$(cat "$so_state"/*.verdict.json)"
+grep -q 'L1: job .* on k2n9-vin: done exit 0, queued ?, ran 1.0 min' "$tmp/so.out" \
+    && pass "shadow-only: prints where and how long each job ran" || fail "shadow-only times" "$(cat "$tmp/so.out")"
+! grep -q '^gh ' "$STUB_CALLS" && ! grep -qvE '^k2 compute (run|wait|get|receipt|fetch) ' "$STUB_CALLS" \
+    && pass "shadow-only: only k2 compute run/wait/get/receipt/fetch (no GitHub, no cancel)" || fail "shadow-only calls" "$(cat "$STUB_CALLS")"
+[ -z "$(git -C "$repo2" status --porcelain)" ] && [ "$(git -C "$repo2" tag)" = "" ] && [ "$(git -C "$repo2" rev-parse HEAD)" = "$C2" ] \
+    && pass "shadow-only: the checkout is untouched (no tag, no commit, no files)" || fail "shadow-only repo" "$(git -C "$repo2" status --porcelain)"
+rc=0; (cd "$repo2" && bash "$ROOT/scripts/lib/compute-release.sh" --shadow-only) >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && pass "shadow-only: no sha = usage (exit 2)" || fail "shadow-only usage" "rc=$rc"
+rc=0; (cd "$repo2" && bash "$ROOT/scripts/lib/compute-release.sh" --shadow-only deadbeefdead) >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && pass "shadow-only: an unknown sha is refused (exit 2)" || fail "shadow-only bad sha" "rc=$rc"
+rc=0; (cd "$repo2" && bash "$ROOT/scripts/lib/compute-release.sh" --tag v1) >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && pass "standalone: only --shadow-only is accepted" || fail "standalone usage" "rc=$rc"
+python3 - "$ROOT/scripts/release.sh" <<'PY' && pass "release.sh: a 7.9c wait timeout defers collect to Step 10.7 (never holds the release)" || fail "late collect" "release.sh"
+import sys
+s = open(sys.argv[1]).read()
+c = s[s.index("k2_shadow_collect() {"):s.index("k2_shadow_tree_check() {")]
+r = s[s.index("k2_shadow_report() {"):]
+assert "K2_SHADOW_LATE=1" in c and c.index("K2_SHADOW_LATE=1") < c.index("k2cr_collect"), "collect"
+assert 'if [ "$K2_SHADOW_LATE" = "1" ]' in r and "K2_COMPUTE_LATE_WAIT_MIN" in r, "report"
+assert r.index("k2cr_collect") < r.index("k2cr_compare_github"), "order"
+PY
 
 echo "shadow report vs GitHub:"
 export STUB_REL="$tmp/rel" STUB_DIR="$tmp/stub-ok" STUB_CALLS="$tmp/calls-ok"

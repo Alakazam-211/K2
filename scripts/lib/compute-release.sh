@@ -15,24 +15,48 @@
 #   k2cr_compare_github <tag>    shadow report vs the GitHub-built assets
 #   k2cr_cancel_open             best effort, for an aborted release
 #
+# Standalone (a dry run of the shadow builds for any commit; no bump, no
+# tag, no signing, no publishing, no GitHub compare; only git reads here
+# and `k2 compute` client calls):
+#   bash scripts/lib/compute-release.sh --shadow-only <sha> [--wait-min N]
+# Run it from the release checkout (the repo that has <sha>). The version
+# is crates/k2-daemon/Cargo.toml at <sha>. Audit:
+# ${K2_RELEASE_AUDIT_DIR:-~/k2-release-audit}/shadow-<sha12>/{compute,files}.
+# Exit 0 = every job built, came back with a receipt, was fetched and
+# verified (and V1 matched L1 when V1 ran); 1 = not; 2 = usage.
+#
 # State dir (the audit archive, G13: ~/k2-release-audit/<v>/compute):
 #   jobs.tsv, <label>/{get,receipt,fetch}.json, <label>.verdict.json,
 #   shadow-report.json, summary.txt. Files dir holds the fetched bytes
 #   (big; target/compute-dist/<v>), and <files-dir>-github the GitHub
 #   assets the shadow report compares them with.
 #
-# Settings (env; defaults are the plan's nodes):
-#   K2_COMPUTE_X86_NODE      k2n4-vin    L1: daemon, node, root helper, engine
-#   K2_COMPUTE_APP_NODE      k2n5-vin    L3: deb, rpm, AppImage
+# Settings (env). Every job is sent with --gate (= --tier ci: next free
+# slot; the workspace needs a grant with --ci on each node).
+#   K2_COMPUTE_NODE          k2n9-vin    the default node for L1 and L3.
+#                                        0.46.7 vendors the private Yrs fork
+#                                        (vendor/k2-mpc-base/vendor/yrs), so
+#                                        its jobs may run only on k2n9-vin or
+#                                        k2-arch until Rosson lifts that. One
+#                                        node = the jobs run one after another
+#                                        (a grant runs 1 job at a time).
+#   K2_COMPUTE_X86_NODE      $K2_COMPUTE_NODE  L1: daemon, node, root helper, engine
+#   K2_COMPUTE_APP_NODE      $K2_COMPUTE_NODE  L3: deb, rpm, AppImage
 #   K2_COMPUTE_VERIFY_NODE   (unset)     V1: second x86 build of the root-key
 #                                        assets on another node (G12 compare)
 #   K2_COMPUTE_ARM_NODE      (unset)     L2: aarch64, natively. Unset until the
 #                                        ARM Linux VM exists (G10); GitHub still
 #                                        builds aarch64 then.
-#   K2_COMPUTE_RELEASE_NODES "k2n4-vin,k2n5-vin,k2n6-hil" (+ the ARM node):
-#                                        a receipt from any other node fails
+#   K2_COMPUTE_RELEASE_NODES the build pool: k2n7-vin … k2n12-vin, k2-arch
+#                                        (+ the ARM node): a receipt from any
+#                                        other node fails. k2n4/5/6 are gone.
+#   K2_COMPUTE_QUEUE_TIMEOUT 2h          --queue-timeout per job (on one node
+#                                        the last job queues behind the others)
 #   K2_COMPUTE_RUST          stable      rust@<this> (pin it for G12)
-#   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run
+#   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run (z3mbpZ's
+#                                        release checkout: pod-leader-4)
+#   K2_COMPUTE_CPUS          (unset)     --cpus per job (unset: the node's default,
+#                                        4 on the Ryzens; z3mbpZ's share allows 8)
 #   K2_COMPUTE_OAUTH         placeholder placeholder | env: pass this Mac's
 #                                        Gmail/MS OAuth values with --env
 #                                        (stored in the job plan; Q4) |
@@ -75,7 +99,7 @@ k2cr_init() {
 }
 
 k2cr_release_nodes() {
-    local n="${K2_COMPUTE_RELEASE_NODES:-k2n4-vin,k2n5-vin,k2n6-hil}"
+    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin,k2n12-vin,k2-arch}"
     [ -n "${K2_COMPUTE_ARM_NODE:-}" ] && n="$n,$K2_COMPUTE_ARM_NODE"
     printf '%s' "$n"
 }
@@ -89,9 +113,10 @@ k2cr_submit() {
     shift 5
     [ "${1:-}" = "--" ] && shift
     local -a args=(compute run "$node" --sha "$K2CR_COMMIT" --detach --gate --json
-        --artifact 'dist/*' --needs "$needs" --mem 16G --queue-timeout 45m --retries 1
+        --artifact 'dist/*' --needs "$needs" --mem 16G --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1
         --env "BUILD_COMMIT=$K2CR_COMMIT" --env "BUILD_TREE=$K2CR_TREE")
     [ -n "${K2_COMPUTE_WORKSPACE:-}" ] && args+=(--workspace "$K2_COMPUTE_WORKSPACE")
+    [ -n "${K2_COMPUTE_CPUS:-}" ] && args+=(--cpus "$K2_COMPUTE_CPUS")
     if [ "$kind" = "linux-bins" ]; then
         if [ "${K2_COMPUTE_OAUTH:-placeholder}" = "env" ]; then
             [ -n "${K2_GMAIL_CLIENT_ID:-}" ] && [ -n "${K2_GMAIL_CLIENT_SECRET:-}" ] \
@@ -129,8 +154,9 @@ k2cr_submit_release_set() {
     local rust="rust@${K2_COMPUTE_RUST:-stable}" rc=0
     local bins_needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev"
     local app_needs="$rust,cmake@3,bun@1.2,sys:pkg-config,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:patchelf,sys:libxdo-dev,sys:file,sys:xdg-utils,sys:libssl-dev"
-    k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-k2n4-vin}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
-    k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-k2n5-vin}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1
+    local node="${K2_COMPUTE_NODE:-k2n9-vin}"
+    k2cr_submit L1 "${K2_COMPUTE_X86_NODE:-$node}" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
+    k2cr_submit L3 "${K2_COMPUTE_APP_NODE:-$node}" linux-app x86_64 "$app_needs" -- bash scripts/ci/build-linux-app.sh || rc=1
     if [ -n "${K2_COMPUTE_VERIFY_NODE:-}" ]; then
         k2cr_submit V1 "$K2_COMPUTE_VERIFY_NODE" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
     fi
@@ -241,3 +267,60 @@ k2cr_cancel_open() {
     done
     echo "  compute jobs cancelled (release stopped before they were collected)." >&2
 }
+
+# One line per job: where, how long it queued and ran, how it ended.
+k2cr_job_times() {
+    local label job node kind arch argv_json
+    while IFS=$'\t' read -r label job node kind arch argv_json; do
+        [ -n "$label" ] || continue
+        python3 - "$K2CR_STATE/$label/get.json" "$label" "$job" "$node" <<'PY' 2>/dev/null || echo "  $label: job ${job:0:8} on $node (no result)"
+import json, sys
+path, label, job, node = sys.argv[1:5]
+g = json.load(open(path))
+q, d = g.get("queueSecs"), g.get("durationSecs")
+fmt = lambda s: "?" if s is None else f"{s / 60:.1f} min"
+print(f"  {label}: job {job[:8]} on {node}: {g.get('state')} exit {g.get('exit')}, queued {fmt(q)}, ran {fmt(d)}")
+PY
+    done < "$K2CR_STATE/jobs.tsv"
+}
+
+# ── Standalone: --shadow-only <sha> (see the header) ──
+k2cr_shadow_only_main() {
+    local usage="usage: bash scripts/lib/compute-release.sh --shadow-only <sha> [--wait-min N]"
+    local sha="" wait_min=90
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --shadow-only) [ $# -ge 2 ] || { echo "$usage" >&2; return 2; }; sha="$2"; shift 2 ;;
+            --wait-min) [ $# -ge 2 ] || { echo "$usage" >&2; return 2; }; wait_min="$2"; shift 2 ;;
+            *) echo "$usage" >&2; return 2 ;;
+        esac
+    done
+    [ -n "$sha" ] || { echo "$usage" >&2; return 2; }
+    case "$wait_min" in ''|*[!0-9]*) echo "$usage" >&2; return 2 ;; esac
+    local commit version short base rc=0
+    commit="$(git rev-parse --verify --quiet "${sha}^{commit}")" \
+        || { echo "FATAL: $sha is not a commit in $(pwd) (run from the release checkout)" >&2; return 2; }
+    version="$(git show "$commit:crates/k2-daemon/Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)"
+    [ -n "$version" ] || { echo "FATAL: no version in crates/k2-daemon/Cargo.toml at ${commit:0:12}" >&2; return 1; }
+    short="${commit:0:12}"
+    base="${K2_RELEASE_AUDIT_DIR:-$HOME/k2-release-audit}/shadow-$short"
+    echo "Shadow-only: K2 Compute Linux builds for ${short} (version ${version}). No tag, no signing, no publishing."
+    k2cr_init "$version" "$commit" "$base/compute" "$base/files" || return 1
+    echo "  Audit: $K2CR_STATE"
+    k2cr_submit_release_set || rc=1
+    if [ ! -s "$K2CR_STATE/jobs.tsv" ]; then
+        echo "  ✗ no job was submitted" >&2
+        return 1
+    fi
+    k2cr_wait "$wait_min" || rc=1
+    k2cr_collect || rc=1
+    k2cr_job_times | tee -a "$K2CR_STATE/summary.txt"
+    echo "Audit: $K2CR_STATE (summary.txt, <label>.verdict.json); files: $K2CR_FILES"
+    return "$rc"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0:-}" ]; then
+    set -uo pipefail
+    k2cr_shadow_only_main "$@"
+    exit $?
+fi

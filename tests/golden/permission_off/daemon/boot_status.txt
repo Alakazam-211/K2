@@ -56,6 +56,7 @@ features:
   push-content-available-v1
   thread-read-v1
   homes-sync-v1
+  stash-sync-v1
   inbox-catchup-v1
   catchup-unchanged-v1
   inbox-stream-v1

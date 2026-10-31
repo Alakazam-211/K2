@@ -75,12 +75,6 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'lib/daemon-settings.ts': 'settings fetch via getDaemonWs(scope)',
   'stores/claude-auth.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/app-update-driver.ts': 'local app-update driver',
-  // 0.46.7 live docs (plan L2): the Live view's one-attempt socket to
-  // WS /cli/docs/live; the URL and token come from the caller's scope, and
-  // the editor's own retry loop owns reconnects (not the dial queue yet).
-  // Temporary: the Live editor slice must dial through grid-dial-queue
-  // (MS70) before any UI uses it.
-  'lib/docs-live-transport.ts': 'live docs socket (WS /cli/docs/live) from the caller\'s scope; one attempt per connect',
   // Not daemon calls.
   'components/Settings/lib/k2-account.ts': 'Supabase account API, not a daemon',
   'components/Settings/lib/account-db-daemon.ts': 'raw /cli/tunnel/config fetch via getLocalDaemonWs() (the account session is this machine\'s, like the Tunnel panel)',

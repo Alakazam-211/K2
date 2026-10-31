@@ -150,6 +150,9 @@ export type LiveExtraClientFrame =
   | { type: 'snapshot'; op: number }
   | { t: 'viewing'; visible: boolean }
   | { type: 'view'; first: number; last: number; root?: string }
+  /** K2's: the app showed this person their removed-text notes; the daemon
+   *  delivers them (`take_notes`), so no later snapshot repeats them. */
+  | { type: 'take_notes' }
 
 export type LiveClientFrame = ClientFrame | LiveExtraClientFrame
 
@@ -176,9 +179,20 @@ export interface LiveTransport {
 
 /** A refused or failed `connect`. */
 export class LiveConnectError extends Error {
+  /** The close's own fields too, so the kit's editor reads the rejection as
+   *  its `CloseEvent` (`{reason, retry, code?, error?}`) and goes by the
+   *  close table instead of retrying a refusal. */
+  readonly reason: LiveCloseReason
+  readonly retry: boolean
+  readonly code?: string
+  readonly error?: ErrorReport
   constructor(readonly close: LiveClose) {
     super(close.message ?? `live socket: ${close.reason}`)
     this.name = 'LiveConnectError'
+    this.reason = close.reason
+    this.retry = close.retry
+    if (close.code !== undefined) this.code = close.code
+    if (close.error !== undefined) this.error = close.error
   }
 }
 
@@ -196,8 +210,10 @@ export interface LiveSocket {
 export interface LiveTransportOptions {
   /** The socket URL for one attempt (`resume` and `prev` when reconnecting). */
   url: (resume: number | undefined, prev: number | undefined) => Promise<string>
-  /** Opens a socket (default: `new WebSocket(url)`). */
-  open?: (url: string, signal: AbortSignal) => Promise<LiveSocket>
+  /** Opens a socket. Required: every daemon socket dials through the
+   *  server's queue (MS70, the dial queue), so this module never makes one
+   *  itself (`docs-live-daemon.ts` passes `openQueuedWebSocket`). */
+  open: (url: string, signal: AbortSignal) => Promise<LiveSocket>
   /**
    * After a failed dial only (the socket ended before it opened: a refused
    * upgrade looks exactly like a network failure to a browser), one cheap
@@ -279,13 +295,8 @@ function abortError(): Error {
   return e
 }
 
-function defaultOpen(url: string, signal: AbortSignal): Promise<LiveSocket> {
-  if (signal.aborted) return Promise.reject(abortError())
-  return Promise.resolve(new WebSocket(url) as unknown as LiveSocket)
-}
-
 export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
-  const open = opts.open ?? defaultOpen
+  const open = opts.open
   const frameCbs = new Set<(f: LiveServerFrame) => void>()
   const closeCbs = new Set<(e: LiveClose) => void>()
   let sock: LiveSocket | null = null

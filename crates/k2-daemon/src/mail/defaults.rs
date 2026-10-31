@@ -93,7 +93,7 @@ pub fn parse_version(v: &str) -> Option<Ver> {
     Some((a, b, c))
 }
 
-fn ver_str(v: Ver) -> String {
+pub fn ver_str(v: Ver) -> String {
     format!("{}.{}.{}", v.0, v.1, v.2)
 }
 

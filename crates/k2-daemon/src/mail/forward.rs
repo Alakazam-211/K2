@@ -379,6 +379,9 @@ fn set_external(row: &MailAddress, caller: &Caller, dest: &str, keep: bool, now:
     if email_notify::airgap_blocks() {
         return Err(fail(409, "air_gap", "air-gap is on: nothing leaves this server, so it can't forward outside"));
     }
+    if !forward_sync::outside_forward_supported() {
+        return Err(fail(409, "upgrade_required", forward_sync::UPGRADE_HINT));
+    }
     let mb = forward_sync::mailbox(&row.id).map_err(email_notify::db_fail)?.ok_or_else(|| fail(404, "not_found", "no such mailbox"))?;
     if mb.send_mode.as_deref() == Some("receive-only") {
         return Err(fail(

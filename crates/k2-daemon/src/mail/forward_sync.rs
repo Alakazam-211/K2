@@ -149,6 +149,47 @@ pub fn ctx() -> Ctx {
     Ctx { host: mail_host(), airgap: crate::push_routes::airgap_blocks(), now: now() }
 }
 
+// ── the mail server's version ───────────────────────────────────────
+
+/// The oldest Stalwart outside forwards are proven on (the live probe,
+/// tests/mail/stalwart-forward-external-probe.py, every check green on
+/// 0.16.25; on 0.16.10 its control redirect never reached the sink).
+/// Same-box forwards work on every version.
+pub const V_OUTSIDE_FORWARD: super::defaults::Ver = (0, 16, 25);
+
+/// The refusal hint for an older (or unknown) mail server.
+pub const UPGRADE_HINT: &str =
+    "outside forwarding needs the mail server upgraded: k2 hostmail upgrade (same-box forwards work as they are)";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_VERSION: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: this thread's installed mail server version (`Some(None)`:
+/// unknown; `None`: the default, the pinned version).
+#[cfg(test)]
+pub(crate) fn set_test_version(v: Option<Option<String>>) {
+    TEST_VERSION.with(|c| *c.borrow_mut() = v);
+}
+
+fn installed_version() -> Option<String> {
+    #[cfg(test)]
+    {
+        TEST_VERSION.with(|c| c.borrow().clone()).unwrap_or_else(|| Some(super::defaults::ver_str(V_OUTSIDE_FORWARD)))
+    }
+    #[cfg(not(test))]
+    {
+        super::supervisor::row_field("installed_version")
+    }
+}
+
+/// Can this server's mail server run an outside forward? Unknown → no
+/// (fail closed).
+pub fn outside_forward_supported() -> bool {
+    installed_version().as_deref().and_then(super::defaults::parse_version).is_some_and(|v| v >= V_OUTSIDE_FORWARD)
+}
+
 // ── the mailbox ─────────────────────────────────────────────────────
 
 /// The forwarding mailbox as the reconcile needs it.
@@ -332,10 +373,16 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
         return Err(format!("mail forwards: mailbox {address_id} has no mail-server account"));
     };
     let current = io.read(account)?;
-    let want = desired(&current, live.as_ref(), ctx);
+    let mut want = desired(&current, live.as_ref(), ctx);
+    // Fail closed on a mail server older than the one outside forwards are
+    // proven on (or an unknown one): no outside forward block.
+    if want.forward.as_ref().is_some_and(|f| f.guard.is_some()) && !outside_forward_supported() {
+        want.forward = None;
+        k2_core::log_debug!("{P} WARN mailbox {address_id}: outside forward not written: {UPGRADE_HINT}");
+    }
     out.blocked = live.as_ref().is_some_and(|f| f.is_active()) && want.forward.is_none();
     if out.blocked {
-        k2_core::log_debug!("{P} WARN forward {} is active but not written: this box's mail host name is missing or invalid", live.as_ref().map(|f| f.id.as_str()).unwrap_or(""));
+        k2_core::log_debug!("{P} WARN forward {} is active but not written (mail host name or mail server version)", live.as_ref().map(|f| f.id.as_str()).unwrap_or(""));
     }
     if in_sync(&current, &want) {
         return Ok(out);

@@ -282,3 +282,27 @@ fn set_without_to_or_address_is_usage() {
     let (st, _) = post(FORWARD_PATH, json!({ "address": "nobody@no-such-fwd.example.test", "to": OUT }));
     assert_eq!(st, 404);
 }
+
+/// Outside forwards are proven on Stalwart 0.16.25: an older (or unknown)
+/// mail server refuses them with the upgrade hint; same-box forwards still
+/// work there.
+#[test]
+fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
+    let t = t("fwver");
+    system_sender_on();
+    for v in [Some("0.16.10".to_string()), Some("v0.16.20".to_string()), None] {
+        crate::mail::forward_sync::set_test_version(Some(v.clone()));
+        let n = t.f.engine.sent.lock().unwrap().len();
+        let (st, body) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+        assert_eq!((st, body["error"]["code"].clone()), (409, json!("upgrade_required")), "{v:?}: {body}");
+        assert!(body["error"]["hint"].as_str().unwrap_or("").contains("k2 hostmail upgrade"), "{body}");
+        assert_eq!(t.f.engine.sent.lock().unwrap().len(), n, "no confirm mail on {v:?}");
+    }
+    seed_mailbox("team@notify.brand.test", "direct");
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "same-box still works: {v}");
+    assert!(t.io.forward(ACC).is_some());
+    crate::mail::forward_sync::set_test_version(Some(Some("0.16.25".to_string())));
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 202, "the pinned version: {v}");
+}

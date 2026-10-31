@@ -64,6 +64,7 @@ pub(crate) fn install(airgap: bool) -> Rc<FakeSieve> {
 pub(crate) fn uninstall() {
     set_test_io(None);
     set_test_ctx(None);
+    set_test_version(None);
 }
 
 /// A mailbox on a fresh domain (`send_mode`), account `acc-<local>`.
@@ -317,4 +318,29 @@ fn a_failed_sieve_write_keeps_the_row_change_and_says_so() {
     // The removed row's mailbox is still on the reconcile's list.
     reconcile_with(io.as_ref(), false, &ctx());
     assert_eq!(io.forward("acc-down"), None);
+}
+
+/// A mail server older than 0.16.25 (or unknown) never gets an outside
+/// forward block, even for an active row (fail closed); same-box blocks are
+/// written as before.
+#[test]
+fn an_older_mail_server_gets_no_outside_block() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("old@brand.test", "direct");
+    let v = verified_row("old@brand.test", "me@outside.test");
+    create(&aid, "old@brand.test", "me@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v));
+    let inside = seed_mailbox("in@brand.test", "direct");
+    create(&inside, "in@brand.test", "old@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None);
+    for ver in [Some("0.16.10".to_string()), None] {
+        set_test_version(Some(ver.clone()));
+        let s = sync_mailbox(&aid, Why::Change).expect("sync");
+        assert!(s.blocked, "{ver:?}");
+        assert_eq!(io.forward("acc-old"), None, "{ver:?}");
+        sync_mailbox(&inside, Why::Change).expect("sync");
+        assert!(io.forward("acc-in").is_some(), "same-box on {ver:?}");
+    }
+    set_test_version(Some(Some("0.16.25-k2.1".to_string())));
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    assert!(io.forward("acc-old").is_some_and(|f| f.guard.is_some()));
 }

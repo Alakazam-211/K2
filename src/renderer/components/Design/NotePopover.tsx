@@ -198,7 +198,7 @@ export function NotePopover({
             </div>
           ) : null}
           <div className="flex items-center gap-1.5">
-            <button type="button" onClick={onCancel} className="px-2 h-6 cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text)]">
+            <button type="button" onClick={onCancel} className="px-2 h-6 cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
               Cancel
             </button>
             <span className="flex-1" />

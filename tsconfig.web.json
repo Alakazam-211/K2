@@ -19,13 +19,17 @@
       "@/*": ["./src/renderer/*"],
       "@shared/*": ["./src/shared/*"],
       "@k2/activity": ["./sdk/activity/src/core.ts"],
-      "@k2/mpc-editor": ["./vendor/k2-mpc-base/client/src/editor/index.ts"]
+      "@k2/mpc-client": ["./vendor/k2-mpc-base/client/src/index.ts"]
     }
   },
   "include": [
     "sdk/activity/src/**/*.ts",
     "vendor/k2-mpc-base/client/src/**/*.ts",
     "vendor/k2-mpc-base/client/test/jsdom-shims.ts",
+    "vendor/k2-mpc-base/client/test/fake-live.ts",
+    "vendor/k2-mpc-base/client/test/fake-server.ts",
+    "vendor/k2-mpc-base/client/test/random-edits.ts",
+    "vendor/k2-mpc-base/client/test/runrec.ts",
     "tests/fixtures/activity/*.json",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",

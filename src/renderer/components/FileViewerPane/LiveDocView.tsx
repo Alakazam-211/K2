@@ -1,6 +1,7 @@
 // The Live view: a file whose multiplayer core is on (Settings → Cores →
-// Multiplayer) opens in the kit's Live editor (`mountLiveEditor`,
-// vendor/k2-mpc-base/client/EDITOR.md) over K2's socket, `WS /cli/docs/live`,
+// Multiplayer) opens in K2's Live editor (`mountLiveEditor`,
+// components/LiveEditor; behaviour as vendor/k2-mpc-base/client/EDITOR.md
+// describes) over K2's socket, `WS /cli/docs/live`,
 // dialled through the server's queue (MS70, `docs-live-daemon.ts`).
 //
 // Everyone in the file sees each other's carets and edits as they happen;
@@ -24,7 +25,7 @@ import {
   type LiveEditorHandle,
   type LiveTransport as KitLiveTransport,
   type RemovedTextNote,
-} from '@k2/mpc-editor'
+} from '@/components/LiveEditor'
 import type { ServerScope } from '@/kessel/server-scope'
 import { createDaemonLiveTransport } from '@/lib/docs-live-daemon'
 import type { LiveTransport } from '@/lib/docs-live-transport'
@@ -185,7 +186,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
         {closed && closed.code !== 'core_off' && (
           <button
             type="button"
-            className="ml-auto rounded border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+            className="ml-auto rounded border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
             onClick={() => setMountKey((k) => k + 1)}
           >
             Reopen
@@ -197,7 +198,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
           {notes.map((n) => {
             const key = `${n.change}:${n.row ?? ''}`
             return (
-              <div key={key} className="rounded border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-[var(--color-text)]" role="alert">
+              <div key={key} className="rounded border border-yellow-500/40 bg-yellow-500/10 p-2 text-xs text-[var(--color-text-primary)]" role="alert">
                 <div className="whitespace-pre-wrap break-words">{n.message}</div>
                 <div className="mt-1 flex gap-2">
                   {noteText(n) && (

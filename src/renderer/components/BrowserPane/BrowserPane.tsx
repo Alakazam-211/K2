@@ -711,7 +711,7 @@ export function BrowserPane({
   const historyButtonClass = (enabled: boolean): string =>
     `flex h-5 w-5 items-center justify-center flex-shrink-0 ${
       enabled
-        ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+        ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
         : 'text-[var(--color-text-muted)] opacity-30'
     }`
 
@@ -786,7 +786,7 @@ export function BrowserPane({
               e.currentTarget.blur()
             }
           }}
-          className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text)] font-mono outline-none focus:border-[var(--color-text-muted)]"
+          className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-primary)] font-mono outline-none focus:border-[var(--color-text-muted)]"
         />
         <div className="flex h-full shrink-0">
         <button

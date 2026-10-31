@@ -35,7 +35,7 @@ export interface NoteTrayProps {
 }
 
 const ICON_BUTTON =
-  'flex h-5 w-5 flex-shrink-0 items-center justify-center cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text)] disabled:opacity-40 disabled:cursor-default'
+  'flex h-5 w-5 flex-shrink-0 items-center justify-center cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-default'
 
 export function NoteTray({
   notes,
@@ -84,7 +84,7 @@ export function NoteTray({
           type="button"
           onClick={onClear}
           disabled={sending || notes.length === 0}
-          className="flex h-6 items-center px-1.5 cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text)] disabled:opacity-50"
+          className="flex h-6 items-center px-1.5 cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
         >
           Clear
         </button>

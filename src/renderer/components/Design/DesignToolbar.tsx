@@ -31,7 +31,7 @@ export function DesignPaletteButton({ armed, onToggle, disabled = false }: Desig
       className={`ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center cursor-pointer disabled:opacity-30 ${
         armed
           ? 'text-[var(--color-accent)] hover:text-[var(--color-accent-hover,var(--color-accent))]'
-          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
       }`}
     >
       <PaletteIcon size={K2_ICON_PX} />

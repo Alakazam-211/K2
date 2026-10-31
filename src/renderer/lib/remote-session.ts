@@ -287,7 +287,9 @@ async function doRevive(hostId: string): Promise<ReviveOutcome> {
   // The SAME mint flow boot uses (loginToHost already rides withRemoteRetry
   // for the dead-pooled-socket eviction and commits the token + keychain
   // cache on success). The password never leaves this scope.
-  const result = await loginToHost(host, password)
+  // A silent revival, not the person's own sign-in: it must not reload
+  // every host-scoped store (revive-and-replay finishes the request).
+  const result = await loginToHost(host, password, undefined, { revival: true })
   if (result.ok) {
     if (result.mustChangePassword) {
       // W4: the remembered password is a TEMPORARY one — the daemon minted a

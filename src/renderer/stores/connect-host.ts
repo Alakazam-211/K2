@@ -159,6 +159,16 @@ export function isLocalHostname(hostname: string): boolean {
 
 export type ActiveHost = 'local' | ConnectHost
 
+/** `setHostToken` options (0.46.8). */
+export interface SetHostTokenOpts {
+  /** The token is a RESTRICTED session (mustChangePassword). Absent = a
+   *  full session. */
+  restricted?: boolean
+  /** A person's own sign-in (not the silent revival): when it replaces
+   *  the ACTIVE host's full token, host-scoped stores reload. */
+  signIn?: boolean
+}
+
 /**
  * A stable string identity for the active host — `'local'` for This Mac,
  * or `${id}:${hostname}:${port}` for a remote. Changes IFF the user
@@ -199,10 +209,15 @@ export function duplicateSavedHostMessage(dup: Pick<ConnectHost, 'label' | 'host
 
 /** Whether the active host carries a usable session: 'local' always does
  *  (per-boot daemon token, resolved by daemon-ws); a remote does IFF it
- *  holds a non-empty session token. `expireSession` flips an active
- *  remote to tokenless; a sign-in mint flips it back. */
-function activeHostAuthed(active: ActiveHost): boolean {
-  return active === 'local' || active.token.length > 0
+ *  holds a non-empty session token that is a FULL session. A RESTRICTED
+ *  session (a temporary password: every route but whoami / change-password
+ *  / logout answers 403 password_change_required) is not usable yet, so
+ *  the fetch burst waits for the full token the rotation step mints.
+ *  `expireSession` flips an active remote to tokenless; a sign-in mint
+ *  flips it back. */
+function activeHostAuthed(state: Pick<ConnectHostState, 'activeHost' | 'restrictedHosts'>): boolean {
+  const active = state.activeHost
+  return active === 'local' || (active.token.length > 0 && !state.restrictedHosts.includes(active.id))
 }
 
 /**
@@ -226,6 +241,15 @@ function activeHostAuthed(active: ActiveHost): boolean {
  * NOT fire — daemon-cli's revive-and-replay already completes those
  * requests, and a mid-session full reset would churn live surfaces.
  *
+ * 0.46.8 (temporary passwords on every login someone else makes): a
+ * RESTRICTED session is not "authed", so signing in with a temporary
+ * password does not fire (its burst would only collect 403s and leave
+ * every list empty), and the FULL token the rotation step mints right
+ * after IS the mint that fires. A person's own sign-in that replaces the
+ * active host's token (loginToHost without `revival`, `sessionEpoch`)
+ * also fires: they signed in again because something looked wrong, and
+ * replaying the burst is the fix. Only the silent revival stays quiet.
+ *
  * This is the single seam the per-machine session stores hook to clear
  * their local-ID-keyed state on a host switch (#625). It runs AFTER
  * `activeHost` has already flipped, so any reload the callback triggers
@@ -236,18 +260,23 @@ export function onActiveHostChange(
   onChange: (nextKey: string, prevKey: string) => void,
 ): () => void {
   let lastKey = activeHostKey(useConnectHostStore.getState().activeHost)
-  let lastAuthed = activeHostAuthed(useConnectHostStore.getState().activeHost)
+  let lastAuthed = activeHostAuthed(useConnectHostStore.getState())
+  let lastEpoch = useConnectHostStore.getState().sessionEpoch
   return useConnectHostStore.subscribe((state) => {
     const nextKey = activeHostKey(state.activeHost)
-    const nextAuthed = activeHostAuthed(state.activeHost)
+    const nextAuthed = activeHostAuthed(state)
     const keyChanged = nextKey !== lastKey
-    // Same host, session minted (tokenless → token): the switch-time fetch
-    // burst died against the dead session — replay it now that it can
-    // succeed. The authed → UNAUTHED transition (expireSession) only
-    // records state: firing there would launch a burst guaranteed to fail.
+    // Same host, session minted (tokenless or restricted → full token):
+    // the switch-time fetch burst died against the dead (or restricted)
+    // session — replay it now that it can succeed. The authed → UNAUTHED
+    // transition (expireSession, a restricted login) only records state:
+    // firing there would launch a burst guaranteed to fail.
     const sessionMinted = !keyChanged && !lastAuthed && nextAuthed
+    // Same host, the person signed in again (full → new full token).
+    const reSignedIn = !keyChanged && nextAuthed && state.sessionEpoch !== lastEpoch
     lastAuthed = nextAuthed
-    if (!keyChanged && !sessionMinted) return
+    lastEpoch = state.sessionEpoch
+    if (!keyChanged && !sessionMinted && !reSignedIn) return
     const prevKey = lastKey
     lastKey = nextKey
     onChange(nextKey, prevKey)
@@ -315,6 +344,15 @@ export interface ConnectHostState {
    * normal password prompt never inherits the rotation step.
    */
   signInRotate: boolean
+  /** 0.46.8: ids of hosts whose in-memory token is a RESTRICTED session
+   *  (signed in with a temporary password; only whoami / change-password
+   *  / logout work until the rotation step mints a full one). Set by
+   *  `setHostToken(id, token, { restricted })`; any other token write for
+   *  the host clears it. Not persisted. */
+  restrictedHosts: string[]
+  /** 0.46.8: bumped when a person's own sign-in replaces the ACTIVE
+   *  host's full token with another (see `onActiveHostChange`). */
+  sessionEpoch: number
   /** Switch the active daemon. Pass 'local' for This Mac, or a saved
    *  ConnectHost. Sets `connectionStatus:'connecting'` then flips
    *  `activeHost` synchronously. The renderer routes daemon-data through
@@ -350,7 +388,7 @@ export interface ConnectHostState {
    *  updated host is the active remote, the `activeHost` object is swapped
    *  synchronously so host-aware `daemonCli*` calls pick up the new
    *  token on their next read. */
-  setHostToken: (id: string, token: string) => void
+  setHostToken: (id: string, token: string, opts?: SetHostTokenOpts) => void
   /** Boot-time hydration: load the durable host list from
    *  ~/.k2so/connect-hosts.json, then resolve each REMEMBERED host's
    *  token from the keychain into memory. Idempotent; call once from the
@@ -770,6 +808,7 @@ export async function loginToHost(
   host: ConnectHost,
   password: string,
   timeoutMs = 8000,
+  opts: { revival?: boolean } = {},
 ): Promise<LoginResult> {
   const username = host.username?.trim() ?? ''
   if (!username) {
@@ -865,7 +904,10 @@ export async function loginToHost(
   // daemon-ws.ts (which reads activeHost.token) picks it up, and cache it
   // to the keychain for a silent next connect.
   const store = useConnectHostStore.getState()
-  store.setHostToken(host.id, body.token)
+  // 0.46.8: a restricted session is kept (the rotation step and the
+  // revival read it) but marked, so it is not "signed in" for the stores
+  // that reload on a mint; the full token after rotation is the mint.
+  store.setHostToken(host.id, body.token, { restricted: mustChangePassword, signIn: !opts.revival })
   const existing = store.hosts.find((h) => h.id === host.id)
   if (existing) {
     store.addHost({ ...existing, token: body.token, lastConnectedAt: Date.now() })
@@ -891,6 +933,8 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   signInRotate: false,
   serverVersion: null,
   serverProtocol: null,
+  restrictedHosts: [],
+  sessionEpoch: 0,
 
   selectHost: (hostOrLocal) => {
     // Hosted web client: never activate the Tauri local-daemon path
@@ -1181,9 +1225,26 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     )
   },
 
-  setHostToken: (id, token) => {
-    const { hosts, activeHost } = get()
+  setHostToken: (id, token, opts) => {
+    const { hosts, activeHost, restrictedHosts, sessionEpoch } = get()
     const hosts2 = hosts.map((h) => (h.id === id ? { ...h, token } : h))
+    const restricted = opts?.restricted === true && token.length > 0
+    const wasRestricted = restrictedHosts.includes(id)
+    const restrictedHosts2 =
+      restricted === wasRestricted
+        ? restrictedHosts
+        : restricted
+          ? [...restrictedHosts, id]
+          : restrictedHosts.filter((h) => h !== id)
+    // A person signed in again on the active host, full → new full token.
+    const isActive = activeHost !== 'local' && activeHost.id === id
+    const reSignIn =
+      opts?.signIn === true &&
+      isActive &&
+      !restricted &&
+      !wasRestricted &&
+      activeHost.token.length > 0 &&
+      activeHost.token !== token
     // Keep the active host object in sync if it's the one being updated,
     // so daemon-ws.ts + host-aware `daemonCli*` calls (which read
     // activeHost.token) see the new token. All synchronous — there is no
@@ -1192,7 +1253,12 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       activeHost !== 'local' && activeHost.id === id
         ? { ...activeHost, token }
         : activeHost
-    set({ hosts: hosts2, activeHost: active2 })
+    set({
+      hosts: hosts2,
+      activeHost: active2,
+      restrictedHosts: restrictedHosts2,
+      sessionEpoch: reSignIn ? sessionEpoch + 1 : sessionEpoch,
+    })
     // Web: mirror the bearer into sessionStorage so a reload can still
     // open WebSockets with ?token= (pragmatic; HTTP uses the k2_session
     // cookie). Cookie is set by login's Set-Cookie — not writable from JS.
@@ -1258,7 +1324,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
 export function __resetConnectHostStoreForTests(): void {
   const storage = getStorage()
   if (storage) clearConnectHostsStorage(storage)
-  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, signInActivate: true, signInRotate: false, serverVersion: null, serverProtocol: null })
+  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, signInActivate: true, signInRotate: false, serverVersion: null, serverProtocol: null, restrictedHosts: [], sessionEpoch: 0 })
 }
 
 /** The localStorage key, re-exported for tests / callers. */

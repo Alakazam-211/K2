@@ -1150,8 +1150,8 @@ fn members_roles_perms_bans_and_timeouts_go_through_sew_as_the_agent() {
     // so up front, and nothing reaches Sew's role create.
     let (s, v) = manage("role/create", json!({"space": "hearth", "role": "eng"}));
     assert_eq!((s, code(&v)), (403, "role_ladder"), "{v}");
-    assert_eq!(v["top"], json!(1), "{v}");
-    assert!(v["hint"].as_str().unwrap().contains("Managers role sits at the bottom"), "{v}");
+    assert_eq!(v["error"]["details"]["top"], json!(1), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("Managers role sits at the bottom"), "{v}");
     assert!(!e.fake.calls().iter().any(|c| c.op == "role_create"), "refused before Sew");
     // The Space's owner moves the Managers role up: room below it.
     e.fake.set_manager_position("sp-hearth", 3);
@@ -1174,7 +1174,7 @@ fn members_roles_perms_bans_and_timeouts_go_through_sew_as_the_agent() {
     e.fake.make_manager("sp-hearth", &e.rosson);
     let (s, v) = manage("role/add", json!({"space": "hearth", "role": "eng", "member": "@rosson"}));
     assert_eq!((s, code(&v)), (403, "role_ladder"), "{v}");
-    assert!(v["hint"].as_str().unwrap().contains("not below your top role"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("not below your top role"), "{v}");
     assert!(e.fake.role_holders(&role_id).is_empty());
     // Channel permissions: view/send only.
     let (s, v) = manage("channel/perms", json!({"to": "hearth/general", "role": "everyone", "deny": ["send"]}));

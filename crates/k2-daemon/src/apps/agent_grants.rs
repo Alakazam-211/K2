@@ -472,7 +472,7 @@ pub(crate) fn test_guest_after_approval(username: &str) -> String {
 /// App's service id, the role's id, room ids; never a password: the
 /// approval's one-time password set is the agent's,
 /// `test_guests::password`).
-pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, a: &TestGuestAsk<'_>) -> R<J> {
+pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &super::test_guests::GuestApp, a: &TestGuestAsk<'_>) -> R<J> {
     let mut body = json!({ "app": app.app_id, "service": app.service_id, "username": a.username, "rooms": a.rooms });
     if let Some(r) = a.role_id {
         body["role"] = json!(r);
@@ -492,7 +492,7 @@ pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &store::AppRow, a: &Test
     hold(
         Step {
             who,
-            app: Some(app),
+            app: app.row.as_ref(),
             label: &app.app_id,
             workspace: ws,
             route: TEST_GUEST_ADD,

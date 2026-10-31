@@ -1460,3 +1460,65 @@ async fn a_made_up_name_flood_on_one_apps_link_never_closes_another_app_or_the_b
     gateway::close("floodappb", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// A test guest of an App published with `k2 publish run --skin` (a
+/// published service with no runtime row): `--test` resolves the App the
+/// way `--app` does (`resolve_app_target`), so its publish name, its
+/// service id and `<workspace>/<name>` all name it; another workspace's
+/// agent still gets `app_not_found`. Before the fix every form answered
+/// `app_not_found` (the runtime App list only).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_guests_of_a_skin_published_app_resolve_like_the_app_flag() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "skinws");
+    let other = seed_ws(&env, "skinother");
+    let root = ws.path.to_string_lossy().to_string();
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::insert(&conn, &ws.id, "skinsite", "", &root, 47_311, "local", "stopped", k2_core::published_services::KIND_SKIN, &root)
+            .expect("skin service")
+            .id
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(k2_core::deploy::store::get_app_by_service(&conn, &svc).unwrap().is_none(), "a --skin App has no runtime row");
+    }
+    let add = |who: String, body: Value| {
+        let port = d.port;
+        async move { post(port, "/cli/app/test-guest/add", &who, body).await }
+    };
+    // The publish name, the service id and <workspace>/<name>.
+    for (n, app) in [("sk1", "skinsite".to_string()), ("sk2", svc.clone()), ("sk3", "skinws/skinsite".to_string())] {
+        let r = add(OWNER.to_string(), json!({"app": app, "username": n})).await;
+        assert_eq!(r.status, 200, "{app}: {}", r.body);
+        let v = r.json();
+        assert_eq!((v["appServiceId"].clone(), v["app"].clone()), (json!(svc), json!("skinws/skinsite")), "{v}");
+        let pid = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == n).expect("made").id;
+        let t = k2_core::skin::test_guests::get(&pid).unwrap().expect("a test guest");
+        assert_eq!((t.app.as_str(), t.workspace_id.as_str()), (svc.as_str(), ws.id.as_str()));
+    }
+    // An unknown App is still app_not_found.
+    let r = add(OWNER.to_string(), json!({"app": "nosuchsite", "username": "sk9"})).await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    // The App's own agent (its Apps' users on) adds and lists; another
+    // workspace's agent never sees it.
+    allow_manage(&ws, true);
+    let r = add(passport(&ws), json!({"app": "skinsite", "username": "sk4"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["tied"], json!(true), "{}", r.body);
+    let r = get(d.port, "/cli/app/test-guests", &passport(&ws), "app=skinsite").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let listed = r.json()["testGuests"].as_array().expect("list").len();
+    assert_eq!(listed, 4, "{}", r.body);
+    allow_manage(&other, true);
+    let r = add(passport(&other), json!({"app": "skinsite", "username": "sk5"})).await;
+    assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
+    // The agent removes its own guest of the --skin App.
+    let r = post(d.port, "/cli/app/test-guest/rm", &passport(&ws), json!({"username": "sk4"})).await;
+    assert_eq!((r.status, r.json()["removed"].clone()), (200, json!(true)), "{}", r.body);
+    drop(env);
+}

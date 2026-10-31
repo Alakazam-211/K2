@@ -43,6 +43,73 @@ use serde_json::{json, Value as J};
 
 use super::routes::{actor, agent_ws, app_for, json_body, need_build, need_credential, no, s, ws_by_id, Who, R};
 
+/// The App a test guest belongs to: a runtime App (`k2 app list`), or an
+/// App published with `k2 publish run --skin` (a published service with
+/// no runtime row). `app_id` is what answers and audits name: the runtime
+/// App id, else `<workspace>/<publish name>`, which resolves back here.
+#[derive(Debug, Clone)]
+pub(crate) struct GuestApp {
+    pub app_id: String,
+    pub service_id: String,
+    pub owner_workspace: String,
+    /// The runtime row, when there is one (held requests file against it).
+    pub row: Option<AppRow>,
+}
+
+impl From<AppRow> for GuestApp {
+    fn from(r: AppRow) -> Self {
+        GuestApp { app_id: r.app_id.clone(), service_id: r.service_id.clone(), owner_workspace: r.owner_workspace.clone(), row: Some(r) }
+    }
+}
+
+/// The App behind a service id: its runtime row, else the published
+/// service (a `--skin` App).
+fn published_app(svc: &str) -> R<Option<GuestApp>> {
+    let row = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        if let Some(r) = deploy::store::get_app_by_service(&conn, svc).map_err(|e| no("db_error", 500, e.to_string()))? {
+            return Ok(Some(r.into()));
+        }
+        k2_core::published_services::get_by_id(&conn, svc).map_err(|e| no("db_error", 500, e.to_string()))?
+    };
+    Ok(row.map(|r| GuestApp {
+        app_id: format!("{}/{}", super::routes::ws_handle(&r.project_id), r.name),
+        service_id: r.id,
+        owner_workspace: r.project_id,
+        row: None,
+    }))
+}
+
+/// The App a test-guest call names, with the same reach as `k2 app user
+/// add --app` (`skin_routes::resolve_app_target`): a runtime App id, a
+/// published service id, `<workspace>/<name>`, or a bare publish name that
+/// names one App (an App published with `k2 publish run --skin` has no
+/// runtime row). A passport sees only its own workspace's Apps (a foreign
+/// one is `app_not_found`, never "forbidden").
+pub(crate) fn guest_app_for(who: &Who, raw: Option<&str>) -> R<GuestApp> {
+    let first = match app_for(who, raw) {
+        Ok(row) => return Ok(row.into()),
+        Err(e) => e,
+    };
+    if first.code != codes::APP_NOT_FOUND {
+        return Err(first);
+    }
+    let Some(raw) = raw.map(str::trim).filter(|r| !r.is_empty()) else { return Err(first) };
+    let svc = match crate::skin_routes::resolve_app_target(raw) {
+        Ok(svc) if svc != skin::HOST_APP_ID => svc,
+        Ok(_) => return Err(no(codes::BAD_REQUEST, 400, "a test guest belongs to one App, not host")),
+        // Two Apps with that name: say which (the resolver lists them).
+        Err(msg) if msg.contains("ambiguous") => return Err(no(codes::BAD_REQUEST, 400, msg)),
+        Err(_) => return Err(first),
+    };
+    let Some(app) = published_app(&svc)? else { return Err(first) };
+    if agent_ws(who).is_some_and(|ws| ws != app.owner_workspace) {
+        return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{raw}' in your workspace (k2 app list)")));
+    }
+    Ok(app)
+}
+
 pub const ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", "/cli/app/test-guests", PASSWORD];
 pub const POST_ROUTES: &[&str] = &["/cli/app/test-guest/add", "/cli/app/test-guest/rm", PASSWORD];
 
@@ -85,7 +152,7 @@ fn store_err(e: String) -> super::routes::Refusal {
     no("db_error", 500, e)
 }
 
-fn app_audit(app: &AppRow, event: &str, by: &str, payload: J) {
+fn app_audit(app: &GuestApp, event: &str, by: &str, payload: J) {
     let h = k2_core::db::shared();
     let conn = h.lock();
     if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, event, by, None, &payload) {
@@ -98,7 +165,7 @@ fn access_audit(event: &str, by: &str, detail: String) {
 }
 
 /// Remove this App's expired test guests (their sessions go with them).
-fn sweep(app: &AppRow, by: &str) {
+fn sweep(app: &GuestApp, by: &str) {
     match tg::expired_usernames(Some(&app.service_id)) {
         Ok(names) => {
             for u in names {
@@ -126,7 +193,7 @@ fn human_ttl(secs: i64) -> String {
 }
 
 /// One test guest for the answers and the list.
-fn guest_json(app: &AppRow, username: &str, t: &tg::TestGuest) -> J {
+fn guest_json(app: &GuestApp, username: &str, t: &tg::TestGuest) -> J {
     let (role, rooms) = grant_view(&t.principal_id, &t.app);
     json!({
         "username": username,
@@ -169,7 +236,7 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
         need_build(who)?;
     }
     let v = json_body(body)?;
-    let app = app_for(who, s(&v, "app"))?;
+    let app = guest_app_for(who, s(&v, "app"))?;
     // A held request's replay names the App's service id too: the same App
     // id on a different App since is refused, never made.
     if let Some(svc) = s(&v, "service") {
@@ -220,7 +287,7 @@ pub(crate) struct NewTestGuest<'a> {
 /// the workspace whose agent made it, or asked for it on a card (scope
 /// already checked by the caller): no `files:agentconfig` role, and the
 /// guest is stamped and tied to that workspace.
-pub(crate) fn add_checked(app: &AppRow, by: &str, agent: Option<&str>, n: &NewTestGuest<'_>) -> R<J> {
+pub(crate) fn add_checked(app: &GuestApp, by: &str, agent: Option<&str>, n: &NewTestGuest<'_>) -> R<J> {
     let by = by.to_string();
     let ttl = tg::parse_ttl(n.expires).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     sweep(app, &by);
@@ -307,7 +374,7 @@ pub(crate) fn add_checked(app: &AppRow, by: &str, agent: Option<&str>, n: &NewTe
 
 /// Only a role this App already defines; never box-wide, never new; an
 /// agent's never one that writes the agent's `.k2` folder.
-pub(crate) fn role_of(app: &AppRow, token: Option<&str>, agent: bool) -> R<Option<String>> {
+pub(crate) fn role_of(app: &GuestApp, token: Option<&str>, agent: bool) -> R<Option<String>> {
     let Some(token) = token.map(str::trim).filter(|r| !r.is_empty()) else { return Ok(None) };
     let roles = skin::list_roles().map_err(store_err)?;
     let mine: Vec<&skin::SkinRole> = roles.iter().filter(|r| r.app_id.as_deref() == Some(app.service_id.as_str())).collect();
@@ -346,11 +413,7 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can remove (k2 app test-guests <app>)"));
     let p = principal(username)?.ok_or_else(missing)?;
     let t = tg::get(&p.id).map_err(store_err)?.ok_or_else(missing)?;
-    let app = {
-        let h = k2_core::db::shared();
-        let conn = h.lock();
-        deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
-    };
+    let app = published_app(&t.app).ok().flatten();
     if let Some(ws) = agent_ws(who) {
         // The App's CURRENT workspace (an App handed over since is another
         // workspace's), and only a test guest its own workspace's agent
@@ -396,11 +459,7 @@ fn password(who: &Who, body: &[u8]) -> R<J> {
     let missing = || no(NOT_A_TEST_GUEST, 404, format!("'{username}' isn't a test guest you can set a password for (k2 app test-guests <app>)"));
     let p = principal(username)?.ok_or_else(missing)?;
     let t = tg::get(&p.id).map_err(store_err)?.ok_or_else(missing)?;
-    let app = {
-        let h = k2_core::db::shared();
-        let conn = h.lock();
-        deploy::store::get_app_by_service(&conn, &t.app).ok().flatten()
-    };
+    let app = published_app(&t.app).ok().flatten();
     // Checked before the one password set is used (review 0.46.4): a
     // refused password never spends it.
     if pw.trim().chars().count() < skin::PUBLIC_PASSWORD_MIN_LEN {
@@ -491,7 +550,7 @@ fn approved_request_for(ws: &str, username: &str) -> R<Option<String>> {
 /// GET `/cli/app/test-guests?app=`.
 fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
-    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let app = guest_app_for(who, params.get("app").map(String::as_str))?;
     // The sweep removes guests: only for a caller that may remove them.
     if need_remover(who).is_ok() {
         sweep(&app, &actor(who));

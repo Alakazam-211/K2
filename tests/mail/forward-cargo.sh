@@ -13,7 +13,9 @@ cmd="${1:-check}"
 shift || true
 case "$cmd" in
   check) exec cargo check --tests -p k2-core -p k2-daemon --message-format short "$@" ;;
-  test) exec cargo test "$@" ;;
+  # Some integration targets (k2-core ptyd_backend) spawn the k2-ptyd
+  # binary: build it first.
+  test) cargo build -p k2-ptyd --bins && exec cargo test "$@" ;;
   # The lane's targeted tests (the store, migrations, the composer, the
   # lockdown allowlist, the sync, the routes, the verify pages).
   targeted)

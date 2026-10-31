@@ -1,0 +1,21 @@
+MPC-E806 header_names_unrendered (structured and CSV)
+exit:     2
+message:  the columns have names that would appear as a header line; clear them or add a row first
+next:     The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.
+rule:     CSV contract §1.4 (C1)
+verbs:    a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E806",
+  "name": "header_names_unrendered",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "the columns have names that would appear as a header line; clear them or add a row first",
+  "next": "The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.",
+  "rule": "CSV contract §1.4 (C1)",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

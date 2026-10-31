@@ -19,7 +19,7 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 use super::awareness::{ClaimEnd, ClaimId, NoteKind, Overwrite};
 use super::handles::Handles;
 use super::host::{LeaveReason, Rights};
-use super::participant::{ConnId, CursorAt, Participant, Role, RosterEntry};
+use super::participant::{CellCursor, ConnId, CursorAt, Participant, Role, RosterEntry};
 use super::position::LineRange;
 use crate::store::Seq;
 
@@ -95,7 +95,8 @@ pub enum RosterEvent {
         version: Seq,
         members: Vec<RosterMember>,
         watching: usize,
-        /// This subscriber's own waiting [`Overwrite`] notes (a push doesn't consume one).
+        /// This subscriber's own waiting [`Overwrite`] notes (a client dedupes on `(change,
+        /// row)`): a push doesn't consume them, so a reconnect or a resync finds them here.
         overwritten: Vec<Overwrite>,
     },
     /// A participant's first connection joined. They start as a viewer, not away, with no
@@ -122,6 +123,16 @@ pub enum RosterEvent {
         /// in the root's text at this version, read together with the caret at delivery.
         /// A client whose text is at another version maps them through the changes between
         /// (e.g. [`super::Session::events_since`]).
+        version: Seq,
+    },
+    /// On a grid: their cell caret or selection ([`RosterEntry::cell`]), by key, or gone.
+    /// Coalesced as [`RosterEvent::Cursor`] is: one per participant per flush, the last
+    /// place (its live position, column name and lines follow moves, sorts and others'
+    /// edits too).
+    CellCursor {
+        who: Who,
+        cell: Option<CellCursor>,
+        /// The doc's version its position (`at`, `lines`) was read at.
         version: Seq,
     },
     /// A claim was taken (explicitly or by a read's `--for-edit`). Never coalesced.
@@ -155,9 +166,10 @@ pub enum RosterEvent {
         lines: LineRange,
         claim: Option<ClaimId>,
     },
-    /// An outside save may have removed `to`'s text ([`Overwrite`]). Sent only to `to`'s own
-    /// subscriptions, never coalesced. The note waits too, until `take_notes` or a verb delivers
-    /// it, so a slow receiver that gets a fresh `Snapshot` still finds it there.
+    /// A change overrode `to`'s live work ([`Overwrite`]): on a grid, its live value (contract
+    /// §2.9.1); on a text doc, an outside save may have removed its text. Sent only to `to`'s
+    /// own subscriptions, never coalesced. The note waits too, until `take_notes` or a verb
+    /// delivers it, so a slow receiver that gets a fresh `Snapshot` still finds it there.
     Overwritten { to: Who, overwrite: Overwrite },
     /// The host closed this doc's live session (`reason`, its code): the last event of every
     /// subscription, which then ends. Later calls fail with
@@ -176,6 +188,7 @@ struct Told {
     role: Role,
     away: bool,
     cursor: Option<CursorAt>,
+    cell: Option<CellCursor>,
 }
 
 struct Sub {
@@ -347,6 +360,7 @@ impl RosterHub {
                             role: Role::Viewer,
                             away: false,
                             cursor: None,
+                            cell: None,
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -372,6 +386,7 @@ impl RosterHub {
                             role: Role::Viewer,
                             away: false,
                             cursor: None,
+                            cell: None,
                         });
                         self.told.len() - 1
                     }
@@ -401,8 +416,16 @@ impl RosterHub {
                 if t.cursor != r.entry.cursor {
                     t.cursor = r.entry.cursor.clone();
                     batch.push(RosterEvent::Cursor {
-                        who,
+                        who: who.clone(),
                         cursor: r.entry.cursor.clone(),
+                        version,
+                    });
+                }
+                if t.cell != r.entry.cell {
+                    t.cell = r.entry.cell.clone();
+                    batch.push(RosterEvent::CellCursor {
+                        who,
+                        cell: r.entry.cell.clone(),
                         version,
                     });
                 }
@@ -466,6 +489,7 @@ fn told(r: &Row) -> Told {
         role: r.entry.role,
         away: r.entry.away,
         cursor: r.entry.cursor.clone(),
+        cell: r.entry.cell.clone(),
     }
 }
 

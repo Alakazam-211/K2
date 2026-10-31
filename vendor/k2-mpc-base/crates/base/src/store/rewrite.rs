@@ -112,6 +112,8 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
             DocRows::Owner(d) => copy(&r, &w, d)?,
             DocRows::Slot(d) => copy(&r, &w, d)?,
             DocRows::Clock(d) => copy(&r, &w, d)?,
+            DocRows::Elem(d) => copy(&r, &w, d)?,
+            DocRows::Named(d) => copy(&r, &w, d)?,
         };
     }
     // a known table this didn't copy (a name in SHARED_TABLES without its copy above)
@@ -215,5 +217,52 @@ impl DocStore {
     pub fn scan_for(&self, needles: &[&[u8]]) -> Result<Vec<super::Finding>, StoreError> {
         let _g = self.db.write().unwrap_or_else(|p| p.into_inner());
         super::scan_file(&self.path, needles).map_err(|e| StoreError::Db(format!("scan: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{DOC_TABLES, SHARED_TABLES};
+    use super::known;
+
+    /// Every table the store defines (`TableDefinition::new("…")` in `src/store/`) is known
+    /// to the rewrite ([`DOC_TABLES`] or [`SHARED_TABLES`], v0.9.7's one list), and every
+    /// known table is one the store defines: a table left out would make every purge refuse
+    /// (`MPC-E502 store_newer`) once a doc wrote to it (format 6's `elem_writes`, C1).
+    #[test]
+    fn every_store_table_is_in_the_rewrite_list() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store");
+        let mut defined = Vec::new();
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().map_or(true, |x| x != "rs") {
+                continue;
+            }
+            // the code only: a comment naming the constructor (this test's own) isn't a table
+            let src: String = std::fs::read_to_string(&p)
+                .unwrap()
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for part in src.split("TableDefinition::new(\"").skip(1) {
+                let name = &part[..part.find('"').unwrap()];
+                defined.push(name.to_owned());
+            }
+        }
+        defined.sort();
+        defined.dedup();
+        assert!(defined.contains(&"elem_writes".to_owned()), "{defined:?}");
+        for name in &defined {
+            assert!(
+                known(name),
+                "{name} is in neither DOC_TABLES nor SHARED_TABLES"
+            );
+        }
+        assert_eq!(
+            defined.len(),
+            DOC_TABLES.len() + SHARED_TABLES.len(),
+            "a listed table nobody defines"
+        );
     }
 }

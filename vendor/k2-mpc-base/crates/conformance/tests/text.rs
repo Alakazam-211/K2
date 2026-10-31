@@ -88,6 +88,13 @@ fn yrs_list_is_pinned() {
             "core.causal",
             "core.no_equivocation",
             "hist.undo_atomic",
+            "mlist.move_lww",
+            "mlist.yata_separating_case",
+            "map.lww",
+            "map.delete_vs_set",
+            "map.steady_bounded",
+            "table.cell_lww",
+            "stream.merged_writes",
         ],
         "the kit Doc's deviations changed: update this test only with the rule's evidence"
     );

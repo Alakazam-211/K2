@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.9.8+2"
+version = "0.10.0+1"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -22,6 +22,9 @@ conformance = []
 # and mint client IDs from a seed (`k2_mpc_base::differential`: the differential tests and the
 # soak's shadow mode). Off by default; no host enables it.
 differential = []
+# Test-only helpers for packs' own tests (`k2_mpc_base::session::test_support`: an import's
+# edits, to build in-memory docs as a session does). Off by default; no host enables it.
+test-support = []
 # Test-only: plant a bug in the engine's position index (the vendored Yrs's feature of the
 # same name), to prove the kit reports what the index's shadow check finds (v0.9.7). Never in
 # a build.
@@ -44,7 +47,7 @@ redb = "2"
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "perf", "unicode", "meta", "hybrid", "nfa-pikevm", "nfa-backtrack", "dfa-onepass"] }
 
 [dev-dependencies]
-k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential", "conformance"] }
+k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential", "test-support", "conformance"] }
 # (conformance: `Session::char_blame` for the tests that read roots; test builds only, the feature only adds functions)
 proptest = "1"
 rand = { version = "0.8", features = ["small_rng"] }

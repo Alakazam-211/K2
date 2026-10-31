@@ -1,5 +1,467 @@
 # Changelog
 
+## v0.10.0.1 (2026-10-31)
+
+v0.10.0 plus the JS client 0.11.0: the live editor's M2 (below). Client only: no change to the
+kit's Rust library, store, merge or wire, and no new dependency. The crate version is
+`0.10.0+1` (the git tag is v0.10.0.1); the client's is `0.11.0`. `client/WIRE.md` now says the
+kit's versioned caret call (`set_cursor_at`) is planned for kit v0.10.1 (it said v0.9.9; there
+is no v0.9.9, its list folds into v0.10.1). Until then a host maps or drops a caret frame that
+is behind, as before; the client's frames don't change when it lands.
+
+**For a host wiring the live editor in** (`mountLiveEditor`, `k2-mpc-client/editor`; `EDITOR.md`):
+
+- **Peers:** `@codemirror/view` ≥ 6.27 and the host's single `@codemirror/state`; leave
+  CodeMirror's `history()` out (mounting with it throws `MPC-EDITOR-HISTORY`: the server owns
+  undo).
+- **Transport** (`WIRE.md`, "The live transport"): the token and auth stay the host's;
+  `connect({resume, prev})` is one attempt, and a `connect()` while a connection is open
+  replaces it. Before the welcome, or any `since` answer, on the new connection the host marks
+  the connection named by `prev` dead and calls `leave(conn)`; frames still arriving on the old
+  socket are dropped unapplied.
+- **Whether to retry a close is the close table's**, never a transport's own `retry`.
+- **Deferred to kit v0.10.1, each with a safe fallback today:**
+  - a versioned caret call (`set_cursor_at`): a `cursor` frame that is behind is mapped forward
+    by the host (`events_since` + `position::transform`) or dropped; the client re-sends its
+    caret after its next change, so a dropped one only shows late;
+  - undo and redo marked in a change's `via`: until then an undo still unanswered on a dropped
+    connection makes Re-apply answer `unknown` ("check and retype") instead of guessing;
+  - the kit's own join that replaces a connection: until then the host calls `leave(conn)` for
+    `prev`, as above;
+  - the wording of a removed-text note for a reader without history (`version: null`,
+    `restore_from` set): the fields are final, only the message text changes.
+
+### The live editor, M2 (client/EDITOR.md; design: docs/design/live-editor-m2.md)
+
+- **Browser tests run Chromium only by default:** `MPC_BROWSERS` (comma-separated: `chromium`,
+  `webkit`) names others, and an unknown name fails the run. A bare `playwright test` no longer
+  selects WebKit, which needs system libraries most runners lack. `tools/README.md` gives the
+  full-checkout gate and the WebKit client-only job as two separate commands.
+- **The replica's text is a rope** (M2): `LiveText` keeps its texts in a persistent chunked
+  rope (`src/rope.ts`) instead of rebuilding a whole string on every edit. A keystroke, a remote
+  change and a `since` replay no longer scan the document. Measured on a build node, one core,
+  p95 per acknowledged keystroke: 0.37 ms at 1 MB (was 18.1 ms) and 0.77 ms at 4 MB (was
+  73.2 ms); a 500-event `since` at 1 MB: 73 ms (was 6.9 s). The API is unchanged: `text` is still
+  a string, built on its first read after a change and cached.
+- **Re-apply by the server's rule** (M2): a rejected change goes back where the server would put
+  it: the change as sent, rebased from its base through every change since (`rebaseOurs`), then
+  through the person's own pending changes, sent fresh at the current version as its own undo
+  step. Deletions, replacements, changes with several hunks and ties all go back in place;
+  `already-present` when nothing is left to apply. Refused: `conflict` (it met someone else's
+  change) and `cant-place` (a reload since, or past the 512-change history). This replaces
+  v0.9.8.2's single-hunk guards; `LiveText.placeRejection` and `Placement` are new, and
+  `reapplyGuard` is deprecated (below).
+  The Re-apply scan (seeds 1–500) gives back every change the guards refused that the rule
+  places, with 0 differences from the rule.
+- **A faster `since` replay:** `recarry`'s self-check is a length check on the plain incoming
+  path (nothing pending), and the rope's edit copies its unchanged chunk list instead of
+  rebuilding it. A 500-event `since` at 1 MB, p50 of 20 runs, interleaved in one job on a busy
+  build node: ASCII 78–98 ms before, 53–63 ms after; CJK/emoji 41–47 ms before, 17–21 ms after.
+- **The rope has two levels** (M2, step d): chunks in blocks of about 32, each block with its
+  own starts. An edit rebuilds the chunks it touches in at most three blocks and copies the list
+  of blocks (about 30 at 1 MB), not the list of chunks. A 500-event `since` at 1 MB, p50 of 20
+  runs interleaved in one job against the one-level rope: ASCII 50 ms → 23–33 ms; CJK/emoji
+  13 ms → 16 ms (both well under the 100 ms target). The property test gains runs with tiny
+  blocks (edits across block edges) and a planted fault in the block sums it must catch.
+- **No re-index during an IME composition:** while remote changes are held, the binding keeps
+  the held document (the editor's plus the held changes) and its byte index up to date change by
+  change; a keystroke no longer builds a byte index of the whole document. A test checks the
+  held document and index against `live.text` after every change of a composition; the bench
+  prints the composition keystroke at 1 MB and 4 MB.
+- **The editor's byte index keeps line lengths in blocks**: a keystroke copies the touched block
+  and the list of blocks, not every line's length (O(lines / 256)).
+- Tests: a differential property test of both against plain strings (random edits, CJK, emoji
+  and surrogate pairs at chunk edges, empty and 1 MB documents, every offset conversion), with
+  a planted fault (a chunk's cached UTF-8 length off by one) it must catch. The bench
+  (`test/bench/live-text-bench.ts`, `M2_BENCH_GATE=1`) fails when a target is missed: p95 per
+  keystroke under 1 ms at 1 MB and 2 ms at 4 MB, a 500-event `since` under 100 ms at 1 MB.
+- **"Insert my text here"** (M2): a single-hunk action the person chooses, beside Re-apply. It
+  first shows the typed text in the editor where it would go (announced in the note,
+  `role="status"`; for a replacement or deletion the note adds that the removal isn't redone),
+  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing. Presence is checked first for a lost change. Handle: `insertHere(id)`,
+  `confirmInsert()`, `cancelInsert()`, `InsertResult`; class `cm-mpc-insert-preview`.
+- **Copy** on every rejection with text (`copyRejected(id)`): to the clipboard, or the text
+  selected when the clipboard refuses. The row's text is selectable.
+- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`, `insertMultiHunk`,
+  `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
+
+**Deprecated**
+- `LiveText.reapplyGuard(id)` and the type `ReapplyGuard` (from v0.9.8.2): a stub over
+  `placeRejection` for this release (`ok`, `conflict` or `cant-place`; the old reasons are never
+  returned). Use `LiveText.placeRejection(id)` and `Placement`; `reapplyGuard` goes in the
+  following release. `ReapplyResult`'s old reasons and their strings stay in the types, unused,
+  and go with it.
+
+## v0.10.0 (2026-10-30)
+
+C1, structured kinds and the grid: the C1 line (grids and the CSV seam) on top of v0.9.7.1.
+Pairs with k2-mpc-csv 0.1.0, k2-mpc-markdown 0.7.8 and k2-mpc-text 0.2.9.
+
+**Includes v0.9.7.1's fixes** (its section below): `write --base` merges by whole lines
+(`merge::write_base_sides`; two changes to one line are a conflict, nothing is merged inside
+a line: the splice of lines that start alike, possible text corruption since v0.1.0, is
+gone), with the actionable `MPC-E111` conflict (`refusal_at`, the current version and each
+region's lines); edits given as a new text pair whole lines first (`lines::edit_hunks`), so
+blame no longer credits a line's deleter with a neighbour that starts alike. On a grid,
+`write --base` is the merge by key (`table::merge3`), cell by cell, as before: a cell is
+never merged inside its value.
+
+**Also includes v0.9.8, v0.9.7.2, v0.9.8.1 and v0.9.8.2** (their sections below), merged in. The
+`Overwritten` notes are one set of types for both kinds of doc (`Overwrite`, `OverwriteCell`,
+`NoteKind::Overwritten`, `RosterEvent::Overwritten`, `Snapshot.overwritten`,
+`Session::take_notes`): a text doc's (v0.9.7.2: in memory, `removed_text` / `replaced_text`)
+and a grid's (this release: stored, the grid rules) each keep their own rules, wording,
+delivery and storage; `Overwrite` carries both field sets (a grid's note has
+`restore_from: None`, `not_shown: 0`, `no_history: false`). A text doc never touches the
+store's `overwrite_notes` table and never needs format 6. `differential::MergeMutant` holds
+both series: v0.9.8's (i) `CharSides`, (ii) `EndFollowsTheirs` and the grid's (xxxii)–(xxxvii);
+a plain build carries neither (the text merge's planted checks are now compiled out there too,
+no behaviour change).
+
+**A row is merged whole through a text (the grid's row-splice fix).** `table::reconcile` maps a
+file's rows onto keys, and a wrong pairing could merge a row someone rewrote with another row's live
+cells: a row nobody wrote. A text can't say otherwise ("A' moved here" and "B edited in place" can
+be the same bytes), so safety no longer rests on pairing:
+- **`write --base`:** a row the text didn't leave exact and the live side changed too is one
+  `edited_row` conflict, nothing of it applied, `--partial` included; the message names the row by key
+  and line and the way out (re-read, or `cell set --base`).
+- **An outside save** (and a stale `write_live_grid`, a revert, a version restore): the text's row wins
+  whole; every live cell that differs gets the Overwritten note, and a version holds it. A live
+  switch between empty and absent in one cell isn't a live edit of that cell when the base row, with
+  only that cell switched, renders the same bytes. A blank row given a `""` cell (blank to `,`)
+  changes bytes and is an edit. Before, such a switch was judged on the whole row's bytes, so another
+  live edit in the row made it count: a spurious note and audit event for the cell.
+- **The cost:** two people's different cells in one row no longer auto-merge through a text. Grid verbs
+  that name a cell keep the per-cell merge. It can be relaxed later without a store format change.
+- **"Exact" compares decoded field values exactly** (a trailing space counts, a blank line isn't
+  `""`), under an exact column mapping (own position, or unique header name). How a field is quoted is
+  no change: a tool requoting a whole file overwrites nothing and bounces nothing.
+- **Row marks** (`row_marks`, in format 6): a keyed write whose base predates a text's non-exact pairing
+  of a row it names is refused (`edited_row`), even on a cell the text didn't change; a non-exact
+  column mapping marks the whole doc. An undo, revert or restore that changes a marked row marks it
+  again. `EditOptions::seen`: a person's edit is guarded the same way if the host passes the version
+  their view last rendered; **no client sends it yet, and without it an edit lands at current.**
+- **Undo (spec S13, grid rows only; text undo is untouched):** undoing a change on a re-paired row with
+  later edits conflicts (`rewritten_row`); `--partial` skips it and reports the skip; a revert rewrites
+  the row whole.
+- **Pairing decides identity and blame only.** A wrong pair costs blame on that key: stated, not a
+  safety cost. Exact duplicates can't be told apart. Native merges would bypass the server's checks and
+  don't exist today (the untrusted-wire path doesn't reach sessions).
+
+**Host notes**
+- **Overwritten notes reach a connected editor:** `RosterEvent::Overwritten`, to its author's own
+  subscriptions, and `RosterEvent::Snapshot::overwritten` (`client/WIRE.md`). They persist across a
+  restart in the change's own transaction, one per row per author, values capped (256 bytes, 32 cells),
+  at most 64 per author with the overflow rolled up, expiring with the revert window. A purge strips
+  their values; `Debug` doesn't print them. Someone who can't read the doc gets nothing, not even a
+  count, until they can. `Session::take_notes` and a verb's notes still deliver them; a push doesn't
+  consume one, so dedupe on `(change, row)`. `rows drop-deleted` can't be undone, so it notes what it
+  removes: `dropped_row` (a deleted row's cells) and `dropped_col` (a deleted column's cells in rows
+  that stay), to whoever wrote them; the note carries the value and names no version. A delete's note
+  carries the live values it hid.
+- **`--partial` applies nothing of a text when a column layout change on either side conflicts with
+  it:** any conflict at a column (`edited_col`: the text deleted a column the live side wrote into;
+  `deleted_col`: the text moved a column the live side deleted; `moved_col`: both moved it), or a
+  `deleted_col` at a cell or a name (the text wrote into, or renamed, a column the live side
+  deleted). The layout every row of the text assumes changed, so `write --base --partial` returns the
+  same conflicts as plain `write --base`. Before, it applied the text's rows beside a held column's old
+  cells: a row nobody wrote. A text that never touches a column the live side deleted applies as
+  before, every field by key. A text's column insert on its own never conflicts. Beside a live column
+  delete, though, the text's fields can still meet the deleted column (`deleted_col` at its cells).
+  Before, `--partial` then applied the insert, so a new empty column took the deleted one's place.
+  Now it applies nothing. An `edited_col` conflict now names the writers of the cells it met.
+- A grid's overwrite note to a reader without history now clears `version` and `restore_from`
+  and sets `no_history`, on every delivery path. A text note is unchanged (it clears `version`
+  only); whether a text reader without history should keep `restore_from` is under review for
+  v0.9.9.
+- **A purge on a grid now also withholds the pushes not yet sent** (as a text doc's): the
+  values go, and a withheld note names no version and no `restore_from`.
+- Test-only: a wire golden for a grid's `overwritten` notes (`roster_events_overwritten_grid.json`,
+  a `cell` and a `dropped_row` note, live and waiting in a snapshot), and
+  `client/test/golden-types.ts`, which holds every golden file to `wire.ts`'s types at compile
+  time (`tsc --noEmit`; `golden.test.ts` reads them untyped and checks the values). A field typed
+  wrong in `wire.ts` (`cells[].col: null`, say, where a grid sends a number) now fails the
+  typecheck, naming the file. It covers v0.9.8.2's goldens too; a hand check of every field in
+  that release found no type drift there.
+- **A raw keyed cell write under a row or column the table doesn't know** (dropped, or never in
+  it) was taken as a hidden write: an orphan cell nobody could see, restore or sweep, reported
+  with a `row restore` / `col restore` that refuses a dropped key. `edit_ops` now refuses the
+  whole edit (`SessionError::UnknownElem`, `MPC-E805 no_element`, exit 4, as the grid verbs'),
+  naming the drop's change and who ran it while its record is in the revert window, else saying
+  the key isn't in the table; nothing applies. A deleted key the table still knows stays a hidden
+  write with its §4.3 message, and a key the same edit inserts takes the write. Map deletes are
+  not checked (they store nothing). Since grids landed; grids have not shipped.
+- **A reversal over a re-paired row the doc has dropped:** a revert that rewrites such a row
+  whole (S13) returned an engine refusal (`UnknownKey`) instead of an outcome, and an undo or redo
+  called it `rewritten_row`. Every reversal now reports it `dropped` (S11 before S13); under
+  `--partial` it is skipped as `dropped`. Since S13 (659a7e9); grids have not shipped.
+- **`write --base` over a byte-neutral live switch:** a live switch of a cell between empty and
+  absent that renders the same bytes (an undo, a revert or a restore of a `""`, say) is no live
+  edit of the cell, so a text writing that cell applies with no conflict. Before, it was a cell
+  conflict.
+- **`HiddenCellWrite::message`:** the kit now supplies the sentence for a cell written into a
+  deleted row or column (csv contract §4.3's template), so every host and agent shows the same
+  text: `r2: c1 set by p2 in a row deleted by p1; row restore --row r2 brings it back` (a column:
+  `… in a column deleted by bot; col restore --col c2 brings it back`; both: `… in a row deleted by
+  p1 and a column deleted by bot; row restore --row r2 and col restore --col c2 bring it back`).
+  Keys and pids only: never a value or a column name (both are content). An App viewer's lens
+  names its handles in it. The data fields are unchanged.
+- **Header-less columns at the same width pair by position:** `reconcile` pairs columns by
+  content only when the width changed, to find the column that went or came. The text's width is
+  its widest row; the base's is its live columns (the version read, or the file as last synced).
+  With a header, columns pair by unique name as before. Content compares a column's values
+  sorted, so a match at the same width could be coincidence. Before, a header-less text whose
+  column happened to hold another column's values was read as a column move: a row that renders
+  as the live row conflicted (`edited_row`), and an outside save moved a column and sent notes.
+  The cost: a real header-less column move reads as value rewrites, so a row the live side edited
+  since is changed by both (noted in an outside save); nothing is lost.
+- **An outside save's whole row covers a column the live side deleted:** the file's row wins over
+  the hidden cell too (noted), so restoring the column shows the file's row, never the live
+  side's hidden value beside it. A live value between empty and absent that the file's row
+  renders anyway is no override (no note).
+- **No false `DiskReplicaMismatch` on a dirty grid outside save:** while the doc is dirty the
+  replica holds the file's state as its own ops, so its state vector can't match the doc's; that
+  cycle now reloads the replica from the doc instead of comparing. Before, every outside save to
+  a dirty grid doc raised the event (which hosts are told to report as a kit bug). Text never
+  raised it.
+- **A text row that renders as the live row is the same row:** where the text's row and the live
+  row render the same decoded fields (an empty field and an absent cell alike), there's no conflict
+  on any of its cells and the cells are the text's. Before, `write --base` refused it (the live side
+  had undone a value to absent, the text had `""`), and an outside save noted an override.
+- **A version restore notes a hidden value it takes:** a restore's overrides now include cells
+  under a deleted row, so the value's author gets the note with the value. Before, a restore that
+  brought a deleted row back over a hidden value noted no one.
+- **Rows both sides changed, when the live side deleted a column it wrote into:** the both-changed
+  test now reads the text's kept columns that the live side knows, a deleted one included. Before,
+  it read the live side's live columns and missed the write. `write --base` now gives `edited_row`
+  there (`--partial` skips the row). An outside save gives the file's row whole, and the live value
+  gets a note. Before, the file brought the column back with the live side's hidden value beside its
+  own row: a row nobody wrote. The outside save's whole-row loop also reads the file's columns
+  live in the result.
+- **A reversal never writes under a dropped key:** an undo, redo or revert of a batch that touched a
+  dropped row or column conflicts (`dropped`) for its cells too; `--partial` skips them (spec S11). `AuditEvent::OutsideOverride` records each, with no
+  content. No `ChangeEvent` field carries it.
+- **Store format 6, lazy and one-way** (`store::STORE_FORMAT` 6, `STORE_FORMAT_BASE` 5): a
+  store is stamped 6, and gains the `elem_writes` table, only in the transaction that writes
+  its first structured doc (a grid). A store that never holds one stays at 5 byte for byte,
+  so v0.9.7 still reads and writes it. A format-5 build refuses a format-6 store with one
+  line (`StoreError::Newer`, "store is format 6; this build reads up to 5"): roll the host
+  back only with stores that never opened a grid.
+
+**Breaking**
+- **`session::Reconciled` gains `exact_rows` and `cols_exact`**, and `table::Reconciled` too. A table
+  pack with its own `reconcile` must pass them on from `table::reconcile`: the defaults (empty, false)
+  are the strict reading, every row merged whole and every keyed write from an older base refused, so
+  a pack can't turn the row rule off by leaving them out.
+- **`Session::write_live_grid` takes `seen`**, the version the body was made from. Stale, it takes the
+  outside-save path, with notes; unknown, `GridWrite::BaseExpired`.
+- **`RosterEvent::Snapshot` gains `overwritten`** (a `match` naming every field needs `..`).
+- **`FacetConflict` gains `rewritten_row`.**
+- **`store::VersionReason` gains `BeforeDrop`** (stored as 8): `rows drop-deleted` cuts that version
+  first; its cell map holds the dropped rows' and columns' cells (restoring an element from it arrives
+  in v0.10.1). An exhaustive `match` needs the new arm.
+- **`PersonAction` gains the grid tier's rows P35-P44** (`RowInsert` … `DropDeleted`), on
+  purpose: the enum is exhaustive, so every pack's `match` stops compiling until it maps
+  them. A text or Markdown pack maps them N/A (`ParityRow::not_applicable`, verbs absent:
+  `row insert`, …, `rows drop-deleted`).
+- **`At` is no longer `Copy`** (it gained `At::Elem { root, key }`, a grid cell by key). Fix:
+  clone the caret where it is used twice, `set_cursor(c, root, at.clone(), at)`.
+- `Tier` gained `Tier::Grid` and `ClaimEnd` / `ReservationEnd` gained `Deleted` (all
+  `#[non_exhaustive]`: additive for matches with a wildcard).
+- **`StructEdit` takes a `&VerbCtx`** (C1i) instead of `(&View, &[u8])`: `ctx.view()`,
+  `ctx.stdin()`, plus the pack's block decoder (`ctx.decode_block`) and line map
+  (`ctx.line_map`). Fix: `|view, stdin| …` becomes `|ctx| { let (view, stdin) =
+  (ctx.view(), ctx.stdin()); … }`.
+
+**Added (C1g)**
+- Presence by key on grids (A10): `Session::set_cell_cursor`, `RosterEntry.cell`
+  (`CellCursor`), `ClaimSpan` and `Session::claim_span`, grid views, notes and
+  `--for-edit`; claims expand at their ends and end `Deleted`; hand-off reservations of
+  grid claims; the claim policy on structured edits and on `write_base_grid`
+  (`GridWriteOptions::policy`); `GridConflict.claimed_by`.
+- The parity grid tier (A11): `Tier::Grid`, `parity::check_grid`, `GridCase`,
+  `kit_grid_cases`, `observe_grid_case`; kit grid verbs `rows drop-deleted`, `blame --cell`,
+  `blame --structure`.
+- Structured pack verbs (A9): `PackVerb::structured_edit` / `structured_read`,
+  `StructEdit`, `StructOutput`.
+- Element blame (A12): line blame on tables, `Session::blame_structure`.
+
+**Added (C1i: the grid verbs, contract §3.1)**
+- `table::verbs::VERBS`: the grid verbs for any table pack, as structured pack verbs: `cell
+  get`, `cell set`, `cells set`, `cells clear`, `row insert|move|delete|restore|list`, `col
+  insert|move|delete|restore|rename|list`, `sort`, `header on|off`. A pack lists them from
+  its `verbs()`. Addressing (§1.7): keys, `#N`, `LN`, column names, `key:` / `name:`,
+  `--where C=V`; exits (§3.3): 0, 1 (`--base`), 2 (usage, ambiguous), 4 (unknown or deleted,
+  with the restore hint). `row_listing` / `col_listing` are the listings a tab shows.
+- `Pack::decode_block(bytes, codec)`: a block of records in the doc's dialect (`cells set`'s
+  stdin); the kit never parses a file format itself. Default: declined (`cells set` exits 2).
+- `VerbCtx` (see Breaking), `StructOutput::shown` / `StructOutput::showing`: a read verb's
+  rows or cells by key; `--for-edit [--ttl]` on `row list` / `cell get` claims them under
+  the read's lock (`ToolOutput::for_edit`), and the read gets the notes about those rows.
+- `--ids` on `cat`, `head`, `tail`, `grep` and `view` on a table: each line prefixed with its
+  row's key and a tab (`header` for the header, `-` for grep's `--`), from the pack's line
+  map under the read's lock. On a doc with no rows, or with output that isn't doc lines
+  (`head -c`, `grep -c`/`-l`/`-q`), exit 2.
+- Text edit verbs on a table (`sed -i`, `patch`, `append`, `replace`, …) run on its rendering;
+  the result is reconciled by key against the live view (`Pack::reconcile`) and applies as
+  one change, with `--if-version`, the claim policy and notes. A result that isn't a valid
+  table is exit 2, nothing applied.
+- Who and when on the grid verbs: `cell get --json` adds `version` (the doc's, a `--base`
+  for the next write), `author` and `change` (the cell's last write, as `blame --cell`; null
+  without the history right); a deleted row's or column's refusal (exit 4) names who deleted
+  it and in which change (`row r9 is deleted (by ana, v12); row restore --row r9`), with the
+  history right. `VerbCtx::version`, `VerbCtx::last_write`.
+- `Pack::set_header(t, on, codec)`: the `header on|off` verb asks the pack, so a format with
+  its own rule for the switch holds the kit's op to it (default: the kit's op);
+  `VerbCtx::set_header`.
+- `Session::write_live_grid` (`write --base live` on a grid): the body replaces the grid,
+  reconciled by key against the live table (rows matched keep their keys; a missing row is
+  deleted, restorable), with the limits and claim policy of every grid write.
+
+**Changed (C1k: what the CSV binding found)**
+- **The aligner keeps a row's key by position in its unchanged slot** (`table::reconcile`'s
+  last pairing step): a run of new rows between the same two kept rows (or table ends) as an
+  equal run of old rows pairs in order, whatever they hold. Was: a blank line edited, or any
+  cell edited in a one-column table (no field shared), became a delete and an insert. A row
+  moved and fully rewritten is still a new row (its slot changed).
+- **The header line is written only when the table has a live row or a name on a live
+  column** (`Table::header_renders`, the codec's rule; `render`, `line_map`). Was: a blank
+  header line for a header-on table with live columns and nothing else. A lone blank line
+  is no header: `Table::import` reads it header off, and `table::reconcile` switches a
+  header-on table to off for a file that is one blank line (names kept, unrendered).
+- **`Table::set_header` never changes the rendering** (the codec's rule, and so the default
+  `Pack::set_header`'s): `on → off` where no header line is written only changes the setting
+  (was: a row for the names, a line more); `off → on` where the only live row is blank is
+  refused, `TableError::HeaderOnlyRowBlank` (exit 2 at the `header` verb, nothing applied).
+  `Table::reidentify_onto` keeps its header where the switch would be refused.
+- **`write --base live` and outside saves:** a row replaced in its own slot keeps its key
+  (above); `tests/grid_verbs.rs`'s `write --base live` case now adds its new row elsewhere.
+
+**Added (C1k)**
+- `View::codec()` / `View::with_codec`: the doc's codec settings on the views the session
+  hands an edit closure (`edit_ops_with`) or a read verb; `VerbCtx::codec()`.
+- `LineOwner::Preamble`: a line a codec writes of its own in front of the records (CSV's
+  `sep=;`), for a pack's `line_map` (was: given to `Header`). `LN` on it is exit 4; `--ids`
+  prints `preamble`; `blame` gives it no write.
+- `Config::grid_max_value_len` (default 64 KiB, `table::DEFAULT_MAX_VALUE_LEN`; `MAX_VALUE_LEN`
+  is kept as the default's earlier name): structured changes writing a longer cell value or
+  name are `AtLimit { what: "value bytes" }` (exit 2; message "a value or name is N bytes;
+  the limit is M bytes"); imports and outside saves holding one are declined; the outside
+  save's aligner reads the file under the knob (raised above 64 KiB, longer values are
+  accepted). `Table::max_value` / `with_max_value`, `Table::import_with_max_value`,
+  `View::with_max_value`, `table::check_value_max`.
+- Feature `test-support`: `session::test_support::import_edits(content)`, the edits a
+  session's import applies, for packs' tests.
+- **A re-save that changes only the codec settings is an attributed outside change** (the
+  CSV binding's rule (b)): a version (reason `External`, by `EXTERNAL_PID`) holding the new
+  settings (no change record: the doc's log doesn't move); `LogItem::Settings { version,
+  description }`, `Session::settings_change(conn, vid)` (`show`'s note),
+  `Pack::describe_codec_change(old, new)` (default "codec settings changed"),
+  `AuditEvent::OutsideSettings`, and `Session::subscribe_settings` delivering
+  `SettingsChanged` (a distinct event, not a `ChangeEvent`: the re-save has no change record,
+  so it has no new version). No store format change.
+
+**Breaking (C1k)**
+- `LineOwner` gained `Preamble` and is now `#[non_exhaustive]`: a `match` needs a wildcard
+  arm. `Table` gained a private field (its value limit): build one with `Table::new`,
+  `Table::import` or `Table::from_keyed`, not a struct literal.
+
+**Changed (the C1 merge with main)**
+- `header on` with no row, over names the columns kept while the header was off, is refused:
+  `TableError::HeaderNamesUnrendered`, `MPC-E806 header_names_unrendered` (exit 2, nothing
+  applied; "the columns have names that would appear as a header line; clear them or add a
+  row first"). Was: the switch wrote them as a header line, changing the file (the property
+  `the_header_switch_never_changes_the_rendering` found it at 10^4; its seed is kept). The
+  kit never clears the names itself: that would rewrite someone else's work.
+- `header on` where the only live row is blank keeps its refusal (exit 2, nothing applied)
+  and gets its own id, `MPC-E807 header_only_row_blank` (was `MPC-E122 tool_usage`), with a
+  message that says to add a non-blank row first, so a host words it apart from `MPC-E806`.
+- Grid outside saves: after a person's save, a file that returns to an earlier write of the
+  kit's is taken as their edit, as for text (v0.9.5's echo rule; was: the kit's echo,
+  ignored). `grid_store.rs`: `after_a_persons_save_an_earlier_kit_write_is_their_edit`.
+
+**Changed (C1 must-have (c), contract §2.9.1)**
+- **A grid's outside save is a keyed three-way merge**, as v0.9.5 makes it for text: base =
+  the grid as the file held it (the disk replica), ours = the file aligned on it, theirs =
+  the live grid, dirty or not; merged by key (`table::merge3_outside`) and applied to the live
+  doc as the external participant; the replica then takes the file's grid. Where both sides
+  changed one element the file wins (the later write) and the live value is never lost: a
+  version cut before the save, a heads-up note to its author (`NoteKind::Overwritten`,
+  `Note::overwrite`: `Overwrite`; delivered with the author's next notes or
+  `Session::take_notes`) and `AuditEvent::OutsideOverride`. Never refused, never dropped.
+  The file's placed rows land right after their left neighbour in the file; at a gap where
+  both sides inserted rows, the file's rows come first (text outside saves put live first;
+  both deterministic, contract §2.9.1).
+- The disk replica's re-sync marker is the change counter (`synced_seq` vs `version`), as in
+  v0.9.5, and a grid change that re-identifies elements re-syncs it at once when the doc
+  renders the synced bytes; rows the live doc re-identified with edits pending take the live
+  keys before the merge: rows and columns (and a header switch) the live doc gave new keys
+  while edits were pending are paired with the base's by what they hold (the same values,
+  else at least half of them, else the one new element at their place; `Table::
+  reidentify_onto`), and the file's changes to an element the live doc dropped since come
+  back under a fresh key. One marker for text and grids: the C1 merge with main kept one
+  copy of `resync_if_synced` and `resync_replica` (main's), shared by both ingests.
+
+**The C1 merge with main (v0.9.5, the K work)**
+- **Error ids for the grid (on main's registry):** `MPC-E801 needs_base`, `E802 at_limit`
+  and `E803 facet_conflict` go live (reserved on main); new `MPC-E153 bad_root_name`,
+  `E154 malformed_doc`, `E804 op_refused` (`DocError::RootName`, `Malformed`, `Op`) and
+  `E805 no_element` (a grid verb's exit 4: an unknown or deleted row, column or cell; with
+  `details.verb` and `details.line`). A structured verb's exit 1 is `E127 pack_verb_no`, as
+  for any pack verb. `ToolOutput::refusal` is set for both. `FacetConflict` details: `count`,
+  `where`, `conflicts` (root, key, facet, by, change, now); `AtLimit`: `what`, `limit`,
+  `would_be`; an undo conflict region on a grid adds `key` and `why`. `capabilities` lists
+  the grid tier on the verbs that serve it and the grid knobs (`grid_max_cells`,
+  `grid_max_cols`, `grid_max_value_len`, and `agent_version_elems`).
+- **Roster push on a grid (K5):** `RosterEvent::CellCursor { who, cell, version }`, coalesced
+  as `Cursor` is (one per participant per flush, the last place; told again when its position
+  changes under it; `None` when it is dropped). A grid claim's `ClaimStarted` is pushed (its
+  `ClaimEnded` already was). `RosterEvent` is `#[non_exhaustive]`: additive.
+- **K5 handles on a grid:** an App viewer sees handles in heads-up notes (the ones an outside
+  save left waiting too, `take_notes`), grid claims, `ChangeEvent.hidden[].deleted_by`,
+  `LogItem::Settings`, `FacetConflict.by`, `blame_cell` / `blame_elem` /
+  `blame_structure`, and `write_base_grid` / `write_live_grid` conflicts, and in everything
+  `run_tool` hands it: the grid verbs' printed attributions (`cell get --json`'s author, a
+  deleted element's "by" line: the verb's history is lensed under its lock), the fence's
+  contributors, a `--for-edit` claim or conflict, hidden writes' deleters and refusals
+  naming someone (`tests/app_view.rs`, `an_app_viewers_grid_verbs_hold_no_pid`).
+- **The live window (K3) on a structured doc:** `events_since` / `edit_at_base` with a base
+  behind the doc are `MPC-E112 base_expired` (read again): a grid's changes are ops by key,
+  which the window can't replay (it returned an empty list before).
+- **Outside saves on a grid follow v0.9.5's echo rule:** an ingest clears the kit's recent
+  writes, so one coming back after a person's save is their save, not an echo.
+- **Undo grouping (K4):** a structured edit never joins a person's open undo group (a step of
+  its own).
+- **Exports reach grids; P24 is live for csv:** the `export` and `export --version` verbs
+  serve the grid tier too (a grid's version renders with the codec it stored), and a grid
+  pack's parity list maps P24 live.
+- **Exports on a grid (the merge with main's exports P0, 319a9af):** `Session::file_at` on
+  a structured doc encodes the version with the codec settings it stored (format 6) and
+  says `FileCodec::Exact`; a text doc's versions are as on main. Tested at every version
+  before and after structural changes (`tests/export.rs`,
+  `grid_file_at_round_trips_every_version`).
+- **Purge rewrite:** a guard test holds that every store table (format 6's `elem_writes`
+  included) is in the rewrite's list and copied, and a grid doc's purge rewrite is tested end
+  to end (`a_grid_purge_rewrite_keeps_every_table`).
+
+**Known limits (v0.10.0)**
+- Live windows on grids: a later release. `events_since` / `edit_at_base` with a base behind
+  a structured doc are `MPC-E112 base_expired` (read again).
+- **Restoring a dropped row or column from its `BeforeDrop` version:** v0.10.1. The version's
+  cell map holds the dropped cells, but its lists don't keep their positions.
+- **`row restore` / `col restore` of a dropped element:** today it refuses with a bare
+  `TableError` (`rows: r2 is unknown`). In v0.10.1 the refusal says the row (or column) was
+  dropped, when and by whom, and points to restoring it from the `BeforeDrop` version, with
+  the restore-from-version verb.
+- Known limits for v0.10.1: the kit keeps no durable record of dropped keys, so once a drop's
+  record leaves the revert window, a refused write under that key can't say it was dropped.
+  `row restore` / `col restore` of a dropped key say 'unknown', not who dropped it and when.
+- v0.10.1 (speed): outside saves and the tick grow with history (3–6× over 600 s, same in
+  v0.9.8); live edits stay flat.
+- v0.10.1 (test-only): the grid traces count a kit `Err` on a revert as a mismatch instead of
+  panicking (`grid_traces.rs` unwraps the revert), so a planted (xxxv) shows as counted
+  mismatches, not only as a test failure.
+
 ## v0.9.8.2 (2026-10-30)
 
 v0.9.8.1 plus the JS client 0.10.0: the live wire contract and the live editor, M1. No change
@@ -205,6 +667,95 @@ The crate version is `0.9.8+1` (Cargo takes three numbers; the build metadata re
 0.9.8); the git tag is v0.9.8.1. It closes v0.9.8's known issue "stale outside saves remove
 text with no note" for text written through the kit (the limits below remain), and its
 known issue "revert of an outside save loses roots".
+
+**Fixed**
+- **A revert of an outside save, or of a version promoted from tier 0, put the text back as
+  new text instead of what the change removed** (undo spec U23; affected: **outside saves from
+  v0.9.0, which added provenance (store format 5), and promotions from v0.9.2, through
+  v0.9.7.1**). The change's revert record kept no roots,
+  so its revert's characters were their own roots: blame credited the reverter instead of
+  the text's author, and the rules that read roots (O4a, I1, U10a, U8) couldn't see that the
+  text was already live under its own root, so the same line could land twice (found by the
+  32-participant soak's history arm, seed 1, call 43,002: the owner's revert of an outside
+  delete beside a restored copy of the line). Both records now keep, per hunk, the roots it
+  deleted and the elements it inserted, as an edit's always did, so the revert, its undo and
+  its redo put back the removed roots. No store format change: records written before this
+  release still hold no roots and revert as before. An outside save whose identity map was
+  dropped (an `IdentityMismatch` event) still keeps none.
+
+**Added**
+- **When an outside save removes someone's text, they're told** (`docs/SESSIONS.md`, "When an
+  outside save removes someone's text"). A writer holding older text saves it plus its own change;
+  the kit reads that as the file deleting what others wrote since, and until now their line left the
+  live doc with `Ingested`, no conflict, and nothing said to them, a person's acknowledged typing
+  included. The rule covers **authors who wrote through the kit**: each character's own author, and
+  the person an assistant acted for (only the text made on their behalf). It applies to text written
+  since the last outside save or within `Config::outside_note_window_ms` (24 h). Whitespace-only
+  changes, and adding to a line, say nothing.
+- **The note carries the author's own removed text**, exact, at most 16 KiB, and never someone
+  else's from the same block, so they can paste it back with an ordinary edit. With the history
+  right it names the version that holds it; without it, it never points at a version they can't
+  open, and says who can restore what was cut. The words are "may have": a moved line reads as
+  removed. No single call restores the text and keeps the saver's change; `restore` of the version
+  replaces it, and the note says so.
+- **Delivery to people and agents:** `RosterEvent::Overwritten` (with `Snapshot.overwritten`), the
+  next verb's `Notes`, `Session::take_notes`; `NoteKind::Overwritten`, `Overwrite`, `OverwriteCell`;
+  `AuditEvent::OutsideOverride`, line numbers only. `Debug` prints no text. No read right, nothing
+  delivered. A purge takes the text; erasing a participant takes their notes.
+- **Held across an unload**, text included, in the manager's memory: agents working one verb at a
+  time usually come back after it. 24 h (`Config::outside_note_text_keep_ms`), 1 MiB of text per doc
+  and 64 MiB across docs, oldest first; past those the note says the text is no longer held.
+
+- **The host can close a doc's live session, members or not** (`docs/SESSIONS.md`, "Closing a
+  doc's live session"): `SessionManager::close(key, reason)` and `close_where(reason, |key, pack|
+  ..)`, for a host switching a file type off. A pending write-back is written first; every
+  roster subscription gets `RosterEvent::Closed { reason }` last; the host gets
+  `AuditEvent::SessionClosed { key, connections, reason }`; every later call, `file_changed`
+  included, fails with the new `SessionError::Closed { reason }` (`MPC-E519`, exit 1). Outside
+  saves stop merging until the host opens the doc again, which takes them in as usual; waiting
+  notes are kept for that open. All additive: `SessionError`, `RosterEvent` and `AuditEvent`
+  are `#[non_exhaustive]`.
+
+**Known limits**
+- Text past 32 places in one note isn't carried (it is counted, and the note says so).
+- Roll-ups carry no text: past 64 waiting notes per person per doc, the rest are a count.
+- Typing in flight at the start of a removed line lands on the next line with no signal.
+- Notes are lost on a daemon restart (the version, the log and the audit row remain).
+- **File-tool text has no author to tell:** text that came in through a file save is `kit:external`,
+  so two agents overwriting each other through their own file tools get no note, only an audit row.
+
+**Tests**
+- `tests/revert_external.rs`: a revert of an outside save (a typed line; a line an undo had
+  put back), with and without `--partial`, with and without a restart between the save and
+  the revert, each followed by an undo and a redo of the revert, checked by roots
+  (`char_blame`), blame's `restored_by` and I1; the control, a revert of an edit. On v0.9.7.1
+  the two outside-save tests fail on U23 and the control passes.
+- `tests/promote.rs`: a revert of a promoted deletion (the same checks); fails on v0.9.7.1.
+- `crates/spec-undo/tests/revert_external_property.rs`: seeded scripts through a real
+  session on a file (agents' edits, undo and redo, whole-text outside saves through the real
+  ingest, the owner's revert of any recent change with its undo and redo, restores, a planted
+  secret purged, restarts) against `spec_undo::model`: after every step the same text, every
+  live character's root on the same change and restored by the same participant, and blame's
+  `restored_by` per line by blame's documented rule (the newest root change; on a tie a
+  restored character). 300 scripts of 40 steps.
+- A planted fault, `differential::ProvMutant::OutsideSaveKeepsNoRoots` (test builds only),
+  drops the roots again; the named tests and the property each catch it.
+- Test builds only: `crates/base`'s dev-dependency on itself also enables the `conformance`
+  feature (`Session::char_blame`); the feature only adds functions.
+
+**Evidence scope.** The undo model check's G1 runs (724.6M states) and the trace test have
+no outside-save step and no promotion, so they say nothing for or against this path; the
+property above is the kit-vs-oracle check for it. An outside-save step in the trace
+generator is a follow-up.
+
+## v0.9.7.2 (2026-10-30)
+
+A note and a fix on v0.9.7.1: an outside save that may have removed someone's text now tells them,
+and gives them the text; and a revert of an outside save or of a promoted version puts back the
+roots it removed. No merge change, no store or wire format change, no new dependency. A new roster
+event, so a host matching `RosterEvent::Snapshot` exhaustively needs `..`.
+
+The crate version is `0.9.7+2`; the git tag is v0.9.7.2.
 
 **Fixed**
 - **A revert of an outside save, or of a version promoted from tier 0, put the text back as

@@ -4,7 +4,7 @@ message:  this table is at its size limit ({limit} {what}, deleted rows included
 next:     The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
 rule:     K-CSV-7 (KC4)
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
-status:   reserved for CSV grids (C1c); nothing returns it yet
+status:   live
 --- json
 {
   "id": "MPC-E802",
@@ -16,6 +16,6 @@ status:   reserved for CSV grids (C1c); nothing returns it yet
   "rule": "K-CSV-7 (KC4)",
   "verbs": ["@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
-  "status": "reserved",
-  "since_or_until": "CSV grids (C1c)"
+  "status": "live",
+  "since_or_until": null
 }

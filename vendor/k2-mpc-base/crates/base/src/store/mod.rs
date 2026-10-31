@@ -27,6 +27,7 @@ mod promote;
 mod purge;
 mod rewrite;
 mod scan;
+mod structured;
 
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
@@ -40,10 +41,14 @@ pub(crate) use promote::PromoteRows;
 #[cfg(test)]
 pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;
 pub use purge::PurgeCounts;
-pub(crate) use purge::{DocPurge, Pick};
+pub(crate) use purge::{DocPurge, ElemPick, Pick};
 pub use rewrite::RewriteReport;
 pub(crate) use scan::Needles;
 pub use scan::{scan_bytes, scan_file, Finding, MIN_MATCH};
+pub use structured::ElemCounts;
+pub(crate) use structured::{
+    ElemFacet, ElemOpKind, ElemOpRecord, ElemRoot, ElemWrite, StoredEffect,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::{RwLock, RwLockReadGuard};
@@ -95,8 +100,15 @@ use enc::{R, W};
 ///   of writing changes without their provenance rows (a later build would then read text
 ///   restored by them as fresh), reading version-2 records as damaged, or refusing the
 ///   table in `rewrite_file` mid-purge.
+/// - 6: structured docs (C1c; `structured.rs`): typed versions (version record 3), revert
+///   records version 3 (ops by key), change summaries version 2 (element counts), and a new
+///   table, `elem_writes`. **Lazy and one-way** (K-FMT-10, approved exception): a store is
+///   stamped 6 only in the transaction that writes its first structured doc. A store that
+///   never holds one stays at 5 ([`STORE_FORMAT_BASE`]) byte for byte, so the previous
+///   release reads and writes it as before. A format-5 build refuses a format-6 store with
+///   one line ([`StoreError::Newer`]: "store is format 6; this build reads up to 5").
 ///
-///   v0.9.7 adds one table, `authored` (the hunks the author wrote, for a change D1
+///   v0.9.7 adds one table (on the format-5 line), `authored` (the hunks the author wrote, for a change D1
 ///   widened; `store/history.rs`), **without a format bump**: the revert record keeps its
 ///   version, and a store without the table (or without a change's row) reads as "authored
 ///   = the record's hunks", exact for every change made before. A v0.9.5 or v0.9.6 build
@@ -104,7 +116,11 @@ use enc::{R, W};
 ///   behind where v0.9.7 drops them (a doc delete, records leaving the window), and its
 ///   `rewrite_file`, and so a purge, refuses the table before changing anything
 ///   ([`StoreError::NewerData`], `MPC-E502`; never a silent drop).
-pub const STORE_FORMAT: u64 = 5;
+pub const STORE_FORMAT: u64 = 6;
+
+/// The format of a store without structured docs: a new store starts here, an older one is
+/// stamped here when opened, and both stay here until their first structured doc.
+pub const STORE_FORMAT_BASE: u64 = 5;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -142,6 +158,11 @@ pub(super) enum DocRows {
     Slot(TableDefinition<'static, (u64, u8), &'static [u8]>),
     /// `(doc, client, clock)` → record.
     Clock(TableDefinition<'static, (u64, u64, u64), &'static [u8]>),
+    /// `(doc, root, key, facet)` → write (`elem_writes`, format 6: a structured doc's last
+    /// write per element facet; C1).
+    Elem(TableDefinition<'static, (u64, &'static str, &'static str, u8), &'static [u8]>),
+    /// `(doc, name)` → record (`row_marks`, format 6: by row key).
+    Named(TableDefinition<'static, (u64, &'static str), &'static [u8]>),
 }
 
 /// How a doc delete erases a per-doc table's rows of the doc.
@@ -175,6 +196,9 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(history::AUTHORED), Erase::Range),
     (DocRows::Clock(history::CHANGE_CLOCKS), Erase::Range),
     (DocRows::Clock(history::PROVENANCE), Erase::Range),
+    (DocRows::Elem(structured::ELEM_WRITES), Erase::Range),
+    (DocRows::Named(structured::ROW_MARKS), Erase::Range),
+    (DocRows::Named(structured::OVERWRITE_NOTES), Erase::Range),
     (DocRows::Pair(blob::BLOB_VERSIONS), Erase::Blob),
     (DocRows::Slot(blob::BLOB_SYNC), Erase::Blob),
     (DocRows::Pair(blob::BLOB_APPROVALS), Erase::Blob),
@@ -194,6 +218,8 @@ impl DocRows {
             Self::Owner(t) => t.name(),
             Self::Slot(t) => t.name(),
             Self::Clock(t) => t.name(),
+            Self::Elem(t) => t.name(),
+            Self::Named(t) => t.name(),
         }
     }
 
@@ -219,6 +245,12 @@ impl DocRows {
             Self::Clock(t) => w
                 .open_table(t)?
                 .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?,
+            Self::Elem(t) => w
+                .open_table(t)?
+                .retain_in((id, "", "", 0u8)..(id + 1, "", "", 0u8), |_, _| false)?,
+            Self::Named(t) => w
+                .open_table(t)?
+                .retain_in((id, "")..(id + 1, ""), |_, _| false)?,
         }
         Ok(())
     }
@@ -248,6 +280,16 @@ impl DocRows {
                 .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
                 .next()
                 .is_some(),
+            Self::Elem(t) => r
+                .open_table(t)?
+                .range((id, "", "", 0u8)..(id + 1, "", "", 0u8))?
+                .next()
+                .is_some(),
+            Self::Named(t) => r
+                .open_table(t)?
+                .range((id, "")..(id + 1, ""))?
+                .next()
+                .is_some(),
         })
     }
 }
@@ -259,6 +301,10 @@ pub enum StoreError {
     Db(String),
     #[error("store is format {found}; this build reads up to {STORE_FORMAT}")]
     Newer { found: u64 },
+    /// A structured doc's row marks can't be read (`row_marks` is missing): a base can't be
+    /// vouched for, so a keyed write naming one is refused as expired (fail closed).
+    #[error("doc {0}: the row marks are missing; read the doc again and retry")]
+    MarksLost(u64),
     /// The store holds a table this kit doesn't know: data a newer kit added without a
     /// format bump. Reading and editing still work; a rewrite (and so a
     /// purge) is refused before anything changes (v0.9.5). In the error registry this is
@@ -535,6 +581,9 @@ pub enum VersionReason {
     BeforeAgent = 5,
     BeforeRestore = 6,
     Named = 7,
+    /// Cut by `rows drop-deleted` just before it removes deleted rows and columns: its cell map
+    /// still holds their cells (a version's lists hold live elements only).
+    BeforeDrop = 8,
 }
 
 impl VersionReason {
@@ -547,6 +596,7 @@ impl VersionReason {
             5 => Self::BeforeAgent,
             6 => Self::BeforeRestore,
             7 => Self::Named,
+            8 => Self::BeforeDrop,
             _ => return Err(StoreError::Corrupt("version reason")),
         })
     }
@@ -563,6 +613,9 @@ pub struct Version {
     /// Participants whose changes are in this version since the previous one.
     pub authors: Vec<String>,
     pub content: Vec<(String, Neutral)>,
+    /// The codec settings when it was cut (a structured doc's dialect can change through
+    /// outside edits; format 6). `None` for a text doc's version, which never stored them.
+    pub codec: Option<Vec<u8>>,
 }
 
 /// What a session needs to rebuild a doc: the latest snapshot and the log after it.
@@ -784,14 +837,41 @@ fn enc_version_redacted(v: &Version, redacted: &[Redaction]) -> Vec<u8> {
     for x in redacted {
         w.str(&x.root).u64(x.start).u64(x.len);
     }
+    // record 3 only where needed: a text doc's versions stay record 2, readable by format 5
+    let typed = is_typed(v);
     w.u32(v.content.len() as u32);
     for (root, n) in &v.content {
         w.str(root);
         match n {
-            Neutral::Text(t) => w.u8(1).str(t),
-        };
+            Neutral::Text(t) => {
+                w.u8(1).str(t);
+            }
+            Neutral::List(items) => {
+                w.u8(2).u32(items.len() as u32);
+                for (k, x) in items {
+                    w.str(k.as_str());
+                    structured::enc_value(&mut w, x);
+                }
+            }
+            Neutral::Map(m) => {
+                w.u8(3).u32(m.len() as u32);
+                for (k, x) in m {
+                    w.str(k);
+                    structured::enc_value(&mut w, x);
+                }
+            }
+        }
+    }
+    if typed {
+        w.opt_bytes(v.codec.as_deref());
+        w.0[0] = 3;
     }
     w.0
+}
+
+/// A version that needs record 3 (format 6): structured content or codec settings.
+fn is_typed(v: &Version) -> bool {
+    v.codec.is_some() || v.content.iter().any(|(_, n)| n.as_text().is_none())
 }
 
 fn dec_version(b: &[u8]) -> Result<Version, StoreError> {
@@ -822,7 +902,7 @@ fn dec_redactions(r: &mut R<'_>, v: u8, total: usize) -> Result<Vec<Redaction>, 
 fn dec_version_full(b: &[u8]) -> Result<(Version, Vec<Redaction>), StoreError> {
     let mut r = R::new(b, "version");
     let ver = r.u8()?;
-    if ver != 1 && ver != 2 {
+    if !(1..=3).contains(&ver) {
         return Err(StoreError::Corrupt("version record version"));
     }
     let (seq, at_ms, reason, name, authors) = (
@@ -842,10 +922,36 @@ fn dec_version_full(b: &[u8]) -> Result<(Version, Vec<Redaction>), StoreError> {
         let root = r.str()?;
         let val = match r.u8()? {
             1 => Neutral::Text(r.str()?),
+            2 if ver >= 3 => {
+                let k = r.u32()? as usize;
+                if k > b.len() {
+                    return Err(StoreError::Corrupt("version list"));
+                }
+                let mut items = Vec::with_capacity(k);
+                for _ in 0..k {
+                    let key = crate::elem::Key::new(r.str()?)
+                        .map_err(|_| StoreError::Corrupt("version list key"))?;
+                    items.push((key, structured::dec_value(&mut r)?));
+                }
+                Neutral::List(items)
+            }
+            3 if ver >= 3 => {
+                let k = r.u32()? as usize;
+                if k > b.len() {
+                    return Err(StoreError::Corrupt("version map"));
+                }
+                let mut m = std::collections::BTreeMap::new();
+                for _ in 0..k {
+                    let key = r.str()?;
+                    m.insert(key, structured::dec_value(&mut r)?);
+                }
+                Neutral::Map(m)
+            }
             _ => return Err(StoreError::Corrupt("version value kind")),
         };
         content.push((root, val));
     }
+    let codec = if ver >= 3 { r.opt_bytes()? } else { None };
     r.end()?;
     Ok((
         Version {
@@ -855,6 +961,7 @@ fn dec_version_full(b: &[u8]) -> Result<(Version, Vec<Redaction>), StoreError> {
             name,
             authors,
             content,
+            codec,
         },
         redacted,
     ))
@@ -876,6 +983,9 @@ fn put_versions(
         .transpose()?
         .map(|(k, _)| k.value().1)
         .unwrap_or(0);
+    if versions.iter().any(is_typed) {
+        structured::upgrade(w)?;
+    }
     for v in versions {
         last += 1;
         t.insert((id, last), enc_version(v).as_slice())?;
@@ -949,14 +1059,15 @@ impl DocStore {
             let found = meta.get("store_format")?.map(|v| v.value());
             match found {
                 None => {
-                    meta.insert("store_format", STORE_FORMAT)?;
+                    meta.insert("store_format", STORE_FORMAT_BASE)?;
                 }
                 Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
                 // 1 -> 2 -> 3: nothing to rewrite (older records still decode); new tables
                 // below. 3 -> 4: the blob approvals, backfilled below. 4 -> 5: the
                 // provenance table (below), empty: every existing element is its own root.
-                Some(f) if f < STORE_FORMAT => {
-                    meta.insert("store_format", STORE_FORMAT)?;
+                // 5 -> 6 never happens here: only a store's first structured doc does it.
+                Some(f) if f < STORE_FORMAT_BASE => {
+                    meta.insert("store_format", STORE_FORMAT_BASE)?;
                 }
                 Some(_) => {}
             }
@@ -1122,15 +1233,18 @@ impl DocStore {
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
         let w = self.begin_write()?;
         let out = {
-            let mut paths = w.open_table(PATHS)?;
-            let k = meta.key.index();
-            if paths.get(k.as_str())?.is_some() {
-                return Err(StoreError::KeyTaken(meta.key.clone()));
-            }
-            let mut m = w.open_table(META)?;
-            let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
-            m.insert("next_doc_id", id + 1)?;
-            paths.insert(k.as_str(), id)?;
+            let id = {
+                let mut paths = w.open_table(PATHS)?;
+                let k = meta.key.index();
+                if paths.get(k.as_str())?.is_some() {
+                    return Err(StoreError::KeyTaken(meta.key.clone()));
+                }
+                let mut m = w.open_table(META)?;
+                let id = m.get("next_doc_id")?.map(|v| v.value()).unwrap_or(1);
+                m.insert("next_doc_id", id + 1)?;
+                paths.insert(k.as_str(), id)?;
+                id
+            };
             w.open_table(DOCS)?.insert(id, enc_meta(meta).as_slice())?;
             w.open_table(CLIENTS)?.insert((id, client), owner)?;
             let seq = match entry {
@@ -1145,6 +1259,9 @@ impl DocStore {
             };
             let mut v = version.clone();
             v.seq = seq.unwrap_or(0);
+            if is_typed(&v) {
+                structured::upgrade(&w)?;
+            }
             w.open_table(VERSIONS)?
                 .insert((id, 1), enc_version(&v).as_slice())?;
             if let Some((sy, key)) = sync {
@@ -1341,6 +1458,9 @@ impl DocStore {
         let vid = {
             if w.open_table(DOCS)?.get(id)?.is_none() {
                 return Err(StoreError::NoDoc(id));
+            }
+            if is_typed(v) {
+                structured::upgrade(&w)?;
             }
             let mut t = w.open_table(VERSIONS)?;
             let last = t

@@ -7,8 +7,10 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Mutex;
 
-use k2_mpc_base::{Doc, Kind, Schema};
+use k2_mpc_base::elem::{Anchor, ListOp, MapOp};
+use k2_mpc_base::{Doc, Edit, Key, Kind, Schema, Value};
 
 const S: Schema = Schema {
     name: "test",
@@ -47,8 +49,12 @@ fn live() -> isize {
     LIVE.load(Ordering::SeqCst)
 }
 
+/// The allocator counts the whole process: one test at a time.
+static LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn agent_edits_keep_no_replica() {
+    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     // A realistic doc: 2,000 lines.
     let base: String = (0..2000)
         .map(|i| format!("- item {i}: some markdown text here\n"))
@@ -107,5 +113,102 @@ fn agent_edits_keep_no_replica() {
         session_heap * 2 <= reloaded_heap * 3,
         "session holds {session_heap} B after 64 agent edits but the doc alone is {reloaded_heap} B: \
          something kept per-agent state (a replica?) past edit_as"
+    );
+}
+
+/// The same invariant for structured edits: 64 agents each move a row and set a cell of a
+/// 2,000-row table; the session stays about the size of the doc reloaded.
+#[test]
+fn structured_agent_edits_keep_no_replica() {
+    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    const G: Schema = Schema {
+        name: "grid",
+        roots: &[("rows", Kind::MovableList), ("cells", Kind::Map)],
+    };
+    let k = |i: usize| Key::new(format!("r{i}")).unwrap();
+    let before = live();
+    let mut session = Doc::new(G).unwrap();
+    let rows: Vec<ListOp> = (0..2000)
+        .map(|i| ListOp::Insert {
+            key: k(i),
+            at: if i == 0 {
+                Anchor::Start
+            } else {
+                Anchor::After(k(i - 1))
+            },
+            value: Value::Null,
+        })
+        .collect();
+    let cells: Vec<MapOp> = (0..2000)
+        .flat_map(|r| {
+            (0..4).map(move |c| MapOp::Set {
+                key: format!("r{r}\u{1f}c{c}"),
+                value: Value::Str(format!("value {r} {c}")),
+            })
+        })
+        .collect();
+    session
+        .edit_as(
+            2,
+            &[
+                Edit::List {
+                    root: "rows".into(),
+                    ops: rows,
+                },
+                Edit::Map {
+                    root: "cells".into(),
+                    ops: cells,
+                },
+            ],
+        )
+        .unwrap()
+        .unwrap();
+    for agent in 0..64usize {
+        let edits = [
+            Edit::List {
+                root: "rows".into(),
+                ops: vec![ListOp::Move {
+                    key: k(agent * 30),
+                    to: Anchor::End,
+                }],
+            },
+            Edit::Map {
+                root: "cells".into(),
+                ops: vec![MapOp::Set {
+                    key: format!("r{}\u{1f}c1", agent * 7),
+                    value: Value::Str(format!("agent {agent}")),
+                }],
+            },
+        ];
+        assert!(session
+            .edit_as(1000 + agent as u64, &edits)
+            .unwrap()
+            .is_some());
+    }
+    session.list("rows").unwrap();
+    let session_heap = live() - before;
+
+    let state = session.encode_state().unwrap();
+    let b2 = live();
+    let reloaded = Doc::load(G, &state).unwrap();
+    reloaded.list("rows").unwrap();
+    let reloaded_heap = live() - b2;
+    assert_eq!(
+        reloaded.export_neutral().unwrap(),
+        session.export_neutral().unwrap()
+    );
+
+    // negative control, as above
+    let b3 = live();
+    let kept = Doc::load(G, &state).unwrap();
+    let one_replica = live() - b3;
+    assert!(
+        (session_heap + one_replica) * 2 > reloaded_heap * 3,
+        "the check is too loose to catch one kept replica"
+    );
+    drop(kept);
+    assert!(
+        session_heap * 2 <= reloaded_heap * 3,
+        "session holds {session_heap} B after 64 agent edits but the doc alone is {reloaded_heap} B"
     );
 }

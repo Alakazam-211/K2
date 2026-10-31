@@ -2152,7 +2152,7 @@ fn a_v040_store_upgrades_to_format_4_in_place() {
     drop((mgr, blobs, store));
     assert_eq!(
         raw_format(&dir.0.join("v040.redb")),
-        k2_mpc_base::store::STORE_FORMAT
+        k2_mpc_base::store::STORE_FORMAT_BASE
     );
 }
 

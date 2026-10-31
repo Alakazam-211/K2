@@ -3,6 +3,7 @@
 
 use k2_mpc_conformance::matrix::{
     self, Awaiting, Cap, Engine, Matrix, Never, Rule, Status, CURRENT, REQUIRED,
+    REQUIRED_STRUCTURED,
 };
 
 #[test]
@@ -27,17 +28,28 @@ fn every_new_rule_is_declared() {
     for id in REQUIRED {
         assert!(matrix::rule(id).is_some(), "{id} is not in the suite");
     }
+    assert_eq!(
+        REQUIRED_STRUCTURED.len(),
+        22,
+        "C1b's structured rules and C1d's table rules"
+    );
+    for id in REQUIRED_STRUCTURED {
+        assert!(matrix::rule(id).is_some(), "{id} is not in the suite");
+    }
 }
 
 /// G1: every rule runs on some engine; what still awaits an engine is the native decoder's
-/// (`sec.*`, G2). (`erase.span_includes_tombstones` runs on the model since mpce-model
-/// v0.4.1, `Doc::span_ids`.)
+/// (`sec.*`, G2), and the structured rules on the reference model (its list, mlist and map
+/// models are K2 Engine's next work). (`erase.span_includes_tombstones` runs on the model
+/// since mpce-model v0.4.1, `Doc::span_ids`.)
 #[test]
 fn only_the_listed_rules_await() {
     const LATER: &[&str] = &[];
+    let structured = |r: &str| matrix::structured_rules().any(|x| x.id == r);
     let waiting = |r: &str| r.starts_with("sec.") || LATER.contains(&r);
     let others: Vec<&str> = matrix::AWAITING
         .iter()
+        .filter(|a| !(structured(a.rule) && a.engine == matrix::MODEL.name))
         .map(|a| a.rule)
         .filter(|r| !waiting(r))
         .collect();

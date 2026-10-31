@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::participant::{ConnId, ParticipantKind};
 use super::position::{self, Bias, LineRange};
+use crate::elem::Key;
 use crate::text::diff::Hunk;
 
 /// A claim's id: unique within the process, so an id from another doc (or an ended claim)
@@ -90,10 +91,13 @@ pub enum ClaimEnd {
     Left,
     /// A store write failed mid-edit and the session reloaded (positions can't be trusted).
     Reset,
+    /// Every row (or column) it covered was deleted (a grid claim, A10, K-PRES-6), so the
+    /// claimant knows why.
+    Deleted,
 }
 
 impl ClaimEnd {
-    /// `released`, `edited`, `expired`, `left`, `reset`.
+    /// `released`, `edited`, `expired`, `left`, `reset`, `deleted`.
     pub fn as_str(self) -> &'static str {
         match self {
             ClaimEnd::Released => "released",
@@ -101,6 +105,59 @@ impl ClaimEnd {
             ClaimEnd::Expired => "expired",
             ClaimEnd::Left => "left",
             ClaimEnd::Reset => "reset",
+            ClaimEnd::Deleted => "deleted",
+        }
+    }
+}
+
+/// What a claim covers (A10, K-PRES-6): lines of a text root, or on a grid ([`crate::table`]
+/// doc) rows, columns or a rectangle of cells **by identity**: the elements between two keys
+/// in the current order, inclusive (whichever comes first). Keys are stable, so a grid span
+/// needs no transform: it follows moves and sorts, rows moved between its ends join it, and
+/// a row inserted right at one of its ends joins it (anchors expand, as a text claim's do).
+/// A deleted end still marks its place (where a restore would show it); the claim ends with
+/// [`ClaimEnd::Deleted`] when nothing it covers is live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClaimSpan {
+    /// Lines of a text root (`claim --lines a,b`; on a grid, mapped to rows when taken).
+    Lines(LineRange),
+    /// Rows `first..last` (`claim --rows R1..R2`).
+    Rows { first: Key, last: Key },
+    /// Columns `first..last` (`claim --cols C1..C2`).
+    Cols { first: Key, last: Key },
+    /// The cells of rows `rows.0..rows.1` and columns `cols.0..cols.1` (`claim --cells
+    /// R1,C1..R2,C2`).
+    Cells { rows: (Key, Key), cols: (Key, Key) },
+}
+
+impl fmt::Display for ClaimSpan {
+    /// `lines 3–5`, `rows r12–r40`, `cols c2`, `cells r1/c1–r4/c3`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pair = |a: &Key, b: &Key| {
+            if a == b {
+                a.to_string()
+            } else {
+                format!("{a}–{b}")
+            }
+        };
+        match self {
+            ClaimSpan::Lines(l) => f.write_str(&lines_text(l)),
+            ClaimSpan::Rows { first, last } => {
+                let w = if first == last { "row" } else { "rows" };
+                write!(f, "{w} {}", pair(first, last))
+            }
+            ClaimSpan::Cols { first, last } => {
+                let w = if first == last { "col" } else { "cols" };
+                write!(f, "{w} {}", pair(first, last))
+            }
+            ClaimSpan::Cells { rows, cols } => {
+                if rows.0 == rows.1 && cols.0 == cols.1 {
+                    write!(f, "cell {}/{}", rows.0, cols.0)
+                } else {
+                    write!(f, "cells {}/{}–{}/{}", rows.0, cols.0, rows.1, cols.1)
+                }
+            }
         }
     }
 }
@@ -119,9 +176,13 @@ pub struct ClaimInfo {
     pub name: String,
     /// The connection that took it (it ends when that connection leaves).
     pub conn: ConnId,
-    /// The lines it covers now (1-based, inclusive).
+    /// The lines it covers now (1-based, inclusive). On a grid: the rendered lines of the
+    /// rows it covers (root [`crate::table::ROWS`]; a column claim covers every line).
     pub lines: LineRange,
-    /// Its byte span in the root's text now (`start <= end`).
+    /// What it covers: [`ClaimSpan::Lines`] (the same as `lines`) on a text doc; on a grid,
+    /// its rows, columns or cells by key (A10).
+    pub span: ClaimSpan,
+    /// Its byte span in the root's text now (`start <= end`; 0 on a grid).
     pub start: usize,
     pub end: usize,
     /// When it was taken (host clock).
@@ -166,10 +227,12 @@ pub enum ReservationEnd {
     Left,
     /// A reload after a failed write, or the session closing: nothing passes on.
     Reset,
+    /// Every row (or column) it held was deleted (a grid reservation): nothing passes on.
+    Deleted,
 }
 
 impl ReservationEnd {
-    /// `edited`, `claimed`, `lapsed`, `cancelled`, `left`, `reset`.
+    /// `edited`, `claimed`, `lapsed`, `cancelled`, `left`, `reset`, `deleted`.
     pub fn as_str(self) -> &'static str {
         match self {
             ReservationEnd::Edited => "edited",
@@ -178,6 +241,7 @@ impl ReservationEnd {
             ReservationEnd::Cancelled => "cancelled",
             ReservationEnd::Left => "left",
             ReservationEnd::Reset => "reset",
+            ReservationEnd::Deleted => "deleted",
         }
     }
 }
@@ -195,8 +259,12 @@ pub struct ReservationInfo {
     pub pid: String,
     pub name: String,
     pub conn: ConnId,
-    /// Its range now (anchored, expanding).
+    /// Its range now (anchored, expanding). On a grid: the rendered lines of its rows.
     pub lines: LineRange,
+    /// What it holds: [`ClaimSpan::Lines`] (as `lines`) on a text doc; on a grid, the ended
+    /// claim's rows, columns or cells by key.
+    pub span: ClaimSpan,
+    /// Its byte span in the root's text now (0 on a grid).
     pub start: usize,
     pub end: usize,
     pub until_ms: u64,
@@ -270,7 +338,8 @@ pub enum NoteKind {
     Edited,
     /// Another participant's viewing range.
     Viewing,
-    /// An outside save may have removed text you wrote ([`Note::overwrite`]).
+    /// An outside save overrode your live work ([`Note::overwrite`]): on a grid, your live
+    /// value (contract §2.9.1); on a text doc, it may have removed text you wrote.
     Overwritten,
 }
 
@@ -311,22 +380,29 @@ pub struct Note {
     pub claim: Option<ClaimId>,
     pub claim_note: Option<String>,
     pub remaining_ms: Option<u64>,
-    /// For [`NoteKind::Overwritten`]: what the outside save may have removed.
+    /// On a grid: what the other participant is on, by key (their claim's span, the cell
+    /// they have a caret on, the rows they view or last edited). `lines` are its rendered
+    /// lines now. `None` on a text doc.
+    pub span: Option<ClaimSpan>,
+    /// For [`NoteKind::Overwritten`]: what the change did to your work (a grid: your value;
+    /// a text doc: what the outside save may have removed).
     pub overwrite: Option<Overwrite>,
 }
 
-/// The most bytes of what the file now has, per place of an [`Overwrite`] (cut at a character
-/// boundary, with `cut` set).
+/// The most bytes of one value an [`Overwrite`] carries (cut at a character boundary, with
+/// `cut` set): on a grid, one cell's value (the full value is in the version the note names);
+/// on a text doc, what the file now has, per place.
 pub const OVERWRITE_VALUE_MAX: usize = 256;
-/// The most places one [`Overwrite`] lists; the rest are counted in `more`.
+/// The most cells (a grid: one row's, for one author) or places (a text doc) one [`Overwrite`]
+/// lists; the rest are counted in `more`. So one grid event is at most about 20 KiB.
 pub const OVERWRITE_CELLS_MAX: usize = 32;
 /// The most notes waiting for one participant on one doc: past it, the last is a roll-up.
 pub const OVERWRITE_PENDING_MAX: usize = 64;
-/// The most text one note carries, all its places together: the author's own removed text and
-/// what the file now has. The rest is counted in [`Overwrite::not_shown`].
+/// The most text one text-doc note carries, all its places together: the author's own removed
+/// text and what the file now has. The rest is counted in [`Overwrite::not_shown`].
 pub const OVERWRITE_TEXT_MAX: usize = 16 * 1024;
-/// The most note text waiting on one doc, everyone's together, loaded or not. Past it the oldest
-/// notes lose their text (the fact stays, and says so). One author's full queue fits
+/// The most note text waiting on one text doc, everyone's together, loaded or not. Past it the
+/// oldest notes lose their text (the fact stays, and says so). One author's full queue fits
 /// (64 x 16 KiB); so does a 32-participant doc's normal load, whose notes are a few lines.
 pub const OVERWRITE_DOC_TEXT_MAX: usize = 1 << 20;
 
@@ -342,7 +418,8 @@ pub(crate) fn cap_value(s: &str) -> (String, bool) {
     (s[..end].to_owned(), true)
 }
 
-/// One more place of an [`Overwrite`]. `Debug` doesn't print the values.
+/// One more cell (a grid: another live cell of the same row and author) or place (a text doc)
+/// of an [`Overwrite`]. `Debug` doesn't print the values.
 #[derive(Clone, PartialEq, Eq)]
 pub struct OverwriteCell {
     pub region: String,
@@ -365,63 +442,83 @@ impl fmt::Debug for OverwriteCell {
     }
 }
 
-/// What an outside save may have done to text someone wrote through the kit (their own, or an
-/// assistant's on their behalf): one note per change per person, the first place in the fields
-/// here, the others in `also`. "May have": the kit can't tell a removal from a move, or from
-/// the author deleting their own line in another program.
+/// What a change did to someone's live work, and where to get it back. Two kinds, one per doc
+/// kind (a doc only ever makes its own kind):
 ///
-/// It carries **the person's own removed text**, so they can paste it back: only their own
-/// characters, never someone else's in the same removed block, up to [`OVERWRITE_TEXT_MAX`] for
-/// the whole note (`not_shown` counts the rest). Past the bound per person, a **roll-up**
-/// ([`Overwrite::is_rollup`]) counts the rest in `more`; a note is never dropped silently.
-/// `Debug` doesn't print the values (a host's catch-all log stays free of document text);
-/// `Display` does, for the person it is for.
+/// - **A grid doc** (contract §2.9.1): an outside save, a stale write, a revert or a restore
+///   won over a live value someone wrote, and the live value is kept in a version. One per row
+///   per author: the first cell in the fields here, the row's others in `also`. Kept in the
+///   store until delivered.
+/// - **A text doc**: an outside save may have removed or replaced text someone wrote through
+///   the kit (their own, or an assistant's on their behalf): one note per change per person,
+///   the first place in the fields here, the others in `also`. "May have": the kit can't tell a
+///   removal from a move, or from the author deleting their own line in another program. It
+///   carries **the person's own removed text**, so they can paste it back: only their own
+///   characters, never someone else's in the same removed block, up to [`OVERWRITE_TEXT_MAX`]
+///   for the whole note (`not_shown` counts the rest). In memory only.
+///
+/// Past the bound per person, a **roll-up** ([`Overwrite::is_rollup`]) counts the rest in
+/// `more`; a note is never dropped silently. `Debug` doesn't print the values (a host's
+/// catch-all log stays free of document text); `Display` does, for the person it is for.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Overwrite {
-    /// `removed_text`, `replaced_text`; `rollup` for a roll-up.
+    /// The rule. A grid: the merge rule (`cell`, `name`, `quoting`, `edited_row`,
+    /// `deleted_row`, `moved_row`, the column forms, `dropped_row`, `dropped_col`). A text doc:
+    /// `removed_text`, `replaced_text`. `rollup` for a roll-up, on either.
     pub rule: &'static str,
-    /// What did it: `an outside save`.
+    /// What did it: `an outside save`, `a write`, `a revert`, `a restore`, `rows drop-deleted`
+    /// (a text doc: `an outside save` only).
     pub source: &'static str,
-    /// Where: `L12` or `L12–L14`, in the text before the change; with more than one root,
+    /// Where. A grid: the element by key (`r2/c3`, `row r4`, `col c2`, `name of c2`). A text
+    /// doc: `L12` or `L12–L14`, in the text before the change; with more than one root,
     /// `root:L12`.
     pub region: String,
-    /// `None` on a text doc (a grid's row key); a client dedupes on `(change, row)`, unique
-    /// here because a change makes one note per person.
+    /// A grid: its row's key, for a cell or a row; a client dedupes on `(change, row)`. `None`
+    /// on a text doc, where `(change, row)` is unique because a change makes one note per
+    /// person.
     pub row: Option<String>,
-    /// Its first line (1-based) in the text before the change.
+    /// Its rendered line (1-based) and column (1-based) in the live file before the change,
+    /// when it had them (a text doc: its first line in the text before the change).
     pub line: Option<usize>,
     pub col: Option<usize>,
-    /// This person's own removed text there, exactly as it was (newlines included): what they
-    /// can paste back. Empty for text someone else wrote that this person put back by an undo.
+    /// A grid: the live value (or `deleted`, a place `#3 (after r2)`). A text doc: this
+    /// person's own removed text there, exactly as it was (newlines included): what they can
+    /// paste back; empty for text someone else wrote that this person put back by an undo.
     pub yours: String,
-    /// Those lines as they read after the change (empty when nothing is left of them).
+    /// A grid: the file's value. A text doc: those lines as they read after the change (empty
+    /// when nothing is left of them).
     pub file: String,
-    /// `yours` or `file` was cut: see `not_shown`, [`OVERWRITE_VALUE_MAX`].
+    /// `yours` or `file` was cut to [`OVERWRITE_VALUE_MAX`] (a text doc: see `not_shown`).
     pub cut: bool,
     /// The change that did it.
     pub change: crate::store::Seq,
-    /// The version that holds the text as it was, **which this reader can open**
-    /// ([`super::Session::show`]). `None` when they have no history right
+    /// The version that holds the live value (`show --version`). On a text doc, **one this
+    /// reader can open** ([`super::Session::show`]): `None` when they have no history right
     /// ([`Overwrite::no_history`]), or it can't be named any more (a purge, or retention).
     pub version: Option<crate::store::VersionId>,
-    /// That version, for telling someone with history access; set whether this reader can open
-    /// it or not. Never link a reader to this one: that's `version`.
+    /// A text doc: that version, for telling someone with history access; set whether this
+    /// reader can open it or not. Never link a reader to this one: that's `version`. `None` on
+    /// a grid.
     pub restore_from: Option<crate::store::VersionId>,
-    /// The other places, for this person.
+    /// The other cells of this row (a grid) or places (a text doc), for this person.
     pub also: Vec<OverwriteCell>,
-    /// More places not listed (past [`OVERWRITE_CELLS_MAX`], or a roll-up's count).
+    /// More cells or places not listed (past [`OVERWRITE_CELLS_MAX`], or a roll-up's count).
     pub more: usize,
-    /// Characters of this person's own removed text the note doesn't carry (past
-    /// [`OVERWRITE_TEXT_MAX`], or in places past [`OVERWRITE_CELLS_MAX`]).
+    /// A text doc: characters of this person's own removed text the note doesn't carry (past
+    /// [`OVERWRITE_TEXT_MAX`], or in places past [`OVERWRITE_CELLS_MAX`]). 0 on a grid.
     pub not_shown: usize,
-    /// The text isn't here any more (a purge, the hold's expiry, or the doc's total cap): `yours`
-    /// and `file` are empty, the fact and the count stay.
+    /// The values aren't here: the reader can't read the doc now, a purge took them, or (a
+    /// text doc) the hold expired or the doc's total cap took them. `yours` and `file` are
+    /// empty, the fact and the count stay.
     pub withheld: bool,
-    /// The reader has no history right: `version` is `None`, and they're told who can help.
+    /// A text doc: the reader has no history right: `version` is `None`, and they're told who
+    /// can help. `false` on a grid.
     pub no_history: bool,
     pub(crate) before: crate::store::Seq,
     pub(crate) at_ms: u64,
+    /// A text doc's note (its rules, its sentences, memory only); a grid's otherwise.
+    pub(crate) text: bool,
 }
 
 impl fmt::Debug for Overwrite {
@@ -448,12 +545,35 @@ impl fmt::Debug for Overwrite {
 }
 
 impl Overwrite {
-    /// The roll-up form: no place, `more` counts them.
+    /// A grid note: the version that holds the live value, given the newest one before the
+    /// change: none for a drop (a version holds live elements only, and a dropped one wasn't
+    /// live): the note itself carries the value, up to [`OVERWRITE_VALUE_MAX`] (`cut` says when
+    /// it was cut).
+    pub(crate) fn version_of(
+        &self,
+        before: Option<crate::store::VersionId>,
+    ) -> Option<crate::store::VersionId> {
+        if self.source == "rows drop-deleted" {
+            None
+        } else {
+            before
+        }
+    }
+
+    /// The roll-up form: no cell or place, `more` counts them.
     pub fn is_rollup(&self) -> bool {
         self.rule == "rollup"
     }
 
-    /// How many places this note speaks for.
+    /// What the other value is called in a grid note's line.
+    fn theirs_word(&self) -> &'static str {
+        match self.source {
+            "an outside save" | "a write" => "the file's",
+            _ => "now",
+        }
+    }
+
+    /// How many cells or places this note speaks for.
     pub fn cells(&self) -> usize {
         usize::from(!self.is_rollup()) + self.also.len() + self.more
     }
@@ -483,47 +603,204 @@ impl Overwrite {
         }
     }
 
-    /// A purge: the values go, and the version can't be vouched for any more.
+    /// A purge, or a reader who can't read the doc now: the values go, the fact and the count
+    /// stay. The note also loses its version, which can't be vouched for any more: no
+    /// `version`, no `restore_from`, both kinds (one rule for hosts; a grid's delivery names
+    /// none for a withheld note either).
     pub(crate) fn withhold(&mut self) {
         self.strip();
         self.version = None;
         self.restore_from = None;
     }
-}
 
-/// `s` on one line and exactly recoverable: `\\`, `\"`, `\n`, `\r`, `\t` escaped, so an agent
-/// reading the note on stderr can paste its text back as it was.
-fn escaped(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = fmt::Write::write_fmt(&mut out, format_args!("\\u{{{:x}}}", c as u32));
-            }
-            c => out.push(c),
+    /// A grid note, for the store (`overwrite_notes`). A text doc's notes are never stored.
+    pub(crate) fn encode(&self, w: &mut Vec<u8>) {
+        fn st(w: &mut Vec<u8>, s: &str) {
+            w.extend_from_slice(&(s.len() as u64).to_le_bytes());
+            w.extend_from_slice(s.as_bytes());
+        }
+        fn n(w: &mut Vec<u8>, v: u64) {
+            w.extend_from_slice(&v.to_le_bytes());
+        }
+        fn opt(w: &mut Vec<u8>, v: Option<usize>) {
+            n(w, v.map_or(u64::MAX, |v| v as u64));
+        }
+        debug_assert!(!self.text, "a text doc's notes are never stored");
+        st(w, self.rule);
+        st(w, self.source);
+        st(w, &self.region);
+        st(w, self.row.as_deref().unwrap_or(""));
+        opt(w, self.line);
+        opt(w, self.col);
+        st(w, &self.yours);
+        st(w, &self.file);
+        n(w, u64::from(self.cut));
+        n(w, self.change);
+        n(w, self.more as u64);
+        n(w, u64::from(self.withheld));
+        n(w, self.before);
+        n(w, self.at_ms);
+        n(w, self.also.len() as u64);
+        for c in &self.also {
+            st(w, &c.region);
+            opt(w, c.col);
+            st(w, &c.yours);
+            st(w, &c.file);
+            n(w, u64::from(c.cut));
         }
     }
-    out
-}
 
-fn value_text(s: &str, cut: bool) -> String {
-    if cut {
-        format!("\"{}…\"", escaped(s))
-    } else {
-        format!("\"{}\"", escaped(s))
+    /// One grid note from `b` at `*at`; `None`: not a note this build wrote.
+    pub(crate) fn decode(b: &[u8], at: &mut usize) -> Option<Overwrite> {
+        fn n(b: &[u8], at: &mut usize) -> Option<u64> {
+            let s = b.get(*at..at.checked_add(8)?)?;
+            *at += 8;
+            Some(u64::from_le_bytes(s.try_into().ok()?))
+        }
+        fn st(b: &[u8], at: &mut usize) -> Option<String> {
+            let l = usize::try_from(n(b, at)?).ok()?;
+            let s = b.get(*at..at.checked_add(l)?)?;
+            *at += l;
+            String::from_utf8(s.to_vec()).ok()
+        }
+        fn opt(b: &[u8], at: &mut usize) -> Option<Option<usize>> {
+            let v = n(b, at)?;
+            Some((v != u64::MAX).then_some(v as usize))
+        }
+        const RULES: &[&str] = &[
+            "cell",
+            "name",
+            "quoting",
+            "edited_row",
+            "deleted_row",
+            "moved_row",
+            "edited_col",
+            "deleted_col",
+            "moved_col",
+            "dropped_row",
+            "dropped_col",
+            "rollup",
+        ];
+        const SOURCES: &[&str] = &[
+            "an outside save",
+            "a write",
+            "a revert",
+            "a restore",
+            "rows drop-deleted",
+        ];
+        let rule = st(b, at)?;
+        let rule = *RULES.iter().find(|r| **r == rule)?;
+        let source = st(b, at)?;
+        let source = *SOURCES.iter().find(|r| **r == source)?;
+        let region = st(b, at)?;
+        let row = Some(st(b, at)?).filter(|r| !r.is_empty());
+        let line = opt(b, at)?;
+        let col = opt(b, at)?;
+        let yours = st(b, at)?;
+        let file = st(b, at)?;
+        let cut = n(b, at)? != 0;
+        let change = n(b, at)?;
+        let more = usize::try_from(n(b, at)?).ok()?;
+        let withheld = n(b, at)? != 0;
+        let before = n(b, at)?;
+        let at_ms = n(b, at)?;
+        let len = usize::try_from(n(b, at)?).ok()?;
+        let mut also = Vec::new();
+        for _ in 0..len {
+            also.push(OverwriteCell {
+                region: st(b, at)?,
+                col: opt(b, at)?,
+                yours: st(b, at)?,
+                file: st(b, at)?,
+                cut: n(b, at)? != 0,
+            });
+        }
+        Some(Overwrite {
+            rule,
+            source,
+            region,
+            row,
+            line,
+            col,
+            yours,
+            file,
+            cut,
+            change,
+            version: None,
+            restore_from: None,
+            also,
+            more,
+            not_shown: 0,
+            withheld,
+            no_history: false,
+            before,
+            at_ms,
+            text: false,
+        })
     }
-}
 
-impl fmt::Display for Overwrite {
-    /// The note's sentences, without the `note: ` prefix. "May have" throughout: a moved line
-    /// reads as removed. It never tells someone to open a version they can't. Pinned in
+    /// A grid note's line (contract §2.9.1), pinned in the grid tests.
+    fn fmt_grid(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_rollup() {
+            write!(f, "{} more cells overwritten, see the log", self.more)?;
+            if let Some(v) = self.version {
+                write!(f, "; yours are in version {v} or earlier")?;
+            }
+            return Ok(());
+        }
+        let what = match self.rule {
+            "edited_row" | "edited_col" => "deleted",
+            "deleted_row" | "deleted_col" => "brought back and wrote",
+            "moved_row" | "moved_col" => "moved",
+            "dropped_row" | "dropped_col" => "removed",
+            _ => "overwrote",
+        };
+        write!(f, "{} {what} {}", self.source, one_line(&self.region))?;
+        match (self.line, self.col) {
+            (Some(l), Some(c)) => write!(f, " (L{l}, col {c})")?,
+            (Some(l), None) => write!(f, " (L{l})")?,
+            (None, Some(c)) => write!(f, " (col {c})")?,
+            (None, None) => {}
+        }
+        if self.withheld {
+            write!(f, " (change {})", self.change)?;
+        } else {
+            write!(
+                f,
+                ": yours {}, {} {} (change {})",
+                one_line(&self.yours),
+                self.theirs_word(),
+                one_line(&self.file),
+                self.change
+            )?;
+        }
+        for c in &self.also {
+            if self.withheld {
+                write!(f, "; also {}", one_line(&c.region))?;
+            } else {
+                write!(
+                    f,
+                    "; also {}: yours {}, {} {}",
+                    one_line(&c.region),
+                    one_line(&c.yours),
+                    self.theirs_word(),
+                    one_line(&c.file)
+                )?;
+            }
+        }
+        if self.more > 0 {
+            write!(f, "; and {} more cells", self.more)?;
+        }
+        if let Some(v) = self.version {
+            write!(f, "; yours is in version {v}")?;
+        }
+        Ok(())
+    }
+
+    /// A text doc's note: its sentences. "May have" throughout: a moved line reads as removed.
+    /// It never tells someone to open a version they can't. Pinned in
     /// `tests/outside_removal_notes.rs`.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_rollup() {
             write!(
                 f,
@@ -616,10 +893,53 @@ impl fmt::Display for Overwrite {
     }
 }
 
+/// `s` on one line and exactly recoverable: `\\`, `\"`, `\n`, `\r`, `\t` escaped, so an agent
+/// reading the note on stderr can paste its text back as it was.
+fn escaped(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = fmt::Write::write_fmt(&mut out, format_args!("\\u{{{:x}}}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn value_text(s: &str, cut: bool) -> String {
+    if cut {
+        format!("\"{}…\"", escaped(s))
+    } else {
+        format!("\"{}\"", escaped(s))
+    }
+}
+
+impl fmt::Display for Overwrite {
+    /// One line, without the `note: ` prefix: a grid note's line or a text note's sentences,
+    /// by the note's kind.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.text {
+            self.fmt_text(f)
+        } else {
+            self.fmt_grid(f)
+        }
+    }
+}
+
 impl fmt::Display for Note {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let w = who(&self.name, &self.pid);
-        let l = lines_text(&self.lines);
+        let l = match &self.span {
+            Some(s) => s.to_string(),
+            None => lines_text(&self.lines),
+        };
         let age = duration(self.age_ms);
         match self.kind {
             NoteKind::Claimed => {
@@ -639,6 +959,9 @@ impl fmt::Display for Note {
             NoteKind::Viewing => write!(f, "note: {w} viewing {l} ({age} ago)"),
             NoteKind::Overwritten => match &self.overwrite {
                 Some(o) => write!(f, "note: {o}"),
+                None if self.lines.root == crate::table::ROWS => {
+                    write!(f, "note: an outside save overrode your change at {l}")
+                }
                 None => write!(f, "note: an outside save may have removed your text at {l}"),
             },
         }
@@ -750,6 +1073,54 @@ pub(crate) struct Claim {
     pub waiters: VecDeque<(ConnId, String)>,
     /// Touched by its owner's edit that is being committed (ends it once durable).
     pub edited: bool,
+    /// A grid claim (A10): its rows and/or columns by key (`root` is
+    /// [`crate::table::CELLS`], `s`/`e` unused).
+    pub grid: Option<GridSpan>,
+}
+
+/// A grid claim's ends by key, per axis (`None`: the whole axis).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridSpan {
+    pub rows: Option<(Key, Key)>,
+    pub cols: Option<(Key, Key)>,
+}
+
+impl GridSpan {
+    pub fn of(span: &ClaimSpan) -> Option<Self> {
+        Some(match span {
+            ClaimSpan::Lines(_) => return None,
+            ClaimSpan::Rows { first, last } => GridSpan {
+                rows: Some((first.clone(), last.clone())),
+                cols: None,
+            },
+            ClaimSpan::Cols { first, last } => GridSpan {
+                rows: None,
+                cols: Some((first.clone(), last.clone())),
+            },
+            ClaimSpan::Cells { rows, cols } => GridSpan {
+                rows: Some(rows.clone()),
+                cols: Some(cols.clone()),
+            },
+        })
+    }
+
+    pub fn span(&self) -> ClaimSpan {
+        match (&self.rows, &self.cols) {
+            (Some(r), None) => ClaimSpan::Rows {
+                first: r.0.clone(),
+                last: r.1.clone(),
+            },
+            (None, Some(c)) => ClaimSpan::Cols {
+                first: c.0.clone(),
+                last: c.1.clone(),
+            },
+            (Some(r), Some(c)) => ClaimSpan::Cells {
+                rows: r.clone(),
+                cols: c.clone(),
+            },
+            (None, None) => unreachable!("a grid span has an axis"),
+        }
+    }
 }
 
 impl Claim {
@@ -781,6 +1152,7 @@ impl Claim {
             name: self.name.clone(),
             conn: self.conn,
             lines: span_lines(&self.root, text, self.s, self.e),
+            span: ClaimSpan::Lines(span_lines(&self.root, text, self.s, self.e)),
             start: self.s,
             end: self.e,
             taken_ms: self.taken_ms,
@@ -809,6 +1181,9 @@ pub(crate) struct Reservation {
     pub queue: VecDeque<(ConnId, String)>,
     /// Touched by the reserved waiter's change being committed (ends it once durable).
     pub edited: bool,
+    /// A grid reservation: the ended claim's span by key (`root` is
+    /// [`crate::table::CELLS`], `s`/`e` unused).
+    pub grid: Option<GridSpan>,
 }
 
 impl Reservation {
@@ -835,6 +1210,7 @@ impl Reservation {
             name: self.name.clone(),
             conn: self.conn,
             lines: span_lines(&self.root, text, self.s, self.e),
+            span: ClaimSpan::Lines(span_lines(&self.root, text, self.s, self.e)),
             start: self.s,
             end: self.e,
             until_ms: self.until_ms,
@@ -857,10 +1233,13 @@ pub(crate) struct Aware {
     pub noted: HashMap<NoteKey, u64>,
     /// When a reader (pid) last got a non-empty batch.
     pub batches: HashMap<String, u64>,
-    /// The [`NoteKind::Overwritten`] notes waiting for each participant, whether they are here
-    /// or not, until a verb or `take_notes` delivers them. In memory: they survive an unload
-    /// (without their values, through the manager) and not a restart.
+    /// The [`NoteKind::Overwritten`] notes waiting for each participant (by pid), whether they
+    /// are here or not, delivered with its next verb (a grid: its next batch) or by
+    /// `take_notes`, whatever the rate limit. A grid doc's are a mirror of the store's
+    /// `overwrite_notes`, read once (`notes_loaded`). A text doc's are in memory: they survive
+    /// an unload (without their values, through the manager) and not a restart.
     pub pending: HashMap<String, Vec<Note>>,
+    pub notes_loaded: bool,
 }
 
 /// Most dedupe entries kept per doc (the oldest go first past it).
@@ -892,6 +1271,7 @@ impl Aware {
 
     /// Participant erasure: drop every trace of `pid` (activity, dedupe, rate limit).
     pub fn forget(&mut self, pid: &str) {
+        self.pending.remove(pid);
         self.activity.retain(|a| a.pid != pid);
         self.noted.retain(|k, _| k.0 != pid && k.1 != pid);
         self.batches.remove(pid);
@@ -1277,6 +1657,63 @@ mod tests {
     }
 
     #[test]
+    fn grid_spans_render_by_key() {
+        let k = |s: &str| Key::new(s).unwrap();
+        let rows = ClaimSpan::Rows {
+            first: k("r12"),
+            last: k("r40"),
+        };
+        assert_eq!(rows.to_string(), "rows r12–r40");
+        let one = ClaimSpan::Cols {
+            first: k("c2"),
+            last: k("c2"),
+        };
+        assert_eq!(one.to_string(), "col c2");
+        let cells = ClaimSpan::Cells {
+            rows: (k("r1"), k("r4")),
+            cols: (k("c1"), k("c3")),
+        };
+        assert_eq!(cells.to_string(), "cells r1/c1–r4/c3");
+        assert_eq!(
+            ClaimSpan::Cells {
+                rows: (k("r1"), k("r1")),
+                cols: (k("c2"), k("c2")),
+            }
+            .to_string(),
+            "cell r1/c2"
+        );
+        for s in [rows, one, cells] {
+            assert_eq!(GridSpan::of(&s).unwrap().span(), s);
+        }
+        assert_eq!(ClaimEnd::Deleted.as_str(), "deleted");
+        // the contract's note (§6)
+        let n = Note {
+            pid: "agent-b".into(),
+            name: "Agent B".into(),
+            kind: NoteKind::Claimed,
+            participant_kind: ParticipantKind::Agent,
+            lines: LineRange {
+                root: "rows".into(),
+                first: 13,
+                last: 41,
+            },
+            age_ms: 20_000,
+            claim: Some(ClaimId::new(3)),
+            claim_note: Some("dedupe emails".into()),
+            remaining_ms: Some(40_000),
+            span: Some(ClaimSpan::Rows {
+                first: k("r12"),
+                last: k("r40"),
+            }),
+            overwrite: None,
+        };
+        assert_eq!(
+            n.to_string(),
+            "note: Agent B (agent-b) claimed rows r12–r40 \"dedupe emails\" (20 s ago, 40 s left)"
+        );
+    }
+
+    #[test]
     fn rendering_is_one_line_with_prefix() {
         let n = Note {
             pid: "agent-b".into(),
@@ -1292,6 +1729,7 @@ mod tests {
             claim: Some(ClaimId::new(3)),
             claim_note: Some("rewriting \"intro\"\n".into()),
             remaining_ms: Some(18_000),
+            span: None,
             overwrite: None,
         };
         let s = n.to_string();

@@ -4,7 +4,7 @@ message:  {count} element(s) changed since your base: {where}
 next:     Someone changed the same cells or rows after the version you read. Nothing was applied. Read again, redo your change on the new values, and pass the new --base.
 rule:     K-BR-12 (KC7)
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
-status:   reserved for CSV grids (C1c); nothing returns it yet
+status:   live
 --- json
 {
   "id": "MPC-E803",
@@ -16,6 +16,6 @@ status:   reserved for CSV grids (C1c); nothing returns it yet
   "rule": "K-BR-12 (KC7)",
   "verbs": ["@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
-  "status": "reserved",
-  "since_or_until": "CSV grids (C1c)"
+  "status": "live",
+  "since_or_until": null
 }

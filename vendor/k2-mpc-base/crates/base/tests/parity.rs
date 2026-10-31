@@ -63,6 +63,34 @@ fn row(a: PersonAction) -> ParityRow {
             &["lease", "lease --renew", "lease --release", "lease --break"],
             "text docs merge; leases are tier 0's",
         ),
+        // grid docs only (A11): a text list has no rows for these
+        P::RowInsert
+        | P::RowMove
+        | P::RowDelete
+        | P::ColInsert
+        | P::ColMove
+        | P::ColDelete
+        | P::ColRename
+        | P::Sort
+        | P::RestoreElement
+        | P::DropDeleted => ParityRow::not_applicable(
+            a,
+            &[],
+            &[
+                "row insert",
+                "row move",
+                "row delete",
+                "row restore",
+                "col insert",
+                "col move",
+                "col delete",
+                "col restore",
+                "col rename",
+                "sort",
+                "rows drop-deleted",
+            ],
+            "a text doc has no rows or columns",
+        ),
     }
 }
 

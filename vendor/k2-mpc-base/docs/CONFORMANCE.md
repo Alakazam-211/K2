@@ -41,10 +41,39 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 | `erase.no_readmit` | E-ERASE-6 | Purge | pass | pass |
 | `erase.versions` | E-ERASE-7, K-PURGE-4 | HistoryPurge | pass | pass |
 | `erase.span_includes_tombstones` | E-ERASE-1 | SpanIds | never | pass |
+| `mlist.converge` | E-CORE-1, E-MLIST-1, E-MLIST-2 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.move_no_duplicate` | E-MLIST-1 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.delete_wins` | E-MLIST-2, engine answer E1 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.insert_beside_moved` | E-MLIST-2 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.move_and_set` | E-MLIST-1 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.move_lww` | E-MLIST-1 | MList | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.block_contiguous` | E-LIST-1, engine answer E9 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.chain_one_run` | engine answers E8, E9 | MList | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `mlist.yata_separating_case` | E-LIST-1 (as E-TEXT-1) | MList | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `map.lww` | E-MAP-1 | Map | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `map.delete_vs_set` | E-MAP-1, engine answer E5 | Map | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `map.steady_bounded` | E-MAP-3 | Map | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.cell_kept` | E-TABLE-1, engine answer E3 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.cell_vs_row_delete` | E-TABLE-2, K-CSV-4, engine answer E3 | Table + Merged | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.cell_vs_col_delete` | E-TABLE-2 (extended), K-CSV-4 | Table + Merged | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.sort_atomic` | K-CSV-3, K-PAR-8 | Table + Merged | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.block_contiguous` | E-TABLE-1, engine answer E9 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.cell_lww` | E-TABLE-2, E-MAP-1 | Table | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.row_identity` | K-CSV-1, E-TABLE-1 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.sort_vs_cell` | K-CSV-4 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.row_move_keeps_cells` | K-CSV-1, E-TABLE-1 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.col_move_keeps_cells` | K-CSV-1, E-TABLE-1 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.col_move_no_duplicate` | K-CSV-4, E-MLIST-1 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.delete_wins_restorable` | E-MLIST-2, K-CSV-4 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.insert_beside_moved_row` | E-MLIST-2 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `table.ragged_render` | CSV contract §1.5, K-CSV-2 | Table | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `stream.merged_replays` | CSV seam design §4.2, A5 | Merged + MList + Map | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `stream.merged_matches_local` | CSV seam design §4.2, engine answer E4 | Merged + MList + Map | pass | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
+| `stream.merged_writes` | engine answer E4 | Merged + MList + Map | **deviation** (pinned) | awaiting: mpce-model, after K2 Engine's list/mlist/map models |
 
 ## Engines
 
-- **kit Doc (yrs)**: Text, Events, Blame, Anchors, Undo, Versions, HistoryPurge, Erasure, Branches, Purge.
+- **kit Doc (yrs)**: Text, Events, Blame, Anchors, Undo, Versions, HistoryPurge, Erasure, Branches, Purge, MList, Map, Table, Merged.
 - **mpce-model (FugueMax)**: Text, Events, Blame, Anchors, Versions, HistoryPurge, Branches, BranchAt, Purge, BlameAt, SpanIds.
 
 ## Pinned deviations
@@ -54,12 +83,48 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 - `core.causal` on kit Doc (yrs): the kit checks an update's dependencies per client (each client's clocks must continue the doc's), which refuses a skipped own predecessor with MissingDeps; an event whose parent is another client's event the doc lacks passes that check, yrs holds it as pending, and the kit then poisons the doc (Pending: reload from the store) instead of refusing it with nothing changed. The native engine checks every parent.
 - `core.no_equivocation` on kit Doc (yrs): yrs identifies content by (client, clock) only: a known ID with different content is skipped as already known, silently (the first content stays), not refused and reported. The native engine keeps a keyed digest per run (E-CORE-4).
 - `hist.undo_atomic` on kit Doc (yrs): a session applies `undo --steps N` (and redo) as N engine batches, N versions and N log entries, committed together in one store transaction under the session lock; the rule asks one batch (one log append). A single step over several roots is one batch attributed to the undoer, as asserted.
+- `mlist.move_lww` on kit Doc (yrs): a move writes the element's position register, a yrs map entry, and yrs orders concurrent writes of one map entry by client ID (YATA's tie-break), not by (lamport, agent): a move made after more of its writer's own changes can lose. Wire-format bound.
+- `mlist.yata_separating_case` on kit Doc (yrs): the list's slots are a yrs array, so YATA orders them: the separating script gives [lb p f a e rb], splitting one writer's run `f e`; FugueMax gives [lb a p f e rb] (as text.yata_separating_case). Wire-format bound.
+- `map.lww` on kit Doc (yrs): yrs orders concurrent sets of one map key by client ID (YATA's tie-break), not by (lamport, agent). Wire-format bound.
+- `map.delete_vs_set` on kit Doc (yrs): a yrs map delete removes only the entry it saw, so a concurrent set always survives it, whatever (lamport, agent) say. (A list element's delete is a set of its delete flag, and wins, as E-MLIST-2 asks.)
+- `map.steady_bounded` on kit Doc (yrs): each overwrite of a map key leaves a content-free item stub (content is garbage-collected, K-PURGE-11), in the live doc and in a doc loaded from its state (the stored v2 state compresses a regular run of them). Bounded on the interim by the CSV caps.
+- `table.cell_lww` on kit Doc (yrs): cells are a kit Map, so concurrent sets of one cell are ordered by client ID (map.lww).
+- `stream.merged_writes` on kit Doc (yrs): a merged update's stream (`Doc::applied_since`, a keyed diff) names each write by the facet's winner; on yrs a restore removes the delete flag and a map delete removes the entry, and yrs keeps no identity for a removal, so those two ops carry no write (`None`), as `winner(Existence)` of a live element is `None`. The native engine reports every merged op's event ID (E4).
 
 ## Awaiting
 
 - `sec.duplicate_ranges` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
 - `sec.base_too_old` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
 - `sec.client_provenance_refused` on kit Doc (yrs): holds by construction in the kit: provenance (undo spec U23) is stamped only by the session's own undo, redo and revert (`Session::apply_local` names the elements a step puts back and writes their `provenance` rows in the change's own transaction, `store::history::put_changes`); no public API takes a root, and a client update (`Doc::check_client_update` / `apply_client_update`) carries engine content only and never reaches the provenance table or the session's map. Refusing a root a client sends on the wire is the native decoder's. Target: native decoder, G2 (the engine's).
+- `mlist.converge` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.move_no_duplicate` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.delete_wins` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.insert_beside_moved` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.move_and_set` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.move_lww` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.block_contiguous` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.chain_one_run` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `mlist.yata_separating_case` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `map.lww` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `map.delete_vs_set` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `map.steady_bounded` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.cell_kept` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.cell_vs_row_delete` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.cell_vs_col_delete` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.sort_atomic` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.block_contiguous` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.cell_lww` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.row_identity` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.sort_vs_cell` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.row_move_keeps_cells` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.col_move_keeps_cells` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.col_move_no_duplicate` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.delete_wins_restorable` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.insert_beside_moved_row` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `table.ragged_render` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `stream.merged_replays` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `stream.merged_matches_local` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
+- `stream.merged_writes` on mpce-model (FugueMax): mpce-model (v0.4.1) has no list, mlist or map model yet; K2 Engine is adding them (mlist with `undel`, engine answer E1; then map). Target: mpce-model, after K2 Engine's list/mlist/map models.
 
 ## Never
 
@@ -75,6 +140,15 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 - `hist.undo_own_only_tokens` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
 - `hist.blame_grain` on kit Doc (yrs): blame at a version needs that version's items with their IDs. Yrs keeps no engine state of a past version: garbage collection is on (K-PURGE-11), so deleted items keep no content, and the kit's versions are engine-neutral text (K-HIST-5) with no attribution. The kit blames the live doc (text.blame_char; erase.purge checks a purge moves no other character's blame).
 - `hist.merge_any_base` on kit Doc (yrs): a branch from a past version needs that version's engine state. Yrs keeps none: garbage collection is on (K-PURGE-11), and the kit's versions are engine-neutral text (K-HIST-5) over a log that is compacted and, at a purge, replaced. The kit has no branch verb (K-BR-6 is the native engine's, G2a); a branch from the current state runs (hist.branch_merge).
+
+## The native engine
+
+Not a column yet. Its deviation list must be empty (K-CT-2). The structured rules await it:
+
+- `mlist.*`: the native engine's mlist (with `undel`, engine answer E1), G2b.
+- `map.*`: the native engine's map, G2b.
+- `table.*`: the native engine's mlist and map (G2b); the table composition model, `MC table` (engine answer E3).
+- `stream.*`: the native engine's applied stream for list and map ops (engine answer E4), G2b.
 
 ## Undo spec trace test
 

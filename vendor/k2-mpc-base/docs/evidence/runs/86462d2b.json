@@ -1,0 +1,19 @@
+{
+ "job": "86462d2b",
+ "collected": "2026-10-29",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "86462d2b",
+   "run": "nobyte_grid",
+   "tool": "proptest",
+   "status": "PASSED",
+   "cases": 10000,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

@@ -132,6 +132,8 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E150` | `unsupported_kind` | 2 | K-SCH-1 | `(host)` | live |
 | `MPC-E151` | `bad_hunk` | 2 | K-SCH-2 | `(host)` | live |
 | `MPC-E152` | `unaccepted` | 3 | K-SEC-2 | `(sync)` | live |
+| `MPC-E153` | `bad_root_name` | 2 | K-SCH-1 | `(host)` | live |
+| `MPC-E154` | `malformed_doc` | 2 | K-SEC-5 | `*` | live |
 | `MPC-E160` | `unknown_error_id` | 4 | the catalog (docs/ERRORS.md) | `explain` | live |
 | `MPC-E161` | `engine_unlisted` | 2 | the MPCE seam (stable codes) | `*` | reserved |
 
@@ -418,6 +420,22 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** K-SEC-2
 - **Exit:** 3
 - **Reached by:** the sync wire: an update this build does not accept
+
+### MPC-E153 `bad_root_name`
+
+- **Message:** `schema root name {root}: names must be non-empty, unique and free of '/'`
+- **Next:** A pack's schema names a root the kit can't store (empty, holding '/', or twice). The pack has to fix its schema; this file type can't open live until then.
+- **Rule:** K-SCH-1
+- **Exit:** 2
+- **Reached by:** a pack with a bad schema (C1)
+
+### MPC-E154 `malformed_doc`
+
+- **Message:** `the doc's state is malformed: {reason}`
+- **Next:** The doc holds something the kit never writes (a bug, or a damaged store). Nothing was applied. Don't retry: report it to the host's operator with this message.
+- **Rule:** K-SEC-5
+- **Exit:** 2
+- **Reached by:** a damaged doc state (C1)
 
 ### MPC-E160 `unknown_error_id`
 
@@ -914,9 +932,13 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 | Id | Name | Exit | Rule | Verbs | Status |
 |---|---|---|---|---|---|
-| `MPC-E801` | `needs_base` | 2 | K-BR-12 | `cell set`, `@change` | reserved |
-| `MPC-E802` | `at_limit` | 2 | K-CSV-7 (KC4) | `@change` | reserved |
-| `MPC-E803` | `facet_conflict` | 1 | K-BR-12 (KC7) | `@change` | reserved |
+| `MPC-E801` | `needs_base` | 2 | K-BR-12 | `cell set`, `@change` | live |
+| `MPC-E802` | `at_limit` | 2 | K-CSV-7 (KC4) | `@change` | live |
+| `MPC-E803` | `facet_conflict` | 1 | K-BR-12 (KC7) | `@change` | live |
+| `MPC-E804` | `op_refused` | 2 | K-SCH-2 (C1) | `@change` | live |
+| `MPC-E805` | `no_element` | 4 | CSV contract §3.3 (C1) | `@pack` | live |
+| `MPC-E806` | `header_names_unrendered` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
+| `MPC-E807` | `header_only_row_blank` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
 
 ### MPC-E801 `needs_base`
 
@@ -924,7 +946,6 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.
 - **Rule:** K-BR-12
 - **Exit:** 2
-- **Status:** reserved for CSV grids (C1c); nothing returns it yet
 
 ### MPC-E802 `at_limit`
 
@@ -932,7 +953,6 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
 - **Rule:** K-CSV-7 (KC4)
 - **Exit:** 2
-- **Status:** reserved for CSV grids (C1c); nothing returns it yet
 
 ### MPC-E803 `facet_conflict`
 
@@ -940,7 +960,34 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** Someone changed the same cells or rows after the version you read. Nothing was applied. Read again, redo your change on the new values, and pass the new --base.
 - **Rule:** K-BR-12 (KC7)
 - **Exit:** 1
-- **Status:** reserved for CSV grids (C1c); nothing returns it yet
+
+### MPC-E804 `op_refused`
+
+- **Message:** `op {op} on root {root}: {problem}`
+- **Next:** One of the edit's row, column or cell operations can't apply (an unknown or reused key, a move next to itself, dropping a live element); nothing of the change was applied. List the rows or columns again (row list, col list) and use the keys shown.
+- **Rule:** K-SCH-2 (C1)
+- **Exit:** 2
+
+### MPC-E805 `no_element`
+
+- **Message:** `{verb}: {line}`
+- **Next:** The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).
+- **Rule:** CSV contract §3.3 (C1)
+- **Exit:** 4
+
+### MPC-E806 `header_names_unrendered`
+
+- **Message:** `the columns have names that would appear as a header line; clear them or add a row first`
+- **Next:** The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.
+- **Rule:** CSV contract §1.4 (C1)
+- **Exit:** 2
+
+### MPC-E807 `header_only_row_blank`
+
+- **Message:** `header on: the only row is a blank line, and a blank header line with nothing after it isn't written (the file would change); add a non-blank row first`
+- **Next:** The table's only row is blank: as the header it would be a blank header line with nothing after it, which isn't written, so the file would change. Nothing was applied. Add a row with values first (row insert), then switch the header on.
+- **Rule:** CSV contract §1.4 (C1)
+- **Exit:** 2
 
 ## 9xx: limits
 

@@ -11,6 +11,13 @@ runner. Any Linux box with a checkout runs a job the same way (`sh tools/job.sh 
 file>` at the repo root). Figures in the notes say "a build node" with the node's size where it matters.
 `tools/check-private.sh` keeps internal host names out of the tree.
 
+**Build machines are the host's.** The jobs are self-contained shell scripts for any Linux
+runner; nothing here names a machine. The examples submit them with one compute CLI
+(`k2 compute run "$NODE" …`): set `NODE` to your own runner, or run `sh -ec "$(cat <out
+dir>/job.sh)"` with the `env-args` variables set on any Linux box. Figures in the notes say "a
+build node" with the node's size where it matters. `tools/check-private.sh` keeps internal
+host names out of the tree.
+
 ## Test jobs
 
 **The default: the runner ships the commit (`--repo`).** Every part runs in a checkout of
@@ -117,6 +124,7 @@ gate.
 | `tests/full.sh` | `tools/tests/full-paths.sh $PART` | ≈ 1–4 min a part (build included; [Build settings](#build-settings)) | the workspace's tests (debug; under nextest when the node has it) in ten parts, `--env PART=`: `base-a1` (the kit's unit tests and doctests; the `disk`, `if_version` and `blame` integration tests were here from exports P0, when base-a2 reached 117,788 of a job's 120,000 inline characters, until the v0.9.7 merge put base-a1 at 130,240: they are base-d's now) and `base-a2` (every other integration test but tier 0's, base-c's, base-d's and errors', `client_vectors` among them; on the kit without its unit-test modules): one part, `base-a`, until the v0.9.5 merge put it over a job's limit, `base-b` (tier 0's, promotion's, both parity harnesses and erasure; live_edit since v0.9.8), `base-c` (the soak's CI variant, `edit_paths`, `edit_cost`, history, presence, sessions, roster, app_view, overflow; v0.9.3), `base-d` (disk, `if_version`, blame, `blame_incremental` (v0.9.7), `blame_cost`, and `position_index` with its planted engine bugs; v0.9.7), `errors` (`error_ids`, `tools_session`, `pack_verbs`, the `mpc` example; v0.10), `conformance` and `spec-undo` (with its mutant tests; both `INLINE=120000` since v0.10, `STRIP_DOCS=1` since v0.9.7; `base-c` too since v0.9.7, when the K5 `run_tool` test put it 600 characters past 120,000 inline), `evidence` (`tools/evidence/`'s self-test and check of `docs/evidence/`; Python, no cargo), `wire-guard` (`tools/tests/wire-guard.sh`, v0.9.8: the `untrusted-wire` feature refused without `--cfg k2_mpc_untrusted_wire_ack`, in the repo and as a host builds; `docs/HOST-WIRE.md`). The whole workspace is over one job's limit (about 61 of 64 chunks a part) |
 | `tests/soak.sh` | `tools/tests/full-paths.sh soak` | `SOAK_SECS` + build (default 10 min) | the 32-participant soak in release (`crates/base/tests/soak.rs`: progress every 30 s, a summary with peak memory), then its CI variant (`soak_short`), then the D1 replay regression (`soak_replay_seed_3_no_d1`: seed 3, 27,000 calls, no known D1 violation; about a minute) |
 | `tests/gnu-parity.sh` | `scripts/gnu-parity.py crates/base/tests/golden` | < 1 min | the golden corpus's `gnu: same` cases against the real GNU tools (K-PAR-7); needs python3 and the GNU tools, no Rust |
+| `n1/n1.sh <tag> <dir>` | `old` (the tag's kit) and `n1` (`n1/consumer` + two stores this build wrote) | < 2 min | store format 6's N−1 check (K-FMT-10 item 22): the previous release opens, reads, writes, reverts and rewrites a store this build used for text docs only, and refuses one holding a grid doc with one line (`N-1 OK`) |
 
 A run, **always with an explicit `--mem`**. Run cargo with the host's `K2_*`/`K2SO_*`
 variables unset (a subshell that runs only cargo); run the `k2` CLI with them **intact**:
@@ -166,15 +174,30 @@ The JS client's browser tests need `client/` and nothing else. `tools/client-shi
 <kit-sha> <out-dir>` writes a fresh one-commit repo holding only `client/` at that commit, checks
 that nothing of the kit came with it (no path outside `client/`, no crates, vendored engine,
 Rust or Cargo files, no history), and prints `ship <sha> <- kit <sha>`. Ship that repo, and quote
-the proof line with the job id:
+the proof line with the job id.
 
-```sh
-tools/client-ship.sh . <kit-sha> <workspace>/client-ship
-k2 compute run "$NODE" --repo client-ship --sha <ship-sha> --needs node@22 --cache pw \
-  --cpus 4 --mem 4G --detach -- sh -ec 'cd client && npm ci &&
-  export PLAYWRIGHT_BROWSERS_PATH=$K2_JOB_CACHE/pw && npx playwright install chromium webkit &&
-  npx playwright test'
-```
+Two kinds of browser job, two commands:
+
+- **The client gate, in a full checkout** (any runner with the kit): Chromium only, which is
+  the default (`client/playwright.config.ts`). It never selects WebKit:
+
+  ```sh
+  k2 compute run "$NODE" --needs node@22 --cpus 4 --mem 8G --detach -- sh -ec 'cd client &&
+    npm ci && node scripts/check-licences.mjs && npx tsc --noEmit && npx vitest run &&
+    export PLAYWRIGHT_BROWSERS_PATH="$PWD/.pw-browsers" && npx playwright install chromium &&
+    npx playwright test'
+  ```
+
+- **WebKit, from the client-only repo,** on a runner that has WebKit's system libraries (most
+  don't; it fails at launch with "Host system is missing dependencies" where they're missing):
+
+  ```sh
+  tools/client-ship.sh . <kit-sha> <workspace>/client-ship
+  k2 compute run "$WEBKIT_NODE" --repo client-ship --sha <ship-sha> --needs node@22 \
+    --cpus 4 --mem 4G --detach -- sh -ec 'cd client && npm ci &&
+    export PLAYWRIGHT_BROWSERS_PATH="$PWD/.pw-browsers" && npx playwright install webkit &&
+    MPC_BROWSERS=webkit npx playwright test'
+  ```
 
 The typecheck, the client's full test suite and its licence check stay in a full checkout: the
 shared-vector test also reads the kit's copy of the vectors when it is there.

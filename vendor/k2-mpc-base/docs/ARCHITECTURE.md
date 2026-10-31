@@ -14,8 +14,8 @@
 ## Rules
 
 1. **Packs never touch the engine.** The public API is `Doc`, `Schema`/`Kind`, `Edit` (data),
-   opaque wire/store bytes, and engine-independent algorithms. Replacing the engine changes
-   `src/engine/` only.
+   element keys, values and the applied-change stream (`elem`), opaque wire/store bytes, and
+   engine-independent algorithms. Replacing the engine changes `src/engine/` only.
 2. **The host owns identity, permission, transport, time and file watching.** The kit asks
    through the `Host` trait (rights, clock, audit) and takes file events as calls
    (`file_changed`, `tick`). It reads and writes the files itself (atomic write-back, outside

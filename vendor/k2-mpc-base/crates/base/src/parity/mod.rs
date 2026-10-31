@@ -1,8 +1,8 @@
 //! The agent-parity framework (K-PAR-1…3): everything a person can do in an editor, an
 //! agent can do through a verb, with the same effect.
 //!
-//! - [`PersonAction`]: one variant per parity row (P1…P34), each for text docs, blob docs
-//!   (tier 0) or both ([`Tier`]). Deliberately exhaustive: a pack
+//! - [`PersonAction`]: one variant per parity row (P1…P44), each for some of text docs, blob
+//!   docs (tier 0) and grid docs ([`Tier`]). Deliberately exhaustive: a pack
 //!   maps it with a `match`, so a new row doesn't compile until every pack maps it.
 //! - [`Registry`]: every verb ([`VerbSpec`]: name, kind, rights, the session calls it makes,
 //!   the actions it serves, flags, exit codes): the kit's [`KIT_VERBS`] plus a pack's own
@@ -17,6 +17,11 @@
 //! - Tier 0 (any file): the same check on blob docs, [`check_blob`] with
 //!   [`Registry::for_tier`]`(Tier::Blob)` and [`kit_blob_cases`]. A text pack's list needs
 //!   rows only for text actions ([`PersonAction::for_tier`]).
+//! - The grid tier (a [`crate::table`] pack, A11): [`check_grid`] with the pack's registry
+//!   ([`Registry::for_pack`]: the kit's [`Tier::Grid`] verbs and the pack's structured
+//!   verbs), [`kit_grid_cases`] and the pack's [`GridCase`]s; it compares the grid **by key**
+//!   ([`GridObservation`]) as well as the rendered bytes. P35-P44 are grid rows; text and
+//!   blob lists don't carry them (a text pack maps them N/A in its exhaustive `match`).
 //!
 //! A pack's test:
 //!
@@ -36,6 +41,8 @@ mod action;
 mod blob;
 mod blob_cases;
 mod cases;
+mod grid;
+mod grid_cases;
 mod harness;
 mod registry;
 
@@ -47,6 +54,11 @@ pub use blob::{
 };
 pub use blob_cases::kit_blob_cases;
 pub use cases::{edit_summary, kit_cases, undo_summary};
+pub use grid::{
+    check_grid, check_grid_list, observe_grid_case, run_grid_case, GridCase, GridChangeObs,
+    GridClaimObs, GridObservation, GridPresenceObs, GRID_DOC, GRID_PATH,
+};
+pub use grid_cases::kit_grid_cases;
 pub use harness::{
     check, check_list, rename_target, render, run_case, Agent, AgentFn, Case, ChangeObs, ClaimObs,
     EventObs, Failure, Observation, Output, ParityRow, Person, PersonFn, PresenceObs, Report,

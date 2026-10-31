@@ -1,0 +1,172 @@
+{
+  "about": "A grid doc's notes: an outside save wrote a cell Ada had written that the file never got (rule `cell`, with its row, column and the version cut before the save), then the owner dropped a deleted row holding Ada's cell (`rows drop-deleted`, rule `dropped_row`, which no version holds). `events` is Ada's live stream, without its cell-cursor events (the wire doesn't encode a grid's caret yet); `final` is a later subscription's snapshot with both notes waiting.",
+  "self": "ada",
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        },
+        {
+          "handle": "own",
+          "name": "Owner",
+          "colour": "#0f766e",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "overwritten",
+      "to": "ada",
+      "change": 3,
+      "version": 2,
+      "restore_from": null,
+      "source": "an outside save",
+      "rule": "cell",
+      "row": "r2",
+      "line": 2,
+      "cells": [
+        {
+          "region": "r2/c2",
+          "col": 2,
+          "yours": "\"LIVE\"",
+          "file": "\"FILE\"",
+          "cut": false
+        }
+      ],
+      "more": 0,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": false,
+      "message": "an outside save overwrote r2/c2 (L2, col 2): yours \"LIVE\", the file's \"FILE\" (change 3); yours is in version 2"
+    },
+    {
+      "kind": "role",
+      "who": "ada",
+      "role": "editor"
+    },
+    {
+      "kind": "overwritten",
+      "to": "ada",
+      "change": 6,
+      "version": null,
+      "restore_from": null,
+      "source": "rows drop-deleted",
+      "rule": "dropped_row",
+      "row": "r1",
+      "line": null,
+      "cells": [
+        {
+          "region": "row r1",
+          "col": null,
+          "yours": "\"MINE\"",
+          "file": "absent",
+          "cut": false
+        }
+      ],
+      "more": 0,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": false,
+      "message": "rows drop-deleted removed row r1: yours \"MINE\", now absent (change 6)"
+    },
+    {
+      "kind": "role",
+      "who": "own",
+      "role": "editor"
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 6,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit"
+      },
+      {
+        "handle": "own",
+        "name": "Owner",
+        "colour": "#0f766e",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit"
+      }
+    ],
+    "watching": 0,
+    "overwritten": [
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 3,
+        "version": 2,
+        "restore_from": null,
+        "source": "an outside save",
+        "rule": "cell",
+        "row": "r2",
+        "line": 2,
+        "cells": [
+          {
+            "region": "r2/c2",
+            "col": 2,
+            "yours": "\"LIVE\"",
+            "file": "\"FILE\"",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "an outside save overwrote r2/c2 (L2, col 2): yours \"LIVE\", the file's \"FILE\" (change 3); yours is in version 2"
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 6,
+        "version": null,
+        "restore_from": null,
+        "source": "rows drop-deleted",
+        "rule": "dropped_row",
+        "row": "r1",
+        "line": null,
+        "cells": [
+          {
+            "region": "row r1",
+            "col": null,
+            "yours": "\"MINE\"",
+            "file": "absent",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "rows drop-deleted removed row r1: yours \"MINE\", now absent (change 6)"
+      }
+    ]
+  }
+}

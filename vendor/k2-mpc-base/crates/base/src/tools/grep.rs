@@ -12,7 +12,7 @@
 use super::args::{self, opt, Arity, Item, Opt, Spec};
 use super::error::ToolError;
 use super::pattern::{self, Dialect, Flavor, Matcher, Search};
-use super::{lines, ForEditArg, Line, ReadOutput, ToolDoc, FOR_EDIT, TTL};
+use super::{lines, ForEditArg, Line, ReadOutput, SrcLines, ToolDoc, FOR_EDIT, IDS, TTL};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Grep {
@@ -29,6 +29,7 @@ pub(crate) struct Grep {
     after: usize,
     before: usize,
     pub(crate) for_edit: Option<Option<u64>>,
+    pub(crate) ids: bool,
 }
 
 const OPTS: &[Opt] = &[
@@ -60,6 +61,7 @@ const OPTS: &[Opt] = &[
     opt("color", None, Some("colour"), Arity::Opt),
     FOR_EDIT,
     TTL,
+    IDS,
 ];
 
 const SPEC: Spec = Spec {
@@ -136,6 +138,7 @@ impl Grep {
                 Item::Opt("H", _) => g.with_name = true,
                 Item::Opt("h", _) => g.with_name = false,
                 Item::Opt("n", _) => g.number = true,
+                Item::Opt("ids", _) => g.ids = true,
                 Item::Opt("m", Some(v)) => g.max = Some(number(&v, "max count")?),
                 Item::Opt("A", Some(v)) => g.after = Some(context(&v)?),
                 Item::Opt("B", Some(v)) => g.before = Some(context(&v)?),
@@ -207,6 +210,7 @@ impl Grep {
             after: g.after.unwrap_or(both),
             before: g.before.unwrap_or(both),
             for_edit: fe.finish()?,
+            ids: g.ids,
         })
     }
 
@@ -222,6 +226,8 @@ impl Grep {
         let ls = lines(doc.text);
         let mut s = self.matcher.search();
         let mut out = String::new();
+        // the doc line of each output line, for --ids
+        let mut src: Vec<usize> = Vec::new();
         let mut selected: u64 = 0;
         let plain = !self.quiet && self.list.is_none() && !self.count;
         let ctx = plain && !self.only && (self.after > 0 || self.before > 0);
@@ -233,7 +239,7 @@ impl Grep {
         for (i, l) in ls.iter().enumerate() {
             if done {
                 if ctx && after_left > 0 {
-                    self.print(&mut out, doc.name, i, l.text, '-');
+                    self.print(&mut out, &mut src, doc.name, i, l.text, '-');
                     after_left -= 1;
                     continue;
                 }
@@ -258,22 +264,25 @@ impl Grep {
                         .max(last_out.map_or(0, |o| o + 1));
                     if last_out.is_some_and(|o| from > o + 1) {
                         out.push_str("--\n");
+                        if self.ids {
+                            src.push(0);
+                        }
                     }
                     for (j, lj) in ls.iter().enumerate().take(i).skip(from) {
-                        self.print(&mut out, doc.name, j, lj.text, '-');
+                        self.print(&mut out, &mut src, doc.name, j, lj.text, '-');
                     }
                     after_left = self.after;
                 }
                 last_out = Some(i);
                 if self.only {
                     if !self.invert {
-                        self.print_matches(&mut s, &mut out, doc.name, i, l)?;
+                        self.print_matches(&mut s, &mut out, &mut src, doc.name, i, l)?;
                     }
                 } else {
-                    self.print(&mut out, doc.name, i, l.text, ':');
+                    self.print(&mut out, &mut src, doc.name, i, l.text, ':');
                 }
             } else if ctx && after_left > 0 {
-                self.print(&mut out, doc.name, i, l.text, '-');
+                self.print(&mut out, &mut src, doc.name, i, l.text, '-');
                 last_out = Some(i);
                 after_left -= 1;
             }
@@ -302,10 +311,16 @@ impl Grep {
         }
         let mut o = ReadOutput::new(out.into_bytes(), exit);
         o.touched = touched;
+        if plain && self.ids {
+            o.src = Some(SrcLines::Each(src));
+        }
         Ok(o)
     }
 
-    fn prefix(&self, out: &mut String, name: &str, i: usize, sep: char) {
+    fn prefix(&self, out: &mut String, src: &mut Vec<usize>, name: &str, i: usize, sep: char) {
+        if self.ids {
+            src.push(i + 1);
+        }
         if self.with_name {
             out.push_str(name);
             out.push(sep);
@@ -316,8 +331,16 @@ impl Grep {
         }
     }
 
-    fn print(&self, out: &mut String, name: &str, i: usize, text: &str, sep: char) {
-        self.prefix(out, name, i, sep);
+    fn print(
+        &self,
+        out: &mut String,
+        src: &mut Vec<usize>,
+        name: &str,
+        i: usize,
+        text: &str,
+        sep: char,
+    ) {
+        self.prefix(out, src, name, i, sep);
         out.push_str(text);
         out.push('\n');
     }
@@ -326,6 +349,7 @@ impl Grep {
         &self,
         s: &mut Search<'_>,
         out: &mut String,
+        src: &mut Vec<usize>,
         name: &str,
         i: usize,
         l: &Line<'_>,
@@ -347,7 +371,7 @@ impl Grep {
                 }
                 continue;
             }
-            self.prefix(out, name, i, ':');
+            self.prefix(out, src, name, i, ':');
             out.push_str(&t[m.clone()]);
             out.push('\n');
             from = m.end;
@@ -370,4 +394,5 @@ struct GrepFlags {
     after: Option<usize>,
     before: Option<usize>,
     both: Option<usize>,
+    ids: bool,
 }

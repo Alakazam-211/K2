@@ -92,11 +92,15 @@ export interface BindingHooks {
   redo(): void;
   /** Carets to draw now. */
   carets(): CaretView[];
+  /** The text "Insert my text here" would insert, and where (bytes of `live.text`), while the
+   * person looks at it before inserting; `null`: none. */
+  preview?(): { byte: number; text: string } | null;
 }
 
 const setCarets = StateEffect.define<DecorationSet>();
 const setRejected = StateEffect.define<DecorationSet>();
 const setReveal = StateEffect.define<DecorationSet>();
+const setPreview = StateEffect.define<DecorationSet>();
 
 function decoField(effect: typeof setCarets): StateField<DecorationSet> {
   return StateField.define<DecorationSet>({
@@ -153,12 +157,32 @@ class RejectedWidget extends WidgetType {
   }
 }
 
+/** The text "Insert my text here" would insert, shown where it would go before it is inserted. */
+class PreviewWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(o: PreviewWidget) {
+    return o.text === this.text;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-mpc-insert-preview";
+    el.textContent = this.text;
+    return el;
+  }
+}
+
 /** Whether a change is the person's own, made in this editor (not remote, not ours). */
 const isLocal = (tr: Transaction) => tr.docChanged && !tr.annotation(remoteChange);
 
 export class Binding {
   /** Remote changes not yet in the editor, on its document; `null` when none. */
   private held: ChangeSet | null = null;
+  /** While changes are held: the editor's document with them applied (`live.text`, as a
+   * CodeMirror `Text`) and its byte index, both kept up to date change by change, so a
+   * keystroke during a composition never re-indexes the whole document. */
+  private shadow: { doc: Text; idx: ByteIndex } | null = null;
   private flushQueued = false;
   private composing = false;
   private compositionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -175,6 +199,7 @@ export class Binding {
   readonly carets = decoField(setCarets);
   readonly rejectedField = decoField(setRejected);
   readonly revealField = decoField(setReveal);
+  readonly previewField = decoField(setPreview);
 
   constructor(
     readonly live: LiveText,
@@ -188,6 +213,7 @@ export class Binding {
       this.carets,
       this.rejectedField,
       this.revealField,
+      this.previewField,
       // undo and redo are the server's, ahead of anything a host adds (a history keymap)
       Prec.highest(
         keymap.of([
@@ -237,6 +263,11 @@ export class Binding {
     this.schedule();
   }
 
+  private unhold(): void {
+    this.held = null;
+    this.shadow = null;
+  }
+
   /** Whether remote changes are being held (an IME composition is under way). */
   get holding(): boolean {
     return this.held !== null;
@@ -260,14 +291,16 @@ export class Binding {
     const view = this.view;
     if (!view || this.dead) return;
     const doc = view.state.doc;
-    const base = this.held ? this.held.apply(doc) : doc;
-    const idx = this.held ? ByteIndex.of(base) : view.state.field(byteIndex);
+    const base = this.shadow && this.held ? this.shadow.doc : doc;
+    const idx = this.shadow && this.held ? this.shadow.idx : view.state.field(byteIndex);
     const cs = changesOf(base, idx, hunks);
     if (!cs) {
-      this.held = null;
+      this.unhold();
       return this.repair("a remote change is off a character boundary of the editor's text");
     }
     this.held = this.held ? this.held.compose(cs) : cs;
+    const next = cs.apply(base);
+    this.shadow = { doc: next, idx: idx.update(base, next, cs) };
     this.schedule();
   }
 
@@ -300,7 +333,7 @@ export class Binding {
     if (this.isComposing) return;
     if (this.held) {
       const changes = this.held;
-      this.held = null;
+      this.unhold();
       view.dispatch({
         changes,
         annotations: [remoteChange.of(true), Transaction.addToHistory.of(false)],
@@ -321,6 +354,7 @@ export class Binding {
       effects: [
         setCarets.of(caretDecorations(doc, idx, this.hooks.carets())),
         setRejected.of(rejectedDecorations(doc, idx, this.live.rejected)),
+        setPreview.of(previewDecorations(doc, idx, this.hooks.preview?.() ?? null)),
       ],
     });
   }
@@ -335,17 +369,21 @@ export class Binding {
     }
     for (const tr of u.transactions) {
       if (!isLocal(tr)) continue;
-      const kind = tr.isUserEvent("input") ? "input" : tr.isUserEvent("delete") ? "delete" : (tr.annotation(Transaction.userEvent) ?? "other");
-      if (kind !== this.kind) {
+      // a Re-apply is an undo step of its own: never composed with the typing around it
+      const kind = tr.isUserEvent("input.reapply") ? "reapply" : tr.isUserEvent("input") ? "input" : tr.isUserEvent("delete") ? "delete" : (tr.annotation(Transaction.userEvent) ?? "other");
+      if (kind !== this.kind || kind === "reapply") {
         this.kind = kind;
         this.group++;
       }
       let hunks: Hunk[];
-      if (this.held) {
-        // live.text is the editor's text plus the held changes: map this change over them
-        const shadow = this.held.apply(tr.startState.doc);
+      if (this.held && this.shadow) {
+        // live.text is the editor's text plus the held changes (the shadow): map this change
+        // over them, and keep the shadow and its index up to date (no re-index of the document)
+        const { doc: shadow, idx } = this.shadow;
         const mine = tr.changes.map(this.held);
-        hunks = hunksOf(shadow, ByteIndex.of(shadow), mine);
+        hunks = hunksOf(shadow, idx, mine);
+        const next = mine.apply(shadow);
+        this.shadow = { doc: next, idx: idx.update(shadow, next, mine) };
         this.held = this.held.map(tr.changes, true);
       } else {
         hunks = hunksOf(tr.startState.doc, tr.startState.field(byteIndex), tr.changes);
@@ -381,7 +419,7 @@ export class Binding {
     const view = this.view;
     if (!view || this.dead) return;
     this.repairs++;
-    this.held = null;
+    this.unhold();
     const doc = view.state.doc;
     const want = this.live.text;
     const have = doc.toString();
@@ -403,6 +441,14 @@ export class Binding {
   }
 
   // ---- positions for the host
+
+  /** CodeMirror changes for `hunks` (UTF-8 bytes of `live.text`), or null (a composition is
+   * holding remote changes, or a hunk is off a character boundary). */
+  changesFor(hunks: readonly Hunk[]): ChangeSet | null {
+    const view = this.view;
+    if (!view || this.held) return null;
+    return changesOf(view.state.doc, view.state.field(byteIndex), hunks);
+  }
 
   /** The UTF-16 position in the editor of a byte offset of `live.text` (or -1). */
   posOf(byte: number): number {
@@ -450,6 +496,13 @@ export function caretDecorations(doc: Text, idx: ByteIndex, carets: readonly Car
     ranges.push(Decoration.widget({ widget: new CaretWidget(c.name, c.colour, c.label, below), side: 1 }).range(h));
   }
   return Decoration.set(ranges, true);
+}
+
+function previewDecorations(doc: Text, idx: ByteIndex, p: { byte: number; text: string } | null): DecorationSet {
+  if (!p) return Decoration.none;
+  const at = idx.posAt(doc, p.byte);
+  if (at < 0) return Decoration.none;
+  return Decoration.set([Decoration.widget({ widget: new PreviewWidget(p.text), side: -1 }).range(at)]);
 }
 
 function rejectedDecorations(doc: Text, idx: ByteIndex, rejected: readonly Rejection[]): DecorationSet {

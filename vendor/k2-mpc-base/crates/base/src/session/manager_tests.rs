@@ -483,3 +483,73 @@ fn delete_space_erases_its_docs_only() {
     assert!(f.store.blob_space("ws").unwrap().is_some());
     assert!(f.mgr.delete_space("ws").unwrap().is_empty());
 }
+
+/// A pack with structured roots opens (C1c): its import is stored with a typed version, and
+/// the store is upgraded to format 6 in that transaction (a text-only store stays at 5).
+#[test]
+fn a_structured_pack_opens_and_upgrades_the_store_lazily() {
+    struct Grid;
+    const S: crate::Schema = crate::Schema {
+        name: "grid",
+        roots: &[
+            ("rows", crate::Kind::MovableList),
+            ("cells", crate::Kind::Map),
+        ],
+    };
+    impl Pack for Grid {
+        fn schema(&self) -> crate::Schema {
+            S
+        }
+        fn decode(&self, b: &[u8]) -> std::result::Result<PackContent, Declined> {
+            let k = |s: &str| crate::elem::Key::new(s).unwrap();
+            let mut rows = Vec::new();
+            let mut cells = std::collections::BTreeMap::new();
+            for (n, l) in std::str::from_utf8(b).unwrap().lines().enumerate() {
+                let r = format!("r{}", n + 1);
+                rows.push((k(&r), crate::Value::Null));
+                cells.insert(r, crate::Value::str(l));
+            }
+            Ok(PackContent {
+                roots: vec![
+                    ("rows".into(), crate::Neutral::List(rows)),
+                    ("cells".into(), crate::Neutral::Map(cells)),
+                ],
+                codec: vec![1],
+            })
+        }
+        fn encode(
+            &self,
+            c: &[(String, crate::Neutral)],
+            _: &[u8],
+        ) -> std::result::Result<Vec<u8>, PackError> {
+            let (crate::Neutral::List(rows), crate::Neutral::Map(cells)) = (&c[0].1, &c[1].1)
+            else {
+                return Err(PackError("not a grid".into()));
+            };
+            let mut out = String::new();
+            for (r, _) in rows {
+                out.push_str(cells.get(r.as_str()).and_then(|v| v.as_str()).unwrap_or(""));
+                out.push('\n');
+            }
+            Ok(out.into_bytes())
+        }
+    }
+    let f = fx("structured");
+    // a text doc first: the store stays at format 5
+    let t = f.text(&key("s", "a.md"), "x\n");
+    let tc = t.join(person("p"), Stay::Held).unwrap().conn;
+    t.replace_text(tc, "source", "y\n").unwrap();
+    assert_eq!(f.store.format().unwrap(), crate::store::STORE_FORMAT_BASE);
+    let k = key("s", "t.grid");
+    let s = f.mgr.open(Arc::new(Grid), &k, Some(b"a\nb\n")).unwrap();
+    assert_eq!(f.store.format().unwrap(), crate::store::STORE_FORMAT);
+    let c = s.join(person("p"), Stay::Held).unwrap().conn;
+    let r = s.read(c).unwrap();
+    assert_eq!(r.bytes, b"a\nb\n");
+    assert!(r.text_by_root.is_empty());
+    let id = f.store.find(&k).unwrap().unwrap();
+    let v = f.store.versions(id).unwrap();
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].1.content, Grid.decode(b"a\nb\n").unwrap().roots);
+    assert_eq!(v[0].1.codec, Some(vec![1]));
+}

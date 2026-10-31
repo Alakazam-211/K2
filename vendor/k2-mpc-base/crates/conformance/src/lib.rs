@@ -19,6 +19,14 @@
 //! [`matrix::RULES`] ([`invalid_deviation_ids`]). A conforming engine's list is empty: the
 //! reference model's is, and a test asserts it.
 //!
+//! **Structured kinds** (MovableList, Map; the CSV grid): the `mlist.*`, `map.*`, `table.*`
+//! and `stream.*` rules ([`mlist`], [`map`], [`table`], [`stream`]) run over the structured
+//! capabilities ([`caps::Structured`] and the traits after it), on [`yrs::YrsGrid`] today;
+//! mpce-model and the native engine await their list and map primitives. Their planted
+//! negatives are mutant adapters ([`mutants`]) and, for a pinned rule, its conforming check
+//! run on the deviating engine (`run_strict`). The memory rule needs a counting allocator
+//! ([`heap`]).
+//!
 //! Rules that need one engine's machinery (wire bytes, untrusted decoding, the store) are
 //! not here: they stay in that engine's crate. Decoding untrusted bytes is the native
 //! decoder's (G2): the `sec.*` rules are declared here and awaiting.
@@ -31,13 +39,20 @@ pub mod branches;
 pub mod caps;
 pub mod erasure;
 pub mod events;
+pub mod grid;
+pub mod heap;
 pub mod kit_history;
 mod kit_session;
 pub mod kit_undo;
+pub mod map;
 pub mod matrix;
+pub mod mlist;
 pub mod model;
+pub mod mutants;
 pub mod purge;
 pub mod span;
+pub mod stream;
+pub mod table;
 pub mod text;
 pub mod undo;
 pub mod versions;

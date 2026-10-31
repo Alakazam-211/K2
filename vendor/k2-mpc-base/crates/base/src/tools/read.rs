@@ -6,13 +6,14 @@
 
 use super::args::{self, opt, Arity, Item, Opt, Spec};
 use super::error::ToolError;
-use super::{lines, no_operands, ForEditArg, ReadOutput, ToolDoc, FOR_EDIT, TTL};
+use super::{lines, no_operands, ForEditArg, ReadOutput, SrcLines, ToolDoc, FOR_EDIT, IDS, TTL};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Cat {
     number: bool,
     nonblank: bool,
     pub(crate) for_edit: Option<Option<u64>>,
+    pub(crate) ids: bool,
 }
 
 const CAT_OPTS: &[Opt] = &[
@@ -21,6 +22,7 @@ const CAT_OPTS: &[Opt] = &[
     opt("u", Some('u'), None, Arity::No),
     FOR_EDIT,
     TTL,
+    IDS,
 ];
 
 const CAT: Spec = Spec {
@@ -43,6 +45,7 @@ impl Cat {
             number: false,
             nonblank: false,
             for_edit: None,
+            ids: false,
         };
         let mut fe = ForEditArg::default();
         for it in args::parse(args, &CAT)? {
@@ -52,6 +55,7 @@ impl Cat {
             match it {
                 Item::Opt("n", _) => c.number = true,
                 Item::Opt("b", _) => c.nonblank = true,
+                Item::Opt("ids", _) => c.ids = true,
                 Item::Opt(..) => {}
                 Item::Operand(o) => return Err(no_operands("cat", &o)),
             }
@@ -65,6 +69,7 @@ impl Cat {
         let n = lines(doc.text).len();
         let mut o = self.output(doc);
         o.touched = (n > 0).then_some((1, n));
+        o.src = Some(SrcLines::Range(1, n));
         o
     }
 
@@ -101,6 +106,7 @@ enum Amount {
 pub(crate) struct Head {
     amount: Amount,
     pub(crate) for_edit: Option<Option<u64>>,
+    pub(crate) ids: bool,
 }
 
 const HEAD_OPTS: &[Opt] = &[
@@ -110,6 +116,7 @@ const HEAD_OPTS: &[Opt] = &[
     opt("q", None, Some("silent"), Arity::No),
     FOR_EDIT,
     TTL,
+    IDS,
 ];
 
 const HEAD: Spec = Spec {
@@ -139,6 +146,7 @@ impl Head {
             all_but: false,
         };
         let mut fe = ForEditArg::default();
+        let mut ids = false;
         for it in args::parse(args, &HEAD)? {
             if fe.take(&it)? {
                 continue;
@@ -152,6 +160,7 @@ impl Head {
                     let (n, all_but) = signed(&v, "bytes")?;
                     a = Amount::Bytes { n, all_but };
                 }
+                Item::Opt("ids", _) => ids = true,
                 Item::Opt(..) => {}
                 Item::Operand(o) => return Err(no_operands("head", &o)),
             }
@@ -159,6 +168,7 @@ impl Head {
         Ok(Head {
             amount: a,
             for_edit: fe.finish()?,
+            ids,
         })
     }
 
@@ -199,6 +209,7 @@ pub(crate) struct Tail {
     n: u64,
     from_start: bool,
     pub(crate) for_edit: Option<Option<u64>>,
+    pub(crate) ids: bool,
 }
 
 const TAIL_OPTS: &[Opt] = &[
@@ -208,6 +219,7 @@ const TAIL_OPTS: &[Opt] = &[
     opt("q", None, Some("silent"), Arity::No),
     FOR_EDIT,
     TTL,
+    IDS,
 ];
 
 const TAIL: Spec = Spec {
@@ -236,6 +248,7 @@ impl Tail {
             n: 10,
             from_start: false,
             for_edit: None,
+            ids: false,
         };
         let mut fe = ForEditArg::default();
         for it in args::parse(args, &TAIL)? {
@@ -254,8 +267,10 @@ impl Tail {
                         n,
                         from_start,
                         for_edit: None,
+                        ids: t.ids,
                     };
                 }
+                Item::Opt("ids", _) => t.ids = true,
                 Item::Opt(..) => {}
                 Item::Operand(o) => return Err(no_operands("tail", &o)),
             }
@@ -396,6 +411,7 @@ impl Wc {
 pub(crate) struct View {
     range: LineSpec,
     pub(crate) for_edit: Option<Option<u64>>,
+    pub(crate) ids: bool,
 }
 
 /// `a,b`, `a` or `a,$` (1-based, inclusive; `$` is the last line).
@@ -444,7 +460,12 @@ impl LineSpec {
     }
 }
 
-const VIEW_OPTS: &[Opt] = &[opt("lines", None, Some("lines"), Arity::Req), FOR_EDIT, TTL];
+const VIEW_OPTS: &[Opt] = &[
+    opt("lines", None, Some("lines"), Arity::Req),
+    FOR_EDIT,
+    TTL,
+    IDS,
+];
 
 const VIEW: Spec = Spec {
     tool: "view",
@@ -457,6 +478,7 @@ const VIEW: Spec = Spec {
 impl View {
     pub(crate) fn parse(args: &[String]) -> Result<Self, ToolError> {
         let mut range = None;
+        let mut ids = false;
         let mut fe = ForEditArg::default();
         for it in args::parse(args, &VIEW)? {
             if fe.take(&it)? {
@@ -464,6 +486,7 @@ impl View {
             }
             match it {
                 Item::Opt("lines", Some(v)) => range = Some(LineSpec::parse(&v)?),
+                Item::Opt("ids", _) => ids = true,
                 Item::Opt(..) => {}
                 Item::Operand(o) => return Err(no_operands("view", &o)),
             }
@@ -472,6 +495,7 @@ impl View {
         Ok(View {
             range,
             for_edit: fe.finish()?,
+            ids,
         })
     }
 
@@ -480,7 +504,7 @@ impl View {
         let a = self.range.first.resolve(ls.len()).max(1);
         let b = self.range.last.resolve(ls.len()).min(ls.len());
         if a > b {
-            return ReadOutput::new(Vec::new(), 0);
+            return ReadOutput::new(Vec::new(), 0).showing(None);
         }
         let s = ls[a - 1].start;
         let e = ls.get(b).map_or(doc.text.len(), |l| l.start);

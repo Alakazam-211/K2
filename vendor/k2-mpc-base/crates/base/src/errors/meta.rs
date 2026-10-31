@@ -354,6 +354,7 @@ fn tier_word(t: Tier) -> &'static str {
     match t {
         Tier::Text => "text",
         Tier::Blob => "blob",
+        Tier::Grid => "grid",
     }
 }
 

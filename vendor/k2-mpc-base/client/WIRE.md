@@ -195,7 +195,7 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   late): the client re-sends its caret after its next change.
 - A refused caret (`MPC-E114` off a boundary, `MPC-E102` for a reader) gets no reply.
 - A versioned `set_cursor_at(conn, root, version, anchor, head)` that maps in the kit is
-  planned for v0.9.9; a host can then pass the frame through.
+  planned for kit v0.10.1; a host can then pass the frame through.
 - Carets coming the other way carry their version: [JSON encodings](#json-encodings).
 
 ## Reconnecting
@@ -429,45 +429,72 @@ interface LiveTransport extends Transport {
 
 ## The `overwritten` event
 
-An outside save may have removed or replaced text you wrote through the kit. It goes only to its
-author's own subscriptions (and the person an assistant acted for), at the next roster flush, and
-is never coalesced. It carries the person's own text so they can paste it back: no single call
-restores the text and keeps the saver's change.
+A change overrode someone's live work. Two kinds, one per doc kind (a doc only makes its own):
+
+- **A text doc:** an outside save may have removed or replaced text you wrote through the kit.
+  It carries the person's own text so they can paste it back: no single call restores the text
+  and keeps the saver's change.
+- **A grid:** a change overrode a live value you wrote: an outside save, a stale write, a
+  revert, a restore or `rows drop-deleted`.
+
+It goes only to its author's own subscriptions (on a text doc, also the person an assistant
+acted for), at the next roster flush (at most `roster_interval_ms` after the change), and is
+never coalesced. Every field is always present, on both kinds.
 
 ```ts
 { kind: "overwritten", to: Handle,
-  change: number,               // the save
-  version: number | null,       // the version holding the text, THAT THIS READER CAN OPEN: link from this only
-  restore_from: number | null,  // the same version, to tell someone with history access; never a link for this reader
-  source: "an outside save",
-  rule: "removed_text" | "replaced_text" | "rollup",
-  row: null,                    // a grid's row key; null on a text doc
-  line: number | null,          // first line, in the text before the save
-  cells: [ { region: string,    // "L12" or "L12–L14"
-             col: null,
-             yours: string,     // this person's own removed characters, exactly, newlines included
-             file: string,      // those lines now, at most 256 bytes
+  change: number,               // the change that did it (a text doc: the save)
+  version: number | null,       // a text doc: the version holding the text, THAT THIS READER CAN OPEN: link from this only
+                                // a grid: the version holding the live value (show --version); null for a drop,
+                                // whose note carries the value itself (a drop can't be undone)
+  restore_from: number | null,  // a text doc: the same version, to tell someone with history access; never a link
+                                // for this reader. null on a grid
+  source: string,               // a text doc: "an outside save"
+                                // a grid: "an outside save" | "a write" | "a revert" | "a restore" | "rows drop-deleted"
+  rule: string,                 // a text doc: "removed_text" | "replaced_text" | "rollup"
+                                // a grid: "cell" | "edited_row" | "deleted_row" | "moved_row" | "dropped_row" | "dropped_col" | "rollup" | ...
+  row: string | null,           // a grid: the row's key now (it may differ from the key the author saw); null on a text doc
+  line: number | null,          // a text doc: first line, in the text before the save
+                                // a grid: its line in the live file before the change: show this, not the key
+  cells: [ { region: string,    // a text doc: "L12" or "L12–L14"; a grid: the element by key
+             col: number | null,// null on a text doc
+             yours: string,     // a text doc: this person's own removed characters, exactly, newlines included
+                                // a grid: the live value
+             file: string,      // a text doc: those lines now; a grid: the file's value. At most 256 bytes
              cut: boolean } ],
-  more: number,                 // places not listed
-  not_shown: number,            // characters of their own text the note doesn't carry
-  withheld: boolean,            // the text is no longer held: a purge, the 24 h hold, the doc's cap
-  no_history: boolean,          // this reader has no history right
-  message: string }             // the note's one line, ready to show; holds the text
+  more: number,                 // places (a text doc) or cells (a grid) not listed
+  not_shown: number,            // a text doc: characters of their own text the note doesn't carry; 0 on a grid
+  withheld: boolean,            // the values are no longer held: yours and file are empty, the fact stays
+                                // (a purge; on a text doc also the 24 h hold, the doc's cap)
+  no_history: boolean,          // a text doc: this reader has no history right; false on a grid
+  message: string }             // the note's one line, ready to show; holds the text or values
 ```
 
-- **"May have".** The kit can't tell a removal from a move, so `message` never says the text is
-  gone. See `docs/SESSIONS.md`, "When an outside save removes someone's text".
-- **Only their own text.** `yours` never holds someone else's characters from the same block.
-- **Sizes.** At most 16 KiB of text a note (`OVERWRITE_TEXT_MAX`), 32 places (`OVERWRITE_CELLS_MAX`),
-  the rest counted in `not_shown` and `more`.
+- **"May have" (text docs).** The kit can't tell a removal from a move, so a text note's
+  `message` never says the text is gone. See `docs/SESSIONS.md`, "When an outside save removes
+  someone's text".
+- **Only their own text (text docs).** `yours` never holds someone else's characters from the
+  same block.
+- **One note per row, per author (grids).** `cells` lists that row's overridden cells.
+- **Sizes.** `file` (and on a grid `yours`) is at most 256 bytes, cut at a character boundary,
+  with `cut: true`; on a grid, `version` serves the full value. `cells` has at most 32 entries,
+  the rest counted in `more` (`OVERWRITE_VALUE_MAX`, `OVERWRITE_CELLS_MAX`); so one grid event is
+  at most about 20 KiB. A text note carries at most 16 KiB of text (`OVERWRITE_TEXT_MAX`), the
+  rest counted in `not_shown`.
 - **Roll-up.** A participant has at most 64 waiting notes on a doc; past that the last is
-  `rule: "rollup"`, `cells: []`, `more: N`. It carries no text. A note is never dropped silently.
+  `rule: "rollup"`, `row: null`, `cells: []`, `more: N`. It carries no text or values (on a grid,
+  `message: "N more cells overwritten, see the log"`). A note is never dropped silently.
 - **Pending notes are also in `snapshot`,** as `overwritten: [...]`, this subscriber's own. A push
-  doesn't consume a note: it waits until `take_notes` or a verb delivers it. Clients dedupe on
-  `(change, row)`; a save makes one note per person. `overwritten` is present only when this
-  subscriber has waiting notes; treat a missing field as none.
-- **Someone who can't read the doc gets nothing, not even a count.** The note stays and arrives if
-  they can read again.
+  doesn't consume a note: it waits until `take_notes` or a verb delivers it, so a slow receiver
+  that gets a fresh `snapshot` still finds it. Clients dedupe on `(change, row)`; on a text doc a
+  save makes one note per person. `overwritten` is present only when this subscriber has waiting
+  notes; treat a missing field as none.
+- **Someone who can't read the doc gets nothing, not even a count:** no event, no snapshot entry,
+  no note. The note stays and arrives if they can read the doc again.
+- **Where they wait.** A grid's notes are saved in the store and live as long as the revert
+  window (`Config::revert_keep_ms`, 30 days by default); past it, one is gone undelivered (the
+  audit entry and the version remain). A text doc's are in memory: an unload keeps them, a
+  restart doesn't.
 - **Logs.** The kit's `Debug` doesn't print `yours`, `file` or `message`'s text; don't log
   `message` yourself. The audit entry holds no content.
 
@@ -488,4 +515,7 @@ restores the text and keeps the saver's change.
 - A local edit is never dropped silently: each is acknowledged (`onAck`) or rejected
   (`onRejected`), exactly once, across reconnects too. A rejected change keeps its typed text
   and a region that moves with later changes, so the host can show it and offer `reapply`.
+- Re-apply (`LiveText.placeRejection`, the editor's `reapply`) puts a rejected change back where
+  the server would put it: its `edit` frame rebased from its base with the server's rule, sent as
+  a fresh `edit` at the current version (no frame changed). Otherwise it refuses.
 - It never sends a frame over the cap.

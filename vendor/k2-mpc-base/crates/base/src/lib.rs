@@ -7,7 +7,12 @@
 //!
 //! - [`doc`]: the loaded doc, wire and store bytes, edits as a participant.
 //! - [`schema`]: primitive kinds and pack schemas.
+//! - [`elem`]: the structured kinds (MovableList, Map) as data: keys, values, ops, readers'
+//!   answers and the applied-change stream; the move rule (forward chains).
 //! - [`text`]: text algorithms (minimal diff, three-way merge) used by text edits.
+//! - [`table`]: tables (the CSV grid) as plain data over the structured kinds: the six roots,
+//!   render rules, key minting, grid ops, the aligner (`reconcile`), the grid three-way merge,
+//!   and the hidden-cell-writes report. Engine-free and codec-free.
 //! - [`store`]: persistence (snapshot + update log + attribution + engine-neutral versions),
 //!   with erasure: redacted records, the file rewrite and the byte scan.
 //! - [`codec`]: reusable file codecs (plain text with BOM/EOL round trip).
@@ -61,6 +66,7 @@ pub mod conformance;
 #[cfg(any(test, feature = "differential"))]
 pub mod differential;
 pub mod doc;
+pub mod elem;
 mod engine;
 pub mod errors;
 pub mod export;
@@ -72,10 +78,12 @@ pub mod parity;
 pub mod schema;
 pub mod session;
 pub mod store;
+pub mod table;
 pub mod text;
 pub mod tools;
 
 pub use doc::{ClientId, Doc, DocError, Edit, Neutral, UpdateInfo, MAX_CLIENT_ID};
+pub use elem::{Applied, Key, Value};
 pub use schema::{Kind, Schema};
 pub use session::{
     Host, Pack, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager,

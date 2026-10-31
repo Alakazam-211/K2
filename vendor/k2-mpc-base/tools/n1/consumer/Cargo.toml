@@ -1,0 +1,10 @@
+[package]
+name = "n1-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+k2-mpc-base = { path = "../old/crates/base" }

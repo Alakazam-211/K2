@@ -7,7 +7,8 @@
 import { expect, vi } from "vitest";
 import "./jsdom-shims";
 import { mountLiveEditor, type LiveEditorHandle } from "../src/editor/mount";
-import { byteToIndex, coalesce, utf8Len, type Hunk } from "../src/hunk";
+import { apply, byteToIndex, coalesce, utf8Len, type Hunk } from "../src/hunk";
+import { Carried, rebaseOurs } from "../src/rebase";
 import { Bias, transform } from "../src/position";
 import { LiveText } from "../src/live";
 import type { ChangeEvent } from "../src/wire";
@@ -234,10 +235,20 @@ async function runIn(
   // a person re-applying every rejection, late: never puts text in twice
   const reapplied: Record<string, number> = {};
   const doubled: string[] = [];
+  const misplaced: string[] = [];
   if (opts.reapplyAll) {
     for (const [i, e] of eds.entries()) {
       for (const rej of [...e.h.rejected]) {
+        // the oracle: where the server would put it, from the server's own log (not the replica's
+        // history): its change as sent, rebased from its base, then through the pending changes
+        const live = (e.h as unknown as { live: LiveText }).live;
+        const want = serverPlacement(live, server, rej.id);
+        const textBefore = e.h.text;
         const res = e.h.reapply(rej.id);
+        if (res.status === "applied") {
+          if (want === null) misplaced.push(`seed ${seed} editor ${i} rejection ${rej.id}: applied where the server's rule refuses`);
+          else if (e.h.text !== apply(textBefore, want)) misplaced.push(`seed ${seed} editor ${i} rejection ${rej.id}: not where the server's rule puts it`);
+        }
         if (opts.trace) console.log(`TRACE reapply p${i + 1} id ${rej.id} -> ${res.status} | text ${JSON.stringify(e.h.text)}`);
         reapplied[res.status] = (reapplied[res.status] ?? 0) + 1;
         const lost = e.e000.find((x) => x.id === rej.id);
@@ -266,6 +277,7 @@ async function runIn(
     for (const [op, st] of e.ops) expect(st, `${where}: op ${op} never settled`).not.toBe("pending");
   }
   expect(doubled, `seed ${seed}: Re-apply put text in twice`).toEqual([]);
+  expect(misplaced, `seed ${seed}: Re-apply placed a change other than by the server's rule`).toEqual([]);
   const typed = eds.reduce((n, e) => n + e.typed, 0);
   const rejected = eds.reduce((n, e) => n + [...e.ops.values()].filter((s) => s === "rejected").length, 0);
   const reconnects = eds.reduce((n, e) => n + e.t.connects - 1, 0);
@@ -290,14 +302,37 @@ export async function withoutPresenceCheck<T>(f: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Run `f` with one of Re-apply's guards out (`LiveText.reapplyGuard` says `ok` instead of `g`):
- * the planted fault for that guard.
+ * Where the server's rule puts rejection `id`, from the fake server's own log: its change as sent
+ * (the replica's record of the `edit` frame) rebased with `rebaseOurs` through the log since its
+ * base, then through the replica's pending changes. `null`: the rule refuses it (a conflict, or
+ * no sent form). Independent of the replica's own history.
  */
-export async function withoutReapplyGuard<T>(g: "not-insertion" | "reloaded" | "tie" | "deleted-around", f: () => Promise<T>): Promise<T> {
-  const orig = LiveText.prototype.reapplyGuard;
-  const spy = vi.spyOn(LiveText.prototype, "reapplyGuard").mockImplementation(function (this: LiveText, id: number) {
-    const r = orig.call(this, id);
-    return r === g ? "ok" : r;
+export function serverPlacement(live: LiveText, server: FakeServer, id: number): Hunk[] | null {
+  type I = { sentOf: Map<number, { hunks: Hunk[]; base: number }>; inflight: { hunks: Hunk[]; doomed?: unknown } | null; queue: Array<{ hunks: Hunk[] }> };
+  const x = live as unknown as I;
+  const sent = x.sentOf.get(id);
+  if (!sent) return null;
+  const log = server.log.filter((a) => a.version > sent.base && a.version <= live.version).map((a) => a.hunks);
+  const r = rebaseOurs(sent.hunks, log);
+  if ("conflict" in r) return null;
+  let c = Carried.of(r.ok);
+  for (const e of [...(x.inflight && !x.inflight.doomed ? [x.inflight] : []), ...x.queue]) {
+    const t = c.through(e.hunks, 0);
+    if ("conflict" in t) return null;
+    c = t.ok;
+  }
+  return c.hunks();
+}
+
+/**
+ * Run `f` with Re-apply placing changes as M1 did (the planted fault for the rule): all of a
+ * rejection's typed text at its region's start, deletions never redone.
+ */
+export async function withRegionPlacement<T>(f: () => Promise<T>): Promise<T> {
+  const spy = vi.spyOn(LiveText.prototype, "placeRejection").mockImplementation(function (this: LiveText, id: number) {
+    const r = this.rejected.find((x) => x.id === id);
+    if (!r) return null;
+    return { hunks: r.text ? [{ start: r.region.start, end: r.region.start, insert: r.text }] : [] };
   });
   try {
     return await f();

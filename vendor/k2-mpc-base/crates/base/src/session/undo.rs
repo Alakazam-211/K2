@@ -84,8 +84,31 @@ pub struct ConflictRegion {
     pub base: String,
     /// What the undo wanted to put back.
     pub ours: String,
-    /// The live text of the region now.
+    /// The live text of the region now. For an element (a structured revert): who wrote
+    /// it since (`pid in change N`), when known.
     pub theirs: String,
+    /// A structured doc's element (`range` is empty): its key, and why it conflicts
+    /// (`written since`, `moved since`, `deleted since`, `dropped from the live sheet`).
+    pub key: Option<String>,
+    pub why: Option<String>,
+}
+
+impl ConflictRegion {
+    /// An element's conflict (a structured revert): `lines` are its row's rendered lines
+    /// (`(0, 0)` when unknown).
+    pub(crate) fn element(root: String, key: String, lines: (usize, usize), why: String) -> Self {
+        ConflictRegion {
+            root,
+            range: 0..0,
+            lines,
+            kind: ConflictKind::Overlap,
+            base: String::new(),
+            ours: String::new(),
+            theirs: String::new(),
+            key: Some(key),
+            why: Some(why),
+        }
+    }
 }
 
 /// One region of a change: what to turn back (`after` into `before`) and where it is now.
@@ -425,6 +448,8 @@ impl Region {
             base: self.after.clone(),
             ours: self.before.clone(),
             theirs,
+            key: None,
+            why: None,
         }
     }
 }
@@ -940,7 +965,9 @@ pub(crate) fn plan(
                 };
                 // the scratch map applies the step as the engine will: the undoer's next
                 // clocks, in the adapter's order (`insert_clocks`)
-                let Edit::Text { hunks, .. } = &edit;
+                let Edit::Text { hunks, .. } = &edit else {
+                    unreachable!("built just above")
+                };
                 let firsts =
                     crate::engine::insert_clocks(clock, std::slice::from_ref(&edit)).remove(0);
                 let ins: Vec<Inserted> = hunks
@@ -1010,6 +1037,7 @@ mod tests {
                 let out = match s.edits.first() {
                     Some(Edit::Text { hunks, .. }) => diff::apply(live, hunks),
                     None => live.to_owned(),
+                    Some(e) => panic!("not a text edit: {e:?}"),
                 };
                 (out, s.skipped.clone())
             }
@@ -1100,7 +1128,9 @@ mod tests {
         let Plan::Steps { steps, .. } = plan_v17(&texts(live), vec![b], Mode::Partial) else {
             panic!()
         };
-        let Edit::Text { hunks, .. } = &steps[0].edits[0];
+        let Edit::Text { hunks, .. } = &steps[0].edits[0] else {
+            panic!("not a text edit")
+        };
         let undone = diff::apply(live, hunks);
         assert_eq!(undone, "one\ntwo\nTHxREE\n");
         assert_eq!(steps[0].inverse.len(), 1); // the skipped region isn't redone
@@ -1113,7 +1143,9 @@ mod tests {
         let Plan::Steps { steps, .. } = plan_v17(&texts(&undone), vec![redo], Mode::All) else {
             panic!()
         };
-        let Edit::Text { hunks, .. } = &steps[0].edits[0];
+        let Edit::Text { hunks, .. } = &steps[0].edits[0] else {
+            panic!("not a text edit")
+        };
         assert_eq!(diff::apply(&undone, hunks), live);
     }
 
@@ -1156,6 +1188,7 @@ mod tests {
                     })
                     .collect(),
             }],
+            elems: Vec::new(),
         };
         let mut ix = RevertIndex::empty_for_tests();
         ix.stage(

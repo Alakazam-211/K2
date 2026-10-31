@@ -88,6 +88,13 @@ fn doc_errors_with(x: &str) -> Vec<DocError> {
         D::Hunk(HunkError::Order { index: 1 }),
         D::Hunk(HunkError::Range { index: 1 }),
         D::Hunk(HunkError::Empty { index: 1 }),
+        D::RootName("a/b".into()),
+        D::Op {
+            root: "rows".into(),
+            index: 0,
+            refusal: crate::elem::OpRefusal::UnknownKey("r9".into()),
+        },
+        D::Malformed(x.into()),
     ]
 }
 
@@ -171,6 +178,40 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::Deleted,
         S::Closed { reason: "core_off" },
         S::Broken(x.into()),
+        S::NeedsBase,
+        S::UnknownElem {
+            root: "rows",
+            key: "r2".into(),
+            dropped: Some(crate::session::DroppedBy {
+                change: 4,
+                by: "p1".into(),
+                at_ms: 9,
+            }),
+        },
+        S::UnknownElem {
+            root: "cols",
+            key: "c99".into(),
+            dropped: None,
+        },
+        S::AtLimit {
+            what: "cells",
+            limit: 25_000,
+            would_be: 25_001,
+        },
+        S::AtLimit {
+            what: "value bytes",
+            limit: 65_536,
+            would_be: 70_000,
+        },
+        S::FacetConflict(vec![crate::session::FacetConflict {
+            root: "rows".into(),
+            key: "r3".into(),
+            facet: crate::elem::Facet::Value,
+            by: Some("p1".into()),
+            change: 7,
+            now: "deleted".into(),
+            rewritten_row: false,
+        }]),
     ];
     for code in [
         "too_large",
@@ -223,6 +264,8 @@ fn region(kind: ConflictKind) -> ConflictRegion {
         base: "b".into(),
         ours: "o".into(),
         theirs: "t".into(),
+        key: None,
+        why: None,
     }
 }
 
@@ -421,6 +464,13 @@ fn every_live_id_has_a_path() {
     seen.insert(meta.refusal.unwrap().id());
     // exact replace and pack verbs: produced by run_tool (the integration test reaches them)
     seen.extend(["MPC-E125", "MPC-E126", "MPC-E127"]);
+    // a grid verb's exit 4 (an unknown or deleted element): produced by run_tool on a table
+    // (tests/grid_verbs.rs)
+    seen.insert("MPC-E805");
+    // a refused header switch (names that would render): the header verb on a table
+    seen.insert("MPC-E806");
+    // a refused header switch (the only row blank): the header verb on a table
+    seen.insert("MPC-E807");
     for e in KIT.iter() {
         match e.status {
             Status::Live => assert!(seen.contains(e.id), "{} {} has no path", e.id, e.name),

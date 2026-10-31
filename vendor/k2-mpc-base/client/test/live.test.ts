@@ -60,7 +60,7 @@ describe("LiveText", () => {
     expect(l.version).toBe(3);
   });
 
-  it("keeps refused text (MPC-E111): out of the doc, handed to onRejected; a replacement isn't re-applied (not-insertion)", () => {
+  it("keeps refused text (MPC-E111): out of the doc, handed to onRejected; Re-apply refuses it (the server's rule: a conflict)", () => {
     const w = wire();
     const l = new LiveText({ text: "abcdef", version: 1 }, w.t);
     const rej: Rejection[] = [];
@@ -78,14 +78,14 @@ describe("LiveText", () => {
     expect(rej).toHaveLength(1);
     expect(rej[0]).toMatchObject({ text: "XYZ", base: 1, hunks: [h(1, 4, "XYZ")], region: { start: 1, end: 2 } });
     expect(rej[0].error?.id).toBe("MPC-E111");
-    // Re-apply would only re-insert "XYZ" beside the text it replaced: refused, kept
-    expect(l.reapplyGuard(rej[0].id)).toBe("not-insertion");
+    // its replacement met a deletion since: the server's rule refuses it again; kept
+    expect(l.placeRejection(rej[0].id)).toEqual({ refused: "conflict" });
     expect(l.reapply(rej[0].id)).toBeNull();
     expect(l.text).toBe("abf");
     expect(l.rejected.map((r) => r.id)).toEqual([rej[0].id]);
   });
 
-  it("re-applies a refused pure insertion at its place, at the new base; one inside a deletion since is refused", () => {
+  it("re-applies a refused insertion where the server would, at the new base; one inside a deletion since is refused", () => {
     const w = wire();
     const l = new LiveText({ text: "abcdef", version: 1 }, w.t);
     const rej: Rejection[] = [];
@@ -95,7 +95,7 @@ describe("LiveText", () => {
     w.deliver({ type: "refused", op: 1, error: { id: "MPC-E901", message: "rate" } });
     expect(rej).toHaveLength(1);
     expect(l.text).toBe("bcdef");
-    expect(l.reapplyGuard(rej[0].id)).toBe("ok");
+    expect(l.placeRejection(rej[0].id)).toEqual({ hunks: [h(2, 2, "XYZ")] });
     l.reapply(rej[0].id);
     expect(l.text).toBe("bcXYZdef");
     expect(w.sent[w.sent.length - 1]).toMatchObject({ type: "edit", base: 2, hunks: [h(2, 2, "XYZ")] });
@@ -105,7 +105,7 @@ describe("LiveText", () => {
     w.deliver({ type: "change", event: ev(4, [h(4, 7, "")]) });
     w.deliver({ type: "refused", op: 3, error: { id: "MPC-E111", message: "write conflict", details: { conflicts: [] } } });
     const q = rej.find((r) => r.text === "Q")!;
-    expect(l.reapplyGuard(q.id)).toBe("deleted-around");
+    expect(l.placeRejection(q.id)).toEqual({ refused: "conflict" });
     expect(l.reapply(q.id)).toBeNull();
   });
 

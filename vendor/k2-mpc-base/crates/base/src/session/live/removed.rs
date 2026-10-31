@@ -193,7 +193,10 @@ impl Session {
         // spaces, or adding to a line, removes nobody's text.
         let mut rooted: Vec<(&str, &str, Vec<Hunk>, Vec<Piece>)> = Vec::new();
         for e in edits {
-            let Edit::Text { root, hunks } = e;
+            // a text doc's edits are text (a structured doc's outside save takes its own path)
+            let Edit::Text { root, hunks } = e else {
+                continue;
+            };
             let told = authored
                 .iter()
                 .find(|(r, _)| r == root)
@@ -438,6 +441,7 @@ impl Session {
                 no_history: false,
                 before,
                 at_ms: now,
+                text: true,
             };
             let lines = LineRange {
                 root: first.root.clone(),
@@ -509,11 +513,16 @@ impl Session {
         }
     }
 
-    /// The notes waiting for member `i`, delivered: gone from the queue. Someone who can't read
-    /// the doc now gets nothing, not even a count; theirs stay and arrive if they can read
-    /// again.
+    /// The notes waiting for member `i`, delivered: gone from the queue. By the doc's kind: a
+    /// grid doc's come from its store mirror ([`Session::drain_grid_notes`]). A text doc's:
+    /// someone who can't read the doc now gets nothing, not even a count; theirs stay and
+    /// arrive if they can read again.
     pub(super) fn drain_notes(&self, st: &mut State, i: usize, now: u64) -> Vec<Note> {
         let pid = st.members[i].p.pid.clone();
+        if self.structured {
+            let rights = self.host.rights(&st.members[i].p, &st.key);
+            return self.drain_grid_notes(st, &pid, &rights, now);
+        }
         if !st.aware.pending.contains_key(&pid) {
             return Vec::new();
         }
@@ -561,12 +570,16 @@ impl Session {
     }
 
     /// Each member's waiting notes for a snapshot, as they may read them. Someone who can't
-    /// read the doc now has none here.
+    /// read the doc now has none here. By the doc's kind: a grid's name their versions as the
+    /// grid does ([`Session::grid_waiting_for_subscribers`]).
     pub(super) fn waiting_for_subscribers(
         &self,
         st: &State,
         now: u64,
     ) -> HashMap<String, Vec<Overwrite>> {
+        if self.structured {
+            return self.grid_waiting_for_subscribers(st);
+        }
         if st.aware.pending.is_empty() {
             return HashMap::new();
         }
@@ -600,7 +613,8 @@ impl Session {
     }
 
     /// Before a flush: the recorded pushes as their readers may have them. Nothing for someone
-    /// who can't read the doc now, no version for someone who can't read history.
+    /// who can't read the doc now (either kind: the note stays waiting, and is delivered if
+    /// they can read again); on a text doc, no version for someone who can't read history.
     pub(super) fn notes_at_flush(&self, st: &mut State) {
         let st = &mut *st;
         let any = st
@@ -622,8 +636,13 @@ impl Session {
             };
             match rights.iter().find(|(w, _)| w == to) {
                 Some((_, r)) if !r.read => false,
+                // a note names a version only for a reader who can open it: a text note keeps
+                // its `restore_from` (unchanged since v0.9.8.2); a grid's loses it too
                 Some((_, r)) if !r.history => {
                     overwrite.version = None;
+                    if !overwrite.text {
+                        overwrite.restore_from = None;
+                    }
                     overwrite.no_history = true;
                     true
                 }
@@ -725,6 +744,7 @@ fn queue_overwrite(q: &mut Vec<Note>, o: Overwrite, lines: LineRange) {
         claim: None,
         claim_note: None,
         remaining_ms: None,
+        span: None,
         overwrite: Some(o),
     };
     if q.len() < OVERWRITE_PENDING_MAX {

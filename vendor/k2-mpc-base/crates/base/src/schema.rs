@@ -1,9 +1,11 @@
 //! K2-defined primitives and pack schemas.
 //!
-//! A pack's schema names its roots and gives each a primitive kind. Only [`Kind::Text`]
-//! is implemented today; the rest are specified in `docs/PRIMITIVES.md` and are built
-//! when the first pack needs them, each with its conformance tests. Declaring an unimplemented kind is refused at
-//! [`crate::Doc::new`], loudly.
+//! A pack's schema names its roots and gives each a primitive kind. [`Kind::Text`],
+//! [`Kind::MovableList`] and [`Kind::Map`] are implemented (the structured kinds' ops and
+//! readers are in [`crate::elem`]); the rest are specified in `docs/PRIMITIVES.md` and are
+//! built when the first pack needs them, each with its conformance tests. Declaring an
+//! unimplemented kind is refused at [`crate::Doc::new`], loudly. Root names are non-empty,
+//! unique, and free of `/` (also checked there).
 
 /// A primitive a pack can build on. Each kind is defined by K2's merge semantics, written
 /// as a conformance suite every engine must pass (`crates/conformance`), not by what one
@@ -31,7 +33,7 @@ pub enum Kind {
 impl Kind {
     /// True when this build of the kit implements the kind.
     pub fn implemented(self) -> bool {
-        matches!(self, Kind::Text)
+        matches!(self, Kind::Text | Kind::MovableList | Kind::Map)
     }
 }
 

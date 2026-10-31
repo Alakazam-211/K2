@@ -1,0 +1,16 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc eb775afef6f108367bd30e296c0568822a1792266c5a8e22c5a83618328bdfa2 # shrinks to records = [[Field { value: "", quote: None }], [Field { value: "", quote: None }, Field { value: "", quote: None }]], header = false, ragged = false, ops = []
+cc e6bce1851d27fa325805d4ceb71ca4c70cecfd3978d49925f1efe877879a63b7 # shrinks to records = [], header = false, ragged = false, setup = [], ours = [InsRow(0, 0, 0), DelRow(0)], theirs = []
+cc 459d9cd0c497bb17173967d601a048967ec5af4d1c96b9406f344408eb1bae8a # shrinks to records = [], header = true, ragged = false, setup = [], change = [InsCol(0, 0, false)]
+cc 213a614ec517b6259d43241ffb345fb4b33b1fad8f713b928be7555bd29b5fe2 # shrinks to records = [[Field { value: "", quote: None }], []], header = false, ragged = false, setup = [], ours = [InsRow(58, 0, 61), InsRow(142, 15, 0), DelRow(2)], theirs = []
+cc 05c94793ade5957aa0c3a9b06bc18852a02ea7fe5925e5d90005ce0733663697 # shrinks to records = [[]], header = true, ragged = false, ops = []
+cc 46dfca4318edb96a394a6891321ecf7195ac45aad9e32a6ae9b76d71cd38edfe # shrinks to records = [[]], header = true, ragged = false, setup = [], change = [DelCol(0)]
+cc 986e8cf8b19445599e86f57da52604e509e0db81a613d1ff7279ffdce343291a # shrinks to records = [], header = true, ragged = false, setup = [InsCol(0, 0, false)], change = []
+cc 2af674b1f97d99a458c83ea5f7e19840f22ea8aa2bc23810eb3d5a4e0f565e9d # the header switch on, no row, names kept unrendered (MPC-E806)
+cc 08af4fbb099bd7aa48e9321ca72ee62e7f4041f180eddc071d0f3b634d0af65e # shrinks to width = 4, cells = [([0, 0, 0, 0], false), ([0, 0, 0, 0], false), ([0, 1, 0, 1], false), ([0, 0, 0, 0], false), ([0, 0, 0, 0], false), ([0, 0, 0, 0], false), ([0, 0, 0, 0], false)], fates = [Keep, Delete, Edit(2), Edit(2), Keep, Keep, Delete, Keep, Keep], order = [0, 0, 31217, 0, 0, 0, 0, 0, 0], inserts = [(1651, [0, 0, 0, 0]), (27155, [0, 1, 1, 1])]
+cc eb2ca18416d643934524d0316575cc38a5083ff3f5d06cf2d546f8daa7271c4f # shrinks to records = [[], [Field { value: "", quote: None }, Field { value: "", quote: None }], []], header = true, ragged = false, setup = [InsRow(69, 0, 37)], change = [MoveRow(2, 23, 9), InsRow(181, 0, 0), Set(11, 0, 110)]

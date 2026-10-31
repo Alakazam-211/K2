@@ -50,11 +50,19 @@ pub enum Cap {
     Wire,
     /// The element IDs a span of the live text covers, tombstones between included.
     SpanIds,
+    /// [`crate::caps::MLists`] (over [`crate::caps::Structured`]).
+    MList,
+    /// [`crate::caps::Maps`] (over [`crate::caps::Structured`]).
+    Map,
+    /// [`crate::caps::Tables`]: MovableLists and a Map, composed as the CSV table.
+    Table,
+    /// [`crate::caps::Merged`]: a merge's applied stream.
+    Merged,
 }
 
 impl Cap {
     /// Every capability.
-    pub const ALL: [Cap; 14] = [
+    pub const ALL: [Cap; 18] = [
         Text,
         Events,
         Blame,
@@ -69,6 +77,10 @@ impl Cap {
         BlameAt,
         Wire,
         SpanIds,
+        MList,
+        Map,
+        Table,
+        Merged,
     ];
 
     pub fn name(self) -> &'static str {
@@ -87,6 +99,10 @@ impl Cap {
             Cap::BlameAt => "BlameAt",
             Cap::Wire => "Wire",
             Cap::SpanIds => "SpanIds",
+            Cap::MList => "MList",
+            Cap::Map => "Map",
+            Cap::Table => "Table",
+            Cap::Merged => "Merged",
         }
     }
 
@@ -107,8 +123,18 @@ impl Cap {
             Cap::Purge => Some(crate::purge::RULES),
             Cap::BlameAt => Some(crate::blame::AT_RULES),
             Cap::SpanIds => Some(crate::span::RULES),
+            Cap::MList => Some(crate::mlist::RULES),
+            Cap::Map => Some(crate::map::RULES),
+            Cap::Table => Some(crate::table::RULES),
+            Cap::Merged => Some(crate::stream::RULES),
             Cap::Wire => None,
         }
+    }
+
+    /// A structured capability (MovableList and Map kinds): its rules run over
+    /// [`crate::caps::Structured`] replicas (`tests/structured.rs`).
+    pub fn is_structured(self) -> bool {
+        matches!(self, Cap::MList | Cap::Map | Cap::Table | Cap::Merged)
     }
 }
 
@@ -191,6 +217,80 @@ pub const RULES: &[Rule] = &[
     r("erase.no_readmit", "E-ERASE-6", &[Purge]),
     r("erase.versions", "E-ERASE-7, K-PURGE-4", &[HistoryPurge]),
     r("erase.span_includes_tombstones", "E-ERASE-1", &[SpanIds]),
+    // structured kinds (CSV seam design §5.3, §7.6; contract §7.1)
+    r("mlist.converge", "E-CORE-1, E-MLIST-1, E-MLIST-2", &[MList]),
+    r("mlist.move_no_duplicate", "E-MLIST-1", &[MList]),
+    r("mlist.delete_wins", "E-MLIST-2, engine answer E1", &[MList]),
+    r("mlist.insert_beside_moved", "E-MLIST-2", &[MList]),
+    r("mlist.move_and_set", "E-MLIST-1", &[MList]),
+    r("mlist.move_lww", "E-MLIST-1", &[MList]),
+    r(
+        "mlist.block_contiguous",
+        "E-LIST-1, engine answer E9",
+        &[MList],
+    ),
+    r("mlist.chain_one_run", "engine answers E8, E9", &[MList]),
+    r(
+        "mlist.yata_separating_case",
+        "E-LIST-1 (as E-TEXT-1)",
+        &[MList],
+    ),
+    r("map.lww", "E-MAP-1", &[Map]),
+    r("map.delete_vs_set", "E-MAP-1, engine answer E5", &[Map]),
+    r("map.steady_bounded", "E-MAP-3", &[Map]),
+    r("table.cell_kept", "E-TABLE-1, engine answer E3", &[Table]),
+    r(
+        "table.cell_vs_row_delete",
+        "E-TABLE-2, K-CSV-4, engine answer E3",
+        &[Table, Merged],
+    ),
+    r(
+        "table.cell_vs_col_delete",
+        "E-TABLE-2 (extended), K-CSV-4",
+        &[Table, Merged],
+    ),
+    r("table.sort_atomic", "K-CSV-3, K-PAR-8", &[Table, Merged]),
+    r(
+        "table.block_contiguous",
+        "E-TABLE-1, engine answer E9",
+        &[Table],
+    ),
+    r("table.cell_lww", "E-TABLE-2, E-MAP-1", &[Table]),
+    r("table.row_identity", "K-CSV-1, E-TABLE-1", &[Table]),
+    r("table.sort_vs_cell", "K-CSV-4", &[Table]),
+    r("table.row_move_keeps_cells", "K-CSV-1, E-TABLE-1", &[Table]),
+    r("table.col_move_keeps_cells", "K-CSV-1, E-TABLE-1", &[Table]),
+    r(
+        "table.col_move_no_duplicate",
+        "K-CSV-4, E-MLIST-1",
+        &[Table],
+    ),
+    r(
+        "table.delete_wins_restorable",
+        "E-MLIST-2, K-CSV-4",
+        &[Table],
+    ),
+    r("table.insert_beside_moved_row", "E-MLIST-2", &[Table]),
+    r(
+        "table.ragged_render",
+        "CSV contract §1.5, K-CSV-2",
+        &[Table],
+    ),
+    r(
+        "stream.merged_replays",
+        "CSV seam design §4.2, A5",
+        &[Merged, MList, Map],
+    ),
+    r(
+        "stream.merged_matches_local",
+        "CSV seam design §4.2, engine answer E4",
+        &[Merged, MList, Map],
+    ),
+    r(
+        "stream.merged_writes",
+        "engine answer E4",
+        &[Merged, MList, Map],
+    ),
 ];
 
 /// The requirements' v1 rules marked "(new)" (slice 1's inventory, 17), plus
@@ -219,6 +319,34 @@ pub const REQUIRED: &[&str] = &[
     "hist.redo",
 ];
 
+/// The structured rules slices C1b and C1d of the CSV grid build must have (their briefs,
+/// the CSV seam design §5.3's pinned deviations, and the CSV contract §7.1): each must be in
+/// [`RULES`].
+pub const REQUIRED_STRUCTURED: &[&str] = &[
+    "mlist.move_no_duplicate",
+    "mlist.delete_wins",
+    "mlist.insert_beside_moved",
+    "mlist.move_and_set",
+    "mlist.move_lww",
+    "mlist.block_contiguous",
+    "mlist.chain_one_run",
+    "mlist.yata_separating_case",
+    "map.lww",
+    "map.delete_vs_set",
+    "map.steady_bounded",
+    "table.cell_kept",
+    "table.cell_vs_row_delete",
+    "table.sort_atomic",
+    "table.block_contiguous",
+    "table.cell_lww",
+    "table.row_move_keeps_cells",
+    "table.col_move_keeps_cells",
+    "table.col_move_no_duplicate",
+    "table.delete_wins_restorable",
+    "table.insert_beside_moved_row",
+    "table.ragged_render",
+];
+
 /// An engine, as the matrix sees it.
 #[derive(Debug)]
 pub struct Engine {
@@ -230,7 +358,8 @@ pub struct Engine {
 }
 
 /// The kit's own [`k2_mpc_base::Doc`] (Yrs), and its sessions for the doc-level
-/// capabilities (undo, versions, history purge, erasure).
+/// capabilities (undo, versions, history purge, erasure); [`crate::yrs::YrsGrid`] for the
+/// structured ones.
 pub const KIT: Engine = Engine {
     name: YrsText::ENGINE,
     caps: &[
@@ -244,6 +373,10 @@ pub const KIT: Engine = Engine {
         Erasure,
         Branches,
         Purge,
+        MList,
+        Map,
+        Table,
+        Merged,
     ],
     deviations: YrsText::KNOWN_DEVIATIONS,
 };
@@ -326,6 +459,11 @@ const PROVENANCE_KIT: &str = concat!(
     "never reaches the provenance table or the session's map. Refusing a root a client ",
     "sends on the wire is the native decoder's"
 );
+/// The structured rules on the reference model: why they don't run yet.
+const MODEL_STRUCTURED: &str = "mpce-model (v0.4.1) has no list, mlist or map model yet; K2 \
+     Engine is adding them (mlist with `undel`, engine answer E1; then map)";
+const MODEL_STRUCTURED_TARGET: &str = "mpce-model, after K2 Engine's list/mlist/map models";
+
 /// Every (rule, engine) that doesn't run yet.
 pub const AWAITING: &[Awaiting] = &[
     aw("sec.duplicate_ranges", K, WIRE, "native decoder, G2"),
@@ -335,6 +473,194 @@ pub const AWAITING: &[Awaiting] = &[
         K,
         PROVENANCE_KIT,
         "native decoder, G2 (the engine's)",
+    ),
+    aw(
+        "mlist.converge",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.move_no_duplicate",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.delete_wins",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.insert_beside_moved",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.move_and_set",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.move_lww",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.block_contiguous",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.chain_one_run",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "mlist.yata_separating_case",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw("map.lww", M, MODEL_STRUCTURED, MODEL_STRUCTURED_TARGET),
+    aw(
+        "map.delete_vs_set",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "map.steady_bounded",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.cell_kept",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.cell_vs_row_delete",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.cell_vs_col_delete",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.sort_atomic",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.block_contiguous",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.cell_lww",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.row_identity",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.sort_vs_cell",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.row_move_keeps_cells",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.col_move_keeps_cells",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.col_move_no_duplicate",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.delete_wins_restorable",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.insert_beside_moved_row",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "table.ragged_render",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "stream.merged_replays",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "stream.merged_matches_local",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+    aw(
+        "stream.merged_writes",
+        M,
+        MODEL_STRUCTURED,
+        MODEL_STRUCTURED_TARGET,
+    ),
+];
+
+/// The native engine is not a column yet (it isn't built): what of the suite awaits it, by
+/// rule-id prefix, with the target. Its deviation list must be empty (K-CT-2).
+pub const NATIVE: &[(&str, &str)] = &[
+    (
+        "mlist.",
+        "the native engine's mlist (with `undel`, engine answer E1), G2b",
+    ),
+    ("map.", "the native engine's map, G2b"),
+    (
+        "table.",
+        "the native engine's mlist and map (G2b); the table composition model, `MC table` \
+         (engine answer E3)",
+    ),
+    (
+        "stream.",
+        "the native engine's applied stream for list and map ops (engine answer E4), G2b",
     ),
 ];
 
@@ -462,6 +788,37 @@ pub const CURRENT: Matrix<'static> = Matrix {
     never: NEVER,
     required: REQUIRED,
 };
+
+/// Every structured rule (one whose first capability is structured).
+pub fn structured_rules() -> impl Iterator<Item = &'static Rule> {
+    RULES
+        .iter()
+        .filter(|r| r.needs.first().is_some_and(|c| c.is_structured()))
+}
+
+/// Problems with [`NATIVE`] and [`REQUIRED_STRUCTURED`]: a structured rule no native
+/// entry covers, an entry that covers no rule, or a required rule that is missing.
+pub fn native_problems() -> Vec<String> {
+    let mut out = Vec::new();
+    for r in structured_rules() {
+        if !NATIVE.iter().any(|(p, _)| r.id.starts_with(p)) {
+            out.push(format!("{}: no native-engine entry covers it", r.id));
+        }
+    }
+    for (p, _) in NATIVE {
+        if !structured_rules().any(|r| r.id.starts_with(p)) {
+            out.push(format!("native entry {p:?} covers no structured rule"));
+        }
+    }
+    for id in REQUIRED_STRUCTURED {
+        if rule(id).is_none() {
+            out.push(format!(
+                "{id}: a required structured rule missing from the rules"
+            ));
+        }
+    }
+    out
+}
 
 impl Matrix<'_> {
     fn rule(&self, id: &str) -> Option<&Rule> {
@@ -684,6 +1041,14 @@ impl Matrix<'_> {
         s.push_str("\n## Never\n\n");
         for n in self.never {
             s.push_str(&format!("- `{}` on {}: {}.\n", n.rule, n.engine, n.reason));
+        }
+        s.push_str("\n## The native engine\n\n");
+        s.push_str(
+            "Not a column yet. Its deviation list must be empty (K-CT-2). The structured \
+             rules await it:\n\n",
+        );
+        for (prefix, target) in NATIVE {
+            s.push_str(&format!("- `{prefix}*`: {target}.\n"));
         }
         s.push_str("\n## Undo spec trace test\n\n");
         s.push_str(UNDO_TRACES);

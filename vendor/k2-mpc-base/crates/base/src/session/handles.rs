@@ -24,7 +24,7 @@ const PREFIX: char = 'p';
 const NOBODY: &str = "kit:nobody";
 
 /// Every App viewer's handles in one doc. Session state.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Handles {
     /// viewer pid -> the pids it has seen, in order (handle `p{k+1}` is `[k]`).
     by_viewer: HashMap<String, Vec<String>>,
@@ -129,6 +129,9 @@ impl Lens<'_> {
     pub fn change(&mut self, mut c: ChangeEvent) -> ChangeEvent {
         c.pid = self.pid(&c.pid);
         c.on_behalf_of = self.opt(c.on_behalf_of.take());
+        for h in &mut c.hidden {
+            h.relabel(|p| self.pid(p));
+        }
         c
     }
 
@@ -151,6 +154,16 @@ impl Lens<'_> {
                 v.authors = self.all(std::mem::take(&mut v.authors));
                 LogItem::Version(v)
             }
+            LogItem::Settings {
+                mut version,
+                description,
+            } => {
+                version.authors = self.all(std::mem::take(&mut version.authors));
+                LogItem::Settings {
+                    version,
+                    description,
+                }
+            }
         }
     }
 
@@ -159,6 +172,49 @@ impl Lens<'_> {
         a.author = self.pid(&a.author);
         a.on_behalf_of = self.pid(&a.on_behalf_of);
         a
+    }
+
+    // ----- grids (C1)
+
+    pub fn elem_blame(&mut self, mut b: super::live::ElemBlame) -> super::live::ElemBlame {
+        b.author = self.pid(&b.author);
+        b.on_behalf_of = self.opt(b.on_behalf_of.take());
+        b.restored_by = self.opt(b.restored_by.take());
+        b
+    }
+
+    pub fn structure_blame(
+        &mut self,
+        mut s: super::live::StructureBlame,
+    ) -> super::live::StructureBlame {
+        for p in s.rows.iter_mut().chain(s.cols.iter_mut()) {
+            p.inserted = p.inserted.take().map(|b| self.elem_blame(b));
+            p.moved = p.moved.take().map(|b| self.elem_blame(b));
+        }
+        s
+    }
+
+    fn grid_conflict(&mut self, mut c: super::live::GridConflict) -> super::live::GridConflict {
+        c.written_by = self.opt(c.written_by.take());
+        c.claimed_by = self.all(std::mem::take(&mut c.claimed_by));
+        c
+    }
+
+    pub fn grid_write(
+        &mut self,
+        mut r: super::live::GridWriteReport,
+    ) -> super::live::GridWriteReport {
+        if let super::live::GridWrite::Conflicts(cs) = &mut r.outcome {
+            *cs = std::mem::take(cs)
+                .into_iter()
+                .map(|c| self.grid_conflict(c))
+                .collect();
+        }
+        r.skipped = std::mem::take(&mut r.skipped)
+            .into_iter()
+            .map(|c| self.grid_conflict(c))
+            .collect();
+        r
     }
 
     // ----- tier 0 (blob docs)
@@ -226,6 +282,22 @@ impl Lens<'_> {
                 name,
                 expires_ms,
             },
+            SessionError::UnknownElem { root, key, dropped } => SessionError::UnknownElem {
+                root,
+                key,
+                dropped: dropped.map(|d| super::DroppedBy {
+                    by: self.pid(&d.by),
+                    ..d
+                }),
+            },
+            SessionError::FacetConflict(cs) => SessionError::FacetConflict(
+                cs.into_iter()
+                    .map(|mut c| {
+                        c.by = self.opt(c.by.take());
+                        c
+                    })
+                    .collect(),
+            ),
             other => other,
         }
     }
@@ -286,6 +358,11 @@ impl Lens<'_> {
             } => RosterEvent::Cursor {
                 who: self.who(who),
                 cursor,
+                version,
+            },
+            RosterEvent::CellCursor { who, cell, version } => RosterEvent::CellCursor {
+                who: self.who(who),
+                cell,
                 version,
             },
             RosterEvent::ClaimStarted {

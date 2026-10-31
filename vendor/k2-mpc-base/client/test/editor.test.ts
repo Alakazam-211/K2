@@ -5,7 +5,7 @@
 // and an IME composition with remote changes in the middle.
 
 import { history, historyKeymap, undo as cmUndo } from "@codemirror/commands";
-import { EditorState, StateEffect, Text } from "@codemirror/state";
+import { EditorState, StateEffect, Text, type ChangeSpec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./jsdom-shims";
@@ -23,11 +23,10 @@ import {
 } from "../src/editor/mount";
 import type { RemovedTextNote } from "../src/editor/notes";
 import { LiveText } from "../src/live";
-import { rebaseOurs } from "../src/rebase";
 import { byteToIndex, indexToByte, utf8Len } from "../src/hunk";
 import type { ClientFrame, LiveTransport, ServerFrame } from "../src/wire";
 import { FakeLiveHost, type FakeLiveTransport, microtasks, netTimers, settle } from "./fake-live";
-import { withoutPresenceCheck, withoutReapplyGuard } from "./editor-harness";
+import { withoutPresenceCheck, withRegionPlacement } from "./editor-harness";
 import { FakeServer, Net, rng } from "./fake-server";
 import { randomEdit, randomText } from "./random-edits";
 
@@ -246,12 +245,12 @@ describe("mountLiveEditor", () => {
       b.focus();
       expect(document.activeElement).toBe(b);
     }
-    // its place was inside the deleted "world": Re-apply refuses (check and retype), keeps it
+    // its place was inside the deleted "world": the server's rule refuses it (a conflict); kept
     again.click();
     await settle(net);
     expect(server.text).toBe("hello \n");
     expect(h.rejected.length).toBe(1);
-    expect((frame.querySelector(".mpc-note") as HTMLElement).textContent).toBe(DEFAULT_STRINGS.deletedAround);
+    expect((frame.querySelector(".mpc-note") as HTMLElement).textContent).toBe(DEFAULT_STRINGS.conflictReapply);
     dismiss.click();
     expect(h.rejected.length).toBe(0);
     expect(list.hidden).toBe(true);
@@ -541,26 +540,14 @@ describe("mountLiveEditor", () => {
       );
     });
 
-    it("planted fault (presence out), without the host rule: the tie guard still refuses (the late edit went in at its very place)", async () => {
+    it("planted fault (the guard out), without the host rule: Re-apply doubles the text", async () => {
       await withoutPresenceCheck(async () => {
         const { net, server, eds, ev } = await race(false);
         expect(ev.landed).toEqual([]);
-        expect(eds[0].reapply(ev.rejected[0].id)).toEqual({ status: "unknown", reason: "tie" });
+        expect(eds[0].reapply(ev.rejected[0].id)).toEqual({ status: "applied" });
         await settle(net);
-        expect(count(server.text)).toBe(1);
+        expect(count(server.text), "the fault went unnoticed").toBe(2);
       });
-    });
-
-    it("planted fault (presence and the tie guard out), without the host rule: Re-apply doubles the text", async () => {
-      await withoutPresenceCheck(() =>
-        withoutReapplyGuard("tie", async () => {
-          const { net, server, eds, ev } = await race(false);
-          expect(ev.landed).toEqual([]);
-          expect(eds[0].reapply(ev.rejected[0].id)).toEqual({ status: "applied" });
-          await settle(net);
-          expect(count(server.text), "the fault went unnoticed").toBe(2);
-        }),
-      );
     });
 
     for (const rule of [false, true]) {
@@ -577,18 +564,16 @@ describe("mountLiveEditor", () => {
         } else {
           expect(ev.landed).toEqual([]);
           expect(eds[0].rejected.map((r) => r.id)).toEqual([id]); // still there
-          // p2's "X" went in at its very place: the server would put p1's after it, Re-apply
-          // before; refused (a tie), kept
-          expect(eds[0].reapply(id)).toEqual({ status: "unknown", reason: "tie" });
-          expect(eds[0].rejected.map((r) => r.id)).toEqual([id]);
+          // p2's "X" went in at its very place: p1's goes after it, as the server puts it
+          expect(eds[0].reapply(id)).toEqual({ status: "applied" });
         }
         await settle(net);
-        expect(count(server.text)).toBe(rule ? 1 : 2);
+        expect(count(server.text)).toBe(2);
         for (const h of eds) expect(doc(h)).toBe(server.text);
       });
     }
 
-    it("an earlier acknowledged edit from the same client ID doesn't count; a lost two-hunk edit is refused, a single-hunk one applies once", async () => {
+    it("an earlier acknowledged edit from the same client ID doesn't count; a lost two-hunk edit and a single-hunk one each apply once, in place", async () => {
       const { net, server, eds, ts, logs } = setup("abc\n");
       await settle(net);
       type(eds[0], 0, "a"); // acknowledged on this connection
@@ -599,38 +584,33 @@ describe("mountLiveEditor", () => {
       const rej = logs[0].rejected[0];
       expect(rej.mayHaveApplied).toBe(true);
       expect(server.text).toBe("aabc\n");
-      // two hunks: refused rather than put back in one place; the text unchanged, still listed
-      expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "multi-hunk" });
-      const frame = eds[0].view.dom.closest(".mpc-editor")!;
-      expect((frame.querySelector(".mpc-note") as HTMLElement).textContent).toBe(
-        "This change touched more than one place: nothing was re-applied. Check it, then type what's missing.",
-      );
-      expect(eds[0].rejected.map((r) => r.id)).toEqual([rej.id]);
+      // two hunks: each back in its own place, by the server's rule
+      expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
+      expect(eds[0].rejected).toEqual([]);
       await settle(net);
-      expect(server.text).toBe("aabc\n");
+      expect(server.text).toBe("aQabcZ\n");
       expect(doc(eds[0])).toBe(server.text);
       // on the new connection: "T" acknowledged, then "S" lost; the earlier acked edit from the
       // same client ID doesn't count: absent, and Re-apply puts "S" in once
       type(eds[0], 0, "T");
       await settle(net);
-      type(eds[0], 5, "S");
+      type(eds[0], 7, "S");
       ts[0].drop(false);
       await settle(net);
       const one = logs[0].rejected.find((r) => r.text === "S")!;
       expect(one.mayHaveApplied).toBe(true);
-      expect(server.text).toBe("Taabc\n");
+      expect(server.text).toBe("TaQabcZ\n");
       expect(eds[0].reapply(one.id)).toEqual({ status: "applied" });
       await settle(net);
-      expect(server.text).toBe("TaabcS\n");
+      expect(server.text).toBe("TaQabcZS\n");
       expect(doc(eds[0])).toBe(server.text);
-      // an ordinary rejection keeps today's Re-apply (no check)
+      // a conflict: the server's rule refuses it
       eds[0].view.dispatch({ changes: { from: 2, to: 5, insert: "XYZ" }, userEvent: "input.type" });
       server.serverEdit([{ start: 2, end: 5, insert: "abd" }]);
       await settle(net);
       const conflict = logs[0].rejected.find((r) => r.error?.id === "MPC-E111")!;
       expect(conflict.mayHaveApplied).toBe(false);
-      // a replacement: Re-apply would only re-insert its text beside what it replaced
-      expect(eds[0].reapply(conflict.id)).toEqual({ status: "unknown", reason: "not-insertion" });
+      expect(eds[0].reapply(conflict.id)).toEqual({ status: "unknown", reason: "conflict" });
     });
 
     it("an undo unanswered on the lost connection: the client can't tell, so Re-apply refuses", async () => {
@@ -1010,6 +990,45 @@ describe("mountLiveEditor", () => {
     expect(eds[0].state).toBe("live");
   });
 
+  it("during a composition the held document and its byte index stay exactly live.text, change by change (no re-index)", async () => {
+    const { net, server, eds } = setup("alpha beta 日本\ngamma 🎉 delta\n", 2);
+    await settle(net);
+    const [a, b] = eds;
+    type Shadow = { held: unknown; shadow: { doc: Text; idx: ByteIndex } | null };
+    const bind = (a as unknown as { binding: Shadow }).binding;
+    const dom = a.view.contentDOM;
+    a.view.dispatch({ selection: { anchor: 10 } });
+    dom.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    const check = (where: string) => {
+      if (!bind.held) return;
+      const sh = bind.shadow!;
+      expect(sh.doc.toString(), `${where}: the held document is live.text`).toBe(a.text);
+      expect(sh.idx.total(), `${where}: its index's length`).toBe(utf8Len(a.text));
+      const fresh = ByteIndex.of(sh.doc);
+      for (let p = 0; p <= sh.doc.length; p += 3) expect(sh.idx.byteAt(sh.doc, p), `${where}: byteAt(${p})`).toBe(fresh.byteAt(sh.doc, p));
+    };
+    let caret = 10;
+    for (let k = 0; k < 6; k++) {
+      // a remote change (another editor, or an outside edit), then the person composes on
+      if (k % 2) type(b, 0, `B${k} `);
+      else server.serverEdit([{ start: 0, end: 0, insert: `S${k}\n` }]);
+      await settle(net);
+      check(`after remote ${k}`);
+      a.view.dispatch({ changes: { from: caret, insert: "に" }, selection: { anchor: caret + 1 }, userEvent: "input.type.compose" });
+      caret += 1;
+      await settle(net);
+      check(`after keystroke ${k}`);
+    }
+    expect(bind.held, "remote changes were held through the composition").not.toBeNull();
+    dom.dispatchEvent(new CompositionEvent("compositionend", { data: "" }));
+    await new Promise((r) => setTimeout(r, 20));
+    await settle(net);
+    expect(bind.shadow).toBeNull();
+    expect(doc(a)).toBe(server.text);
+    expect(a.text).toBe(server.text);
+    expect(doc(b)).toBe(server.text);
+  });
+
   it("holds remote changes during an IME composition: nothing lost or doubled, and all converge", async () => {
     const { net, server, eds, logs } = setup("alpha beta\n", 2);
     await settle(net);
@@ -1043,19 +1062,19 @@ describe("mountLiveEditor", () => {
   });
 });
 
-// Single-hunk Re-apply puts the typed text back at the region's start: the server's place for it
-// only for a pure insertion, placed by the server's changes, with nothing inserted at that point
-// since. Each guard below refuses one case where M1 put the wrong text in, and each has a
-// planted fault (that guard out) showing the old result.
-describe("Re-apply's guards (single hunk)", () => {
-  const withoutGuard = withoutReapplyGuard;
+// Re-apply by the server's rule (M2): a rejected change goes back where the server would put it
+// had it been sent at its base and applied now, or is refused. Each case below is one where
+// v0.9.8.2's guards refused (and M1 put the wrong text in): now the rule's result. The planted
+// fault (`withRegionPlacement`: M1's placement, all the typed text at the region's start) must
+// bring the old wrong result back.
+describe("Re-apply by the server's rule", () => {
   const note = (h: LiveEditorHandle) => (h.view.dom.closest(".mpc-editor")!.querySelector(".mpc-note") as HTMLElement).textContent;
 
-  /** A change lost with its socket (`MPC-E000`, found absent): `change` on "abc\n". */
-  async function lost(change: { from: number; to?: number; insert?: string }, n = 1) {
-    const s = setup("abc\n", n);
+  /** A change lost with its socket (`MPC-E000`, found absent): `change` on `text`. */
+  async function lost(change: ChangeSpec, n = 1, text = "abc\n") {
+    const s = setup(text, n);
     await settle(s.net);
-    s.eds[0].view.dispatch({ changes: change, userEvent: change.insert ? "input.type" : "delete" });
+    s.eds[0].view.dispatch({ changes: change, userEvent: "input.type" });
     s.ts[0].drop(false);
     await settle(s.net);
     const rej = s.logs[0].rejected.at(-1)!;
@@ -1064,7 +1083,7 @@ describe("Re-apply's guards (single hunk)", () => {
     return { ...s, rej };
   }
 
-  it("a pure insertion still applies, once", async () => {
+  it("a pure insertion applies, once", async () => {
     const { net, server, eds, rej } = await lost({ from: 1, insert: "Q" });
     expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
     await settle(net);
@@ -1073,33 +1092,32 @@ describe("Re-apply's guards (single hunk)", () => {
     expect(eds[0].rejected).toEqual([]);
   });
 
-  it("a deletion: refused (M1 said applied and changed nothing)", async () => {
+  it("a deletion is deleted again (M1 said applied and changed nothing)", async () => {
     const { net, server, eds, rej } = await lost({ from: 1, to: 2 });
-    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "not-insertion" });
-    expect(note(eds[0])).toBe(DEFAULT_STRINGS.notInsertion);
-    expect(eds[0].rejected.map((r) => r.id)).toEqual([rej.id]); // kept
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
     await settle(net);
-    expect(server.text).toBe("abc\n");
+    expect(server.text).toBe("ac\n");
+    expect(doc(eds[0])).toBe(server.text);
   });
 
-  it("planted fault (not-insertion out): a deletion says applied and changes nothing", async () => {
-    await withoutGuard("not-insertion", async () => {
+  it("planted fault (region placement): a deletion changes nothing", async () => {
+    await withRegionPlacement(async () => {
       const { net, server, eds, rej } = await lost({ from: 1, to: 2 });
-      expect(eds[0].reapply(rej.id), "the fault went unnoticed").toEqual({ status: "applied" });
+      eds[0].reapply(rej.id);
       await settle(net);
-      expect(server.text, "the fault went unnoticed").toBe("abc\n"); // "b" never deleted again
+      expect(server.text, "the fault went unnoticed").toBe("abc\n");
     });
   });
 
-  it("a replacement: refused (M1 put the new text beside the old)", async () => {
+  it("a replacement replaces (M1 put the new text beside the old)", async () => {
     const { net, server, eds, rej } = await lost({ from: 1, to: 2, insert: "B" });
-    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "not-insertion" });
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
     await settle(net);
-    expect(server.text).toBe("abc\n");
+    expect(server.text).toBe("aBc\n");
   });
 
-  it("planted fault (not-insertion out): a replacement's text goes in beside the old", async () => {
-    await withoutGuard("not-insertion", async () => {
+  it("planted fault (region placement): a replacement's text goes in beside the old", async () => {
+    await withRegionPlacement(async () => {
       const { net, server, eds, rej } = await lost({ from: 1, to: 2, insert: "B" });
       expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
       await settle(net);
@@ -1116,60 +1134,49 @@ describe("Re-apply's guards (single hunk)", () => {
     return s;
   }
 
-  it("a tie (something inserted at its place since): refused (M1 put it before; the server would put it after)", async () => {
+  it("a tie: after the insertion made at its place since, as the server puts it (M1 put it before)", async () => {
     const { net, server, eds, rej } = await tie();
-    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "tie" });
-    expect(note(eds[0])).toBe(DEFAULT_STRINGS.tie);
-    expect(eds[0].rejected.map((r) => r.id)).toEqual([rej.id]);
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
     await settle(net);
-    expect(server.text).toBe("abcY\n");
+    expect(server.text).toBe("abcYX\n");
+    for (const h of eds) expect(doc(h)).toBe(server.text);
   });
 
-  it("text around its place deleted since: refused (M1 put it at the deletion's start)", async () => {
-    const { net, server, eds, rej } = await deletedAround();
-    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "deleted-around" });
-    expect(note(eds[0])).toBe(DEFAULT_STRINGS.deletedAround);
-    await settle(net);
-    expect(server.text).toBe("ad\n");
-  });
-
-  it("planted fault (deleted-around out): the text goes in where the deletion began", async () => {
-    await withoutGuard("deleted-around", async () => {
-      const { net, server, eds, rej } = await deletedAround();
-      expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
-      await settle(net);
-      // the server's rule refuses it: an insertion strictly inside a range deleted since
-      expect("conflict" in rebaseOurs([{ start: 2, end: 2, insert: "X" }], [[{ start: 1, end: 3, insert: "" }]])).toBe(true);
-      expect(server.text, "the fault went unnoticed").toBe("aXd\n");
-    });
-  });
-
-  it("planted fault (tie out): the text goes in before the other insertion", async () => {
-    await withoutGuard("tie", async () => {
+  it("planted fault (region placement): at a tie the text goes in before the other insertion", async () => {
+    await withRegionPlacement(async () => {
       const { net, server, eds, rej } = await tie();
       expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
       await settle(net);
-      // the server's rule puts the earlier change after the one inserted at its place since
-      const sent = rebaseOurs([{ start: 3, end: 3, insert: "X" }], [[{ start: 3, end: 3, insert: "Y" }]]);
-      expect(sent).toEqual({ ok: [{ start: 4, end: 4, insert: "X" }] });
       expect(server.text, "the fault went unnoticed").toBe("abcXY\n");
     });
   });
 
   /** A lost "X" at 2 in "abcd\n", then p2 deletes "bc" around it. */
   async function deletedAround() {
-    const s = setup("abcd\n", 2);
-    await settle(s.net);
-    type(s.eds[0], 2, "X");
-    s.ts[0].drop(false);
-    await settle(s.net);
-    const rej = s.logs[0].rejected.at(-1)!;
-    expect(rej.error?.id).toBe("MPC-E000");
+    const s = await lost({ from: 2, insert: "X" }, 2, "abcd\n");
     s.eds[1].view.dispatch({ changes: { from: 1, to: 3 }, userEvent: "delete" });
     await settle(s.net);
     expect(s.server.text).toBe("ad\n");
-    return { ...s, rej };
+    return s;
   }
+
+  it("text around its place deleted since: refused, a conflict (M1 put it at the deletion's start)", async () => {
+    const { net, server, eds, rej } = await deletedAround();
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "conflict" });
+    expect(note(eds[0])).toBe(DEFAULT_STRINGS.conflictReapply);
+    expect(eds[0].rejected.map((r) => r.id)).toEqual([rej.id]); // kept
+    await settle(net);
+    expect(server.text).toBe("ad\n");
+  });
+
+  it("planted fault (region placement): the text goes in where the deletion began", async () => {
+    await withRegionPlacement(async () => {
+      const { net, server, eds, rej } = await deletedAround();
+      expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
+      await settle(net);
+      expect(server.text, "the fault went unnoticed").toBe("aXd\n");
+    });
+  });
 
   /** A pending "Y" at 3 refused by an MPC-E112 (its base left the window): the editor reloads. */
   async function reloaded() {
@@ -1187,16 +1194,16 @@ describe("Re-apply's guards (single hunk)", () => {
     return { ...s, rej };
   }
 
-  it("a reload since: refused (M1 put the text at the start of the document)", async () => {
+  it("a reload since: refused, cant-place (M1 put the text at the start of the document)", async () => {
     const { net, server, eds, rej } = await reloaded();
-    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "reloaded" });
-    expect(note(eds[0])).toBe(DEFAULT_STRINGS.reloaded);
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "cant-place" });
+    expect(note(eds[0])).toBe(DEFAULT_STRINGS.cantPlace);
     await settle(net);
     expect(server.text).toBe("0abc\n");
   });
 
-  it("planted fault (reloaded out): the text goes in at the start of the document", async () => {
-    await withoutGuard("reloaded", async () => {
+  it("planted fault (region placement): after a reload the text goes in at the start", async () => {
+    await withRegionPlacement(async () => {
       const { net, server, eds, rej } = await reloaded();
       expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
       await settle(net);
@@ -1204,7 +1211,54 @@ describe("Re-apply's guards (single hunk)", () => {
     });
   });
 
-  it("a deletion someone already made: still already-present, by presence", async () => {
+  it("more than one hunk, CJK and emoji: each hunk in its place; the binding sends exactly the placed hunks", async () => {
+    const { net, server, eds, ts, rej } = await lost([{ from: 2, insert: "語" }, { from: 4, insert: "😀" }], 1, "日本🎉abc\n");
+    expect(rej.hunks.length).toBe(2);
+    const live = (eds[0] as unknown as { live: LiveText }).live;
+    const placed = live.placeRejection(rej.id);
+    expect(placed).toEqual({ hunks: [{ start: 6, end: 6, insert: "語" }, { start: 10, end: 10, insert: "😀" }] });
+    const before = edits(ts[0]).length;
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
+    const sent = edits(ts[0]).slice(before);
+    expect(sent.map((f) => f.type === "edit" && f.hunks)).toEqual([(placed as { hunks: unknown }).hunks]);
+    await settle(net);
+    expect(server.text).toBe("日本語🎉😀abc\n");
+    expect(doc(eds[0])).toBe(server.text);
+  });
+
+  it("nothing left to apply (its deletion made by someone else since): already-present, dismissed", async () => {
+    const { net, server, eds, rej } = await lost({ from: 1, to: 2 }, 2);
+    eds[1].view.dispatch({ changes: { from: 1, to: 2 }, userEvent: "delete" });
+    await settle(net);
+    expect(server.text).toBe("ac\n");
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "already-present" });
+    expect(note(eds[0])).toBe(DEFAULT_STRINGS.alreadyPresent);
+    expect(eds[0].rejected).toEqual([]);
+    await settle(net);
+    expect(server.text).toBe("ac\n");
+  });
+
+  it("a Re-apply is its own undo step: one undo takes back exactly the re-applied text", async () => {
+    const { net, server, eds, ts, rej } = await lost({ from: 3, insert: "X" });
+    type(eds[0], 0, "a");
+    type(eds[0], 1, "b"); // typing right before (one undo group, still pending)
+    expect(eds[0].reapply(rej.id)).toEqual({ status: "applied" });
+    await settle(net);
+    expect(server.text).toBe("ababcX\n");
+    // its own group token: never composed with the typing (the server's undo groups by token)
+    const groups = edits(ts[0]).map((f) => (f.type === "edit" ? f.group : undefined));
+    const reapplyGroup = groups.find((g) => g?.startsWith("reapply-"));
+    expect(reapplyGroup, "the Re-apply's own group").toBeDefined();
+    expect(groups.filter((g) => g === reapplyGroup).length).toBe(1);
+    expect(groups.filter((g) => g !== reapplyGroup).every((g) => !g?.startsWith("reapply-"))).toBe(true);
+    // one undo takes back exactly "X"
+    eds[0].undo();
+    await settle(net);
+    expect(server.text).toBe("ababc\n");
+    expect(doc(eds[0])).toBe(server.text);
+  });
+
+  it("a lost change that landed (presence) is still already-present", async () => {
     const { net, server, eds, ts, logs } = setup("abc\n", 1);
     server.leaveOldOnReconnect = false;
     server.noRuleLeave = "keepalive";
@@ -1215,5 +1269,111 @@ describe("Re-apply's guards (single hunk)", () => {
     const rej = logs[0].rejected.find((r) => r.error?.id === "MPC-E000")!;
     expect(server.text).toBe("ac\n");
     expect(eds[0].reapply(rej.id)).toEqual({ status: "already-present" });
+  });
+});
+
+// "Insert my text here": the person's own choice for a single-hunk rejection the rule refuses.
+// It shows the typed text where it would go before inserting it; nothing changes until confirmed.
+describe("Insert my text here", () => {
+  const note = (h: LiveEditorHandle) => (h.view.dom.closest(".mpc-editor")!.querySelector(".mpc-note") as HTMLElement).textContent;
+  const preview = (h: LiveEditorHandle) => h.view.dom.querySelector(".cm-mpc-insert-preview")?.textContent ?? null;
+  const row = (h: LiveEditorHandle) => h.view.dom.closest(".mpc-editor")!.querySelector(".mpc-rejections li") as HTMLElement;
+
+  /** "world" replaced by "WORLD" while someone replaced it with "earth" first: a conflict. */
+  async function conflict() {
+    const s = setup("hello world\n", 1);
+    await settle(s.net);
+    s.eds[0].view.dispatch({ changes: { from: 6, to: 11, insert: "WORLD" }, userEvent: "input.type" });
+    s.server.serverEdit([{ start: 6, end: 11, insert: "earth" }]);
+    await settle(s.net);
+    const rej = s.logs[0].rejected[0];
+    expect(s.eds[0].reapply(rej.id)).toEqual({ status: "unknown", reason: "conflict" });
+    return { ...s, rej };
+  }
+
+  it("previews where the text goes, inserts only when confirmed, as its own undo step", async () => {
+    const { net, server, eds, ts, rej } = await conflict();
+    expect(row(eds[0]).querySelector(".mpc-insert-here")?.textContent).toBe(DEFAULT_STRINGS.insertHere);
+    expect(eds[0].insertHere(rej.id)).toEqual({ status: "previewing", line: 1 });
+    // a replacement: the note says its removal isn't redone
+    expect(note(eds[0])).toBe("Your text will go in at line 1, shown in the editor. Insert it, or Cancel. Your edit also removed text; that part isn't redone here.");
+    expect(preview(eds[0])).toBe("WORLD");
+    expect(doc(eds[0])).toBe("hello earth\n"); // nothing inserted yet
+    expect(document.activeElement?.classList.contains("mpc-insert-confirm")).toBe(true);
+    expect(eds[0].confirmInsert()).toEqual({ status: "applied" });
+    await settle(net);
+    expect(server.text).toBe("hello WORLDearth\n");
+    expect(doc(eds[0])).toBe(server.text);
+    expect(eds[0].rejected).toEqual([]);
+    expect(preview(eds[0])).toBeNull();
+    const last = edits(ts[0]).at(-1);
+    expect(last?.type === "edit" && last.group?.startsWith("reapply-")).toBe(true);
+  });
+
+  it("Cancel (or Escape) inserts nothing and keeps the rejection", async () => {
+    const { net, server, eds, rej } = await conflict();
+    eds[0].insertHere(rej.id);
+    eds[0].cancelInsert();
+    expect(preview(eds[0])).toBeNull();
+    expect(note(eds[0])).toBe("");
+    expect(eds[0].confirmInsert()).toEqual({ status: "unavailable" });
+    eds[0].insertHere(rej.id);
+    row(eds[0]).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(preview(eds[0])).toBeNull();
+    await settle(net);
+    expect(server.text).toBe("hello earth\n");
+    expect(eds[0].rejected.map((r) => r.id)).toEqual([rej.id]);
+  });
+
+  it("the preview moves with changes made while it shows, and the text goes where it shows", async () => {
+    const { net, server, eds, rej } = await conflict();
+    eds[0].insertHere(rej.id);
+    server.serverEdit([{ start: 0, end: 0, insert: "XX\n" }]);
+    await settle(net);
+    expect(preview(eds[0])).toBe("WORLD");
+    const at = eds[0].view.state.doc.toString().indexOf("earth");
+    const widget = eds[0].view.dom.querySelector(".cm-mpc-insert-preview")!;
+    expect(eds[0].view.posAtDOM(widget)).toBe(at);
+    expect(eds[0].confirmInsert()).toEqual({ status: "applied" });
+    await settle(net);
+    expect(server.text).toBe("XX\nhello WORLDearth\n");
+  });
+
+  it("a pure insertion's preview note doesn't mention removed text", async () => {
+    const s = setup("hello world\n", 1);
+    await settle(s.net);
+    s.eds[0].view.dispatch({ changes: { from: 8, insert: "XY" }, userEvent: "input.type" }); // inside "world"...
+    s.server.serverEdit([{ start: 6, end: 11, insert: "" }]); // ...deleted first: a conflict
+    await settle(s.net);
+    const rej = s.logs[0].rejected[0];
+    expect(rej.hunks[0].start).toBe(rej.hunks[0].end);
+    expect(s.eds[0].insertHere(rej.id)).toEqual({ status: "previewing", line: 1 });
+    expect(note(s.eds[0])).toBe("Your text will go in at line 1, shown in the editor. Insert it, or Cancel.");
+    expect(note(s.eds[0])).not.toContain(DEFAULT_STRINGS.insertRemovedText);
+  });
+
+  it("single-hunk only: a change with two hunks has no Insert action (copy it instead)", async () => {
+    const s = setup("abcdef\n", 1);
+    await settle(s.net);
+    s.eds[0].view.dispatch({ changes: [{ from: 1, to: 2, insert: "B" }, { from: 4, to: 5, insert: "E" }], userEvent: "input.type" });
+    s.server.serverEdit([{ start: 1, end: 2, insert: "b2" }]);
+    await settle(s.net);
+    const rej = s.logs[0].rejected[0];
+    expect(rej.hunks.length).toBe(2);
+    expect(row(s.eds[0]).querySelector(".mpc-insert-here")).toBeNull();
+    expect(row(s.eds[0]).querySelector(".mpc-copy")).not.toBeNull();
+    expect(s.eds[0].insertHere(rej.id)).toEqual({ status: "unknown", reason: "multi-hunk" });
+    expect(note(s.eds[0])).toBe(DEFAULT_STRINGS.insertMultiHunk);
+  });
+
+  it("the text is always copyable: without a clipboard it is selected for the person", async () => {
+    const { eds, rej } = await conflict();
+    expect(row(eds[0]).querySelector(".mpc-rejected-snippet")?.textContent).toBe("WORLD");
+    const ok = await eds[0].copyRejected(rej.id);
+    if (ok) expect(note(eds[0])).toBe(DEFAULT_STRINGS.copied);
+    else {
+      expect(note(eds[0])).toBe(DEFAULT_STRINGS.copyFailed);
+      expect(document.getSelection()?.toString()).toBe("WORLD");
+    }
   });
 });

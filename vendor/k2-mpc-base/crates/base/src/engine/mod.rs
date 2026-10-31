@@ -4,11 +4,18 @@
 //! Packs, sessions and stored formats above this line don't change (stored state carries
 //! an engine/format stamp so it can be re-encoded on upgrade).
 
+mod structured;
+#[cfg(test)]
+mod structured_tests;
 mod yrs;
 
 #[cfg(any(test, feature = "differential"))]
 pub(crate) use self::yrs::TextPlan;
 pub(crate) use self::yrs::{insert_clocks, YrsDoc};
+
+use std::collections::BTreeMap;
+
+use crate::elem::{Edited, ElemState, Facet, Key, Value, WriteId};
 
 /// A relative position in a text root (the conformance suite's anchors only).
 #[cfg(feature = "conformance")]
@@ -72,10 +79,26 @@ pub(crate) trait EngineDoc: Sized + Send {
     fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError>;
     fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError>;
     fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError>;
-    /// Apply already-validated edits as `client`, as one change on this doc (v0.9.3: on the doc
-    /// itself, as the client, with a sampled check against a throwaway replica); return the
-    /// update.
-    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError>;
+    /// Apply edits (roots, kinds and text hunks already checked) as `client`, as one change on
+    /// this doc (v0.9.3: on the doc itself, as the client, with a sampled check against a
+    /// throwaway replica). Structured ops are checked here, in order; a refused op
+    /// refuses the change and nothing is applied. Returns the update (`None` when nothing is
+    /// written: no text hunks, and every structured op a no-op) and the applied stream, in
+    /// apply order, at element identity.
+    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError>;
+    /// A MovableList root's live elements, in order.
+    fn list(&self, root: &str) -> Result<Vec<(Key, Value)>, DocError>;
+    fn elem(&self, root: &str, key: &str) -> Result<ElemState, DocError>;
+    /// A known element's value, live or deleted.
+    fn elem_value(&self, root: &str, key: &str) -> Result<Option<Value>, DocError>;
+    /// A list root's deleted elements and their values (for the keyed diff).
+    fn hidden(&self, root: &str) -> Result<BTreeMap<Key, Value>, DocError>;
+    /// Every element of a list root, live and deleted, in place order.
+    fn places(&self, root: &str) -> Result<Vec<Key>, DocError>;
+    fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError>;
+    fn map_get(&self, root: &str, key: &str) -> Result<Option<Value>, DocError>;
+    /// The write that holds a register now (E4's `winner`), from the state alone: O(1).
+    fn winner(&self, root: &str, key: &str, facet: Facet) -> Result<Option<WriteId>, DocError>;
     /// How many clock units `client` has inserted into this doc (0 if none): a change by
     /// `client` occupies the clocks between this before it and this after it.
     fn clock_of(&self, client: ClientId) -> u32;

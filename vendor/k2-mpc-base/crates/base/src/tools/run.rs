@@ -1,8 +1,8 @@
 //! [`Session::run_tool`]: a verb on a live doc, as one call.
 
-use super::error::{exit, ToolRunError};
+use super::error::ToolRunError;
 use super::fence::Fence;
-use super::{EditOutput, Kind, Tool, ToolDoc, ToolError};
+use super::{exit, EditOutput, Kind, Tool, ToolDoc, ToolError};
 use crate::errors::{ids, ErrorReport};
 use crate::session::Shown;
 use crate::session::{ClaimPolicy, ConnId, EditResult, EditWithError, ForEdit, Notes, Session};
@@ -112,8 +112,10 @@ impl Session {
     /// refused). Read verbs ignore the policy. `run_tool` is this with the defaults.
     ///
     /// An App viewer (K5) sees the others by handle in everything the output carries: the
-    /// fence's contributors, a `--for-edit` claim or conflict (or the refusal it carries), and
-    /// a refusal naming someone. Notes are lensed where they are made.
+    /// fence's contributors, a `--for-edit` claim or conflict (or the refusal it carries), the
+    /// hidden-cell writes' deleters, a refusal naming someone, and the attributions a grid verb
+    /// prints (`cell get --json`'s author, a deleted element's "by" line). Notes are lensed
+    /// where they are made.
     pub fn run_tool_with(
         &self,
         conn: ConnId,
@@ -135,6 +137,11 @@ impl Session {
         stdin: &[u8],
         opts: &ToolOptions,
     ) -> Result<ToolOutput, ToolRunError> {
+        if let Some(v) = self.pack_verb_for(argv) {
+            if v.is_structured() {
+                return self.run_structured(conn, v, &argv[v.words()..], stdin, opts);
+            }
+        }
         let verb = crate::parity::verb_form(argv);
         if let Some(v) = argv.first().and_then(|n| self.pack_verb(n)) {
             let (if_version, args) = super::args::take_if_version(&argv[1..])?;
@@ -162,16 +169,32 @@ impl Session {
         }
         let tool = Tool::parse(argv)?;
         let name = self.key()?.path;
+        if tool.kind() == Kind::Edit && self.is_table() {
+            return self.run_table_text_edit(conn, &tool, stdin, opts, &verb);
+        }
         match tool.kind() {
             Kind::Read => {
+                let ids = tool.ids();
+                if ids && !self.is_table() {
+                    return Err(ToolError::usage(format!(
+                        "--ids shows each line's row key; {name} has no rows"
+                    ))
+                    .into());
+                }
                 let (read, out, notes, for_edit) =
-                    self.read_with(conn, root, &verb, tool.for_edit(), |r, text| {
+                    self.read_with(conn, root, &verb, tool.for_edit(), ids, |r, text, map| {
                         let doc = ToolDoc {
                             name: &name,
                             text,
                             bytes: &r.bytes,
                         };
-                        let out = tool.read(&doc, stdin);
+                        let out = tool.read(&doc, stdin).and_then(|o| match map {
+                            Some(m) if ids => o.with_ids(m),
+                            _ if ids => Err(ToolError::usage(
+                                "--ids: the doc's format has no line map for its rows",
+                            )),
+                            _ => Ok(o),
+                        });
                         let shown = out.as_ref().map_or(Shown::default(), |o| Shown {
                             view: o.view,
                             touched: o.touched,
@@ -207,6 +230,210 @@ impl Session {
                 })
             }
         }
+    }
+
+    /// A pack's structured verb (A9): a read runs on a View of the live doc under the lock (a
+    /// read base is recorded, as for `cat`); an edit computes its ops on the View inside
+    /// [`Session::edit_ops_with`] and they apply as one change, by key, with `--if-version`,
+    /// `--base` and the claim policy. `args` are the arguments after the verb's words.
+    fn run_structured(
+        &self,
+        conn: ConnId,
+        v: super::PackVerb,
+        args: &[String],
+        stdin: &[u8],
+        opts: &ToolOptions,
+    ) -> Result<ToolOutput, ToolRunError> {
+        let name = self.key()?.path;
+        let verb = v.name();
+        if v.kind() == Kind::Read {
+            let (if_version, base, args) = super::args::take_guards(args)?;
+            if if_version.is_some() || base.is_some() {
+                return Err(super::if_version_on_read(verb).into());
+            }
+            let (for_edit, args) = super::take_for_edit(&args)?;
+            let f = v.parse_structured(&args)?;
+            let (pack, codec) = self.pack_and_codec()?;
+            let (read, out, notes, for_edit) =
+                self.read_view_with(conn, verb, for_edit, |view, hist| {
+                    let ctx =
+                        super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
+                    let out = f(&ctx);
+                    let shown = out.as_ref().ok().and_then(|o| o.shown.clone());
+                    (out, shown)
+                })?;
+            let out = out?;
+            if !out.edits.is_empty() {
+                return Err(ToolError::usage(format!(
+                    "{verb} is a read verb: it may not edit (a pack bug)"
+                ))
+                .into());
+            }
+            let fence = Fence::new(
+                &name,
+                read.version,
+                read.contributors_since_last_read,
+                &out.stdout,
+            );
+            let refusal = structured_refusal(verb, out.exit, &out.stdout);
+            let mut summary = format!("{name} v{}", read.version);
+            if let Some(r) = &refusal {
+                summary = format!("{summary} ({})", r.id());
+            }
+            return Ok(ToolOutput {
+                stdout: out.stdout,
+                stderr_summary: summary,
+                exit: out.exit,
+                version: read.version,
+                changed: None,
+                fence: Some(fence),
+                notes,
+                for_edit: for_edit.map(Box::new),
+                refusal,
+            });
+        }
+        let (if_version, base, args) = super::args::take_guards(args)?;
+        let f = v.parse_structured(&args)?;
+        let (pack, codec) = self.pack_and_codec()?;
+        let mut eo = crate::session::EditOptions::new().policy(opts.policy);
+        eo.if_version = if_version;
+        eo.base = base;
+        let mut report: Option<(Vec<u8>, u8)> = None;
+        let mut own: Option<&'static crate::errors::ErrorEntry> = None;
+        let res = self.edit_ops_verb(conn, &eo, verb, |view, hist| {
+            let ctx = super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
+            let o = f(&ctx)?;
+            report = Some((o.stdout, o.exit));
+            own = o.refusal;
+            Ok::<_, ToolError>(o.edits)
+        });
+        let (changed, notes) = match res {
+            Ok(r) => r,
+            Err(EditWithError::Compute(e)) => return Err(e.into()),
+            Err(EditWithError::Session(e)) => return Err(e.into()),
+        };
+        let (stdout, exit) = report.unwrap_or((Vec::new(), exit::OK));
+        let (version, mut summary) = match &changed {
+            Some(c) => (
+                c.version,
+                format!("edited {name} ({}) · v{}", elems_text(&c.elems), c.version),
+            ),
+            None => {
+                let v = self.status()?.version;
+                (v, format!("no change to {name} · v{v}"))
+            }
+        };
+        let refusal = match (&changed, own) {
+            (Some(_), _) => None,
+            // a refusal with its own id (MPC-E806, MPC-E807): its exit is the entry's
+            (None, Some(entry)) => {
+                let line = String::from_utf8_lossy(&stdout).trim_end().to_owned();
+                Some(ErrorReport::new(entry, line).with("verb", verb))
+            }
+            (None, None) => structured_refusal(verb, exit, &stdout),
+        };
+        if let Some(r) = &refusal {
+            summary = format!("{summary} ({})", r.id());
+        }
+        Ok(ToolOutput {
+            stdout,
+            stderr_summary: summary,
+            exit,
+            version,
+            changed,
+            fence: None,
+            notes,
+            for_edit: None,
+            refusal,
+        })
+    }
+
+    /// A text edit verb on a table (contract §3.2, §2.9): it runs on the doc's rendering
+    /// (the pack's encoding of the live view) under the session lock; its result is
+    /// reconciled into grid ops by key against that view ([`crate::session::Pack::reconcile`])
+    /// and they apply as one change through [`Session::edit_ops_with`] (`--if-version`, the
+    /// claim policy, notes). A result that isn't valid in the doc's format is exit 2 with the
+    /// pack's reason, and nothing applies.
+    fn run_table_text_edit(
+        &self,
+        conn: ConnId,
+        tool: &Tool,
+        stdin: &[u8],
+        opts: &ToolOptions,
+        verb: &str,
+    ) -> Result<ToolOutput, ToolRunError> {
+        let name = self.key()?.path;
+        let (pack, codec) = self.pack_and_codec()?;
+        let mut eo = crate::session::EditOptions::new().policy(opts.policy);
+        eo.if_version = tool.if_version();
+        let mut report: Option<EditOutput> = None;
+        let mut applied = true;
+        let res = self.edit_ops_verb(conn, &eo, verb, |view, _| {
+            let bytes = pack
+                .encode(&view.content(), &codec)
+                .map_err(|e| ToolError::usage(format!("the doc can't be rendered: {}", e.0)))?;
+            let text = String::from_utf8(bytes)
+                .map_err(|_| ToolError::usage("the doc's rendering is not UTF-8"))?;
+            let mut o = tool.edit(&name, &text, stdin)?;
+            let new = o.text.take();
+            report = Some(o);
+            let Some(new) = new else {
+                applied = false;
+                return Ok(Vec::new());
+            };
+            if new == text {
+                return Ok(Vec::new());
+            }
+            let rec = pack.reconcile(view, new.as_bytes(), &codec).map_err(|d| {
+                ToolError::usage(format!(
+                    "the result is not a valid table in the doc's format: {} ({}); nothing applied",
+                    d.message, d.code
+                ))
+            })?;
+            Ok::<_, ToolError>(rec.edits)
+        });
+        let (changed, notes) = match res {
+            Ok(r) => r,
+            Err(EditWithError::Compute(e)) => return Err(e.into()),
+            Err(EditWithError::Session(e)) => return Err(e.into()),
+        };
+        let mut report = report.unwrap_or(EditOutput {
+            text: None,
+            stdout: Vec::new(),
+            exit: exit::OK,
+            refusal: None,
+        });
+        let refusal = report.refusal.take().filter(|_| report.exit != exit::OK);
+        let (version, summary) = match &changed {
+            Some(c) => (
+                c.version,
+                format!("edited {name} ({}) · v{}", elems_text(&c.elems), c.version),
+            ),
+            None => {
+                let v = self.status()?.version;
+                let what = if applied {
+                    "no change to"
+                } else {
+                    "nothing applied to"
+                };
+                (v, format!("{what} {name} · v{v}"))
+            }
+        };
+        let summary = match &refusal {
+            Some(r) => format!("{summary} ({})", r.id()),
+            None => summary,
+        };
+        Ok(ToolOutput {
+            stdout: report.stdout,
+            stderr_summary: summary,
+            exit: report.exit,
+            version,
+            changed,
+            fence: None,
+            notes,
+            for_edit: None,
+            refusal,
+        })
     }
 
     /// An edit verb (the kit's or a pack's): `f` computes on the live text inside
@@ -274,6 +501,60 @@ impl Session {
             for_edit: None,
             refusal,
         })
+    }
+}
+
+/// The refusal a structured verb's "no" is (C1, the grid verbs' exits, CSV contract §3.3):
+/// exit 4 (an unknown or deleted row, column or cell) is `MPC-E805 no_element`, exit 1 the
+/// pack verb's "no" (`MPC-E127`); its first stdout line is the message. Exit 0 and 2 (a
+/// usage error, already a [`ToolError`]) are none.
+fn structured_refusal(verb: &str, code: u8, stdout: &[u8]) -> Option<ErrorReport> {
+    let entry = match code {
+        exit::NOT_FOUND => &ids::NO_ELEMENT,
+        exit::NO => &ids::PACK_VERB_NO,
+        _ => return None,
+    };
+    let first = String::from_utf8_lossy(stdout)
+        .lines()
+        .next()
+        .filter(|l| !l.trim().is_empty())
+        .map_or_else(|| format!("{verb}: nothing applied"), str::to_owned);
+    Some(
+        ErrorReport::new(entry, first.clone())
+            .with("verb", verb)
+            .with("line", first),
+    )
+}
+
+/// A structured change's counts, one clause per root: `rows +1 −0 ~2, cells set 3`.
+pub(crate) fn elems_text(elems: &[crate::store::ElemCounts]) -> String {
+    let mut parts = Vec::new();
+    for e in elems.iter().filter(|e| !e.is_empty()) {
+        let mut p = Vec::new();
+        if e.inserted > 0 {
+            p.push(format!("+{}", e.inserted));
+        }
+        if e.deleted > 0 {
+            p.push(format!("−{}", e.deleted));
+        }
+        if e.moved > 0 {
+            p.push(format!("moved {}", e.moved));
+        }
+        if e.restored > 0 {
+            p.push(format!("restored {}", e.restored));
+        }
+        if e.set > 0 {
+            p.push(format!("set {}", e.set));
+        }
+        if e.dropped > 0 {
+            p.push(format!("dropped {}", e.dropped));
+        }
+        parts.push(format!("{} {}", e.root, p.join(" ")));
+    }
+    if parts.is_empty() {
+        "no element changed".to_owned()
+    } else {
+        parts.join(", ")
     }
 }
 

@@ -83,14 +83,23 @@ pub enum LogItem {
         approval: Option<ApprovalState>,
     },
     Version(VersionInfo),
+    /// An outside save that changed only the file's codec settings (C1k): the version that
+    /// holds them (reason `External`, by [`EXTERNAL_PID`]), and how they changed from the
+    /// version before it ([`super::super::Pack::describe_codec_change`], computed here).
+    Settings {
+        version: VersionInfo,
+        description: String,
+    },
 }
 
 impl LogItem {
-    fn key(&self) -> (Seq, u8) {
+    fn key(&self) -> (Seq, u8, VersionId) {
         match self {
-            // a version at position S reflects the doc after change S: list it first
-            LogItem::Change { info, .. } => (info.seq, 0),
-            LogItem::Version(v) => (v.seq, 1),
+            // a version at position S reflects the doc after change S: list it first; of
+            // several versions at one position (an outside settings change after another),
+            // the newest first
+            LogItem::Change { info, .. } => (info.seq, 0, 0),
+            LogItem::Version(v) | LogItem::Settings { version: v, .. } => (v.seq, 1, v.id),
         }
     }
 }
@@ -155,9 +164,7 @@ impl Session {
             .map_err(no_version(vid))?;
         Ok(v.content
             .into_iter()
-            .map(|(r, n)| match n {
-                Neutral::Text(t) => (r, t),
-            })
+            .filter_map(|(r, n)| Some((r, n.into_text()?)))
             .collect())
     }
 
@@ -175,21 +182,30 @@ impl Session {
             .store(&st)?
             .version(self.doc_id, vid)
             .map_err(no_version(vid))?;
-        let bytes = self.pack.encode(&v.content, &st.codec)?;
-        let current = v.seq == st.version
-            && v.content
-                .iter()
-                .zip(st.texts.iter())
-                .all(|((r, Neutral::Text(t)), (lr, lt))| r == lr && t == lt)
-            && v.content.len() == st.texts.len();
+        let (bytes, codec) = match &v.codec {
+            // a structured doc's version holds the codec settings it was cut with (format 6,
+            // C1): the file then, exactly
+            Some(c) => (self.pack.encode(&v.content, c)?, FileCodec::Exact),
+            None => {
+                let bytes = self.pack.encode(&v.content, &st.codec)?;
+                let current = v.seq == st.version
+                    && v.content
+                        .iter()
+                        .zip(st.texts.iter())
+                        .all(|((r, n), (lr, lt))| r == lr && n.as_text() == Some(lt.as_str()))
+                    && v.content.len() == st.texts.len();
+                let codec = if current {
+                    FileCodec::Exact
+                } else {
+                    FileCodec::Current
+                };
+                (bytes, codec)
+            }
+        };
         Ok(FileBytes {
             bytes,
             version: v.seq,
-            codec: if current {
-                FileCodec::Exact
-            } else {
-                FileCodec::Current
-            },
+            codec,
         })
     }
 
@@ -239,12 +255,43 @@ impl Session {
         self.admit_history(&mut st, conn, now)?;
         let name = st.key.path.clone();
         let store = self.store(&st)?.clone();
+        if self.is_grid() {
+            // a grid: the unified diff of the rendered file (CSV contract §5.2)
+            let render = |content: &[(String, Neutral)], codec: &[u8]| -> Result<String> {
+                Ok(String::from_utf8_lossy(&self.pack.encode(content, codec)?).into_owned())
+            };
+            let at = |vid: VersionId| -> Result<String> {
+                let v = store.version(self.doc_id, vid).map_err(no_version(vid))?;
+                render(&v.content, v.codec.as_deref().unwrap_or(&st.codec))
+            };
+            let old = at(from)?;
+            let (new, to_label) = match to {
+                Some(v) => (at(v)?, format!("{name} (version {v})")),
+                None => (
+                    render(&self.content(&st)?, &st.codec)?,
+                    format!("{name} (live)"),
+                ),
+            };
+            let differs = old != new;
+            let text = if differs {
+                crate::tools::unified(
+                    &old,
+                    &new,
+                    context,
+                    &format!("{name} (version {from})"),
+                    &to_label,
+                )
+            } else {
+                String::new()
+            };
+            return Ok(DiffOutput { text, differs });
+        }
         let text_at = |vid: VersionId| -> Result<String> {
             let v = store.version(self.doc_id, vid).map_err(no_version(vid))?;
             Ok(v.content
                 .into_iter()
                 .find(|(r, _)| r == root)
-                .map(|(_, Neutral::Text(t))| t)
+                .and_then(|(_, n)| n.into_text())
                 .unwrap_or_default())
         };
         let old = text_at(from)?;
@@ -309,17 +356,92 @@ impl Session {
             items.len() < limit
         })?;
         if q.on_behalf_of.is_none() && !q.pending {
-            for v in store.version_infos(self.doc_id)? {
+            let infos = store.version_infos(self.doc_id)?;
+            let mut settings = self.settings_changes(&store, &infos)?;
+            for v in infos {
                 if q.by.as_ref().map_or(true, |b| v.authors.contains(b))
                     && q.since_ms.map_or(true, |t| v.at_ms >= t)
                 {
-                    items.push(LogItem::Version(v));
+                    items.push(match settings.remove(&v.id) {
+                        Some(description) => LogItem::Settings {
+                            version: v,
+                            description,
+                        },
+                        None => LogItem::Version(v),
+                    });
                 }
             }
         }
         items.sort_by_key(|x| std::cmp::Reverse(x.key()));
         items.truncate(limit);
         Ok(items)
+    }
+
+    /// `show --version V`'s note: when version `vid` is an outside save that changed only the
+    /// file's codec settings (C1k), how they changed ([`LogItem::Settings`]); `None` for any
+    /// other version. Needs history.
+    pub fn settings_change(&self, conn: ConnId, vid: VersionId) -> Result<Option<String>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit_history(&mut st, conn, now)?;
+        let store = self.store(&st)?.clone();
+        let infos = store.version_infos(self.doc_id)?;
+        if !infos.iter().any(|v| v.id == vid) {
+            return Err(SessionError::NoSuchChange(vid));
+        }
+        Ok(self.settings_changes(&store, &infos)?.remove(&vid))
+    }
+
+    /// The versions that are outside settings changes, with their descriptions: an
+    /// `External` version by [`EXTERNAL_PID`] with no outside change at its position (or a
+    /// later one at the position of another), whose codec settings differ from the version
+    /// before it. Reads only those candidates' versions (an outside save that changed the
+    /// content too is a change of its own, listed as such).
+    fn settings_changes(
+        &self,
+        store: &DocStore,
+        infos: &[VersionInfo],
+    ) -> Result<HashMap<VersionId, String>> {
+        let mut out = HashMap::new();
+        if !self.structured {
+            return Ok(out);
+        }
+        let external: Vec<&VersionInfo> = infos
+            .iter()
+            .filter(|v| {
+                v.reason == VersionReason::External && v.authors == [EXTERNAL_PID.to_owned()]
+            })
+            .collect();
+        if external.is_empty() {
+            return Ok(out);
+        }
+        let seqs: std::collections::BTreeSet<Seq> = external.iter().map(|v| v.seq).collect();
+        let changes = store.change_infos(self.doc_id, &seqs)?;
+        let mut seen_at: HashSet<Seq> = HashSet::new();
+        let mut by_id: Vec<&VersionInfo> = external.clone();
+        by_id.sort_by_key(|v| v.id);
+        for v in by_id {
+            let outside_change = changes
+                .get(&v.seq)
+                .is_some_and(|c| c.kind == ChangeKind::External);
+            let first_at = seen_at.insert(v.seq);
+            if outside_change && first_at {
+                continue;
+            }
+            let Some(prev) = infos.iter().filter(|w| w.id < v.id).map(|w| w.id).max() else {
+                continue;
+            };
+            let (new, old) = (
+                store.version(self.doc_id, v.id)?.codec,
+                store.version(self.doc_id, prev)?.codec,
+            );
+            if let (Some(new), Some(old)) = (new, old) {
+                if new != old {
+                    out.insert(v.id, self.pack.describe_codec_change(&old, &new));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `version --name N`: name version `vid`, or (`None`) cut a named version of the live
@@ -345,12 +467,13 @@ impl Session {
                 .map_err(no_version(v))?;
             return Ok(v);
         }
+        let snap = self.snapshot(&st)?;
         let v = Self::version_of(
             &st,
             st.version,
             VersionReason::Named,
             Some(name.to_owned()),
-            &st.texts,
+            snap,
             now,
         );
         let id = store.put_version(self.doc_id, &v)?;
@@ -372,9 +495,18 @@ impl Session {
             .store(&st)?
             .version(self.doc_id, vid)
             .map_err(no_version(vid))?;
+        if self.structured {
+            // by identity: revive, delete, move, set (C1c)
+            return self.restore_structured(&mut st, i, target, vid, now);
+        }
         let mut edits = Vec::new();
         for (root, live) in &st.texts {
-            let Some((_, Neutral::Text(t))) = target.content.iter().find(|(r, _)| r == root) else {
+            let Some(t) = target
+                .content
+                .iter()
+                .find(|(r, _)| r == root)
+                .and_then(|(_, n)| n.as_text())
+            else {
                 continue;
             };
             let t = self.pack.normalize_input(root, t);
@@ -388,12 +520,13 @@ impl Session {
         }
         let mut versions = Vec::new();
         if !edits.is_empty() && st.last_version_seq != st.version {
+            let snap = self.snapshot(&st)?;
             versions.push(Self::version_of(
                 &st,
                 st.version,
                 VersionReason::BeforeRestore,
                 None,
-                &st.texts,
+                snap,
                 now,
             ));
         }
@@ -449,6 +582,10 @@ impl Session {
             return Err(SessionError::Forbidden {
                 need: Need::AuthorOrOwner,
             });
+        }
+        if !rec.elems.is_empty() || self.structured {
+            // by key, from the record's ops (v3): no carrying (C1c)
+            return self.revert_structured(st, i, change, rec, partial, now);
         }
         let edges = self
             .revert_index(st)?
@@ -555,7 +692,8 @@ impl Session {
         if st.version != st.last_version_seq
             && now.saturating_sub(st.last_change_ms) >= c.idle_version_ms
         {
-            let v = Self::version_of(st, st.version, VersionReason::Idle, None, &st.texts, now);
+            let snap = self.snapshot(st)?;
+            let v = Self::version_of(st, st.version, VersionReason::Idle, None, snap, now);
             rep.cut = Some(store.put_version(self.doc_id, &v)?);
             st.last_version_seq = st.version;
         }

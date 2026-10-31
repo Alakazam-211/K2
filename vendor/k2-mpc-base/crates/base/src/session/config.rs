@@ -72,6 +72,9 @@ pub struct Config {
     pub agent_version_lines: usize,
     /// ...or more than this percent of the doc's lines. Default 10.
     pub agent_version_percent: usize,
+    /// For a structured doc: cut a version before an agent change touching more than this
+    /// many list elements (rows; a sort counts the rows it moved)... Default 20.
+    pub agent_version_elems: usize,
     /// Retention: keep every automatic version this long... Default 30 days.
     pub version_keep_all_ms: u64,
     /// ...then one per hour up to this age, then one per day. Default 90 days.
@@ -271,6 +274,19 @@ pub struct Config {
     /// version is named or a person edited the copy (its bytes no longer match the version
     /// it holds). Default 30 days.
     pub conflict_copy_keep_ms: u64,
+
+    // --- grids (tables on the interim engine, K-CSV-7): knobs, measured in C1a ---
+    /// A table holds at most this many cells (present, live or hidden). A change that would
+    /// grow past it is refused ([`super::SessionError::AtLimit`], exit 2); existing content
+    /// is never dropped. Default 25,000.
+    pub grid_max_cells: usize,
+    /// At most this many columns (live or deleted). Default 1,024.
+    pub grid_max_cols: usize,
+    /// The longest cell value or column name, in bytes (contract §1.8). A change that writes
+    /// a longer one is refused ([`super::SessionError::AtLimit`], `value bytes`, exit 2);
+    /// values already in the doc are never touched. Raise or lower it; the table ops of an
+    /// edit closure's view follow it. Default 64 KiB ([`crate::table::DEFAULT_MAX_VALUE_LEN`]).
+    pub grid_max_value_len: usize,
 }
 
 impl Config {
@@ -303,6 +319,7 @@ impl Config {
             idle_version_ms,
             agent_version_lines,
             agent_version_percent,
+            agent_version_elems,
             version_keep_all_ms,
             version_hourly_until_ms,
             version_max_count,
@@ -347,6 +364,9 @@ impl Config {
             lease_auto_ms,
             blob_merge_max_bytes,
             conflict_copy_keep_ms,
+            grid_max_cells,
+            grid_max_cols,
+            grid_max_value_len,
         } = self;
         vec![
             ("editor_window_ms", *editor_window_ms),
@@ -373,6 +393,7 @@ impl Config {
             ("idle_version_ms", *idle_version_ms),
             ("agent_version_lines", *agent_version_lines as u64),
             ("agent_version_percent", *agent_version_percent as u64),
+            ("agent_version_elems", *agent_version_elems as u64),
             ("version_keep_all_ms", *version_keep_all_ms),
             ("version_hourly_until_ms", *version_hourly_until_ms),
             ("version_max_count", *version_max_count as u64),
@@ -420,6 +441,9 @@ impl Config {
             ("lease_auto_ms", *lease_auto_ms),
             ("blob_merge_max_bytes", *blob_merge_max_bytes),
             ("conflict_copy_keep_ms", *conflict_copy_keep_ms),
+            ("grid_max_cells", *grid_max_cells as u64),
+            ("grid_max_cols", *grid_max_cols as u64),
+            ("grid_max_value_len", *grid_max_value_len as u64),
         ]
     }
 }
@@ -463,6 +487,7 @@ impl Default for Config {
             idle_version_ms: 2 * 60_000,
             agent_version_lines: 20,
             agent_version_percent: 10,
+            agent_version_elems: 20,
             version_keep_all_ms: 30 * DAY,
             version_hourly_until_ms: 90 * DAY,
             version_max_count: 500,
@@ -507,6 +532,9 @@ impl Default for Config {
             lease_auto_ms: 2 * 60_000,
             blob_merge_max_bytes: 32 << 20,
             conflict_copy_keep_ms: 30 * DAY,
+            grid_max_cells: 25_000,
+            grid_max_cols: 1_024,
+            grid_max_value_len: crate::table::DEFAULT_MAX_VALUE_LEN,
         }
     }
 }

@@ -141,6 +141,51 @@ function checkOverwritten(e: Overwritten) {
   }
 }
 
+/** A grid doc's `overwritten`: the same fields as a text doc's, exactly, with the grid's values
+ * (WIRE.md, "The `overwritten` event"): `row` set, a cell's `col` set, `restore_from` null,
+ * `not_shown` 0, `no_history` false here (the reader may read history), the grid's `source` and
+ * `rule`. */
+const GRID_SOURCES = ["an outside save", "a write", "a revert", "a restore", "rows drop-deleted"];
+const GRID_RULES = ["cell", "name", "quoting", "edited_row", "deleted_row", "moved_row", "edited_col", "deleted_col", "moved_col", "dropped_row", "dropped_col", "rollup"];
+function checkOverwrittenGrid(e: Overwritten) {
+  expect(overwrittenComplete && cellComplete && noteComplete).toBe(true);
+  expect(keys(e)).toEqual([...OVERWRITTEN_KEYS].sort());
+  expect(e.kind).toBe("overwritten");
+  expect(typeof e.to).toBe("string");
+  expect(isInt(e.change)).toBe(true);
+  expect(isIntOrNull(e.version)).toBe(true);
+  expect(e.restore_from).toBeNull();
+  expect(GRID_SOURCES).toContain(e.source);
+  expect(GRID_RULES).toContain(e.rule);
+  expect(isIntOrNull(e.line)).toBe(true);
+  expect(Array.isArray(e.cells)).toBe(true);
+  for (const c of e.cells) {
+    expect(keys(c)).toEqual([...CELL_KEYS].sort());
+    expect(typeof c.region).toBe("string");
+    expect(isIntOrNull(c.col)).toBe(true);
+    expect(typeof c.yours).toBe("string");
+    expect(typeof c.file).toBe("string");
+    expect(typeof c.cut).toBe("boolean");
+  }
+  expect(isInt(e.more)).toBe(true);
+  expect(e.not_shown).toBe(0);
+  expect(typeof e.withheld).toBe("boolean");
+  expect(e.no_history).toBe(false);
+  expect(typeof e.message).toBe("string");
+  if (e.rule === "rollup") {
+    expect(e.cells).toEqual([]);
+    expect(e.row).toBeNull();
+  } else {
+    expect(e.cells.length).toBeGreaterThan(0);
+    expect(typeof e.row).toBe("string");
+    expect(e.row!.length).toBeGreaterThan(0);
+  }
+  if (e.rule === "cell") {
+    expect(isInt(e.line)).toBe(true);
+    for (const c of e.cells) expect(isInt(c.col)).toBe(true);
+  }
+}
+
 /** How many places a note speaks for (the kit's `Overwrite::cells`). */
 const places = (o: Overwritten) => (o.rule === "rollup" ? 0 : o.cells.length) + o.more;
 
@@ -395,6 +440,37 @@ describe("golden wire JSON written by the Rust kit", () => {
     expect(notes.reduce((n, o) => n + places(o), 0)).toBe(g.saves);
     expect(new Set(notes.map((o) => o.change)).size).toBe(64); // one note per change
     runrec("client_golden_roster_events_rollup", { saves: g.saves, waiting: notes.length });
+  });
+
+  it("roster_events_overwritten_grid.json: a grid doc's notes carry the row, the column and the grid's rules, live and waiting", () => {
+    const g = load("roster_events_overwritten_grid.json");
+    expect(typeof g.about).toBe("string");
+    expect(typeof g.self).toBe("string");
+    const events = g.events as RosterEvent[];
+    expect(events[0].kind).toBe("snapshot");
+    for (const e of events) if (e.kind !== "overwritten") checkRoster(e);
+    const pushed = events.filter((e): e is Overwritten => e.kind === "overwritten");
+    pushed.forEach(checkOverwrittenGrid);
+    expect(pushed.map((o) => [o.source, o.rule])).toEqual([
+      ["an outside save", "cell"],
+      ["rows drop-deleted", "dropped_row"],
+    ]);
+    const [cell, dropped] = pushed;
+    expect(cell.row).toBe("r2");
+    expect(cell.cells[0].region).toBe("r2/c2");
+    expect(cell.cells[0].col).toBe(2);
+    expect(isInt(cell.version)).toBe(true); // the version cut before the save
+    expect(dropped.version).toBeNull(); // no version holds a dropped row
+    expect(dropped.cells[0].yours).toContain("MINE");
+    for (const o of pushed) expect(o.to).toBe(g.self);
+    // the same notes wait in a later snapshot, the same values
+    const final = g.final as Extract<RosterEvent, { kind: "snapshot" }>;
+    expect(keys(final)).toEqual([...SNAPSHOT_KEYS, "overwritten"].sort());
+    final.members.forEach(checkEntry);
+    final.overwritten!.forEach(checkOverwrittenGrid);
+    expect(final.overwritten!.map((o) => [o.change, o.row])).toEqual(pushed.map((o) => [o.change, o.row]));
+    expect(final.overwritten).toEqual(pushed);
+    runrec("client_golden_roster_events_overwritten_grid", { events: events.length, notes: pushed.length });
   });
 
   it("errors.json: each report is `ErrorReport` JSON, and the client acts on it", () => {

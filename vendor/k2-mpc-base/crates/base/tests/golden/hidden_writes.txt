@@ -1,0 +1,4 @@
+row: r2: c1 set by p2 in a row deleted by p1; row restore --row r2 brings it back
+col: r1: c2 set by p2 in a column deleted by bot; col restore --col c2 brings it back
+both: r2: c2 set by p2 in a row deleted by p1 and a column deleted by bot; row restore --row r2 and col restore --col c2 bring it back
+row, header on: r2: c1 set by p2 in a row deleted by p1; row restore --row r2 brings it back

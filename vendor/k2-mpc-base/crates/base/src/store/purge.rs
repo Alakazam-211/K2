@@ -13,6 +13,15 @@
 //!   deleted text a needle matches, are blanked and marked `redacted` (a revert over them
 //!   reports `erased`). Change ids, authors, times and lengths stay (`changes` keeps each
 //!   change's hunk positions and lengths).
+//! - **Structured roots** (C1f, A13; CSV seam design §7.4): content is values (a map's values,
+//!   a list's element values: a table's cells, hidden ones too, its column names). A value
+//!   is redacted **whole**, never in part (a register has no sub-value identity): in a typed
+//!   version it becomes empty, with a [`Redaction`] `{root}/{key}` of its byte length; in a
+//!   record version 3 the op's values before and after become empty and the op is marked
+//!   `redacted` (a revert or undo over it reports `erased`). Keys, writes, effects and
+//!   places stay. Targeted whole: the picked changes' and versions' values, and the
+//!   elements [`ElemPick`] names (a cell, a row's cells); elsewhere, any value a needle
+//!   matches.
 //! - **Authored hunks** (v0.9.7, the `authored` rows of changes D1 widened): every authored
 //!   hunk inside a record hunk the purge blanked (or blanked before), every one whose
 //!   insert a needle matches, and all of a change taken whole, lose their insert; their
@@ -32,6 +41,8 @@ use super::history::{
     dec_authored, dec_change, dec_pair, dec_record, enc_authored, enc_change, enc_pair, enc_record,
     enc_stats, stats_in, RevertRecord, CHANGES, REVERTS, REVERT_INDEX, REVERT_STATS,
 };
+use crate::elem::Value;
+
 use super::{
     dec_approval, dec_entry_full, dec_meta, dec_version_full, enc_approval, enc_doc_key,
     enc_entry_as, enc_meta, enc_snapshot, enc_sync, enc_version_redacted, ApprovalState, DocId,
@@ -59,7 +70,34 @@ impl Pick {
     }
 }
 
-/// What to purge from one text doc.
+/// Elements whose every value in history is redacted whole (`purge --cell`, `--row`): by
+/// root, exact keys and key prefixes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ElemPick {
+    pub root: String,
+    pub keys: Vec<String>,
+    pub prefixes: Vec<String>,
+}
+
+impl ElemPick {
+    pub(crate) fn has(&self, root: &str, key: &str) -> bool {
+        root == self.root
+            && (self.keys.iter().any(|k| k == key)
+                || self.prefixes.iter().any(|p| key.starts_with(p.as_str())))
+    }
+}
+
+/// A version's redaction of a structured value: root `{root}/{key}` (root names never hold
+/// `/`), start 0, the value's byte length.
+pub(crate) fn value_redaction(root: &str, key: &str, len: usize) -> Redaction {
+    Redaction {
+        root: format!("{root}/{key}"),
+        start: 0,
+        len: len as u64,
+    }
+}
+
+/// What to purge from one doc.
 pub(crate) struct DocPurge<'a> {
     /// The doc's version now: entries up to it are redacted, the snapshot is taken at it.
     pub head: Seq,
@@ -77,6 +115,8 @@ pub(crate) struct DocPurge<'a> {
     pub key: [u8; 32],
     /// Participant erasure: `(pid, pseudonym)`.
     pub erase: Option<(&'a str, &'a str)>,
+    /// Structured elements whose values are redacted whole everywhere.
+    pub elems: Option<ElemPick>,
 }
 
 /// What a purge did (metadata only: counts and sizes, never content).
@@ -91,6 +131,8 @@ pub struct PurgeCounts {
     pub revert_hunks: u64,
     /// Content bytes taken out of versions and revert records.
     pub bytes: u64,
+    /// Structured values redacted whole, in versions and revert records (C1f).
+    pub values: u64,
     /// Rows where participant erasure replaced the pid.
     pub attributions: u64,
     /// Undo and redo batches cleared (every stack of the doc, spec U19).
@@ -230,7 +272,22 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
             let whole = p.versions.has(vid);
             let mut cut_any = false;
             for (root, val) in &mut v.content {
-                let Neutral::Text(text) = val;
+                let text = match val {
+                    Neutral::Text(text) => text,
+                    Neutral::List(items) => {
+                        for (k, x) in items.iter_mut() {
+                            cut_any |=
+                                redact_value(p, whole, root, k.as_str(), x, &mut red, &mut c);
+                        }
+                        continue;
+                    }
+                    Neutral::Map(m) => {
+                        for (k, x) in m.iter_mut() {
+                            cut_any |= redact_value(p, whole, root, k, x, &mut red, &mut c);
+                        }
+                        continue;
+                    }
+                };
                 let spans: Vec<Range<usize>> = if whole {
                     if text.is_empty() {
                         Vec::new()
@@ -306,6 +363,31 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
                     changed = true;
                 }
             }
+            for root in rec.elems.iter_mut() {
+                for o in root.ops.iter_mut() {
+                    if o.redacted {
+                        continue;
+                    }
+                    let held = [&o.value_before, &o.value_after];
+                    let hit = whole
+                        || p.elems.as_ref().is_some_and(|e| e.has(&root.root, &o.key))
+                        || held.iter().any(
+                            |v| matches!(v, Some(Value::Str(s)) if p.needles.hits(s.as_bytes())),
+                        );
+                    if !hit {
+                        continue;
+                    }
+                    for v in [&mut o.value_before, &mut o.value_after] {
+                        if let Some(Value::Str(s)) = v {
+                            c.bytes += s.len() as u64;
+                            s.clear();
+                        }
+                    }
+                    o.redacted = true;
+                    c.values += 1;
+                    changed = true;
+                }
+            }
             if rename(&mut rec.author, er) | rename_opt(&mut rec.on_behalf_of, er) {
                 c.attributions += 1;
                 changed = true;
@@ -358,6 +440,40 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
     w.open_table(DOC_KEYS)?
         .insert(id, enc_doc_key(&p.key).as_slice())?;
     Ok(c)
+}
+
+/// Redact one structured value of a version whole if `whole` (the version is targeted), its
+/// element is picked, or a needle matches it: emptied, with its [`value_redaction`] (unless
+/// an earlier purge already redacted it). Returns whether it did.
+fn redact_value(
+    p: &DocPurge<'_>,
+    whole: bool,
+    root: &str,
+    key: &str,
+    x: &mut Value,
+    red: &mut Vec<Redaction>,
+    c: &mut PurgeCounts,
+) -> bool {
+    let Value::Str(s) = x else {
+        return false;
+    };
+    if s.is_empty() {
+        return false;
+    }
+    let hit =
+        whole || p.elems.as_ref().is_some_and(|e| e.has(root, key)) || p.needles.hits(s.as_bytes());
+    if !hit {
+        return false;
+    }
+    let r = value_redaction(root, key, s.len());
+    if !red.iter().any(|x| x.root == r.root) {
+        red.push(r);
+        red.sort_by(|a, b| (&a.root, a.start).cmp(&(&b.root, b.start)));
+    }
+    c.bytes += s.len() as u64;
+    c.values += 1;
+    s.clear();
+    true
 }
 
 /// The authored hunks (v0.9.7) of the doc's widened changes, after their records were

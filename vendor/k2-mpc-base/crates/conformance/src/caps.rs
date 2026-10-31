@@ -27,9 +27,28 @@
 //! - [`HistoryPurge`]: purge every copy of a text (live, deleted, in versions), and a byte
 //!   scan of everything the doc's history keeps.
 //! - [`Erasure`]: participant erasure, the kit's mapping from agents to people.
+//!
+//! **Structured capabilities** (MovableList and Map, the CSV grid's kinds) are not
+//! [`TextReplica`]s either: a replica of a doc with the rules' fixed roots ([`ROWS`] and
+//! [`COLS`], MovableLists; [`CELLS`], a Map), edited with the kit's engine-free ops
+//! ([`k2_mpc_base::Edit::List`], [`k2_mpc_base::Edit::Map`]) and read by key. Each names its
+//! engine's text replica (`Engine`), whose deviation list applies, and its own write identity
+//! (`Write`):
+//!
+//! - [`Structured`]: the replica, its edits (with the applied stream they report) and sync.
+//! - [`MLists`]: MovableList readers, and how many runs of the engine's ID index a list's
+//!   elements take (the forward-chain rule).
+//! - [`Maps`]: Map readers and a key's winning write.
+//! - [`Tables`]: both (the composition of the CSV contract's `table.*` rules).
+//! - [`Merged`]: deliver another replica's changes one at a time or all at once, each with the
+//!   stream of what it did here (on the kit, a keyed diff, `Doc::applied_since`).
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Range;
+
+use k2_mpc_base::elem::{self, ElemState};
+use k2_mpc_base::{Edit, Key, Value};
 
 use crate::{Hunk, Refused, TextReplica};
 
@@ -366,4 +385,99 @@ pub trait Erasure: HistoryPurge {
 
     /// How many changes the history attributes to `label`.
     fn changes_by(&self, label: &str) -> usize;
+}
+
+// ---------- structured kinds (replicas) ----------
+
+/// The rules' rows: a MovableList.
+pub const ROWS: &str = "rows";
+/// The rules' columns: a MovableList.
+pub const COLS: &str = "cols";
+/// The rules' cells: a Map keyed `"<row key>\x1f<col key>"` (CSV contract §1.1).
+pub const CELLS: &str = "cells";
+
+/// A replica of a doc with roots [`ROWS`], [`COLS`] (MovableLists) and [`CELLS`] (a Map),
+/// editing as one agent: what every structured rule needs.
+///
+/// - Agents are `u64` and order numerically (tie-breaks are by `(lamport, agent)`).
+/// - Ops are the kit's, by key ([`Edit::List`], [`Edit::Map`]); positions never cross.
+/// - Engine-neutral: the kit's Doc implements it today; the reference model and the native
+///   engine implement it when they have the kinds.
+pub trait Structured: Sized {
+    /// The text replica of the same engine, whose deviation list applies.
+    type Engine: TextReplica;
+    /// What a replica has seen; replicas that saw the same changes have equal versions.
+    type Version: PartialEq + Debug + Clone;
+    /// The engine's identity of one write (the kit's `WriteId`, an event ID).
+    type Write: Clone + PartialEq + Debug;
+
+    /// A replica editing as `agent`, holding `seed`: edits applied by [`crate::SEED_AGENT`]
+    /// in the same way on every replica, so replicas made separately with the same seed share
+    /// it (syncing them adds nothing).
+    fn replica(agent: u64, seed: &[Edit]) -> Self;
+
+    /// Apply `edits` as this replica's agent, as **one change**; what each op did (the
+    /// applied stream, with this engine's writes). A refused op refuses the whole change.
+    fn edit(&mut self, edits: &[Edit]) -> Result<Vec<elem::Applied<Self::Write>>, Refused>;
+
+    /// Deliver everything `from` has that this replica lacks.
+    fn sync_from(&mut self, from: &Self);
+
+    fn version(&self) -> Self::Version;
+
+    /// The agent that made `w`.
+    fn agent_of(w: &Self::Write) -> u64;
+
+    /// A replica loaded from this one's stored state (its checkpoint), editing as the same
+    /// agent: what a process holds after a restart.
+    fn reloaded(&self) -> Self;
+}
+
+/// MovableList readers.
+pub trait MLists: Structured {
+    /// The live elements of list root `root`, in order, with their values.
+    fn list(&self, root: &str) -> Vec<(Key, Value)>;
+
+    /// Where `key` is: live (at which index), deleted, or never inserted.
+    fn elem(&self, root: &str, key: &Key) -> ElemState;
+
+    /// How many runs of the engine's ID index the current places of `keys` (in this order)
+    /// take: 1 when they are one run (adjacent places, consecutive IDs), as a forward chain
+    /// of moves makes them (E8/E9). `None` when a key was never inserted.
+    fn place_runs(&self, root: &str, keys: &[Key]) -> Option<usize>;
+}
+
+/// Map readers.
+pub trait Maps: Structured {
+    /// Map root `root`'s keys and values.
+    fn map(&self, root: &str) -> BTreeMap<String, Value>;
+
+    /// The write that holds `key` now (`None`: absent, or no identity).
+    fn map_winner(&self, root: &str, key: &str) -> Option<Self::Write>;
+}
+
+/// The table composition (CSV contract §1.1): two MovableLists and a Map.
+pub trait Tables: MLists + Maps {}
+
+impl<T: MLists + Maps> Tables for T {}
+
+/// Merged updates: another replica's changes delivered here, each with the stream of what it
+/// did on **this** replica (writes `None` where the engine can't name them).
+pub trait Merged: Structured {
+    /// One change, as the engine ships it.
+    type Change: Clone + Debug;
+
+    /// This replica's own changes, oldest first: one per [`Structured::edit`] that wrote
+    /// something.
+    fn own_changes(&self) -> Vec<Self::Change>;
+
+    /// Deliver one change another replica made (this replica has everything it depends on);
+    /// what it did here.
+    fn deliver(
+        &mut self,
+        change: &Self::Change,
+    ) -> Result<Vec<elem::Applied<Option<Self::Write>>>, EventRefusal>;
+
+    /// [`Structured::sync_from`], with what the merge did here.
+    fn sync_applied(&mut self, from: &Self) -> Vec<elem::Applied<Option<Self::Write>>>;
 }

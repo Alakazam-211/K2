@@ -73,6 +73,7 @@ export const editorTheme = EditorView.baseTheme({
     textDecorationSkipInk: "none",
   },
   ".cm-mpc-rejected-text": { opacity: "0.6", textDecoration: "line-through", color: v("--mpc-rejected") },
+  ".cm-mpc-insert-preview": { outline: `1px dashed ${v("--mpc-rejected")}`, color: v("--mpc-rejected"), opacity: "0.8" },
   ".cm-mpc-reveal": { backgroundColor: `color-mix(in srgb, ${v("--mpc-focus")} 15%, transparent)` },
 });
 
@@ -94,7 +95,7 @@ export const FRAME_CSS = `
 .mpc-editor .mpc-rejections .mpc-may-have-applied { font-style: italic; }
 .mpc-editor .mpc-note { padding: 2px 6px; }
 .mpc-editor .mpc-note[hidden] { display: none; }
-.mpc-editor .mpc-rejections .mpc-rejected-snippet { color: ${v("--mpc-rejected")}; white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; font-family: ${v("--mpc-font")}; }
+.mpc-editor .mpc-rejections .mpc-rejected-snippet { color: ${v("--mpc-rejected")}; white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; font-family: ${v("--mpc-font")}; user-select: text; -webkit-user-select: text; }
 `;
 
 let injected = new WeakSet<Document>();

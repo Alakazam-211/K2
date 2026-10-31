@@ -46,13 +46,22 @@ mod roster;
 mod summary;
 mod tier0;
 mod undo;
+mod view;
+
+/// Helpers for packs' own tests (feature `test-support`; no host enables it): build an
+/// in-memory doc from a pack's decoded content as a session's import does, without copying
+/// the kit's code.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use super::view::import_edits;
+}
 
 pub use crate::store::{Approval, ApprovalState};
 pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
 pub(crate) use awareness::pair_text;
 pub use awareness::{
-    ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ForEdit, Note,
-    NoteKind, Notes, Overwrite, OverwriteCell, ReservationEnd, ReservationInfo, Waiting,
+    ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ClaimSpan, ForEdit,
+    Note, NoteKind, Notes, Overwrite, OverwriteCell, ReservationEnd, ReservationInfo, Waiting,
     OVERWRITE_CELLS_MAX, OVERWRITE_DOC_TEXT_MAX, OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX,
     OVERWRITE_VALUE_MAX,
 };
@@ -61,22 +70,28 @@ pub use config::{
     DEFAULT_BLAME_CHECK_LARGE_AT,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
-pub use error::{EditWithError, SessionError};
+pub use error::{DroppedBy, EditWithError, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
 pub(crate) use live::Shown;
 pub use live::{
+    AuditReport, AuditViolation, CellBlame, ElemBlame, FacetConflict, GridConflict, GridWrite,
+    GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
+};
+pub use live::{
     Blame, BlameLine, ChangeEvent, DiffOutput, EditAtBase, EditOptions, EditResult, FileBytes,
     FileCodec, FileCopy, Joined, LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest,
-    PurgeScope, ReadResult, RightsChange, Session, Status, SyncDrift, UndoMode, UndoOutcome,
-    UndoRequest, WriteOutcome, WriteReport,
+    PurgeScope, ReadResult, RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode,
+    UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
-pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
+pub use pack::{
+    default_reconcile, Declined, Pack, PackContent, PackError, Reconciled, TextFilePack,
+};
 pub use participant::{
-    ConnId, CursorAt, Participant, ParticipantKind, Role, RosterEntry, Stay, EXTERNAL_PID,
-    IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
+    CellCursor, ConnId, CursorAt, Participant, ParticipantKind, Role, RosterEntry, Stay,
+    EXTERNAL_PID, IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{RosterEvent, RosterMember, Who};
@@ -86,6 +101,7 @@ pub use tier0::{
     LeaseInfo, Promoted, Promotion, MERGE_PID, REGION_MAX_BYTES,
 };
 pub use undo::{ConflictKind, ConflictRegion};
+pub use view::View;
 
 #[cfg(test)]
 mod disk_crash_tests;

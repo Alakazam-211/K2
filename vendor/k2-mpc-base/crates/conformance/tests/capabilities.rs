@@ -46,9 +46,11 @@ macro_rules! engine_suite {
 
         #[test]
         fn caps_match_the_matrix() {
-            // Text runs on every engine (tests/text.rs).
+            // Text runs on every engine (tests/text.rs); the structured capabilities in
+            // tests/structured.rs, which checks them.
             let mut ran = vec![Cap::Text $(, engine_suite!(@cap $cap))*];
-            let mut declared = $info.caps.to_vec();
+            let mut declared: Vec<Cap> =
+                $info.caps.iter().copied().filter(|c| !c.is_structured()).collect();
             ran.sort();
             declared.sort();
             assert_eq!(ran, declared, "{}: the capabilities tested here and the matrix's differ", $info.name);

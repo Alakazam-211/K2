@@ -64,6 +64,17 @@ fn row(a: PersonAction) -> ParityRow {
         | P::UndoPartial
         | P::Mention
         | P::Revert => ParityRow::not_applicable(a, &[], &[], "text docs only"),
+        // grid docs only (A11)
+        P::RowInsert
+        | P::RowMove
+        | P::RowDelete
+        | P::ColInsert
+        | P::ColMove
+        | P::ColDelete
+        | P::ColRename
+        | P::Sort
+        | P::RestoreElement
+        | P::DropDeleted => ParityRow::not_applicable(a, &[], &[], "grid docs only"),
     }
 }
 

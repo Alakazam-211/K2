@@ -97,19 +97,26 @@ export type RosterEvent =
       kind: "overwritten";
       to: Handle;
       change: number;
-      /** The version holding the text, which this reader can open. Only link from this one. */
+      /** The version holding the live value (a grid) or the text (a text doc, one this reader can open). Only link from this one. */
       version: number | null;
-      /** The same version, for telling someone with history access. Never a link for this reader. */
+      /** A text doc: the same version, for telling someone with history access. Never a link for this reader. null on a grid. */
       restore_from: number | null;
+      /** "an outside save" (a text doc); a grid also "a write" | "a revert" | "a restore" | "rows drop-deleted" */
       source: string;
-      /** "removed_text" | "replaced_text" | "rollup" */
+      /**
+       * A text doc: "removed_text" | "replaced_text" | "rollup".
+       * A grid: "cell" | "name" | "quoting" | "edited_row" | "deleted_row" | "moved_row" | "dropped_row" | "dropped_col" | "rollup" | the column forms.
+       */
       rule: string;
+      /** A grid: the row's key; null on a text doc. */
       row: string | null;
       line: number | null;
       cells: { region: string; col: number | null; yours: string; file: string; cut: boolean }[];
       more: number;
+      /** A text doc: characters of the reader's own removed text not carried; 0 on a grid. */
       not_shown: number;
       withheld: boolean;
+      /** A text doc: the reader has no history right (version is null); false on a grid. */
       no_history: boolean;
       message: string;
     }

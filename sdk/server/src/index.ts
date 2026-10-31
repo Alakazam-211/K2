@@ -25,6 +25,18 @@ export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUse
 export { K2Error, fromResponse } from './errors.ts'
 export * from './generated/verbs.ts'
 export { qrSvg, type QrSvgOptions } from './pairing.ts'
+export {
+  applyChannelOps,
+  channelOp,
+  setAllChannels,
+  CHANNEL_OPS_PER_CALL,
+  CHANNELS_PER_PERSON,
+  MEMBER_CHANNELS_PER_CALL,
+  type ChannelRef,
+  type ChatChannelsActor,
+  type ChatSpaceOptions,
+  type EnsureOptions,
+} from './chat.ts'
 
 /** Where a wall mounts the App pass (runtime §5.2). */
 export const DEFAULT_PASS_FILE = '/run/k2/pass'

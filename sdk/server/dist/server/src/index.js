@@ -18,6 +18,7 @@ export { coerceTurn, describe as describeTurn, reduceTurn } from "../../activity
 export { K2Error, fromResponse } from "./errors.js";
 export * from "./generated/verbs.js";
 export { qrSvg } from "./pairing.js";
+export { applyChannelOps, channelOp, setAllChannels, CHANNEL_OPS_PER_CALL, CHANNELS_PER_PERSON, MEMBER_CHANNELS_PER_CALL, } from "./chat.js";
 /** Where a wall mounts the App pass (runtime §5.2). */
 export const DEFAULT_PASS_FILE = '/run/k2/pass';
 /** The App key's file name under K2_SECRETS_DIR (S45). */

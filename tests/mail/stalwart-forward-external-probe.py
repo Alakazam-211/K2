@@ -391,6 +391,8 @@ def main():
         ids = (q.get("ids") or [])[:10]
         n, g = admin.call("x:QueuedMessage/get", {"ids": ids}) if ids else (n, q)
         info("diag queue after X0", f"{n} {json.dumps(g)[:1200]}")
+    # bob forwards nothing more (alice's vacation reply to bob would reach the sink).
+    put_script(bob, "keep;\n")
 
     # ── keep on ─────────────────────────────────────────────────────
     n, a = put_script(alice, golden("external-keep.sieve", "me@outside.test", args.host))
@@ -430,7 +432,7 @@ def main():
     # spam step: a normal inbound message forwards (control), a bounce doesn't.
     nospam = re.sub(r'if anyof \(spamtest[^\n]*\{\nkeep;\nstop;\n\}\n', "", golden("external-keep.sieve", "me@outside.test", args.host))
     n, a = put_script(alice, nospam)
-    check("X3 setup: the golden minus its spam step is written", "spamtest" not in nospam and n == "SieveScript/set", f"{n}")
+    check("X3 setup: the golden minus its spam step is written", "spamtest :value" not in nospam and n == "SieveScript/set", f"{n}")
     mid = f"x3c-{tag}"
     inject(mid, "sender@sender.example")
     check("X3 control: inbound mail forwards without the spam step", len(wait_for(lambda: sink.with_id(mid))) == 1, "")
@@ -459,7 +461,8 @@ def main():
     ham(mid)
     got = wait_for(lambda: sink.with_id(mid))
     time.sleep(3)
-    check("X7 keep off: forwarded", len(got) == 1, f"{len(got)} at the sink")
+    from_alice = [m for m in got if (m["from"] or "").lower() == alice_addr.lower()]
+    check("X7 keep off: forwarded (once, from the mailbox)", len(from_alice) == 1, f"{len(from_alice)} from the mailbox at the sink ({len(got)} in all)")
     check("X7 keep off: not kept", kept(mid) == 0, f"kept {kept(mid)}")
 
     # ── X8 the mailbox itself still can't write Sieve ───────────────

@@ -136,7 +136,12 @@ rc="$(run "$SANDBOX/sew.txt" app sdk add "$APP2" --sew)"
 out="$(cat "$SANDBOX/sew.txt")"
 expect_eq "--sew exits 3" "$rc" "3"
 expect_has "  says why" "$out" "sew_kit_"
-expect_has "  names Sew 0.5.0+" "$out" "0.5.0"
+# The pinned release's App kit, read from the pin itself
+# (k2_root_proto::sew: the pin is the last release; its kit is the last
+# SEW_APP_KITS row).
+PIN_KIT_V="$(sed -n 's/^ *SewAppKit { version: "\([0-9.]*\)".*/\1/p' "$PROJECT_ROOT/crates/k2-root-proto/src/sew.rs" | tail -1)"
+[ -n "$PIN_KIT_V" ] || bad "  no SewAppKit row in crates/k2-root-proto/src/sew.rs"
+expect_has "  names the pinned Sew kit ($PIN_KIT_V)" "$out" "Sew's App kit $PIN_KIT_V"
 [ ! -e "$APP2/vendor" ] && [ ! -e "$APP2/package.json" ] && ok "  nothing written" || bad "  wrote into $APP2"
 
 echo "== usage =="

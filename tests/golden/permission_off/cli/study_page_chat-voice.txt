@@ -10,6 +10,8 @@ and makes a text and a voice channel per project; calls are end-to-end
 encrypted. Hearth (Sew's own client) is optional: nothing here needs it;
 if the owner installs it, people see your channels there too. Rooms,
 channels, joining, limits: k2 study chat-voice-rooms. Caps: app-chat.
+Sew 0.6.0+: a shorter way, chat for every App user with one chat key (k2
+study app-chat, THE CHAT KEY). Below: the per-person path (Sew 0.5.0+).
 
 WHO. Owner = the box owner, in person (an Admin login may do the reset in
 step 3). Agent = your App's agent, with switches only the owner turns on:
@@ -25,15 +27,13 @@ THE ORDER
     home: "app-scoped sessions yes" and "app origin" yes.
  2. Install with a public URL from the start (Agent, "Build and run Apps"):
       k2 app install <app> --tunnel
-    Without --tunnel the App never gets its own <app>.<box>.k2.dev URL: no
-    command adds it later. Sew's voice origin is the App's public host, so
-    without one nobody outside can call. The only other ways: the box's one
-    meet label (k2 hostchat meet bind <app>) or a live custom domain (Linux
-    box; the Owner's k2 front enable and k2 domain add; k2 app domain
-    --help). A name from k2 app domain add <app> <subdomain> doesn't count.
-    Already installed without it? Use one of those, or re-create the App
-    before people use it: re-creating drops its logins and its guests-chat
-    grant, and leaves its Space read-only until bound again (redo 3–9).
+    Sew's voice origin is the App's public host, so without one nobody
+    outside can call. Already installed without it? k2 app expose <app>
+    --tunnel adds <app>.<box>.k2.dev and keeps the App's id, logins and
+    grants. Never re-create it for this: re-creating drops its logins and
+    its guests-chat grant (k2 app uninstall says what it would drop). Other
+    ways: the box's meet label (k2 hostchat meet bind <app>) or a live
+    custom domain (k2 app domain --help).
  3. The Space owner: an App-only person (a real one who will stay). The
     Owner picks them and runs:
       k2 app user invite <owner-user> --app <app> --email <e> [--role R]

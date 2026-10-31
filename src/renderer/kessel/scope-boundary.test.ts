@@ -208,6 +208,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.1 secret handoff (H4): Vault Incoming/Sent default to the window's
   // server; callers with a room pass its scope.
   'components/Settings/sections/handoff-api.ts',
+  // 0.46.7 outside forwards (FW4): Email Hosting → a mailbox → Forwarding
+  // is about the window's own server's mail; callers with a room pass its
+  // scope.
+  'components/Settings/sections/mail-forward-api.ts',
   // 0.46.1 remote switch: the per-agent switch in the window's server's
   // workspace settings.
   'components/Settings/shared/RemoteInstructToggle.tsx',

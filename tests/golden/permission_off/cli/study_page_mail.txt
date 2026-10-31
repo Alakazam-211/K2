@@ -169,8 +169,14 @@ FORWARDING (0.46.7, `k2 hostmail forward`)
            its words, the confirm link's state, last-24h counts, events.
            manual (someone paused it), dest_gone, refused, daily_cap,
            revoked (the destination clicked Stop), box_brake (every
-           outside forward: too many of the server's were refused);
-           only air_gap / receive_only lift by themselves.
+           outside forward: too many of the server's were refused),
+           upgrade_required (not forwarding: the mail server needs
+           upgrading: k2 hostmail upgrade); only air_gap / receive_only /
+           upgrade_required lift by themselves.
+  Upgrade  outside forwards need the pinned mail server (Stalwart
+           0.16.25 or later). On an older one set answers exit 1
+           upgrade_required ("k2 hostmail upgrade"); same-box forwards
+           work on any version.
   Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, show,
            unset, pause and resume a manual pause, on any mailbox they
            manage, outside addresses included, end to end — no card, no

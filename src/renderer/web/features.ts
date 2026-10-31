@@ -12,6 +12,7 @@
 import { isWebClient } from '@/lib/is-web'
 import {
   getDesktopChrome,
+  isMacPlatform,
   TRAFFIC_LIGHT_SPACER_PX as DESKTOP_TRAFFIC_LIGHT_SPACER_PX,
 } from '@/lib/desktop-chrome'
 
@@ -28,8 +29,12 @@ export const webFeatures = {
    * Desktop only — hosted web has no `open_app_devtools` invoke target.
    */
   appDevTools: desktop,
-  /** macOS FDA / Accessibility / Mic permissions Settings section. */
-  permissions: desktop,
+  /**
+   * macOS FDA / Accessibility / Mic permissions Settings section. macOS
+   * only: its checks and System Settings links do nothing on Windows or
+   * Linux (`commands/permissions.rs` reports "granted" there).
+   */
+  permissions: desktop && isMacPlatform(),
   /** Multi-host ServerSwitcher + Add server (hosted web is single same-origin). */
   multiHost: desktop,
   /**

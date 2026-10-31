@@ -83072,7 +83072,7 @@ for l in lanes:
     if setup.get("running"):
         print("  setup running; k2 sim status again to follow it")
     elif setup.get("error") and not licences:
-        print("  setup failed; the server's owner retries it (Retry setup on the Mobile tab), never you")
+        print("  setup failed; the owner of this server retries it (Retry setup on the Mobile tab), never you")
 s = v.get("sim")
 if not s or s.get("state") in ("stopped", "failed"):
     ready = any(l.get("ready") for l in lanes)

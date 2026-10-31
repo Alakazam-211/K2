@@ -23,10 +23,21 @@ static SEEN: Mutex<Vec<Seen>> = Mutex::new(Vec::new());
 /// Ops whose label contains one of these fail in the sink.
 static FAIL_ON: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Install the recording sink on every call: the outbox-path tests in
-/// `tool_hook` clear it (under the same env lock) to reach S27's real
-/// writer.
-fn recorder() {
+/// The recording sink, installed until this guard drops. Bind it inside
+/// `with_temp_home` so it is gone before the env lock is released: a sink
+/// left installed swallowed every later test's `sew_session_revoke` op
+/// (soak 2026-10-31, shuffled: `app_chat_key`'s revoke tests found no
+/// outbox row).
+#[must_use = "the recording sink is removed when the guard drops"]
+struct Recorder;
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        sew_revoke::clear_sink();
+    }
+}
+
+fn recorder() -> Recorder {
     sew_revoke::set_sink(Arc::new(|conn: &rusqlite::Connection, op: &SewSessionRevoke| {
         if FAIL_ON.lock().unwrap().iter().any(|f| op.label().contains(f.as_str())) {
             return Err("outbox write failed (test)".into());
@@ -36,6 +47,7 @@ fn recorder() {
     }));
     SEEN.lock().unwrap().clear();
     FAIL_ON.lock().unwrap().clear();
+    Recorder
 }
 
 fn seen() -> Vec<Seen> {
@@ -63,7 +75,7 @@ fn host_grant_id(principal_id: &str) -> String {
 #[test]
 fn chat_grant_is_read_live_and_must_be_enabled_on_sew() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         let ada = guest("ada", false);
         assert!(!principal_has_chat_grant(&ada.id).expect("lookup"));
         insert_chat_grant_for_tests(&ada.id).expect("grant");
@@ -76,7 +88,7 @@ fn chat_grant_is_read_live_and_must_be_enabled_on_sew() {
 #[test]
 fn revoke_token_queues_its_skn_sid_inside_the_transaction() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         guest("ada", true);
         let (meta, raw) = create_session_token("ada").expect("login");
         assert!(resolve_skin_token(&raw).is_some());
@@ -92,7 +104,7 @@ fn revoke_token_queues_its_skn_sid_inside_the_transaction() {
 #[test]
 fn no_chat_grant_means_no_revoke_op() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         guest("bob", false);
         let (meta, _raw) = create_session_token("bob").expect("login");
         assert!(revoke_token(&meta.id).expect("revoke"));
@@ -105,7 +117,7 @@ fn no_chat_grant_means_no_revoke_op() {
 #[test]
 fn password_change_and_removal_revoke_by_external_id() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         let ada = guest("ada", true);
         let (_m1, raw1) = create_session_token("ada").expect("login 1");
         let (_m2, _raw2) = create_session_token("ada").expect("login 2");
@@ -126,7 +138,7 @@ fn password_change_and_removal_revoke_by_external_id() {
 #[test]
 fn app_grant_off_and_service_removal_revoke_those_sessions_only() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         let ada = guest("ada", true);
         let (host_meta, _) = create_session_token("ada").expect("host login");
         // An App session (S24) bound to service `svc1`.
@@ -155,7 +167,7 @@ fn app_grant_off_and_service_removal_revoke_those_sessions_only() {
 #[test]
 fn outbox_failure_rolls_the_revoke_back() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         guest("ada", true);
         let (meta, raw) = create_session_token("ada").expect("login");
         FAIL_ON.lock().unwrap().push(meta.id.clone());
@@ -172,7 +184,7 @@ fn outbox_failure_rolls_the_revoke_back() {
 #[test]
 fn chat_only_login_is_thread_dark_and_dies_with_the_grant() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         let ada = guest("ada", false);
         assert!(delete_grant_by_key("principal", &ada.id, "app", HOST_APP_ID).expect("drop host grant"));
         // Neither grant: the same denial as a bad password.
@@ -197,7 +209,7 @@ fn chat_only_login_is_thread_dark_and_dies_with_the_grant() {
 #[test]
 fn host_session_with_rooms_does_not_survive_on_a_chat_grant() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         let ada = guest("ada", true);
         let role = create_role("readers", &thread_only_room_policy(&["room-1".to_string()])).expect("role");
         assign_role("ada", &role.id).expect("assign");
@@ -217,7 +229,7 @@ fn host_session_with_rooms_does_not_survive_on_a_chat_grant() {
 #[test]
 fn connect_ids_are_stable_backfilled_and_never_reused() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         // A store written before ids existed.
         let legacy = serde_json::json!({
             "users": [
@@ -262,7 +274,7 @@ fn connect_ids_are_stable_backfilled_and_never_reused() {
 #[test]
 fn connect_logout_and_revoke_all_queue_cu_sids() {
     with_temp_home(|| {
-        recorder();
+        let _sink = recorder();
         connect_users::add_user("carol", "password-for-tests-1").expect("add");
         let t1 = connect_users::create_session("carol");
         let t2 = connect_users::create_session("carol");

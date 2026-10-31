@@ -114,7 +114,7 @@ const anim = (name: string, ms: number, ease = 'cubic-bezier(0.22, 1, 0.36, 1)')
 export const THREAD_ZEN_CSS = `
 ${SCOPE} [data-zen-message] { animation: zen-message-in ${anim('messageIn', 220)} both; }
 ${SCOPE} [data-zen-message][data-zen-message-still] { animation: none; }
-${SCOPE} [data-zen-pulse] { animation: zen-pulse var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
+${SCOPE} [data-zen-pulse] { animation: zen-pulse var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; will-change: opacity, transform; }
 ${SCOPE} [data-zen-typing] span { animation: zen-typing var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
 ${SCOPE} [data-zen-typing] span:nth-child(2) { animation-delay: 160ms; }
 ${SCOPE} [data-zen-typing] span:nth-child(3) { animation-delay: 320ms; }

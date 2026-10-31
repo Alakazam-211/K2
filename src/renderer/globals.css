@@ -1084,21 +1084,6 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   background: var(--color-scrollbar-thumb-hover);
 }
 
-/* ── Status dot pulse animation ───────────────────────────────────── */
-
-@keyframes status-pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-.status-dot-dirty {
-  animation: status-pulse 2s infinite;
-}
-
 /* ── Agent status cluster (plan-agent-status-unify-v1 §3) ───────────
    working | heartbeat | status-or-live | number, 14px slots. Every glyph's
    ink sits in the same 14-of-24 box, so a 4px box gap reads ≈9px; the
@@ -1206,17 +1191,6 @@ html[data-style="square"] [data-limit-track] {
 
 .icon-rail-active {
   border-left: 2px solid var(--accent-color, var(--color-accent));
-}
-
-/* ── Terminal activity indicator ───────────────────────────────── */
-
-@keyframes terminal-active {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-.terminal-active-indicator {
-  animation: terminal-active 1.5s ease-in-out infinite;
 }
 
 /* ── Context menu fade-in ─────────────────────────────────────── */
@@ -1367,40 +1341,14 @@ html[data-style="square"] [data-limit-track] {
   animation: braille-spin 0.8s steps(1) infinite;
 }
 
-/* ── Thread working strip (prd-daemon-activity-and-thread-working-v1 S7) ── */
-
-@keyframes thread-strip-pulse {
-  50% { opacity: 0.35; }
-}
-
-@keyframes thread-strip-shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-
-.thread-strip-pulse {
-  animation: thread-strip-pulse 1.4s ease-in-out infinite;
-}
-
-/* "Thinking… 8s": the text is a timer, so it shimmers instead of spinning. */
-.thread-strip-shimmer {
-  background: linear-gradient(90deg, var(--color-text-secondary) 0%, var(--color-text-primary) 45%, var(--color-text-secondary) 90%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: thread-strip-shimmer 1.6s linear infinite;
-}
+/* The Thread's working strip animates in ZenActivityDrawer (ZEN_DRAWER_CSS:
+   an opacity pulse on its own layer). The old `.thread-strip-pulse` and the
+   `background-position` text shimmer (a repaint every frame) had no users
+   and are gone; so are `.status-dot-dirty` and `.terminal-active-indicator`. */
 
 @media (prefers-reduced-motion: reduce) {
-  .thread-strip-pulse,
-  .thread-strip .braille-spinner::after {
+  .braille-spinner::after {
     animation: none;
-  }
-  .thread-strip-shimmer {
-    animation: none;
-    background: none;
-    color: var(--color-text-primary);
   }
 }
 

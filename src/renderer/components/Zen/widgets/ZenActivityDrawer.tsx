@@ -164,6 +164,7 @@ export const ZEN_DRAWER_CSS = `
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
 ${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse], ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text { animation: ${ZEN_DRAWER_PULSE_ANIMATION}; }
+${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse], ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text { will-change: opacity; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
 ${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
 ${DRAWER_SCOPE} .zen-drawer-code { --zen-tag-hue: var(--zen-text-muted); color: inherit; padding: 1px 5px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
@@ -177,6 +178,7 @@ ${DRAWER_SCOPE} .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
   ${DRAWER_SCOPE} .zen-drawer-pulse-text, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
+  ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text, ${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse] { will-change: auto; }
 }
 `
 

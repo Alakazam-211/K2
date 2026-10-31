@@ -63,6 +63,23 @@ async fn site_listener() -> TcpListener {
     panic!("no loopback port free of App rows in 64 tries");
 }
 
+/// A port nothing listens on, held for the test (bound, never listening: a
+/// dial is refused at once, and no other test can take it meanwhile), that no
+/// App row claims.
+fn dead_port() -> (tokio::net::TcpSocket, u16) {
+    let mut passed = Vec::new();
+    for _ in 0..64 {
+        let s = tokio::net::TcpSocket::new_v4().unwrap();
+        s.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = s.local_addr().unwrap().port();
+        if no_app_claims(port) {
+            return (s, port);
+        }
+        passed.push(s);
+    }
+    panic!("no loopback port free of App rows in 64 tries");
+}
+
 /// A small HTTP/1.1 site: 200 with its tag, keep-alive; an `Upgrade` request
 /// gets a `101`, then echoes raw bytes.
 async fn spawn_site() -> (u16, Arc<Upstream>) {
@@ -769,10 +786,10 @@ async fn public_dev_is_parsed_and_open_and_a_public_sites_k2_paths_are_its_own()
 
 #[tokio::test]
 async fn a_dead_site_is_k2s_502_only_after_the_gate() {
-    let dead = {
-        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        l.local_addr().unwrap().port()
-    };
+    // Held for the whole test: a port let go of here was bound by another
+    // test's listener under load, and the "dead" site answered (soak
+    // 2026-10-31, shuffled seed 9).
+    let (_held, dead) = dead_port();
     let rig = Rig::new(&[("sg-dead", dead)]).await;
     assert!(rig.get("sg-dead", None, "/").await.starts_with("HTTP/1.1 401"), "no session: the gate first");
     let cookie = rig.sign_in("sg-dead", sv::USER_OWNER_TOKEN).await;

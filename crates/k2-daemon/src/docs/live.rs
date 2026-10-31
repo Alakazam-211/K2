@@ -38,10 +38,13 @@
 //! - `undo` / `redo` → the change arrives as `change`, then `undone {op,
 //!   steps, version, notice?}`; a conflict is `refused` (`MPC-E201`).
 //! - `snapshot` → `snapshot {op, text, version}`.
-//! - `cursor` → `set_cursor` only when its version is the doc's version as
-//!   this socket last saw it; behind, it is dropped (WIRE.md "Carets" allows
-//!   dropping; the client re-sends after its next change). No reply; a
-//!   refused caret is ignored.
+//! - `cursor` → `set_cursor`, mapped to now first (`place_caret`, WIRE.md
+//!   "Carets"): a caret at the doc's version goes in as it is; one behind
+//!   (a change this socket had sent was still on its way to the client) is
+//!   carried through `events_since` with the kit's `position::transform`,
+//!   `Bias::After`. Past the live window, or at a version this socket never
+//!   told the client, it is dropped (the client re-sends after its next
+//!   change). No reply; a refused caret is ignored.
 //! - `visible` (and the Thread's `{"t":"viewing","visible"}`) →
 //!   `set_visible`; `view` → `set_view`; `hello` is ignored (the URL carries
 //!   root and resume).
@@ -92,7 +95,7 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
-use k2_mpc_base::session::position::{At, LineRange};
+use k2_mpc_base::session::position::{transform, At, Bias, LineRange};
 use k2_mpc_base::session::{
     ChangeEvent, ClaimPolicy, ConnId, EditOptions, RosterEvent, Session, SessionError, Stay,
 };
@@ -697,6 +700,62 @@ where
     let _ = write.send(close_msg(c.ws_code, c.reason.as_str())).await;
 }
 
+/// A client's caret on `root` at `version` (bytes of that version's text),
+/// set in the kit at the doc's current version (WIRE.md "Carets"). The kit's
+/// `set_cursor` takes no version, so a caret from an older version is mapped
+/// first ([`map_caret`]). Fire-and-forget: a dropped or refused caret is only
+/// logged. Returns the caret as set.
+fn place_caret(session: &Session, conn: ConnId, root: &str, version: Seq, at_seen: Seq, anchor: usize, head: usize) -> Option<(usize, usize)> {
+    let now = match session.status() {
+        Ok(s) => s.version,
+        Err(e) => {
+            log_debug!("[docs/live] caret ignored: {}", e.report().plain());
+            return None;
+        }
+    };
+    let (a, h) = map_caret(session, conn, root, version, at_seen, now, anchor, head)?;
+    match session.set_cursor(conn, root, At::Byte(a), At::Byte(h)) {
+        Ok(c) => Some((c.anchor, c.head)),
+        Err(e) => {
+            log_debug!("[docs/live] caret ignored: {}", e.report().plain());
+            None
+        }
+    }
+}
+
+/// Where a caret at `version` is at `now` (the doc's version): unchanged when
+/// they're equal; behind, `anchor` and `head` are carried through every change
+/// since on `root`, in order, with the bias the kit carries carets with
+/// (`Bias::After`). `None` (dropped) for another root, a version past
+/// `at_seen` (the client can't have seen it), or one `events_since` refuses
+/// (past the live window).
+#[allow(clippy::too_many_arguments)]
+fn map_caret(session: &Session, conn: ConnId, root: &str, version: Seq, at_seen: Seq, now: Seq, anchor: usize, head: usize) -> Option<(usize, usize)> {
+    if root != ROOT {
+        return None;
+    }
+    if version > at_seen || version > now {
+        log_debug!("[docs/live] caret at {version} dropped: ahead of what this socket told the client ({at_seen})");
+        return None;
+    }
+    if version == now {
+        return Some((anchor, head));
+    }
+    let events = match session.events_since(conn, version) {
+        Ok(evs) => evs,
+        Err(e) => {
+            log_debug!("[docs/live] caret at {version} dropped: {}", e.plain());
+            return None;
+        }
+    };
+    let (mut a, mut h) = (anchor, head);
+    for e in events.iter().filter(|e| e.root == root) {
+        a = transform(a, &e.hunks, Bias::After);
+        h = transform(h, &e.hunks, Bias::After);
+    }
+    Some((a, h))
+}
+
 fn close_msg(code: u16, reason: &str) -> Message {
     Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.to_string().into() }))
 }
@@ -1061,14 +1120,12 @@ impl Worker {
                 Err(e) => self.send(wire::refused_frame(op, &e.report())),
             },
             ClientFrame::Cursor { root, version, anchor, head } => {
-                // G6: the kit places a caret in the current text. Only a caret
-                // at the version this socket last told the client goes in.
+                // G6: the kit places a caret in the current text. The client
+                // knows at most what this socket had told it before this
+                // frame (`at_seen`); the pump may tell it more, after.
+                let at_seen = self.seen;
                 self.pump()?;
-                if version == self.seen && root == ROOT {
-                    if let Err(e) = self.session.set_cursor(self.conn, &root, At::Byte(anchor), At::Byte(head)) {
-                        log_debug!("[docs/live] caret ignored: {}", e.report().plain());
-                    }
-                }
+                place_caret(&self.session, self.conn, &root, version, at_seen, anchor, head);
                 Ok(())
             }
             ClientFrame::Visible(v) => {
@@ -1187,6 +1244,146 @@ mod tests {
         assert_eq!(code(person_for(Caller::Shell { project_id: "p".into() }, false)), "agents_use_k2_doc");
         assert_eq!(code(person_for(Caller::WrongCredential, false)), "wrong_credential");
         assert_eq!(code(person_for(Caller::Invalid, false)), "forbidden");
+    }
+
+    /// One doc ("one\ntwo\n") on the vendored kit, a live window of 2
+    /// changes, and two people: Ada (who edits) and Bob (whose carets come in).
+    struct Carets {
+        dir: std::path::PathBuf,
+        s: Arc<Session>,
+        ada: ConnId,
+        bob: ConnId,
+        _mgr: k2_mpc_base::session::SessionManager,
+    }
+
+    impl Drop for Carets {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct CaretHost;
+
+    impl k2_mpc_base::session::Host for CaretHost {
+        fn rights(&self, _who: &k2_mpc_base::session::Participant, _key: &DocKey) -> k2_mpc_base::session::Rights {
+            k2_mpc_base::session::Rights::editor()
+        }
+        fn now_ms(&self) -> u64 {
+            1_700_000_000_000
+        }
+        fn on_event(&self, _ev: &k2_mpc_base::session::AuditEvent) {}
+    }
+
+    impl Carets {
+        fn new() -> Carets {
+            use k2_mpc_base::session::{Config, Participant, ParticipantKind, SessionManager, TextFilePack};
+            let dir = std::env::temp_dir().join(format!("k2-live-carets-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let mut config = Config::default();
+            config.live_window_events = 2;
+            config.edit_rate_per_s = 1_000_000;
+            config.edit_burst = 1_000_000;
+            let store = Arc::new(k2_mpc_base::store::DocStore::open(dir.join("docs.redb")).expect("store"));
+            let mgr = SessionManager::new(store, Arc::new(CaretHost), config);
+            let s = mgr
+                .open(
+                    Arc::new(TextFilePack::new("markdown", 4 << 20)),
+                    &DocKey { space: "ws".into(), path: "notes.md".into() },
+                    Some(b"one\ntwo\n"),
+                )
+                .expect("open");
+            let ada = s.join(Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held).expect("join ada").conn;
+            let bob = s.join(Participant::new("bob", "Bob", "#16a34a", ParticipantKind::Person, "tab"), Stay::Held).expect("join bob").conn;
+            Carets { dir, s, ada, bob, _mgr: mgr }
+        }
+        fn version(&self) -> Seq {
+            self.s.status().expect("status").version
+        }
+        /// Ada's edit at the doc's version; the version after it.
+        fn ada_edits(&self, start: usize, end: usize, insert: &str) -> Seq {
+            let hunk = k2_mpc_base::text::Hunk { start, end, insert: insert.into() };
+            let r = self.s.edit_at_base(self.ada, ROOT, self.version(), vec![hunk], &EditOptions::new()).expect("ada's edit");
+            assert!(!r.hunks.is_empty(), "ada's edit applied nothing");
+            r.result.version
+        }
+        /// Bob's caret as the kit's roster has it, in bytes.
+        fn bobs_caret(&self) -> Option<(usize, usize)> {
+            let roster = self.s.roster(self.bob).expect("roster");
+            let bob = roster.iter().find(|e| e.participant.pid == "bob").expect("bob on the roster");
+            bob.cursor.as_ref().map(|c| {
+                assert_eq!(c.cursor.root, ROOT, "bob's caret root");
+                (c.cursor.anchor, c.cursor.head)
+            })
+        }
+    }
+
+    /// WIRE.md "Carets": a caret one change behind (the change was still on
+    /// its way to the client) is carried through it, `Bias::After`.
+    #[test]
+    fn a_caret_behind_is_mapped_through_the_changes_since() {
+        let f = Carets::new();
+        let v0 = f.version();
+        // "one\ntwo\n" -> "XXone\ntwo\n"
+        let v1 = f.ada_edits(0, 0, "XX");
+        assert_eq!(v1, v0 + 1);
+        // Bob selected "two" (bytes 4..7) at v0; this socket had sent v1.
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v1, 4, 7), Some((6, 9)));
+        assert_eq!(f.bobs_caret(), Some((6, 9)), "the kit holds the mapped caret");
+        // A caret exactly at Ada's insertion goes after it (Bias::After).
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v1, 0, 0), Some((2, 2)));
+        assert_eq!(f.bobs_caret(), Some((2, 2)));
+        // Two changes behind, a deletion among them: "XXone\ntwo\n" -> "XXne\ntwo\n".
+        let v2 = f.ada_edits(2, 3, "");
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v2, 4, 7), Some((5, 8)));
+        assert_eq!(f.bobs_caret(), Some((5, 8)));
+    }
+
+    #[test]
+    fn a_caret_at_the_docs_version_is_set_as_it_is() {
+        let f = Carets::new();
+        let v1 = f.ada_edits(0, 0, "XX");
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v1, v1, 1, 3), Some((1, 3)));
+        assert_eq!(f.bobs_caret(), Some((1, 3)));
+    }
+
+    /// Past the live window (2 changes here) `events_since` refuses: dropped,
+    /// and the caret the kit already held stays.
+    #[test]
+    fn a_caret_past_the_live_window_is_dropped() {
+        let f = Carets::new();
+        let v0 = f.version();
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v0, 1, 1), Some((1, 1)));
+        // Three appends at the end: Bob's held caret at 1 doesn't move.
+        f.ada_edits(8, 8, "a");
+        f.ada_edits(9, 9, "b");
+        let v3 = f.ada_edits(10, 10, "c");
+        assert_eq!(v3, v0 + 3);
+        assert!(f.s.events_since(f.bob, v0).is_err(), "the kit's window should refuse 3 changes back");
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v3, 4, 7), None);
+        assert_eq!(f.bobs_caret(), Some((1, 1)), "a dropped caret leaves the held one");
+    }
+
+    /// A caret at a version this socket never told the client: dropped,
+    /// whether the doc has reached it or not.
+    #[test]
+    fn a_caret_from_the_future_is_dropped() {
+        let f = Carets::new();
+        let v0 = f.version();
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v0, v0, 2, 2), Some((2, 2)));
+        // The doc is at v1 but this socket had told the client only v0.
+        let v1 = f.ada_edits(8, 8, "z");
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v1, v0, 4, 7), None);
+        // A version the doc hasn't reached.
+        assert_eq!(place_caret(&f.s, f.bob, ROOT, v1 + 1, v1 + 1, 4, 7), None);
+        assert_eq!(f.bobs_caret(), Some((2, 2)), "a dropped caret leaves the held one");
+    }
+
+    #[test]
+    fn a_caret_on_another_root_is_dropped() {
+        let f = Carets::new();
+        let v0 = f.version();
+        assert_eq!(place_caret(&f.s, f.bob, "other", v0, v0, 0, 0), None);
+        assert_eq!(f.bobs_caret(), None);
     }
 
     #[test]

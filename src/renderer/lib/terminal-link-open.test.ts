@@ -23,6 +23,7 @@ import {
   TERMINAL_LINK_REFUSED,
 } from './terminal-link-open'
 import { useToastStore } from '@/stores/toast'
+import type { RoomProjectsStore } from '@/stores/room'
 
 const ROOTS = ['/Users/me/ws', '/Users/me/ws-wt/feature', 'C:\\Users\\me\\proj']
 
@@ -32,7 +33,7 @@ function room() {
     { path: 'C:\\Users\\me\\proj', workspaces: [] },
   ]
   const store = { getState: () => ({ projects }), getInitialState: () => ({ projects }), subscribe: () => () => {} }
-  return { isPrimary: true, scope: {} as never, projects: store as never }
+  return { isPrimary: true, scope: {} as never, projects: store as unknown as RoomProjectsStore }
 }
 
 beforeEach(() => {

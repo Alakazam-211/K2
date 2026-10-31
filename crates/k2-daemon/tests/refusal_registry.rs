@@ -2,12 +2,17 @@
 //! (prd-tauri-core-0467-v1 TC-18, vs-live TA-19).
 //!
 //! 1. Every refusal code an App route module can send has a row in
-//!    `k2_core::refusals`: the scan reads `apps/`, `app_pairing/` and
-//!    `app_push/` (production code only: test files and everything after
-//!    `#[cfg(test)]` are skipped) for `no("code", …)`, `no(CONST, …)`,
-//!    `refusal("4xx …", "code", …)`, `refusal_with(…)`, `"code": "…"` and
+//!    `k2_core::refusals`: the scan reads `apps/`, `app_pairing/`,
+//!    `app_push/` and the App's own chat routes (`governed_app_routes.rs`,
+//!    `chat_map_routes.rs`, `chat_channel_routes.rs`; production code only:
+//!    test files and everything after `#[cfg(test)]` are skipped) for
+//!    `no("code", …)`, `no(CONST, …)`, `refusal("4xx …", "code", …)`,
+//!    `refusal_with(…)`, `error(4xx, "code", …)`, `"code": "…"` and
 //!    `codes::CONST`, with each `CONST` resolved in its own file first,
-//!    then in `deploy::codes`, then anywhere in those modules.
+//!    then in `deploy::codes`, then anywhere in those modules. The k2-core
+//!    helpers the chat routes pass refusals through
+//!    (`tool_hook::governed_space_for_app`, `app_user_for_call`) are read
+//!    for `(4xx, "code", …)` and `Err("code")`.
 //! 2. A row's exit is what `cli/k2` prints: `_compute_fail` maps 400 and
 //!    413 to 2 and the rest to 3; the listed overrides are pinned to the
 //!    CLI lines that print them.
@@ -114,6 +119,21 @@ fn scan(src: &str) -> Found {
             }
         }
     }
+    // `error(409, "code", …)` (the App chat routes' helper).
+    for (i, _) in src.match_indices("error(") {
+        if src[..i].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let rest = src[i + 6..].trim_start();
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits != 3 {
+            continue;
+        }
+        let Some(after) = rest[digits..].trim_start().strip_prefix(',') else { continue };
+        if let Some(code) = literal(after).filter(|c| is_code(c)) {
+            f.literals.insert(code.to_string());
+        }
+    }
     for (i, _) in src.match_indices("\"code\"") {
         let rest = src[i + 6..].trim_start();
         if let Some(rest) = rest.strip_prefix(':') {
@@ -129,6 +149,37 @@ fn scan(src: &str) -> Found {
         }
     }
     f
+}
+
+/// `(409, "code", …)` and `Err("code")` in one k2-core helper's body (the
+/// refusals it hands a route to send).
+fn scan_helper(src: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, _) in src.match_indices('(') {
+        let rest = &src[i + 1..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 3 {
+            if let Some(after) = rest[digits..].trim_start().strip_prefix(',') {
+                if let Some(code) = literal(after).filter(|c| is_code(c)) {
+                    out.insert(code.to_string());
+                }
+            }
+        }
+    }
+    for (i, _) in src.match_indices("Err(") {
+        if let Some(code) = literal(&src[i + 4..]).filter(|c| is_code(c)) {
+            out.insert(code.to_string());
+        }
+    }
+    out
+}
+
+/// The body of `pub fn <name>` in `src` (up to the next top-level fn).
+fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+    let start = src.find(&format!("\npub fn {name}(")).unwrap_or_else(|| panic!("pub fn {name} not found"));
+    let rest = &src[start + 1..];
+    let end = rest[1..].find("\npub fn ").map(|e| e + 1).unwrap_or(rest.len());
+    &rest[..end]
 }
 
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -151,6 +202,10 @@ fn route_codes() -> BTreeMap<String, BTreeSet<String>> {
     let mut files = Vec::new();
     for d in ["apps", "app_pairing", "app_push"] {
         rs_files(&src.join(d), &mut files);
+    }
+    // The App's own chat routes (Sew for Apps A6/A9, App-governed Spaces).
+    for f in ["governed_app_routes.rs", "chat_map_routes.rs", "chat_channel_routes.rs"] {
+        files.push(src.join(f));
     }
     assert!(files.len() > 40, "the scan found the route modules: {}", files.len());
     let deploy_src = read(&root().join("crates/k2-core/src/deploy/mod.rs"));
@@ -193,6 +248,13 @@ fn route_codes() -> BTreeMap<String, BTreeSet<String>> {
     for v in deploy_codes.values() {
         out.entry(v.clone()).or_default().insert("k2-core deploy::codes".into());
     }
+    // What the chat routes pass through from k2-core.
+    let hook = read(&root().join("crates/k2-core/src/tool_hook/mod.rs"));
+    for name in ["governed_space_for_app", "app_user_for_call"] {
+        for c in scan_helper(fn_body(&hook, name)) {
+            out.entry(c).or_default().insert(format!("k2-core tool_hook::{name}"));
+        }
+    }
     out
 }
 
@@ -200,7 +262,22 @@ fn route_codes() -> BTreeMap<String, BTreeSet<String>> {
 fn every_app_route_refusal_code_has_a_registry_row() {
     let codes = route_codes();
     assert!(codes.len() >= 120, "the scan finds the App codes ({})", codes.len());
-    for known in ["apps_manage_off", "app_not_found", "token_in_use", "pairing_off", "pass_invalid", "egress_self", "box_service_invalid", "handover_vault_closed"] {
+    for known in [
+        "apps_manage_off",
+        "app_not_found",
+        "token_in_use",
+        "pairing_off",
+        "pass_invalid",
+        "egress_self",
+        "box_service_invalid",
+        "handover_vault_closed",
+        // The App chat routes (error(…)) and what they pass through.
+        "sew_unreachable",
+        "sew_refused",
+        "chat_key_required",
+        "space_unbound",
+        "agent_subject",
+    ] {
         assert!(codes.contains_key(known), "the scan sees {known}: {:?}", codes.keys().collect::<Vec<_>>());
     }
     let missing: Vec<String> = codes
@@ -223,12 +300,17 @@ fn the_scan_reads_every_call_shape() {
         fn a() { no("lit_code", 409, "x"); no(codes::APP_EXISTS, 409, "y"); no(MINE, 400, "z"); }
         fn b() { refusal("403 Forbidden", "ref_code", "h"); refusal_with("429 Too Many Requests", "rate_x", "h", m); }
         fn c() { json!({"code": "json_code"}); info("not_a_code", 1); do_no("nope", 1); }
+        fn d() { error(409, "err_code", "h", None); error(500, msg, "x", None); my_error(400, "not_this", "h"); error("409", "nor_this"); }
     "#;
     let f = scan(src);
-    for c in ["lit_code", "ref_code", "rate_x", "json_code"] {
+    for c in ["lit_code", "ref_code", "rate_x", "json_code", "err_code"] {
         assert!(f.literals.contains(c), "{c}: {:?}", f.literals);
     }
-    assert!(!f.literals.contains("not_a_code") && !f.literals.contains("nope"), "{:?}", f.literals);
+    for c in ["not_a_code", "nope", "not_this", "nor_this"] {
+        assert!(!f.literals.contains(c), "{c}: {:?}", f.literals);
+    }
+    let helper = r#"pub fn h() -> R { if x { return Ok(Err((409, "tuple_code", "h".into()))); } Err("item_code") }"#;
+    assert_eq!(scan_helper(helper), BTreeSet::from(["tuple_code".to_string(), "item_code".to_string()]));
     assert!(f.consts.contains("APP_EXISTS") && f.consts.contains("MINE"), "{:?}", f.consts);
     assert_eq!(consts(src).get("MINE").map(String::as_str), Some("my_code"));
 }

@@ -875,6 +875,17 @@ fn thread_read_ready() -> bool {
 /// exist.
 pub const FEATURE_HOMES_SYNC: &str = k2_core::homes_sync::FEATURE;
 
+/// stash-sync-v1 (0.46.7): `/cli/me/stash*` (a person's prompt stash
+/// synced between their devices) and the `stash_changed` frame. On only
+/// when migration 0257's tables (and 0193's device registry) exist.
+pub const FEATURE_STASH_SYNC: &str = k2_core::stash_sync::FEATURE;
+
+fn stash_sync_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| k2_core::stash_sync::tables_exist(&db.lock()))
+        .unwrap_or(false)
+}
+
 fn homes_sync_ready() -> bool {
     k2_core::db::try_shared()
         .map(|db| k2_core::homes_sync::tables_exist(&db.lock()))
@@ -1096,6 +1107,9 @@ pub fn features() -> Vec<&'static str> {
     if homes_sync_ready() {
         out.push(FEATURE_HOMES_SYNC);
     }
+    if stash_sync_ready() {
+        out.push(FEATURE_STASH_SYNC);
+    }
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
         out.push(FEATURE_CATCHUP_UNCHANGED);
@@ -1243,6 +1257,7 @@ mod tests {
                 "push-content-available-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
+                "stash-sync-v1",
                 "inbox-catchup-v1",
                 "catchup-unchanged-v1",
                 "inbox-stream-v1",

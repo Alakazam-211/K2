@@ -102,20 +102,38 @@ fn device_removed(device_id: &str) -> CliResponse {
 /// person, never a username match: a Connect user with a reserved name
 /// (`owner`, made before 0.46.6) gets 403, linked or not.
 pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
+    resolve_person(actor).map_err(|r| match r {
+        PersonRefusal::NoLogin => not_a_person(),
+        PersonRefusal::Store(e) => error("500 Internal Server Error", "store", e),
+        PersonRefusal::Reserved => error(
+            "403 Forbidden",
+            "homes_person_only",
+            "this login's name is one K2 uses for the server's owner and its agents, so it has no Homes; the owner can remove it in Settings → Admin Access and add the person under another name",
+        ),
+    })
+}
+
+/// Why a credential is not a person (the per-feature routes word it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PersonRefusal {
+    /// A login that no longer exists.
+    NoLogin,
+    /// A login whose name K2 reserves (`owner`, made before 0.46.6).
+    Reserved,
+    /// The people roster could not be read.
+    Store(String),
+}
+
+/// The person key for `actor` (shared by Homes and stash sync).
+pub fn resolve_person(actor: &Actor) -> Result<String, PersonRefusal> {
     if actor.owner_token {
         return Ok(OWNER.to_string());
     }
     if k2_core::connect_users::role_for_user(&actor.login).is_none() {
-        return Err(not_a_person());
+        return Err(PersonRefusal::NoLogin);
     }
-    let people = People::load().map_err(|e| error("500 Internal Server Error", "store", e))?;
-    people.login_person_key(&actor.login).ok_or_else(|| {
-        error(
-            "403 Forbidden",
-            "homes_person_only",
-            "this login's name is one K2 uses for the server's owner and its agents, so it has no Homes; the owner can remove it in Settings → Admin Access and add the person under another name",
-        )
-    })
+    let people = People::load().map_err(|e| PersonRefusal::Store(e.to_string()))?;
+    people.login_person_key(&actor.login).ok_or(PersonRefusal::Reserved)
 }
 
 fn now_ms() -> i64 {

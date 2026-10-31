@@ -190,6 +190,8 @@ mod tests {
         ("GET", "/cli/llm/accounts/for"),
         ("POST", "/cli/llm/accounts/for/refresh"),
         ("GET", "/cli/me/homes"),
+        ("GET", "/cli/me/stash"),
+        ("POST", "/cli/me/stash/push"),
         ("GET", "/cli/settings/get"),
         ("POST", "/cli/settings/update"),
         ("POST", "/cli/users/set-role"),

@@ -989,6 +989,18 @@ pub enum SessionEvent {
         device_id: String,
     },
 
+    /// stash-sync-v1 (0.46.7): one person's prompt stash changed on this
+    /// server (a device pushed). PERSON-SCOPED like `homes_changed`: only
+    /// that person's sockets get it. A device whose cursor differs pulls
+    /// `GET /cli/me/stash?since=`. Carries no stash content.
+    ///
+    /// Wire: `{ "kind": "stash_changed", "cursor": number }`.
+    StashChanged {
+        #[serde(skip)]
+        person: String,
+        cursor: i64,
+    },
+
     /// 0.46.6 pair success: a Companion pairing code finished. PERSON-
     /// SCOPED to whoever minted it (the owner token and every login the
     /// owner linked are one person; a login that minted for itself is its
@@ -1071,6 +1083,7 @@ impl SessionEvent {
             SessionEvent::ThreadRead(f) | SessionEvent::ProjectRead(f) => Some(f.person.as_str()),
             SessionEvent::HomesChanged { person, .. }
             | SessionEvent::HomesDeviceRemoved { person, .. }
+            | SessionEvent::StashChanged { person, .. }
             | SessionEvent::PairCodeChanged { person, .. } => Some(person.as_str()),
             _ => None,
         }
@@ -1145,6 +1158,7 @@ impl SessionEvent {
             SessionEvent::ProjectRead(_) => "project_read",
             SessionEvent::HomesChanged { .. } => "homes_changed",
             SessionEvent::HomesDeviceRemoved { .. } => "homes_device_removed",
+            SessionEvent::StashChanged { .. } => "stash_changed",
             SessionEvent::PairCodeChanged { .. } => "pair_code_changed",
         }
     }

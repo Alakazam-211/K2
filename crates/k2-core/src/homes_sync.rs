@@ -389,7 +389,8 @@ pub fn device_state(conn: &Connection, person: &str, device_id: &str) -> rusqlit
     })
 }
 
-fn touch_device(conn: &Connection, person: &str, device_id: &str, now_ms: i64) -> rusqlite::Result<()> {
+/// Stamp an active device's `last_sync_at` (Homes and stash sync share the registry).
+pub fn touch_device(conn: &Connection, person: &str, device_id: &str, now_ms: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE homes_devices SET last_sync_at = ?3 WHERE person = ?1 AND device_id = ?2 AND removed_at IS NULL",
         params![person, device_id, now_ms],

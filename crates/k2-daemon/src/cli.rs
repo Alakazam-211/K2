@@ -178,6 +178,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::homes_routes::refuse_outside_person_arm(path, false) {
         return resp;
     }
+    // stash-sync-v1: the same door for `/cli/me/stash*`.
+    if let Some(resp) = crate::stash_routes::refuse_outside_person_arm(path, false) {
+        return resp;
+    }
     if let Some(resp) = crate::push_routes::dispatch(path, params) {
         return resp;
     }

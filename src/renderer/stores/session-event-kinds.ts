@@ -191,6 +191,10 @@ export const SESSION_EVENT_ROUTES = {
   // daemon, and the runner also polls.
   homes_changed: { class: 'app', app: true },
   homes_device_removed: { class: 'app', app: true },
+  // stash-sync-v1 (0.46.7): person-scoped like the Homes frames. The stash
+  // sync runner pulls on it (`onStashChanged`). Not carried: sync talks to
+  // this computer's daemon, and the runner also polls.
+  stash_changed: { class: 'app', app: true },
   // 0.46.6 pair success: person-scoped to the code's minter. Pair a phone
   // switches to its success / expired state and the phones list adds the
   // phone (`onPairCodeChanged`). Not carried: Settings and the profile modal

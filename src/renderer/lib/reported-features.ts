@@ -94,6 +94,12 @@ export const REPORTED_FEATURES = {
    *  `homes_device_removed` frames and `serverId` on `/boot-status`. The
    *  desktop syncs its Homes with its own daemon only when it lists this. */
   'homes-sync-v1': 'homes-sync-v1',
+  /** stash-sync-v1 (0.46.7): `/cli/me/stash*` (a person's prompt stash
+   *  synced between their devices, records only, no file bytes) and the
+   *  person-scoped `stash_changed` frame. Devices are the Homes registry.
+   *  The desktop syncs its stash with its own daemon only when it lists
+   *  this. */
+  'stash-sync-v1': 'stash-sync-v1',
   /** thread-attachments-v1 (0.46.1): file objects on Thread messages.
    *  `attachments` on `POST /cli/thread/post` (`[{path, line?, lineEnd?}]`,
    *  text optional when files ride) and `GET /cli/thread/attachment`. With

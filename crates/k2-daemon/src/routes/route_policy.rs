@@ -1134,6 +1134,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/me/homes/devices/register", Member),
     post("/cli/me/homes/devices/remove", Member),
     post("/cli/me/homes/push", Member),
+    // stash-sync-v1 (0.46.7): a person's own prompt stash, same rule.
+    get("/cli/me/stash", Member),
+    post("/cli/me/stash/push", Member),
     // Box moves carry the vault (prd-box-move-carry-v1): the steps are the
     // box owner's (the handler also takes the person + vault confirm, or
     // holds the step for the owner); begin and status are Admin.

@@ -10007,12 +10007,15 @@ async fn handle_one_request(
                 .await;
         }
         // homes-sync-v1 (0.46.1) — `/cli/me/homes*`: a person's own Homes
-        // and devices. The PERSON comes from the token (owner token →
+        // and devices; stash-sync-v1 (0.46.7) — `/cli/me/stash*`: their
+        // prompt stash. The PERSON comes from the token (owner token →
         // `owner`; a live Connect session → its person key), never the
         // body. Anything else (agent passports, app passes, API keys) is
-        // 403 `homes_person_only`. A GET to a POST-only path was answered
-        // 405 before auth (`get_refused`).
-        p if crate::homes_routes::is_homes_route(p) => {
+        // 403 `homes_person_only` / `stash_person_only`. A GET to a
+        // POST-only path was answered 405 before auth (`get_refused`).
+        p if crate::homes_routes::is_homes_route(p) || crate::stash_routes::is_stash_route(p) => {
+            let stash = crate::stash_routes::is_stash_route(p);
+            let max_body = if stash { crate::stash_routes::MAX_BODY } else { crate::homes_routes::MAX_BODY };
             let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
                 Some(crate::notify_routes::Actor::owner_token())
             } else {
@@ -10023,25 +10026,29 @@ async fn handle_one_request(
             };
             let Some(actor) = actor else {
                 if is_post {
-                    let _ = super::http::read_post_body_capped(&mut *stream, &mut buf, crate::homes_routes::MAX_BODY)
-                        .await;
+                    let _ = super::http::read_post_body_capped(&mut *stream, &mut buf, max_body).await;
                 } else {
                     let _ = stream.read(&mut buf).await;
                 }
-                let r = crate::homes_routes::not_a_person();
+                let r = if stash { crate::stash_routes::not_a_person() } else { crate::homes_routes::not_a_person() };
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             };
             let body_bytes = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::homes_routes::MAX_BODY).await {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, max_body).await {
                     Ok(b) => b,
                     Err(refused) => {
+                        let body = if stash {
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"stash push body over 4 MiB: split the batch"}}"#
+                        } else {
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"Homes push body over 1 MiB"}}"#
+                        };
                         super::http::refuse_body_too_large(
                             &mut *stream,
                             &refused,
                             "413 Payload Too Large",
                             "application/json",
-                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"Homes push body over 1 MiB"}}"#,
+                            body,
                         )
                         .await;
                         return DispatchOutcome::Done;
@@ -10054,7 +10061,11 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let params = super::http::parse_params(p, &query);
             let result = tokio::task::spawn_blocking(move || {
-                crate::homes_routes::handle(is_post, &p_owned, &body_bytes, &actor, &params)
+                if stash {
+                    crate::stash_routes::handle(is_post, &p_owned, &body_bytes, &actor, &params)
+                } else {
+                    crate::homes_routes::handle(is_post, &p_owned, &body_bytes, &actor, &params)
+                }
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

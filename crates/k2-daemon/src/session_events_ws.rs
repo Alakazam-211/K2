@@ -689,6 +689,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // sockets get them.
         SessionEvent::ThreadRead(_) | SessionEvent::ProjectRead(_) => None,
         SessionEvent::HomesChanged { .. } | SessionEvent::HomesDeviceRemoved { .. } => None,
+        // stash-sync-v1: person-scoped like the Homes frames.
+        SessionEvent::StashChanged { .. } => None,
         // 0.46.6 pair success: person-scoped to the code's minter like the
         // Homes frames.
         SessionEvent::PairCodeChanged { .. } => None,
@@ -1105,6 +1107,7 @@ mod tests {
             SessionEvent::ProjectRead(read_frame("owner")),
             SessionEvent::HomesChanged { person: "owner".into(), cursor: 3 },
             SessionEvent::HomesDeviceRemoved { person: "owner".into(), device_id: "d-1".into() },
+            SessionEvent::StashChanged { person: "owner".into(), cursor: 4 },
             pair_code_paired("owner"),
         ]
     }
@@ -1189,6 +1192,20 @@ mod tests {
         assert!(!person_may_see(&ev, None), "an unresolved socket gets no person frames");
         let app = SessionEvent::ProjectsChanged {};
         assert!(person_may_see(&app, None) && person_may_see(&app, Some("gina")), "other kinds are untouched");
+    }
+
+    /// stash-sync-v1: `stash_changed`'s wire shape (the phone contract) and
+    /// its routing: only that person's sockets, no person key on the wire.
+    #[test]
+    fn stash_frame_is_person_scoped_and_keeps_its_wire_shape() {
+        let ev = SessionEvent::StashChanged { person: "gina".into(), cursor: 9 };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).expect("ser")).expect("json");
+        assert_eq!(json, serde_json::json!({ "kind": "stash_changed", "cursor": 9 }));
+        assert_eq!(ev.kind_name(), "stash_changed");
+        assert!(person_may_see(&ev, Some("gina")));
+        assert!(!person_may_see(&ev, Some("owner")), "another person's socket");
+        assert!(!person_may_see(&ev, None), "an unresolved socket gets no person frames");
+        assert_eq!(event_scope_path(&ev), None, "app-level by path");
     }
 
     /// homes-sync-v1: the Homes frames' wire shape (the phone contract) and

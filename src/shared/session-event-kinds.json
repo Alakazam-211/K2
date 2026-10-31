@@ -57,6 +57,7 @@
   "app_deployed": "app",
   "homes_changed": "app",
   "homes_device_removed": "app",
+  "stash_changed": "app",
   "pair_code_changed": "app",
   "inbox_subscribed": "inbox",
   "inbox_error": "inbox",

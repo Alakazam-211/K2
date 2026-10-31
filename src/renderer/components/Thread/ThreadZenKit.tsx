@@ -831,6 +831,10 @@ export function ThreadComposeBox({
 // a soft dark wash and a dark glyph on light ones (no white on white).
 
 /** The lit "+"'s fill: the text colour at 20% (white at 20% on dark). */
+/** The message box's tool buttons' ("+", "/", the stash) corner radius
+ *  outside the square Style: a rounded square, the cards' radius. */
+export const THREAD_TOOL_RADIUS = 'calc(var(--zen-radius) / 2)'
+
 export const THREAD_PLUS_LIT_FILL = 'color-mix(in srgb, var(--zen-text) 20%, transparent)'
 /** The lit "+"'s glyph: the text colour (white on dark), from muted. */
 export const THREAD_PLUS_LIT_INK = 'var(--zen-text)'
@@ -904,13 +908,21 @@ export function ThreadRoundButton({
       onClick={onClick}
       {...(lightable ? handlers : {})}
       {...data}
+      // Its backdrop (hover, held, on) is a square (Rosson 2026-10-31: never
+      // a circle or an oval): the square Style's chamfer; elsewhere a
+      // rounded square, the cards' radius.
+      data-chamfer=""
       className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
       style={{
         width: 32,
         height: 32,
-        borderRadius: 999,
+        borderRadius: THREAD_TOOL_RADIUS,
         color: pressed ? 'var(--zen-accent-text)' : lit ? THREAD_PLUS_LIT_INK : 'var(--zen-text-muted)',
         background: pressed ? 'var(--zen-accent)' : lit ? THREAD_PLUS_LIT_FILL : undefined,
+        ...chamferVars({
+          cut: CHAMFER_CUT.button,
+          fill: pressed ? 'var(--zen-accent)' : lit ? THREAD_PLUS_LIT_FILL : 'transparent',
+        }),
         ...(lightable ? { transition: THREAD_PLUS_LIT_TRANSITION } : {}),
         fontSize: 20,
         lineHeight: 1,

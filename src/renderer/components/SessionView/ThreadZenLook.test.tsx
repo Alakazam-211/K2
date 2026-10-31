@@ -508,7 +508,7 @@ describe('chamfered corners in K2\'s square Style', () => {
   /** Does the chamfer rule (the cut-shape layers) apply to `e`? */
   const cut = (e: HTMLElement): boolean => e.matches(`${CHAMFER_SCOPE} [data-chamfer]`)
 
-  it('bubbles, the field, Send, the drawer\'s tab and Stop, and "Earlier messages" carry the chamfer; "+" and "/" do not', () => {
+  it('bubbles, the field, Send, the drawer\'s tab and Stop, "Earlier messages", and the "+", "/" and stash buttons carry the chamfer', () => {
     renderThread()
     const named = Array.from(document.querySelectorAll('[data-chamfer]')).map((e) =>
       e.hasAttribute('data-zen-bubble')
@@ -523,11 +523,21 @@ describe('chamfered corners in K2\'s square Style', () => {
                 ? 'stop'
                 : e.hasAttribute('data-zen-load-older')
                   ? 'earlier'
-                  : e.outerHTML.slice(0, 60),
+                  : e.getAttribute('data-testid') === 'compose-plus'
+                    ? 'plus'
+                    : e.getAttribute('data-testid') === 'compose-slash-button'
+                      ? 'slash'
+                      : e.hasAttribute('data-stash-button')
+                        ? 'stash'
+                        : e.outerHTML.slice(0, 60),
     )
-    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stop'])
-    for (const small of [screen.getByRole('button', { name: 'Attach or save' }), screen.getByTestId('compose-slash-button')]) {
-      expect(small.hasAttribute('data-chamfer')).toBe(false)
+    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'plus', 'send', 'slash', 'stash', 'stop'])
+    // Rosson 2026-10-31: their backdrop (hover, held, on) is a square, never a
+    // circle or an oval: a 3px cut, transparent until hovered.
+    for (const small of [screen.getByTestId('compose-plus'), screen.getByTestId('compose-slash-button'), screen.getByTestId('stash-button')]) {
+      expect(['tl', 'tr', 'br', 'bl'].map((k) => small.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '3px', '3px'])
+      expect(small.style.getPropertyValue('--ch-fill')).toBe('transparent')
+      expect(small.style.borderRadius).toBe('calc(var(--zen-radius) / 2)')
     }
     // Scaled like Send (5px at 32px): Stop 20px → 3px, "Earlier messages" 22px → 3.5px.
     expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('3px')
@@ -553,9 +563,11 @@ describe('chamfered corners in K2\'s square Style', () => {
     const send = el('[data-zen-send]')
     const btn = screen.getByTestId('stash-button')
     expect(btn.nextElementSibling).toBe(send)
-    // A soft round button like "+" and "/": no fill, so no chamfer in any Style.
+    // A soft button like "+" and "/": a square backdrop on hover, chamfered
+    // in the square Style, a rounded square (never a pill) in the others.
     expect(btn.hasAttribute('data-zen-soft-button')).toBe(true)
-    expect(btn.hasAttribute('data-chamfer')).toBe(false)
+    expect(cut(btn)).toBe(style === 'square')
+    expect(btn.style.borderRadius).toBe('calc(var(--zen-radius) / 2)')
     expect(document.querySelector('[data-stash-tab]')).toBeNull()
     fireEvent.change(box(), { target: { value: 'x' } })
     expect(screen.queryByTestId('stash-button')).toBeNull()
@@ -597,9 +609,12 @@ describe('chamfered corners in K2\'s square Style', () => {
     for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]', '[data-zen-drawer-stop]', '[data-zen-load-older]']) {
       expect(cut(el(sel)), sel).toBe(true)
     }
-    // "+" and "/" have no fill: left as they are.
-    expect(cut(screen.getByRole('button', { name: 'Attach or save' }))).toBe(false)
-    expect(cut(screen.getByTestId('compose-slash-button'))).toBe(false)
+    // "+" and "/" (and the stash): their hover backdrop is chamfered too, and
+    // a held "+" keeps its lit fill (the hover rule skips it).
+    expect(cut(screen.getByTestId('compose-plus'))).toBe(true)
+    expect(cut(screen.getByTestId('compose-slash-button'))).toBe(true)
+    expect(THREAD_CHAMFER_CSS).toContain('[data-zen-soft-button][data-chamfer]:hover:not(:disabled):not([data-zen-lit]) { --ch-fill: var(--zen-surface-raised) !important; }')
+    expect(THREAD_CHAMFER_CSS).toContain('[data-zen-compose] [data-zen-soft-button][data-chamfer]:hover:not(:disabled):not([data-zen-lit]) { --ch-fill: var(--zen-surface) !important; }')
     // The rule flattens the radius and paints the cut shape behind the content.
     expect(THREAD_CHAMFER_CSS).toMatch(/\[data-chamfer\] \{ border-radius: 0 !important;/)
     expect(THREAD_CHAMFER_CSS).toContain('[data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: polygon(')

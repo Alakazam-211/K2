@@ -70,6 +70,34 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
             &["lease", "lease --renew", "lease --release", "lease --break"],
             "a Markdown doc merges edits; leases are tier 0's",
         ),
+        // the grid tier's rows (P35-P44, base C1g): a Markdown doc has no rows or columns
+        P::RowInsert
+        | P::RowMove
+        | P::RowDelete
+        | P::ColInsert
+        | P::ColMove
+        | P::ColDelete
+        | P::ColRename
+        | P::Sort
+        | P::RestoreElement
+        | P::DropDeleted => ParityRow::not_applicable(
+            a,
+            &[],
+            &[
+                "row insert",
+                "row move",
+                "row delete",
+                "row restore",
+                "col insert",
+                "col move",
+                "col delete",
+                "col restore",
+                "col rename",
+                "sort",
+                "rows drop-deleted",
+            ],
+            "a Markdown doc has no rows or columns; these are a grid's (CSV)",
+        ),
     }
 }
 

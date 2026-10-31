@@ -221,7 +221,7 @@ out="$(k2 sim wait --for Saved --timeout 30s 2>&1)"
 [ "$(req)" = '/cli/sim/wait {"for": "Saved", "timeoutMs": 30000, "workspace": "/ws/docs"}' ] && grep -qF 'ok wait' <<<"$out" && ok "3: wait" || bad "3: wait: $(req) $out"
 out="$(k2 sim status 2>&1)"
 grep -qF 'lane android   needs a step' <<<"$out" \
-    && grep -qF '  the owner must accept the Android SDK licence (a card; never you)' <<<"$out" \
+    && grep -qF '  the owner must accept the Android SDK licence [android-sdk-license] (a card; never you)' <<<"$out" \
     && grep -qF 'lane ios       not available (not a Mac)' <<<"$out" \
     && grep -qF 'device: sim s1 · android · Pixel 9 · running · 412x915 pt · com.acme.app' <<<"$out" \
     && grep -qF 'held: rosson is using the device' <<<"$out" \

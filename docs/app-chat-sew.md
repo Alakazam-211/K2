@@ -14,6 +14,64 @@ them), never by version numbers:
 | `home_client` | the owner's home client and "App-only" marks reach Sew |
 | `app_origin` | K2 sends each App's `wss://` signalling origin: **voice and calls for a custom App** (expected with Sew 0.4.1) |
 | `k2_managed_avatar` | K2's picture replaces one a member set in Sew |
+| `app_governed_spaces` | Sew 0.6.0: the **chat key** and App-governed Spaces (below). `k2 app chat <app>` says whether this box's Sew has it |
+
+## The chat key (Sew 0.6.0, K2 0.46.7)
+
+With Sew's `app_governed_spaces` flag there is a shorter path than giving each
+person chat (the next sections): one **chat key** per App, and the App decides
+who sees which channel.
+
+1. **The key.** The owner, in person (a vault confirm from a terminal outside
+   K2): `k2 app grant <app> --kind chat-key [--max-level member|moderator|admin]
+   [--max N] [--caps "…"] [--uploads on|off]`. It is a permission K2 keeps, not a
+   secret: nothing reaches the App. Every App user with a login then gets chat on
+   their first pass, up to N people (default 500); until Sew confirms their
+   member the pass answers `503 chat_member_pending` (retry). An agent asks on a
+   permission card: `k2 permission request apps.chat-key app=<app> --why "…"`.
+   Narrowing or `--revoke` needs no confirm (the owner, an Admin, or the App's own
+   agent); `--revoke` also ends the App's chat sessions.
+2. **The manifest's `chat` block** (needs `requires.k2 >= 0.46.7`; `k2 app
+   validate` checks it): static `channels` (`slug`, `name`, `type` text|voice,
+   `private`, `userLimit`), who sees a private one (`roles`, or `rooms`: anyone
+   whose role has a room line there), `agents` (workspaces in private text
+   channels, at level member: the App's own or a room of its roles) and `levels`
+   (role → member|moderator|admin, never above the key's `max_level`). Public
+   channels list nobody: every member of the Space sees them.
+3. **A Space the App owns.** `k2 chat space create <slug> --name "<Name>" --app
+   <app>` (an agent with Manage Chat / Voice Hosting): owned by the App's service
+   owner (`app:<app id>`, never a person, never signs in), bound in one step.
+4. **The switch.** The owner or an Admin, in person: `k2 hostchat app-space
+   governance <app> <space-id> app` (an agent asks on a card:
+   `sew.space-governance`). Box users (the owner, Admins) leave the Space; they
+   are never members of App chat. K2 then keeps every App user's private
+   channels and level in step with their role, within seconds of any change.
+5. **Channels made at run time.** `chat.channels` (Sew's bulk channel ops:
+   `ensure`, `rename`, `archive`, `unarchive`; 200 a call) and
+   `chat.setChannels` (each person's App-managed list, in full; 500 people a
+   call), cap `chat:channels`, 60 calls a minute per App. The server SDK's
+   helpers build and batch them:
+
+   ```ts
+   import { applyChannelOps, channelOp, setAllChannels } from '@k2/server'
+   const app = k2.asApp()
+   await applyChannelOps(app, [
+     channelOp.ensure('job-1042', 'Job 1042', { private: true }),
+     channelOp.ensure('site-call', 'Site call', { type: 'voice', userLimit: 12 }),
+   ])
+   await setAllChannels(app, [{ username: 'dana', channels: ['job-1042'] }])
+   ```
+
+   K2 sends each person their role's channels plus the App's list, so the
+   manifest and the App's own calls never overwrite each other.
+6. **See it.** `k2 app chat <app>`: the key, each Space and who governs it, the
+   channels, and each person's last sync. A held person says why: banned in the
+   Space, deactivated in chat, the Space at the App's member limit, or an unknown
+   channel.
+
+An App user whose name matches a box login (the owner, an Admin) is a separate
+account; their chat handle gets a short suffix. An existing App Space moves the
+same way: the key, then the switch.
 
 ## The shape
 
@@ -164,6 +222,14 @@ deactivated (history stays); giving chat again brings back the same member id.
 | `app_mismatch` (409) | the Space belongs to another App | use your own Space |
 | `chat_unavailable` (409/503) | Chat / Voice Hosting is off or not reachable | `k2 hostchat status` |
 | `rate_limited` (429) | 60 calls a minute per App | wait `retryAfterMs` |
+| `chat_key_required` (409) | the App has no chat key (chat.channels, chat.setChannels, the switch) | the owner: `k2 app grant <app> --kind chat-key` |
+| `chat_member_pending` (503) | a keyed App's user: Sew hasn't confirmed their member yet | retry after `Retry-After` |
+| `agent_subject` (item) | that username is an agent's login | list agents in the manifest's `chat` block instead |
+| `not_app_governed` (409) | the Space is still Sew-governed | the owner or an Admin: `k2 hostchat app-space governance … app` |
+| `home_client_cannot_govern` (409) | the home-client App can't hold a key or govern | use another App |
+| `sew_unreachable` (503) / `sew_refused` (502) | K2 couldn't reach Sew, or Sew refused (the hint says why) | `k2 hostchat status`; fix the op |
+
+Every code above (and more): `k2 explain <code>`.
 
 ## Home client and App-only
 

@@ -188,6 +188,8 @@ pub enum MemberLookup {
 pub struct Role {
     pub id: String,
     pub name: String,
+    /// Sew's ladder position (`@everyone` is 0; higher outranks lower).
+    pub position: u32,
 }
 
 /// The channel permissions K2 lets an agent set through `channel perms`
@@ -226,14 +228,19 @@ pub struct Overwrite {
 }
 
 /// A Space to create through Sew's mgmt `spaces/create` (SW11). Agents
-/// never own a Space: `owner_external_id` is `k2:owner` or a person, and
-/// the acting agent becomes a non-ADMINISTRATOR manager.
+/// never own a Space: `owner_external_id` is `k2:owner` or a person. A
+/// coworker agent that creates it becomes a non-ADMINISTRATOR manager; an
+/// assistant never does (Sew: managers are persons or coworker agents, an
+/// assistant is `422 target_not_eligible`), so `manager` is false for one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSpace {
     pub slug: String,
     pub name: String,
     pub owner_external_id: String,
     pub idempotency_key: String,
+    /// Name the acting agent in `managers` (a coworker); false for an
+    /// assistant (no managers named).
+    pub manager: bool,
     /// Sew 0.6.0: an App-owned Space (`owner` = `app:<this id>`); Sew
     /// writes the governing link with the create.
     pub app_id: Option<String>,
@@ -300,6 +307,10 @@ pub trait SewChat: Send + Sync {
     fn channel_set_private(&self, a: &ActAs, channel_id: &str, private: bool) -> Result<Channel, SewError>;
     fn roles(&self, a: &ActAs, space_id: &str) -> Result<Vec<Role>, SewError>;
     fn role_create(&self, a: &ActAs, space_id: &str, name: &str, idempotency_key: &str) -> Result<Role, SewError>;
+    /// The top ladder position among a member's roles in a Space (0: only
+    /// `@everyone`). Sew's ladder (S12 §8.3) lets a manager create and hand
+    /// out roles only below its own top role, to people below it.
+    fn member_top_position(&self, a: &ActAs, space_id: &str, member_id: &str) -> Result<u32, SewError>;
     /// Add (`add`) or remove a role from a member.
     fn role_member(&self, a: &ActAs, space_id: &str, role_id: &str, member_id: &str, add: bool) -> Result<(), SewError>;
     /// Set one role's overwrite on a channel (replaces that role's allow

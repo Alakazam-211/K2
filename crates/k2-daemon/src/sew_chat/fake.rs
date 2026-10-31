@@ -61,6 +61,11 @@ struct State {
     space_members: HashMap<String, HashSet<String>>,
     /// Space id → managers (Sew's MANAGE_* holders).
     managers: HashMap<String, HashSet<String>>,
+    /// Agents Sew holds as assistants (external ids).
+    assistants: HashSet<String>,
+    /// The `Managers` role's ladder position per Space (Sew makes it at 1,
+    /// the bottom, at create; the owner may move it up).
+    manager_position: HashMap<String, u32>,
     /// Space id → roles; role id → members.
     roles: HashMap<String, Vec<Role>>,
     role_members: HashMap<String, HashSet<String>>,
@@ -126,6 +131,36 @@ impl FakeSew {
     /// Give a member Sew's MANAGE_* in a Space (a Space manager).
     pub fn make_manager(&self, space_id: &str, member_id: &str) {
         self.s.lock().unwrap().managers.entry(space_id.into()).or_default().insert(member_id.into());
+    }
+
+    /// Sew holds this agent (`k2:workspace:<id>`) as an assistant.
+    pub fn set_assistant(&self, external_id: &str) {
+        self.s.lock().unwrap().assistants.insert(external_id.into());
+    }
+
+    /// The Space's owner moved the `Managers` role to `position` (Sew makes
+    /// it at 1, where a manager has no room below it on the ladder).
+    pub fn set_manager_position(&self, space_id: &str, position: u32) {
+        self.s.lock().unwrap().manager_position.insert(space_id.into(), position);
+    }
+
+    /// Sew's ladder (S12 §8.3): a member's top role position (managers hold
+    /// the `Managers` role, at 1 unless moved).
+    fn top_of(s: &State, space_id: &str, member_id: &str) -> u32 {
+        let managed = s.managers.get(space_id).is_some_and(|m| m.contains(member_id));
+        let manager = if managed { s.manager_position.get(space_id).copied().unwrap_or(1) } else { 0 };
+        let held = s
+            .roles
+            .get(space_id)
+            .map(|rs| rs.iter().filter(|r| s.role_members.get(&r.id).is_some_and(|h| h.contains(member_id))).map(|r| r.position).max().unwrap_or(0))
+            .unwrap_or(0);
+        manager.max(held)
+    }
+
+    fn hierarchy() -> SewError {
+        let mut e = SewError::new(403, "missing_permission", "the role or the member is not below you on the role ladder");
+        e.reason = Some("hierarchy".into());
+        e
     }
 
     /// Take a member out of a Space (test setup; no act-as).
@@ -673,9 +708,23 @@ impl SewChat for FakeSew {
         if s.roles.get(space_id).is_some_and(|r| r.iter().any(|r| r.name.eq_ignore_ascii_case(name))) {
             return Err(SewError::new(409, "name_taken", "a role with that name already exists"));
         }
-        let r = Role { id: format!("role-{}", Self::id(&mut s)), name: name.into() };
+        // Sew: a new role lands at position 1, which must sit below the
+        // creator's top role.
+        if Self::top_of(&s, space_id, &me) <= 1 {
+            return Err(Self::hierarchy());
+        }
+        let r = Role { id: format!("role-{}", Self::id(&mut s)), name: name.into(), position: 1 };
         s.roles.entry(space_id.into()).or_default().push(r.clone());
         Ok(r)
+    }
+
+    fn member_top_position(&self, a: &ActAs, space_id: &str, member_id: &str) -> Result<u32, SewError> {
+        let mut s = self.s.lock().unwrap();
+        let me = self.enter(&mut s, "member_top_position", a, None, &format!("{space_id}/{member_id}"))?;
+        if !s.space_members.get(space_id).is_some_and(|m| m.contains(&me)) {
+            return Err(SewError::not_found("space not found"));
+        }
+        Ok(Self::top_of(&s, space_id, member_id))
     }
 
     fn role_member(&self, a: &ActAs, space_id: &str, role_id: &str, member_id: &str, add: bool) -> Result<(), SewError> {
@@ -683,8 +732,12 @@ impl SewChat for FakeSew {
         let op = if add { "role_add" } else { "role_remove" };
         let me = self.enter(&mut s, op, a, None, &format!("{role_id}:{member_id}"))?;
         Self::need_manager(&s, space_id, &me)?;
-        if !s.roles.get(space_id).is_some_and(|r| r.iter().any(|r| r.id == role_id)) {
+        let Some(position) = s.roles.get(space_id).and_then(|r| r.iter().find(|r| r.id == role_id)).map(|r| r.position) else {
             return Err(SewError::not_found("role not found"));
+        };
+        let top = Self::top_of(&s, space_id, &me);
+        if position >= top || (member_id != me && Self::top_of(&s, space_id, member_id) >= top) {
+            return Err(Self::hierarchy());
         }
         let set = s.role_members.entry(role_id.into()).or_default();
         if add {
@@ -752,11 +805,23 @@ impl SewChat for FakeSew {
         if s.spaces.iter().any(|x| x.slug == n.slug) {
             return Err(SewError::new(409, "slug_taken", "that Space slug is taken"));
         }
+        // Sew: managers are persons or coworker agents; an assistant named
+        // as one is 422 target_not_eligible.
+        if n.manager && s.assistants.contains(&a.external_id()) {
+            let mut e = SewError::new(422, "invalid_state", "managers are persons or coworker agents");
+            e.reason = Some("target_not_eligible".into());
+            return Err(e);
+        }
         let id = format!("sp-{}", Self::id(&mut s));
         let sp = Space { id: id.clone(), slug: n.slug.clone(), name: n.name.clone() };
         s.spaces.push(sp.clone());
-        s.space_members.insert(id.clone(), [me.clone()].into_iter().collect());
-        s.managers.insert(id, [me].into_iter().collect());
+        if n.manager {
+            s.space_members.insert(id.clone(), [me.clone()].into_iter().collect());
+            s.managers.insert(id, [me].into_iter().collect());
+        } else {
+            // No manager named: the agent isn't in the Space.
+            s.space_members.insert(id, HashSet::new());
+        }
         s.space_creates.push((n.slug.clone(), n.owner_external_id.clone(), a.external_id(), a.actor.clone()));
         Ok(sp)
     }

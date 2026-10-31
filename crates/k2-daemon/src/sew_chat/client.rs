@@ -643,6 +643,13 @@ impl SewChat for SewClientChat {
         Ok(map_role(&role))
     }
 
+    fn member_top_position(&self, a: &ActAs, space_id: &str, member_id: &str) -> R<u32> {
+        let (sid, mid) = (parse_id(space_id)?, parse_id(member_id)?);
+        let m: SpaceMember = self.get_as(a, r::with_ids(r::SPACE_MEMBER, sid, mid), vec![])?;
+        let roles: PPage<PRole> = self.get_as(a, r::with_id(r::SPACE_ROLES, sid), vec![])?;
+        Ok(roles.items.iter().filter(|r| m.role_ids.contains(&r.id)).map(|r| r.position).max().unwrap_or(0))
+    }
+
     fn role_member(&self, a: &ActAs, space_id: &str, role_id: &str, member_id: &str, add: bool) -> R<()> {
         let tpl = if add { r::SPACE_MEMBER_ROLES_ADD } else { r::SPACE_MEMBER_ROLES_REMOVE };
         let path = r::with_ids(tpl, parse_id(space_id)?, parse_id(member_id)?);
@@ -691,6 +698,8 @@ impl SewChat for SewClientChat {
     fn space_create(&self, a: &ActAs, n: &NewSpace) -> R<Space> {
         let slug = Slug::new(&n.slug).map_err(|_| usage_err("a Space slug is lowercase a-z, 0-9 and -"))?;
         let manager: ExternalId = a.external_id().parse().map_err(|_| usage_err("the acting agent isn't an external id"))?;
+        // Sew: managers are persons or coworker agents; never an assistant.
+        let managers: Vec<ExternalId> = if n.manager { vec![manager] } else { Vec::new() };
         let body = match &n.app_id {
             // Sew 0.6.0 §3a: an App-owned Space, owned by the App's service
             // owner. The vendored sew-proto (0.3.x) has no `app:` form, so
@@ -704,7 +713,7 @@ impl SewChat for SewClientChat {
                     "slug": slug.as_str(),
                     "name": n.name.trim(),
                     "owner": owner.to_string(),
-                    "managers": [manager.to_string()],
+                    "managers": managers.iter().map(ToString::to_string).collect::<Vec<_>>(),
                     "app_id": app,
                 })
             }
@@ -714,7 +723,7 @@ impl SewChat for SewClientChat {
                     slug,
                     name: n.name.trim().to_string(),
                     owner,
-                    managers: vec![manager],
+                    managers,
                     app_id: None,
                     hidden: false,
                 };
@@ -1017,7 +1026,7 @@ pub(crate) fn map_space(s: &PSpace) -> Space {
 }
 
 pub(crate) fn map_role(r: &PRole) -> Role {
-    Role { id: r.id.to_string(), name: if r.is_everyone { "everyone".to_string() } else { r.name.clone() } }
+    Role { id: r.id.to_string(), name: if r.is_everyone { "everyone".to_string() } else { r.name.clone() }, position: r.position }
 }
 
 pub(crate) fn map_member(m: &PMember) -> MemberRef {

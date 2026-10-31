@@ -370,6 +370,7 @@ async fn space_create_is_a_mgmt_call_naming_the_agent_manager() {
                     name: "Ops".into(),
                     owner_external_id: "k2:owner".into(),
                     idempotency_key: "k2c-space1".into(),
+                    manager: true,
                     app_id: None,
                 },
             )
@@ -382,6 +383,7 @@ async fn space_create_is_a_mgmt_call_naming_the_agent_manager() {
                     name: "Mine".into(),
                     owner_external_id: format!("k2:workspace:{WS}"),
                     idempotency_key: "k2c-space2".into(),
+                    manager: true,
                     app_id: None,
                 },
             )

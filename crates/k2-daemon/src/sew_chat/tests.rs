@@ -1145,7 +1145,16 @@ fn members_roles_perms_bans_and_timeouts_go_through_sew_as_the_agent() {
     assert!(!e.fake.is_space_member("sp-hearth", "mem-gamma"));
     let (s, v) = manage("space/members/add", json!({"space": "hearth", "member": "@ghost"}));
     assert_eq!((s, code(&v)), (404, "not_found"), "{v}");
-    // Roles; never on itself.
+    // Roles. Sew's ladder (S12 §8.3): a new Space's Managers role is at
+    // position 1, the bottom, so a manager has no room below it. K2 says
+    // so up front, and nothing reaches Sew's role create.
+    let (s, v) = manage("role/create", json!({"space": "hearth", "role": "eng"}));
+    assert_eq!((s, code(&v)), (403, "role_ladder"), "{v}");
+    assert_eq!(v["top"], json!(1), "{v}");
+    assert!(v["hint"].as_str().unwrap().contains("Managers role sits at the bottom"), "{v}");
+    assert!(!e.fake.calls().iter().any(|c| c.op == "role_create"), "refused before Sew");
+    // The Space's owner moves the Managers role up: room below it.
+    e.fake.set_manager_position("sp-hearth", 3);
     let (s, v) = manage("role/create", json!({"space": "hearth", "role": "eng"}));
     assert_eq!(s, 200, "{v}");
     let role_id = v["role"]["id"].as_str().unwrap().to_string();
@@ -1161,6 +1170,12 @@ fn members_roles_perms_bans_and_timeouts_go_through_sew_as_the_agent() {
     assert!(e.fake.role_holders(&role_id).is_empty());
     let (s, v) = manage("role/add", json!({"space": "hearth", "role": "nope", "member": "@rosson"}));
     assert_eq!((s, code(&v)), (404, "not_found"), "{v}");
+    // Never to someone who ranks as high (another manager): the ladder again.
+    e.fake.make_manager("sp-hearth", &e.rosson);
+    let (s, v) = manage("role/add", json!({"space": "hearth", "role": "eng", "member": "@rosson"}));
+    assert_eq!((s, code(&v)), (403, "role_ladder"), "{v}");
+    assert!(v["hint"].as_str().unwrap().contains("not below your top role"), "{v}");
+    assert!(e.fake.role_holders(&role_id).is_empty());
     // Channel permissions: view/send only.
     let (s, v) = manage("channel/perms", json!({"to": "hearth/general", "role": "everyone", "deny": ["send"]}));
     assert_eq!(s, 200, "{v}");
@@ -1254,6 +1269,21 @@ fn new_spaces_are_owned_by_a_person_and_the_creator_manages_them() {
     assert_eq!(s, 200, "the creator manages it right away: {v}");
     let (s, v) = manage("space/create", json!({"slug": "design"}));
     assert_eq!((s, code(&v)), (409, "slug_taken"), "{v}");
+    assert_eq!(v_bool(&manage("space/create", json!({"slug": "design2"})).1, "sewManager"), Some(true), "a coworker is named manager");
+    // An assistant is never a Sew Space manager (Sew: 422
+    // target_not_eligible): K2 names no manager and says so.
+    routes::test_assist::set(WA, Some(owner_person()));
+    e.fake.set_assistant(&format!("k2:workspace:{WA}"));
+    let (s, v) = manage("space/create", json!({"slug": "notes", "name": "Notes"}));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["sewManager"], json!(false), "{v}");
+    assert!(v["note"].as_str().unwrap().contains("never makes an assistant a Space manager"), "{v}");
+    assert_eq!(v["access"]["level"], json!("manage"), "K2 still records level manage: {v}");
+    routes::test_assist::clear();
+}
+
+fn v_bool(v: &Value, k: &str) -> Option<bool> {
+    v.get(k).and_then(Value::as_bool)
 }
 
 #[test]

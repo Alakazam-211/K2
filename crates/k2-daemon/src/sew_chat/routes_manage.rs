@@ -382,8 +382,43 @@ fn role_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
     let sew = backend()?;
     let row = manage_space(c, &b.space)?;
     let a = act(c, m);
+    // Sew's ladder, checked up front: a new role lands at position 1, which
+    // must sit below the agent's own top role.
+    let me = sew.me(&a).map_err(sew_err)?;
+    let top = sew.member_top_position(&a, &row.space_id, &me.member_id).map_err(sew_err)?;
+    if top <= 1 {
+        audit(m, Some(&c.project_id), "role.create", Some(&row.space_id), Some(name), None, "refused", Some(ROLE_LADDER))?;
+        return Err(ladder_refusal(
+            &row.space_slug,
+            top,
+            format!("you can't create a role in {}: your top role there is at position {top}, and a new role would land at or above it", row.space_slug),
+        ));
+    }
     let r = sew_step(c, m, "role.create", Some(&row.space_id), Some(name), None, || sew.role_create(&a, &row.space_id, name, &key))?;
     Ok(json!({ "ok": true, "space": row.space_slug, "role": { "id": r.id, "name": r.name } }))
+}
+
+/// Sew's role ladder refused it (`403 missing_permission`, reason `hierarchy`).
+pub const ROLE_LADDER: &str = "role_ladder";
+
+/// Sew's role ladder (S12 §8.3), in words an agent can act on. A manager
+/// creates and hands out roles only below its own top role, to people
+/// below it; Sew makes a new Space's `Managers` role at position 1, the
+/// bottom, so a manager has no room under it until the Space's owner moves
+/// that role up.
+fn ladder_refusal(space: &str, top: u32, what: String) -> ChatErr {
+    ChatErr::new(
+        ROLE_LADDER,
+        403,
+        format!(
+            "{what}. In Sew a manager creates and hands out roles only below its own top role, and only to people below it. \
+             A new Space's Managers role sits at the bottom of the ladder (position 1), so a manager has no room under it: \
+             a person who owns the Space adds or hands out the role, or moves the Managers role up (the Sew app: Space settings → Roles), \
+             and then you can work below it"
+        ),
+    )
+    .with("space", space)
+    .with("top", top)
 }
 
 #[derive(Deserialize)]
@@ -415,6 +450,21 @@ fn role_member(c: &Caller, m: &Admin, body: &[u8], add: bool) -> R<Value> {
         .find(|r| r.name.eq_ignore_ascii_case(b.role.trim()))
         .ok_or_else(|| ChatErr::new("not_found", 404, format!("no role '{}' in {}", b.role.trim(), row.space_slug)))?;
     let op = if add { "role.add" } else { "role.remove" };
+    // Sew's ladder, checked up front: the role and (for someone else) the
+    // person must both sit below the agent's own top role.
+    let top = sew.member_top_position(&a, &row.space_id, &me.member_id).map_err(sew_err)?;
+    let theirs = if who.member_id == me.member_id { 0 } else { sew.member_top_position(&a, &row.space_id, &who.member_id).map_err(sew_err)? };
+    let (blocked, what) = if role.position >= top {
+        (true, format!("role '{}' is at position {} and your top role in {} is at {top}: you hand out only roles below yours", role.name, role.position, row.space_slug))
+    } else if who.member_id != me.member_id && theirs >= top {
+        (true, format!("{} ranks at position {theirs} in {}, not below your top role ({top})", who.username, row.space_slug))
+    } else {
+        (false, String::new())
+    };
+    if blocked {
+        audit(m, Some(&c.project_id), op, Some(&row.space_id), Some(&who.username), Some(role.name.clone()), "refused", Some(ROLE_LADDER))?;
+        return Err(ladder_refusal(&row.space_slug, top, what));
+    }
     sew_step(c, m, op, Some(&row.space_id), Some(&who.username), Some(role.name.clone()), || {
         sew.role_member(&a, &row.space_id, &role.id, &who.member_id, add)
     })?;
@@ -611,9 +661,20 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         Some(svc) => (format!("app:{svc}"), format!("app:{svc}")),
         None => owner_external_id(b.owner.as_deref())?,
     };
+    // Sew makes the creating agent a manager only if it is a coworker: an
+    // assistant is never a Space manager (Sew answers 422
+    // target_not_eligible), so an assistant's Space names no manager.
+    let assistant = super::routes::assistant_of(&c.project_id)?;
     let sew = backend()?;
     let a = act(c, m);
-    let ns = NewSpace { slug: slug.clone(), name, owner_external_id: owner_ext.clone(), idempotency_key: key, app_id: app.clone() };
+    let ns = NewSpace {
+        slug: slug.clone(),
+        name,
+        owner_external_id: owner_ext.clone(),
+        idempotency_key: key,
+        manager: assistant.is_none(),
+        app_id: app.clone(),
+    };
     let sp = sew_step(c, m, "space.create", None, Some(&slug), Some(format!("owner={owner_ext}")), || sew.space_create(&a, &ns))?;
     if let Some(svc) = &app {
         // Sew wrote the governing link with the create: K2 records the
@@ -652,6 +713,13 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         "owner": owner_name,
         "app": app,
         "access": { "level": "manage", "approval": approval.as_str() },
+        "sewManager": assistant.is_none(),
+        "note": assistant.map(|p| format!(
+            "you are {}'s assistant in chat: Sew never makes an assistant a Space manager, so the Space has no manager in Sew. \
+             K2 gives you level manage on it, but Sew's role ladder gives an assistant no rank: roles, bans and timeouts there \
+             are for a person (or a coworker agent) to do",
+            p.username
+        )),
     }))
 }
 

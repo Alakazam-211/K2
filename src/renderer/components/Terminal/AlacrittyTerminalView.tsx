@@ -860,9 +860,9 @@ export function AlacrittyTerminalView({
     e.preventDefault()
     e.stopPropagation()
 
-    if (clicked.type === 'url') {
-      openTerminalUrl(room, clicked.target)
-    } else if (clicked.type === 'file' && clicked.filePath) {
+    // A file opens in K2's viewer: the sibling pane when the setting says
+    // so, else a new tab. A clicked `file://` link comes here too.
+    const openFileLink = (filePath: string) => {
       const tabsStore = room.tabs.getState()
       const openInSplit = useTerminalSettingsStore.getState().openLinksInSplitPane
 
@@ -873,13 +873,19 @@ export function AlacrittyTerminalView({
           // Find a pane group that isn't the terminal's pane
           const siblingId = [...tab.paneGroups.keys()].find((id) => id !== paneGroupId)
           if (siblingId) {
-            tabsStore.openFileInPaneGroup(tabId, siblingId, clicked.filePath)
+            tabsStore.openFileInPaneGroup(tabId, siblingId, filePath)
             return
           }
         }
       }
 
-      tabsStore.openFileInNewTab(clicked.filePath)
+      tabsStore.openFileInNewTab(filePath)
+    }
+
+    if (clicked.type === 'url') {
+      openTerminalUrl(room, clicked.target, openFileLink)
+    } else if (clicked.type === 'file' && clicked.filePath) {
+      openFileLink(clicked.filePath)
     }
   }, [linkClickMode, hoveredLink, cwd, tabId, paneGroupId])
 

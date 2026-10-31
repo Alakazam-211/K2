@@ -200,7 +200,9 @@ describe('a link clicked in a terminal', () => {
     const room = pinned()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     try {
-      openTerminalUrl(room, 'https://example.com/docs')
+      openTerminalUrl(room, 'https://example.com/docs', () => {
+        throw new Error('a web link never opens a file')
+      })
       await vi.waitFor(() => expect(h.opened).toEqual(['https://example.com/docs']))
       expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes('fs/open-external'))).toEqual([])
     } finally {

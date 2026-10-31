@@ -2,24 +2,33 @@
 // this server can boot, grouped by platform (iPhone, Android), the running
 // one first, each with its OS, its state and Start. A lane that isn't ready
 // shows what it needs as a card with the one action that resolves it:
-//   - a licence → "Show the licence": a boot asks the daemon, which puts
-//     the owner's Accept card on this workspace's Thread (beside the
-//     device), never "go to Settings";
+//   - licences (every one the setup needs, together) → "Show the licence":
+//     a boot asks the daemon, which puts the owner's one Accept card on
+//     this workspace's Thread (beside the device), never "go to Settings";
 //   - an owner step → the exact command, with Copy;
-//   - a first-use download → said up front (Start does it).
-// It shows in the empty state and in the device chip's menu. It reads what
-// the daemon already reports (sim/status, sim/devices) and keeps no state.
+//   - a setup that failed → why, with "Retry setup" for the owner;
+//   - a setup still to run → what it downloads, with "Set up" for the owner;
+//   - a setup running → its progress;
+//   - a first-use download on a ready lane → said up front (Start does it).
+// A Start that is off always has its reason in the group (the lane's detail
+// at the least), never a bare disabled button. It shows in the empty state
+// and in the device chip's menu. It reads what the daemon already reports
+// (sim/status, sim/devices) and keeps no state.
 
 import { SmartphoneIcon } from '@/components/icons/K2Icons'
-import type { SimDeviceProfile, SimLaneNeed, SimPlatform, SimState } from './simApi'
+import type { SimDeviceProfile, SimLaneNeed, SimLaneSetup, SimPlatform, SimState } from './simApi'
 
 export interface DevicePickerGroup {
   platform: SimPlatform
   devices: SimDeviceProfile[]
   /** A lane for this platform can boot now. */
   ready: boolean
-  /** What the platform's lane still needs (licence, owner step, install). */
+  /** What the platform's lane still needs (licences, owner step, install). */
   needs: SimLaneNeed[]
+  /** The lane's one-line state from the daemon (why it isn't ready). */
+  detail?: string
+  /** The owner's setup while it runs, or the last one's failure. */
+  setup?: SimLaneSetup
   /** Still fetching sim/devices for it. */
   loading: boolean
 }
@@ -35,10 +44,14 @@ export interface DevicePickerProps {
   /** The device a Start is in flight for. */
   pending: string | null
   canControl: boolean
+  /** This person is the server's owner (Retry setup / Set up). */
+  canSetup?: boolean
   busy: boolean
   onStart(platform: SimPlatform, id: string): void
   /** Ask the daemon for the owner's licence card (a boot that needs it). */
   onShowLicence(platform: SimPlatform): void
+  /** The owner runs the platform's setup again (or for the first time). */
+  onRetrySetup?(platform: SimPlatform): void
   /** Copy text (an owner step's command). */
   onCopy(text: string): void
   compact?: boolean
@@ -55,34 +68,130 @@ function formatBytes(n: number): string {
   return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`
 }
 
+/** "A", "A and B", "A, B and C". */
+function andList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? ''
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** Why a group that isn't ready can't start, as cards and lines. */
+function NotReady({
+  g,
+  canControl,
+  canSetup,
+  props,
+}: {
+  g: DevicePickerGroup
+  canControl: boolean
+  canSetup: boolean
+  props: DevicePickerProps
+}): React.JSX.Element {
+  const licences = g.needs.filter((n): n is Extract<SimLaneNeed, { kind: 'licence' }> => n.kind === 'licence')
+  const step = g.needs.find((n): n is Extract<SimLaneNeed, { kind: 'owner-step' }> => n.kind === 'owner-step')
+  const install = g.needs.find((n): n is Extract<SimLaneNeed, { kind: 'install' }> => n.kind === 'install')
+  // A daemon before `setup` existed says it only in `detail`.
+  const FAILED = 'the last setup failed: '
+  const failed = g.setup
+    ? g.setup.running
+      ? undefined
+      : g.setup.error
+    : g.detail?.startsWith(FAILED)
+      ? g.detail.slice(FAILED.length)
+      : undefined
+  const failedLine = failed ? <div data-mobile-setup-error="">The last setup stopped: {failed}</div> : null
+  const ownerRetries = canSetup && props.onRetrySetup ? props.onRetrySetup : null
+  const cards: React.ReactNode[] = []
+  if (licences.length > 0) {
+    const many = licences.length > 1
+    cards.push(
+      <NeedCard
+        key="licence"
+        title={many ? `Accept ${licences.length} licences: ${andList(licences.map((l) => `the ${l.title}`))}` : `Accept the ${licences[0].title}`}
+        body={
+          <>
+            {failedLine}
+            <div>
+              {many
+                ? "The server's owner accepts them together, once. K2 puts them on this workspace's Thread to read and accept."
+                : "The server's owner accepts it once. K2 puts the licence on this workspace's Thread to read and accept."}
+            </div>
+          </>
+        }
+        action={canControl ? { label: many ? 'Show the licences' : 'Show the licence', onClick: () => props.onShowLicence(g.platform) } : null}
+        testId="licence"
+      />,
+    )
+  }
+  if (step) {
+    cards.push(
+      <NeedCard
+        key="owner-step"
+        title={`The owner must ${step.what}`}
+        body={<code className="break-all text-[11px] text-[var(--color-text-primary)]">{step.command}</code>}
+        action={{ label: 'Copy', onClick: () => props.onCopy(step.command) }}
+        testId="owner-step"
+      />,
+    )
+  }
+  if (cards.length === 0 && g.setup?.running) {
+    cards.push(
+      <div key="installing" className="px-1 text-[11px] text-[var(--color-text-secondary)]" data-mobile-need="installing">
+        Setting up {PLATFORM_LABEL[g.platform]}: {g.detail ?? 'installing…'}
+      </div>,
+    )
+  } else if (cards.length === 0 && failed) {
+    cards.push(
+      <NeedCard
+        key="setup-failed"
+        title={`${PLATFORM_LABEL[g.platform]} setup didn't finish`}
+        body={
+          <>
+            {failedLine}
+            {ownerRetries ? null : <div>The server's owner can retry it from this tab.</div>}
+          </>
+        }
+        action={ownerRetries ? { label: 'Retry setup', onClick: () => ownerRetries(g.platform) } : null}
+        testId="setup-failed"
+      />,
+    )
+  } else if (cards.length === 0 && install) {
+    cards.push(
+      <NeedCard
+        key="setup"
+        title={`Set up ${PLATFORM_LABEL[g.platform]}`}
+        body={
+          <div>
+            The server's owner sets it up once: K2 downloads {install.what}
+            {install.bytes ? ` (about ${formatBytes(install.bytes)})` : ''}.{ownerRetries ? '' : ' The owner can start it from this tab.'}
+          </div>
+        }
+        action={ownerRetries ? { label: 'Set up', onClick: () => ownerRetries(g.platform) } : null}
+        testId="setup"
+      />,
+    )
+  }
+  if (cards.length === 0) {
+    // Never a bare disabled Start: the daemon's own line at the least.
+    cards.push(
+      <div key="detail" className="px-1 text-[11px] text-[var(--color-text-secondary)]" data-mobile-need="detail">
+        {g.detail ?? `${PLATFORM_LABEL[g.platform]} needs setting up on this server first.`}
+      </div>,
+    )
+  }
+  return <>{cards}</>
+}
+
 export function DevicePicker(props: DevicePickerProps): React.JSX.Element {
   const { groups, up, selected, pending, canControl, busy } = props
   return (
     <div className="flex w-full flex-col gap-3" data-mobile-picker="">
       {groups.map((g) => {
         const rows = [...g.devices].sort((a, b) => Number(b.id === up?.id) - Number(a.id === up?.id))
-        const licence = g.needs.find((n) => n.kind === 'licence')
-        const step = g.needs.find((n) => n.kind === 'owner-step')
         const install = g.needs.find((n) => n.kind === 'install')
         return (
           <section key={g.platform} className="flex flex-col gap-1" data-mobile-group={g.platform}>
             <h3 className="px-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">{PLATFORM_LABEL[g.platform]}</h3>
-            {licence && licence.kind === 'licence' && !g.ready ? (
-              <NeedCard
-                title={`Accept the ${licence.title}`}
-                body="The server's owner accepts it once. K2 puts the licence on this workspace's Thread to read and accept."
-                action={canControl ? { label: 'Show the licence', onClick: () => props.onShowLicence(g.platform) } : null}
-                testId="licence"
-              />
-            ) : null}
-            {step && step.kind === 'owner-step' && !g.ready ? (
-              <NeedCard
-                title={`The owner must ${step.what}`}
-                body={<code className="break-all text-[11px] text-[var(--color-text-primary)]">{step.command}</code>}
-                action={{ label: 'Copy', onClick: () => props.onCopy(step.command) }}
-                testId="owner-step"
-              />
-            ) : null}
+            {!g.ready ? <NotReady g={g} canControl={canControl} canSetup={props.canSetup === true} props={props} /> : null}
             {install && install.kind === 'install' && g.ready ? (
               <div className="px-1 text-[11px] text-[var(--color-text-muted)]" data-mobile-need="install">
                 The first start downloads {install.what}
@@ -137,7 +246,7 @@ export function DevicePicker(props: DevicePickerProps): React.JSX.Element {
                       className="flex h-6 flex-shrink-0 cursor-pointer items-center gap-1.5 border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-primary)] enabled:hover:border-[var(--color-accent)] disabled:cursor-default disabled:opacity-45"
                       style={{ borderRadius: 'var(--radius-field, 0px)' }}
                       disabled={!g.ready || busy || pending !== null}
-                      title={g.ready ? `Start ${d.name}` : 'This platform needs setting up first'}
+                      title={g.ready ? `Start ${d.name}` : `Not yet: ${g.detail ?? 'this platform needs setting up first'}`}
                       onClick={() => props.onStart(g.platform, d.id)}
                       data-mobile-start={d.id}
                     >

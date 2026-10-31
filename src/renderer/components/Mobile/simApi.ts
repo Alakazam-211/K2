@@ -17,6 +17,7 @@ export const SIM_DEVICES_ROUTE = 'sim/devices'
 export const SIM_BOOT_ROUTE = 'sim/boot'
 export const SIM_STOP_ROUTE = 'sim/stop'
 export const SIM_SCREENSHOT_ROUTE = 'sim/screenshot'
+export const SIM_SETUP_ROUTE = 'sim/setup'
 
 /** `lane::LaneKind`. */
 export type SimLaneId = 'android' | 'ios' | 'ios-node'
@@ -37,6 +38,17 @@ export interface SimLaneStatus {
   needs: SimLaneNeed[]
   /** One line for the status view ("/dev/kvm: permission denied …"). */
   detail?: string
+  /** The owner's setup while it runs, or the last one's failure. */
+  setup?: SimLaneSetup
+}
+
+/** `lane::SetupView`. */
+export interface SimLaneSetup {
+  running: boolean
+  done: number
+  total: number
+  /** Why the last setup failed. */
+  error?: string
 }
 
 /** `stream::SimState`. */
@@ -91,6 +103,9 @@ export interface SimStatus {
    *  only (Rosson 2026-10-27). Read from the daemon's `canControl` when it
    *  sends one; else null and the pane asks `auth/whoami`. */
   canControl: boolean | null
+  /** Is THIS caller the server's owner, who alone accepts licences and
+   *  starts or retries a lane's setup? False when the daemon doesn't say. */
+  canSetup: boolean
 }
 
 const LANES: ReadonlySet<string> = new Set(['android', 'ios', 'ios-node'])
@@ -134,7 +149,19 @@ function parseLane(raw: unknown): SimLaneStatus {
   }
   const needs = raw.needs === undefined ? [] : Array.isArray(raw.needs) ? raw.needs.map(parseNeed) : fail('sim lane', raw)
   const detail = str(raw.detail)
-  return { lane: raw.lane as SimLaneId, usable: raw.usable, ready: raw.ready, needs, ...(detail ? { detail } : {}) }
+  const setup = raw.setup === undefined || raw.setup === null ? undefined : parseSetup(raw.setup)
+  return { lane: raw.lane as SimLaneId, usable: raw.usable, ready: raw.ready, needs, ...(detail ? { detail } : {}), ...(setup ? { setup } : {}) }
+}
+
+function parseSetup(raw: unknown): SimLaneSetup {
+  if (!isObj(raw) || typeof raw.running !== 'boolean') fail('sim lane setup', raw)
+  const error = str(raw.error)
+  return {
+    running: raw.running,
+    done: typeof raw.done === 'number' ? raw.done : 0,
+    total: typeof raw.total === 'number' ? raw.total : 0,
+    ...(error ? { error } : {}),
+  }
 }
 
 export function parseSimHold(raw: unknown): SimHold {
@@ -210,6 +237,7 @@ export function parseSimStatus(raw: unknown): SimStatus {
     running: typeof raw.running === 'number' ? raw.running : 0,
     agentsAllowed: raw.agentsAllowed,
     canControl: typeof raw.canControl === 'boolean' ? raw.canControl : null,
+    canSetup: raw.canSetup === true,
   }
 }
 
@@ -250,6 +278,14 @@ export async function bootSim(
       noTab: true,
     }),
   )
+}
+
+/** The owner's Retry setup (`api::SetupReq` with no licence): run the
+ *  lane's first-use install again. Licences are accepted on the Thread card,
+ *  never here. Owner only (the daemon answers `owner_only` to anyone else). */
+export async function setupSim(scope: ServerScope, lane: SimLaneId): Promise<void> {
+  const raw = await daemonCliPost<unknown>(scope, SIM_SETUP_ROUTE, { lane })
+  if (!isObj(raw) || raw.ok !== true) fail('sim setup', raw)
 }
 
 export async function stopSim(scope: ServerScope, workspace: string): Promise<SimView> {

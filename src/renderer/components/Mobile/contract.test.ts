@@ -64,6 +64,18 @@ describe('route adapter parses (sim::api)', () => {
     })
     expect(firstUsableLane(st.lanes)?.lane).toBe('android')
     expect(parseSimStatus({ lanes: [], running: 0, limits: {}, agentsAllowed: true, canControl: false }).canControl).toBe(false)
+    // The owner's setup (`lane::SetupView`) and canSetup (absent = false).
+    const failed = parseSimStatus({
+      lanes: [{ lane: 'android', usable: true, ready: false, setup: { running: false, done: 1, total: 2, error: 'boom' } }],
+      agentsAllowed: true,
+      canSetup: true,
+    })
+    expect(failed.canSetup).toBe(true)
+    expect(failed.lanes[0].setup).toEqual({ running: false, done: 1, total: 2, error: 'boom' })
+    expect(parseSimStatus({ lanes: [], agentsAllowed: true }).canSetup).toBe(false)
+    expect(() => parseSimStatus({ lanes: [{ lane: 'android', usable: true, ready: false, setup: { done: 1 } }], agentsAllowed: true })).toThrow(
+      /sim lane setup/,
+    )
   })
 
   it('reads every hold, including Take over’s idle_ms as the daemon sends it today', () => {

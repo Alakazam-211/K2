@@ -45,7 +45,9 @@ export function useSimStatus(scope: ServerScope, workspace: string | null, visib
       }
       if (cancelled) return
       const st = statusRef.current?.sim?.state
-      const changing = st === 'installing' || st === 'booting' || st === 'stopping'
+      // A lane's setup running counts too: its progress and its end show.
+      const settingUp = statusRef.current?.lanes.some((l) => l.setup?.running) ?? false
+      const changing = st === 'installing' || st === 'booting' || st === 'stopping' || settingUp
       timer = setTimeout(() => void load(), changing ? SIM_STATUS_FAST_MS : SIM_STATUS_SLOW_MS)
     }
     void load()

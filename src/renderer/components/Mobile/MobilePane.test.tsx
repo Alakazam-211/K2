@@ -77,6 +77,7 @@ vi.mock('@/lib/daemon-cli', async () => {
       if (route === 'sim/boot') return { ...RUNNING, state: 'booting' }
       if (route === 'sim/stop') return { ...RUNNING, state: 'stopping' }
       if (route === 'sim/screenshot') return { path: '/w/docs/.k2/sim/shots/s1-0001.png', width: 412, height: 915 }
+      if (route === 'sim/setup') return { ok: true, lane: 'android', lanes: [] }
       throw new Error(`unexpected POST ${route}`)
     }),
   }
@@ -397,6 +398,66 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe(
       "This server can't run a device yet. /dev/kvm: permission denied for user k2.",
     )
+  })
+
+  it("the owner's stuck box: the licence the setup failed on is named, with why, and Show the licence asks for its card", async () => {
+    const why =
+      "system-images;android-35;google_apis;arm64-v8a needs the licence 'android-sdk-arm-dbt-license', which the owner hasn't accepted"
+    daemon.status = status({
+      sim: null,
+      canSetup: true,
+      lanes: [
+        {
+          lane: 'android',
+          usable: true,
+          ready: false,
+          needs: [
+            { kind: 'licence', id: 'android-sdk-arm-dbt-license', title: "Android SDK licence 'android-sdk-arm-dbt-license'" },
+            { kind: 'install', what: 'Android system image (from Google)', bytes: 2_200_000_000 },
+          ],
+          detail: `the last setup failed: ${why}`,
+          setup: { running: false, done: 0, total: 0, error: why },
+        },
+      ],
+    })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe(
+      "The owner of this server must accept the Android SDK licence 'android-sdk-arm-dbt-license' first.",
+    )
+    expect(document.querySelector('[data-mobile-empty] [data-mobile-setup-error]')?.textContent).toBe(`The last setup stopped: ${why}`)
+    expect(startRow('pixel_9').disabled).toBe(true)
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-need-action="licence"]') as HTMLButtonElement)
+    })
+    await flush()
+    expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'pixel_9', platform: 'android', noTab: true } }])
+  })
+
+  it('a setup that failed for another reason: the owner retries it from the tab', async () => {
+    const why = 'download https://dl.google.com/android/repository/emulator.zip: connection reset'
+    daemon.status = status({
+      sim: null,
+      canSetup: true,
+      lanes: [
+        {
+          lane: 'android',
+          usable: true,
+          ready: false,
+          needs: [{ kind: 'install', what: 'Android emulator (from Google)', bytes: 2_200_000_000 }],
+          detail: `the last setup failed: ${why}`,
+          setup: { running: false, done: 5, total: 100, error: why },
+        },
+      ],
+    })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe(`The device setup didn't finish: ${why}`)
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-need-action="setup-failed"]') as HTMLButtonElement)
+    })
+    await flush()
+    expect(daemon.posts).toEqual([{ route: 'sim/setup', body: { lane: 'android' } }])
   })
 
   it('a server with no iOS lane (Linux) offers Android only and says what an iPhone needs', async () => {

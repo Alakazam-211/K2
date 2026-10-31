@@ -58,6 +58,7 @@ import {
   lanePlatform,
   offeredPlatforms,
   screenshotSim,
+  setupSim,
   simIsUp,
   stopSim,
   type SimDeviceProfile,
@@ -318,12 +319,16 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
     return `This server can't run a device yet.${why ? ` ${why}` : ''}`
   }
   if (!lane.ready) {
-    const licence = lane.needs.find((n) => n.kind === 'licence')
-    if (licence && licence.kind === 'licence') {
-      return `The owner of this server must accept the ${licence.title} first.`
+    const licences = lane.needs.flatMap((n) => (n.kind === 'licence' ? [`the ${n.title}`] : []))
+    if (licences.length > 0) {
+      const all = licences.length === 1 ? licences[0] : `${licences.slice(0, -1).join(', ')} and ${licences[licences.length - 1]}`
+      return `The owner of this server must accept ${all} first.`
     }
     const step = lane.needs.find((n) => n.kind === 'owner-step')
     if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
+    if (lane.setup?.running) return `Setting up the device tools: ${lane.detail ?? 'installing…'}`
+    if (lane.setup?.error) return `The device setup didn't finish: ${lane.setup.error}`
+    if (lane.detail) return `The owner of this server must set up devices first (${lane.detail}).`
   }
   if (s?.state === 'failed') return s.reason ? `The device stopped: ${s.reason}` : 'The device stopped with an error.'
   return 'No device is running.'
@@ -514,6 +519,18 @@ function MobileDevice({
       })
     },
     [act, devicesBy, scope, workspaceRef],
+  )
+  // Retry setup / Set up (the server's owner): the daemon runs the lane's
+  // first-use install again. Licences stay on the Thread card.
+  const onRetrySetup = useCallback(
+    (on: SimPlatform) => {
+      const lane = status?.lanes.find((l) => l.usable && !l.ready && lanePlatform(l.lane) === on)
+      if (!lane) return
+      void act('setup', async () => {
+        await setupSim(scope, lane.lane)
+      })
+    },
+    [act, scope, status],
   )
   const onCopy = useCallback((text: string) => {
     writeClipboardText(text)
@@ -1024,11 +1041,14 @@ function MobileDevice({
   const pickerGroups: DevicePickerGroup[] = platforms.map((p) => {
     const lanes = status?.lanes.filter((l) => l.usable && lanePlatform(l.lane) === p) ?? []
     const readyLane = lanes.find((l) => l.ready)
+    const lane = readyLane ?? lanes[0]
     return {
       platform: p,
       devices: devicesBy[p]?.devices ?? [],
       ready: !!readyLane,
-      needs: (readyLane ?? lanes[0])?.needs ?? [],
+      needs: lane?.needs ?? [],
+      ...(lane?.detail ? { detail: lane.detail } : {}),
+      ...(lane?.setup ? { setup: lane.setup } : {}),
       loading: !devicesBy[p],
     }
   })
@@ -1038,9 +1058,11 @@ function MobileDevice({
     selected: device,
     pending: bootPending ? bootingId : null,
     canControl,
+    canSetup: status?.canSetup === true,
     busy,
     onStart,
     onShowLicence,
+    onRetrySetup,
     onCopy,
   }
   const pickedProfile = devices.find((d) => d.id === device)

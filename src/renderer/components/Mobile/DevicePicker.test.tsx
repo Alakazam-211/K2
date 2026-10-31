@@ -152,4 +152,135 @@ describe('DevicePicker', () => {
     expect(document.querySelector('[data-mobile-start]')).toBeNull()
     expect(document.querySelector('[data-mobile-need-action="licence"]')).toBeNull()
   })
+
+  // The owner's stuck box: the SDK licence was accepted, the setup then
+  // failed on the arm64 image's own licence.
+  const DBT_FAIL =
+    "system-images;android-35;google_apis;arm64-v8a needs the licence 'android-sdk-arm-dbt-license', which the owner hasn't accepted"
+
+  it('a setup that failed on a licence: one card names it, shows why, and Show the licence', () => {
+    const p = props({
+      groups: [
+        {
+          platform: 'android',
+          devices: [PIXEL_9],
+          ready: false,
+          needs: [
+            { kind: 'licence', id: 'android-sdk-arm-dbt-license', title: "Android SDK licence 'android-sdk-arm-dbt-license'" },
+            { kind: 'install', what: 'Android system image (from Google)', bytes: 2_200_000_000 },
+          ],
+          detail: `the last setup failed: ${DBT_FAIL}`,
+          setup: { running: false, done: 0, total: 0, error: DBT_FAIL },
+          loading: false,
+        },
+      ],
+    })
+    render(<DevicePicker {...p} />)
+    const card = document.querySelector('[data-mobile-need="licence"]')
+    expect(card?.textContent).toContain("Accept the Android SDK licence 'android-sdk-arm-dbt-license'")
+    expect(card?.querySelector('[data-mobile-setup-error]')?.textContent).toBe(`The last setup stopped: ${DBT_FAIL}`)
+    expect(document.querySelectorAll('[data-mobile-need]').length).toBe(1)
+    fireEvent.click(document.querySelector('[data-mobile-need-action="licence"]') as HTMLButtonElement)
+    expect(p.onShowLicence).toHaveBeenCalledWith('android')
+    const start = document.querySelector('[data-mobile-start="pixel_9"]') as HTMLButtonElement
+    expect(start.disabled).toBe(true)
+    expect(start.title).toBe(`Not yet: the last setup failed: ${DBT_FAIL}`)
+  })
+
+  it('every licence the setup needs is on one card with one action', () => {
+    const p = props({
+      groups: [
+        {
+          platform: 'android',
+          devices: [PIXEL_9],
+          ready: false,
+          needs: [
+            { kind: 'licence', id: 'android-sdk-license', title: 'Android SDK licence' },
+            { kind: 'licence', id: 'android-sdk-arm-dbt-license', title: 'ARM licence' },
+          ],
+          loading: false,
+        },
+      ],
+    })
+    render(<DevicePicker {...p} />)
+    const cards = document.querySelectorAll('[data-mobile-need="licence"]')
+    expect(cards.length).toBe(1)
+    expect(cards[0].textContent).toContain('Accept 2 licences: the Android SDK licence and the ARM licence')
+    expect(cards[0].textContent).toContain('accepts them together, once')
+    const action = document.querySelector('[data-mobile-need-action="licence"]') as HTMLButtonElement
+    expect(action.textContent).toBe('Show the licences')
+    fireEvent.click(action)
+    expect(p.onShowLicence).toHaveBeenCalledTimes(1)
+  })
+
+  it('a setup that failed for another reason shows why; the owner gets Retry setup', () => {
+    const group = {
+      platform: 'android' as const,
+      devices: [PIXEL_9],
+      ready: false,
+      needs: [{ kind: 'install' as const, what: 'Android emulator (from Google)', bytes: 2_200_000_000 }],
+      detail: 'the last setup failed: download emulator.zip: connection reset',
+      setup: { running: false, done: 10, total: 100, error: 'download emulator.zip: connection reset' },
+      loading: false,
+    }
+    const onRetrySetup = vi.fn()
+    render(<DevicePicker {...props({ groups: [group], canSetup: true, onRetrySetup })} />)
+    const card = document.querySelector('[data-mobile-need="setup-failed"]')
+    expect(card?.textContent).toContain("Android setup didn't finish")
+    expect(card?.textContent).toContain('The last setup stopped: download emulator.zip: connection reset')
+    const retry = document.querySelector('[data-mobile-need-action="setup-failed"]') as HTMLButtonElement
+    expect(retry.textContent).toBe('Retry setup')
+    fireEvent.click(retry)
+    expect(onRetrySetup).toHaveBeenCalledWith('android')
+    cleanup()
+    // Not the owner: the reason, and who can retry, but no button.
+    render(<DevicePicker {...props({ groups: [group], canSetup: false, onRetrySetup })} />)
+    expect(document.querySelector('[data-mobile-need="setup-failed"]')?.textContent).toContain("The server's owner can retry it from this tab.")
+    expect(document.querySelector('[data-mobile-need-action="setup-failed"]')).toBeNull()
+  })
+
+  it('Start is never off without a visible reason in its group', () => {
+    const cases = [
+      { needs: [], detail: 'the emulator crashed on its last start' },
+      { needs: [], detail: undefined },
+      { needs: [{ kind: 'install' as const, what: 'Android emulator (from Google)', bytes: 2_200_000_000 }], detail: 'downloads it on first use' },
+      { needs: [], detail: 'installing: 40% of 2.2 GB', setup: { running: true, done: 40, total: 100 } },
+      // A daemon from before `setup` says the failure only in `detail`.
+      { needs: [{ kind: 'install' as const, what: 'Android emulator (from Google)' }], detail: `the last setup failed: ${DBT_FAIL}` },
+    ]
+    for (const c of cases) {
+      render(
+        <DevicePicker
+          {...props({ canSetup: true, onRetrySetup: vi.fn(), groups: [{ platform: 'android', devices: [PIXEL_9], ready: false, loading: false, ...c }] })}
+        />,
+      )
+      const start = document.querySelector('[data-mobile-start="pixel_9"]') as HTMLButtonElement
+      expect(start.disabled).toBe(true)
+      const reasons = Array.from(document.querySelectorAll('[data-mobile-group="android"] [data-mobile-need]')).map((n) => n.textContent?.trim() ?? '')
+      expect(reasons.length, JSON.stringify(c)).toBeGreaterThan(0)
+      expect(reasons.every((r) => r.length > 0), JSON.stringify(c)).toBe(true)
+      cleanup()
+    }
+    render(
+      <DevicePicker
+        {...props({
+          canSetup: true,
+          onRetrySetup: vi.fn(),
+          groups: [{ platform: 'android', devices: [PIXEL_9], ready: false, loading: false, needs: [], detail: 'installing: 40% of 2.2 GB', setup: { running: true, done: 40, total: 100 } }],
+        })}
+      />,
+    )
+    expect(document.querySelector('[data-mobile-need="installing"]')?.textContent).toBe('Setting up Android: installing: 40% of 2.2 GB')
+    cleanup()
+    render(
+      <DevicePicker
+        {...props({
+          canSetup: true,
+          onRetrySetup: vi.fn(),
+          groups: [{ platform: 'android', devices: [PIXEL_9], ready: false, loading: false, needs: [], detail: `the last setup failed: ${DBT_FAIL}` }],
+        })}
+      />,
+    )
+    expect(document.querySelector('[data-mobile-setup-error]')?.textContent).toBe(`The last setup stopped: ${DBT_FAIL}`)
+  })
 })

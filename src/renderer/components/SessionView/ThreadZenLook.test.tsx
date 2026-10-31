@@ -570,6 +570,25 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
   })
 
+  it('the stash bookmark is drawn like "+" and "/": the same 2px line and the "+"\'s 12px ink', () => {
+    renderThread()
+    const svg = (sel: string): SVGSVGElement => {
+      const found = document.querySelector(sel)
+      if (!(found instanceof SVGSVGElement)) throw new Error(`no svg ${sel}`)
+      return found
+    }
+    const plus = svg('[data-compose-glyph="plus"]')
+    const bar = plus.querySelector('rect') as SVGRectElement
+    const stash = svg('[data-stash-button] [data-compose-glyph="stash"]')
+    const line = stash.querySelector('polygon') as SVGPolygonElement
+    expect(bar.getAttribute('width')).toBe('2')
+    expect(line.getAttribute('stroke-width')).toBe(bar.getAttribute('width'))
+    expect(line.getAttribute('stroke-linejoin')).toBe('miter')
+    expect(stash.getAttribute('height')).toBe(plus.getAttribute('height'))
+    // Pixel units, like the "+": its viewBox is its size, so 2 stays 2px.
+    expect(stash.getAttribute('viewBox')).toBe(`0 0 ${stash.getAttribute('width')} ${stash.getAttribute('height')}`)
+  })
+
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {
     document.documentElement.setAttribute('data-style', 'square')
     renderThread()

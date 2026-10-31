@@ -135,12 +135,41 @@ export function stashButtonLabel(count: number): string {
 
 /** The Thread box's stash button's face: the bookmark, popping when a save
  *  lands (the count is in the button's label, not drawn). */
-export function StashBookmark({ count, size = 14 }: { count: number; size?: number }): JSX.Element {
+export function StashBookmark({ count, ink = STASH_BOOKMARK_INK }: { count: number; ink?: number }): JSX.Element {
   const pop = useCountPop(count)
   return (
     <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
-      <StashGlyph size={size} />
+      <ComposeBookmarkGlyph ink={ink} />
     </span>
+  )
+}
+
+/** The bookmark's ink height (px): the message box's "+" (12 tall). */
+export const STASH_BOOKMARK_INK = 12
+/** Its line weight (px): the "+" and "/" bars are 2px. */
+export const STASH_BOOKMARK_WEIGHT = 2
+
+/** The bookmark drawn the way the box's "+" and "/" are (Rosson 2026-10-31:
+ *  same weight): in pixel units, `ink` tall, a 2px line with square joins,
+ *  so it is as bold as they are at any size. */
+export function ComposeBookmarkGlyph({ ink = STASH_BOOKMARK_INK }: { ink?: number }): JSX.Element {
+  const h = ink
+  const w = Math.round(ink * (5 / 6))
+  const half = STASH_BOOKMARK_WEIGHT / 2
+  const notch = Math.round(h * 0.3)
+  const pts = [
+    [half, half],
+    [w - half, half],
+    [w - half, h - half],
+    [w / 2, h - half - notch],
+    [half, h - half],
+  ]
+    .map(([x, y]) => `${x},${y}`)
+    .join(' ')
+  return (
+    <svg data-compose-glyph="stash" width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="none" aria-hidden="true" style={{ display: 'block' }}>
+      <polygon points={pts} stroke="currentColor" strokeWidth={STASH_BOOKMARK_WEIGHT} strokeLinejoin="miter" />
+    </svg>
   )
 }
 

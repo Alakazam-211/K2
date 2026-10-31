@@ -32,10 +32,41 @@ struct Upstream {
     requests: Mutex<Vec<String>>,
 }
 
+/// May a stand-in site sit on `port`? Not when an App row names it as its
+/// front port: a label whose target is an App's front port is that App's
+/// ([`classify_with`]: Open, no gate), so the test would meet the site with
+/// no session. The test database is shared, and other tests leave App rows
+/// whose front port was an ephemeral port they bound and since let go of (and
+/// a few write fixed ports in K2's App range and the 40000s). Soak 2026-10-31:
+/// `sign_in` got the site's `200 SITE` instead of the gate's `303`.
+fn no_app_claims(port: u16) -> bool {
+    if (38600..39000).contains(&port) || (40000..42000).contains(&port) {
+        return false;
+    }
+    let claims: i64 = db(|c| c.query_row("SELECT COUNT(*) FROM apps WHERE front_port = ?1", params![i64::from(port)], |r| r.get(0))).unwrap();
+    claims == 0
+}
+
+/// A loopback listener on a port no App row claims ([`no_app_claims`]). The
+/// listener holds the port, so no test can bind it (and record it as an App's
+/// front port) while this one runs.
+async fn site_listener() -> TcpListener {
+    let mut passed = Vec::new();
+    for _ in 0..64 {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        if no_app_claims(l.local_addr().unwrap().port()) {
+            return l;
+        }
+        // Held until a good one is found, so the same port isn't handed back.
+        passed.push(l);
+    }
+    panic!("no loopback port free of App rows in 64 tries");
+}
+
 /// A small HTTP/1.1 site: 200 with its tag, keep-alive; an `Upgrade` request
 /// gets a `101`, then echoes raw bytes.
 async fn spawn_site() -> (u16, Arc<Upstream>) {
-    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l = site_listener().await;
     let port = l.local_addr().unwrap().port();
     let seen = Arc::new(Upstream::default());
     let s2 = seen.clone();

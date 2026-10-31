@@ -243,16 +243,16 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
 
-## Multiplayer kit: k2-mpc-base v0.10.0.1 (vendored)
+## Multiplayer kit: k2-mpc-base v0.10.0.2 (vendored)
 
 Live docs (Markdown, plain text and any file) run on Alakazam Labs' multiplayer kit,
 vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.11.0 (`vendor/k2-mpc-base/client/src`: the Live editor the app's file tab mounts) |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.10.0.1` (`bebf77f`; crate version `0.10.0+1`, client `0.11.0`) |
-| **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
+| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.11.0 with K2's copy of the kit's 0.11.1 caret fix (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.10.0.2` (`5fedd15`; crate version `0.10.0+2`, client `0.11.0`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 
 Its Rust dependencies, in K2's `Cargo.lock`:
 
@@ -271,7 +271,7 @@ time by procedural macros; Unicode-3.0 is OSI-approved and permissive.
 The JS client adds no npm dependency: its `@codemirror/*` packages (`view`, `state`,
 `commands`, `language`, `lang-markdown`; MIT) are peer dependencies, the app's own copies.
 
-## Multiplayer kit: k2-mpc-markdown v0.7.8 (vendored)
+## Multiplayer kit: k2-mpc-markdown v0.7.9 (vendored)
 
 The Markdown type pack for the kit (schema, file codec, its own verbs such as
 `replace-section`, the parity list), vendored beside it.
@@ -279,11 +279,11 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.8` (`2037069`) |
-| **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.9` (`cb86020`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 
-## Multiplayer kit: k2-mpc-text v0.2.9 (vendored)
+## Multiplayer kit: k2-mpc-text v0.2.10 (vendored)
 
 The plain-text type pack for the kit (code, config, markup, diagram sources,
 `.txt`, and `.csv`/`.tsv` as text: a per-extension file-type table, a
@@ -292,8 +292,8 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-text` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.9` (`9e688ed`) |
-| **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.10` (`6b231ef`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above); its tests use proptest (MIT OR Apache-2.0) |
 
 Update these sections on every kit bump.

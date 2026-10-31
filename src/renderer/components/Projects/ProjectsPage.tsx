@@ -28,7 +28,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
 import { useZenShown, zenShownNow } from '@/lib/zen/zen-view'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
-import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
@@ -351,6 +351,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
+        onContextMenu={titleBarOnContextMenu}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div

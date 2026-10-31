@@ -1848,6 +1848,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Win/Linux App Menu — open secondary window (macOS uses native menu).
             menu::window_new,
+            // Windows: the title bar's right-click system menu.
+            menu::window_system_menu,
             // Tickets "Open in window" — one window per ticket.
             menu::window_open_ticket,
             // prd-zen-mode-v1 Z53: the View menu's Enter/Exit Zen Mode text.

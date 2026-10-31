@@ -16,7 +16,7 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import remarkGfm from 'remark-gfm'
-import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
 import { primaryRoom } from '@/stores/room'
@@ -617,6 +617,7 @@ export default function WikiPage(): React.JSX.Element | null {
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
+        onContextMenu={titleBarOnContextMenu}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div

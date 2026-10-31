@@ -292,6 +292,54 @@ pub fn set_zen_menu_label(app: AppHandle, in_zen: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Windows: the system menu (Restore, Move, Size, Minimize, Maximize,
+/// Close) at the pointer, for a right-click on K2's own title bar (the
+/// window has no native frame, so Windows doesn't show it by itself). The
+/// chosen item runs as the same WM_SYSCOMMAND a framed window sends. A
+/// sync command: it runs on the main thread, which owns the window.
+/// Elsewhere it does nothing.
+#[tauri::command]
+pub fn window_system_menu(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnableMenuItem, GetCursorPos, GetSystemMenu, PostMessageW, TrackPopupMenu, MF_BYCOMMAND, MF_ENABLED,
+            MF_GRAYED, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, TPM_RETURNCMD,
+            TPM_RIGHTBUTTON, WM_SYSCOMMAND,
+        };
+        let hwnd = HWND(window.hwnd().map_err(|e| e.to_string())?.0);
+        let maximized = window.is_maximized().unwrap_or(false);
+        // SAFETY: Win32 calls on this window's own handle, on its thread;
+        // the system menu belongs to the window and is not destroyed here.
+        unsafe {
+            let menu = GetSystemMenu(hwnd, false);
+            if menu.is_invalid() {
+                return Ok(());
+            }
+            for (id, on) in [
+                (SC_RESTORE, maximized),
+                (SC_MOVE, !maximized),
+                (SC_SIZE, !maximized),
+                (SC_MAXIMIZE, !maximized),
+                (SC_MINIMIZE, true),
+                (SC_CLOSE, true),
+            ] {
+                let _ = EnableMenuItem(menu, id, MF_BYCOMMAND | if on { MF_ENABLED } else { MF_GRAYED });
+            }
+            let mut pt = POINT::default();
+            GetCursorPos(&mut pt).map_err(|e| e.to_string())?;
+            let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, None, hwnd, None);
+            if cmd.0 != 0 {
+                PostMessageW(Some(hwnd), WM_SYSCOMMAND, WPARAM(cmd.0 as usize), LPARAM(0)).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+    Ok(())
+}
+
 /// Open a secondary main-layout window (shared by menu + Win/Linux App Menu).
 #[tauri::command]
 pub fn window_new(app: AppHandle) -> Result<(), String> {

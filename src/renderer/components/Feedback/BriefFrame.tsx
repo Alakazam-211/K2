@@ -31,7 +31,7 @@ import {
   TRAFFIC_LIGHT_SPACER_BASE_PX,
   type DesktopChrome,
 } from '@/lib/desktop-chrome'
-import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
 import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
@@ -293,6 +293,7 @@ function BriefOverlay({
         style={{ height: OVERLAY_TOPBAR_HEIGHT, minHeight: OVERLAY_TOPBAR_HEIGHT }}
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
+        onContextMenu={titleBarOnContextMenu}
       >
         {stoplightInset > 0 && (
           <div

@@ -60,6 +60,7 @@ vi.mock('@/components/TopBar/TopBarUtilities', () => ({
 vi.mock('@/components/TopBar/K2MarkButton', () => ({ default: () => null }))
 vi.mock('@/lib/titlebar-drag', () => ({
   titleBarDragOnMouseDown: () => undefined,
+  titleBarOnContextMenu: () => undefined,
   titleBarOnDoubleClick: () => undefined,
 }))
 vi.mock('@/lib/daemon-cli', () => ({

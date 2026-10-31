@@ -33,6 +33,7 @@ vi.mock('@/components/TopBar/K2MarkButton', () => ({ default: () => null }))
 vi.mock('@/components/Sidebar/IconRail', () => ({ default: () => <div data-testid="rail" /> }))
 vi.mock('@/lib/titlebar-drag', () => ({
   titleBarDragOnMouseDown: () => undefined,
+  titleBarOnContextMenu: () => undefined,
   titleBarOnDoubleClick: () => undefined,
 }))
 vi.mock('@/lib/daemon-cli', () => ({

@@ -3,7 +3,7 @@
 // draggable title bar. Opened by `window_open_ticket` (menu.rs).
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { getDesktopChrome } from '@/lib/desktop-chrome'
 import { useFeedbackStore } from '@/stores/feedback'
 import { fetchFeedbackShow, type FeedbackListRow } from './feedback-api'
@@ -52,6 +52,7 @@ export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Elem
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
+        onContextMenu={titleBarOnContextMenu}
       >
         {stoplightInset > 0 && <div aria-hidden className="k2-stoplight-spacer-brief" />}
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">

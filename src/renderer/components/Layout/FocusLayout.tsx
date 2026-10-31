@@ -9,7 +9,7 @@ import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { Surface } from '@/components/ui'
-import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -39,6 +39,7 @@ export default function FocusLayout({
         className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
+        onContextMenu={titleBarOnContextMenu}
         style={{
           height: TOPBAR_HEIGHT,
           minHeight: TOPBAR_HEIGHT

@@ -180,7 +180,7 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 webview2-com = "0.39"
 windows-core = "0.62"
 # Browser freeze-frame: CapturePreview writes into an SHCreateMemStream.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 default = ["browser-pane"]

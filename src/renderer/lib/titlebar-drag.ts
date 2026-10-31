@@ -13,6 +13,8 @@
  */
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
+import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
 
 const INTERACTIVE =
   'button, input, select, textarea, a, [role="button"], [role="menuitem"], [role="menu"], .no-drag'
@@ -98,4 +100,16 @@ export function titleBarOnDoubleClick(e: ReactMouseEvent): void {
   if (isInteractiveTarget(e)) return
   cancelPendingDrag()
   e.preventDefault()
+}
+
+/** Windows: right-click on the title bar opens the window's system menu
+ *  (Restore, Move, Size, Minimize, Maximize, Close), as on a framed
+ *  window. The app draws its own title bar, so the shell (`window_system_menu`)
+ *  shows the menu. macOS and Linux keep their default. */
+export function titleBarOnContextMenu(e: ReactMouseEvent): void {
+  if (typeof navigator === 'undefined' || desktopOsFromNavigator(navigator) !== 'windows') return
+  if (isInteractiveTarget(e)) return
+  e.preventDefault()
+  cancelPendingDrag()
+  void invoke('window_system_menu').catch(() => {})
 }

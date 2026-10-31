@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { useZenShown } from '@/lib/zen/zen-view'
 import { zenAvailable } from '@/lib/zen/zen-platform'
+import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
 import {
   APP_MENU_ACTION_IDS,
   handleAppMenuAction,
@@ -11,6 +12,9 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 type MenuEntry =
   | { kind: 'item'; id: AppMenuActionId; label: string }
   | { kind: 'sep' }
+
+/** Windows says Exit (its File → Exit convention); Linux keeps Quit. */
+const quitWord = typeof navigator !== 'undefined' && desktopOsFromNavigator(navigator) === 'windows' ? 'Exit' : 'Quit'
 
 const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
   {
@@ -107,7 +111,13 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
                 onClick={() => run(item.id)}
                 className="flex w-full items-center px-2.5 py-1.5 text-left text-xs text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
               >
-                {item.id === 'zen-toggle' ? (zenShown ? 'Exit Zen Mode' : 'Enter Zen Mode') : item.label}
+                {item.id === 'zen-toggle'
+                  ? zenShown
+                    ? 'Exit Zen Mode'
+                    : 'Enter Zen Mode'
+                  : item.id === 'quit' && quitWord === 'Exit'
+                    ? 'Exit'
+                    : item.label}
               </button>
             ),
           )}

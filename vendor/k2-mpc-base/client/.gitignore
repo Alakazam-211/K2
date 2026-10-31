@@ -1,0 +1,5 @@
+# browser tests: the bundled page, Playwright's output, browsers installed per job
+test/browser/.build/
+test-results/
+playwright-report/
+.pw-browsers/

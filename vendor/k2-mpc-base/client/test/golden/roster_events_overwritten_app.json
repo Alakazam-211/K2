@@ -1,0 +1,237 @@
+{
+  "self": "p3",
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "p1",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        },
+        {
+          "handle": "p2",
+          "name": "Bob",
+          "colour": "#16a34a",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        },
+        {
+          "handle": "p3",
+          "name": "Widget",
+          "colour": "#64748b",
+          "kind": "app",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "role",
+      "who": "p1",
+      "role": "editor"
+    },
+    {
+      "kind": "cursor",
+      "who": "p1",
+      "cursor": {
+        "root": "source",
+        "anchor": 22,
+        "head": 22,
+        "version": 2,
+        "anchor_lc": "4:1",
+        "head_lc": "4:1"
+      },
+      "version": 2
+    },
+    {
+      "kind": "cursor",
+      "who": "p1",
+      "cursor": {
+        "root": "source",
+        "anchor": 44,
+        "head": 44,
+        "version": 3,
+        "anchor_lc": "7:1",
+        "head_lc": "7:1"
+      },
+      "version": 3
+    },
+    {
+      "kind": "overwritten",
+      "to": "p3",
+      "change": 5,
+      "version": null,
+      "restore_from": 2,
+      "source": "an outside save",
+      "rule": "removed_text",
+      "row": null,
+      "line": 8,
+      "cells": [
+        {
+          "region": "L8",
+          "col": null,
+          "yours": "by the widget\n",
+          "file": "",
+          "cut": false
+        }
+      ],
+      "more": 0,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": true,
+      "message": "An outside save may have removed your text (L8). It read \"by the widget\\n\"."
+    },
+    {
+      "kind": "cursor",
+      "who": "p1",
+      "cursor": {
+        "root": "source",
+        "anchor": 17,
+        "head": 17,
+        "version": 5,
+        "anchor_lc": "5:1",
+        "head_lc": "5:1"
+      },
+      "version": 5
+    },
+    {
+      "kind": "role",
+      "who": "p3",
+      "role": "editor"
+    },
+    {
+      "kind": "cursor",
+      "who": "p3",
+      "cursor": {
+        "root": "source",
+        "anchor": 23,
+        "head": 23,
+        "version": 5,
+        "anchor_lc": "6:1",
+        "head_lc": "6:1"
+      },
+      "version": 5
+    },
+    {
+      "kind": "cursor",
+      "who": "p1",
+      "cursor": {
+        "root": "source",
+        "anchor": 28,
+        "head": 28,
+        "version": 7,
+        "anchor_lc": "4:1",
+        "head_lc": "4:1"
+      },
+      "version": 7
+    },
+    {
+      "kind": "cursor",
+      "who": "p3",
+      "cursor": {
+        "root": "source",
+        "anchor": 42,
+        "head": 42,
+        "version": 7,
+        "anchor_lc": "7:1",
+        "head_lc": "7:1"
+      },
+      "version": 7
+    },
+    {
+      "kind": "closed",
+      "reason": "core_off"
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 7,
+    "members": [
+      {
+        "handle": "p1",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": {
+          "root": "source",
+          "anchor": 28,
+          "head": 28,
+          "version": 7,
+          "anchor_lc": "4:1",
+          "head_lc": "4:1"
+        },
+        "rights": "edit"
+      },
+      {
+        "handle": "p3",
+        "name": "Widget",
+        "colour": "#64748b",
+        "kind": "app",
+        "role": "editor",
+        "away": false,
+        "cursor": {
+          "root": "source",
+          "anchor": 42,
+          "head": 42,
+          "version": 7,
+          "anchor_lc": "7:1",
+          "head_lc": "7:1"
+        },
+        "rights": "edit"
+      },
+      {
+        "handle": "p2",
+        "name": "Bob",
+        "colour": "#16a34a",
+        "kind": "person",
+        "role": "viewer",
+        "away": false,
+        "cursor": null,
+        "rights": "edit"
+      }
+    ],
+    "watching": 0,
+    "overwritten": [
+      {
+        "kind": "overwritten",
+        "to": "p3",
+        "change": 5,
+        "version": null,
+        "restore_from": 2,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 8,
+        "cells": [
+          {
+            "region": "L8",
+            "col": null,
+            "yours": "by the widget\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": true,
+        "message": "An outside save may have removed your text (L8). It read \"by the widget\\n\"."
+      }
+    ]
+  }
+}

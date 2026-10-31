@@ -160,6 +160,25 @@ k2 compute run <node> --no-source --needs rust@stable,cargo-nextest --cpus 4 --m
 
 The licence check (`scripts/check-licences.sh`, `cargo metadata` only) runs locally.
 
+### Client-only jobs (browser tests)
+
+The JS client's browser tests need `client/` and nothing else. `tools/client-ship.sh <kit-repo>
+<kit-sha> <out-dir>` writes a fresh one-commit repo holding only `client/` at that commit, checks
+that nothing of the kit came with it (no path outside `client/`, no crates, vendored engine,
+Rust or Cargo files, no history), and prints `ship <sha> <- kit <sha>`. Ship that repo, and quote
+the proof line with the job id:
+
+```sh
+tools/client-ship.sh . <kit-sha> <workspace>/client-ship
+k2 compute run "$NODE" --repo client-ship --sha <ship-sha> --needs node@22 --cache pw \
+  --cpus 4 --mem 4G --detach -- sh -ec 'cd client && npm ci &&
+  export PLAYWRIGHT_BROWSERS_PATH=$K2_JOB_CACHE/pw && npx playwright install chromium webkit &&
+  npx playwright test'
+```
+
+The typecheck, the client's full test suite and its licence check stay in a full checkout: the
+shared-vector test also reads the kit's copy of the vectors when it is there.
+
 ## Build settings
 
 The kit's own debug builds and node test runs (since the build-speed trial, 10-28):

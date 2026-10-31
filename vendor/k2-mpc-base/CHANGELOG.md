@@ -1,5 +1,199 @@
 # Changelog
 
+## v0.9.8.2 (2026-10-30)
+
+v0.9.8.1 plus the JS client 0.10.0: the live wire contract and the live editor, M1. No change
+to the kit's Rust library, store or merge; no new dependency. The crate version is `0.9.8+2`
+(the git tag is v0.9.8.2); the client's is `0.10.0`.
+
+### Wire goldens for `overwritten` and `closed`
+
+The client's types for the roster's `overwritten` and `closed` events were checked only against
+WIRE.md; now they are checked against the kit's own JSON too.
+
+**Tests**
+- `crates/base/tests/wire_golden.rs` encodes `RosterEvent::Overwritten` and `Closed`, and a
+  snapshot's waiting notes, and writes four new goldens from a session opened on a file:
+  `roster_events_overwritten.json` and its App lens `roster_events_overwritten_app.json`
+  (outside saves that remove and replace an author's text: the author's own pushes live, the
+  same notes waiting in a later snapshot, then the host's `SessionManager::close`), and
+  `roster_events_closed.json` / `roster_events_closed_app.json` (a later subscription: its
+  snapshot with `overwritten`, then `closed`, after which it ends). A fifth,
+  `roster_events_rollup.json`, holds one person's notes past the cap of 64 (the roll-up). The
+  existing goldens are unchanged.
+- `client/test/golden.test.ts` checks every field of `overwritten` and of its cells against key
+  lists that `satisfies` the type in `wire.ts` (a renamed field fails to compile, or fails the
+  key-set check; the editor's own `RemovedTextNote` is held to the same names), the snapshot's `overwritten` (present only with waiting notes, deduped on
+  `(change, row)`), `closed {reason}` as the last event, and the roll-up's counts (64 waiting,
+  the last `rule: "rollup"`, `cells: []`, every place counted).
+
+**Docs**
+- `client/WIRE.md`: notes of kind `note` are the ones passed through untyped; `overwritten`,
+  and its waiting copies in a snapshot, are typed in full. A snapshot's `overwritten` is present
+  only when the subscriber has waiting notes; a missing field means none. The same wording in
+  `wire.ts` and `src/editor/notes.ts`.
+- `client/WIRE.md`, "JSON encodings": rows for the `overwritten` event (where each field comes
+  from in the kit's `Overwrite`; `cells` is the first place, then `also`, in order; `message` is
+  its `Display`) and for a snapshot's `overwritten` (bare `Overwrite`s: the host adds `kind` and
+  `to`, the subscriber). The roster: members' order isn't significant (compare by `handle`).
+
+### The JS client 0.9.9 and the live wire contract (client/WIRE.md)
+
+What a host needs to carry a live editor over a socket: the handshake, closing, reconnecting,
+the own-edit filter, undo's reply, carets at a version, keepalive and a 4 MiB frame cap. No
+Rust change in the kit; no new dependency; the client's existing frames are unchanged.
+
+**Added (client/WIRE.md, `client/src/wire.ts`)**
+- **Connecting:** `welcome {root, version, text?, client, self, rights}`, the first frame on
+  every connection, after the host's authentication, `join`, `subscribe` and
+  `subscribe_roster`, then `read`; an optional `hello {root, resume?}`; `snapshot {op}` →
+  `snapshot {op, text, version}`.
+- **Closing:** `closed {reason, error?}` with the reasons `left`, `idle`, `kicked`,
+  `rights_lost`, `deleted`, `moved`, `released`, `cut_off`, `declined`, `not_found`, `auth`,
+  `network` and `closed` (`SessionManager::close`), which ones allow a retry (`canRetry`), and
+  `error {error}` for a frame with no `op` to answer.
+- **The own-edit filter, exactly:** on an edit applied at V the host forwards the queued events
+  before V, skips the one at V on that connection, then sends `ack`; nothing applied: all of
+  them, then `ack` at the version unchanged. Undo and redo come back as `change`: filter by
+  version, never by client ID.
+- **Reconnecting:** a new connection and a new client ID; frames sent while disconnected are
+  dropped, never replayed (no idempotency key).
+- **Undo's reply:** `undone {op, steps, version, notice?}` after the `change` frames it made;
+  `steps: 0` is "nothing to undo" (with `MPC-E206` / `MPC-E207` as `notice` when the kit says
+  why); conflicts stay `refused` with `MPC-E201`.
+- **Carets (G6):** the kit's `set_cursor` resolves offsets against the current text and takes
+  no version, so the host maps a stale `cursor` frame through `events_since` with
+  `position::transform` (`Bias::After`, as the kit carries carets) or drops it. A caret frame
+  has no reply.
+- **`visible {visible}`, `view {root?, first, last}`**; no app-level ping (the host pings at
+  the socket level; the component resyncs on focus, `online` and visibility).
+- **The frame cap: 4 MiB** (`FRAME_MAX`). An `edit` over it is refused with `MPC-E113
+  bad_edit`; any other frame with `error`; a `change` too big isn't sent (the client asks
+  `since`), a `since` reply too big is `MPC-E112` (reload), and a doc whose text doesn't fit
+  one frame is `closed {reason: "declined"}` with `MPC-E401` at `welcome` or `snapshot`.
+- **`LiveTransport`** (`connect`, `send`, `onFrame`, `onClose`, `close`) for a live editor
+  component; `Transport` is unchanged and is its base.
+- **JSON encodings pinned:** `who` (a pid, or an App viewer's handle), `rights` (`edit`,
+  `read`, `none`), `role`, `kind`, `reason`, `how`, a caret's `line:col`, `on_behalf_of: null`,
+  and `RosterMember` → roster entry.
+
+**Added (client 0.9.9)**
+- `LiveText.reconnected(welcome)`: takes the new client ID (the edit in flight is still
+  recognised under the one it was sent with), re-sends the caret, visibility and view, then
+  resyncs (or resets, when the welcome carries text).
+- `LiveText.reload()` (the answer to `onReload`), `onUndo`, `onClosed`, `setVisible`,
+  `setView`, the `client` getter; `undo()` and `redo()` return their op.
+- An edit whose frame would pass the cap is refused by the client before sending
+  (`MPC-E113`) and goes to `onRejected` with its text.
+- A roster `cursor` event's `version` beside the caret is taken when the caret has none.
+
+**Tests**
+- `crates/base/tests/wire_golden.rs` writes `client/test/golden/*.json` from a real session
+  (change events in both lenses, roster events, the refusals) with the kit's JSON writer;
+  `MPC_BLESS=1` regenerates. `client/test/golden.test.ts` parses them with `wire.ts`'s types,
+  replays the changes to the kit's text and folds the roster to the kit's own.
+- `client/test/wire.test.ts`: a reconnect mid-edit (applied, and lost), frames dropped while
+  down, the caret re-sent, a resume that can't, the own-edit filter with a lagging writer
+  (both outcomes), the client's own undo as a `change`, `undone` with 0 steps, the reload
+  past the window, and the frame cap (client-side, host-side, a doc too big at `welcome`, a
+  doc that grows past it, and the sizes of the largest frames).
+- The fake host follows the host rules exactly: a queue per connection drained by its writer,
+  undo per participant with `undone`, reconnects, the cap. Its successful undo now sends
+  `undone` and a nothing-to-undo answers `undone {steps: 0}`, so the seeded convergence runs
+  that undo draw different latencies than before: their counts differ from earlier runs.
+
+### The live editor, M1 (client/EDITOR.md)
+
+**The live editor, M1** (`k2-mpc-client/editor`, `client/EDITOR.md`): `mountLiveEditor(parent,
+opts)`, a CodeMirror 6 editor for one text root in plain DOM, with the connection's life inside
+it. The kit's Rust side is unchanged.
+
+**Added**
+- **The connection's states:** connect, welcome, live; on a drop, a jittered backoff (1–15 s)
+  and `connect({resume})` with a new client ID, then a resync. An edit made while the editor
+  knows it is down is sent once after the welcome; an edit already handed to the transport is
+  never sent again (the resync settles it: applied, or `MPC-E000` with its text kept).
+  `MPC-E112` reloads by snapshot, with a fresh connect as the fallback. A close for good shows a
+  banner and freezes the editor read-only.
+- **Markdown mode** (highlighting, list keys), line wrapping, CodeMirror's default keymap
+  without history; **read-only** and live rights changes.
+- **Remote carets** with names readable on the participant's colour (black or white, whichever
+  contrasts more), never cut off on line 1; label modes `always`, `active`, `hover`. A basic
+  roster strip.
+- **Rejections** listed with **Re-apply** and **Dismiss** buttons (keyboard-reachable); `MPC-E111`
+  also as a `conflict` event. A change whose reply was lost with a connection (`MPC-E000`) is
+  marked `mayHaveApplied`; if it lands after all (a change from the client ID it went out on)
+  it leaves the list and the new **`landed`** event fires; Re-apply applies it only when the
+  server's record shows it absent (`ReapplyResult`: `applied`, `already-present`, `unknown`,
+  `unavailable`). On a host breaking the reconnect rule, a late landing after a Re-apply fires
+  **`duplicateRisk`**.
+  A rejection with more than one hunk is refused by Re-apply in this version (`unknown`,
+  `reason: "multi-hunk"`; `LiveText.reapply` returns `null`) rather than put back in one place;
+  restoring each hunk in place through the server's rebase rule is planned.
+  **Re-apply now applies only a plain lost insertion** (typed text whose reply was lost, or that
+  was refused for a reason other than someone else's change, with nothing changed around it
+  since); every other rejected change is refused with "check and retype" until M2, which puts
+  them back where the server would.
+  **Re-apply's guards (single hunk):** it re-inserts the typed text only for a pure insertion,
+  with no reload since, nothing else inserted at its place since and no text around its place
+  (or at its edge) deleted or replaced since; anything else is `unknown` with `reason` `not-insertion`,
+  `reloaded`, `tie` or `deleted-around`, the rejection kept (`LiveText.reapplyGuard`). Each
+  guard closes an M1 case that put the wrong text in: a deletion said `applied` and changed
+  nothing, a replacement's text went in beside the old, a change pending at a reload went in at
+  the start of the document, at a tie the text went before the other insertion where the
+  server's rule puts it after, and a place inside deleted text went to the deletion's start
+  (and stayed there when that deletion was refused). The Re-apply scan (seeds 1–500, strict
+  host): every Re-apply that still applies matches the server's rebase rule.
+- **The reconnect rule** (WIRE.md, Reconnecting): `prev=<old client ID>` on every reconnect
+  (`ConnectOptions.prev`); the host leaves that connection first and drops its late frames.
+  `LiveText.disconnected()` keeps edits made with no connection in its queue until
+  `reconnected`; `LiveText.presence`, `onLanded`, `onDuplicateRisk`.
+- **Events:** `state`, `roster`, `rights`, `change`, `pending`, `ack`, `rejected`, `conflict`,
+  `note` (the kit's removed-text note, `overwritten`, only to this participant, once per
+  `(change, row)`), `claim`, `reload`, `closed`, `error`, `participantClick`.
+- **Theming** by CSS variables on `.mpc-editor` (`--mpc-bg`, `--mpc-fg`, `--mpc-font`, ...) and
+  stable classes.
+
+**Fixed (`LiveText`)**
+- **One event per root per version.** A change touching several text roots is one event per
+  root at one version; `LiveText` dropped a root's event when another root's event at that
+  version came first (the change lost, or an own edit taken for lost: `MPC-E000`). Each
+  (root, version) is now applied once, in whatever order, live and inside a `since` reply; a
+  repeat is ignored. WIRE.md (Units and ordering) says so.
+
+**Changed (the binding inside the editor)**
+- No `doc.toString()` per keystroke: a byte index converts offsets from the changed lines.
+- Remote changes are held during an IME composition and dispatched after it; nothing typed is
+  lost or doubled.
+- A host's CodeMirror history can't change the shared text: undo and redo go to the server.
+- `codemirrorLive` (the old binding) is unchanged.
+
+**Tests and checks**
+- jsdom: `test/editor.test.ts`; three mounted editors through the convergence harness with
+  dropped sockets and resumes (`test/editor-convergence.test.ts`).
+- Browsers (Playwright 1.47.2, pinned, all under `client/`): `test/browser/editor.spec.ts`,
+  `test/browser/ime.spec.ts` (Chromium: synthetic and Chromium's own IME input; WebKit:
+  synthetic). Linux WebKit is WebKitGTK, not macOS WKWebView: a WebKit IME pass is an early
+  signal only, and the real IME check is the host application's on macOS.
+- The client's licence check is narrowed to MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib and
+  Unicode-3.0, with one named dev-only exception (`@csstools/color-helpers`, MIT-0, through
+  jsdom).
+
+**Host notes**
+- Every `@codemirror/*` package is a peer dependency; the editor needs `@codemirror/view`
+  ≥ 6.27, `state` ^6.4, `commands` ^6.6, `language` ^6.10, `lang-markdown` ^6.2 (tested with
+  view 6.43.15, state 6.7.6, commands 6.6.0, language 6.10.2, lang-markdown 6.2.5).
+- **`MPC-EDITOR-HISTORY`:** the editor refuses to mount with CodeMirror's `history()` among the
+  host's extensions (the server owns undo; CodeMirror's history commands can't be
+  intercepted). Leave `history()` and `historyKeymap` out.
+- The editor takes `wire.ts`'s `LiveTransport` (above) and `LiveText.reconnected`; `connect()`
+  while a connection is open replaces it (WIRE.md, "The live transport").
+- **Retry is the close table's:** the editor decides whether to reconnect from the close's
+  reason (`canRetry`), not from a transport's own `retry` flag, and reports a disagreement once
+  as `MPC-EDITOR-CLOSE-RETRY`. WIRE.md's host notes (extra fields ignored, `closed` gains
+  `code?` and `path?`, a restart with no frame is `network`, an auth pre-check after a failed
+  dial, a hard close with `cut_off`, clients key on error ids) are in the wire types too.
+
 ## v0.9.8.1 (2026-10-30)
 
 v0.9.8 plus what v0.9.7.2 added to v0.9.7.1 (the same commits, ported): an outside save that may

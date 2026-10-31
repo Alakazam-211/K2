@@ -1,0 +1,1685 @@
+{
+  "about": "One person's notes past the cap of 64: `saves` outside saves each removed one of their lines. `pushed` counts the live `overwritten` pushes; `tail` is the last three as they came (the 64th note, then the roll-up twice); `final` is a later subscription's snapshot with all 64 waiting notes, the last the roll-up.",
+  "self": "ada",
+  "saves": 66,
+  "pushed": 66,
+  "tail": [
+    {
+      "kind": "overwritten",
+      "to": "ada",
+      "change": 66,
+      "version": 65,
+      "restore_from": 65,
+      "source": "an outside save",
+      "rule": "removed_text",
+      "row": null,
+      "line": 3,
+      "cells": [
+        {
+          "region": "L3",
+          "col": null,
+          "yours": "line 63\n",
+          "file": "",
+          "cut": false
+        }
+      ],
+      "more": 0,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": false,
+      "message": "An outside save may have removed your text (L3). Version 65 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 63\\n\"."
+    },
+    {
+      "kind": "overwritten",
+      "to": "ada",
+      "change": 67,
+      "version": 66,
+      "restore_from": 66,
+      "source": "an outside save",
+      "rule": "rollup",
+      "row": null,
+      "line": null,
+      "cells": [],
+      "more": 2,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": false,
+      "message": "An outside save may have removed or replaced your text in 2 more places. See change 67 in the log. Version 66 holds the latest of it."
+    },
+    {
+      "kind": "overwritten",
+      "to": "ada",
+      "change": 68,
+      "version": 67,
+      "restore_from": 67,
+      "source": "an outside save",
+      "rule": "rollup",
+      "row": null,
+      "line": null,
+      "cells": [],
+      "more": 3,
+      "not_shown": 0,
+      "withheld": false,
+      "no_history": false,
+      "message": "An outside save may have removed or replaced your text in 3 more places. See change 68 in the log. Version 67 holds the latest of it."
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 68,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "viewer",
+        "away": false,
+        "cursor": {
+          "root": "source",
+          "anchor": 9,
+          "head": 9,
+          "version": 68,
+          "anchor_lc": "3:1",
+          "head_lc": "3:1"
+        },
+        "rights": "edit"
+      }
+    ],
+    "watching": 0,
+    "overwritten": [
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 3,
+        "version": 2,
+        "restore_from": 2,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 0\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 2 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 0\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 4,
+        "version": 3,
+        "restore_from": 3,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 1\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 3 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 1\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 5,
+        "version": 4,
+        "restore_from": 4,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 2\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 4 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 2\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 6,
+        "version": 5,
+        "restore_from": 5,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 3\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 5 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 3\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 7,
+        "version": 6,
+        "restore_from": 6,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 4\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 6 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 4\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 8,
+        "version": 7,
+        "restore_from": 7,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 5\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 7 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 5\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 9,
+        "version": 8,
+        "restore_from": 8,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 6\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 8 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 6\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 10,
+        "version": 9,
+        "restore_from": 9,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 7\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 9 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 7\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 11,
+        "version": 10,
+        "restore_from": 10,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 8\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 10 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 8\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 12,
+        "version": 11,
+        "restore_from": 11,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 9\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 11 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 9\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 13,
+        "version": 12,
+        "restore_from": 12,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 10\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 12 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 10\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 14,
+        "version": 13,
+        "restore_from": 13,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 11\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 13 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 11\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 15,
+        "version": 14,
+        "restore_from": 14,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 12\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 14 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 12\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 16,
+        "version": 15,
+        "restore_from": 15,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 13\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 15 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 13\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 17,
+        "version": 16,
+        "restore_from": 16,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 14\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 16 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 14\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 18,
+        "version": 17,
+        "restore_from": 17,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 15\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 17 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 15\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 19,
+        "version": 18,
+        "restore_from": 18,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 16\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 18 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 16\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 20,
+        "version": 19,
+        "restore_from": 19,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 17\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 19 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 17\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 21,
+        "version": 20,
+        "restore_from": 20,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 18\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 20 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 18\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 22,
+        "version": 21,
+        "restore_from": 21,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 19\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 21 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 19\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 23,
+        "version": 22,
+        "restore_from": 22,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 20\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 22 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 20\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 24,
+        "version": 23,
+        "restore_from": 23,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 21\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 23 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 21\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 25,
+        "version": 24,
+        "restore_from": 24,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 22\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 24 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 22\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 26,
+        "version": 25,
+        "restore_from": 25,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 23\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 25 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 23\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 27,
+        "version": 26,
+        "restore_from": 26,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 24\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 26 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 24\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 28,
+        "version": 27,
+        "restore_from": 27,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 25\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 27 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 25\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 29,
+        "version": 28,
+        "restore_from": 28,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 26\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 28 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 26\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 30,
+        "version": 29,
+        "restore_from": 29,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 27\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 29 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 27\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 31,
+        "version": 30,
+        "restore_from": 30,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 28\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 30 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 28\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 32,
+        "version": 31,
+        "restore_from": 31,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 29\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 31 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 29\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 33,
+        "version": 32,
+        "restore_from": 32,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 30\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 32 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 30\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 34,
+        "version": 33,
+        "restore_from": 33,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 31\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 33 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 31\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 35,
+        "version": 34,
+        "restore_from": 34,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 32\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 34 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 32\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 36,
+        "version": 35,
+        "restore_from": 35,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 33\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 35 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 33\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 37,
+        "version": 36,
+        "restore_from": 36,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 34\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 36 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 34\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 38,
+        "version": 37,
+        "restore_from": 37,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 35\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 37 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 35\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 39,
+        "version": 38,
+        "restore_from": 38,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 36\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 38 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 36\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 40,
+        "version": 39,
+        "restore_from": 39,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 37\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 39 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 37\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 41,
+        "version": 40,
+        "restore_from": 40,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 38\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 40 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 38\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 42,
+        "version": 41,
+        "restore_from": 41,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 39\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 39\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 43,
+        "version": 42,
+        "restore_from": 42,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 40\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 42 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 40\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 44,
+        "version": 43,
+        "restore_from": 43,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 41\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 43 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 41\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 45,
+        "version": 44,
+        "restore_from": 44,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 42\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 44 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 42\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 46,
+        "version": 45,
+        "restore_from": 45,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 43\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 45 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 43\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 47,
+        "version": 46,
+        "restore_from": 46,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 44\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 46 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 44\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 48,
+        "version": 47,
+        "restore_from": 47,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 45\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 47 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 45\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 49,
+        "version": 48,
+        "restore_from": 48,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 46\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 48 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 46\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 50,
+        "version": 49,
+        "restore_from": 49,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 47\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 49 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 47\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 51,
+        "version": 50,
+        "restore_from": 50,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 48\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 50 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 48\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 52,
+        "version": 51,
+        "restore_from": 51,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 49\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 51 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 49\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 53,
+        "version": 52,
+        "restore_from": 52,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 50\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 52 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 50\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 54,
+        "version": 53,
+        "restore_from": 53,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 51\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 53 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 51\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 55,
+        "version": 54,
+        "restore_from": 54,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 52\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 54 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 52\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 56,
+        "version": 55,
+        "restore_from": 55,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 53\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 55 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 53\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 57,
+        "version": 56,
+        "restore_from": 56,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 54\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 56 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 54\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 58,
+        "version": 57,
+        "restore_from": 57,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 55\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 57 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 55\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 59,
+        "version": 58,
+        "restore_from": 58,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 56\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 58 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 56\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 60,
+        "version": 59,
+        "restore_from": 59,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 57\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 59 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 57\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 61,
+        "version": 60,
+        "restore_from": 60,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 58\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 60 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 58\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 62,
+        "version": 61,
+        "restore_from": 61,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 59\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 61 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 59\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 63,
+        "version": 62,
+        "restore_from": 62,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 60\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 62 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 60\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 64,
+        "version": 63,
+        "restore_from": 63,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 61\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 63 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 61\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 65,
+        "version": 64,
+        "restore_from": 64,
+        "source": "an outside save",
+        "rule": "removed_text",
+        "row": null,
+        "line": 3,
+        "cells": [
+          {
+            "region": "L3",
+            "col": null,
+            "yours": "line 62\n",
+            "file": "",
+            "cut": false
+          }
+        ],
+        "more": 0,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed your text (L3). Version 64 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"line 62\\n\"."
+      },
+      {
+        "kind": "overwritten",
+        "to": "ada",
+        "change": 68,
+        "version": 67,
+        "restore_from": 67,
+        "source": "an outside save",
+        "rule": "rollup",
+        "row": null,
+        "line": null,
+        "cells": [],
+        "more": 3,
+        "not_shown": 0,
+        "withheld": false,
+        "no_history": false,
+        "message": "An outside save may have removed or replaced your text in 3 more places. See change 68 in the log. Version 67 holds the latest of it."
+      }
+    ]
+  }
+}

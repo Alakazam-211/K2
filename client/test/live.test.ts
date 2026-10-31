@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Hunk } from "../src/hunk";
 import { LiveText, type Rejection } from "../src/live";
 import type { ChangeEvent, ClientFrame, ServerFrame, Transport } from "../src/wire";
@@ -60,7 +60,7 @@ describe("LiveText", () => {
     expect(l.version).toBe(3);
   });
 
-  it("keeps refused text (MPC-E111): out of the doc, handed to onRejected, re-applicable", () => {
+  it("keeps refused text (MPC-E111): out of the doc, handed to onRejected; a replacement isn't re-applied (not-insertion)", () => {
     const w = wire();
     const l = new LiveText({ text: "abcdef", version: 1 }, w.t);
     const rej: Rejection[] = [];
@@ -78,10 +78,35 @@ describe("LiveText", () => {
     expect(rej).toHaveLength(1);
     expect(rej[0]).toMatchObject({ text: "XYZ", base: 1, hunks: [h(1, 4, "XYZ")], region: { start: 1, end: 2 } });
     expect(rej[0].error?.id).toBe("MPC-E111");
-    // the host offers re-apply at the new base
+    // Re-apply would only re-insert "XYZ" beside the text it replaced: refused, kept
+    expect(l.reapplyGuard(rej[0].id)).toBe("not-insertion");
+    expect(l.reapply(rej[0].id)).toBeNull();
+    expect(l.text).toBe("abf");
+    expect(l.rejected.map((r) => r.id)).toEqual([rej[0].id]);
+  });
+
+  it("re-applies a refused pure insertion at its place, at the new base; one inside a deletion since is refused", () => {
+    const w = wire();
+    const l = new LiveText({ text: "abcdef", version: 1 }, w.t);
+    const rej: Rejection[] = [];
+    l.onRejected((r) => rej.push(r));
+    l.applyLocal([h(3, 3, "XYZ")]);
+    w.deliver({ type: "change", event: ev(2, [h(0, 1, "")]) }); // elsewhere
+    w.deliver({ type: "refused", op: 1, error: { id: "MPC-E901", message: "rate" } });
+    expect(rej).toHaveLength(1);
+    expect(l.text).toBe("bcdef");
+    expect(l.reapplyGuard(rej[0].id)).toBe("ok");
     l.reapply(rej[0].id);
-    expect(l.text).toBe("aXYZbf");
-    expect(w.sent[w.sent.length - 1]).toMatchObject({ type: "edit", base: 2, hunks: [h(1, 1, "XYZ")] });
+    expect(l.text).toBe("bcXYZdef");
+    expect(w.sent[w.sent.length - 1]).toMatchObject({ type: "edit", base: 2, hunks: [h(2, 2, "XYZ")] });
+    // an insertion strictly inside a range deleted since (MPC-E111): its place snapped
+    l.applyLocal([h(5, 5, "Q")], { group: "q" });
+    w.deliver({ type: "ack", op: 2, version: 3, hunks: [h(2, 2, "XYZ")] });
+    w.deliver({ type: "change", event: ev(4, [h(4, 7, "")]) });
+    w.deliver({ type: "refused", op: 3, error: { id: "MPC-E111", message: "write conflict", details: { conflicts: [] } } });
+    const q = rej.find((r) => r.text === "Q")!;
+    expect(l.reapplyGuard(q.id)).toBe("deleted-around");
+    expect(l.reapply(q.id)).toBeNull();
   });
 
   it("an unforeseen refusal (rate limit) rolls back and keeps later typing", () => {
@@ -238,3 +263,141 @@ describe("LiveText", () => {
   });
 });
 
+
+// One change touching several text roots is one event per root, all at one version (WIRE.md,
+// Units and ordering): the client applies each (root, version) once, whichever root comes first.
+describe("one change, several roots: each (root, version) applied once", () => {
+  const evc = (version: number, hunks: Hunk[], root = "source", client = 2): ChangeEvent => ({ ...ev(version, hunks, "p2", root), client });
+
+  /**
+   * The planted fault: the skip as it was before (any event at a version already seen is
+   * dropped, whatever its root), so a root's event after another root's at that version is lost.
+   */
+  async function withOldSkip<T>(f: () => T | Promise<T>): Promise<T> {
+    type P = { _version: number };
+    const spy = vi.spyOn(LiveText.prototype as unknown as { placeOf(v: number, r: string): string }, "placeOf");
+    spy.mockImplementation(function (this: P, v: number) {
+      if (v <= this._version) return "seen";
+      return v === this._version + 1 ? "next" : "gap";
+    });
+    try {
+      return await f();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  function otherRootFirstLive() {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t);
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "m")], "meta") });
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "x")]) });
+    w.deliver({ type: "change", event: evc(3, [h(3, 3, "y")]) });
+    return { w, l };
+  }
+
+  it("another root's event first, at the same version, live: this root's is applied", () => {
+    const { w, l } = otherRootFirstLive();
+    expect(l.text).toBe("xaby");
+    expect(l.version).toBe(3);
+    expect(w.sent.filter((f) => f.type === "since")).toEqual([]); // no gap seen
+  });
+
+  it("the same inside a since reply", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t);
+    w.deliver({ type: "change", event: evc(4, [h(0, 0, "z")]) }); // a gap: since
+    expect(w.sent).toEqual([{ type: "since", op: 1, version: 1 }]);
+    w.deliver({
+      type: "events",
+      op: 1,
+      events: [evc(2, [h(0, 0, "m")], "meta"), evc(2, [h(0, 0, "x")]), evc(3, [h(3, 3, "y")]), evc(4, [h(0, 0, "n")], "meta"), evc(4, [h(0, 0, "z")])],
+    });
+    expect(l.text).toBe("zxaby");
+    expect(l.version).toBe(4);
+    expect(w.sent.length).toBe(1); // no second since
+  });
+
+  it("this root's event first, then the other root's: both fine, nothing applied twice", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t);
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "x")]) });
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "m")], "meta") });
+    w.deliver({ type: "change", event: evc(3, [h(3, 3, "y")]) });
+    expect(l.text).toBe("xaby");
+    expect(l.version).toBe(3);
+    expect(w.sent.filter((f) => f.type === "since")).toEqual([]);
+  });
+
+  it("a duplicate of this root's event at that version is applied once (live and in a since reply)", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t);
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "m")], "meta") });
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "x")]) });
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "x")]) });
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "m")], "meta") });
+    expect(l.text).toBe("xab");
+    w.deliver({ type: "change", event: evc(4, [h(0, 0, "q")]) }); // a gap: since from 2
+    expect(w.sent).toEqual([{ type: "since", op: 1, version: 2 }]);
+    w.deliver({
+      type: "events",
+      op: 1,
+      events: [evc(2, [h(0, 0, "x")]), evc(3, [h(0, 0, "m")], "meta"), evc(3, [h(3, 3, "y")]), evc(3, [h(3, 3, "y")]), evc(4, [h(0, 0, "q")])],
+    });
+    expect(l.text).toBe("qxaby");
+    expect(l.version).toBe(4);
+  });
+
+  it("a snapshot has every root at its version: a late event at that version is seen", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 2 }, w.t);
+    w.deliver({ type: "change", event: evc(2, [h(0, 0, "x")]) });
+    expect(l.text).toBe("ab");
+    l.reset({ text: "xab", version: 3 });
+    w.deliver({ type: "change", event: evc(3, [h(0, 0, "x")]) });
+    expect(l.text).toBe("xab");
+  });
+
+  function ownAfterOtherRoot(via: "ack" | "since") {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t, { client: 7 });
+    const acks: number[] = [];
+    const rej: Rejection[] = [];
+    const reloads: string[] = [];
+    l.onAck((a) => acks.push(a.version));
+    l.onRejected((r) => rej.push(r));
+    l.onReload((r) => reloads.push(r.reason));
+    l.applyLocal([h(2, 2, "!")]);
+    if (via === "ack") {
+      // the change's other root comes first as a change; then this root's own edit is acked
+      w.deliver({ type: "change", event: evc(2, [h(0, 0, "m")], "meta", 7) });
+      w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(2, 2, "!")] });
+    } else {
+      // a resync while the edit is in flight: the reply lists the other root first, then ours
+      l.resync();
+      w.deliver({ type: "events", op: 2, events: [evc(2, [h(0, 0, "m")], "meta", 7), evc(2, [h(2, 2, "!")], "source", 7)] });
+    }
+    return { l, acks, rej, reloads };
+  }
+
+  for (const via of ["ack", "since"] as const) {
+    it(`an own edit is settled as ours when its other root's event came first (${via})`, () => {
+      const { l, acks, rej, reloads } = ownAfterOtherRoot(via);
+      expect(rej).toEqual([]);
+      expect(reloads).toEqual([]);
+      expect(acks).toEqual([2]);
+      expect(l.text).toBe("ab!");
+      expect(l.version).toBe(2);
+      expect(l.pending).toBe(0);
+    });
+  }
+
+  it("planted fault (the old skip): a root's event after another root's at that version is lost, and an own edit is taken for lost", async () => {
+    await withOldSkip(() => {
+      const { l } = otherRootFirstLive();
+      expect(l.text, "the fault went unnoticed").not.toBe("xaby");
+      const own = ownAfterOtherRoot("since");
+      expect(own.rej.map((r) => r.error?.id), "the fault went unnoticed").toEqual(["MPC-E000"]);
+    });
+  });
+});

@@ -1,0 +1,119 @@
+{
+  "self": "ada",
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 7,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "editor",
+          "away": false,
+          "cursor": {
+            "root": "source",
+            "anchor": 28,
+            "head": 28,
+            "version": 7,
+            "anchor_lc": "4:1",
+            "head_lc": "4:1"
+          },
+          "rights": "edit"
+        },
+        {
+          "handle": "widget",
+          "name": "Widget",
+          "colour": "#64748b",
+          "kind": "app",
+          "role": "editor",
+          "away": false,
+          "cursor": {
+            "root": "source",
+            "anchor": 42,
+            "head": 42,
+            "version": 7,
+            "anchor_lc": "7:1",
+            "head_lc": "7:1"
+          },
+          "rights": "edit"
+        },
+        {
+          "handle": "bob",
+          "name": "Bob",
+          "colour": "#16a34a",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit"
+        }
+      ],
+      "watching": 0,
+      "overwritten": [
+        {
+          "kind": "overwritten",
+          "to": "ada",
+          "change": 5,
+          "version": 2,
+          "restore_from": 2,
+          "source": "an outside save",
+          "rule": "removed_text",
+          "row": null,
+          "line": 3,
+          "cells": [
+            {
+              "region": "L3",
+              "col": null,
+              "yours": "first by ada\n",
+              "file": "",
+              "cut": false
+            },
+            {
+              "region": "L6",
+              "col": null,
+              "yours": "second by ada\n",
+              "file": "",
+              "cut": false
+            }
+          ],
+          "more": 0,
+          "not_shown": 0,
+          "withheld": false,
+          "no_history": false,
+          "message": "An outside save may have removed your text (L3, L6). Version 2 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. L3: It read \"first by ada\\n\". L6: It read \"second by ada\\n\"."
+        },
+        {
+          "kind": "overwritten",
+          "to": "ada",
+          "change": 7,
+          "version": 4,
+          "restore_from": 4,
+          "source": "an outside save",
+          "rule": "replaced_text",
+          "row": null,
+          "line": 3,
+          "cells": [
+            {
+              "region": "L3",
+              "col": null,
+              "yours": "ada's draft\n",
+              "file": "the editor's draft",
+              "cut": false
+            }
+          ],
+          "more": 0,
+          "not_shown": 0,
+          "withheld": false,
+          "no_history": false,
+          "message": "An outside save may have replaced your text (L3). Version 4 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read \"ada's draft\\n\"; the file now has \"the editor's draft\"."
+        }
+      ]
+    },
+    {
+      "kind": "closed",
+      "reason": "core_off"
+    }
+  ]
+}

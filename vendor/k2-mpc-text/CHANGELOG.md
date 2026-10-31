@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.2.9 (2026-10-30): pairs with kit v0.10.0
+
+**Requires `k2-mpc-base` v0.10.0** (C1: structured kinds and the grid, for CSV, on top of
+kit v0.9.7.1, whose whole-line `write --base` this pack took in v0.2.8: that entry stands).
+This pack gets no grid and no new verb; what changed for it:
+- **The grid's arrival doesn't affect it.** The kit's grid tier (structured roots, the grid
+  verbs, presence by key, element blame) is used only by packs that declare structured roots;
+  a text doc stays a text root, and its tests and goldens are unchanged (checked on a build
+  node).
+- **Breaking items absorbed:**
+  - `PersonAction` gained the grid tier's rows P35-P44 (`RowInsert` … `DropDeleted`):
+    `parity_row` maps them **N/A** (a text doc has no rows or columns), listing the grid verbs
+    as absent (`row insert` … `rows drop-deleted`); `docs/PARITY.md` has the row.
+  - `At` is no longer `Copy` (it gained `At::Elem`, a grid cell by key): nothing here
+    copied one, so no code change.
+- **Store format 6 is lazy:** a store is stamped 6 (with the `elem_writes` table) only when
+  it writes its first structured doc. A store holding only this pack's docs stays at format 5
+  byte for byte, so a kit v0.9.7.1 build still reads and writes it.
+- **Error ids:** `MPC-E806 header_names_unrendered` and `MPC-E807 header_only_row_blank`
+  come from the grid's `header on` verb, which this pack doesn't list: not visible here.
+  P24 (`export`, `export --version`) stays live as in v0.2.7.
+- `Cargo.lock`: k2-mpc-base 0.10.0; the crate version.
+
 ## v0.2.8 (2026-10-30): pairs with kit v0.9.7.1
 
 **Requires `k2-mpc-base` v0.9.7.1** (crate version `0.9.7+1`). The kit's `write --base` now

@@ -369,7 +369,10 @@ mod tests {
     #[test]
     fn the_upgrade_card_answers_decide_one_site_or_the_rest() {
         let _home = crate::test_support::TempHome::new();
-        let _ = k2_core::db::init_for_tests();
+        // Its own database: the list is every grandfathered site in the table,
+        // and on the shared one other tests' sites are in it (soak 2026-10-31,
+        // shuffled: 7, not 4), and "Keep them all public" would decide theirs.
+        let _db = k2_core::db::scoped_for_test();
         std::fs::write(_home.path().join(".k2/tunnel.json"), json!({ "token": "t", "subdomain": "rosson", "e2e": true }).to_string()).expect("tunnel.json");
         let id = uuid::Uuid::new_v4().simple().to_string();
         let ws = format!("ws-{id}");

@@ -25,6 +25,7 @@
   "include": [
     "sdk/activity/src/**/*.ts",
     "vendor/k2-mpc-base/client/src/**/*.ts",
+    "vendor/k2-mpc-base/client/test/jsdom-shims.ts",
     "tests/fixtures/activity/*.json",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",

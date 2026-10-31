@@ -1299,7 +1299,55 @@ pub fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: the files Explorer's Copy put on the clipboard (CF_HDROP),
+/// read in this (the person's) session, so the terminal pastes them as
+/// paths, as on a Mac. No file list on the clipboard: empty.
+#[cfg(windows)]
+pub fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard};
+    use windows_sys::Win32::UI::Shell::DragQueryFileW;
+    /// The shell's file-list clipboard format.
+    const CF_HDROP: u32 = 15;
+    // SAFETY: a plain format probe.
+    if unsafe { IsClipboardFormatAvailable(CF_HDROP) } == 0 {
+        return Ok(Vec::new());
+    }
+    // Another app may hold the clipboard for a moment: a few short tries.
+    let mut opened = false;
+    for _ in 0..5 {
+        // SAFETY: no owner window; closed below on every path.
+        if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+            opened = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if !opened {
+        return Err("the clipboard is busy".to_string());
+    }
+    let mut paths = Vec::new();
+    // SAFETY: the clipboard is open; the HDROP belongs to the clipboard
+    // and is only read (never freed) before CloseClipboard; each buffer is
+    // sized from DragQueryFileW's own length plus the NUL.
+    unsafe {
+        let h = GetClipboardData(CF_HDROP);
+        if !h.is_null() {
+            let n = DragQueryFileW(h, u32::MAX, std::ptr::null_mut(), 0);
+            for i in 0..n {
+                let len = DragQueryFileW(h, i, std::ptr::null_mut(), 0) as usize;
+                let mut buf = vec![0u16; len + 1];
+                let got = DragQueryFileW(h, i, buf.as_mut_ptr(), buf.len() as u32) as usize;
+                if got > 0 {
+                    paths.push(String::from_utf16_lossy(&buf[..got]));
+                }
+            }
+        }
+        CloseClipboard();
+    }
+    Ok(paths)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
@@ -1728,6 +1776,27 @@ mod tests {
         let err = delete(&[nonexist.to_string_lossy().to_string()], true)
             .expect_err("missing must fail");
         assert!(err.contains("Does not exist"), "got: {err}");
+    }
+
+    /// Windows: files copied in Explorer (a CF_HDROP list, set here the
+    /// way PowerShell's Set-Clipboard -Path does) read back as paths.
+    #[cfg(windows)]
+    #[test]
+    fn clipboard_file_list_reads_back_on_windows() {
+        let dir = std::env::temp_dir().join(format!("k2-clip-paths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("one.txt"), dir.join("two words.png"));
+        std::fs::write(&a, "1").unwrap();
+        std::fs::write(&b, "2").unwrap();
+        let script = format!("Set-Clipboard -Path '{}','{}'", a.display(), b.display());
+        let st = crate::bg_proc::command("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", &script])
+            .status()
+            .expect("powershell runs");
+        assert!(st.success(), "{st:?}");
+        let got = clipboard_read_file_paths().expect("read the clipboard");
+        assert_eq!(got, vec![a.display().to_string(), b.display().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Windows "Show in File Explorer": the item selected, any slashes.

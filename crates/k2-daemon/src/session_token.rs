@@ -521,6 +521,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // 0.46.7: a mailbox's own PERSON's forward routes (owner token or a
         // Connect login); agents use `/cli/mail/forward` with mail-manage.
         "/cli/mail/self/",
+        // 0.46.7: the Live editor's socket and its auth probe are people
+        // only (a client's Live view; `k2 doc` never calls them).
+        "/cli/docs/live",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/oauth-config",
@@ -2420,6 +2423,9 @@ mod tests {
             // 0.46.7: a person's own forward routes.
             "/cli/mail/self/forward",
             "/cli/mail/self/forward/unset",
+            // 0.46.7: the Live editor's socket and probe (people only).
+            "/cli/docs/live",
+            "/cli/docs/live/check",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/oauth-config",

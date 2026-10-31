@@ -108,7 +108,9 @@ fn a_second_process_holding_the_lock_fails_then_heals_without_a_restart() {
 fn a_failed_open_is_not_cached() {
     let path = temp_store();
     let holder = Database::create(&path).expect("second handle holds the lock");
-    let slot = StoreSlot::new(Duration::from_millis(300), Duration::ZERO);
+    // A 3 s gap: a loaded test node can't cross it between the first two
+    // calls (300 ms could be, and the second call then opened the store).
+    let slot = StoreSlot::new(Duration::from_secs(3), Duration::ZERO);
 
     let first = slot.get(|| path.clone()).err().expect("held: the open fails");
     assert_locked(&first, &path);
@@ -117,7 +119,7 @@ fn a_failed_open_is_not_cached() {
     let in_gap = slot.get(|| path.clone()).err().expect("inside the retry gap: no new attempt yet");
     assert_eq!(in_gap, first, "inside the gap the last error comes back as is");
 
-    std::thread::sleep(Duration::from_millis(350));
+    std::thread::sleep(Duration::from_millis(3200));
     let db = slot.get(|| path.clone()).expect("after the gap the store opens");
     round_trip(&db);
     let again = slot.get(|| path.clone()).expect("then it stays open");

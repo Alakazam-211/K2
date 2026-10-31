@@ -74,12 +74,14 @@ async fn an_apps_chat_map_and_channel_routes_reach_their_handlers() {
     let r = post(port, WHOIS, &remote, json!({ "memberIds": ["7"] })).await;
     assert_eq!((r.status, r.code()), (403, "cap_not_granted".to_string()), "whois: {}", r.body);
     let r = get(port, WHOIS, &remote, "").await;
-    assert_eq!((r.status, r.code()), (405, "usage".to_string()), "whois is a POST: {}", r.body);
+    // A POST route: refused for GET (the route policy answers before the handler).
+    assert_eq!(r.status, 405, "whois is a POST: {}", r.body);
     let r = post(port, CHANNELS, &remote, json!({ "slug": "desk", "name": "Desk" })).await;
     assert_eq!((r.status, r.code()), (403, "cap_not_granted".to_string()), "channels: {}", r.body);
     assert_eq!(r.json()["error"]["cap"], json!("chat:channels"), "{}", r.body);
     let r = get(port, CHANNELS, &remote, "").await;
-    assert_eq!((r.status, r.code()), (405, "usage".to_string()), "channels is a POST: {}", r.body);
+    // A POST route: refused for GET (the route policy answers before the handler).
+    assert_eq!(r.status, 405, "channels is a POST: {}", r.body);
 
     // The owner token is never these routes' credential: the routes' own
     // answer, not the catch-all's.

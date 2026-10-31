@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { ChatMessageBody, chatHardBreaks } from './ChatMessage'
 import { codeBlockCopyText } from './chat-copy'
+import { useContextMenuStore } from '@/stores/context-menu'
 
 const clip = vi.hoisted(() => ({ writes: [] as string[] }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
@@ -215,18 +216,39 @@ describe('copy buttons in chat markdown', () => {
     expect(clip.writes).toEqual(['second'])
   })
 
-  it('a link gets a copy icon that copies its URL', async () => {
+  it('a link has no hover button; right-click offers "Copy link", which copies its URL', async () => {
     const { container } = render(<ChatMessageBody text={'See [the docs](https://k2.dev/docs) and https://example.com/x'} />)
-    const btns = container.querySelectorAll('[data-chat-copy="link"]')
-    expect(btns.length).toBe(2)
-    await act(async () => {
-      fireEvent.click(btns[0])
-    })
-    await act(async () => {
-      fireEvent.click(btns[1])
-    })
+    expect(container.querySelector('[data-chat-copy="link"], button')).toBeNull()
+    const links = container.querySelectorAll('a[data-chat-link]')
+    expect(links.length).toBe(2)
+    expect(links[0].getAttribute('href')).toBe('https://k2.dev/docs')
+    for (const link of Array.from(links)) {
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 20 })
+      act(() => {
+        link.dispatchEvent(ev)
+      })
+      // The app's menu, not the webview's.
+      expect(ev.defaultPrevented).toBe(true)
+      const menu = useContextMenuStore.getState()
+      expect(menu.isOpen).toBe(true)
+      expect(menu.items.map((i) => [i.id, i.label])).toEqual([['copy-link', 'Copy link']])
+      await act(async () => {
+        useContextMenuStore.getState().selectItem('copy-link')
+      })
+    }
     expect(clip.writes).toEqual(['https://k2.dev/docs', 'https://example.com/x'])
-    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://k2.dev/docs')
+  })
+
+  it('a link\'s right-click stays its own: the message around it doesn\'t open its menu too', () => {
+    const outer = vi.fn()
+    const { container } = render(
+      <div onContextMenu={outer}>
+        <ChatMessageBody text={'[x](https://k2.dev)'} />
+      </div>,
+    )
+    fireEvent.contextMenu(container.querySelector('a[data-chat-link]') as HTMLElement)
+    expect(outer).not.toHaveBeenCalled()
+    act(() => useContextMenuStore.getState().close())
   })
 
   it('inline code has no Copy button', () => {

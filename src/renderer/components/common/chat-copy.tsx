@@ -4,13 +4,15 @@
 //   - A fenced code block gets a Copy button at its top right (on hover; always
 //     on touch). It copies the block's raw text: no fence, and the one trailing
 //     newline markdown adds to every block trimmed.
-//   - A link gets a small copy icon beside it on hover; it copies the URL.
+//   - A link's right-click menu has "Copy link" (no hover button).
 // The clipboard write goes through the Tauri clipboard plugin (no
 // user-activation rule in WKWebView), with navigator.clipboard as the
 // fallback, as the terminal's copy does.
 
 import { useCallback, useEffect, useRef, useState, type JSX, type MouseEvent, type ReactNode } from 'react'
 import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
+import { useContextMenuStore } from '@/stores/context-menu'
+import { useToastStore } from '@/stores/toast'
 
 /** The text a code block's Copy puts on the clipboard: the code as written,
  *  minus the single trailing newline markdown ends every block with. */
@@ -103,49 +105,42 @@ export function ChatCodeBlock({
   )
 }
 
-function CopyGlyph({ done }: { done: boolean }): JSX.Element {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden>
-      {done ? (
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5 12.5l4.5 4.5L19 7.5" />
-      ) : (
-        <>
-          <rect x="8" y="8" width="12" height="12" rx="2" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-        </>
-      )}
-    </svg>
-  )
-}
-
-/** `a` for react-markdown: the link, then a copy icon shown on hover. */
+/** `a` for react-markdown: the link. Right-click offers "Copy link" (Rosson
+ *  2026-10-31: no button on hover; the app's own menu, since the webview's
+ *  is off). It handles its own menu, so a link inside a Thread message opens
+ *  this one, not the message's. */
 export function ChatLink({
   node: _node,
   children,
   ...props
 }: { node?: unknown; children?: ReactNode } & React.AnchorHTMLAttributes<HTMLAnchorElement>): JSX.Element {
-  const [copied, copy] = useCopied()
   const href = typeof props.href === 'string' ? props.href : ''
   if (!href) return <a {...props}>{children}</a>
   return (
-    <span className="chat-md-link" data-chat-link="">
-      <a {...props}>{children}</a>
-      <button
-        type="button"
-        className="chat-md-link-copy"
-        data-chat-copy="link"
-        data-copied={copied ? '' : undefined}
-        aria-label={copied ? 'Link copied' : 'Copy link'}
-        title={copied ? 'Copied' : 'Copy link'}
-        onPointerDown={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          stop(e)
-          copy(href)
-        }}
-      >
-        <CopyGlyph done={copied} />
-      </button>
-    </span>
+    <a
+      {...props}
+      data-chat-link=""
+      onContextMenu={(e) => {
+        props.onContextMenu?.(e)
+        if (e.defaultPrevented) return
+        e.preventDefault()
+        e.stopPropagation()
+        void openChatLinkMenu(e.clientX, e.clientY, href)
+      }}
+    >
+      {children}
+    </a>
   )
+}
+
+/** A link's right-click menu at (x, y): "Copy link". */
+export async function openChatLinkMenu(x: number, y: number, href: string): Promise<void> {
+  const picked = await useContextMenuStore.getState().show(x, y, [{ id: 'copy-link', label: 'Copy link' }])
+  if (picked !== 'copy-link') return
+  try {
+    await copyToClipboard(href)
+    useToastStore.getState().addToast('Link copied', 'success', 2000)
+  } catch (err) {
+    useToastStore.getState().addToast(`Couldn't copy the link: ${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
 }

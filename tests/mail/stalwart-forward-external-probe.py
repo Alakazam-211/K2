@@ -312,20 +312,49 @@ def main():
         n, a = svc.call("SieveScript/validate", {"accountId": alice, "blobId": blob}, using=(CORE, SIEVE)) if blob else ("upload", err)
         check(f"X1 {name} compiles", n == "SieveScript/validate" and a.get("error") is None, f"{n} {json.dumps(a)[:300]}")
 
-    def inject(mid, mail_from, extra_headers="", body="Hello from outside.\r\n"):
-        msg = (f"From: Sender <sender@sender.example>\r\nTo: {alice_addr}\r\nSubject: probe {mid}\r\n"
+    def inject(mid, mail_from, extra_headers="", body="Hello from outside.\r\n", to=None):
+        to = to or alice_addr
+        msg = (f"From: Sender <sender@sender.example>\r\nTo: {to}\r\nSubject: probe {mid}\r\n"
                f"Message-ID: <{mid}@sender.example>\r\nDate: {time.strftime('%a, %d %b %Y %H:%M:%S +0000', time.gmtime())}\r\n"
                f"{extra_headers}MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n{body}")
         with smtplib.SMTP("127.0.0.1", args.smtp_port, local_hostname="sender.example", timeout=30) as s:
-            refused = s.sendmail(mail_from, [alice_addr], msg.encode())
+            refused = s.sendmail(mail_from, [to], msg.encode())
         info(f"inject {mid}", f"refused {refused}")
 
-    def kept(mid):
-        n, a = svc.call("Email/query", {"accountId": alice, "filter": {"header": ["Message-ID", f"<{mid}@sender.example>"]}}, using=(CORE, MAIL))
-        return len(a.get("ids") or []) if n == "Email/query" else -1
+    def ids_for(mid, account=None):
+        n, a = svc.call("Email/query", {"accountId": account or alice, "filter": {"subject": f"probe {mid}"}}, using=(CORE, MAIL))
+        return (a.get("ids") or []) if n == "Email/query" else None
+
+    def kept(mid, account=None):
+        ids = ids_for(mid, account)
+        return -1 if ids is None else len(ids)
+
+    def stored_headers(mid, account=None):
+        ids = ids_for(mid, account) or []
+        if not ids:
+            return {}
+        n, e = svc.call("Email/get", {"accountId": account or alice, "ids": ids[:1], "properties": [
+            "header:X-Spam-Score:asText", "header:X-K2-Forwarded:asText", "header:Authentication-Results:asText", "mailboxIds"]},
+            using=(CORE, MAIL))
+        return (e.get("list") or [{}])[0]
 
     def kept_eventually(mid):
         return wait_for(lambda: kept(mid) > 0, 20) and kept(mid) > 0
+
+    # ── X0 control: a bare K2 same-box-style redirect to the sink ────
+    # Separates the sandbox (inbound, the relay route to the sink) from
+    # the guard: if this one doesn't reach the sink, the setup is at fault.
+    n, a = put_script(bob, 'require ["copy"];\n# k2-forward\nredirect :copy "me@outside.test";\n')
+    mid = f"x0-{tag}"
+    inject(mid, "sender@sender.example", to=bob_addr)
+    got = wait_for(lambda: sink.with_id(mid))
+    check("X0 control: an unguarded redirect reaches the loopback sink", len(got) == 1,
+          f"{len(got)} at the sink; bob kept {kept(mid, bob)}; headers {json.dumps(stored_headers(mid, bob))[:300]}")
+    if not got:
+        n, q = admin.call("x:QueuedMessage/query", {})
+        ids = (q.get("ids") or [])[:10]
+        n, g = admin.call("x:QueuedMessage/get", {"ids": ids}) if ids else (n, q)
+        info("diag queue after X0", f"{n} {json.dumps(g)[:1200]}")
 
     # ── keep on ─────────────────────────────────────────────────────
     n, a = put_script(alice, golden("external-keep.sieve", "me@outside.test", args.host))
@@ -339,7 +368,7 @@ def main():
         check("X2 MAIL FROM is the forwarding mailbox (forwarder return path)", (got[0]["from"] or "").lower() == alice_addr.lower(), got[0]["from"])
         check("X2 the forwarded copy carries this box's marker", f"X-K2-Forwarded: {args.host}" in got[0]["data"], "")
         check("X2 the original From is untouched", "From: Sender <sender@sender.example>" in got[0]["data"], "")
-    check("X2 the mailbox keeps its copy (keep on)", kept_eventually(mid), "")
+    check("X2 the mailbox keeps its copy (keep on)", kept_eventually(mid), f"stored headers {json.dumps(stored_headers(mid))[:400]}")
     if not got or kept(mid) <= 0:
         # Diagnostics: what the mailbox holds, what the queue holds.
         n, a = svc.call("Email/query", {"accountId": alice}, using=(CORE, MAIL))
@@ -358,18 +387,14 @@ def main():
         inject(mid, frm, hdr, body)
         kept_ok = kept_eventually(mid)
         time.sleep(3)
-        check(step, kept_ok and not sink.with_id(mid), f"kept {kept(mid)}, at sink {len(sink.with_id(mid))}")
+        check(step, kept_ok and not sink.with_id(mid), f"kept {kept(mid)}, at sink {len(sink.with_id(mid))}; {json.dumps(stored_headers(mid))[:200]}")
 
     # X6 spam: GTUBE.
     mid = f"x6-{tag}"
     inject(mid, "sender@sender.example", "", "XJS*C4JDBQADN1.NSBN3*2IDNEN*GTUBE-STANDARD-ANTI-UBE-TEST-EMAIL*C.34X\r\n")
     kept_ok = kept_eventually(mid)
     time.sleep(3)
-    n, a = svc.call("Email/query", {"accountId": alice, "filter": {"header": ["Message-ID", f"<{mid}@sender.example>"]}}, using=(CORE, MAIL))
-    spam_hdr = ""
-    if a.get("ids"):
-        n, e = svc.call("Email/get", {"accountId": alice, "ids": a["ids"][:1], "properties": ["header:X-Spam-Score:asText"]}, using=(CORE, MAIL))
-        spam_hdr = ((e.get("list") or [{}])[0].get("header:X-Spam-Score:asText") or "")
+    spam_hdr = (stored_headers(mid).get("header:X-Spam-Score:asText") or "").strip()
     if spam_hdr.lower().startswith("spam"):
         check("X6 spam stays home", kept_ok and not sink.with_id(mid), f"X-Spam-Score: {spam_hdr}; at sink {len(sink.with_id(mid))}")
     else:
@@ -411,7 +436,6 @@ def main():
         admin.call("x:MtaRoute/set", {"destroy": [r]})
     for aid in made:
         admin.call("x:Account/set", {"destroy": [aid]})
-    _ = bob, bob_addr
     print(f"== outside forwards: {len(FAILED)} failed check(s): {FAILED} ==", flush=True)
     sys.exit(1 if FAILED else 0)
 

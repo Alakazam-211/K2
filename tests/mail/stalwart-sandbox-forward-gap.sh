@@ -138,6 +138,10 @@ PY
   fi
   echo "Stalwart $v up on 127.0.0.1:18080 (loopback only)"
   STALWART_PROBE_ADMIN="$(cat "$work/admin")" python3 -I "$PROBE" --url http://127.0.0.1:18080 --domain example.test || rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "${STALWART_PROBE_LOG_TAIL:-}" ]; then
+    echo "== Stalwart $v: last $STALWART_PROBE_LOG_TAIL log lines (sieve / queue / delivery) =="
+    grep -iE "sieve|queue|deliver|redirect|smtp\\.|spam|loop" "$work/log.3" | tail -n "$STALWART_PROBE_LOG_TAIL" || true
+  fi
   kill "$pid"; wait "$pid" 2>/dev/null || true
   rm -rf "$work"
   echo "== Stalwart $v: probe exit $rc =="

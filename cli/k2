@@ -84673,8 +84673,9 @@ EOF
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
             # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
             # domain` (its custom-domain help, not the App family's) and
-            # `k2 app sdk` (add|status|kit). 0.46.7: `k2 app updates`, `k2 app status`.
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk|updates|status)
+            # `k2 app sdk` (add|status|kit). 0.46.7: `k2 app updates`, `k2 app status`,
+            # `k2 app chat` (App-governed Spaces; it printed the whole family before).
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk|updates|status|chat)
                 shift; cmd_app "$@"
                 ;;
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.

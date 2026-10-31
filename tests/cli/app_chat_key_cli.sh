@@ -165,6 +165,14 @@ assert_eq "an unknown step: no request" "$(nreq)" "$before"
 out="$(env HOME="$WORK/nohome" K2_PORT=1 "$K2_CLI" hostchat --help 2>&1)"
 assert_contains "help: pass-keys" "$out" "k2 hostchat pass-keys rotate [--json]"
 assert_contains "help: one set per box" "$out" "never one per App"
+# k2 app chat --help prints its own page (it printed the whole k2 app
+# family before 0.46.7's S8), with the hold reasons the sync can give.
+before="$(nreq)"
+out="$(owner app chat --help 2>&1)"
+assert_eq "app chat help: no request" "$(nreq)" "$before"
+assert_contains "app chat help: its own page" "$out" "What K2 keeps in step for an App's chat"
+assert_contains "app chat help: the member limit hold" "$out" "the Space at the App's member limit"
+if printf '%s' "$out" | grep -Fq 'k2 app token <create|list|revoke|rooms>'; then bad "app chat help: not the family's usage"; else ok "app chat help: not the family's usage"; fi
 
 echo
 echo "app chat-key CLI: $pass passed, $fail failed"

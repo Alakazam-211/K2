@@ -3,6 +3,8 @@
 //!   signal dispositions + mask, cwd, env, IUTF8), print PROBE_DONE, sleep.
 //! - `burst <mib>`: write <mib> MiB of `a..z` (byte i = b'a' + i % 26), exit 0.
 //! - `seq`: print `seq=<n> ` every 10 ms forever.
+//! - `flood-for <dir> <ms>`: write the pid to `<dir>/pid`, write output as
+//!   fast as possible for <ms> ms, print `flood-done`, sleep forever.
 //! - `echo`: for each input line print `got:<line>`.
 //! - `hup-ignore`: ignore SIGHUP, print READY, sleep forever.
 //! - `sleep`: print READY, sleep forever.

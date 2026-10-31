@@ -264,6 +264,77 @@ fn test_writer_delay() -> Option<Duration> {
     std::env::var("K2_PTYD_TEST_CKPT_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_millis)
 }
 
+/// How many times [`attach_retrying`] tries before giving up.
+pub(crate) const ATTACH_TRIES: u32 = 20;
+/// After a failed try, the next attach starts this far behind the live end.
+const ATTACH_TAIL: u64 = 256 << 10;
+
+/// Why [`attach_retrying`] gave up.
+#[derive(Debug)]
+pub(crate) enum AttachGaveUp {
+    /// The session ended meanwhile (its exit event), or ptyd is gone or no
+    /// longer has the session (`OwnerLost`).
+    Ended(SessionEvent),
+    /// The session still runs, but no attach held for [`ATTACH_TRIES`] tries.
+    Exhausted,
+}
+
+/// Attach a data stream for `sid`, retrying while the program writes
+/// faster than an attach can complete. ptyd answers an attach by queueing
+/// its `attached` reply; if more output overruns the ring before that reply
+/// is written, ptyd drops the reply and closes the connection (an `Overrun`
+/// event follows on the owner connection). So after a failed try the next
+/// attach starts near the live end (the bytes before it were lost anyway),
+/// with a growing pause between tries.
+///
+/// The first try starts at `floor`; later ones never before it. Used by a
+/// fresh spawn's first attach (`floor` 0) and by the IO loop's reattach
+/// after an overrun (`floor` = the next unread byte). Overrun events seen
+/// meanwhile are consumed; any other event ends the attempt.
+pub(crate) fn attach_retrying(owner: &Owner, sid: &str, events: &mpsc::Receiver<SessionEvent>, floor: u64) -> Result<DataStream, AttachGaveUp> {
+    for attempt in 0..ATTACH_TRIES {
+        let from = if attempt == 0 {
+            floor
+        } else {
+            match owner.request(Request::List) {
+                Ok(k2_ptyd::proto::Reply::Sessions { sessions }) => match sessions.iter().find(|s| s.sid == sid) {
+                    Some(info) if matches!(info.state, k2_ptyd::proto::SessionState::Running) => info.ring_end.saturating_sub(ATTACH_TAIL).max(floor),
+                    // Exited: its exit event is on the way (skip overruns
+                    // left over from the failed tries).
+                    Some(_) => return Err(AttachGaveUp::Ended(next_non_overrun(events, Duration::from_secs(2)))),
+                    None => return Err(AttachGaveUp::Ended(SessionEvent::OwnerLost)),
+                },
+                _ => return Err(AttachGaveUp::Ended(SessionEvent::OwnerLost)),
+            }
+        };
+        match owner.attach(sid, from) {
+            Ok(s) => return Ok(s),
+            Err(e) => crate::log_debug!("[ptyd] session={} attach at {} failed (try {}): {}", sid, from, attempt + 1, e),
+        }
+        // An exit that arrived meanwhile ends the attempt; a further
+        // overrun just means "try again".
+        while let Ok(ev) = events.try_recv() {
+            if !matches!(ev, SessionEvent::Overrun { .. }) {
+                return Err(AttachGaveUp::Ended(ev));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10 * u64::from(attempt + 1)));
+    }
+    Err(AttachGaveUp::Exhausted)
+}
+
+/// The next event that isn't an overrun, or `OwnerLost` after `within`.
+fn next_non_overrun(events: &mpsc::Receiver<SessionEvent>, within: Duration) -> SessionEvent {
+    let deadline = Instant::now() + within;
+    loop {
+        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(SessionEvent::Overrun { .. }) => continue,
+            Ok(ev) => return ev,
+            Err(_) => return SessionEvent::OwnerLost,
+        }
+    }
+}
+
 enum Step {
     Continue,
     Stopped,
@@ -325,46 +396,25 @@ impl<L: EventListener> Loop<L> {
         }
     }
 
-    /// After an overrun: reattach, retrying while the agent keeps writing
-    /// faster than this loop drains. A fresh stream that starts far behind
-    /// the ring's head can overrun again before its `attached` reply is even
-    /// read (ptyd then closes it), so after a failed try the next attach
-    /// starts near the live end (the bytes before it were lost anyway).
-    /// `Err(event)` ends the session: the child exited meanwhile, or ptyd is
-    /// gone / the session no longer exists.
+    /// After an overrun: reattach with [`attach_retrying`] (the agent may
+    /// keep writing faster than this loop drains) and swap the new stream
+    /// in. `Err(event)` ends the session: the child exited meanwhile, ptyd
+    /// is gone / the session no longer exists, or no attach held.
     fn reattach_after_overrun(&mut self, sock: &mut UnixStream) -> Result<(), SessionEvent> {
-        const TRIES: u32 = 20;
-        const TAIL: u64 = 256 << 10;
-        for attempt in 0..TRIES {
-            let from = if attempt == 0 {
-                self.shadow.pos()
-            } else {
-                match self.owner.request(Request::List) {
-                    Ok(k2_ptyd::proto::Reply::Sessions { sessions }) => match sessions.iter().find(|s| s.sid == self.sid) {
-                        Some(info) if matches!(info.state, k2_ptyd::proto::SessionState::Running) => {
-                            info.ring_end.saturating_sub(TAIL).max(self.shadow.pos())
-                        }
-                        // Exited: its record and exit event are on the way.
-                        Some(_) => return Err(self.events.recv_timeout(Duration::from_secs(2)).unwrap_or(SessionEvent::OwnerLost)),
-                        None => return Err(SessionEvent::OwnerLost),
-                    },
-                    _ => return Err(SessionEvent::OwnerLost),
-                }
-            };
-            if self.reattach_from(sock, from) {
-                return Ok(());
-            }
-            // An exit that arrived meanwhile ends the session; a further
-            // overrun just means "try again".
-            while let Ok(ev) = self.events.try_recv() {
-                if !matches!(ev, SessionEvent::Overrun { .. }) {
-                    return Err(ev);
+        match attach_retrying(&self.owner, &self.sid, &self.events, self.shadow.pos()) {
+            Ok(s) => {
+                if self.adopt_stream(sock, s) {
+                    Ok(())
+                } else {
+                    Err(SessionEvent::OwnerLost)
                 }
             }
-            std::thread::sleep(Duration::from_millis(10 * u64::from(attempt + 1)));
+            Err(AttachGaveUp::Ended(ev)) => Err(ev),
+            Err(AttachGaveUp::Exhausted) => {
+                crate::log_debug!("[ptyd] session={}: no stable reattach after {ATTACH_TRIES} tries", self.sid);
+                Err(SessionEvent::OwnerLost)
+            }
         }
-        crate::log_debug!("[ptyd] session={}: no stable reattach after {TRIES} tries", self.sid);
-        Err(SessionEvent::OwnerLost)
     }
 
     /// Attach a new stream at the next unread offset and swap it in.
@@ -373,19 +423,23 @@ impl<L: EventListener> Loop<L> {
     /// scanner restarts at the new start.
     fn reattach(&mut self, sock: &mut UnixStream) -> bool {
         let from = self.shadow.pos();
-        self.reattach_from(sock, from)
-    }
-
-    fn reattach_from(&mut self, sock: &mut UnixStream, from: u64) -> bool {
-        let s = match self.owner.attach(&self.sid, from) {
-            Ok(s) => s,
+        match self.owner.attach(&self.sid, from) {
+            Ok(s) => self.adopt_stream(sock, s),
             Err(e) => {
                 crate::log_debug!("[ptyd] session={} reattach at {} failed: {}", self.sid, from, e);
-                return false;
+                false
             }
-        };
-        if s.start != from {
-            crate::log_debug!("[ptyd] session={} reattached at {} (wanted {}): {} byte(s) lost", self.sid, s.start, from, s.start.saturating_sub(from));
+        }
+    }
+
+    /// Swap in a freshly attached stream. When it doesn't start at the
+    /// next unread offset (an overrun, or a retry that attached near the
+    /// live end), the bytes between were lost and the scanner restarts at
+    /// the stream's start.
+    fn adopt_stream(&mut self, sock: &mut UnixStream, s: DataStream) -> bool {
+        let want = self.shadow.pos();
+        if s.start != want {
+            crate::log_debug!("[ptyd] session={} reattached at {} (wanted {}): {} byte(s) lost", self.sid, s.start, want, s.start.saturating_sub(want));
             self.shadow = Shadow::at(s.start);
             self.pos.store(s.start, Ordering::Release);
         }

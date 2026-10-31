@@ -58,6 +58,11 @@ pub fn run() {
         ),
         "vault-probe-child" => vault_probe_child(&args[1], &args[2]),
         "repaint" => repaint(&args[1], args[2].parse().unwrap()),
+        // `flood-for <dir> <ms>`: write the pid to <dir>/pid, then write
+        // output as fast as possible from the first instant for <ms>
+        // milliseconds (by the clock, so the flood covers the same window
+        // on a fast or a slow box), then `flood-done` and sleep.
+        "flood-for" => flood_for(&args[1], args[2].parse().unwrap()),
         // `lines <n> <ms>`: print `line <i>` n times, ms apart, then exit 0.
         "lines" => {
             let n: u64 = args[1].parse().unwrap();
@@ -226,6 +231,27 @@ fn repaint(dir: &str, mib: usize) {
         written += buf.len();
     }
     write!(out, "\r\nrepaint-done frames={n}\r\n").unwrap();
+    out.flush().unwrap();
+    sleep_forever();
+}
+
+fn flood_for(dir: &str, ms: u64) {
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pid"), std::process::id().to_string()).unwrap();
+    let mut out = std::io::stdout();
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    let mut buf = Vec::with_capacity(1 << 16);
+    let mut n = 0u64;
+    while std::time::Instant::now() < until {
+        buf.clear();
+        while buf.len() < (1 << 16) - 64 {
+            write!(buf, "flood={n}\r\n").unwrap();
+            n += 1;
+        }
+        out.write_all(&buf).unwrap();
+    }
+    write!(out, "\r\nflood-done lines={n}\r\n").unwrap();
     out.flush().unwrap();
     sleep_forever();
 }

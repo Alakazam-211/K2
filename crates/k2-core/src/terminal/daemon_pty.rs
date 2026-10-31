@@ -1336,13 +1336,41 @@ impl DaemonPtySession {
         // The vault binds this session's agent socket record to this ptyd
         // instance and process.
         crate::terminal::ptyd::note_spawned(&sid, pid, &owner.boot_id);
-        let stream = match owner.attach(&sid, 0) {
+        // Debug builds only (tests): widen the window between `spawned` and
+        // the first attach (as on a loaded box), so a flooding program has
+        // filled the ring and is still writing when the attach lands.
+        if cfg!(debug_assertions) {
+            if let Some(ms) = std::env::var("K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+        }
+        // The first attach can lose its `attached` reply to an overrun when
+        // the program writes more than the ring before it lands (ptyd then
+        // closes the connection). The program is fine: retry the way the
+        // IO loop's reattach does, and end the session only if it really
+        // ended or no attach held.
+        let stream = match crate::terminal::ptyd::io::attach_retrying(&owner, &sid, &events, 0) {
             Ok(s) => s,
-            Err(e) => {
-                let _ = owner.request(Request::Kill { sid: sid.clone(), grace_ms: Some(100) });
+            Err(gave_up) => {
+                use crate::terminal::ptyd::{client::SessionEvent, io::AttachGaveUp};
+                let msg = match &gave_up {
+                    AttachGaveUp::Ended(SessionEvent::Exited { code, signal }) => {
+                        format!("ptyd: session {sid} ended before its first attach held (code={code:?} signal={signal:?})")
+                    }
+                    AttachGaveUp::Ended(_) => format!("ptyd: lost ptyd (or session {sid}) before the session's first attach held"),
+                    AttachGaveUp::Exhausted => format!(
+                        "ptyd: session {sid}'s first attach overran {} times (the program writes faster than it can be attached); stopped it",
+                        crate::terminal::ptyd::io::ATTACH_TRIES
+                    ),
+                };
+                log_debug!("[daemon_pty] {msg}");
+                // A program that already exited needs no kill.
+                if !matches!(gave_up, AttachGaveUp::Ended(SessionEvent::Exited { .. })) {
+                    let _ = owner.request(Request::Kill { sid: sid.clone(), grace_ms: Some(100) });
+                }
                 let _ = owner.request(Request::AckExit { sid: sid.clone() });
                 owner.unwatch(&sid);
-                return Err(e);
+                return Err(io::Error::other(msg));
             }
         };
 

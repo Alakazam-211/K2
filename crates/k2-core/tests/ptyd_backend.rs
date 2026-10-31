@@ -363,3 +363,91 @@ fn ptyd_death_ends_sessions_without_spinning_and_ptyd_relaunches() {
     assert_ne!(ptyd2, ptyd);
     s2.kill();
 }
+
+/// `k2-ptyd-test-agent` next to `k2-ptyd` (`cargo build -p k2-ptyd --bins`).
+fn test_agent_bin() -> PathBuf {
+    let bin = ptyd_bin().with_file_name("k2-ptyd-test-agent");
+    assert!(bin.is_file(), "k2-ptyd-test-agent not found at {} — run `cargo build -p k2-ptyd --bins` first", bin.display());
+    bin
+}
+
+/// Removes this test's debug-only knobs again, also on a panic, so no
+/// other test in this binary inherits them.
+struct KnobsOff(&'static [&'static str]);
+impl Drop for KnobsOff {
+    fn drop(&mut self) {
+        for k in self.0 {
+            std::env::remove_var(k);
+        }
+    }
+}
+
+/// Soak 10-30: a program that floods output from its first instant
+/// overruns ptyd's ring before the spawn's FIRST attach lands. ptyd then
+/// drops the queued `attached` reply and closes the stream; the spawn used
+/// to fail on that ("ptyd closed the connection") and kill a live program.
+/// It must retry like the IO loop's reattach and keep the program.
+///
+/// A 256 KiB ring and a 150 ms pause before the first attach (debug-only
+/// knobs; the pause stands in for a loaded box) make the ring full and the
+/// flood still running when the attach lands. Six sessions at once, each
+/// flooding for one second by the clock, then printing `flood-done`. Every
+/// spawn must succeed and every program survive; at least one session must
+/// have overrun (on a loaded box not all of them do).
+#[test]
+fn a_flood_during_the_first_attach_never_fails_the_spawn() {
+    let _g = setup();
+    let agent = test_agent_bin();
+    const KNOBS: &[&str] = &["K2_PTYD_TEST_RING_BYTES", "K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS"];
+    let off = KnobsOff(KNOBS);
+    std::env::set_var("K2_PTYD_TEST_RING_BYTES", (256 * 1024).to_string());
+    std::env::set_var("K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS", "150");
+    type Spawned = (PathBuf, Result<std::sync::Arc<DaemonPtySession>, std::io::Error>);
+    let spawned: Vec<Spawned> = std::thread::scope(|sc| {
+        let handles: Vec<_> = (0..6)
+            .map(|i| {
+                let dir = home().join(format!("first-attach-{i}"));
+                let _ = std::fs::remove_dir_all(&dir);
+                let agent = agent.clone();
+                sc.spawn(move || {
+                    // Through /bin/sh: the temp-HOME spawn guard only lets
+                    // system binaries start directly.
+                    let r = DaemonPtySession::spawn(cfg(&format!("exec '{}' flood-for '{}' 1000", agent.display(), dir.display())));
+                    (dir, r)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().expect("spawn thread")).collect()
+    });
+    drop(off);
+    let failed: Vec<String> = spawned.iter().filter_map(|(d, r)| r.as_ref().err().map(|e| format!("{}: {e}", d.display()))).collect();
+    assert!(failed.is_empty(), "spawn failed while the program flooded its first attach ({} of {}):\n{}", failed.len(), spawned.len(), failed.join("\n"));
+    let sessions: Vec<_> = spawned.into_iter().map(|(d, r)| (d, r.expect("checked above"))).collect();
+    let log = home().join(".k2/logs/ptyd.log");
+    let mut overran = 0;
+    for (dir, s) in &sessions {
+        assert_eq!(s.backend_name(), "ptyd");
+        let pid: i32 = wait_file(&dir.join("pid"), Duration::from_secs(10)).trim().parse().expect("agent pid");
+        assert_eq!(s.child_pid(), Some(pid), "the session holds the flooding program");
+        let t = Instant::now();
+        while !s.visible_text_rows().iter().any(|r| r.starts_with("flood-done")) {
+            assert!(t.elapsed() < Duration::from_secs(60), "the flood's last line never reached the screen: {:?}", s.visible_text_rows());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(alive(pid), "the flooding program died");
+        assert!(s.is_child_alive(), "the session ended during the flood");
+        let ptyd_log = std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("{}: {e}", log.display()));
+        let sid = s.session_id.to_string();
+        if ptyd_log.contains(&format!("overrun sid={sid}")) {
+            overran += 1;
+        }
+        assert!(!ptyd_log.contains(&format!("exited sid={sid}")), "session {sid} ended during the flood");
+    }
+    // A loaded box floods slower, so not every session overruns; one is
+    // enough to prove the point (every spawn above succeeded).
+    eprintln!("first-attach flood: {overran} of {} session(s) overran", sessions.len());
+    assert!(overran >= 1, "no session overran; the test proves nothing");
+    for (_, s) in sessions {
+        s.kill();
+    }
+}

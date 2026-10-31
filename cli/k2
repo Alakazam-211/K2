@@ -72068,10 +72068,11 @@ Paused = new mail stays in the mailbox. show gives the reason:
                 (k2 hostmail upgrade); lifts by itself after it
 Resume rules per reason: k2 hostmail forward resume --help.
 
-Outside forwards need the pinned mail server (Stalwart 0.16.25 or
-later). On an older one, set to an outside address fails with
-upgrade_required (exit 1): run k2 hostmail upgrade. Same-box forwards
-work on any version.
+Outside forwards need Stalwart 0.16.25 or later on this server. On an
+older one, set to an outside address fails with upgrade_required (exit 1)
+and saves nothing: run k2 hostmail upgrade, then set again. A forward
+that was already set shows paused (upgrade_required) instead, and starts
+again by itself after the upgrade. Same-box forwards work on any version.
 
 WHO
   Owner, Admin, and agents with "Allow agents to manage hosted mail on
@@ -72111,7 +72112,8 @@ Refused: an address on one of this server's domains that isn't a
 mailbox here, the mailbox itself, a notification sender address, outside
 destinations under air-gap or on a receive-only domain, and outside
 destinations on a mail server older than Stalwart 0.16.25
-(upgrade_required, exit 1: k2 hostmail upgrade).
+(upgrade_required, exit 1, nothing saved: k2 hostmail upgrade, then set
+again).
 Same destination again: while it waits for the confirm, a new link is
 sent; after a Stop (reason revoked), a new link is sent; otherwise only
 the keep setting changes.
@@ -72165,8 +72167,8 @@ Resume a paused forward. Who may, by the reason show gives:
   revoked                   nobody: the destination clicked Stop. Run
                             set again to send a new confirm link
   air_gap, receive_only     nobody: it resumes by itself when that changes
-  upgrade_required          nobody: run k2 hostmail upgrade; it resumes by
-                            itself after the upgrade
+  upgrade_required          not by hand: run k2 hostmail upgrade; it resumes
+                            by itself after the upgrade
 
 USAGE
   k2 hostmail forward resume <addr> [--json]

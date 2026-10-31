@@ -149,26 +149,54 @@ export const STASH_BOOKMARK_INK = 12
 /** Its line weight (px): the "+" and "/" bars are 2px. */
 export const STASH_BOOKMARK_WEIGHT = 2
 
-/** The bookmark drawn the way the box's "+" and "/" are (Rosson 2026-10-31:
- *  same weight): in pixel units, `ink` tall, a 2px line with square joins,
- *  so it is as bold as they are at any size. */
-export function ComposeBookmarkGlyph({ ink = STASH_BOOKMARK_INK }: { ink?: number }): JSX.Element {
+/** The bookmark's outline and its 2px-in hole, in pixels: a filled shape
+ *  (even-odd), the way the "+" and "/" are drawn (filled bars), so its ink
+ *  runs edge to edge: top at 0, the two bottom points at exactly `ink`, the
+ *  "+"'s height. (A stroked outline inside the box loses half its line at
+ *  the edges and gets its bottom points clipped.) */
+export function stashBookmarkShape(ink: number = STASH_BOOKMARK_INK): {
+  w: number
+  h: number
+  outer: Array<[number, number]>
+  inner: Array<[number, number]>
+} {
   const h = ink
   const w = Math.round(ink * (5 / 6))
-  const half = STASH_BOOKMARK_WEIGHT / 2
+  const t = STASH_BOOKMARK_WEIGHT
   const notch = Math.round(h * 0.3)
-  const pts = [
-    [half, half],
-    [w - half, half],
-    [w - half, h - half],
-    [w / 2, h - half - notch],
-    [half, h - half],
+  // The bottom edges run from each corner (0|w, h) up to the notch (w/2, h - notch);
+  // the hole's are the same lines moved t inward.
+  const half = w / 2
+  const len = Math.hypot(half, notch)
+  const apexY = h - notch - (t * len) / half
+  const cornerY = h - notch + ((half - t) * notch - t * len) / half
+  const outer: Array<[number, number]> = [
+    [0, 0],
+    [w, 0],
+    [w, h],
+    [half, h - notch],
+    [0, h],
   ]
-    .map(([x, y]) => `${x},${y}`)
-    .join(' ')
+  const inner: Array<[number, number]> = [
+    [t, t],
+    [w - t, t],
+    [w - t, cornerY],
+    [half, apexY],
+    [t, cornerY],
+  ]
+  return { w, h, outer, inner }
+}
+
+/** The bookmark drawn the way the box's "+" and "/" are (Rosson 2026-10-31:
+ *  same weight and height): filled, in pixel units, a 2px line, its ink
+ *  exactly as tall as the "+". */
+export function ComposeBookmarkGlyph({ ink = STASH_BOOKMARK_INK }: { ink?: number }): JSX.Element {
+  const { w, h, outer, inner } = stashBookmarkShape(ink)
+  const path = (pts: Array<[number, number]>): string =>
+    `M${pts.map(([x, y]) => `${+x.toFixed(3)},${+y.toFixed(3)}`).join(' L')} Z`
   return (
-    <svg data-compose-glyph="stash" width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="none" aria-hidden="true" style={{ display: 'block' }}>
-      <polygon points={pts} stroke="currentColor" strokeWidth={STASH_BOOKMARK_WEIGHT} strokeLinejoin="miter" />
+    <svg data-compose-glyph="stash" width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="currentColor" aria-hidden="true" style={{ display: 'block' }}>
+      <path d={`${path(outer)} ${path(inner)}`} fillRule="evenodd" />
     </svg>
   )
 }

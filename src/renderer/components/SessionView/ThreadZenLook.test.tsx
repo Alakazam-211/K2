@@ -62,6 +62,7 @@ import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
 import { ThreadAttachmentChip, ThreadFooterFade, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
 import { CHAMFER_SCOPE, FOOTER_BLUR_LAYERS, FOOTER_FADE_PX, FOOTER_FADE_TARGETS, FOOTER_GLASS_WASH, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE, threadFadeTop, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
+import { stashBookmarkShape } from '@/components/PromptStash/PromptStash'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
 import { renderInRoom, testRoom } from '@/test-utils/room'
@@ -582,23 +583,45 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
   })
 
-  it('the stash bookmark is drawn like "+" and "/": the same 2px line and the "+"\'s 12px ink', () => {
+  it('the stash bookmark\'s ink is as tall as the "+" (12px, edge to edge) and drawn with the same 2px line', () => {
     renderThread()
     const svg = (sel: string): SVGSVGElement => {
       const found = document.querySelector(sel)
       if (!(found instanceof SVGSVGElement)) throw new Error(`no svg ${sel}`)
       return found
     }
+    // Pixel units for all three: the viewBox is the box, so no scaling.
+    const unscaled = (g: SVGSVGElement): void =>
+      expect(g.getAttribute('viewBox')).toBe(`0 0 ${g.getAttribute('width')} ${g.getAttribute('height')}`)
     const plus = svg('[data-compose-glyph="plus"]')
-    const bar = plus.querySelector('rect') as SVGRectElement
+    const slash = svg('[data-compose-glyph="slash"]')
     const stash = svg('[data-stash-button] [data-compose-glyph="stash"]')
-    const line = stash.querySelector('polygon') as SVGPolygonElement
-    expect(bar.getAttribute('width')).toBe('2')
-    expect(line.getAttribute('stroke-width')).toBe(bar.getAttribute('width'))
-    expect(line.getAttribute('stroke-linejoin')).toBe('miter')
-    expect(stash.getAttribute('height')).toBe(plus.getAttribute('height'))
-    // Pixel units, like the "+": its viewBox is its size, so 2 stays 2px.
-    expect(stash.getAttribute('viewBox')).toBe(`0 0 ${stash.getAttribute('width')} ${stash.getAttribute('height')}`)
+    for (const g of [plus, slash, stash]) unscaled(g)
+    // The drawn ink's top-to-bottom extent, from the shapes themselves.
+    const span = (ys: number[]): [number, number] => [Math.min(...ys), Math.max(...ys)]
+    const plusYs = Array.from(plus.querySelectorAll('rect')).flatMap((r) => {
+      const y = Number(r.getAttribute('y'))
+      return [y, y + Number(r.getAttribute('height'))]
+    })
+    const slashYs = (slash.querySelector('polygon')?.getAttribute('points') ?? '').split(' ').map((p) => Number(p.split(',')[1]))
+    const stashPath = stash.querySelector('path')?.getAttribute('d') ?? ''
+    const stashYs = Array.from(stashPath.matchAll(/[ML]([\d.]+),([\d.]+)/g)).map((m) => Number(m[2]))
+    expect(span(plusYs)).toEqual([0, 12])
+    expect(span(slashYs)).toEqual([0, 14])
+    expect(span(stashYs)).toEqual([0, 12])
+    // A filled shape like the "+" (no stroke to clip), its line 2px like the
+    // "+"'s bars: the hole sits 2px in on the top and sides, and its bottom
+    // edges run 2px inside the outline's.
+    expect(stash.querySelector('path')?.getAttribute('fill-rule')).toBe('evenodd')
+    expect(stash.querySelector('[stroke]')).toBeNull()
+    expect(Number(plus.querySelector('rect')?.getAttribute('width'))).toBe(2)
+    const { w, outer, inner } = stashBookmarkShape(12)
+    expect(inner[0]).toEqual([2, 2])
+    expect(inner[1]).toEqual([w - 2, 2])
+    const [, , [bx, by], [ax, ay]] = outer
+    const [, , [ix, iy]] = inner
+    const dist = Math.abs((ay - by) * ix - (ax - bx) * iy + ax * by - ay * bx) / Math.hypot(ay - by, ax - bx)
+    expect(dist).toBeCloseTo(2, 6)
   })
 
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {

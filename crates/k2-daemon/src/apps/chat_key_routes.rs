@@ -23,7 +23,9 @@
 //! | narrowing only (fewer caps, lower level or `max`, uploads off) and revoke | the owner, an Admin, a K2 shell tab, or the App's own agent with "Build and run Apps"; no confirm |
 //!
 //! An agent that would widen gets `owner_only` (today's plain refusal; with
-//! permission cards on, the `apps.chat-key` card's wall). Values are
+//! permission cards on for its workspace, the refusal also names the App and
+//! what it asked for, so it ends with the `apps.chat-key` card's Ask-with
+//! line: `permission::actions::chat_cards`). Values are
 //! checked before the confirm is spent. Refused: `host` (`not_for_host`),
 //! the home-client App (`409 home_client_cannot_govern`), a standalone Sew
 //! (`409 provider_is_standalone`), a Sew without `app_governed_spaces`
@@ -195,6 +197,53 @@ fn within_admin_ceiling(before: Option<&ChatKey>, w: &Want, approved: Option<&[S
     caps_ok && w.max_level <= Level::Moderator && w.max_members <= ck::DEFAULT_MAX_MEMBERS && uploads_ok
 }
 
+/// What a `POST /cli/app/chat-key` with body `v` would make of the App's
+/// key: the `apps.chat-key` card's words and checks read it, so the card
+/// and the route never disagree on the defaults or the Admin ceiling.
+pub(crate) struct KeyPreview {
+    pub before: Option<ChatKey>,
+    pub want: Want,
+    /// Turning it on or widening it (needs a person and a confirm).
+    pub widens: bool,
+    /// An Admin login may give it (else the owner only).
+    pub admin_may: bool,
+}
+
+pub(crate) fn preview(service_id: &str, v: &J) -> R<KeyPreview> {
+    let t = target(&Who::Owner, Some(service_id))?;
+    let before = ck::get(&t.service_id).map_err(store)?;
+    let approved = approved_chat_caps(&t)?;
+    let want = want_of(v, before.as_ref(), approved.as_deref())?;
+    let widens = ck::widens(before.as_ref(), &want);
+    let admin_may = within_admin_ceiling(before.as_ref(), &want, approved.as_deref());
+    Ok(KeyPreview { before, want, widens, admin_may })
+}
+
+/// An agent refused turning on or widening its own App's key: with
+/// permission cards on for its workspace, the refusal also names the App and
+/// what it asked for (`app`, `level`, `caps`, `uploads`), so the card wrapper
+/// teaches `k2 permission request apps.chat-key …`. Cards off (or not its
+/// own App): today's refusal, byte for byte.
+fn with_card_fields(r: Refusal, who: &Who, t: &Target, v: &J) -> Refusal {
+    let Some((ws, _)) = who.passport() else { return r };
+    if t.project_id != ws || !k2_core::permission::gate::enabled_for(ws) {
+        return r;
+    }
+    let mut extra = json!({ "app": t.name });
+    if let Some(l) = s(v, "maxLevel").map(str::trim).filter(|l| !l.is_empty()) {
+        extra["level"] = json!(l);
+    }
+    if let Ok(Some(caps)) = caps_arg(v) {
+        if !caps.is_empty() {
+            extra["caps"] = json!(caps.join(","));
+        }
+    }
+    if let Some(J::Bool(b)) = v.get("uploads") {
+        extra["uploads"] = json!(if *b { "on" } else { "off" });
+    }
+    Refusal { extra: Some(extra), ..r }
+}
+
 /// GET `/cli/app/chat-key?app=`.
 pub(crate) fn read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let t = key_target(who, params.get("app").map(String::as_str))?;
@@ -216,7 +265,12 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
     // Who may ask at all, before anything about the values (an agent's
     // refusal is today's plain `owner_only`).
     if !admin_human(who) && !app_agent_at(who, &t, super::access::Level::Build) {
-        return Err(owner_only("gives an App a chat key (k2 app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key"));
+        return Err(with_card_fields(
+            owner_only("gives an App a chat key (k2 app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key"),
+            who,
+            &t,
+            &v,
+        ));
     }
     let w = want_of(&v, before.as_ref(), approved.as_deref())?;
     let widen = ck::widens(before.as_ref(), &w);
@@ -229,7 +283,14 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
                     "gives a chat key more than the App's approved chat caps, level admin, more than 500 people, or uploads back on",
                 ))
             }
-            _ => return Err(owner_only("turns an App's chat key on or widens it (k2 app grant <app> --kind chat-key from a terminal outside K2)")),
+            _ => {
+                return Err(with_card_fields(
+                    owner_only("turns an App's chat key on or widens it (k2 app grant <app> --kind chat-key from a terminal outside K2)"),
+                    who,
+                    &t,
+                    &v,
+                ))
+            }
         }
     }
     // The App and the box, before a confirm is spent.

@@ -18,7 +18,8 @@ type Step = { step: 'starting' } | { step: 'mac' } | { step: 'password'; method:
 export interface ConfirmStepProps {
   scope: ServerScope
   /** `garden-guests`: a Garden widget's guest-rooms change (RS-A15).
-   *  `app-approve` / `node-admin` / `vault-move` / `chat-owner-handoff` / `sew-rollback-data-loss` / `vault-share-service`: a permission card's
+   *  `app-approve` / `node-admin` / `vault-move` / `chat-owner-handoff` / `sew-rollback-data-loss` / `vault-share-service` /
+   *  `apps-chat-key` / `sew-space-governance`: a permission card's
    *  confirm action (the same confirm Settings asks, prd-agent-settings-cards-v1 §17.4).
    *  `app-handover`: giving an App to a workspace (Settings → Apps). */
   action:
@@ -32,6 +33,8 @@ export interface ConfirmStepProps {
     | 'chat-owner-handoff'
     | 'sew-rollback-data-loss'
     | 'vault-share-service'
+    | 'apps-chat-key'
+    | 'sew-space-governance'
   /** The source id, the batch hash, or the guest-rooms change's id. */
   secretId: string
   /** Shown in the Mac's sheet ("source secret deploys"). */

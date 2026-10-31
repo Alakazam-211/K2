@@ -92,6 +92,11 @@ pub(crate) const LOOPBACK_ONLY: &str = "loopback_only";
 /// (`apps.user-password-reset`).
 pub(crate) use super::actions::password_reset::REVEAL_NEEDS_SCREEN;
 
+/// The same for an answer the card's own rules leave to the owner (an Admin
+/// allowing a chat key past the Admin ceiling, `apps.chat-key`): the card
+/// stays open for the owner.
+pub(crate) use super::actions::chat_cards::OWNER_IN_PERSON;
+
 /// The display id of the request being applied on this thread.
 pub(crate) fn current_request() -> Option<String> {
     CURRENT_REQUEST.with(|c| c.borrow().clone())
@@ -473,7 +478,11 @@ fn decide_one(
             record(RequestState::Approved, Some(&msg), None)
         }
         Applied::Refused { code: c, message }
-            if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" || c == LOOPBACK_ONLY || c == REVEAL_NEEDS_SCREEN =>
+            if c == code::VAULT_CONFIRM_REQUIRED
+                || c == "rate_limited"
+                || c == LOOPBACK_ONLY
+                || c == REVEAL_NEEDS_SCREEN
+                || c == OWNER_IN_PERSON =>
         {
             store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
             let status = if c == "rate_limited" { 429 } else { 403 };

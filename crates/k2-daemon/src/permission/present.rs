@@ -151,7 +151,8 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::sew::with_computed(spec.id, ctx))
         .or_else(|| super::actions::password_reset::with_computed(spec.id, ctx))
         .or_else(|| super::actions::vault::with_computed(spec.id, ctx))
-        .or_else(|| super::actions::app_login::with_computed(spec.id, ctx));
+        .or_else(|| super::actions::app_login::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::chat_cards::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();

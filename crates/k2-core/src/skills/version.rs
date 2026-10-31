@@ -306,7 +306,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 45;
 /// v3: "Your own service or App" (`vault.share-service`).
 /// v4: "Logins on your own App" (`app.login-grant`).
 /// v5 = 0.46.7: published sites' cards (`publish.public`, `publish.pin`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 5;
+/// v6 = 0.46.7: "Chat in your own App" (`apps.chat-key`, `sew.space-governance`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 6;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

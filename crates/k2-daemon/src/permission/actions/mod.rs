@@ -21,6 +21,7 @@
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |
 //! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
 //! | `publish.rs` | 0.46.7 | `publish.public`, `publish.pin` (who may open a published site) |
+//! | `chat_cards.rs` | 0.46.7 | `apps.chat-key` (turn on or widen its App's chat key), `sew.space-governance` (switch who governs its App's Space) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -31,6 +32,7 @@ use k2_core::permission::catalog::{ActionSpec, NotCardableSpec};
 use serde_json::{Map, Value};
 
 pub(crate) mod app_login;
+pub(crate) mod chat_cards;
 pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod gardens;
@@ -126,6 +128,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(workbench::actions());
     out.extend(app_login::actions());
     out.extend(publish::actions());
+    out.extend(chat_cards::actions());
     out
 }
 
@@ -145,6 +148,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(workbench::not_cardable());
     out.extend(app_login::not_cardable());
     out.extend(publish::not_cardable());
+    out.extend(chat_cards::not_cardable());
     out
 }
 

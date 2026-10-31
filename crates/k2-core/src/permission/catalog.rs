@@ -188,6 +188,14 @@ pub enum ParamKind {
     /// A few words the agent wrote, shown as its own: `publish.public reason=`
     /// (0.46.7).
     Text,
+    /// A Sew Space id bound to an App of the asking workspace:
+    /// `sew.space-governance space=` (0.46.7). Checked at request time and
+    /// again at the click; the card names the Space by its slug where K2
+    /// knows it.
+    SewSpace,
+    /// Chat caps for an App's chat key, a list from `chat:read chat:post
+    /// chat:respond voice:join voice:video`: `apps.chat-key caps=` (0.46.7).
+    ChatCaps,
 }
 
 /// One value an action takes (`key=value` on the CLI).
@@ -286,16 +294,28 @@ pub enum ConfirmAction {
     /// name the secret, the service and the delivery.
     #[serde(rename = "vault-share-service")]
     VaultShareService,
+    /// Turning an App's chat key on or widening it (the card
+    /// `apps.chat-key`); bound to the request id, whose stored values name
+    /// the App and what it asks for.
+    #[serde(rename = "apps-chat-key")]
+    AppsChatKey,
+    /// Switching who governs a chat Space (the card
+    /// `sew.space-governance`); bound to the request id, whose stored values
+    /// name the App, the Space and the side.
+    #[serde(rename = "sew-space-governance")]
+    SewSpaceGovernance,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 6] = [
+    pub const ALL: [ConfirmAction; 8] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,
         ConfirmAction::ChatOwnerHandoff,
         ConfirmAction::SewRollbackDataLoss,
         ConfirmAction::VaultShareService,
+        ConfirmAction::AppsChatKey,
+        ConfirmAction::SewSpaceGovernance,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -307,6 +327,8 @@ impl ConfirmAction {
             ConfirmAction::ChatOwnerHandoff => "chat-owner-handoff",
             ConfirmAction::SewRollbackDataLoss => "sew-rollback-data-loss",
             ConfirmAction::VaultShareService => "vault-share-service",
+            ConfirmAction::AppsChatKey => "apps-chat-key",
+            ConfirmAction::SewSpaceGovernance => "sew-space-governance",
         }
     }
 }
@@ -678,7 +700,19 @@ mod tests {
     #[test]
     fn the_card_confirms_are_app_approve_node_admin_vault_move_and_the_two_sew_ones() {
         let names: Vec<&str> = ConfirmAction::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names, ["app-approve", "node-admin", "vault-move", "chat-owner-handoff", "sew-rollback-data-loss", "vault-share-service"]);
+        assert_eq!(
+            names,
+            [
+                "app-approve",
+                "node-admin",
+                "vault-move",
+                "chat-owner-handoff",
+                "sew-rollback-data-loss",
+                "vault-share-service",
+                "apps-chat-key",
+                "sew-space-governance"
+            ]
+        );
         for c in ConfirmAction::ALL {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::Value::String(c.as_str().to_string()));
         }
@@ -705,6 +739,23 @@ mod tests {
             ParamSpec { key: "app", kind: ParamKind::App, required: false, list: false, choices: &[] },
         ];
         validate(&s).expect("AppUser and App params");
+    }
+
+    /// 0.46.7: the chat key's and the Space governance cards' value kinds.
+    #[test]
+    fn sew_space_and_chat_caps_values_are_their_own_kinds() {
+        assert_eq!(serde_json::to_value(ParamKind::SewSpace).unwrap(), serde_json::json!("sew-space"));
+        assert_eq!(serde_json::to_value(ParamKind::ChatCaps).unwrap(), serde_json::json!("chat-caps"));
+        let mut s = USE;
+        s.params = &[
+            ParamSpec { key: "app", kind: ParamKind::App, required: true, list: false, choices: &[] },
+            ParamSpec { key: "space", kind: ParamKind::SewSpace, required: true, list: false, choices: &[] },
+            ParamSpec { key: "caps", kind: ParamKind::ChatCaps, required: false, list: true, choices: &[] },
+        ];
+        validate(&s).expect("SewSpace and ChatCaps params");
+        // A list kind never takes choices (that's a Choice).
+        s.params = &[ParamSpec { key: "caps", kind: ParamKind::ChatCaps, required: false, list: true, choices: &["chat:read"] }];
+        assert!(validate(&s).is_err(), "choices only on a Choice");
     }
 
     #[test]

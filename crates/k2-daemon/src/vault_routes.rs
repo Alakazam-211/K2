@@ -2001,6 +2001,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     GRANT_READ_CONFIRM_ACTION,
     // The `vault.share-service` card: bound to the permission request.
     crate::permission::actions::vault::SHARE_CONFIRM,
+    // The `apps.chat-key` and `sew.space-governance` cards (0.46.7): bound
+    // to the permission request; Allow turns each into the route's own
+    // confirm (`chat-key`, `chat-governance`) for the same person.
+    crate::permission::actions::chat_cards::KEY_CONFIRM,
+    crate::permission::actions::chat_cards::GOV_CONFIRM,
     "kek-rotate",
     "rekey",
     "rollback",
@@ -2183,6 +2188,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     } else if let Some(reason) = crate::permission::actions::vault::confirm_reason(action, b.secret_id.as_deref()) {
         // The share card: the sheet says what's being shared with whom from
         // the request's stored values, never from the client's label.
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::permission::actions::chat_cards::confirm_reason(action, b.secret_id.as_deref()) {
+        // The chat key and Space governance cards: the sheet says what
+        // changes from the request's stored values.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::app_push::confirm_reason(action, b.secret_id.as_deref()) {

@@ -128,7 +128,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 45] = [
+pub(crate) const V1_ACTIONS: [&str; 47] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -198,6 +198,10 @@ pub(crate) const V1_ACTIONS: [&str; 45] = [
     // person types it into K2's own form).
     "publish.public",
     "publish.pin",
+    // 0.46.7 App-governed Spaces: turn on or widen the agent's own App's
+    // chat key, and switch who governs one of that App's Spaces.
+    "apps.chat-key",
+    "sew.space-governance",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -283,6 +287,13 @@ pub(crate) const ROWS: &[Row] = &[
     row(Target::Cannot { r#where: HOME_CLIENT_WHERE }, code(403, "owner_only"), "/cli/sew/home/client", POST),
     // An App's App-only mark off widens the home client again.
     row(Target::Cannot { r#where: HOME_APP_WHERE }, code(403, "owner_only"), "/cli/sew/home/app", POST),
+    // `k2 hostchat app-space governance <app> <space> app|sew` by an agent
+    // ("Manage Sew" or not, AG-7): the App, the Space and the side come
+    // from the refused call's own body.
+    Row {
+        params: &[("app", &[ParamFrom::Body("/app")]), ("space", &[ParamFrom::Body("/spaceId")]), ("to", &[ParamFrom::Body("/governance")])],
+        ..row(ask("sew.space-governance", Floor::Admin), code(403, "person_only"), "/cli/sew/app-spaces/governance", POST)
+    },
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     // Workbench W1 (0.46.7): an agent's `k2 sidecar land` / `retire`; the
@@ -374,6 +385,21 @@ pub(crate) const ROWS: &[Row] = &[
         fixed: &[("op", "remove")],
         params: &[("user", &[ParamFrom::Body("/subjectId")]), ("app", &[ParamFrom::Body("/targetId")])],
         ..row(ask("app.login-grant", LOGIN_GRANT_FLOOR), code(403, "owner_only"), "/cli/skin/grants/delete", POST)
+    },
+    // `k2 app grant <app> --kind chat-key` by an agent, turning the key on
+    // or widening it: the route's `owner_only`. With cards on it names the
+    // App and what was asked (`caps` comma-joined); without `app` (another
+    // workspace's App, cards off) it isn't this card's wall.
+    Row {
+        needs: Some("/error/app"),
+        params: &[
+            ("app", &[ParamFrom::Response("/error/app")]),
+            ("level", &[ParamFrom::Response("/error/level")]),
+            ("caps", &[ParamFrom::Response("/error/caps")]),
+            ("uploads", &[ParamFrom::Response("/error/uploads")]),
+        ],
+        optional: &["level", "caps", "uploads"],
+        ..row(ask("apps.chat-key", Floor::Admin), code(403, "owner_only"), "/cli/app/chat-key", POST)
     },
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
@@ -986,6 +1012,9 @@ mod tests {
             (403, "POST", "/cli/skin/grants", vec![], Some(json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","roleId":"viewer"})), json!({"error":{"code":"owner_only","hint":"x"}}), "app.login-grant"),
             // `k2 publish secret add svc NAME` on a secret a person gave.
             (403, "POST", "/cli/vault/grant", vec![], Some(json!({"name":"PIN","to":"service:svc","as":"file"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"file"}}), "vault.share-service"),
+            // 0.46.7: an agent turning its own App's chat key on (cards on), and switching a Space's governance.
+            (403, "POST", "/cli/app/chat-key", vec![], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs"}}), "apps.chat-key"),
+            (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
@@ -1181,6 +1210,43 @@ mod tests {
     /// refusal, names only when the agent gave them. The same code without a
     /// `service` (a share with another workspace, a secret a card can't
     /// share) stays "It can't be requested"; on the policy route it stays
+    /// `apps.chat-key`: the route names the App and what was asked only with
+    /// cards on for the agent's own App; without `app` the same code is "It
+    /// can't be requested" (revoke, another workspace's App). Optional values
+    /// the agent didn't send stay out of the line.
+    #[test]
+    fn chat_key_teaches_only_the_refusal_that_names_the_app() {
+        let body = json!({"app":"jobs","caps":["chat:read","voice:join"],"maxLevel":"admin"});
+        let p = teach_of(403, "POST", "/cli/app/chat-key", &[], Some(body.clone()), json!({"error":{"code":"owner_only","hint":"x","app":"jobs","level":"admin","caps":"chat:read,voice:join"}})).unwrap();
+        assert_eq!(action_of(&p), "apps.chat-key", "{p}");
+        assert_eq!(p["params"], json!({"app":"jobs","level":"admin","caps":"chat:read,voice:join"}), "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        assert_eq!(p["command"], "k2 permission request apps.chat-key app=jobs caps=chat:read,voice:join level=admin --why \"<what you need it for>\"");
+        let p = teach_of(403, "POST", "/cli/app/chat-key", &[], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","app":"jobs"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request apps.chat-key app=jobs --why \"<what you need it for>\"");
+        for (path, resp) in [
+            ("/cli/app/chat-key", json!({"error":{"code":"owner_only","hint":"x"}})),
+            ("/cli/app/chat-key/revoke", json!({"error":{"code":"owner_only","hint":"x"}})),
+        ] {
+            let p = teach_of(403, "POST", path, &[], Some(json!({"app":"jobs"})), resp).unwrap();
+            assert_eq!(p["requestable"], false, "{path}: {p}");
+        }
+    }
+
+    /// `sew.space-governance`: the App, the Space and the side come from the
+    /// refused call's body; only `person_only` on that route teaches it.
+    #[test]
+    fn space_governance_teaches_from_the_refused_body() {
+        let body = json!({"app":"jobs","spaceId":"5101","governance":"app"});
+        let p = teach_of(403, "POST", "/cli/sew/app-spaces/governance", &[], Some(body.clone()), json!({"error":{"code":"person_only","hint":"x"}})).unwrap();
+        assert_eq!(action_of(&p), "sew.space-governance", "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        assert_eq!(p["command"], "k2 permission request sew.space-governance app=jobs space=5101 to=app --why \"<what you need it for>\"");
+        // Manage Sew off is its own switch, not this card.
+        let p = teach_of(403, "POST", "/cli/sew/app-spaces/governance", &[], Some(body), json!({"error":{"code":"chat_manage_off"}})).unwrap();
+        assert_ne!(p["action"], "sew.space-governance", "{p}");
+    }
+
     /// `vault.delivery`.
     #[test]
     fn share_service_teaches_only_the_refusal_that_names_a_service() {
@@ -1392,7 +1458,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 45);
+        assert_eq!(V1_ACTIONS.len(), 47);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

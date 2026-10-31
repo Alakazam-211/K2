@@ -1409,6 +1409,11 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
 
 The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
 
+## Chat in your own App
+
+- Your App's chat key: `k2 app grant <app> --kind chat-key` is refused when it would turn the key on or widen it, and ends with the line to ask with, for example `k2 permission request apps.chat-key app=<your app> caps=chat:read,chat:post,voice:join --why "..."` (`level=member|moderator|admin` and `uploads=on|off` when you asked for them). The owner or an admin allows it and confirms it's them; level admin, caps past what your App's manifest asked for, more than 500 people or uploads back on is the owner's alone. When the `[permission:]` turn says approved, the key is on: don't run the grant again. Narrowing or revoking your own App's key needs no card.
+- Who governs one of your App's Spaces: `k2 hostchat app-space governance <app> <space-id> app|sew` is a person's, and the refusal ends with `k2 permission request sew.space-governance app=<your app> space=<space-id> to=app --why "..."`. Switching to `app` needs the chat key first. The owner or an admin allows it; box users in the Space leave first (`k2 app chat <app>` shows them).
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

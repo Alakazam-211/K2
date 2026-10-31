@@ -16957,6 +16957,12 @@ without the owner token.
                                        or --max, --uploads off) needs no confirm: the
                                        owner, an Admin, or the App's own workspace
                                        agent with "Build and run Apps" on.
+                                       An agent turning on or widening its own App's
+                                       key is refused (owner_only); with permission
+                                       cards on it asks on a card: k2 permission
+                                       request apps.chat-key app=<app> [level=…]
+                                       [caps=…]. The owner or an Admin allows it with
+                                       a confirm (past the Admin defaults, the owner).
   k2 app grant <app> --kind chat-key --revoke
                                        Off at once: no more passes through it, and
                                        Sew ends every chat session of this App. The
@@ -65107,7 +65113,8 @@ App Spaces (members: the App's users who also have chat; never Connect owners/ad
           chat <app> shows them leaving); their messages stay. Without the chat key it is refused
           (chat_key_required); on a Sew older than 0.6.0, sew_feature_missing. sew: back to Sew's
           own rules. The owner or an admin, in person (Touch ID or the vault password), from a
-          terminal outside K2; an agent is refused (person_only) and asks a person to run it.
+          terminal outside K2. An agent is refused (person_only); with permission cards on it asks
+          on a card: k2 permission request sew.space-governance app=<app> space=<space-id> to=app|sew.
           The <app> must be the one the Space is bound to. app-spaces shows each Space's governance.
 Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
@@ -76561,6 +76568,11 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
     k2 permission request app.login-grant op=add user=<username> app=<your app> role=<role> --why "<what you need it for>"
 
 The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
+
+## Chat in your own App
+
+- Your App's chat key: `k2 app grant <app> --kind chat-key` is refused when it would turn the key on or widen it, and ends with the line to ask with, for example `k2 permission request apps.chat-key app=<your app> caps=chat:read,chat:post,voice:join --why "..."` (`level=member|moderator|admin` and `uploads=on|off` when you asked for them). The owner or an admin allows it and confirms it's them; level admin, caps past what your App's manifest asked for, more than 500 people or uploads back on is the owner's alone. When the `[permission:]` turn says approved, the key is on: don't run the grant again. Narrowing or revoking your own App's key needs no card.
+- Who governs one of your App's Spaces: `k2 hostchat app-space governance <app> <space-id> app|sew` is a person's, and the refusal ends with `k2 permission request sew.space-governance app=<your app> space=<space-id> to=app --why "..."`. Switching to `app` needs the chat key first. The owner or an admin allows it; box users in the Space leave first (`k2 app chat <app>` shows them).
 
 ## Apps
 

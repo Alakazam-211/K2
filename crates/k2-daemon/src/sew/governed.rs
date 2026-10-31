@@ -11,8 +11,9 @@
 //!   person, with a fresh vault confirm (action [`CONFIRM_GOVERNANCE`],
 //!   bound to `<app>:<space>:<governance>`). "Manage Sew" alone is not
 //!   enough (AG-7). An agent gets `person_only`, naming the command a
-//!   person runs (the `sew.space-governance` card is not built yet: it
-//!   needs a Sew Space value kind in the card catalog).
+//!   person runs; with permission cards on, that refusal is the
+//!   `sew.space-governance` card's wall (`permission::actions::chat_cards`),
+//!   whose Allow runs this route as the person who clicked.
 //! - `GET /cli/sew/app-chat?app=<app>` ([`view`]): `k2 app chat <app>`,
 //!   read-only.
 

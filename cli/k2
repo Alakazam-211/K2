@@ -10847,13 +10847,9 @@ GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
 
 THE CHAT KEY (Sew 0.6.0+; k2 app chat <app> says if this box's Sew can):
 every App user gets chat, and your App decides who sees which channel.
- 1. The owner, in person: k2 app grant <app> --kind chat-key [--max N]
-    [--max-level member|moderator|admin]. Then each App user with a login
-    gets chat on their first pass (no per-person step; at most N people,
-    default 500). Until Sew confirms them: 503 chat_member_pending, retry.
-    You ask: k2 permission request apps.chat-key app=<app> --why "…".
- 2. The manifest's chat block (k2 app validate checks it; requires
-    {"k2": ">=0.46.7"}):
+ 1. The manifest (k2 app validate checks it): the caps under MANIFEST
+    below plus chat:channels (voice rooms: voice:join, voice:video too),
+    requires {"k2": ">=0.46.7"}, and a top-level chat block:
       "chat": {"channels": [
         {"slug": "meeting-room", "name": "Meeting room", "type": "voice", "userLimit": 25},
         {"slug": "plans-desk", "name": "Plans desk", "type": "text", "private": true,
@@ -10863,26 +10859,39 @@ every App user gets chat, and your App decides who sees which channel.
     is in roles, or has a room line on one of rooms. agents: workspaces in
     a private text channel (yours, or a room of your roles), level member.
     levels: role → level (default member, never above the key's).
+    userLimit 0-99 (voice). roles, rooms, agents, levels are optional.
+    Deploy; the owner approves the caps (k2 app approvals). Voice rooms
+    also need voice and a public URL: k2 study chat-voice, steps 1-2.
+ 2. The owner, in person: k2 app grant <app> --kind chat-key [--max N]
+    [--max-level member|moderator|admin]. Its caps are the approved ones.
+    Then each App user with a login gets chat on their first pass (no
+    per-person step; at most N people, default 500). Until Sew confirms
+    them the pass answers 503 chat_member_pending: retry.
+    You ask: k2 permission request apps.chat-key app=<app> --why "…".
  3. A Space your App owns (you, with Manage Chat / Voice Hosting):
       k2 chat space create <slug> --name "<Name>" --app <app>
-    Owned by the App itself (never a person), bound in the same step.
+    Owned by the App itself (never a person), bound in the same step;
+    you keep level manage in it (k2 chat).
  4. The owner or an admin, in person, hands it to your App:
       k2 hostchat app-space governance <app> <space-id> app
     You ask: k2 permission request sew.space-governance app=<app>
     space=<space-id> to=app --why "…". Box users (the owner, admins) leave
-    the Space; they are never in App chat. K2 syncs everyone in seconds.
+    the Space; they are never in App chat. From then on its channels and
+    who is in them are your App's; K2 syncs everyone within seconds.
  5. Channels made at run time (your server; cap chat:channels):
       import { applyChannelOps, channelOp, setAllChannels } from '@k2/server'
       await applyChannelOps(k2.asApp(), [channelOp.ensure('job-7', 'Job 7', {private: true})])
       await setAllChannels(k2.asApp(), [{username: 'dana', channels: ['job-7']}])
-    The verbs: chat.channels (ops ensure, rename, archive, unarchive; 200 a
-    call) and chat.setChannels (500 people a call); 60 calls a minute. A
-    person's list there is your App's, in full; K2 sends it with their
-    role's channels, so neither overwrites the other.
+    chat.channels: ops ensure, rename, archive, unarchive, 200 a call; an
+    ensure of a slug that exists changes nothing. chat.setChannels: each
+    person's list, IN FULL (send all of it each time; keep it in your
+    store), 500 people a call. 60 calls a minute for both. K2 sends each
+    person their role's channels plus your list: neither overwrites the
+    other. Slugs: 1-80 of a-z 0-9 -, not starting with -.
  6. Check: k2 app chat <app>: the key, governance, channels, each person's
     sync (held says why: banned, deactivated, the Space at your App's
     member limit, an unknown channel).
- An existing App Space moves the same way: the key (1), then the switch (4).
+ An existing App Space moves the same way: the key (2), then the switch (4).
  Same name as a box login: a separate account; its chat handle gets a
  short suffix. --uploads off stops uploads and recordings.
 

@@ -18,7 +18,10 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
       '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
+      // 0.46.7 live docs: the vendored kit's Live editor (as vite.config.ts).
+      '@k2/mpc-editor': resolve(__dirname, 'vendor/k2-mpc-base/client/src/editor/index.ts'),
     },
+    dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@codemirror/commands', '@codemirror/lang-markdown'],
   },
   test: {
     // sdk/server: the App server SDK's unit tests (runtime S23).

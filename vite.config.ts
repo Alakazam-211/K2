@@ -60,10 +60,16 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
       '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
+      // 0.46.7 live docs: the vendored kit's Live editor (k2-mpc-client/editor),
+      // on the app's own CodeMirror (its peers; one copy of each, below).
+      '@k2/mpc-editor': resolve(__dirname, 'vendor/k2-mpc-base/client/src/editor/index.ts'),
       // Wiki 3D: three-render-objects statically imports the (unused)
       // WebGPU renderer; stub it out of the lazy chunk (prd-wiki-3d-view-v1 §6.5).
       'three/webgpu': resolve(__dirname, 'src/renderer/lib/three-webgpu-stub.ts'),
-    }
+    },
+    // Two copies of @codemirror/state or view in one page break CodeMirror
+    // (the Live editor is a peer of the app's).
+    dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@codemirror/commands', '@codemirror/lang-markdown'],
   },
   root: 'src/renderer',
   build: {

@@ -43,7 +43,10 @@ export default defineConfig({
       // Wiki 3D: three-render-objects statically imports the (unused)
       // WebGPU renderer; stub it out of the lazy chunk (prd-wiki-3d-view-v1 §6.5).
       'three/webgpu': resolve(__dirname, 'src/renderer/lib/three-webgpu-stub.ts'),
+      // 0.46.7 live docs: the vendored kit's Live editor (as vite.config.ts).
+      '@k2/mpc-editor': resolve(__dirname, 'vendor/k2-mpc-base/client/src/editor/index.ts'),
     },
+    dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@codemirror/commands', '@codemirror/lang-markdown'],
   },
   root: 'src/renderer',
   base: `/app/${version}/`,

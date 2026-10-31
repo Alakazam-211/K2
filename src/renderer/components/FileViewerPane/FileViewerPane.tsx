@@ -14,6 +14,9 @@ import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 const PDFViewer = lazy(() => import('./PDFViewer').then((m) => ({ default: m.PDFViewer })))
 const DocxViewer = lazy(() => import('./DocxViewer').then((m) => ({ default: m.DocxViewer })))
 const CodeEditor = lazy(() => import('./CodeEditor').then((m) => ({ default: m.CodeEditor })))
+// 0.46.7 live docs: the kit's Live editor, for a file whose multiplayer
+// core is on (it pulls CodeEditor's language and theme tables too).
+const LiveDocPane = lazy(() => import('./LiveDocPane').then((m) => ({ default: m.LiveDocPane })))
 const ZipViewer = lazy(() => import('./ZipViewer').then((m) => ({ default: m.ZipViewer })))
 const CsvViewer = lazy(() => import('./CsvViewer').then((m) => ({ default: m.CsvViewer })))
 const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m.MediaViewer })))
@@ -55,6 +58,7 @@ import { PinIcon } from '@/components/icons/K2Icons'
 import { isPinnedTab } from '@/lib/pinned-tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
+import { useLiveDocCore } from '@/lib/live-doc-core'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -291,6 +295,23 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       : editedContent !== null && editedContent !== content
   const setTabDirty = useRoomTabs((s) => s.setTabDirty)
   const setFileViewerState = useRoomTabs((s) => s.setFileViewerState)
+
+  // 0.46.7 live docs: while this file's multiplayer core is on (Settings →
+  // Cores → Multiplayer), its editor is the Live editor: everyone's carets
+  // and edits live, the daemon writes the file. The daemon names the core by
+  // the file's name; a switch flipped anywhere takes effect here. Unsaved
+  // edits in this tab keep today's editor until they're saved.
+  const [liveEpoch, setLiveEpoch] = useState(0)
+  const [liveEnded, setLiveEnded] = useState(false)
+  const liveCore = useLiveDocCore(room.scope, filePath, liveEpoch)
+  const liveOn = liveCore.status === 'live' && textLock === null && !isDirty
+  // Opening a live file shows the Live editor (not a Markdown preview).
+  useEffect(() => {
+    if (liveCore.status === 'live') {
+      setViewMode('raw')
+      setLiveEnded(false)
+    }
+  }, [liveCore.status])
 
   // The toolbar pin pins THIS viewer's tab — the same pin as the tab
   // strip's (right-click Pin Tab / the tab's pin), for every file kind.
@@ -746,6 +767,17 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           {fileName}
         </span>
 
+        {/* Live: the file's multiplayer core is on */}
+        {liveOn && (
+          <span
+            className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
+            data-testid="file-viewer-live-badge"
+            title="Live: everyone in this file sees each other's edits as they happen; K2 saves the file."
+          >
+            Live
+          </span>
+        )}
+
         {/* Dirty / saving indicator */}
         {isDirty && (
           <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0">
@@ -908,6 +940,18 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       )}
 
+      {/* The Live view ended because the file's core was turned off */}
+      {liveEnded && !liveOn && (
+        <div
+          role="status"
+          data-testid="file-viewer-live-ended"
+          className="border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 text-[11px] text-[var(--color-text-secondary)] flex-shrink-0"
+        >
+          Live editing was turned off for this kind of file (Settings → Cores → Multiplayer). Every change was saved; the file
+          now opens the usual way.
+        </div>
+      )}
+
       {/* Re-read failed, buffer kept (non-blocking) */}
       {rereadIssue !== null && textLock === null && (
         <div
@@ -977,6 +1021,23 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         // into, nothing to save (see `textLock`).
         <div className="flex-1 overflow-hidden" ref={contentRef} data-testid="file-viewer-text-lock" data-reason={textLock.reason}>
           <BinaryEmptyState filePath={filePath} message={TEXT_LOCK_MESSAGES[textLock.reason]} detail={textLock.detail} />
+        </div>
+      ) : liveOn && liveCore.status === 'live' && (!showViewToggle || viewMode === 'raw') ? (
+        <div className="flex-1 overflow-hidden" data-testid="file-viewer-live">
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading the live editor…</div>}>
+            <LiveDocPane
+              scope={room.scope}
+              filePath={filePath}
+              core={liveCore.core}
+              onCoreOff={() => {
+                // The core went off: today's view, with the file as the
+                // daemon wrote it back.
+                setLiveEnded(true)
+                setLiveEpoch((e) => e + 1)
+                void loadFile()
+              }}
+            />
+          </Suspense>
         </div>
       ) : category === 'csv' && viewMode === 'rendered' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>

@@ -25,21 +25,24 @@ import { runrec } from "../../../../../vendor/k2-mpc-base/client/test/runrec";
 type Fixed = { seed: number; opts?: RunOptions; fault: "hunk-only" | "no-presence-check" | "region-placement" };
 const SLOW: RunOptions = { steps: 50, drops: 6, maxLatency: 120 };
 const FIXED_SEEDS: Fixed[] = [
+  // client 0.11.1's caret re-send changed every run's schedule (each caret frame draws a link
+  // latency from the run's generator), so the seeds were picked again: rescan job 333cd509 on
+  // the 0.11.1 tree, each checked exactly as below (region-placement seeds 1-600, the first six:
+  // 7,8,10,15,24,25; hunk-only seeds 1-2000: 1163,1752; no-rule seeds 1-400, the first six:
+  // 9,10,13,34,39,43; slow no-rule 7000-7300, the first six: 7003,7023,7039,7044,7059,7062).
+  // The faults and their shapes are the ones the earlier seeds were found for (77 and 213;
+  // 688, 1231 and 1381, job bcc38413; 10, 85, slow 7014 and 7008, jobs f5166c71 and 1bb87d8b).
   // the multi-hunk race: a lost change with two hunks, placed by the server's rule
-  { seed: 77, opts: { reapplyAll: true }, fault: "region-placement" },
-  { seed: 213, opts: { reapplyAll: true }, fault: "region-placement" },
-  // found by the scan (job bcc38413, seeds 1-1500)
-  { seed: 688, fault: "hunk-only" },
-  { seed: 1231, fault: "hunk-only" },
-  { seed: 1381, fault: "hunk-only" },
-  // the race on a host without the rule (jobs f5166c71, 1bb87d8b, after the multi-hunk
-  // refusal: slow 7011's lost edit had two hunks, so it no longer doubles even with the guard
-  // out, and slow 7014 replaced it); 85 and slow 7008 doubled with the text-matching check
-  // that came before the client-ID one
+  { seed: 7, opts: { reapplyAll: true }, fault: "region-placement" },
+  { seed: 8, opts: { reapplyAll: true }, fault: "region-placement" },
+  // LiveText taking someone else's identical change for its own
+  { seed: 1163, fault: "hunk-only" },
+  { seed: 1752, fault: "hunk-only" },
+  // the race on a host without the rule
+  { seed: 9, fault: "no-presence-check" },
   { seed: 10, fault: "no-presence-check" },
-  { seed: 85, fault: "no-presence-check" },
-  { seed: 7014, opts: SLOW, fault: "no-presence-check" },
-  { seed: 7008, opts: SLOW, fault: "no-presence-check" },
+  { seed: 7003, opts: SLOW, fault: "no-presence-check" },
+  { seed: 7023, opts: SLOW, fault: "no-presence-check" },
 ];
 
 describe("mounted editors converge (jsdom)", () => {

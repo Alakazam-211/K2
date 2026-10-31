@@ -2,7 +2,7 @@
 // See WIRE.md for the frames a host carries.
 
 export { LiveText, diffText, frameBytes } from "./live";
-export type { ChangeInfo, DuplicateRisk, Landed, LiveOptions, OpId, Placement, Presence, ReapplyGuard, Rejection, RemoteCaret, UndoResult } from "./live";
+export type { ChangeInfo, DuplicateRisk, Landed, LiveOptions, LiveTimers, OpId, Placement, Presence, ReapplyGuard, Rejection, RemoteCaret, UndoResult } from "./live";
 export { codemirrorLive, changesToHunks, hunksToChanges, remoteChange } from "./codemirror";
 export type { CodemirrorLiveOptions } from "./codemirror";
 export { transform, Bias } from "./position";

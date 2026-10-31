@@ -3,6 +3,38 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.11.1 (unreleased; kit tag v0.10.0.3)
+
+A fix for remote carets, client-side only: no wire change, no new dependency. `package.json`
+stays at `0.11.0` for this patch (a host applies the diff to its vendored copy).
+
+- **The caret is re-sent after remote changes, mapped and throttled.** A host that drops a
+  `cursor` frame unless it is at the version that socket was last sent (and may forward a
+  queued change just before comparing) could leave an idle person's caret unseen. 0.11.0 did
+  re-send on each remote change of the root, but at the caret's old offset (the editor then
+  sent a corrected second frame), not after a change to another root, and unthrottled. Now
+  `LiveText` moves its caret through every change that isn't the person's own typing exactly
+  as CodeMirror moves a selection, and re-sends it after any remote change that advances the
+  version (another root's included): at most once per 250 ms, with a trailing send at the
+  last version, never while an edit of its own is pending. The editor's echo of the moved
+  caret dedupes to nothing (one frame per version). `setCursor` with the caret's current
+  place sends nothing while a re-send is due.
+- **New options:** `LiveOptions.timers` (`LiveTimers`: the throttle's clock; the system's by
+  default) and `LiveOptions.caretResendMs` (default `CARET_RESEND_MS`, 250).
+- **Tests:** the fake host gains an opt-in caret route (`FakeServer.caretRoute`): a `cursor`
+  frame is accepted only at the version that connection was last sent, compared after the
+  queue is forwarded, folded per participant as the kit's roster does, and pushed as roster
+  events on `caretTick()`. `test/caret-resend.test.ts`: an idle caret read behind shows in the
+  typist's editor and stays, at its real place (fails with the re-send planted out); recovery
+  within one throttle window; the throttle (50 remote changes in 100 ms: 2 frames); nothing
+  sent with an edit in flight; the mapping against CodeMirror's `SelectionRange.map`; and
+  today's limit for one person on two devices (the other device's caret isn't drawn). The
+  editor harness runs the throttle on its fake clock.
+- **The editor harness's fixed seeds were picked again:** caret frames draw link latencies from
+  a run's generator, so the re-send changed every run's schedule and the old seeds no longer
+  reached their planted faults (seed 77 re-applied nothing). The new ones (7, 8; 1163, 1752;
+  9, 10; slow 7003, 7023) each pass and fail under their fault, as before.
+
 ## 0.11.0 (kit tag v0.10.0.1)
 
 The live editor's M2, on kit v0.10.0. No wire change: hosts built for 0.10.0 carry 0.11.0 as

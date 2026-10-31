@@ -129,6 +129,9 @@ class Pipe<T> {
   }
 }
 
+/** A caret the caret route accepted: bytes at `version`. */
+type RoutedCaret = { root: string; anchor: number; head: number; version: number };
+
 interface Applied {
   version: number;
   conn: number;
@@ -189,6 +192,27 @@ export class FakeServer {
   readonly appliedAt = new Map<string, number>();
   /** Each connection's participant, kept after the connection goes. */
   private handles = new Map<number, string>();
+  /**
+   * Opt-in (`null`: off, as every test before it): route `cursor` frames to roster events as a
+   * real host does, with a real host's quirk planted. A frame is accepted only when its
+   * `version` is the one this connection was last sent, and the route first forwards anything
+   * queued for the connection, then compares (so a frame that was current when it left can be
+   * behind by the time it is read). Accepted carets are kept per connection and folded per
+   * participant as the kit's roster does (one row per pid: the caret of the first of its
+   * connections that has one); `caretTick()` sends each connection a `joined` for every
+   * participant it hasn't been told of, and a `cursor` roster event for every participant
+   * whose caret changed since its last tick. `names`: display names by participant.
+   */
+  caretRoute: { names: Record<string, string> } | null = null;
+  /** The caret route: frames dropped as behind, and accepted. */
+  caretDropped = 0;
+  caretAccepted = 0;
+  /** The version each connection was last sent (`change`, `ack`, `events`, `snapshot`). */
+  private told = new Map<number, number>();
+  /** Accepted carets, per connection. */
+  private carets = new Map<number, RoutedCaret>();
+  /** Per connection: the participants it was told of, with the caret it was last sent. */
+  private caretSeen = new Map<number, Map<string, string>>();
 
   constructor(
     private net: Net,
@@ -238,6 +262,7 @@ export class FakeServer {
     };
     this.conns.set(conn, c);
     this.handles.set(conn, c.handle);
+    this.told.set(conn, this.version);
     return c;
   }
 
@@ -382,7 +407,11 @@ export class FakeServer {
     if (!c) return;
     const json = JSON.stringify(f);
     const bytes = utf8Len(json);
-    if (bytes <= this.frameMax) return c.out.sendJson(json);
+    if (bytes <= this.frameMax) {
+      if (f.type === "change") this.told.set(conn, f.event.version);
+      else if (f.type === "ack" || f.type === "snapshot") this.told.set(conn, f.version);
+      return c.out.sendJson(json);
+    }
     this.withheld.push(f.type);
     switch (f.type) {
       case "change":
@@ -541,6 +570,7 @@ export class FakeServer {
         }
         c.queue.length = 0; // the reply covers them
         const events = this.log.filter((a) => a.version > f.version).map((a) => this.event(a));
+        this.told.set(conn, events.length ? events[events.length - 1].version : f.version);
         return this.send(conn, { type: "events", op: f.op, events });
       }
       case "snapshot":
@@ -576,9 +606,45 @@ export class FakeServer {
       case "visible":
       case "view":
         this.presence.push({ conn, frame: f });
+        if (f.type === "cursor" && this.caretRoute) this.routeCaret(conn, f);
         return;
       case "hello":
         return;
+    }
+  }
+
+  /** The caret route's read of a `cursor` frame: forward what's queued, then compare. */
+  private routeCaret(conn: number, f: Extract<ClientFrame, { type: "cursor" }>) {
+    this.drain(conn);
+    if (f.version !== this.told.get(conn)) {
+      this.caretDropped++;
+      return;
+    }
+    this.caretAccepted++;
+    this.carets.set(conn, { root: f.root, anchor: f.anchor, head: f.head, version: f.version });
+  }
+
+  /** The caret route's periodic roster push (see `caretRoute`). */
+  caretTick() {
+    const route = this.caretRoute;
+    if (!route) return;
+    // one row per participant: the first of its connections (in join order) with a caret
+    const rows = new Map<string, RoutedCaret | null>();
+    for (const [conn, c] of this.conns) if (!rows.get(c.handle)) rows.set(c.handle, this.carets.get(conn) ?? null);
+    for (const [conn] of this.conns) {
+      let seen = this.caretSeen.get(conn);
+      if (!seen) this.caretSeen.set(conn, (seen = new Map()));
+      for (const [who, caret] of rows) {
+        if (!seen.has(who)) {
+          const participant = { name: route.names[who] ?? who, colour: "#7c3aed", kind: "person" as const };
+          this.send(conn, { type: "roster_event", event: { kind: "joined", who, participant } });
+          seen.set(who, "");
+        }
+        const key = caret ? JSON.stringify(caret) : "";
+        if (key === seen.get(who)) continue;
+        seen.set(who, key);
+        this.send(conn, { type: "roster_event", event: { kind: "cursor", who, cursor: caret, version: caret?.version ?? this.version } });
+      }
     }
   }
 

@@ -125,7 +125,8 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   client's text.
 - Frames with no reply (`cursor`, `visible`, `view`) are fire-and-forget: a refusal of one (a
   caret off a boundary, `MPC-E114`; a reader's caret, `MPC-E102`) is dropped by the host,
-  silently. The client re-sends its caret after its next change.
+  silently. The client re-sends its caret after any change that advances its version, its own
+  or a remote one, throttled ([Carets](#carets)).
 
 ## Host → client
 
@@ -193,6 +194,18 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   (past the window) or the frame's version is ahead of the doc's, drop the frame. Dropping
   any stale caret instead of mapping it is also correct (it only shows the caret a change
   late): the client re-sends its caret after its next change.
+- **The client re-sends its caret after any change that advances its version**, its own or a
+  remote one (a change to another root included), so a frame the host dropped as behind is
+  replaced at the new version even when the person is idle:
+  - after its own edit is acknowledged, at once (as before);
+  - after remote changes, at most once per 250 ms per connection (`LiveOptions.caretResendMs`),
+    with a trailing send so the last version always goes out;
+  - never while an edit of its own is in flight or queued (its ack sends it);
+  - at the caret's place in that version's text: the client moves the caret through every
+    change that isn't the person's own typing as CodeMirror moves a selection (an empty caret
+    stays before text inserted at it; a range doesn't grow), so an editor echoing the moved
+    caret back sends no second frame;
+  - deduplicated by `version:anchor:head`.
 - A refused caret (`MPC-E114` off a boundary, `MPC-E102` for a reader) gets no reply.
 - A versioned `set_cursor_at(conn, root, version, anchor, head)` that maps in the kit is
   planned for kit v0.10.1; a host can then pass the frame through.

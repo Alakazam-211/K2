@@ -123,6 +123,35 @@ export interface UndoResult {
   notice: ErrorReport | null;
 }
 
+/** A clock for the caret's re-send throttle (`LiveOptions.timers`). */
+export interface LiveTimers {
+  set(f: () => void, ms: number): unknown;
+  clear(h: unknown): void;
+  now(): number;
+}
+
+/** After remote changes, the caret is re-sent at most once per this many ms; a trailing re-send
+ * carries the last version. */
+export const CARET_RESEND_MS = 250;
+
+const systemTimers: LiveTimers = {
+  set: (f, ms) => setTimeout(f, ms),
+  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
+};
+let defaultTimers: LiveTimers = systemTimers;
+
+/**
+ * Tests only (not exported from the package): the clock a `LiveText` takes when
+ * `LiveOptions.timers` isn't given, e.g. a fake network's, for replicas a component builds;
+ * `null` restores the system clock. Returns the one it replaces.
+ */
+export function setDefaultLiveTimers(t: LiveTimers | null): LiveTimers {
+  const was = defaultTimers;
+  defaultTimers = t ?? systemTimers;
+  return was;
+}
+
 export interface LiveOptions {
   /** The text root this replica edits (default `source`). */
   root?: string;
@@ -131,6 +160,10 @@ export interface LiveOptions {
   client?: number;
   /** This connection's participant handle, to tell its own roster entry apart. */
   self?: Handle;
+  /** The clock for the caret's re-send throttle (default: the system's). */
+  timers?: LiveTimers;
+  /** The throttle's window (default `CARET_RESEND_MS`). */
+  caretResendMs?: number;
 }
 
 /** A local change not yet acknowledged: `hunks` on `before`. */
@@ -220,6 +253,12 @@ export class LiveText {
   private _rejected: Rejection[] = [];
   private cursor: { anchor: number; head: number } | null = null;
   private cursorSent: string | null = null;
+  /** When a caret frame last went out (the re-send throttle). */
+  private cursorAt = -Infinity;
+  /** The trailing re-send, when one is due. */
+  private resendTimer: unknown = null;
+  private readonly timers: LiveTimers;
+  private readonly resendMs: number;
   private visible: boolean | null = null;
   /** The connection is gone (`disconnected`): edits wait in the queue until `reconnected`. */
   private offline = false;
@@ -252,6 +291,8 @@ export class LiveText {
     this.root = opts.root ?? "source";
     this.clientId = opts.client;
     this.selfHandle = opts.self;
+    this.timers = opts.timers ?? defaultTimers;
+    this.resendMs = opts.caretResendMs ?? CARET_RESEND_MS;
     this.serverText = Rope.of(snapshot.text);
     this._text = this.serverText;
     this._version = snapshot.version;
@@ -319,8 +360,14 @@ export class LiveText {
     return id;
   }
 
-  /** Set this connection's caret or selection (UTF-8 bytes of `text`). */
+  /**
+   * Set this connection's caret or selection (UTF-8 bytes of `text`). After a remote change the
+   * replica has moved the caret already, as CodeMirror moves a selection: an editor echoing that
+   * position back is no move, and sends nothing while a re-send is due.
+   */
   setCursor(anchor: number, head: number): void {
+    const c = this.cursor;
+    if (c && c.anchor === anchor && c.head === head && this.resendTimer !== null) return;
     this.cursor = { anchor, head };
     this.sendCursor();
   }
@@ -548,12 +595,14 @@ export class LiveText {
     const d = diffText(old, snapshot.text);
     if (d.length) {
       this.moveRejected(d);
+      this.moveCursor(d);
       this.emit("change", { hunks: d, by: null, local: false });
     }
   }
 
   close(): void {
     this.dead = true;
+    this.clearResend();
     this.unsub();
   }
 
@@ -801,6 +850,7 @@ export class LiveText {
     if (at === "gap") return this.askSince();
     if (ev.root !== this.root) {
       this.advance(ev.version, ev.root, [], ev.client);
+      this.resendCursor(); // the version moved: a caret sent at the last one is behind
       return;
     }
     const bad = this.serverText.validate(ev.hunks);
@@ -811,7 +861,7 @@ export class LiveText {
     this.serverText = old.apply(hs);
     this.recarry(hs, this.serverText, [], ev.pid);
     this.checkLanded(ev);
-    this.sendCursor();
+    this.resendCursor();
   }
 
   /**
@@ -961,6 +1011,7 @@ export class LiveText {
     }
     if (x.length) {
       this.moveRejected(x);
+      this.moveCursor(x);
       this.emit("change", { hunks: x, by, local: false });
     }
     for (const g of regions) {
@@ -1017,7 +1068,46 @@ export class LiveText {
     const key = `${this._version}:${a}:${h}`;
     if (key === this.cursorSent) return;
     this.cursorSent = key;
+    this.cursorAt = this.timers.now();
+    this.clearResend();
     this.t.send({ type: "cursor", root: this.root, version: this._version, anchor: a, head: h });
+  }
+
+  /**
+   * Remote changes moved the version: send the caret again at it (the host may have dropped the
+   * last one as behind, and an idle person would stay unseen). At most one per `resendMs`, the
+   * last version always going out in a trailing re-send; never while an edit is pending (its
+   * ack sends the caret).
+   */
+  private resendCursor(): void {
+    if (!this.cursor || this.resendTimer !== null) return;
+    const wait = this.cursorAt + this.resendMs - this.timers.now();
+    if (wait <= 0) return this.sendCursor();
+    this.resendTimer = this.timers.set(() => {
+      this.resendTimer = null;
+      if (!this.dead) this.sendCursor();
+    }, wait);
+  }
+
+  private clearResend(): void {
+    if (this.resendTimer === null) return;
+    this.timers.clear(this.resendTimer);
+    this.resendTimer = null;
+  }
+
+  /** The caret through a change that isn't the person's own typing, as CodeMirror maps a
+   * selection, so an editor's echo of it is the same bytes. */
+  private moveCursor(hs: readonly Hunk[]): void {
+    const c = this.cursor;
+    if (!c) return;
+    if (c.anchor === c.head) {
+      const p = mapPos(c.anchor, hs, -1);
+      this.cursor = { anchor: p, head: p };
+      return;
+    }
+    const lo = mapPos(Math.min(c.anchor, c.head), hs, 1);
+    const hi = mapPos(Math.max(c.anchor, c.head), hs, -1);
+    this.cursor = c.anchor < c.head ? { anchor: lo, head: hi } : { anchor: hi, head: lo };
   }
 
   private rejection(e: Entry, error: ErrorReport | null): Rejection {
@@ -1063,6 +1153,7 @@ export class LiveText {
     const d = diffText(old, this._text.toString());
     if (d.length) {
       this.moveRejected(d);
+      this.moveCursor(d);
       this.emit("change", { hunks: d, by: null, local: false });
     }
   }
@@ -1175,6 +1266,27 @@ export function diffText(a: string, b: string): Hunk[] {
       insert: b.slice(p, b.length - s),
     },
   ];
+}
+
+/**
+ * Where byte `pos` goes through `hunks` (sorted, non-overlapping), as CodeMirror's
+ * `ChangeSet.mapPos(pos, assoc)` maps it in `MapMode.Simple` with one section per hunk: before a
+ * hunk, unchanged; at its start, or inside it with `assoc` -1, its start; inside it with
+ * `assoc` 1, the end of its insert; at an insertion, before it (-1) or after it (1); at the end
+ * of a deletion or replacement, after it. (A selection range maps its start with 1, its end
+ * and an empty caret with -1: `SelectionRange.map`.)
+ */
+export function mapPos(pos: number, hunks: readonly Hunk[], assoc: -1 | 1): number {
+  let delta = 0;
+  for (const h of hunks) {
+    if (h.start > pos) break;
+    const len = h.end - h.start;
+    if (h.end > pos || (h.end === pos && assoc < 0 && len === 0)) {
+      return pos === h.start || assoc < 0 ? h.start + delta : h.start + delta + utf8Len(h.insert);
+    }
+    delta += utf8Len(h.insert) - len;
+  }
+  return pos + delta;
 }
 
 /** How many UTF-8 bytes `hunks` add to the text they apply to (negative: remove). */

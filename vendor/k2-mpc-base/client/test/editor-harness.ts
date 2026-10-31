@@ -10,7 +10,7 @@ import { mountLiveEditor, type LiveEditorHandle } from "../src/editor/mount";
 import { apply, byteToIndex, coalesce, utf8Len, type Hunk } from "../src/hunk";
 import { Carried, rebaseOurs } from "../src/rebase";
 import { Bias, transform } from "../src/position";
-import { LiveText } from "../src/live";
+import { LiveText, setDefaultLiveTimers } from "../src/live";
 import type { ChangeEvent } from "../src/wire";
 import { FakeLiveHost, microtasks, netTimers, type FakeLiveTransport } from "./fake-live";
 import { FakeServer, Net, rng } from "./fake-server";
@@ -75,9 +75,12 @@ export async function run(seed: number, opts: RunOptions = {}): Promise<RunResul
   const maxLatency = opts.maxLatency ?? 1 + r.int(30);
   const host = new FakeLiveHost(net, server, () => r.int(maxLatency + 1));
   const eds: Ed[] = [];
+  // the replicas' caret re-send throttle on the fake clock too (a run stays deterministic)
+  const wasTimers = setDefaultLiveTimers(netTimers(net, () => 0));
   try {
     return await runIn(seed, opts, r, net, server, maxLatency, host, eds);
   } finally {
+    setDefaultLiveTimers(wasTimers);
     if (opts.trace) {
       for (const a of server.log) console.log(`TRACE log v${a.version} ${a.pid} client ${a.client} ${JSON.stringify(a.hunks)} | before ${JSON.stringify(a.before)}`);
       for (const [k, v] of server.appliedAt) console.log(`TRACE applied ${k} at v${v}`);

@@ -4,7 +4,8 @@
 //! The E2E listener (`tunnel_tls_listener::serve_one`) asks [`classify`] about
 //! each nested connection:
 //!
-//! - **Open**: K2's reserved labels and App runtime Apps (their own logins).
+//! - **Open**: K2's reserved labels and App runtime Apps (their own logins):
+//!   by the App's name, or by its front port while K2's App router holds it.
 //!   Today's path, untouched. A `k2 publish run --cmd` folder App is *not* one
 //!   of these: it has no logins, so the table speaks for it.
 //! - **Public** (not dev): today's raw splice, untouched, byte for byte. Only
@@ -89,15 +90,36 @@ pub struct Gated {
 
 /// The App behind `label` or behind the port `target` names, as `(front port,
 /// a publish folder App)`.
+///
+/// A port match counts only while K2's App router holds that App's front on
+/// it ([`crate::apps::router::front_is`]). A stored front port K2 doesn't hold
+/// (Apps off, so no front was opened at boot; a front that ended) is a port any
+/// process may bind: a `k2 publish` site there must not borrow the App's
+/// "its own logins decide" and skip the gate. It is classified as itself: its
+/// row, or private.
 fn app_behind(conn: &Connection, label: &str, target: &str) -> rusqlite::Result<Option<(Option<i64>, bool)>> {
-    let port = target.rsplit(':').next().and_then(|p| p.parse::<i64>().ok()).unwrap_or(-1);
-    conn.query_row(
-        "SELECT front_port, source = 'folder' AND path = 'open' FROM apps WHERE app_id = ?1 OR front_port = ?2
-         ORDER BY app_id = ?1 DESC LIMIT 1",
-        params![label, port],
-        |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)? != 0)),
-    )
-    .optional()
+    let own = conn
+        .query_row(
+            "SELECT front_port, source = 'folder' AND path = 'open' FROM apps WHERE app_id = ?1",
+            params![label],
+            |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)? != 0)),
+        )
+        .optional()?;
+    if own.is_some() {
+        return Ok(own);
+    }
+    let Some(port) = target.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0) else {
+        return Ok(None);
+    };
+    let mut st = conn.prepare("SELECT app_id, source = 'folder' AND path = 'open' FROM apps WHERE front_port = ?1 ORDER BY app_id")?;
+    let rows = st.query_map(params![i64::from(port)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)))?;
+    for row in rows {
+        let (app_id, folder) = row?;
+        if crate::apps::router::front_is(&app_id, port) {
+            return Ok(Some((Some(i64::from(port)), folder)));
+        }
+    }
+    Ok(None)
 }
 
 /// [`classify`] on a connection. A database error is `Err`.

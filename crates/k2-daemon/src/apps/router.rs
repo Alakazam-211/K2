@@ -522,6 +522,18 @@ pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16, fa
     Ok(port)
 }
 
+/// Does this process's App router hold `app_id`'s front listener on `port`
+/// right now (bound, its accept loop running)? The site gate trusts a stored
+/// front port only then: a row's port K2 doesn't hold (Apps off, so no front
+/// was opened; a front that ended) can be bound by any process.
+pub fn front_is(app_id: &str, port: u16) -> bool {
+    fronts()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(app_id)
+        .is_some_and(|f| f.port == port && !f.task.is_finished())
+}
+
 /// Stop `app_id`'s front listener (uninstall).
 pub fn close_front(app_id: &str) {
     if let Some(f) = fronts().lock().unwrap_or_else(|e| e.into_inner()).remove(app_id) {

@@ -264,6 +264,9 @@ async fn assert_cut<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) {
 
 #[test]
 fn reserved_labels_and_real_apps_are_open_and_a_folder_app_is_covered() {
+    // A real front for sg-real-app, held by K2's App router.
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let live = crate::apps::router::ensure_front(rt.handle(), "sg-real-app", 0, true).expect("front");
     db(|c| {
         for r in k2_core::skin::RESERVED_NESTED_LABELS {
             assert_eq!(classify_with(c, r.label, "127.0.0.1:1").unwrap(), Site::Open, "{}", r.label);
@@ -273,9 +276,18 @@ fn reserved_labels_and_real_apps_are_open_and_a_folder_app_is_covered() {
             [],
         )
         .unwrap();
-        insert_app(c, "sg-real-app", "sg-1", "seed", "guarded", 41001);
-        assert_eq!(classify_with(c, "sg-real-app", "127.0.0.1:41001").unwrap(), Site::Open, "an App's own logins decide");
-        assert_eq!(classify_with(c, "sg-taken-label", "127.0.0.1:41001").unwrap(), Site::Open, "a label pointing at an App's front port is that App's");
+        insert_app(c, "sg-real-app", "sg-1", "seed", "guarded", i64::from(live));
+        let at = format!("127.0.0.1:{live}");
+        assert_eq!(classify_with(c, "sg-real-app", &at).unwrap(), Site::Open, "an App's own logins decide");
+        assert_eq!(classify_with(c, "sg-taken-label", &at).unwrap(), Site::Open, "a label pointing at a live App front is that App's");
+        // A stored front port K2 doesn't hold (here: the App's front ended) is
+        // anyone's port: the label is classified as itself.
+        crate::apps::router::close_front("sg-real-app");
+        let Site::Gated(g) = classify_with(c, "sg-taken-label", &at).unwrap() else {
+            panic!("a front port K2 doesn't hold borrows no App's logins");
+        };
+        assert_eq!(g.upstream, at);
+        assert_eq!(classify_with(c, "sg-real-app", &at).unwrap(), Site::Open, "the App's own name: its logins decide");
 
         c.execute(
             "INSERT INTO published_services (id, project_id, name, cmd, cwd, port, expose, desired) VALUES ('sg-2', 'p', 'sg-folder-app', '(app)', '/t', 41002, 'tunnel', 'running')",
@@ -466,6 +478,45 @@ async fn every_request_on_a_keep_alive_connection_passes_the_gate() {
     assert!(r.contains("200 OK") && r.contains("401 Unauthorized"), "{r}");
     let heads = seen.requests.lock().unwrap().clone();
     assert!(!heads.iter().any(|h| h.starts_with("GET /b")), "{heads:?}");
+}
+
+/// An App row whose stored front port K2 doesn't hold (Apps off: no front is
+/// opened at boot) lends its "own logins" to nothing. A private site that sits
+/// on that port is still behind the gate: an agent can't skip private-by-default
+/// by binding a stale App front port. Before 0.46.7's fix the site answered.
+#[tokio::test]
+async fn a_stale_app_front_port_does_not_open_a_private_site() {
+    let (port, seen) = spawn_site().await;
+    db(|c| {
+        c.execute(
+            "INSERT INTO published_services (id, project_id, name, cmd, cwd, port, expose, desired) VALUES ('sg-stale', 'p', 'sg-stale-app', '(app)', '/t', ?1, 'tunnel', 'running')",
+            params![i64::from(port)],
+        )
+        .unwrap();
+        insert_app(c, "sg-stale-app", "sg-stale", "seed", "guarded", i64::from(port));
+    });
+    // The row goes when the test ends, pass or fail: once this port is let go
+    // it must not be a stale row for another test.
+    struct Rows;
+    impl Drop for Rows {
+        fn drop(&mut self) {
+            db(|c| {
+                c.execute("DELETE FROM apps WHERE app_id = 'sg-stale-app'", []).unwrap();
+                c.execute("DELETE FROM published_services WHERE id = 'sg-stale'", []).unwrap();
+            });
+        }
+    }
+    let _rows = Rows;
+    let rig = Rig::new(&[("sg-stale-site", port)]).await;
+    assert!(!k2_core::deploy::enabled(), "Apps are off: K2 opened no front");
+    assert!(!crate::apps::router::front_is("sg-stale-app", port));
+
+    let r = rig.get("sg-stale-site", None, "/").await;
+    assert!(r.starts_with("HTTP/1.1 401"), "the gate first, not the site: {r}");
+    assert_eq!(seen.requests.lock().unwrap().len(), 0, "nothing reached the site without a session");
+    let cookie = rig.sign_in("sg-stale-site", sv::USER_OWNER_TOKEN).await;
+    let ok = rig.get("sg-stale-site", Some(&cookie), "/").await;
+    assert!(ok.ends_with("SITE"), "with the owner's session it opens: {ok}");
 }
 
 #[test]

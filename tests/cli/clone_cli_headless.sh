@@ -166,7 +166,7 @@ expect_has "import answers a report" "$imp" '"report"'
 expect_has "imports lists for the workspace" "$(ka thread imports "$HDEST" --json)" '"imports"'
 
 echo "== the clone gate =="
-printf 'password1\n' | ka users add mem --password-stdin >/dev/null
+printf 'password1\n' | ka users add mem --password-stdin --keep-password >/dev/null
 login="$(post "$PA" "/cli/auth/login" '{"username":"mem","password":"password1"}')"
 MEM="$(printf '%s' "$login" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("token") or v.get("session_token") or "")')"
 [ -n "$MEM" ] || { bad "member login on loopback ($login)"; exit 1; }

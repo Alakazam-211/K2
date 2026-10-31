@@ -198,7 +198,7 @@ done
 jok "$st" 'j["pool"]["running"]' "turning a core on started the docs runtime"
 
 echo "== a Member login: refused =="
-printf 'password1\n' | env HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT" "$K2_CLI" users add mo --password-stdin >/dev/null 2>&1 || true
+printf 'password1\n' | env HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT" "$K2_CLI" users add mo --password-stdin --keep-password >/dev/null 2>&1 || true
 login="$(curl -s -X POST -H 'Content-Type: application/json' --data-raw '{"username":"mo","password":"password1"}' "$BASE/cli/auth/login")"
 MEM="$(printf '%s' "$login" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("token") or v.get("session_token") or "")')"
 [ -n "$MEM" ] || fail "member login: $login"

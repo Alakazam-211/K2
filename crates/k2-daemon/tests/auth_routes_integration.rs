@@ -333,7 +333,7 @@ async fn users_add_role_matrix_and_creates_member() {
             d.port,
             "POST",
             &format!("/cli/users/add?token={member}"),
-            Some(r#"{"username":"newby1","password":"password123"}"#),
+            Some(r#"{"username":"newby1","password":"password123","mustChangePassword":false}"#),
         );
         assert_eq!(r.status, 403, "member must NOT add users; body={}", r.body);
 
@@ -342,7 +342,7 @@ async fn users_add_role_matrix_and_creates_member() {
             d.port,
             "POST",
             &format!("/cli/users/add?token={admin}"),
-            Some(r#"{"username":"newby2","password":"password123"}"#),
+            Some(r#"{"username":"newby2","password":"password123","mustChangePassword":false}"#),
         );
         assert_eq!(r.status, 200, "admin adds a user; body={}", r.body);
         assert_eq!(
@@ -356,7 +356,7 @@ async fn users_add_role_matrix_and_creates_member() {
             d.port,
             "POST",
             &format!("/cli/users/add?token={OWNER_TOKEN}"),
-            Some(r#"{"username":"newby3","password":"password123"}"#),
+            Some(r#"{"username":"newby3","password":"password123","mustChangePassword":false}"#),
         );
         assert_eq!(r.status, 200, "owner adds a user; body={}", r.body);
     });
@@ -534,7 +534,7 @@ async fn users_add_get_is_405_post_is_200() {
             d.port,
             "POST",
             &format!("/cli/users/add?token={OWNER_TOKEN}"),
-            Some(r#"{"username":"postonly1","password":"password123"}"#),
+            Some(r#"{"username":"postonly1","password":"password123","mustChangePassword":false}"#),
         );
         assert_eq!(r.status, 200, "POST /cli/users/add must be 200; body={}", r.body);
     });

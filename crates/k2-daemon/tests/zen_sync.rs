@@ -1545,7 +1545,7 @@ fn gs52_headless_sync_and_news_routes() {
     assert_eq!(s, 200, "{v}");
 
     // A Connect login (any role) is refused.
-    let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(r#"{"username":"zsync","password":"correct-horse-battery-9"}"#));
+    let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(r#"{"username":"zsync","password":"correct-horse-battery-9","mustChangePassword":false}"#));
     assert_eq!(s, 200, "{v}");
     let (s, v) = call(port, "POST", &format!("/cli/users/set-role?token={tok}"), Some(r#"{"username":"zsync","role":"owner"}"#));
     assert_eq!(s, 200, "{v}");

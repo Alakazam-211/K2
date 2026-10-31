@@ -207,7 +207,7 @@ DID="$(jq -r '.deliveryId // empty' <<<"$out")"
 ok "sales sent HOME_KEY to ops; it waits for a person"
 
 echo "== B: a Member's login decides (Home and K2's conversation widget send this) =="
-printf 'password123\n' | owner_k2 b users add mia --role member --password-stdin >/dev/null || fail "users add mia"
+printf 'password123\n' | owner_k2 b users add mia --role member --password-stdin --keep-password >/dev/null || fail "users add mia"
 st="$(post b "/cli/auth/login" '{"username":"mia","password":"password123"}')"
 [ "$st" = 200 ] || fail "login: $st $(cat "$SANDBOX/body")"
 MIA="$(jq -r '.token // .session_token // empty' "$SANDBOX/body")"; [ -n "$MIA" ] || fail "no session token"

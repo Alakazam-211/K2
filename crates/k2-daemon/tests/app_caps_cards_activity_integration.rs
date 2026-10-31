@@ -263,7 +263,7 @@ async fn a_login_can_neither_dodge_nor_drain_another_callers_bucket() {
     let port = d.port;
     let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
     let (ws, _) = pinned_ws(&env, &format!("b2{tag}"));
-    ok_post(port, "/cli/users/add", OWNER, json!({ "username": format!("mel{tag}"), "password": "password123" })).await;
+    ok_post(port, "/cli/users/add", OWNER, json!({ "username": format!("mel{tag}"), "password": "password123", "mustChangePassword": false })).await;
     let body = json!({ "username": format!("mel{tag}"), "password": "password123" }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "connect login: {}", r.body);

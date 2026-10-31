@@ -193,7 +193,7 @@ fn add_user(d: &Daemon, username: &str, password: &str) {
         d.port,
         "POST",
         &format!("/cli/users/add?token={}", d.owner),
-        Some(&serde_json::json!({ "username": username, "password": password }).to_string()),
+        Some(&serde_json::json!({ "username": username, "password": password, "mustChangePassword": false }).to_string()),
     );
     assert_eq!(r.status, 200, "users/add: {}", r.body);
 }

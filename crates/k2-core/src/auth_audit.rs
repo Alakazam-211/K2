@@ -29,7 +29,7 @@ pub const MAX_USER_CHARS: usize = 64;
 /// One audit record (all strings; the writer owns the timestamp).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEvent {
-    /// `login` | `change-password` | `logout` | `set-password`.
+    /// `login` | `change-password` | `logout` | `set-password` | `add-user` (and others).
     pub event: String,
     pub user: String,
     pub outcome: String,

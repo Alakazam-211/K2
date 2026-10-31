@@ -820,7 +820,8 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let path = "/cli/users/set-password";
 
-        // Owner token: ok, default mustChangePassword=false (CLI behaviour).
+        // Owner token on someone else's login: ok, and the password is
+        // temporary by default (0.46.8; was false before).
         let target_sess = connect_users::create_session("target");
         let r = http(
             d.port,
@@ -832,8 +833,8 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
         assert_eq!(r.status, 200, "owner token ok; body={}", r.body);
         let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert_eq!(j["success"], true);
-        assert_eq!(j["mustChangePassword"], false);
-        assert!(!connect_users::must_change_password("target"));
+        assert_eq!(j["mustChangePassword"], true);
+        assert!(connect_users::must_change_password("target"));
         assert!(
             connect_users::validate_session(&target_sess).is_none(),
             "password reset revokes the target's sessions"
@@ -957,6 +958,127 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
         for e in &sp {
             assert_eq!(e["ingress"], "loopback", "{e}");
         }
+        // 0.46.8: each line names who reset it.
+        let actors: Vec<&str> = sp.iter().map(|e| e["actor"].as_str().expect("actor")).collect();
+        assert_eq!(
+            actors,
+            vec!["owner-token", "user:boss", "user:boss", "user:boss", "user:boss"],
+            "{sp:?}"
+        );
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0.46.8 — a login someone else makes has a temporary password.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn users_add_is_temporary_by_default_listed_and_audited() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("deputy", "password123").unwrap();
+        connect_users::set_role("deputy", Role::Admin).unwrap();
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let add = "/cli/users/add";
+
+        // Owner token, flag absent → temporary; the answer says so.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("{add}?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"newbie","password":"temppass123"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], true, "{j}");
+        assert!(connect_users::must_change_password("newbie"));
+        // Their first sign-in is restricted until they choose their own.
+        let r = http(d.port, "POST", LOGIN, Some(r#"{"username":"newbie","password":"temppass123"}"#), &[]);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], true, "{j}");
+
+        // Explicit false keeps it (the owner's own login).
+        let r = http(
+            d.port,
+            "POST",
+            &format!("{add}?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"mine","password":"mypass12345","mustChangePassword":false}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], false, "{j}");
+        assert!(!connect_users::must_change_password("mine"));
+
+        // An Admin session making a login: also temporary by default.
+        let deputy = connect_users::create_session("deputy");
+        let r = http(
+            d.port,
+            "POST",
+            &format!("{add}?token={deputy}"),
+            Some(r#"{"username":"helper","password":"helppass123"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(connect_users::must_change_password("helper"));
+
+        // A refused add (duplicate) is audited as rejected.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("{add}?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"newbie","password":"again12345"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 400, "{}", r.body);
+
+        // GET /cli/users carries the flag per row.
+        let r = http(d.port, "GET", &format!("/cli/users?token={OWNER_TOKEN}"), None, &[]);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        let rows = j["users"].as_array().expect("users");
+        let flag = |name: &str| -> serde_json::Value {
+            rows.iter()
+                .find(|u| u["username"] == name)
+                .unwrap_or_else(|| panic!("no {name} in {j}"))["mustChangePassword"]
+                .clone()
+        };
+        assert_eq!(flag("newbie"), true);
+        assert_eq!(flag("helper"), true);
+        assert_eq!(flag("mine"), false);
+        assert_eq!(flag("deputy"), false);
+
+        // Every add is an `add-user` audit line: target, outcome, actor.
+        let adds: Vec<(String, String, String)> = audit_events_for("add-user")
+            .iter()
+            .map(|e| {
+                (
+                    e["user"].as_str().expect("user").to_string(),
+                    e["outcome"].as_str().expect("outcome").to_string(),
+                    e["actor"].as_str().expect("actor").to_string(),
+                )
+            })
+            .collect();
+        let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        assert_eq!(
+            adds,
+            vec![
+                s("newbie", "ok", "owner-token"),
+                s("mine", "ok", "owner-token"),
+                s("helper", "ok", "user:deputy"),
+                s("newbie", "rejected:400", "owner-token"),
+            ]
+        );
+        for e in audit_events_for("add-user") {
+            assert_eq!(e["ingress"], "loopback", "{e}");
+            assert_eq!(e["client"], "api", "{e}");
+        }
+
+        // Still POST-only.
+        let r = http(d.port, "GET", &format!("{add}?token={OWNER_TOKEN}"), None, &[]);
+        assert_eq!(r.status, 405, "{}", r.body);
     });
 }
 

@@ -2391,12 +2391,12 @@ exit: 0
     },
     {
       "name": "users",
-      "usage": "k2 users [list|add|audit|unlock] ...",
-      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role; audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
+      "usage": "k2 users [list|add|set-password|audit|unlock] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin (temporary unless --keep-password), then optional --role set-role; set-password resets someone's password (owner only, temporary unless --keep-password); audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
       "args": [],
       "flags": [
         {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
-        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
+        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName,mustChangePassword}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
       ]
     },
     {
@@ -2410,12 +2410,23 @@ exit: 0
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member] [--password-stdin]",
-      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. --role calls set-role after add (default member server-side).",
+      "usage": "k2 users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). --role calls set-role after add (default member server-side).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member (there is no viewer role)"},
-        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}
+      ]
+    },
+    {
+      "name": "users set-password",
+      "usage": "k2 users set-password <username> [--password-stdin] [--keep-password]",
+      "description": "Reset someone's password (POST /cli/users/set-password; owner token or an Owner login). Signs them out everywhere. Temporary (they choose their own at the next sign-in) unless --keep-password; a reset of the owner's own linked login is kept. Exit 3 when refused.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the next sign-in."}
       ]
     },
     {

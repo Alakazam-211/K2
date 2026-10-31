@@ -663,7 +663,7 @@ describe('the Admin profile modal: change password (Connect logins only)', () =>
     fill('Confirm new password', 'new-pass-22')
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Set password' })))
     await waitFor(() => expect(text('admin-profile-notice')).toBe(ownerPasswordChangedNotice('rosson-phone')))
-    expect(h.posts).toEqual([{ route: 'users/set-password', body: { username: 'rosson-phone', password: 'new-pass-22' } }])
+    expect(h.posts).toEqual([{ route: 'users/set-password', body: { username: 'rosson-phone', password: 'new-pass-22', mustChangePassword: false } }])
     expect(h.login).not.toHaveBeenCalled()
     expect(h.remember).not.toHaveBeenCalled()
   })

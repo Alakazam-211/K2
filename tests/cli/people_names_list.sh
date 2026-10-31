@@ -66,7 +66,8 @@ USERS = {"users": [
     {"username": "z3thon", "createdAt": "2026-10-01T00:00:00+00:00", "disabled": False, "role": "owner",
      "wasViewer": False, "canClone": True, "firstName": "Rosson", "lastName": "Long", "displayName": "Rosson Long"},
     {"username": "anna", "createdAt": "2026-10-02T00:00:00+00:00", "disabled": False, "role": "member",
-     "wasViewer": False, "canClone": True, "firstName": None, "lastName": None, "displayName": "anna"},
+     "wasViewer": False, "canClone": True, "firstName": None, "lastName": None, "displayName": "anna",
+     "mustChangePassword": True},
 ]}
 CONNS = {"workspace": {"name": "k2", "path": "/w/k2", "id": "ws-1"}, "connections": [], "users": [
     {"username": "z3thon", "role": "owner", "disabled": False, "firstName": "Rosson", "lastName": "Long", "displayName": "Rosson Long"},
@@ -118,15 +119,20 @@ done
 
 echo "== k2 users list (human) =="
 out="$("$K2_CLI" users list)"
-assert_line_matches "header has a NAME column" "$out" '^USERNAME +NAME +ROLE +DISABLED +CREATED$'
-assert_line_matches "z3thon row shows the real name" "$out" '^z3thon +Rosson Long +owner +no '
+assert_line_matches "header has a NAME column" "$out" '^USERNAME +NAME +ROLE +DISABLED +PASSWORD +CREATED$'
+assert_line_matches "z3thon row shows the real name" "$out" '^z3thon +Rosson Long +owner +no +- '
 assert_line_matches "nameless row shows -" "$out" '^anna +- +member +no '
+# 0.46.8: a temporary password is marked.
+assert_line_matches "temporary password is marked" "$out" '^anna +- +member +no +temporary +2026-'
 
 echo "== k2 users list --json =="
 json_out="$("$K2_CLI" users list --json)"
 assert_eq "--json passes names through" \
     "$(printf '%s' "$json_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["ok"], [(u["username"], u["firstName"], u["lastName"], u["displayName"]) for u in d["users"]])')" \
     "True [('z3thon', 'Rosson', 'Long', 'Rosson Long'), ('anna', None, None, 'anna')]"
+assert_eq "--json carries mustChangePassword" \
+    "$(printf '%s' "$json_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([(u["username"], u["mustChangePassword"]) for u in d["users"]])')" \
+    "[('z3thon', False), ('anna', True)]"
 
 echo "== k2 users list rejects a stray flag =="
 set +e

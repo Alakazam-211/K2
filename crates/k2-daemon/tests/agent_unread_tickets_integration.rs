@@ -80,7 +80,7 @@ fn ticket(ws: &Ws, title: &str, status: &str, assignees: &[&str]) -> String {
 }
 
 async fn connect_login(port: u16, username: &str) -> String {
-    owner_ok(port, "/cli/users/add", json!({ "username": username, "password": "password123" })).await;
+    owner_ok(port, "/cli/users/add", json!({ "username": username, "password": "password123", "mustChangePassword": false })).await;
     let body = json!({ "username": username, "password": "password123" }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "login {username}: {}", r.body);

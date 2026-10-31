@@ -308,7 +308,7 @@ async fn member_routes_pass_and_admin_owner_routes_refuse_members() {
             d.port,
             "POST",
             &format!("/cli/users/add?token={member}"),
-            Some(r#"{"username":"sneaky","password":"password123"}"#),
+            Some(r#"{"username":"sneaky","password":"password123","mustChangePassword":false}"#),
         );
         assert_role_required(&r, "admin", "member POST users/add");
         assert_eq!(connect_users::role_for_user("sneaky"), None, "nobody created");

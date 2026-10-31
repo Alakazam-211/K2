@@ -149,7 +149,9 @@ function CreateAdminForm({
     const scope = primaryScope()
     try {
       if (created.current !== name) {
-        const body: Record<string, unknown> = { username: name, password }
+        // The owner's OWN login: they chose this password, so it is never
+        // temporary (users/add makes a temporary one by default, 0.46.8).
+        const body: Record<string, unknown> = { username: name, password, mustChangePassword: false }
         if (firstName.trim()) body.firstName = firstName.trim()
         if (lastName.trim()) body.lastName = lastName.trim()
         await daemonCliPost(scope, 'users/add', body)

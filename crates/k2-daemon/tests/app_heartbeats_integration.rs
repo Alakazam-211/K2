@@ -555,7 +555,7 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
             last_change(&a, "inbox-sweep"),
             ("enabled".to_string(), Some("owner-token".to_string()))
         );
-        owner_post(port, "/cli/users/add", r#"{"username":"connie","password":"connie-pass-123"}"#);
+        owner_post(port, "/cli/users/add", r#"{"username":"connie","password":"connie-pass-123","mustChangePassword":false}"#);
         let login = http(port, "POST", "/cli/auth/login", Some(r#"{"username":"connie","password":"connie-pass-123"}"#));
         assert_eq!(login.status, 200, "connect login; {}", login.body);
         let connie = login.json()["token"].as_str().expect("connect token").to_string();

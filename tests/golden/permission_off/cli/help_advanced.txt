@@ -88,9 +88,11 @@ CONNECT (pair purchased k2.dev subdomain — headless account login)
   connect logout                                Clear ~/.k2/connect-account.json (not tunnel)
 
 USERS (local daemon connect-user accounts)
-  users | users list [--json]                   List accounts (username, name, role, disabled)
-  users add <username> [--role owner|admin|member] [--password-stdin]
-                                                Create account (password via prompt or stdin)
+  users | users list [--json]                   List accounts (username, name, role, disabled, temporary password)
+  users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]
+                                                Create account (password via prompt or stdin; temporary unless --keep-password)
+  users set-password <username> [--keep-password]
+                                                Reset someone's password (owner; temporary unless --keep-password)
   users pair-phone [--user <login>]             One-time code + QR to pair the K2 phone app
   users phones | users unpair-phone <id>        Paired phones; end one
 

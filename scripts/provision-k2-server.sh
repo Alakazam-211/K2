@@ -641,7 +641,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 		GENERATED_PW=1
 	fi
 	log "creating owner user '${K2_OWNER_USER}'"
-	BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"password":os.environ["K2_OWNER_PASSWORD"]}))')
+	BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"password":os.environ["K2_OWNER_PASSWORD"],"mustChangePassword":False}))')
 	ADD_RES_FILE=$(mktemp)
 	OWNER_CREATED=1
 	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$BODY" "" -sS -o "$ADD_RES_FILE" -w '%{http_code}' -X POST)
@@ -668,7 +668,7 @@ if [ -n "${K2_OPS_USER:-}" ]; then
 	OPS_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
 	export K2_OPS_USER OPS_PASSWORD
 	log "creating service user '${K2_OPS_USER}' (website management)"
-	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"]}))')
+	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"],"mustChangePassword":False}))')
 	OPS_RES=$(mktemp)
 	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$OPS_BODY" "" -sS -o "$OPS_RES" -w '%{http_code}' -X POST)
 	if [ "$HTTP" != "200" ]; then

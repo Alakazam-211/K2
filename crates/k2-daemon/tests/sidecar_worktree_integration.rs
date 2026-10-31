@@ -171,7 +171,7 @@ fn ok(r: Resp) -> Value {
 }
 
 fn provision_login(port: u16, username: &str, role: &str) -> String {
-    let r = req(port, "POST", &format!("/cli/users/add?token={OWNER}"), Some(&format!(r#"{{"username":"{username}","password":"password123"}}"#)));
+    let r = req(port, "POST", &format!("/cli/users/add?token={OWNER}"), Some(&format!(r#"{{"username":"{username}","password":"password123","mustChangePassword":false}}"#)));
     assert_eq!(r.status, 200, "users/add; {}", r.body);
     if role != "member" {
         let r = req(port, "POST", &format!("/cli/users/set-role?token={OWNER}"), Some(&format!(r#"{{"username":"{username}","role":"{role}"}}"#)));

@@ -319,7 +319,7 @@ fn peer_rosters_lists_this_server_then_paired_servers_a_to_z_with_offline_ones_c
 
     // A Member login can't list paired servers (same gate as peer-roster).
     let password = "Peer-Rosters-Member-9!";
-    let (st, added) = http(&a, "POST", "/cli/users/add", Some(serde_json::json!({ "username": "mo", "password": password })));
+    let (st, added) = http(&a, "POST", "/cli/users/add", Some(serde_json::json!({ "username": "mo", "password": password, "mustChangePassword": false })));
     assert_eq!(st, 200, "users/add: {added}");
     let r = try_http(
         a.port,

@@ -237,7 +237,7 @@ fn seed_thread(prefix: &str) -> (String, String, String) {
 }
 
 fn login(port: u16, username: &str) -> String {
-    ok(port, "POST", &format!("/cli/users/add?token={OWNER_TOKEN}"), Some(serde_json::json!({ "username": username, "password": "password123" })));
+    ok(port, "POST", &format!("/cli/users/add?token={OWNER_TOKEN}"), Some(serde_json::json!({ "username": username, "password": "password123", "mustChangePassword": false })));
     let r = ok(port, "POST", "/cli/auth/login", Some(serde_json::json!({ "username": username, "password": "password123" })));
     r["token"].as_str().expect("token").to_string()
 }

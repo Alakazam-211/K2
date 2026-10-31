@@ -37504,20 +37504,38 @@ _users_usage() {
 k2 users — local daemon connect-user accounts
 
 USAGE
-  k2 users                      List accounts (username, name, role, disabled)
+  k2 users                      List accounts (username, name, role,
+                                disabled, PASSWORD, created). PASSWORD is
+                                "temporary" while the person still has to
+                                choose their own, else "-"
   k2 users list [--json]        Same as above; --json adds firstName,
                                 lastName, displayName (names are display
-                                only — commands take the username)
-  k2 users add <username> [--role owner|admin|member]
+                                only — commands take the username) and
+                                mustChangePassword (true = temporary)
+  k2 users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]
                                 Create an account; prompts for password
-                                (hidden) + confirm. Default role is member;
-                                --role always calls set-role after add.
-                                There is no viewer role: a login is a
-                                trusted operator. For limited access use
-                                an app pass (k2 app).
+                                (hidden) + confirm. The password is
+                                TEMPORARY: at their first sign-in K2 asks
+                                the person to choose their own. Making a
+                                login for yourself? Add --keep-password
+                                (K2 can't tell it's yours yet). Default
+                                role is member; --role sets the role
+                                right after the account is made. There
+                                is no viewer role: a login is a trusted
+                                operator. For limited access use an app
+                                pass (k2 app).
+  k2 users set-password <username> [--password-stdin] [--keep-password]
+                                Reset someone's password (owner only);
+                                prompts like add. Signs them out
+                                everywhere. TEMPORARY like add, except on
+                                a login linked to you as the owner
+                                (Settings → General → Your account), which
+                                keeps it with no flag. --keep-password:
+                                the person keeps the password you typed.
   k2 users audit [--tail N] [--json]
                                 Last N auth-audit records (login /
-                                change-password / logout / set-password:
+                                change-password / logout / set-password /
+                                add-user:
                                 outcome, ingress, ip, client). Owner only.
                                 Default 50, max 1000. ~/.k2/auth-audit.jsonl
   k2 users set-can-clone <username> on|off
@@ -37548,13 +37566,16 @@ USAGE
 FLAGS
   --role <r>                    owner | admin | member
   --password-stdin              Read password from stdin (automation; no echo)
+  --keep-password               add / set-password: not temporary (no
+                                forced change at the next sign-in)
   --tail <N>                    audit: how many records (1..1000, default 50)
   --json                        list: {ok,users[]} with names; unlock: daemon body; audit: raw JSON
   --help, -h                    This help
 
 SECURITY
   Password is NEVER accepted on the command line (no --password flag).
-  First owner is bootstrapped via the on-box daemon/owner token.
+  First owner is bootstrapped via the on-box daemon/owner token:
+  k2 users add <you> --role owner --keep-password
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage
@@ -37665,6 +37686,8 @@ if os.environ.get("AS_JSON") == "1":
             "firstName": u.get("firstName"),
             "lastName": u.get("lastName"),
             "displayName": u.get("displayName") or username,
+            # 0.46.8: true while the password is temporary.
+            "mustChangePassword": u.get("mustChangePassword") is True,
         })
     doc = {"ok": True, "users": out}
     if d.get("doctor"):
@@ -37673,9 +37696,9 @@ if os.environ.get("AS_JSON") == "1":
     sys.exit(0)
 if not users:
     print("No connect users yet.")
-    print("Create the first owner: k2 users add <username> --role owner")
+    print("Create the first owner: k2 users add <username> --role owner --keep-password")
     sys.exit(0)
-# Table: USERNAME  NAME  ROLE  DISABLED  CREATED
+# Table: USERNAME  NAME  ROLE  DISABLED  PASSWORD  CREATED
 rows = []
 for u in users:
     if not isinstance(u, dict):
@@ -37693,6 +37716,8 @@ for u in users:
         name or "-",
         str(u.get("role") or "member"),
         disabled,
+        # 0.46.8: "temporary" until the person chooses their own.
+        "temporary" if u.get("mustChangePassword") is True else "-",
         str(u.get("createdAt") or u.get("created_at") or "-"),
     ))
 if not rows:
@@ -37702,9 +37727,10 @@ w_user = max([len(r[0]) for r in rows] + [len("USERNAME")])
 w_name = max([len(r[1]) for r in rows] + [len("NAME")])
 w_role = max([len(r[2]) for r in rows] + [len("ROLE")])
 w_dis = max([len(r[3]) for r in rows] + [len("DISABLED")])
-print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_name, "NAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
-for u, name, role, dis, created in rows:
-    print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, u, w_name, name, w_role, role, w_dis, dis, created))
+w_pw = max([len(r[4]) for r in rows] + [len("PASSWORD")])
+print("%-*s  %-*s  %-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_name, "NAME", w_role, "ROLE", w_dis, "DISABLED", w_pw, "PASSWORD", "CREATED"))
+for u, name, role, dis, pw, created in rows:
+    print("%-*s  %-*s  %-*s  %-*s  %-*s  %s" % (w_user, u, w_name, name, w_role, role, w_dis, dis, w_pw, pw, created))
 # 0.46.6: a login with a name K2 keeps for itself acts as nobody.
 for line in d.get("doctor") or []:
     sys.stderr.write("doctor: %s\n" % line)
@@ -37712,7 +37738,7 @@ for line in d.get("doctor") or []:
             ;;
         add)
             shift || true
-            local username="" role="" password_stdin=0
+            local username="" role="" password_stdin=0 keep_password=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --role)
@@ -37721,6 +37747,8 @@ for line in d.get("doctor") or []:
                         role="${1#--role=}"; shift ;;
                     --password-stdin)
                         password_stdin=1; shift ;;
+                    --keep-password)
+                        keep_password=1; shift ;;
                     --password|--pass)
                         echo "Error: passwords must not be passed on the command line." >&2
                         echo "Use an interactive prompt or --password-stdin." >&2
@@ -37744,7 +37772,7 @@ for line in d.get("doctor") or []:
                 esac
             done
             if [ -z "$username" ]; then
-                echo "Usage: k2 users add <username> [--role owner|admin|member] [--password-stdin]" >&2
+                echo "Usage: k2 users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]" >&2
                 return 2
             fi
             if [ -n "$role" ]; then
@@ -37764,15 +37792,17 @@ for line in d.get("doctor") or []:
             local password
             password="$(_users_read_password "$password_stdin")" || return 1
             local body resp
-            body=$(USERNAME="$username" PASSWORD="$password" python3 -c '
+            # 0.46.8: temporary unless --keep-password (sent either way, so
+            # an older daemon that defaulted to false does the same).
+            body=$(USERNAME="$username" PASSWORD="$password" KEEP="$keep_password" python3 -c '
 import json, os
-print(json.dumps({"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}))
+print(json.dumps({"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"], "mustChangePassword": os.environ["KEEP"] != "1"}))
 ')
             # Drop password from the environment as soon as the body is built.
             unset password
             resp=$(cli_send cli_post_json "/cli/users/add" "$body") || resp=""
             unset body
-            printf '%s' "$resp" | USERNAME="$username" python3 -c '
+            printf '%s' "$resp" | USERNAME="$username" KEEP="$keep_password" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 username = os.environ.get("USERNAME", "?")
@@ -37790,6 +37820,13 @@ if not (isinstance(d, dict) and d.get("success")):
     sys.stderr.write("Error: users/add failed: %s\n" % (raw[:200] or "empty response"))
     sys.exit(1)
 print("Created user %s." % username)
+temp = d.get("mustChangePassword")
+if temp is None:
+    temp = os.environ.get("KEEP") != "1"
+if temp is True:
+    print("The password is temporary: the first time %s signs in, K2 asks them to choose their own." % username)
+else:
+    print("The password is kept (not temporary).")
 '
             # Always call set-role when --role is given (default after add is
             # member server-side; owner/admin need the explicit write).
@@ -37819,6 +37856,80 @@ if not (isinstance(d, dict) and d.get("success")):
 print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("USERNAME", "?")))
 '
             fi
+            ;;
+        set-password)
+            # 0.46.8: owner reset of someone's password (POST
+            # /cli/users/set-password; owner token or an Owner login).
+            # Temporary unless --keep-password; the daemon keeps a reset
+            # of the owner's own linked login as theirs.
+            shift || true
+            local username="" password_stdin=0 keep_password=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --password-stdin) password_stdin=1; shift ;;
+                    --keep-password) keep_password=1; shift ;;
+                    --password|--pass)
+                        echo "Error: passwords must not be passed on the command line." >&2
+                        echo "Use an interactive prompt or --password-stdin." >&2
+                        return 2
+                        ;;
+                    --help|-h) _users_usage; return 0 ;;
+                    -*)
+                        echo "Error: unknown flag '$1'" >&2
+                        _users_usage
+                        return 2
+                        ;;
+                    *)
+                        if [ -z "$username" ]; then
+                            username="$1"; shift
+                        else
+                            echo "Error: unexpected argument '$1'" >&2
+                            return 2
+                        fi
+                        ;;
+                esac
+            done
+            if [ -z "$username" ]; then
+                echo "Usage: k2 users set-password <username> [--password-stdin] [--keep-password]" >&2
+                return 2
+            fi
+            local password
+            password="$(_users_read_password "$password_stdin")" || return 1
+            local body resp
+            body=$(USERNAME="$username" PASSWORD="$password" KEEP="$keep_password" python3 -c '
+import json, os
+b = {"username": os.environ["USERNAME"], "password": os.environ["PASSWORD"]}
+if os.environ["KEEP"] == "1":
+    b["mustChangePassword"] = False
+print(json.dumps(b))
+')
+            unset password
+            resp=$(cli_send cli_post_json "/cli/users/set-password" "$body") || resp=""
+            unset body
+            printf '%s' "$resp" | USERNAME="$username" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+username = os.environ.get("USERNAME", "?")
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error: %s\n" % hint)
+    low = str(hint).lower()
+    sys.exit(3 if ("token" in low or "forbidden" in low or "may not" in low) else 1)
+if not (isinstance(d, dict) and d.get("success")):
+    sys.stderr.write("Error: set-password failed: %s\n" % (raw[:200] or "empty response"))
+    sys.exit(1)
+print("Password set for %s. They are signed out everywhere." % username)
+if d.get("mustChangePassword") is True:
+    print("It is temporary: the next time %s signs in, K2 asks them to choose their own." % username)
+else:
+    print("The password is kept (not temporary).")
+'
             ;;
         audit)
             # PRD connect-login-edge-only L3 — GET /cli/users/audit?tail=N
@@ -43473,12 +43584,12 @@ cmd_schema() {
     },
     {
       "name": "users",
-      "usage": "k2 users [list|add|audit|unlock] ...",
-      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role; audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
+      "usage": "k2 users [list|add|set-password|audit|unlock] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin (temporary unless --keep-password), then optional --role set-role; set-password resets someone's password (owner only, temporary unless --keep-password); audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only); unlock clears a box login lock without changing the password.",
       "args": [],
       "flags": [
         {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
-        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
+        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName,mustChangePassword}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
       ]
     },
     {
@@ -43492,12 +43603,23 @@ cmd_schema() {
     },
     {
       "name": "users add",
-      "usage": "k2 users add <username> [--role owner|admin|member] [--password-stdin]",
-      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. --role calls set-role after add (default member server-side).",
+      "usage": "k2 users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]",
+      "description": "Create a local connect-user. Password via hidden prompt (+ confirm) or --password-stdin — never on argv. The password is temporary: at their first sign-in K2 asks the person to choose their own (--keep-password: not temporary, e.g. your own login). --role calls set-role after add (default member server-side).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member (there is no viewer role)"},
-        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the first sign-in."}
+      ]
+    },
+    {
+      "name": "users set-password",
+      "usage": "k2 users set-password <username> [--password-stdin] [--keep-password]",
+      "description": "Reset someone's password (POST /cli/users/set-password; owner token or an Owner login). Signs them out everywhere. Temporary (they choose their own at the next sign-in) unless --keep-password; a reset of the owner's own linked login is kept. Exit 3 when refused.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."},
+        {"name": "--keep-password", "arg": null, "description": "Not temporary: no forced change at the next sign-in."}
       ]
     },
     {
@@ -56654,9 +56776,11 @@ CONNECT (pair purchased k2.dev subdomain — headless account login)
   connect logout                                Clear ~/.k2/connect-account.json (not tunnel)
 
 USERS (local daemon connect-user accounts)
-  users | users list [--json]                   List accounts (username, name, role, disabled)
-  users add <username> [--role owner|admin|member] [--password-stdin]
-                                                Create account (password via prompt or stdin)
+  users | users list [--json]                   List accounts (username, name, role, disabled, temporary password)
+  users add <username> [--role owner|admin|member] [--password-stdin] [--keep-password]
+                                                Create account (password via prompt or stdin; temporary unless --keep-password)
+  users set-password <username> [--keep-password]
+                                                Reset someone's password (owner; temporary unless --keep-password)
   users pair-phone [--user <login>]             One-time code + QR to pair the K2 phone app
   users phones | users unpair-phone <id>        Paired phones; end one
 

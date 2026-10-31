@@ -278,8 +278,11 @@ pub struct ConnectUser {
     /// K2 Cloud S1 (prd-k2-cloud-hosted-servers §6): when true the account
     /// must rotate its password before doing anything else. A session from
     /// this user still AUTHENTICATES but the route layer restricts it to
-    /// whoami / change-password / logout until the flag clears. Set opt-in
-    /// at provision (`users/add` / the seed-users file); cleared by ANY
+    /// whoami / change-password / logout until the flag clears. Set at
+    /// provision: `users/add` and a password reset for someone else set
+    /// it unless the caller sends `mustChangePassword: false` (0.46.8, a
+    /// temporary password by default); the seed-users file opts in per
+    /// row. Cleared by ANY
     /// successful password write ([`set_password`], which both the owner
     /// reset and self-service [`change_password`] route through).
     /// `#[serde(default)]` → `false` so pre-S1 stored rows load unchanged.
@@ -825,8 +828,9 @@ fn add_user_inner(
             // Fresh users start at epoch 0 (K2 Connect #4). The first
             // revoke event bumps it to 1.
             token_epoch: 0,
-            // K2 Cloud S1: provision flows that want a forced first-login
-            // rotation flip this via set_must_change_password after add.
+            // K2 Cloud S1: the route layer (`users/add`, temporary by
+            // default since 0.46.8) and the seed-users file flip this via
+            // set_must_change_password after add.
             must_change_password: false,
             was_viewer: false,
             legacy_viewer_unmigrated: false,
@@ -1171,6 +1175,19 @@ pub fn must_change_password(username: &str) -> bool {
         .find(|u| u.username == normalized)
         .map(|u| u.must_change_password)
         .unwrap_or(false)
+}
+
+/// The usernames that have a forced password rotation pending (a
+/// temporary password), read once. `GET /cli/users` marks those rows
+/// "Temporary password" without a store read per row.
+pub fn must_change_password_usernames() -> Result<std::collections::HashSet<String>, String> {
+    let store = load_store()?;
+    Ok(store
+        .users
+        .iter()
+        .filter(|u| u.must_change_password)
+        .map(|u| u.username.clone())
+        .collect())
 }
 
 /// Look up the stored role for `username`. `None` when the user doesn't

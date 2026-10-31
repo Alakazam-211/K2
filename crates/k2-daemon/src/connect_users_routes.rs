@@ -34,6 +34,12 @@ pub fn handle_list() -> CliResponse {
                 .into_iter()
                 .map(|(id, username, _)| (username, id))
                 .collect();
+            // 0.46.8: rows whose password is temporary (someone else set
+            // it; they choose their own at the next sign-in).
+            let temporary = match connect_users::must_change_password_usernames() {
+                Ok(s) => s,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             // Re-key to camelCase wire shape (createdAt) for the client.
             let users: Vec<serde_json::Value> = views
                 .iter()
@@ -54,6 +60,9 @@ pub fn handle_list() -> CliResponse {
                         "firstName": v.first_name,
                         "lastName": v.last_name,
                         "displayName": v.display_name,
+                        // 0.46.8: a temporary password ("Temporary
+                        // password" in Settings / `k2 users list`).
+                        "mustChangePassword": temporary.contains(&v.username),
                     })
                 })
                 .collect();
@@ -77,10 +86,12 @@ pub fn handle_list() -> CliResponse {
 struct AddReq {
     username: String,
     password: String,
-    /// K2 Cloud S1: opt-in forced first-login rotation. Optional +
-    /// defaults false so every existing caller is unchanged.
+    /// K2 Cloud S1 forced first-login rotation. 0.46.8: absent = `true`
+    /// (the person who made the login chose the password, so it is
+    /// temporary); an explicit `false` keeps it (the owner making their
+    /// own login, a service user, tests).
     #[serde(default, rename = "mustChangePassword")]
-    must_change_password: bool,
+    must_change_password: Option<bool>,
     /// Optional, and only ever `"member"`: users/add always creates a
     /// Member (owner/admin go through `/cli/users/set-role`, which is
     /// Owner-only). It exists so a caller asking for the retired
@@ -98,9 +109,11 @@ struct AddReq {
 }
 
 /// `POST /cli/users/add` `{username,password[,mustChangePassword][,role][,firstName][,lastName]}`
-/// → `{"success":true}`. When `mustChangePassword` is true the new
-/// account is flagged: its sessions are restricted to whoami /
-/// change-password / logout until the password is rotated (K2 Cloud S1).
+/// → `{"success":true,"mustChangePassword":<bool>}`. The password is
+/// TEMPORARY unless the body says `"mustChangePassword": false` (0.46.8):
+/// the new account is flagged and its sessions are restricted to whoami /
+/// change-password / logout until the person picks their own (K2 Cloud
+/// S1; every K2 sign-in runs the shared rotation step).
 /// `role`, when present, must be `"member"`: `"viewer"` is a 400 with
 /// [`connect_users::VIEWER_ROLE_REMOVED`]; `"owner"`/`"admin"` are a 400
 /// pointing at `/cli/users/set-role`. Nothing is created on a 400.
@@ -130,7 +143,8 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),
     }
-    if req.must_change_password {
+    let must = req.must_change_password.unwrap_or(true);
+    if must {
         // The user was just created, so a failure here is an unexpected
         // store error — surface it LOUDLY rather than reporting success
         // for an account that silently missed its restriction.
@@ -140,7 +154,20 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
             ));
         }
     }
-    CliResponse::ok_json(r#"{"success":true}"#.to_string())
+    CliResponse::ok_json(
+        serde_json::json!({ "success": true, "mustChangePassword": must }).to_string(),
+    )
+}
+
+/// True when `username` is one of the owner's own logins (Settings →
+/// General → Your account, the `ownerAccounts` setting). An owner-token
+/// password reset on one of them is the owner changing their own
+/// password, so it is not temporary.
+fn is_owner_linked_login(username: &str) -> bool {
+    k2_core::app_settings::load()
+        .owner_accounts
+        .iter()
+        .any(|l| l.trim().eq_ignore_ascii_case(username))
 }
 
 #[derive(serde::Deserialize)]
@@ -178,10 +205,10 @@ struct SetPasswordReq {
     username: String,
     password: String,
     /// PRD connect-login-edge-only R1: when set, the target must rotate at
-    /// next login (their sessions are revoked). Default depends on the
-    /// actor — `true` for a session (dashboard reset hands over a temp
-    /// password), `false` for the owner token (CLI/Settings behaviour
-    /// unchanged).
+    /// next login (their sessions are revoked). Absent = `true` (someone
+    /// else chose the password, so it is temporary), except an owner-token
+    /// reset of one of the owner's own logins (0.46.8; before, the owner
+    /// token defaulted to `false`).
     #[serde(default)]
     must_change_password: Option<bool>,
 }
@@ -208,8 +235,9 @@ pub enum SetPasswordActor {
 /// Rules (R1):
 /// - target resolved via `can_act_on(actor_role, target_role)` → 403;
 /// - a session may not target ITSELF → 400 (use `/cli/auth/change-password`);
-/// - `mustChangePassword` defaults `true` for a session actor, `false`
-///   for the owner token.
+/// - `mustChangePassword` defaults `true` (a temporary password), except
+///   the owner token on one of the owner's own logins (`ownerAccounts`):
+///   that is a self change and defaults `false`.
 pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliResponse {
     let req: SetPasswordReq = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -220,7 +248,9 @@ pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliRespo
         Err(e) => return CliResponse::bad_request(e),
     };
     let (actor_role, self_target, default_flag) = match actor {
-        SetPasswordActor::OwnerToken => (connect_users::Role::Owner, false, false),
+        SetPasswordActor::OwnerToken => {
+            (connect_users::Role::Owner, false, !is_owner_linked_login(&target))
+        }
         SetPasswordActor::Session { username, role } => (*role, username == &target, true),
     };
     if self_target {
@@ -1171,10 +1201,83 @@ mod tests {
             assert!(r.body.contains("\"success\":true"), "got: {}", r.body);
             assert!(connect_users::must_change_password("mcp_new"));
 
-            // Field absent → default false (existing callers unchanged).
-            let r = handle_add(br#"{"username":"mcp_plain","password":"password1"}"#);
+            // 0.46.8: field absent → temporary (true), and the answer says so.
+            let r = handle_add(br#"{"username":"mcp_absent","password":"password1"}"#);
             assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["mustChangePassword"], serde_json::json!(true), "{v}");
+            assert!(connect_users::must_change_password("mcp_absent"));
+
+            // Explicit false → kept (the owner's own login, service users).
+            let r = handle_add(
+                br#"{"username":"mcp_plain","password":"password1","mustChangePassword":false}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["mustChangePassword"], serde_json::json!(false), "{v}");
             assert!(!connect_users::must_change_password("mcp_plain"));
+        });
+    }
+
+    #[test]
+    fn list_rows_carry_must_change_password() {
+        with_temp_home(|| {
+            let r = handle_add(br#"{"username":"lst_temp","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let r = handle_add(
+                br#"{"username":"lst_kept","password":"password1","mustChangePassword":false}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let r = handle_list();
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            let rows = v["users"].as_array().expect("users array");
+            let flag = |name: &str| -> serde_json::Value {
+                rows.iter()
+                    .find(|u| u["username"] == name)
+                    .unwrap_or_else(|| panic!("no row {name}: {v}"))["mustChangePassword"]
+                    .clone()
+            };
+            assert_eq!(flag("lst_temp"), serde_json::json!(true));
+            assert_eq!(flag("lst_kept"), serde_json::json!(false));
+        });
+    }
+
+    #[test]
+    fn owner_token_reset_is_temporary_except_on_the_owners_own_login() {
+        with_temp_home(|| {
+            connect_users::add_user("rst_other", "password1").expect("add");
+            connect_users::add_user("rst_me", "password1").expect("add");
+            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["rst_me"] }))
+                .expect("link the owner's login");
+
+            // Someone else: absent → temporary.
+            let r = handle_set_password_as(
+                &SetPasswordActor::OwnerToken,
+                br#"{"username":"rst_other","password":"newpass123"}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["mustChangePassword"], serde_json::json!(true), "{v}");
+            assert!(connect_users::must_change_password("rst_other"));
+
+            // Explicit false from the owner token still works.
+            let r = handle_set_password_as(
+                &SetPasswordActor::OwnerToken,
+                br#"{"username":"rst_other","password":"newpass124","mustChangePassword":false}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            assert!(!connect_users::must_change_password("rst_other"));
+
+            // The owner's own login: a self change, not temporary.
+            let r = handle_set_password_as(
+                &SetPasswordActor::OwnerToken,
+                br#"{"username":"rst_me","password":"newpass125"}"#,
+            );
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["mustChangePassword"], serde_json::json!(false), "{v}");
+            assert!(!connect_users::must_change_password("rst_me"));
         });
     }
 

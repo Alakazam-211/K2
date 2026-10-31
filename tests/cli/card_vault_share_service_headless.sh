@@ -210,8 +210,8 @@ echo "== Allow =="
 # People sign in over Connect (setting the vault password takes a person at
 # the machine, not a token): a Member, and an Admin who confirms with her
 # own password.
-printf 'k2test-Member-Horse-71\n' | owner_k2 users add mem --role member --password-stdin >/dev/null || fail "users add mem"
-printf 'k2test-Admin-Horse-71\n' | owner_k2 users add ada --role admin --password-stdin >/dev/null || fail "users add ada"
+printf 'k2test-Member-Horse-71\n' | owner_k2 users add mem --role member --password-stdin --keep-password >/dev/null || fail "users add mem"
+printf 'k2test-Admin-Horse-71\n' | owner_k2 users add ada --role admin --password-stdin --keep-password >/dev/null || fail "users add ada"
 login() {
     st="$(post "/cli/auth/login" "{\"username\":\"$1\",\"password\":\"$2\"}")"
     [ "$st" = 200 ] || fail "login $1: $st $(body)"

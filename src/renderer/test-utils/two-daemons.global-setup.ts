@@ -90,7 +90,7 @@ export async function seedMember(d: Spawned): Promise<void> {
   const add = await fetch(`http://127.0.0.1:${d.port}/cli/users/add?token=${d.owner}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: B_USER, password: B_PASSWORD }),
+    body: JSON.stringify({ username: B_USER, password: B_PASSWORD, mustChangePassword: false }),
   })
   if (add.status !== 200) throw new Error(`seeding ${B_USER} on ${d.port} failed: ${add.status} ${await add.text()}`)
 }

@@ -243,7 +243,7 @@ describe('owner account prompt: create a new account (admins exist)', () => {
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Create and use this account' })))
     await waitFor(() => expect(prompt()).toBeNull())
     expect(h.posts).toEqual([
-      { route: 'users/add', body: { username: 'rosson-mac', password: 'pass-1234', firstName: 'Rosson' } },
+      { route: 'users/add', body: { username: 'rosson-mac', password: 'pass-1234', mustChangePassword: false, firstName: 'Rosson' } },
       { route: 'users/set-role', body: { username: 'rosson-mac', role: 'admin' } },
       { route: 'owner/accounts', body: { accounts: ['rosson-mac'] } },
     ])
@@ -298,6 +298,8 @@ describe('owner account prompt: no admins (create is required)', () => {
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Create and use this account' })))
     await waitFor(() => expect(prompt()).toBeNull())
     expect(h.posts.map((p) => p.route)).toEqual(['users/add', 'users/set-role', 'owner/accounts'])
+    // 0.46.8: the owner's own login is never a temporary password.
+    expect(h.posts[0].body).toEqual({ username: 'rosson', password: 'pass-1234', mustChangePassword: false })
     expect(h.posts[2].body).toEqual({ accounts: ['rosson'] })
   })
 

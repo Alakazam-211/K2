@@ -317,12 +317,13 @@ async fn owner_set_password_clears_the_flag() {
                 d.port,
                 "POST",
                 &format!("/cli/users/set-password?token={OWNER_TOKEN}"),
-                Some(r#"{"username":"prov_reset","password":"owner-issued-2"}"#),
+                // 0.46.8: an owner reset is temporary unless it says false.
+                Some(r#"{"username":"prov_reset","password":"owner-issued-2","mustChangePassword":false}"#),
             );
             assert_eq!(r.status, 200, "set-password; body={}", r.body);
             assert!(
                 !connect_users::must_change_password("prov_reset"),
-                "owner set-password must clear the flag"
+                "owner set-password (mustChangePassword:false) must clear the flag"
             );
             let v = login(d.port, "prov_reset", "owner-issued-2");
             assert_eq!(v["mustChangePassword"], serde_json::json!(false));

@@ -40,6 +40,7 @@ import {
   type K2User,
 } from './connect-user-roles'
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
+import { MUST_CHANGE_NOTE } from './AppUserDialogs'
 import { PERSON_NAME_MAX, realName } from '@/lib/person-name'
 import { setPersonName } from '@/components/Presence/person-name-api'
 import { CanCloneToggle, setCanCloneOptimistic } from './CanCloneToggle'
@@ -349,6 +350,20 @@ async function whoamiGet(): Promise<Response> {
   }, { onRetry: invalidateDaemonWs })
 }
 
+/** 0.46.8: whether a users/add or users/set-password answer says the
+ *  password is temporary. An older daemon may not answer the field; then
+ *  `fallback` (what this client asked for) stands. */
+export async function answeredTemporary(res: Response, fallback: boolean): Promise<boolean> {
+  const text = await res.text()
+  try {
+    const parsed = JSON.parse(text) as { mustChangePassword?: unknown }
+    if (typeof parsed.mustChangePassword === 'boolean') return parsed.mustChangePassword
+  } catch {
+    /* an empty or non-JSON 200 from an older daemon */
+  }
+  return fallback
+}
+
 async function errText(res: Response): Promise<string> {
   const text = await res.text()
   try {
@@ -591,6 +606,9 @@ export function K2ConnectSection({
   const [nameDraft, setNameDraft] = useState<{ firstName: string; lastName: string }>({ firstName: '', lastName: '' })
   const [nameBusy, setNameBusy] = useState(false)
   const [newRole, setNewRole] = useState<K2Role>('member')
+  // 0.46.8: the password you type for someone else is temporary (they
+  // choose their own at their first sign-in). On by default.
+  const [newTemporary, setNewTemporary] = useState(true)
   const [userQuery, setUserQuery] = useState('')
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [addBusy, setAddBusy] = useState(false)
@@ -853,6 +871,7 @@ export function K2ConnectSection({
       const res = await userPost('/add', {
         username,
         password: pw,
+        mustChangePassword: newTemporary,
         ...(firstName ? { firstName } : {}),
         ...(lastName ? { lastName } : {}),
       })
@@ -860,6 +879,7 @@ export function K2ConnectSection({
         setAddError(await errText(res))
         return
       }
+      const temporary = await answeredTemporary(res, newTemporary)
       // add_user always creates Member. Owner can pick a starting role
       // here; apply it with the same set-role path as the per-row selector.
       if (canChangeRoles(myRole) && newRole !== 'member') {
@@ -875,8 +895,13 @@ export function K2ConnectSection({
       setNewFirstName('')
       setNewLastName('')
       setNewRole('member')
-      setAddedMsg(`Added — share these credentials with the user.`)
-      setTimeout(() => setAddedMsg(null), 4000)
+      setNewTemporary(true)
+      setAddedMsg(
+        temporary
+          ? `Added — share these credentials with ${username}. ${MUST_CHANGE_NOTE}`
+          : `Added — share these credentials with ${username}.`,
+      )
+      setTimeout(() => setAddedMsg(null), 8000)
       await refreshUsers()
     } catch (e) {
       setAddError(e instanceof Error ? e.message : 'Failed to add user')
@@ -910,15 +935,18 @@ export function K2ConnectSection({
     setResetBusy(true)
     setUsersError(null)
     try {
+      // No flag: the daemon decides (0.46.8: temporary, except the
+      // owner's own linked login) and says which in its answer.
       const res = await userPost('/set-password', { username, password: resetPassword })
       if (!res.ok) {
         setUsersError(await errText(res))
         return
       }
+      const temporary = await answeredTemporary(res, false)
       setResetFor(null)
       setResetPassword('')
-      setResetMsg(`Password reset for ${username}.`)
-      setTimeout(() => setResetMsg(null), 4000)
+      setResetMsg(temporary ? `Password reset for ${username}. ${MUST_CHANGE_NOTE}` : `Password reset for ${username}.`)
+      setTimeout(() => setResetMsg(null), 8000)
       await refreshUsers()
     } catch (e) {
       setUsersError(e instanceof Error ? e.message : 'Failed to reset password')
@@ -1994,16 +2022,42 @@ export function K2ConnectSection({
                   {addBusy ? 'Adding…' : 'Add user'}
                 </button>
               </div>
+              <label className="flex items-start gap-1.5 cursor-pointer select-none no-drag" data-testid="new-user-temporary">
+                {/* Square peer-checked checkbox (matches "Enabled" below). */}
+                <input
+                  type="checkbox"
+                  checked={newTemporary}
+                  onChange={(e) => setNewTemporary(e.target.checked)}
+                  aria-label="Temporary password"
+                  className="peer sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+                >
+                  {newTemporary && (
+                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                    </svg>
+                  )}
+                </span>
+                <span className="text-[10px] text-[var(--color-text-secondary)]">
+                  Temporary password
+                  <span className="text-[var(--color-text-muted)]">
+                    {newTemporary ? ` — ${MUST_CHANGE_NOTE}` : ' — off: they keep the password you type.'}
+                  </span>
+                </span>
+              </label>
               {addError && (
                 <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{addError}</div>
               )}
-              {addedMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]">{addedMsg}</div>}
+              {addedMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]" data-testid="added-user-msg">{addedMsg}</div>}
             </form>
 
             {usersError && (
               <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{usersError}</div>
             )}
-            {resetMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]">{resetMsg}</div>}
+            {resetMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]" data-testid="reset-password-msg">{resetMsg}</div>}
 
             {/* User list */}
             <input
@@ -2047,6 +2101,15 @@ export function K2ConnectSection({
                           </span>
                         )}
                         {u.wasViewer && <WasViewerBadge />}
+                        {u.mustChangePassword === true && (
+                          <span
+                            data-testid={`temporary-password-${u.username}`}
+                            title={MUST_CHANGE_NOTE}
+                            className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)]"
+                          >
+                            Temporary password
+                          </span>
+                        )}
                       </span>
                       <div className="flex items-center gap-3 flex-shrink-0">
                         {/* K2 #629 — role selector. Editable only for an
@@ -2201,7 +2264,8 @@ export function K2ConnectSection({
                     )}
                     {resetFor === u.username && (
                       <form
-                        className="flex items-center gap-1.5"
+                        className="flex flex-wrap items-center gap-1.5"
+                        data-testid={`reset-form-${u.username}`}
                         onSubmit={(e) => {
                           e.preventDefault()
                           void submitReset(u.username)
@@ -2233,6 +2297,11 @@ export function K2ConnectSection({
                         >
                           Cancel
                         </button>
+                        <span className="basis-full text-[10px] text-[var(--color-text-muted)]">
+                          {ownerAccounts.loaded && ownerAccounts.isLinked(u.username)
+                            ? 'Your own login: you keep this password.'
+                            : MUST_CHANGE_NOTE}
+                        </span>
                       </form>
                     )}
                   </div>

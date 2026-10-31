@@ -44,6 +44,10 @@ export interface K2User {
   firstName?: string | null
   lastName?: string | null
   displayName?: string
+  /** 0.46.8: the password is temporary (someone else set it; K2 asks the
+   *  person to choose their own at the next sign-in). Absent from an
+   *  older daemon. */
+  mustChangePassword?: boolean
 }
 
 /** Whether the row should offer "Enable as Member": a former Viewer that

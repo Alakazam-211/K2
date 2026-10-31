@@ -351,7 +351,7 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     let mut sessions = Vec::new();
     for role in ["member", "admin", "owner"] {
         let user = format!("u-{role}");
-        let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(&format!(r#"{{"username":"{user}","password":"correct-horse-battery-9"}}"#)));
+        let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(&format!(r#"{{"username":"{user}","password":"correct-horse-battery-9","mustChangePassword":false}}"#)));
         assert_eq!(s, 200, "{v}");
         if role != "member" {
             let (s, v) = call(port, "POST", &format!("/cli/users/set-role?token={tok}"), Some(&format!(r#"{{"username":"{user}","role":"{role}"}}"#)));

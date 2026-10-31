@@ -221,7 +221,7 @@ fn login_as(d: &Daemon, username: &str, role: Option<&str>) -> String {
         d.port,
         "POST",
         &format!("/cli/users/add?token={owner}"),
-        Some(&serde_json::json!({ "username": username, "password": "correct horse 6" }).to_string()),
+        Some(&serde_json::json!({ "username": username, "password": "correct horse 6", "mustChangePassword": false }).to_string()),
     );
     assert_eq!(r.status, 200, "users/add {username}: {}", r.body);
     if let Some(role) = role {

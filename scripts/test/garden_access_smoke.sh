@@ -123,9 +123,9 @@ uri() { jq -rn --arg v "$1" '$v|@uri'; }
 # ── people, agents, Zen ──────────────────────────────────────────────
 
 PW="ga-smoke-Pass-1234!"
-must "$OWNER" POST /cli/users/add "{\"username\":\"phone\",\"password\":\"$PW\"}"
+must "$OWNER" POST /cli/users/add "{\"username\":\"phone\",\"password\":\"$PW\",\"mustChangePassword\":false}"
 must "$OWNER" POST /cli/users/set-role '{"username":"phone","role":"owner"}'
-must "$OWNER" POST /cli/auth/login "{\"username\":\"phone\",\"password\":\"$PW\"}"
+must "$OWNER" POST /cli/auth/login "{\"username\":\"phone\",\"password\":\"$PW\",\"mustChangePassword\":false}"
 LOGIN="$(jq -r '.token' <<<"$BODY")"
 [[ -n "$LOGIN" && "$LOGIN" != null ]] || die "no login token: $BODY"
 say "Owner login 'phone' signed in"

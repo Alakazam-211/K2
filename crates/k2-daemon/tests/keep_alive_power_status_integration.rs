@@ -187,7 +187,7 @@ fn power_status_answers_once_on_a_keep_alive_socket() {
     let (s, b) = conn.request(
         "POST",
         &format!("/cli/users/add?token={}", d.owner),
-        Some(r#"{"username":"keepalive","password":"correct-horse-battery-9"}"#),
+        Some(r#"{"username":"keepalive","password":"correct-horse-battery-9","mustChangePassword":false}"#),
     );
     assert_eq!(s, 200, "users/add: {b}");
     let mut conn = Conn::open(d.port);

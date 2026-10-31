@@ -11,6 +11,7 @@
 import {
   duplicateSavedHost,
   duplicateSavedHostMessage,
+  forgetToken as storeForgetToken,
   loginToHost as storeLoginToHost,
   useConnectHostStore,
   type ConnectHost,
@@ -68,4 +69,38 @@ export async function verifyHostCredentials(
     return { kind: 'rotate', host: { ...host, token: result.token } }
   }
   return { kind: 'signed-in', token: result.token }
+}
+
+export interface AbandonRotationDeps {
+  removeHost: (id: string) => void
+  clearHostToken: (id: string) => void
+  /** The keychain copy (`forgetToken`). */
+  forgetToken: (id: string) => Promise<void>
+}
+
+function abandonDeps(): AbandonRotationDeps {
+  const s = useConnectHostStore.getState()
+  return { removeHost: s.removeHost, clearHostToken: s.clearHostToken, forgetToken: storeForgetToken }
+}
+
+/**
+ * The person cancelled the rotation step after signing in with a temporary
+ * password. The RESTRICTED session is useless and loginToHost already
+ * cached it in the keychain: a NEW host's provisional tile is removed
+ * (which forgets its token too); an EDITED host drops the token in memory
+ * AND in the keychain, always — `clearHostToken` skips the keychain when
+ * the in-memory token is already empty, which could leave the restricted
+ * token behind for the next launch.
+ */
+export async function abandonRotation(
+  hostId: string,
+  isNew: boolean,
+  deps: AbandonRotationDeps = abandonDeps(),
+): Promise<void> {
+  if (isNew) {
+    deps.removeHost(hostId)
+    return
+  }
+  deps.clearHostToken(hostId)
+  await deps.forgetToken(hostId)
 }

@@ -332,7 +332,7 @@ async fn thread_after_seq_keeps_every_callers_read_rules() {
 
 /// A Connect login (a server member) made through the real routes.
 async fn member_login(port: u16, username: &str) -> String {
-    ok_post(port, "/cli/users/add", OWNER, json!({ "username": username, "password": "password123" })).await;
+    ok_post(port, "/cli/users/add", OWNER, json!({ "username": username, "password": "password123", "mustChangePassword": false })).await;
     let body = json!({ "username": username, "password": "password123" }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "login {username}: {}", r.body);

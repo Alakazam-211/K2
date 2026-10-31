@@ -109,7 +109,7 @@ fn login_member(port: u16, username: &str) -> String {
         port,
         "POST",
         &format!("/cli/users/add?token={OWNER}"),
-        Some(&format!(r#"{{"username":"{username}","password":"{password}"}}"#)),
+        Some(&format!(r#"{{"username":"{username}","password":"{password}","mustChangePassword":false}}"#)),
     );
     assert_eq!(r.status, 200, "users/add: {}", r.body);
     let r = http(port, "POST", "/cli/auth/login", Some(&format!(r#"{{"username":"{username}","password":"{password}"}}"#)));

@@ -4531,12 +4531,38 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // 0.46.8: who made the login, for the auth-audit line (the
+            // gate above already proved one of these two).
+            let actor_for_audit = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner-token".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| format!("user:{u}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
             // argon2 hashing is intentionally slow; run off the accept loop.
             let r = tokio::task::spawn_blocking(move || {
                 crate::connect_users_routes::handle_add(&body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            k2_core::auth_audit::record(
+                &k2_core::auth_audit::AuditEvent::new(
+                    "add-user",
+                    &target_for_audit,
+                    if r.status.starts_with("200") {
+                        "ok".to_string()
+                    } else {
+                        format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?"))
+                    },
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                )
+                .with_actor(&actor_for_audit),
+            );
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/cli/users/remove" => {
@@ -4621,14 +4647,17 @@ async fn handle_one_request(
                  outcome={outcome} ingress={}",
                 ingress.as_str()
             );
-            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
-                "set-password",
-                &target_for_audit,
-                outcome,
-                ingress.as_str(),
-                "-",
-                if web_client_header { "web" } else { "api" },
-            ));
+            k2_core::auth_audit::record(
+                &k2_core::auth_audit::AuditEvent::new(
+                    "set-password",
+                    &target_for_audit,
+                    outcome,
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                )
+                .with_actor(&actor_for_audit),
+            );
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/cli/users/unlock" => {

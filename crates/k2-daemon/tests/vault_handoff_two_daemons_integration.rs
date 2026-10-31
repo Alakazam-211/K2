@@ -310,7 +310,7 @@ fn two_daemons_hand_a_secret_over_sealed_and_old_peers_get_peer_too_old() {
     let secret_id = v["secretId"].as_str().expect("secretId").to_string();
     // An Admin login confirms with its Connect password, then sends.
     let password = "Handoff-Two-Daemons-9!";
-    let (st, v) = http(&a, "POST", "/cli/users/add", Some(serde_json::json!({ "username": "lee", "password": password })));
+    let (st, v) = http(&a, "POST", "/cli/users/add", Some(serde_json::json!({ "username": "lee", "password": password, "mustChangePassword": false })));
     assert_eq!(st, 200, "users/add: {v}");
     let (st, v) = http(&a, "POST", "/cli/users/set-role", Some(serde_json::json!({ "username": "lee", "role": "admin" })));
     assert_eq!(st, 200, "set-role: {v}");

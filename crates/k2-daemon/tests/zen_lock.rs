@@ -571,7 +571,7 @@ fn headless_lock_route_restore_and_audit() {
     assert_eq!(s, 200, "the person renames a locked Garden: {v}");
 
     // A Connect login (any role) can't flip it.
-    let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(r#"{"username":"zlock","password":"correct-horse-battery-9"}"#));
+    let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(r#"{"username":"zlock","password":"correct-horse-battery-9","mustChangePassword":false}"#));
     assert_eq!(s, 200, "{v}");
     let (s, v) = call(port, "POST", &format!("/cli/users/set-role?token={tok}"), Some(r#"{"username":"zlock","role":"owner"}"#));
     assert_eq!(s, 200, "{v}");

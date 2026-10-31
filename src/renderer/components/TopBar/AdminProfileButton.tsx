@@ -238,7 +238,8 @@ function OwnerSetPasswordStep({
         if (busy || !pw || pw !== confirm) return
         setBusy(true)
         setErr(null)
-        daemonCliPost(scope, 'users/set-password', { username, password: pw }).then(
+        // The owner's own login: a self change, never a temporary password.
+        daemonCliPost(scope, 'users/set-password', { username, password: pw, mustChangePassword: false }).then(
           () => onDone(),
           (e2: unknown) => {
             setErr(e2 instanceof Error ? e2.message : String(e2))

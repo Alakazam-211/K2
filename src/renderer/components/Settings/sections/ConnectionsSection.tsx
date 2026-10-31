@@ -38,7 +38,7 @@ import {
   type ConnectionStatus,
 } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
-import { verifyHostCredentials } from '@/lib/add-server-login'
+import { abandonRotation, verifyHostCredentials } from '@/lib/add-server-login'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
@@ -368,13 +368,10 @@ export function ConnectionsSection(): React.JSX.Element {
     if (!rotation) return
     // A restricted session is useless: for a NEW host drop the provisional
     // tile (so a half-added server never sticks); for an edit, drop the
-    // restricted token so the tile reads signed-out. The draft stays for
-    // another try.
-    if (rotation.isNew) {
-      removeHost(rotation.host.id)
-    } else {
-      useConnectHostStore.getState().clearHostToken(rotation.host.id)
-    }
+    // restricted token in memory AND the keychain so the tile reads
+    // signed-out and no restricted token survives a relaunch. The draft
+    // stays for another try.
+    void abandonRotation(rotation.host.id, rotation.isNew)
     setRotation(null)
   }
 

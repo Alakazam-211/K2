@@ -115,7 +115,7 @@ describe('Admin Access: first and last names', () => {
     await waitFor(() => expect(cli.fetches.some((f) => f.path === '/cli/users/add')).toBe(true))
     const add = cli.fetches.find((f) => f.path === '/cli/users/add')
     if (!add) throw new Error('no users/add')
-    expect(add.body).toEqual({ username: 'anna', password: 'pass-1234', firstName: 'Anna', lastName: 'Lee' })
+    expect(add.body).toEqual({ username: 'anna', password: 'pass-1234', mustChangePassword: true, firstName: 'Anna', lastName: 'Lee' })
     expect((await screen.findByTestId('user-real-name-anna')).textContent).toBe('Anna Lee')
   })
 
@@ -126,7 +126,7 @@ describe('Admin Access: first and last names', () => {
     act(() => void fireEvent.change(screen.getByPlaceholderText('initial password'), { target: { value: 'pass-1234' } }))
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add user' })))
     await waitFor(() => expect(cli.fetches.some((f) => f.path === '/cli/users/add')).toBe(true))
-    expect(cli.fetches.find((f) => f.path === '/cli/users/add')?.body).toEqual({ username: 'bo', password: 'pass-1234' })
+    expect(cli.fetches.find((f) => f.path === '/cli/users/add')?.body).toEqual({ username: 'bo', password: 'pass-1234', mustChangePassword: true })
   })
 
   it('Edit name sets someone else\'s names through people/name with person; empty clears', async () => {

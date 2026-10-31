@@ -206,7 +206,7 @@ fn login_as(port: u16, owner: &str, username: &str, role: &str) -> String {
         port,
         "POST",
         &format!("/cli/users/add?token={owner}"),
-        Some(&format!(r#"{{"username":"{username}","password":"correct-horse-battery-9"}}"#)),
+        Some(&format!(r#"{{"username":"{username}","password":"correct-horse-battery-9","mustChangePassword":false}}"#)),
     );
     assert_eq!(s, 200, "users/add {username}: {b}");
     if role != "member" {

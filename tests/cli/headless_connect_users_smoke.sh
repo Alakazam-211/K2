@@ -169,7 +169,7 @@ schema="$("$K2_CLI" --schema 2>/dev/null || true)"
 assert_contains "schema has connect login" "$schema" '"name": "connect login"'
 assert_contains "schema has users add" "$schema" '"name": "users add"'
 assert_contains "schema has users unlock" "$schema" '"name": "users unlock"'
-assert_contains "schema users usage lists unlock" "$schema" "k2 users [list|add|audit|unlock]"
+assert_contains "schema users usage lists unlock" "$schema" "k2 users [list|add|set-password|audit|unlock]"
 assert_contains "schema has connect" "$schema" '"name": "connect"'
 assert_contains "schema has users" "$schema" '"name": "users"'
 # Full-document json.loads is not required: pre-existing mail-flag

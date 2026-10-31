@@ -225,7 +225,7 @@ fn provision_login(port: u16, username: &str, role: &str) -> String {
         "POST",
         &format!("/cli/users/add?token={OWNER}"),
         Some(&format!(
-            r#"{{"username":"{username}","password":"password123"}}"#
+            r#"{{"username":"{username}","password":"password123","mustChangePassword":false}}"#
         )),
     );
     assert_eq!(r.status, 200, "users/add({username}); {}", r.body);

@@ -16,7 +16,7 @@ vi.stubGlobal('localStorage', {
 })
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
-import { verifyHostCredentials, type AddServerLoginDeps } from './add-server-login'
+import { abandonRotation, verifyHostCredentials, type AddServerLoginDeps } from './add-server-login'
 import type { ConnectHost, LoginResult } from '@/stores/connect-host'
 
 const HOST: ConnectHost = {
@@ -73,5 +73,52 @@ describe('verifyHostCredentials (add-server path)', () => {
     const out = await verifyHostCredentials(HOST, 'bad', false, d)
     expect(out.kind).toBe('error')
     expect(d.removeHost).not.toHaveBeenCalled()
+  })
+})
+
+// 0.46.8: logins someone else makes have a temporary password, so the
+// rotation step shows on every first sign-in. Cancelling it must not leave
+// the RESTRICTED token loginToHost cached in the keychain.
+describe('abandonRotation (rotation step cancelled)', () => {
+  function abandonDeps(): {
+    removeHost: ReturnType<typeof vi.fn>
+    clearHostToken: ReturnType<typeof vi.fn>
+    forgetToken: ReturnType<typeof vi.fn>
+  } {
+    return { removeHost: vi.fn(), clearHostToken: vi.fn(), forgetToken: vi.fn(async () => undefined) }
+  }
+
+  it('an EDITED host drops the restricted token in memory AND forgets it in the keychain', async () => {
+    const d = abandonDeps()
+    await abandonRotation('h-1', false, d)
+    expect(d.clearHostToken).toHaveBeenCalledWith('h-1')
+    expect(d.forgetToken).toHaveBeenCalledWith('h-1')
+    expect(d.removeHost).not.toHaveBeenCalled()
+  })
+
+  it('a NEW host removes the provisional tile (removeHost forgets its token itself)', async () => {
+    const d = abandonDeps()
+    await abandonRotation('new-1', true, d)
+    expect(d.removeHost).toHaveBeenCalledWith('new-1')
+    expect(d.clearHostToken).not.toHaveBeenCalled()
+    expect(d.forgetToken).not.toHaveBeenCalled()
+  })
+
+  it('the real store: an edited host already tokenless in memory still has its keychain entry deleted', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const inv = vi.mocked(invoke)
+    const { useConnectHostStore } = await import('@/stores/connect-host')
+    // In memory the token is already gone (e.g. an expiry); the keychain
+    // may still hold the restricted one.
+    useConnectHostStore.getState().addHost({ ...HOST, id: 'edit-1', token: '' })
+    inv.mockClear()
+    await abandonRotation('edit-1', false)
+    const h = useConnectHostStore.getState().hosts.find((x) => x.id === 'edit-1')
+    if (!h) throw new Error('host vanished')
+    expect(h.token).toBe('')
+    const deletes = inv.mock.calls.filter(
+      (c) => c[0] === 'k2_secret_delete' && (c[1] as { account?: string }).account === 'edit-1',
+    )
+    expect(deletes.length).toBeGreaterThan(0)
   })
 })

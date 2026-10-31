@@ -597,7 +597,7 @@ fn update_flow_handshake_survives_a_real_restart_in_compat_and_ghost() {
     }
     // The owner's remote login (an Owner-role Connect session, the token the
     // desktop holds for a remote host).
-    let r = post(a.port, &format!("/cli/users/add?token={owner}"), r#"{"username":"updater","password":"password123"}"#);
+    let r = post(a.port, &format!("/cli/users/add?token={owner}"), r#"{"username":"updater","password":"password123","mustChangePassword":false}"#);
     assert_eq!(r.status, 200, "users/add: {}", r.body);
     let r = post(a.port, &format!("/cli/users/set-role?token={owner}"), r#"{"username":"updater","role":"owner"}"#);
     assert_eq!(r.status, 200, "users/set-role: {}", r.body);

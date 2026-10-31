@@ -29,7 +29,7 @@ contains() { if grep -Fq -- "$2" <<<"$3"; then pass "$1"; else bad "$1 (missing 
 
 k2() { HOME="$SANDBOX_HOME" K2SO_PORT="$K2SO_PORT" K2SO_TOKEN="$K2SO_TOKEN" "$K2" "$@"; }
 
-printf 'password123\n' | k2 users add mobile --role member --password-stdin >/dev/null
+printf 'password123\n' | k2 users add mobile --role member --password-stdin --keep-password >/dev/null
 
 # 1. The owner token with no linked login and no --user: refused, exit 3.
 set +e

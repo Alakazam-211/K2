@@ -138,10 +138,10 @@ must "$OWNER" POST /cli/zen/reload '{}'
 # ── 2 ────────────────────────────────────────────────────────────────
 say "step 2: logins and paired phones"
 PW="correct-horse-battery-staple-9"
-must "$OWNER" POST /cli/users/add "{\"username\":\"rosphone\",\"password\":\"$PW\"}"
+must "$OWNER" POST /cli/users/add "{\"username\":\"rosphone\",\"password\":\"$PW\",\"mustChangePassword\":false}"
 must "$OWNER" POST /cli/users/set-role '{"username":"rosphone","role":"admin"}'
 must "$OWNER" POST /cli/owner/accounts '{"accounts":["rosphone"]}'
-must "$OWNER" POST /cli/users/add "{\"username\":\"other\",\"password\":\"$PW\"}"
+must "$OWNER" POST /cli/users/add "{\"username\":\"other\",\"password\":\"$PW\",\"mustChangePassword\":false}"
 must "$OWNER" POST /cli/users/set-role '{"username":"other","role":"owner"}'
 # pair ASUSER DEVICE → prints the device session (the owner token mints the code).
 pair() {
@@ -157,7 +157,7 @@ PHONE="$(pair "" ios-smoke-1)"
 [[ -n "$PHONE" && "$PHONE" != null ]] || die "the owner's phone didn't pair: $BODY"
 OTHER="$(pair other android-smoke-2)"
 [[ -n "$OTHER" && "$OTHER" != null ]] || die "the other phone didn't pair: $BODY"
-must "$OWNER" POST /cli/auth/login "{\"username\":\"rosphone\",\"password\":\"$PW\"}"
+must "$OWNER" POST /cli/auth/login "{\"username\":\"rosphone\",\"password\":\"$PW\",\"mustChangePassword\":false}"
 PASSWORD_LOGIN="$(jq -r '.token' <<<"$BODY")"
 ok "paired two phones and signed in once with a password"
 

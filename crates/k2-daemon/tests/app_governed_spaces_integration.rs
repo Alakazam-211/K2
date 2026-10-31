@@ -214,7 +214,13 @@ async fn a_bound_space_switches_to_app_and_people_get_their_roles_channels() {
     settle(&env).await;
     assert_eq!(sync_posts(&env), before, "a repeat sends nothing");
     // A role change (k2 app grant role) sends that one person's list (I4 single).
-    let g = skin::list_grants().expect("grants").into_iter().find(|g| g.kind == "app" && g.subject_id == est.id).expect("estella's login");
+    // Her login on APP: add_principal also gives her a host grant (kind=app,
+    // target host), and the two can share a created_at second.
+    let g = skin::list_grants()
+        .expect("grants")
+        .into_iter()
+        .find(|g| g.kind == "app" && g.subject_id == est.id && g.target_id == APP)
+        .expect("estella's login");
     assert!(skin::set_app_grant_role(&g.id, "office").expect("role change").1);
     assert!(hook::reconcile_requested(), "a role change asks for a sweep");
     settle(&env).await;

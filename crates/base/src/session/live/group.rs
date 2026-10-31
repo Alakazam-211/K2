@@ -78,7 +78,11 @@ impl Session {
         // (c), (d): what it types, after the character before each insertion
         let (mut newline, mut bounded) = (false, false);
         for e in edits {
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                // a structured edit is never typing: a step of its own
+                newline = true;
+                continue;
+            };
             let Ok((_, text)) = self.text_of(st, root) else {
                 bounded = true;
                 continue;

@@ -16,11 +16,14 @@ pub enum Tier {
     /// Any file: a [`crate::session::BlobSession`] (tier 0, and tier 0.5 with a merging
     /// [`crate::session::BlobPack`]).
     Blob,
+    /// A grid doc: a [`crate::table`] pack's [`crate::session::Session`] (structured, merged
+    /// by key; CSV contract §3.5).
+    Grid,
 }
 
 impl Tier {
     /// Every tier.
-    pub const ALL: &'static [Tier] = &[Tier::Text, Tier::Blob];
+    pub const ALL: &'static [Tier] = &[Tier::Text, Tier::Blob, Tier::Grid];
 }
 
 /// What a verb does.
@@ -89,6 +92,15 @@ pub enum Api {
     ReleaseClaim,
     /// `Session::activity`.
     Activity,
+    /// `Session::edit_ops_with` (what `run_tool` runs a pack's structured edit verbs
+    /// through, A9).
+    EditOps,
+    /// `Session::drop_deleted` (`rows drop-deleted`, K-CSV-7).
+    DropDeleted,
+    /// `Session::blame_cell` (`blame --cell R,C`).
+    BlameCell,
+    /// `Session::blame_structure` (`blame --structure`).
+    BlameStructure,
     /// `Session::file_now` (tier 0: `BlobSession::file_now_to`), then the export registry.
     FileNow,
     /// `Session::file_at` (tier 0: `BlobSession::file_at_to`), then the export registry.
@@ -182,8 +194,12 @@ const NO_: &[Need] = &[Need::Read, Need::Owner];
 const OK0: &[u8] = &[OK];
 const OK01: &[u8] = &[OK, NO];
 const TEXT: &[Tier] = &[Tier::Text];
-const BOTH: &[Tier] = &[Tier::Text, Tier::Blob];
 const BLOB: &[Tier] = &[Tier::Blob];
+const GRID: &[Tier] = &[Tier::Grid];
+/// Text and grid docs: a grid's reads see its rendered file (CSV contract §3.2).
+const TG: &[Tier] = &[Tier::Text, Tier::Grid];
+/// Every tier.
+const ALL3: &[Tier] = &[Tier::Text, Tier::Blob, Tier::Grid];
 
 const fn kit(
     name: &'static str,
@@ -221,8 +237,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "open (stays until leave)",
         OK0,
     )
-    .on(BOTH),
-    kit("leave", R, NR, &[A::Leave], &[P::Close], "leave", OK0).on(BOTH),
+    .on(ALL3),
+    kit("leave", R, NR, &[A::Leave], &[P::Close], "leave", OK0).on(ALL3),
     // on a blob doc, `cat` is the file's bytes (`BlobSession::read`)
     kit(
         "cat",
@@ -233,7 +249,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "cat [-n] [-b] [--for-edit [--ttl MS]] (tier 0: the file's bytes, no flags)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "wc",
         R,
@@ -242,7 +258,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::ReadAll],
         "wc [-l] [-w] [-c] [-m]",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "head",
         R,
@@ -251,7 +268,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::ViewRange],
         "head [-n N] [-c N] [--for-edit [--ttl MS]]",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "tail",
         R,
@@ -260,7 +278,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::ViewRange],
         "tail [-n [+]N] [-c [+]N] [--for-edit [--ttl MS]]",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "sed",
         R,
@@ -269,7 +288,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::ViewRange],
         "sed -n 'a,bp' (any script without -i) [--for-edit [--ttl MS]]",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "view",
         R,
@@ -278,7 +298,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::ViewRange],
         "view --lines a,b [--for-edit [--ttl MS]]",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "grep",
         R,
@@ -287,8 +308,9 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Find],
         "grep [-EFGivwxcoqlLHhn] [-m N] [-A/-B/-C N] [--for-edit [--ttl MS]] PATTERN",
         OK01,
-    ),
-    kit("who", R, NR, &[A::Roster], &[P::Who], "who", OK0).on(BOTH),
+    )
+    .on(TG),
+    kit("who", R, NR, &[A::Roster], &[P::Who], "who", OK0).on(ALL3),
     // agent presence (amendment 13): where others are working, and saying where I am
     kit(
         "activity",
@@ -298,16 +320,19 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Who],
         "activity [-n N] (who did what, where, lately)",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "claim",
         E,
         NE,
         &[A::Claim],
         &[P::Caret],
-        "claim --lines a,b [--ttl MS] [--note TEXT] [--hold] (someone else's claim there: exit 5)",
+        "claim --lines a,b | (grid) --rows R1..R2 | --cols C1..C2 | --cells R1,C1..R2,C2 \
+         [--ttl MS] [--note TEXT] [--hold] (someone else's claim there: exit 5)",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "claim --renew",
         E,
@@ -316,7 +341,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Caret],
         "claim --renew [--id ID] [--ttl MS] [--hold | --no-hold] (others waiting: exit 2; none: 4)",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "claim --release",
         E,
@@ -325,7 +351,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Caret],
         "claim --release [--id ID] (all of mine without an id; 1: none held)",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "follow",
         R,
@@ -334,16 +361,19 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Follow],
         "follow <pid> (1: not here or no caret)",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "cursor",
         E,
         NE,
         &[A::SetCursor, A::SetView],
         &[P::Caret],
-        "cursor --at L:C | --select L:C-L:C (read only: a viewing range)",
+        "cursor --at L:C | --select L:C-L:C | (grid) --cell R,C [--to R,C] \
+         (read only: a viewing range)",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "insert",
         E,
@@ -415,10 +445,10 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         NE,
         &[A::WriteBase, A::ReplaceText],
         &[P::Rewrite],
-        "write --base V | --base live (new text on stdin)",
+        "write --base V | --base live (new text on stdin; a grid: --base V [--partial] [--respect-claims], merged by key)",
         &[OK, NO, TOO_OLD],
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "undo",
         E,
@@ -427,7 +457,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Undo],
         "undo [--steps N] [--for P]",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "redo",
         E,
@@ -436,7 +467,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Undo],
         "redo [--steps N]",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "undo --drop",
         E,
@@ -445,7 +477,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Undo],
         "undo --drop",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "undo --partial",
         E,
@@ -454,7 +487,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::UndoPartial],
         "undo --partial [--steps N] [--for P]",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "status",
         R,
@@ -464,8 +498,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "status",
         OK0,
     )
-    .on(BOTH),
-    kit("flush", R, NR, &[A::Flush], &[P::Saved], "flush", OK0).on(BOTH),
+    .on(ALL3),
+    kit("flush", R, NR, &[A::Flush], &[P::Saved], "flush", OK0).on(ALL3),
     kit(
         "watch",
         R,
@@ -474,7 +508,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Watch],
         "watch",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "tail -f",
         R,
@@ -483,7 +518,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Watch],
         "tail -f (the same as watch)",
         OK0,
-    ),
+    )
+    .on(TG),
     kit(
         "log",
         H,
@@ -493,7 +529,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "log [--by P] [-n N]",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "diff --version",
         H,
@@ -502,7 +538,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::History],
         "diff --version V [--to W] [-U N]",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "show --version",
         H,
@@ -512,7 +549,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "show --version V",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     // P24: the file's bytes through the export registry (the kit's target is `as-is`; a
     // host registers format exporters beside it)
     kit(
@@ -524,7 +561,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "export [--to as-is] (the file now, through the export registry)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "export --version",
         H,
@@ -534,7 +571,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "export --version V [--to as-is] (the file at version V)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "diff",
         R,
@@ -543,17 +580,18 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::History],
         "diff [-u] [-U N] (my copy on stdin vs live)",
         OK01,
-    ),
+    )
+    .on(TG),
     kit(
         "blame",
         H,
         NH,
         &[A::Blame],
         &[P::Blame],
-        "blame [-L a,b]",
+        "blame [-L a,b] (a grid: rendered lines, each to its row's latest cell write)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "restore",
         E,
@@ -563,7 +601,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "restore --version V",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "version --name",
         E,
@@ -573,7 +611,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "version --name NAME [--version V]",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "mv",
         E,
@@ -583,7 +621,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "mv <new path>",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "approve",
         E,
@@ -593,7 +631,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "approve <change> (a blob doc: <version>)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "decline",
         E,
@@ -603,7 +641,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "decline <change> (a blob doc: <version>; then restore --version to reverse it)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "log --pending",
         H,
@@ -613,7 +651,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     // the same list under a host-neutral name: what `log --pending` does, flag for flag
     kit(
         "approvals",
@@ -624,7 +662,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         "approvals [--all] [--on-behalf-of me|P] (the same as log --pending)",
         OK0,
     )
-    .on(BOTH),
+    .on(ALL3),
     kit(
         "revert",
         E,
@@ -633,7 +671,40 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         &[P::Revert],
         "revert <change> [--partial] (too old: exit 8)",
         OK01,
-    ),
+    )
+    .on(TG),
+    // grids (CSV contract §3.5, §5.5; K-CSV-7)
+    kit(
+        "rows drop-deleted",
+        E,
+        NO_,
+        &[A::DropDeleted],
+        &[P::DropDeleted],
+        "rows drop-deleted (owner only: frees the size limit; history keeps the rows)",
+        OK0,
+    )
+    .on(GRID),
+    kit(
+        "blame --cell",
+        H,
+        NH,
+        &[A::BlameCell],
+        &[P::Blame],
+        "blame --cell R,C (the cell's current write; none recorded: exit 2, bad_position, as \
+         blame -L past the end)",
+        OK0,
+    )
+    .on(GRID),
+    kit(
+        "blame --structure",
+        H,
+        NH,
+        &[A::BlameStructure],
+        &[P::Blame],
+        "blame --structure (per row: who inserted it, who last moved it)",
+        OK0,
+    )
+    .on(GRID),
     // tier 0: the lease (K-T0-2)
     kit(
         "lease",
@@ -680,8 +751,10 @@ pub const KIT_VERBS: &[VerbSpec] = &[
 /// The verb form an `argv` names: `argv[0]`, or `argv[0]` plus the flag that makes it a
 /// separate registry entry (`sed -i`, `undo --partial`, `undo --drop`, `log --pending`,
 /// `diff --version`, `show --version`, `version --name`, `tail -f`, `lease --renew`,
-/// `lease --release`, `lease --break`). A host names verbs the same way when it checks its
-/// command table against the registry.
+/// `lease --release`, `lease --break`, `blame --cell`, `blame --structure`), or its two
+/// words (`rows drop-deleted`). A host names verbs the same way when it checks its command
+/// table against the registry; a pack's two-word structured verb (`row insert`) is named by
+/// [`Registry::form_of`].
 pub fn verb_form(argv: &[String]) -> String {
     let Some((verb, args)) = argv.split_first() else {
         return String::new();
@@ -717,6 +790,9 @@ pub fn verb_form(argv: &[String]) -> String {
         "claim" if has("--release") => "claim --release",
         "lease" if has("--release") => "lease --release",
         "lease" if has("--break") => "lease --break",
+        "blame" if has("--cell") => "blame --cell",
+        "blame" if has("--structure") => "blame --structure",
+        "rows" if args.first().is_some_and(|a| a == "drop-deleted") => "rows drop-deleted",
         v => v,
     };
     form.to_owned()
@@ -767,22 +843,55 @@ impl Registry {
         self.tier
     }
 
-    /// The kit's text verbs plus the pack's ([`crate::session::Pack::verbs`]): edit verbs that
-    /// need read and edit and run through `run_tool` / `edit_with`. Refused: a pack verb
-    /// named like a kit verb of any tier (the kit's would win), twice, with spaces, or serving
-    /// nothing.
+    /// The kit's verbs of the pack's tier plus the pack's own ([`crate::session::Pack::verbs`]).
+    /// A [`crate::table`] pack is a grid pack ([`Tier::Grid`]), any other a text pack.
+    ///
+    /// - A text pack's verbs are edit verbs that need read and edit and run through
+    ///   `run_tool` / `edit_with`; one word each.
+    /// - A grid pack's verbs are structured verbs (A9): edit verbs need read and edit and run
+    ///   through `run_tool` / `edit_ops_with`, read verbs need read and run through `run_tool`;
+    ///   a name is one or two words (`row insert`).
+    ///
+    /// Refused: a pack verb whose first word is a kit verb's of any tier (the kit's would
+    /// win), twice, with a word that isn't
+    /// lowercase letters, digits or `-`, serving nothing, or of the other kind (a text verb on
+    /// a grid pack, a structured verb on a text pack).
     pub fn for_pack(pack: &dyn Pack) -> Result<Self, RegistryError> {
-        let mut r = Self::kit();
+        let grid = crate::table::is_table(&pack.schema());
+        let mut r = Self::for_tier(if grid { Tier::Grid } else { Tier::Text });
         for v in pack.verbs() {
             let name = v.name();
-            if name.is_empty() || name.contains(char::is_whitespace) {
-                return Err(RegistryError(format!("pack verb {name:?}: one word")));
+            let words: Vec<&str> = name.split(' ').collect();
+            let word_ok = |w: &str| {
+                !w.is_empty()
+                    && !w.starts_with('-')
+                    && w.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            let max_words = if v.is_structured() { 2 } else { 1 };
+            if words.len() > max_words || !words.iter().all(|w| word_ok(w)) {
+                return Err(RegistryError(format!(
+                    "pack verb {name:?}: {} lowercase word(s)",
+                    if max_words == 1 { "one" } else { "one or two" }
+                )));
             }
-            if crate::tools::is_kit_verb(name)
+            if v.is_structured() != grid {
+                return Err(RegistryError(format!(
+                    "pack verb {name:?}: a {} verb on a {} pack",
+                    if v.is_structured() {
+                        "structured"
+                    } else {
+                        "text"
+                    },
+                    if grid { "grid" } else { "text" }
+                )));
+            }
+            // a kit verb's first word is the kit's, whatever follows (`blame x`, `rows x`)
+            if crate::tools::is_kit_verb(words[0])
                 || r.get(name).is_some()
                 || KIT_VERBS
                     .iter()
-                    .any(|k| k.name.split(' ').next() == Some(name))
+                    .any(|k| k.name.split(' ').next() == Some(words[0]))
             {
                 return Err(RegistryError(format!(
                     "pack verb {name:?} is already a verb (the kit's would win)"
@@ -793,19 +902,36 @@ impl Registry {
                     "pack verb {name:?} serves no person action"
                 )));
             }
+            let read = v.kind() == crate::tools::Kind::Read;
             r.verbs.push(VerbSpec {
                 name,
-                kind: VerbKind::Edit,
-                needs: NE,
-                api: TOOL_EDIT,
+                kind: if read { VerbKind::Read } else { VerbKind::Edit },
+                needs: if read { NR } else { NE },
+                api: match (grid, read) {
+                    (false, _) => TOOL_EDIT,
+                    (true, false) => &[A::RunTool, A::EditOps],
+                    (true, true) => TOOL,
+                },
                 serves: v.serves(),
                 usage: v.usage(),
                 exits: v.exits(),
                 source: Source::Pack,
-                tiers: TEXT,
+                tiers: if grid { GRID } else { TEXT },
             });
         }
         Ok(r)
+    }
+
+    /// The registry form `argv` names: a registered two-word form (`row insert`, a grid
+    /// pack's) when `argv[1]` completes one, else [`verb_form`].
+    pub fn form_of(&self, argv: &[String]) -> String {
+        if let [a, b, ..] = argv {
+            let two = format!("{a} {b}");
+            if self.get(&two).is_some_and(|v| v.source == Source::Pack) {
+                return two;
+            }
+        }
+        verb_form(argv)
     }
 
     /// Every verb, kit verbs first.
@@ -1046,7 +1172,7 @@ mod tests {
             "log --pending",
             "approvals",
         ] {
-            assert_eq!(text.get(n).map(|v| v.tiers), Some(BOTH), "{n}");
+            assert_eq!(text.get(n).map(|v| v.tiers), Some(ALL3), "{n}");
         }
         assert_eq!(
             blob.get("lease --break").map(|v| v.needs),
@@ -1058,5 +1184,70 @@ mod tests {
                 assert!(blob.serving(a).count() > 0, "{a}");
             }
         }
+        // the grid tier (A11): the kit's reads, presence, history and its own three; no text
+        // edit verbs (reconcile, C1i), no leases
+        let grid = Registry::for_tier(Tier::Grid);
+        assert_eq!(grid.tier(), Tier::Grid);
+        let names: Vec<&str> = grid.verbs().iter().map(|v| v.name).collect();
+        for n in [
+            "open",
+            "cat",
+            "head",
+            "grep",
+            "claim",
+            "cursor",
+            "follow",
+            "write",
+            "undo --partial",
+            "diff --version",
+            "blame",
+            "revert",
+            "rows drop-deleted",
+            "blame --cell",
+            "blame --structure",
+        ] {
+            assert!(names.contains(&n), "{n} on a grid");
+        }
+        for n in [
+            "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "lease",
+        ] {
+            assert!(!names.contains(&n), "{n} on a grid");
+        }
+        for n in ["rows drop-deleted", "blame --cell", "blame --structure"] {
+            assert!(
+                text.get(n).is_none() && blob.get(n).is_none(),
+                "{n} is grid only"
+            );
+        }
+        // P44 is the owner's
+        assert_eq!(
+            grid.get("rows drop-deleted").map(|v| (v.needs, v.serves)),
+            Some((
+                &[Need::Read, Need::Owner][..],
+                &[PersonAction::DropDeleted][..]
+            ))
+        );
+        // the grid-only actions with a kit verb
+        assert_eq!(grid.serving(PersonAction::DropDeleted).count(), 1);
+    }
+
+    #[test]
+    fn grid_forms() {
+        for (a, f) in [
+            (&["rows", "drop-deleted"][..], "rows drop-deleted"),
+            (&["rows"], "rows"),
+            (&["blame", "--cell", "r1,c2"], "blame --cell"),
+            (&["blame", "--structure"], "blame --structure"),
+            (&["blame", "-L", "2,3"], "blame"),
+        ] {
+            assert_eq!(verb_form(&argv(a)), f, "{a:?}");
+        }
+        // a registry without pack verbs names two words only when they are a kit form
+        let r = Registry::for_tier(Tier::Grid);
+        assert_eq!(r.form_of(&argv(&["row", "insert"])), "row");
+        assert_eq!(
+            r.form_of(&argv(&["rows", "drop-deleted"])),
+            "rows drop-deleted"
+        );
     }
 }

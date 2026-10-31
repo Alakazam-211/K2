@@ -12,7 +12,7 @@ use crate::session::{
 };
 use crate::tools::{self, session_exit};
 
-type R = Result<Step, String>;
+pub(super) type R = Result<Step, String>;
 
 // ---------- shared helpers ----------
 
@@ -29,7 +29,7 @@ pub fn edit_summary(r: &EditResult) -> String {
     )
 }
 
-fn regions(r: &[ConflictRegion]) -> Vec<String> {
+pub(super) fn regions(r: &[ConflictRegion]) -> Vec<String> {
     r.iter()
         .map(|c| format!("{}:{:?} {:?}", c.root, c.lines, c.kind))
         .collect()
@@ -58,7 +58,7 @@ pub fn undo_summary(o: &UndoOutcome) -> String {
 }
 
 /// A person-path result: exit 0 and `f`'s output, or the refusal's exit code.
-fn person_step<T>(r: Result<T, SessionError>, f: impl FnOnce(T) -> Output) -> R {
+pub(super) fn person_step<T>(r: Result<T, SessionError>, f: impl FnOnce(T) -> Output) -> R {
     Ok(match r {
         Ok(t) => Step::ok(f(t)),
         Err(e) => Step::exit(session_exit(&e), Output::None),
@@ -66,7 +66,7 @@ fn person_step<T>(r: Result<T, SessionError>, f: impl FnOnce(T) -> Output) -> R 
 }
 
 /// An agent-path result: the verb's exit and `f`'s output (nothing when refused).
-fn agent_step(out: VerbOut, f: impl FnOnce(&VerbOut) -> Output) -> R {
+pub(super) fn agent_step(out: VerbOut, f: impl FnOnce(&VerbOut) -> Output) -> R {
     Ok(if out.refused.is_some() {
         Step::exit(out.exit, Output::None)
     } else {
@@ -74,7 +74,7 @@ fn agent_step(out: VerbOut, f: impl FnOnce(&VerbOut) -> Output) -> R {
     })
 }
 
-fn tool_edit(out: &VerbOut) -> Output {
+pub(super) fn tool_edit(out: &VerbOut) -> Output {
     match &out.value {
         VerbValue::Tool(t) => Output::Value(
             t.changed
@@ -85,28 +85,28 @@ fn tool_edit(out: &VerbOut) -> Output {
     }
 }
 
-fn person_edit(r: Result<EditResult, SessionError>) -> R {
+pub(super) fn person_edit(r: Result<EditResult, SessionError>) -> R {
     person_step(r, |e| Output::Value(edit_summary(&e)))
 }
 
-fn stdout_text(out: &VerbOut) -> Output {
+pub(super) fn stdout_text(out: &VerbOut) -> Output {
     Output::Text(String::from_utf8_lossy(out.stdout()).into_owned())
 }
 
 /// Lines `first..=last` of `text`, each with its `\n`.
-fn lines(text: &str, first: usize, last: usize) -> String {
+pub(super) fn lines(text: &str, first: usize, last: usize) -> String {
     text.split_inclusive('\n')
         .skip(first - 1)
         .take(last + 1 - first)
         .collect()
 }
 
-fn line_start(text: &str, line: usize) -> Result<usize, String> {
+pub(super) fn line_start(text: &str, line: usize) -> Result<usize, String> {
     position::line_start(text, line).ok_or_else(|| format!("no line {line}"))
 }
 
 /// A person looks at lines `first..=last` (scrolls the tab there) and sees them.
-fn person_view(p: &mut Person<'_>, first: usize, last: usize) -> R {
+pub(super) fn person_view(p: &mut Person<'_>, first: usize, last: usize) -> R {
     let c = p.conn()?;
     let root = p.root().to_owned();
     let text = p.text()?;
@@ -116,12 +116,12 @@ fn person_view(p: &mut Person<'_>, first: usize, last: usize) -> R {
     Ok(Step::ok(Output::Text(lines(&text, first, last))))
 }
 
-fn agent_tool(a: &mut Agent<'_>, argv: &[&str], stdin: &str) -> Result<VerbOut, String> {
+pub(super) fn agent_tool(a: &mut Agent<'_>, argv: &[&str], stdin: &str) -> Result<VerbOut, String> {
     a.verb(argv, stdin.as_bytes())
 }
 
 /// Bytes of `from` to `to` (`L:C`, half-open) in the person's live text.
-fn span(
+pub(super) fn span(
     p: &mut Person<'_>,
     from: (usize, usize),
     to: (usize, usize),
@@ -129,13 +129,13 @@ fn span(
     Ok((p.offset(from.0, from.1)?, p.offset(to.0, to.1)?))
 }
 
-fn sam(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn sam(stage: &mut Stage) -> Result<(), String> {
     stage.other("sam", ParticipantKind::Person)?;
     Ok(())
 }
 
 /// Sam rewrites line 12 entirely (overlapping anything on it).
-fn sam_rewrites_line_12(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn sam_rewrites_line_12(stage: &mut Stage) -> Result<(), String> {
     stage.edit_as("sam", |t| {
         let mut out = String::new();
         for (i, l) in t.split_inclusive('\n').enumerate() {
@@ -146,45 +146,45 @@ fn sam_rewrites_line_12(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 
-fn sam_edits_intro(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn sam_edits_intro(stage: &mut Stage) -> Result<(), String> {
     stage.edit_as("sam", |t| t.replace("Intro line.", "Intro, revised."))?;
     Ok(())
 }
 
 // ---------- P1-P8: presence and reading ----------
 
-fn p1_person(p: &mut Person<'_>) -> R {
+pub(super) fn p1_person(p: &mut Person<'_>) -> R {
     p.conn()?;
     Ok(Step::done())
 }
-fn p1_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p1_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["open"], b"")?, |_| Output::None)
 }
 
-fn p2_person(p: &mut Person<'_>) -> R {
+pub(super) fn p2_person(p: &mut Person<'_>) -> R {
     p.conn()?;
     p.close()?;
     Ok(Step::done())
 }
-fn p2_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p2_agent(a: &mut Agent<'_>) -> R {
     a.verb(&["open"], b"")?;
     agent_step(a.verb(&["leave"], b"")?, |_| Output::None)
 }
 
-fn p3_cat_person(p: &mut Person<'_>) -> R {
+pub(super) fn p3_cat_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().read(c), |r| Output::Bytes(r.bytes))
 }
-fn p3_cat_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p3_cat_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["cat"], b"")?, |o| {
         Output::Bytes(o.stdout().to_vec())
     })
 }
 
-fn counts(lines: usize, words: usize, bytes: usize) -> Output {
+pub(super) fn counts(lines: usize, words: usize, bytes: usize) -> Output {
     Output::Value(format!("{lines} {words} {bytes}"))
 }
-fn p3_wc_person(p: &mut Person<'_>) -> R {
+pub(super) fn p3_wc_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().read(c), |r| {
         let text = String::from_utf8_lossy(&r.bytes).into_owned();
@@ -195,7 +195,7 @@ fn p3_wc_person(p: &mut Person<'_>) -> R {
         )
     })
 }
-fn p3_wc_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p3_wc_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["wc"], b"")?, |o| {
         let s = String::from_utf8_lossy(o.stdout()).into_owned();
         let n: Vec<usize> = s
@@ -210,32 +210,32 @@ fn p3_wc_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn p4_view_person(p: &mut Person<'_>) -> R {
+pub(super) fn p4_view_person(p: &mut Person<'_>) -> R {
     person_view(p, 5, 8)
 }
-fn p4_view_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p4_view_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["view", "--lines", "5,8"], b"")?, stdout_text)
 }
-fn p4_head_person(p: &mut Person<'_>) -> R {
+pub(super) fn p4_head_person(p: &mut Person<'_>) -> R {
     person_view(p, 1, 4)
 }
-fn p4_head_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p4_head_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["head", "-n", "4"], b"")?, stdout_text)
 }
-fn p4_tail_person(p: &mut Person<'_>) -> R {
+pub(super) fn p4_tail_person(p: &mut Person<'_>) -> R {
     person_view(p, 10, 13)
 }
-fn p4_tail_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p4_tail_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["tail", "-n", "4"], b"")?, stdout_text)
 }
-fn p4_sed_person(p: &mut Person<'_>) -> R {
+pub(super) fn p4_sed_person(p: &mut Person<'_>) -> R {
     person_view(p, 7, 8)
 }
-fn p4_sed_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p4_sed_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["sed", "-n", "7,8p"], b"")?, stdout_text)
 }
 
-fn p5_person(p: &mut Person<'_>) -> R {
+pub(super) fn p5_person(p: &mut Person<'_>) -> R {
     let t = p.text()?;
     let hits: Vec<usize> = t
         .lines()
@@ -246,7 +246,7 @@ fn p5_person(p: &mut Person<'_>) -> R {
     let exit = if hits.is_empty() { 1 } else { 0 };
     Ok(Step::exit(exit, Output::Lines(hits)))
 }
-fn p5_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p5_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["grep", "-n", "re"], b"")?, |o| {
         Output::Lines(
             String::from_utf8_lossy(o.stdout())
@@ -257,21 +257,21 @@ fn p5_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn pids(r: &[crate::session::RosterEntry]) -> Output {
+pub(super) fn pids(r: &[crate::session::RosterEntry]) -> Output {
     Output::Pids(r.iter().map(|e| e.participant.pid.clone()).collect())
 }
-fn p6_person(p: &mut Person<'_>) -> R {
+pub(super) fn p6_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().roster(c), |r| pids(&r))
 }
-fn p6_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p6_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["who"], b"")?, |o| match &o.value {
         VerbValue::Roster(r) => pids(r),
         v => Output::value(v),
     })
 }
 
-fn p7_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn p7_setup(stage: &mut Stage) -> Result<(), String> {
     let c = stage.other("sam", ParticipantKind::Person)?;
     let root = stage.root();
     stage
@@ -285,7 +285,7 @@ fn p7_setup(stage: &mut Stage) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
-fn p7_person(p: &mut Person<'_>) -> R {
+pub(super) fn p7_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let r = p.session().roster(c).map_err(|e| e.to_string())?;
     let caret = r
@@ -295,14 +295,14 @@ fn p7_person(p: &mut Person<'_>) -> R {
         .map(|c| (c.anchor, c.head));
     Ok(Step::exit(u8::from(caret.is_none()), Output::Caret(caret)))
 }
-fn p7_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p7_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["follow", "sam"], b"")?, |o| match &o.value {
         VerbValue::Caret(c) => Output::Caret(c.as_ref().map(|c| (c.anchor, c.head))),
         v => Output::value(v),
     })
 }
 
-fn p8_person_caret(p: &mut Person<'_>) -> R {
+pub(super) fn p8_person_caret(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let at = p.offset(7, 3)?;
     let root = p.root().to_owned();
@@ -311,10 +311,10 @@ fn p8_person_caret(p: &mut Person<'_>) -> R {
         |_| Output::None,
     )
 }
-fn p8_agent_caret(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_agent_caret(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["cursor", "--at", "7:3"], b"")?, |_| Output::None)
 }
-fn p8_person_select(p: &mut Person<'_>) -> R {
+pub(super) fn p8_person_select(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let (s, e) = span(p, (7, 3), (8, 5))?;
     let root = p.root().to_owned();
@@ -323,16 +323,16 @@ fn p8_person_select(p: &mut Person<'_>) -> R {
         |_| Output::None,
     )
 }
-fn p8_agent_select(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_agent_select(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["cursor", "--select", "7:3-8:5"], b"")?, |_| {
         Output::None
     })
 }
-fn p8_reader(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn p8_reader(stage: &mut Stage) -> Result<(), String> {
     stage.grant(ACTOR, Rights::read_only());
     Ok(())
 }
-fn p8_person_reader(p: &mut Person<'_>) -> R {
+pub(super) fn p8_person_reader(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let root = p.root().to_owned();
     person_step(
@@ -352,7 +352,7 @@ fn p8_person_reader(p: &mut Person<'_>) -> R {
 
 /// Lines 5-8 for 30 s (the default `--for-edit` TTL), with a view: what a tab does when a
 /// person says "I'm about to edit this".
-fn p4_for_edit_person(p: &mut Person<'_>) -> R {
+pub(super) fn p4_for_edit_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let root = p.root().to_owned();
     let text = p.text()?;
@@ -368,7 +368,7 @@ fn p4_for_edit_person(p: &mut Person<'_>) -> R {
         Output::Text(lines(&text, 5, 8))
     })
 }
-fn p4_for_edit_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p4_for_edit_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         a.verb(&["view", "--lines", "5,8", "--for-edit"], b"")?,
         stdout_text,
@@ -376,7 +376,7 @@ fn p4_for_edit_agent(a: &mut Agent<'_>) -> R {
 }
 
 /// Sam edits the intro, then the activity tail is read.
-fn activity_rows(rows: &[crate::session::ActivityEntry]) -> Output {
+pub(super) fn activity_rows(rows: &[crate::session::ActivityEntry]) -> Output {
     Output::Value(
         rows.iter()
             .map(|r| {
@@ -392,11 +392,11 @@ fn activity_rows(rows: &[crate::session::ActivityEntry]) -> Output {
             .join("; "),
     )
 }
-fn p6_activity_person(p: &mut Person<'_>) -> R {
+pub(super) fn p6_activity_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().activity(c, 10), |r| activity_rows(&r))
 }
-fn p6_activity_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p6_activity_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["activity", "-n", "10"], b"")?, |o| {
         match &o.value {
             VerbValue::Activity(r) => activity_rows(r),
@@ -405,20 +405,20 @@ fn p6_activity_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn claim_lines(c: &crate::session::ClaimInfo) -> Output {
+pub(super) fn claim_lines(c: &crate::session::ClaimInfo) -> Output {
     Output::Value(format!(
         "lines {}-{} hold {} note {:?}",
         c.lines.first, c.lines.last, c.hold, c.note
     ))
 }
-fn claim_out(o: &VerbOut) -> Output {
+pub(super) fn claim_out(o: &VerbOut) -> Output {
     match &o.value {
         VerbValue::Claim(c) => claim_lines(c),
         VerbValue::ClaimsReleased(r) => Output::Value(format!("released {}", r.len())),
         v => Output::value(v),
     }
 }
-fn person_claim(
+pub(super) fn person_claim(
     p: &mut Person<'_>,
     first: usize,
     last: usize,
@@ -435,13 +435,13 @@ fn person_claim(
         false,
     ))
 }
-fn p8_claim_person(p: &mut Person<'_>) -> R {
+pub(super) fn p8_claim_person(p: &mut Person<'_>) -> R {
     person_step(
         person_claim(p, 5, 8, Some(60_000), Some("tidying goals"))?,
         |c| claim_lines(&c),
     )
 }
-fn p8_claim_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_claim_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         a.verb(
             &[
@@ -458,7 +458,7 @@ fn p8_claim_agent(a: &mut Agent<'_>) -> R {
         claim_out,
     )
 }
-fn p8_renew_person(p: &mut Person<'_>) -> R {
+pub(super) fn p8_renew_person(p: &mut Person<'_>) -> R {
     person_claim(p, 5, 8, None, None)?.map_err(|e| e.to_string())?;
     let c = p.conn()?;
     person_step(
@@ -466,25 +466,25 @@ fn p8_renew_person(p: &mut Person<'_>) -> R {
         |c| claim_lines(&c),
     )
 }
-fn p8_renew_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_renew_agent(a: &mut Agent<'_>) -> R {
     a.verb(&["claim", "--lines", "5,8"], b"")?;
     agent_step(
         a.verb(&["claim", "--renew", "--ttl", "120000", "--hold"], b"")?,
         claim_out,
     )
 }
-fn p8_release_person(p: &mut Person<'_>) -> R {
+pub(super) fn p8_release_person(p: &mut Person<'_>) -> R {
     person_claim(p, 5, 8, None, None)?.map_err(|e| e.to_string())?;
     let c = p.conn()?;
     person_step(p.session().release_claim(c, None), |r| {
         Output::Value(format!("released {}", r.len()))
     })
 }
-fn p8_release_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_release_agent(a: &mut Agent<'_>) -> R {
     a.verb(&["claim", "--lines", "5,8"], b"")?;
     agent_step(a.verb(&["claim", "--release"], b"")?, claim_out)
 }
-fn p8_release_none_person(p: &mut Person<'_>) -> R {
+pub(super) fn p8_release_none_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     Ok(match p.session().release_claim(c, None) {
         Ok(r) if r.is_empty() => Step::exit(1, Output::Value("released 0".into())),
@@ -492,11 +492,11 @@ fn p8_release_none_person(p: &mut Person<'_>) -> R {
         Err(e) => Step::exit(session_exit(&e), Output::None),
     })
 }
-fn p8_release_none_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_release_none_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["claim", "--release"], b"")?, claim_out)
 }
 /// Sam (an agent) has claimed lines 6-7.
-fn sam_claims_6_7(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn sam_claims_6_7(stage: &mut Stage) -> Result<(), String> {
     let c = stage.other("sam", ParticipantKind::Agent)?;
     let root = stage.root().to_owned();
     stage
@@ -515,89 +515,89 @@ fn sam_claims_6_7(stage: &mut Stage) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
-fn p8_claimed_person(p: &mut Person<'_>) -> R {
+pub(super) fn p8_claimed_person(p: &mut Person<'_>) -> R {
     person_step(person_claim(p, 5, 8, None, None)?, |c| claim_lines(&c))
 }
-fn p8_claimed_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p8_claimed_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["claim", "--lines", "5,8"], b"")?, claim_out)
 }
 
 // ---------- P9-P15: editing ----------
 
-fn p9_line_person(p: &mut Person<'_>) -> R {
+pub(super) fn p9_line_person(p: &mut Person<'_>) -> R {
     let at = line_start(&p.text()?, 7)?;
     person_edit(p.type_at(at, at, "- write tests\n"))
 }
-fn p9_line_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p9_line_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["insert", "--line", "7"], "- write tests\n")?,
         tool_edit,
     )
 }
-fn p9_at_person(p: &mut Person<'_>) -> R {
+pub(super) fn p9_at_person(p: &mut Person<'_>) -> R {
     let at = p.offset(7, 8)?;
     person_edit(p.type_at(at, at, "all of "))
 }
-fn p9_at_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p9_at_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["insert", "--at", "7:8"], "all of ")?,
         tool_edit,
     )
 }
-fn p9_after_person(p: &mut Person<'_>) -> R {
+pub(super) fn p9_after_person(p: &mut Person<'_>) -> R {
     let at = line_start(&p.text()?, 9)?;
     person_edit(p.type_at(at, at, "- add tests\n"))
 }
-fn p9_after_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p9_after_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["insert", "--after", "8"], "- add tests\n")?,
         tool_edit,
     )
 }
 
-fn p10_lines_person(p: &mut Person<'_>) -> R {
+pub(super) fn p10_lines_person(p: &mut Person<'_>) -> R {
     // select from after "- " on line 7 to the end of line 8, and type
     let (s, e) = span(p, (7, 3), (8, 19))?;
     person_edit(p.type_at(s, e, "one\n- two"))
 }
-fn p10_lines_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p10_lines_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["replace", "--lines", "7,8"], "- one\n- two\n")?,
         tool_edit,
     )
 }
-fn p10_range_person(p: &mut Person<'_>) -> R {
+pub(super) fn p10_range_person(p: &mut Person<'_>) -> R {
     let (s, e) = span(p, (7, 3), (7, 7))?;
     person_edit(p.type_at(s, e, "SHIP"))
 }
-fn p10_range_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p10_range_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["replace", "--range", "7:3-7:7"], "SHIP")?,
         tool_edit,
     )
 }
 
-fn p11_person(p: &mut Person<'_>) -> R {
+pub(super) fn p11_person(p: &mut Person<'_>) -> R {
     let t = p.text()?;
     let (s, e) = (line_start(&t, 12)?, line_start(&t, 13)?);
     person_edit(p.type_at(s, e, ""))
 }
-fn p11_delete_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p11_delete_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["delete", "--lines", "12,12"], "")?,
         tool_edit,
     )
 }
-fn p11_sed_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p11_sed_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["sed", "-i", "12d"], "")?, tool_edit)
 }
 
-fn p12_person(p: &mut Person<'_>) -> R {
+pub(super) fn p12_person(p: &mut Person<'_>) -> R {
     person_step(p.edit_with(|t| t.replace("files", "docs")), |r| {
         Output::Value(r.as_ref().map_or_else(|| "no change".into(), edit_summary))
     })
 }
-fn p12_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p12_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["sed", "-i", "s/files/docs/g"], "")?,
         tool_edit,
@@ -605,32 +605,32 @@ fn p12_agent(a: &mut Agent<'_>) -> R {
 }
 
 /// Find and replace with exact text: the dialog's "Replace" on its only match.
-fn p12_exact_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p12_exact_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["replace", "--old", "files", "--new", "docs"], "")?,
         tool_edit,
     )
 }
 /// "Replace all": both list items' "- " become "* ".
-fn p12_all_person(p: &mut Person<'_>) -> R {
+pub(super) fn p12_all_person(p: &mut Person<'_>) -> R {
     person_step(p.edit_with(|t| t.replace("- ", "* ")), |r| {
         Output::Value(r.as_ref().map_or_else(|| "no change".into(), edit_summary))
     })
 }
-fn p12_all_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p12_all_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["replace", "--old", "- ", "--new", "* ", "--all"], "")?,
         tool_edit,
     )
 }
 /// A two-line find (lines 7-8) replaced by one line, the find text on stdin.
-fn p12_lines_person(p: &mut Person<'_>) -> R {
+pub(super) fn p12_lines_person(p: &mut Person<'_>) -> R {
     person_step(
         p.edit_with(|t| t.replace("- ship the core\n- keep", "- ship and keep")),
         |r| Output::Value(r.as_ref().map_or_else(|| "no change".into(), edit_summary)),
     )
 }
-fn p12_lines_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p12_lines_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(
             a,
@@ -642,36 +642,36 @@ fn p12_lines_agent(a: &mut Agent<'_>) -> R {
 }
 
 /// Line 12's "more" becomes "less": the change P13's patches carry.
-fn more_to_less(p: &mut Person<'_>) -> R {
+pub(super) fn more_to_less(p: &mut Person<'_>) -> R {
     let (s, e) = span(p, (12, 13), (12, 17))?;
     person_edit(p.type_at(s, e, "less"))
 }
-fn patch_text() -> String {
+pub(super) fn patch_text() -> String {
     tools::unified(DOC, &DOC.replace("more", "less"), 3, DOC_LABEL, DOC_LABEL)
 }
 const DOC_LABEL: &str = super::harness::DOC_PATH;
-fn p13_patch_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p13_patch_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["patch"], &patch_text())?, tool_edit)
 }
-fn p13_apply_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p13_apply_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["apply"], &patch_text())?, tool_edit)
 }
-fn p13_append_person(p: &mut Person<'_>) -> R {
+pub(super) fn p13_append_person(p: &mut Person<'_>) -> R {
     let end = p.text()?.len();
     person_edit(p.type_at(end, end, "Appended.\n"))
 }
-fn p13_append_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p13_append_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["append"], "Appended.\n")?, tool_edit)
 }
 
-fn p14_person(p: &mut Person<'_>) -> R {
+pub(super) fn p14_person(p: &mut Person<'_>) -> R {
     p.text()?; // the tab shows the doc
     sam_edits_intro(p.stage())?;
     // typing lands on the live text: "more" -> "TBD" where it now is
     let (s, e) = span(p, (12, 13), (12, 17))?;
     person_edit(p.type_at(s, e, "TBD"))
 }
-fn p14_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p14_agent(a: &mut Agent<'_>) -> R {
     let v = a
         .verb(&["cat"], b"")?
         .version()
@@ -687,23 +687,23 @@ fn p14_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn p15_heading_person(p: &mut Person<'_>) -> R {
+pub(super) fn p15_heading_person(p: &mut Person<'_>) -> R {
     let at = line_start(&p.text()?, 3)?;
     person_edit(p.type_at(at, at, "### "))
 }
-fn p15_replace_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p15_replace_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["replace", "--lines", "3,3"], "### Intro line.\n")?,
         tool_edit,
     )
 }
-fn p15_insert_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p15_insert_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["insert", "--at", "3:1"], "### ")?,
         tool_edit,
     )
 }
-fn p15_bold_person(p: &mut Person<'_>) -> R {
+pub(super) fn p15_bold_person(p: &mut Person<'_>) -> R {
     let (s, e) = span(p, (7, 12), (7, 16))?;
     person_edit(p.edit(vec![
         crate::text::diff::Hunk {
@@ -718,7 +718,7 @@ fn p15_bold_person(p: &mut Person<'_>) -> R {
         },
     ]))
 }
-fn p15_bold_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p15_bold_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["sed", "-i", "s/core/**core**/"], "")?,
         tool_edit,
@@ -727,51 +727,51 @@ fn p15_bold_agent(a: &mut Agent<'_>) -> R {
 
 // ---------- P16, P26: undo ----------
 
-fn undo_out(o: &VerbOut) -> Output {
+pub(super) fn undo_out(o: &VerbOut) -> Output {
     match &o.value {
         VerbValue::Undo(u) => Output::Value(undo_summary(u)),
         v => Output::value(v),
     }
 }
-fn person_undo(r: Result<UndoOutcome, SessionError>) -> R {
+pub(super) fn person_undo(r: Result<UndoOutcome, SessionError>) -> R {
     Ok(match r {
         Ok(u) => Step::exit(u.exit(), Output::Value(undo_summary(&u))),
         Err(e) => Step::exit(session_exit(&e), Output::None),
     })
 }
 
-fn p16_person_edit(p: &mut Person<'_>) -> Result<(), String> {
+pub(super) fn p16_person_edit(p: &mut Person<'_>) -> Result<(), String> {
     let at = line_start(&p.text()?, 7)?;
     p.type_at(at, at, "- write tests\n")
         .map_err(|e| e.to_string())?;
     Ok(())
 }
-fn p16_agent_edit(a: &mut Agent<'_>) -> Result<(), String> {
+pub(super) fn p16_agent_edit(a: &mut Agent<'_>) -> Result<(), String> {
     let o = a.verb(&["insert", "--line", "7"], b"- write tests\n")?;
     match o.refused {
         Some(e) => Err(e),
         None => Ok(()),
     }
 }
-fn p16_undo_person(p: &mut Person<'_>) -> R {
+pub(super) fn p16_undo_person(p: &mut Person<'_>) -> R {
     p16_person_edit(p)?;
     person_undo(p.undo(UndoMode::Partial)) // Ctrl+Z
 }
-fn p16_undo_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p16_undo_agent(a: &mut Agent<'_>) -> R {
     p16_agent_edit(a)?;
     agent_step(a.verb(&["undo"], b"")?, undo_out)
 }
-fn p16_redo_person(p: &mut Person<'_>) -> R {
+pub(super) fn p16_redo_person(p: &mut Person<'_>) -> R {
     p16_person_edit(p)?;
     p.undo(UndoMode::Partial).map_err(|e| e.to_string())?;
     person_undo(p.redo())
 }
-fn p16_redo_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p16_redo_agent(a: &mut Agent<'_>) -> R {
     p16_agent_edit(a)?;
     a.verb(&["undo"], b"")?;
     agent_step(a.verb(&["redo"], b"")?, undo_out)
 }
-fn p16_drop_person(p: &mut Person<'_>) -> R {
+pub(super) fn p16_drop_person(p: &mut Person<'_>) -> R {
     more_to_less(p)?;
     sam_rewrites_line_12(p.stage())?;
     let blocked = p.undo(UndoMode::Partial).map_err(|e| e.to_string())?;
@@ -786,7 +786,7 @@ fn p16_drop_person(p: &mut Person<'_>) -> R {
         )),
     ))
 }
-fn p16_drop_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p16_drop_agent(a: &mut Agent<'_>) -> R {
     agent_tool(a, &["replace", "--range", "12:13-12:17"], "less")?;
     sam_rewrites_line_12(a.stage())?;
     let blocked = a.verb(&["undo", "--partial"], b"")?;
@@ -800,7 +800,7 @@ fn p16_drop_agent(a: &mut Agent<'_>) -> R {
     ))
 }
 
-fn p26_person(p: &mut Person<'_>) -> R {
+pub(super) fn p26_person(p: &mut Person<'_>) -> R {
     // one change in two places: "core" -> "CORE" (line 7), "more" -> "MORE" (line 12)
     let (a0, a1) = span(p, (7, 12), (7, 16))?;
     let (b0, b1) = span(p, (12, 13), (12, 17))?;
@@ -814,7 +814,7 @@ fn p26_person(p: &mut Person<'_>) -> R {
     sam_rewrites_line_12(p.stage())?;
     person_undo(p.undo(UndoMode::Partial))
 }
-fn p26_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p26_agent(a: &mut Agent<'_>) -> R {
     agent_tool(a, &["sed", "-i", "s/core/CORE/;s/more/MORE/"], "")?;
     sam_rewrites_line_12(a.stage())?;
     agent_step(a.verb(&["undo", "--partial"], b"")?, undo_out)
@@ -822,28 +822,31 @@ fn p26_agent(a: &mut Agent<'_>) -> R {
 
 // ---------- P17, P18, P25: saving, watching, live editing off ----------
 
-fn disk_out(disk: &Option<crate::session::DiskState>, declined: &Option<String>) -> Output {
+pub(super) fn disk_out(
+    disk: &Option<crate::session::DiskState>,
+    declined: &Option<String>,
+) -> Output {
     Output::Value(format!("disk {disk:?} declined {declined:?}"))
 }
-fn p17_status_person(p: &mut Person<'_>) -> R {
+pub(super) fn p17_status_person(p: &mut Person<'_>) -> R {
     more_to_less(p)?;
     person_step(p.session().status(), |s| disk_out(&s.disk, &s.declined))
 }
-fn p17_status_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p17_status_agent(a: &mut Agent<'_>) -> R {
     agent_tool(a, &["replace", "--range", "12:13-12:17"], "less")?;
     agent_step(a.verb(&["status"], b"")?, |o| match &o.value {
         VerbValue::Status(s) => disk_out(&s.disk, &s.declined),
         v => Output::value(v),
     })
 }
-fn p17_flush_person(p: &mut Person<'_>) -> R {
+pub(super) fn p17_flush_person(p: &mut Person<'_>) -> R {
     more_to_less(p)?;
     // the tab saves by itself: write-back after a quiet second, on the host's tick
     p.stage().advance(1_001);
     p.stage().manager().tick().map_err(|e| e.to_string())?;
     person_step(p.session().status(), |s| Output::value(s.disk))
 }
-fn p17_flush_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p17_flush_agent(a: &mut Agent<'_>) -> R {
     agent_tool(a, &["replace", "--range", "12:13-12:17"], "less")?;
     agent_step(a.verb(&["flush"], b"")?, |o| match &o.value {
         VerbValue::Flush(f) => Output::value(&f.disk),
@@ -851,44 +854,44 @@ fn p17_flush_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn p18_person(p: &mut Person<'_>) -> R {
+pub(super) fn p18_person(p: &mut Person<'_>) -> R {
     p.subscribe()?;
     sam_edits_intro(p.stage())?;
     Ok(Step::ok(Output::Events(p.events())))
 }
-fn watch_agent(a: &mut Agent<'_>, argv: &[&str]) -> R {
+pub(super) fn watch_agent(a: &mut Agent<'_>, argv: &[&str]) -> R {
     a.verb(argv, b"")?;
     sam_edits_intro(a.stage())?;
     let ev: Vec<EventObs> = a.events();
     Ok(Step::ok(Output::Events(ev)))
 }
-fn p18_watch_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p18_watch_agent(a: &mut Agent<'_>) -> R {
     watch_agent(a, &["watch"])
 }
-fn p18_tail_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p18_tail_agent(a: &mut Agent<'_>) -> R {
     watch_agent(a, &["tail", "-f"])
 }
 
-fn p25_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn p25_setup(stage: &mut Stage) -> Result<(), String> {
     // another program makes the file binary: live editing turns off
     stage.write_file(b"# Plan\n\0binary\n")?;
     Ok(())
 }
-fn p25_status_person(p: &mut Person<'_>) -> R {
+pub(super) fn p25_status_person(p: &mut Person<'_>) -> R {
     p.conn()?;
     person_step(p.session().status(), |s| disk_out(&s.disk, &s.declined))
 }
-fn p25_edit_person(p: &mut Person<'_>) -> R {
+pub(super) fn p25_edit_person(p: &mut Person<'_>) -> R {
     p.conn()?;
     person_edit(p.type_at(0, 0, "x\n"))
 }
-fn p25_edit_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p25_edit_agent(a: &mut Agent<'_>) -> R {
     agent_step(agent_tool(a, &["insert", "--line", "1"], "x\n")?, tool_edit)
 }
 
 // ---------- P19-P21: history, restore, rename ----------
 
-fn history_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn history_setup(stage: &mut Stage) -> Result<(), String> {
     let first = stage
         .versions()?
         .first()
@@ -897,26 +900,26 @@ fn history_setup(stage: &mut Stage) -> Result<(), String> {
     stage.set_mark("v", first);
     sam_edits_intro(stage)
 }
-fn mark_arg(p: &Stage) -> Result<String, String> {
+pub(super) fn mark_arg(p: &Stage) -> Result<String, String> {
     Ok(p.mark("v")?.to_string())
 }
 
-fn p19_log_person(p: &mut Person<'_>) -> R {
+pub(super) fn p19_log_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().log(c, &LogQuery::default()), Output::value)
 }
-fn p19_log_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p19_log_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["log"], b"")?, |o| match &o.value {
         VerbValue::Log(l) => Output::value(l),
         v => Output::value(v),
     })
 }
-fn p19_show_person(p: &mut Person<'_>) -> R {
+pub(super) fn p19_show_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let v = p.stage().mark("v")?;
     person_step(p.session().show(c, v), Output::value)
 }
-fn p19_show_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p19_show_agent(a: &mut Agent<'_>) -> R {
     let v = mark_arg(a.stage())?;
     agent_step(a.verb(&["show", "--version", &v], b"")?, |o| {
         match &o.value {
@@ -925,7 +928,7 @@ fn p19_show_agent(a: &mut Agent<'_>) -> R {
         }
     })
 }
-fn p19_diffv_person(p: &mut Person<'_>) -> R {
+pub(super) fn p19_diffv_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let v = p.stage().mark("v")?;
     let root = p.root().to_owned();
@@ -934,7 +937,7 @@ fn p19_diffv_person(p: &mut Person<'_>) -> R {
         Err(e) => Ok(Step::exit(session_exit(&e), Output::None)),
     }
 }
-fn p19_diffv_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p19_diffv_agent(a: &mut Agent<'_>) -> R {
     let v = mark_arg(a.stage())?;
     agent_step(a.verb(&["diff", "--version", &v], b"")?, |o| {
         match &o.value {
@@ -944,27 +947,27 @@ fn p19_diffv_agent(a: &mut Agent<'_>) -> R {
     })
 }
 /// A unified diff's hunks, without its two label lines.
-fn diff_body(s: &str) -> Output {
+pub(super) fn diff_body(s: &str) -> Output {
     Output::Text(s.lines().skip(2).map(|l| format!("{l}\n")).collect())
 }
-fn p19_diff_person(p: &mut Person<'_>) -> R {
+pub(super) fn p19_diff_person(p: &mut Person<'_>) -> R {
     // "compare with my copy": the editor diffs the copy it holds against the live text
     let live = p.text()?;
     let d = tools::unified(DOC, &live, 3, "mine", "live");
     Ok(Step::exit(u8::from(!d.is_empty()), diff_body(&d)))
 }
-fn p19_diff_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p19_diff_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["diff", "-u"], DOC.as_bytes())?, |o| {
         diff_body(&String::from_utf8_lossy(o.stdout()))
     })
 }
 
-fn p20_restore_person(p: &mut Person<'_>) -> R {
+pub(super) fn p20_restore_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let v = p.stage().mark("v")?;
     person_edit(p.session().restore(c, v))
 }
-fn p20_restore_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p20_restore_agent(a: &mut Agent<'_>) -> R {
     let v = mark_arg(a.stage())?;
     agent_step(a.verb(&["restore", "--version", &v], b"")?, |o| {
         match &o.value {
@@ -973,11 +976,11 @@ fn p20_restore_agent(a: &mut Agent<'_>) -> R {
         }
     })
 }
-fn p20_name_person(p: &mut Person<'_>) -> R {
+pub(super) fn p20_name_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().name_version(c, "draft", None), Output::value)
 }
-fn p20_name_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p20_name_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         a.verb(&["version", "--name", "draft"], b"")?,
         |o| match &o.value {
@@ -987,12 +990,12 @@ fn p20_name_agent(a: &mut Agent<'_>) -> R {
     )
 }
 
-fn p21_person(p: &mut Person<'_>) -> R {
+pub(super) fn p21_person(p: &mut Person<'_>) -> R {
     p.conn()?;
     // the tab's rename: the host renames the file and tells the kit
     person_step(p.stage().host_rename("renamed.md"), Output::value)
 }
-fn p21_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p21_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["mv", "renamed.md"], b"")?, |o| match &o.value {
         VerbValue::Moved(d) => Output::value(d),
         v => Output::value(v),
@@ -1018,23 +1021,23 @@ fn export_out(o: &VerbOut) -> Output {
         v => Output::value(v),
     }
 }
-fn p24_now_person(p: &mut Person<'_>) -> R {
+pub(super) fn p24_now_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let s = p.session();
     let r = s.key().and_then(|k| exported(&k.path, s.file_now(c)?));
     person_step(r, Output::value)
 }
-fn p24_now_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p24_now_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["export"], b"")?, export_out)
 }
-fn p24_at_person(p: &mut Person<'_>) -> R {
+pub(super) fn p24_at_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let v = p.stage().mark("v")?;
     let s = p.session();
     let r = s.key().and_then(|k| exported(&k.path, s.file_at(c, v)?));
     person_step(r, Output::value)
 }
-fn p24_at_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p24_at_agent(a: &mut Agent<'_>) -> R {
     let v = mark_arg(a.stage())?;
     agent_step(
         a.verb(&["export", "--version", &v, "--to", "as-is"], b"")?,
@@ -1045,38 +1048,38 @@ fn p24_at_agent(a: &mut Agent<'_>) -> R {
 // ---------- P29-P31: on-behalf edits and revert ----------
 
 /// An assistant ("aide") edits line 12 on the actor's behalf; mark "c" is its change.
-fn aide_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn aide_setup(stage: &mut Stage) -> Result<(), String> {
     stage.assistant("aide", ACTOR)?;
     let seq = stage.edit_as("aide", |t| t.replace("more", "MORE"))?;
     stage.set_mark("c", seq);
     Ok(())
 }
-fn approval_person(p: &mut Person<'_>, state: ApprovalState) -> R {
+pub(super) fn approval_person(p: &mut Person<'_>, state: ApprovalState) -> R {
     let c = p.conn()?;
     let seq = p.stage().mark("c")?;
     person_step(p.session().set_approval(c, seq, state), Output::value)
 }
-fn approval_agent(a: &mut Agent<'_>, verb: &str) -> R {
+pub(super) fn approval_agent(a: &mut Agent<'_>, verb: &str) -> R {
     let seq = a.stage().mark("c")?.to_string();
     agent_step(a.verb(&[verb, &seq], b"")?, |o| match &o.value {
         VerbValue::Approval(x) => Output::value(x),
         v => Output::value(v),
     })
 }
-fn p29_approve_person(p: &mut Person<'_>) -> R {
+pub(super) fn p29_approve_person(p: &mut Person<'_>) -> R {
     approval_person(p, ApprovalState::Approved)
 }
-fn p29_approve_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p29_approve_agent(a: &mut Agent<'_>) -> R {
     approval_agent(a, "approve")
 }
-fn p29_decline_person(p: &mut Person<'_>) -> R {
+pub(super) fn p29_decline_person(p: &mut Person<'_>) -> R {
     approval_person(p, ApprovalState::Declined)
 }
-fn p29_decline_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p29_decline_agent(a: &mut Agent<'_>) -> R {
     approval_agent(a, "decline")
 }
 
-fn p30_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn p30_setup(stage: &mut Stage) -> Result<(), String> {
     stage.assistant("aide", ACTOR)?;
     stage.edit_as("aide", |t| t.replace("more", "MORE"))?;
     stage.assistant("bot", "sam")?;
@@ -1084,7 +1087,7 @@ fn p30_setup(stage: &mut Stage) -> Result<(), String> {
     stage.edit_as("aide", |t| t.replace("core", "CORE"))?;
     Ok(())
 }
-fn p30_person(p: &mut Person<'_>) -> R {
+pub(super) fn p30_person(p: &mut Person<'_>) -> R {
     // the tab's "waiting for you" list
     let c = p.conn()?;
     person_step(p.session().approvals(c), |all| {
@@ -1096,12 +1099,12 @@ fn p30_person(p: &mut Person<'_>) -> R {
         Output::value(seqs)
     })
 }
-fn p30_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p30_agent(a: &mut Agent<'_>) -> R {
     p30_agent_as(a, &["log", "--pending", "--on-behalf-of", "me"])
 }
 /// As [`p30_setup`], then sam settles the bot's two edits made for sam: one approved, one
 /// declined (`approvals --all` lists settled records too).
-fn p30_all_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn p30_all_setup(stage: &mut Stage) -> Result<(), String> {
     p30_setup(stage)?;
     let first = stage.edit_as("bot", |t| t.replace("MORE", "More"))?;
     let second = stage.edit_as("bot", |t| t.replace("INTRO", "Intro"))?;
@@ -1118,7 +1121,7 @@ fn p30_all_setup(stage: &mut Stage) -> Result<(), String> {
     Ok(())
 }
 /// `approvals --all`: every approval record, settled ones too, newest first, with its state.
-fn p30_all_person(p: &mut Person<'_>) -> R {
+pub(super) fn p30_all_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     person_step(p.session().approvals(c), |mut all| {
         all.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
@@ -1126,13 +1129,13 @@ fn p30_all_person(p: &mut Person<'_>) -> R {
         Output::value(rows)
     })
 }
-fn p30_all_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p30_all_agent(a: &mut Agent<'_>) -> R {
     p30_all_agent_as(a, &["approvals", "--all"])
 }
-fn p30_all_log_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p30_all_log_agent(a: &mut Agent<'_>) -> R {
     p30_all_agent_as(a, &["log", "--pending", "--all"])
 }
-fn p30_all_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
+pub(super) fn p30_all_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
     agent_step(a.verb(argv, b"")?, |o| match &o.value {
         VerbValue::Log(l) => {
             let rows: Vec<(u64, ApprovalState)> = l
@@ -1151,10 +1154,10 @@ fn p30_all_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
     })
 }
 /// P30 through the alias (`approvals`, the same as `log --pending`).
-fn p30_alias_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p30_alias_agent(a: &mut Agent<'_>) -> R {
     p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
 }
-fn p30_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
+pub(super) fn p30_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
     agent_step(a.verb(argv, b"")?, |o| match &o.value {
         VerbValue::Log(l) => {
             let mut seqs: Vec<u64> = l
@@ -1171,12 +1174,12 @@ fn p30_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
     })
 }
 
-fn p31_person(p: &mut Person<'_>) -> R {
+pub(super) fn p31_person(p: &mut Person<'_>) -> R {
     let c = p.conn()?;
     let seq = p.stage().mark("c")?;
     person_undo(p.session().revert(c, seq, false))
 }
-fn p31_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p31_agent(a: &mut Agent<'_>) -> R {
     let seq = a.stage().mark("c")?.to_string();
     agent_step(a.verb(&["revert", &seq], b"")?, undo_out)
 }
@@ -1185,7 +1188,7 @@ fn p31_agent(a: &mut Agent<'_>) -> R {
 
 /// A history with every kind of author: the import, a person, an agent, an assistant acting
 /// for the actor (pending), an outside edit; a second apart each.
-fn blame_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn blame_setup(stage: &mut Stage) -> Result<(), String> {
     stage.advance(1_000);
     stage.edit_as("sam", |t| t.replace("Intro line.", "Intro, revised."))?;
     stage.advance(1_000);
@@ -1214,18 +1217,18 @@ fn blame_setup(stage: &mut Stage) -> Result<(), String> {
     stage.advance(1_000);
     Ok(())
 }
-fn blame_no_history_setup(stage: &mut Stage) -> Result<(), String> {
+pub(super) fn blame_no_history_setup(stage: &mut Stage) -> Result<(), String> {
     blame_setup(stage)?;
     stage.grant(ACTOR, Rights::editor());
     Ok(())
 }
-fn blame_out(o: &VerbOut) -> Output {
+pub(super) fn blame_out(o: &VerbOut) -> Output {
     match &o.value {
         VerbValue::Blame(b) => Output::value(&b.lines),
         v => Output::value(v),
     }
 }
-fn p22_person(p: &mut Person<'_>) -> R {
+pub(super) fn p22_person(p: &mut Person<'_>) -> R {
     // the tab's blame gutter: the same session call, every line
     let c = p.conn()?;
     let root = p.root().to_owned();
@@ -1233,10 +1236,10 @@ fn p22_person(p: &mut Person<'_>) -> R {
         Output::value(b.lines)
     })
 }
-fn p22_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p22_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["blame"], b"")?, blame_out)
 }
-fn p22_range_person(p: &mut Person<'_>) -> R {
+pub(super) fn p22_range_person(p: &mut Person<'_>) -> R {
     // the gutter of the lines in view (3 to 9), as the verb prints them
     let c = p.conn()?;
     let root = p.root().to_owned();
@@ -1249,7 +1252,7 @@ fn p22_range_person(p: &mut Person<'_>) -> R {
         Output::Text(b.render(|_| None))
     })
 }
-fn p22_range_agent(a: &mut Agent<'_>) -> R {
+pub(super) fn p22_range_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["blame", "-L", "3,9"], b"")?, |o| match &o.value {
         VerbValue::Blame(b) => Output::Text(b.render(|_| None)),
         v => Output::value(v),
@@ -1715,10 +1718,21 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
         P::Annotate | P::Mention | P::Purge => Vec::new(),
         // tier 0 only: `kit_blob_cases`
         P::Lease | P::ReleaseLease | P::BreakLease => Vec::new(),
+        // grid docs only: `kit_grid_cases`
+        P::RowInsert
+        | P::RowMove
+        | P::RowDelete
+        | P::ColInsert
+        | P::ColMove
+        | P::ColDelete
+        | P::ColRename
+        | P::Sort
+        | P::RestoreElement
+        | P::DropDeleted => Vec::new(),
     }
 }
 
-fn p17_status_like(a: &mut Agent<'_>) -> R {
+pub(super) fn p17_status_like(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["status"], b"")?, |o| match &o.value {
         VerbValue::Status(s) => disk_out(&s.disk, &s.declined),
         v => Output::value(v),

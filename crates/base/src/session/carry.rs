@@ -873,6 +873,7 @@ mod tests {
                         })
                         .collect(),
                 }],
+                elems: Vec::new(),
             };
             let entry = LogEntry {
                 author: "a".into(),
@@ -888,6 +889,9 @@ mod tests {
                 span: None,
                 provenance: Vec::new(),
                 authored: None,
+                row_marks: Vec::new(),
+                col_remap: false,
+                note_rows: Vec::new(),
             };
             let seqs = store.commit_changes(id, &[entry], &[change], &[]).unwrap();
             live.bind(&seqs);

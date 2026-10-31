@@ -122,6 +122,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoBlobStore
         | SessionError::Deleted
         | SessionError::NoClaim(_)
+        | SessionError::UnknownElem { .. }
         | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
             exit::NOT_FOUND
         }
@@ -134,12 +135,15 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::BadPath(_)
         | SessionError::NoLease
         | SessionError::BadClaim(_)
+        | SessionError::AtLimit { .. }
+        | SessionError::NeedsBase
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
         SessionError::Leased { .. } | SessionError::Claimed { .. } => exit::LEASED,
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
         SessionError::RevertTooOld { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
+        | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
         | SessionError::Blob(_)
         | SessionError::Pack(_)
@@ -164,6 +168,7 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::NoBlob(_)
         | S::PurgedVersion(..) => exit::NOT_FOUND,
         S::CurrentVersion(..) => exit::USAGE,
+        S::MarksLost(_) => exit::TOO_OLD,
         S::Db(_)
         | S::Newer { .. }
         | S::NewerData { .. }
@@ -219,6 +224,16 @@ mod tests {
             (SessionError::Store(S::CurrentVersion(1, 2)), 2),
             (SessionError::Store(S::PurgedVersion(1, 2)), 4),
             (SessionError::RevertTooOld { seq: 1 }, 8),
+            // a raw keyed write under a row or column the table doesn't know: as the grid
+            // verbs' unknown key (MPC-E805)
+            (
+                SessionError::UnknownElem {
+                    root: "rows",
+                    key: "r2".into(),
+                    dropped: None,
+                },
+                4,
+            ),
             (
                 SessionError::Stale {
                     expected: 1,

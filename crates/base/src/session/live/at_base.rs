@@ -115,6 +115,15 @@ impl Session {
         if base > st.version {
             return Err(expired(base, "a version this doc hasn't reached"));
         }
+        // a structured doc's changes are ops by key, not text hunks: the window (read from
+        // the records' text roots) can't replay them, so a client reloads (C1: an empty
+        // window there would read as "nothing happened")
+        if self.structured && base < st.version {
+            return Err(expired(
+                base,
+                "a structured doc's changes aren't in the live window: read again",
+            ));
+        }
         if st.version - base > self.config.live_window_events {
             return Err(expired(
                 base,
@@ -171,10 +180,15 @@ impl Session {
                         pid: info.author.clone(),
                         client,
                         via: info.via.clone(),
+                        applied: crate::elem::Applied::Text {
+                            root: r.root.clone(),
+                            hunks: hunks.clone(),
+                        },
                         root: r.root,
                         hunks,
                         at_ms: info.at_ms,
                         on_behalf_of: info.on_behalf_of.clone(),
+                        hidden: Vec::new(),
                     },
                     elems,
                     deleted,
@@ -316,6 +330,7 @@ impl Session {
             .map_err(rep)?;
         let applied = match &edits[0] {
             Edit::Text { hunks, .. } => diff::coalesce(hunks.clone()),
+            Edit::List { .. } | Edit::Map { .. } => unreachable!("a text edit"),
         };
         st.group_hint = opts.group;
         let v = st.version;

@@ -56,17 +56,38 @@ export interface EditorStrings {
   duplicateRisk: string;
   /** After Re-apply couldn't tell (nothing re-applied). */
   cantTell: string;
-  /** After Re-apply refused a change with more than one hunk (nothing re-applied). */
+  /** After Re-apply refused a change that met someone else's change since (nothing re-applied). */
+  conflictReapply: string;
+  /** After Re-apply couldn't work out where a change goes now (nothing re-applied). */
+  cantPlace: string;
+  /** The single-hunk action that inserts the typed text where the change was (after a preview). */
+  insertHere: string;
+  /** Confirm the insertion being previewed. */
+  insertConfirm: string;
+  /** Cancel the insertion being previewed. */
+  insertCancel: string;
+  /** While previewing: where the text will go (`{line}` is the 1-based line). */
+  insertPreview: string;
+  /** Added to the preview's note when the rejected edit also removed text (a replacement or a
+   * deletion): Insert only puts the typed text back. */
+  insertRemovedText: string;
+  /** "Insert my text here" on a change with more than one hunk (nothing inserted). */
+  insertMultiHunk: string;
+  /** Copy the rejected text. */
+  copy: string;
+  /** After a copy. */
+  copied: string;
+  /** When the clipboard refused: the text is selected for the person to copy. */
+  copyFailed: string;
+  /** @deprecated v0.9.8.2's single-hunk guards; no longer shown. */
   multiHunk: string;
-  /** After Re-apply refused a change that deleted or replaced text (nothing re-applied). */
+  /** @deprecated v0.9.8.2's single-hunk guards; no longer shown. */
   notInsertion: string;
-  /** After Re-apply refused a change from before a reload (nothing re-applied). */
+  /** @deprecated v0.9.8.2's single-hunk guards; no longer shown. */
   reloaded: string;
-  /** After Re-apply refused a change something else was inserted beside since (nothing
-   * re-applied). */
+  /** @deprecated v0.9.8.2's single-hunk guards; no longer shown. */
   tie: string;
-  /** After Re-apply refused a change whose surrounding text was deleted or replaced since
-   * (nothing re-applied). */
+  /** @deprecated v0.9.8.2's single-hunk guards; no longer shown. */
   deletedAround: string;
 }
 
@@ -102,6 +123,17 @@ export const DEFAULT_STRINGS: EditorStrings = {
   landed: "A change that seemed lost went through after all.",
   duplicateRisk: "A change you re-applied had also gone through: it may now be in the document twice. Check it.",
   cantTell: "Can't tell whether this change is already in the document: nothing was re-applied. Check it, then type what's missing.",
+  conflictReapply: "Someone else changed this text since: nothing was re-applied. Check it, then type what's missing.",
+  cantPlace: "Can't tell where this change goes now (the document reloaded, or a lot changed since): nothing was re-applied. Check it, then type what's missing.",
+  insertHere: "Insert my text here…",
+  insertConfirm: "Insert",
+  insertCancel: "Cancel",
+  insertPreview: "Your text will go in at line {line}, shown in the editor. Insert it, or Cancel.",
+  insertRemovedText: "Your edit also removed text; that part isn't redone here.",
+  insertMultiHunk: "This change touched more than one place: copy its text and retype it where you want it.",
+  copy: "Copy",
+  copied: "Copied.",
+  copyFailed: "Couldn't copy: the text is selected, copy it with your keyboard.",
   multiHunk: "This change touched more than one place: nothing was re-applied. Check it, then type what's missing.",
   notInsertion: "This change deleted or replaced text: nothing was re-applied. Check it, then type what's missing.",
   reloaded: "The document reloaded since this change: nothing was re-applied. Check it, then type what's missing.",
@@ -129,8 +161,10 @@ export type EditorRejection = Rejection & { mayHaveApplied: boolean };
 
 /**
  * What `reapply` did:
- * - `applied`: the text went back in, as a new edit;
- * - `already-present`: (a `mayHaveApplied` change) it is in the text already; nothing applied,
+ * - `applied`: the change went back in where the server would put it, as a new edit (its own undo
+ *   step);
+ * - `already-present`: it is in the text already (a `mayHaveApplied` change that landed, or a
+ *   change with nothing left to apply, such as a deletion someone else made); nothing applied,
  *   the rejection dismissed;
  * - `unknown`: Re-apply can't put it back where the server would: nothing applied, the
  *   rejection kept, a note asks the person to check and retype (`reason` says why);
@@ -142,21 +176,46 @@ export type ReapplyResult = {
    * Why `unknown`:
    * - `cant-tell`: (a `mayHaveApplied` change) the record can't tell whether it landed (its
    *   version left the history, or an undo was unanswered on the lost connection);
-   * - `multi-hunk`: more than one hunk (its text would go back in one place, not each hunk's);
-   * - `not-insertion`: it deleted or replaced text (Re-apply only re-inserts typed text);
-   * - `reloaded`: the editor reloaded since (its place moved by a diff, not the server's changes);
-   * - `tie`: something else was inserted at its place since (the server would put it after
-   *   that, Re-apply before);
-   * - `deleted-around`: text around its place was deleted or replaced since (its place snapped
-   *   to the deletion's start; the server refuses it, or never saw the deletion).
+   * - `conflict`: the change met someone else's change since (the server refused it, or would);
+   * - `cant-place`: the editor can't work out where the server would put it now (it reloaded
+   *   since, or more changed since than its history keeps).
+   *
+   * `multi-hunk`, `not-insertion`, `reloaded`, `tie` and `deleted-around` were v0.9.8.2's
+   * single-hunk guards; Re-apply places every change by the server's rule now and never returns
+   * them (kept in the type for one release).
    */
-  reason?: "cant-tell" | "multi-hunk" | "not-insertion" | "reloaded" | "tie" | "deleted-around";
+  reason?: "cant-tell" | "conflict" | "cant-place" | "multi-hunk" | "not-insertion" | "reloaded" | "tie" | "deleted-around";
+};
+
+/**
+ * What "Insert my text here" did (`insertHere`, `confirmInsert`):
+ * - `previewing`: the typed text is shown in the editor where it would go (`line`); nothing is
+ *   inserted until `confirmInsert` (or `cancelInsert`);
+ * - `applied`: inserted there, as a new edit (its own undo step), the rejection dismissed;
+ * - `already-present`: (a `mayHaveApplied` change) it landed after all; nothing inserted;
+ * - `unknown`: `cant-tell` (it may have landed: the record can't tell) or `multi-hunk` (only a
+ *   single-hunk change has one place to insert at); nothing inserted;
+ * - `unavailable`: not now (read-only, no such rejection or no text, a composition, nothing
+ *   previewed).
+ */
+export type InsertResult = {
+  status: "previewing" | "applied" | "already-present" | "unknown" | "unavailable";
+  reason?: "cant-tell" | "multi-hunk";
+  /** While `previewing`: the line (1-based) the text would go in at. */
+  line?: number;
 };
 
 export interface RejectionActions {
   reapply(): ReapplyResult;
   dismiss(): void;
   reveal(): void;
+  /** Preview inserting the typed text where the change was (single-hunk changes). */
+  insertHere(): InsertResult;
+  /** Insert the previewed text. */
+  confirmInsert(): InsertResult;
+  cancelInsert(): void;
+  /** Copy the rejected text to the clipboard (or select it, when the clipboard refuses). */
+  copy(): Promise<boolean>;
 }
 
 export interface LiveEditorOptions {
@@ -235,6 +294,19 @@ export interface LiveEditorHandle {
   /** Re-insert a rejection's text where it was, as a new edit. False when it can't now. */
   reapply(id: number): ReapplyResult;
   dismiss(id: number): void;
+  /**
+   * "Insert my text here", the person's own choice for a single-hunk rejection: shows its typed
+   * text in the editor where it would go (`previewing`, with the line); nothing is inserted until
+   * `confirmInsert()`. Unlike Re-apply it doesn't follow the server's rule: it inserts the typed
+   * text at the change's place as the editor tracked it, and never deletes.
+   */
+  insertHere(id: number): InsertResult;
+  /** Insert the text being previewed, as a new edit (its own undo step). */
+  confirmInsert(): InsertResult;
+  /** Stop previewing; nothing inserted. */
+  cancelInsert(): void;
+  /** Copy a rejection's text to the clipboard; when the clipboard refuses, select it. */
+  copyRejected(id: number): Promise<boolean>;
   /** Scroll to lines `first..last` (1-based) and mark them for a moment. */
   reveal(lines: { first: number; last: number }): void;
   /** Keep a participant's caret in view (`null` stops). */
@@ -323,6 +395,8 @@ class LiveEditor implements LiveEditorHandle {
   private seenNotes = new Set<string>();
   /** Rejections that landed after all (Re-apply on them says so). */
   private landedIds = new Set<number>();
+  /** The rejection whose "Insert my text here" is being previewed. */
+  private previewId: number | null = null;
   private caretsSeen = new Map<Handle, { key: string; until: number }>();
   private readonly ls = new Map<keyof LiveEditorEvents, Set<(v: never) => void>>();
   private readonly offs: Array<() => void> = [];
@@ -449,11 +523,6 @@ class LiveEditor implements LiveEditorHandle {
     const r = this.rejected.find((x) => x.id === id);
     if (!r) return unavailable;
     if (b.holding) return unavailable; // during a composition
-    if (r.hunks.length > 1) {
-      // refused rather than put in the wrong place (a later version restores each hunk in place)
-      this.showNote(this.strings.multiHunk);
-      return { status: "unknown", reason: "multi-hunk" };
-    }
     if (r.mayHaveApplied) {
       // its reply was lost: Re-apply only when the server's record shows it never landed
       const p = live.presence(id);
@@ -467,28 +536,23 @@ class LiveEditor implements LiveEditorHandle {
         return { status: "unknown", reason: "cant-tell" };
       }
     }
-    // only a pure insertion, placed by the server's changes, with no tie, goes back where it was
-    const g = live.reapplyGuard(id);
-    if (g === null) return unavailable;
-    if (g !== "ok") {
-      const notes = {
-        "multi-hunk": this.strings.multiHunk,
-        "not-insertion": this.strings.notInsertion,
-        reloaded: this.strings.reloaded,
-        tie: this.strings.tie,
-        "deleted-around": this.strings.deletedAround,
-      } as const;
-      const note = notes[g];
-      this.showNote(note);
-      return { status: "unknown", reason: g };
+    // where the server would put it: its change as sent, rebased from its base (never by region)
+    const p = live.placeRejection(id);
+    if (p === null) return unavailable;
+    if ("refused" in p) {
+      this.showNote(p.refused === "conflict" ? this.strings.conflictReapply : this.strings.cantPlace);
+      return { status: "unknown", reason: p.refused };
     }
-    const pos = b.posOf(r.region.start);
-    if (pos < 0) return unavailable;
-    this.view.dispatch({
-      changes: { from: pos, insert: r.text },
-      selection: { anchor: pos + r.text.length },
-      userEvent: "input.reapply",
-    });
+    if (p.hunks.length === 0) {
+      this.dismiss(id);
+      this.showNote(this.strings.alreadyPresent);
+      return { status: "already-present" };
+    }
+    const changes = b.changesFor(p.hunks);
+    if (!changes) return unavailable;
+    const last = p.hunks[p.hunks.length - 1];
+    const caret = changes.mapPos(b.posOf(last.end), 1);
+    this.view.dispatch({ changes, selection: { anchor: caret }, userEvent: "input.reapply" });
     if (r.mayHaveApplied) live.noteReapplied(id);
     this.dismiss(id);
     this.showNote("");
@@ -503,9 +567,104 @@ class LiveEditor implements LiveEditorHandle {
   }
 
   dismiss(id: number): void {
+    if (this.previewId === id) this.previewId = null;
     this.live?.dismiss(id);
     this.renderRejections();
     this.binding?.schedule();
+  }
+
+  insertHere(id: number): InsertResult {
+    const live = this.live;
+    const b = this.binding;
+    const unavailable: InsertResult = { status: "unavailable" };
+    if (!live || !b || this.isReadOnly()) return unavailable;
+    if (this.landedIds.has(id)) {
+      this.showNote(this.strings.alreadyPresent);
+      return { status: "already-present" };
+    }
+    const r = this.rejected.find((x) => x.id === id);
+    if (!r || !r.text || b.holding) return unavailable;
+    if (r.hunks.length > 1) {
+      this.showNote(this.strings.insertMultiHunk);
+      return { status: "unknown", reason: "multi-hunk" };
+    }
+    if (r.mayHaveApplied) {
+      // the same check as Re-apply: never insert a change that may be in already
+      const p = live.presence(id);
+      if (p === "present") {
+        this.dismiss(id);
+        this.showNote(this.strings.alreadyPresent);
+        return { status: "already-present" };
+      }
+      if (p !== "absent") {
+        this.showNote(this.strings.cantTell);
+        return { status: "unknown", reason: "cant-tell" };
+      }
+    }
+    const pos = b.posOf(r.region.start);
+    if (pos < 0) return unavailable;
+    const line = this.view.state.doc.lineAt(pos).number;
+    this.previewId = id;
+    this.renderRejections();
+    b.redraw();
+    this.reveal({ first: line, last: line });
+    // a replacement or deletion: say that only the typed text goes back, never the removal
+    const removed = r.hunks[0].start < r.hunks[0].end;
+    this.showNote(this.strings.insertPreview.replace("{line}", String(line)) + (removed ? ` ${this.strings.insertRemovedText}` : ""));
+    (this.dom.rejections.querySelector(`li[data-rejection="${id}"] .mpc-insert-confirm`) as HTMLElement | null)?.focus();
+    return { status: "previewing", line };
+  }
+
+  confirmInsert(): InsertResult {
+    const live = this.live;
+    const b = this.binding;
+    const id = this.previewId;
+    if (!live || !b || id === null || this.isReadOnly() || b.holding) return { status: "unavailable" };
+    if (this.landedIds.has(id)) {
+      this.previewId = null;
+      this.showNote(this.strings.alreadyPresent);
+      return { status: "already-present" };
+    }
+    const r = this.rejected.find((x) => x.id === id);
+    if (!r || !r.text) return { status: "unavailable" };
+    const pos = b.posOf(r.region.start);
+    if (pos < 0) return { status: "unavailable" };
+    this.previewId = null;
+    // its own undo step (the binding gives every input.reapply transaction its own group)
+    this.view.dispatch({ changes: { from: pos, insert: r.text }, selection: { anchor: pos + r.text.length }, userEvent: "input.reapply.here" });
+    if (r.mayHaveApplied) live.noteReapplied(id);
+    this.dismiss(id);
+    this.showNote("");
+    return { status: "applied" };
+  }
+
+  cancelInsert(): void {
+    const id = this.previewId;
+    if (id === null) return;
+    this.previewId = null;
+    this.showNote("");
+    this.renderRejections();
+    this.binding?.redraw(); // the preview goes at once
+    (this.dom.rejections.querySelector(`li[data-rejection="${id}"] .mpc-insert-here`) as HTMLElement | null)?.focus();
+  }
+
+  async copyRejected(id: number): Promise<boolean> {
+    const r = this.rejected.find((x) => x.id === id);
+    if (!r) return false;
+    const win = this.dom.frame.ownerDocument.defaultView;
+    try {
+      if (!win?.navigator.clipboard) throw new Error("no clipboard");
+      await win.navigator.clipboard.writeText(r.text);
+      this.showNote(this.strings.copied);
+      return true;
+    } catch {
+      // the clipboard refused: select the text, so the person can copy it with their keyboard
+      const snippet = this.dom.rejections.querySelector(`li[data-rejection="${id}"] .mpc-rejected-snippet`);
+      const sel = win?.getSelection();
+      if (snippet && sel) sel.selectAllChildren(snippet);
+      this.showNote(this.strings.copyFailed);
+      return false;
+    }
   }
 
   reveal(lines: { first: number; last: number }): void {
@@ -736,6 +895,10 @@ class LiveEditor implements LiveEditorHandle {
       undo: () => this.undo(),
       redo: () => this.redo(),
       carets: () => this.caretViews(),
+      preview: () => {
+        const r = this.previewId === null ? undefined : this.rejected.find((x) => x.id === this.previewId);
+        return r ? { byte: r.region.start, text: r.text } : null;
+      },
       local: () => this.pendingChanged(),
       historyAdded: () => this.emit("error", { id: HISTORY_ERROR, message: HISTORY_MESSAGE }),
       repaired: (reason) => this.emit("error", { id: "MPC-E000", message: `the editor was reset to the live text: ${reason}` }),
@@ -1013,10 +1176,20 @@ class LiveEditor implements LiveEditorHandle {
     list.hidden = r === false || rejected.length === 0;
     if (r === false) return;
     const doc = list.ownerDocument;
+    if (this.previewId !== null && !rejected.some((x) => x.id === this.previewId)) {
+      this.previewId = null; // it left (landed, or dismissed elsewhere)
+      this.showNote("");
+    }
     for (const rej of rejected) {
       const actions: RejectionActions = {
         reapply: () => this.reapply(rej.id),
         dismiss: () => this.dismiss(rej.id),
+        insertHere: () => this.insertHere(rej.id),
+        confirmInsert: () => (this.previewId === rej.id ? this.confirmInsert() : { status: "unavailable" }),
+        cancelInsert: () => {
+          if (this.previewId === rej.id) this.cancelInsert();
+        },
+        copy: () => this.copyRejected(rej.id),
         reveal: () => {
           const pos = this.binding?.posOf(rej.region.start) ?? -1;
           if (pos >= 0) {
@@ -1055,7 +1228,32 @@ class LiveEditor implements LiveEditorHandle {
           maybe.textContent = this.strings.mayHaveApplied;
           li.append(maybe);
         }
-        li.append(again, dismiss);
+        const button = (cls: string, text: string, run: () => void) => {
+          const btn = doc.createElement("button");
+          btn.type = "button";
+          btn.className = cls;
+          btn.textContent = text;
+          btn.addEventListener("click", run);
+          return btn;
+        };
+        if (this.previewId === rej.id) {
+          li.dataset.previewing = "true";
+          li.append(
+            button("mpc-insert-confirm", this.strings.insertConfirm, () => actions.confirmInsert()),
+            button("mpc-insert-cancel", this.strings.insertCancel, () => actions.cancelInsert()),
+          );
+          li.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              actions.cancelInsert();
+            }
+          });
+        } else {
+          li.append(again);
+          if (rej.text && rej.hunks.length === 1) li.append(button("mpc-insert-here", this.strings.insertHere, () => actions.insertHere()));
+        }
+        if (rej.text) li.append(button("mpc-copy", this.strings.copy, () => void actions.copy()));
+        li.append(dismiss);
       }
       list.append(li);
     }

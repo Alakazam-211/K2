@@ -105,8 +105,13 @@ pub fn with_group_mutant<R>(mutant: GroupMutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// A fault planted in `write --base`'s merge, so the trace classes can show they catch it.
-/// Installed per thread by [`with_merge_mutant`].
+/// A fault planted in a merge, so the tests that should catch it can show they do. Installed per
+/// thread by [`with_merge_mutant`]. Two families share it:
+/// - `write --base`'s text merge (v0.9.8), caught by the trace classes ((i) and (ii) below;
+///   `spec-undo`'s `traces` plants them by value);
+/// - the grid's text merge (`table::merge3_text` and the outside save), so the row-pairing
+///   property and its named tests can show they catch each one (mutants (xxxii) to (xxxvii):
+///   contract §2.9.1, §3.4 and §4.3, spec S11/S13; selected in the tests by `MPC_MERGE_MUTANT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MergeMutant {
@@ -115,6 +120,25 @@ pub enum MergeMutant {
     CharSides,
     /// (ii) The final line break always as theirs left it, whoever wrote the last line.
     EndFollowsTheirs,
+    /// (xxxii) An outside save's whole-row loop goes over the live side's live columns, so a
+    /// column the file brings back keeps the live side's hidden value beside the file's row.
+    OutsideWholeRowLiveCols,
+    /// (xxxiii) The both-changed test by cell goes over the live side's live columns, missing a
+    /// live write into a column the live side then deleted.
+    ByCellLiveCols,
+    /// (xxxiv) `write --base` conflicts on a live switch between empty and absent that changes
+    /// no byte of the row (no live edit of the cell), as before the per-cell rule reached it.
+    WriteBaseNeutralConflicts,
+    /// (xxxv) A revert that rewrites a re-paired row whole (S13) restores it even when the doc has
+    /// dropped it (S11 skipped): an engine refusal on an unknown key.
+    WholeRowRestoresDropped,
+    /// (xxxvi) An undo or redo of an op on a re-paired row the doc has dropped says
+    /// `rewritten_row` (S13) instead of `dropped` (S11).
+    RewrittenRowBeforeDropped,
+    /// (xxxvii) A raw keyed cell write under a row or a column the table doesn't know (dropped,
+    /// or never in it) is taken as a hidden write, as before the check: an orphan cell nobody
+    /// can see, restore or sweep, reported with a restore that can't work.
+    KeyedWriteUnderUnknownKey,
 }
 
 thread_local! {
@@ -137,7 +161,6 @@ pub fn with_merge_mutant<R>(mutant: MergeMutant, f: impl FnOnce() -> R) -> R {
     let _back = Back(MERGE_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
 }
-
 /// How an edit becomes an engine change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]

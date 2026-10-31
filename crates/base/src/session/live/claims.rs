@@ -7,6 +7,9 @@ use crate::session::awareness::{
     Claim, ClaimEnd, ClaimId, ClaimInfo, ForEdit, Note, NoteKind, Reservation, ReservationEnd,
     ReservationInfo, Waiting,
 };
+use crate::session::awareness::{
+    Overwrite, OverwriteCell, OVERWRITE_CELLS_MAX, OVERWRITE_PENDING_MAX,
+};
 
 impl Session {
     // ----- claims: the public calls -----
@@ -42,11 +45,21 @@ impl Session {
         note: Option<String>,
         hold: bool,
     ) -> Result<ClaimInfo> {
-        let out = self.claim_inner(conn, range, ttl_ms, note, hold);
+        let out = if self.is_grid() {
+            self.claim_span_inner(
+                conn,
+                crate::session::ClaimSpan::Lines(range),
+                ttl_ms,
+                note,
+                hold,
+            )
+        } else {
+            self.claim_inner(conn, range, ttl_ms, note, hold)
+        };
         self.for_viewer(conn, out, |l, c| l.claim(c))
     }
 
-    fn claim_inner(
+    pub(super) fn claim_inner(
         &self,
         conn: ConnId,
         range: LineRange,
@@ -278,10 +291,8 @@ impl Session {
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
-        st.aware
-            .reservations
-            .iter()
-            .map(|r| Ok(r.info(self.text_of(st, &r.root)?.1, now)))
+        (0..st.aware.reservations.len())
+            .map(|k| self.any_reservation_info(st, k, now))
             .collect()
     }
 
@@ -308,7 +319,7 @@ impl Session {
 
     // ----- claims: internal -----
 
-    fn claim_ttl(&self, ttl: u64) -> Result<u64> {
+    pub(super) fn claim_ttl(&self, ttl: u64) -> Result<u64> {
         if ttl == 0 {
             return Err(SessionError::BadClaim(
                 "a claim needs a TTL above 0 ms".into(),
@@ -318,8 +329,7 @@ impl Session {
     }
 
     fn claim_info(&self, st: &State, k: usize, now: u64) -> Result<ClaimInfo> {
-        let c = &st.aware.claims[k];
-        Ok(c.info(self.text_of(st, &c.root)?.1, now))
+        self.any_claim_info(st, k, now)
     }
 
     /// The caller's pid's claim `id` (or its only one).
@@ -470,6 +480,7 @@ impl Session {
             for_edit,
             waiters,
             edited: false,
+            grid: None,
         };
         let info = claim.info(text, now);
         st.aware.claims.push(claim);
@@ -509,10 +520,15 @@ impl Session {
     }
 
     /// End claim `k`: remove it, tell the host (with its queue), log it; with `grant`, hand
-    /// its range to the first waiter still here (a reservation).
-    fn end_claim(&self, st: &mut State, k: usize, how: ClaimEnd, now: u64, grant: bool) {
+    /// its range (a grid claim: its rows, columns or cells) to the first waiter still here
+    /// (a reservation).
+    pub(super) fn end_claim(&self, st: &mut State, k: usize, how: ClaimEnd, now: u64, grant: bool) {
         let c = st.aware.claims.remove(k);
-        let lines = self.lines_now(st, &c.root, c.s, c.e);
+        let lines = if c.grid.is_some() {
+            self.grid_claim_lines(st, &c)
+        } else {
+            self.lines_now(st, &c.root, c.s, c.e)
+        };
         let waiters: Vec<(ConnId, String)> = c.waiters.into_iter().collect();
         st.roster.record(
             RosterEvent::ClaimEnded {
@@ -535,7 +551,8 @@ impl Session {
             waiters: waiters.clone(),
         });
         if grant {
-            self.grant_reservation(st, c.id, &c.root, (c.s, c.e), waiters.into(), now);
+            let span = (c.s, c.e);
+            self.grant_reservation(st, c.id, &c.root, span, c.grid.clone(), waiters.into(), now);
         }
         st.aware.push_activity(
             ActivityEntry {
@@ -559,14 +576,17 @@ impl Session {
         awareness::span_lines(root, text, s, e)
     }
 
-    /// Reserve `root`'s span `(s, e)` (claim `claim`'s, now ended) for the first waiter in
-    /// `queue` still present, for [`Config::claim_handoff_ms`]. Off when that is 0.
+    /// Reserve `root`'s span `(s, e)` (claim `claim`'s, now ended; on a grid, its span by
+    /// key, `grid`) for the first waiter in `queue` still present, for
+    /// [`Config::claim_handoff_ms`]. Off when that is 0.
+    #[allow(clippy::too_many_arguments)]
     fn grant_reservation(
         &self,
         st: &mut State,
         claim: ClaimId,
         root: &str,
         (s, e): (usize, usize),
+        grid: Option<awareness::GridSpan>,
         mut queue: VecDeque<(ConnId, String)>,
         now: u64,
     ) {
@@ -589,10 +609,15 @@ impl Session {
                 until_ms: now.saturating_add(ms),
                 queue,
                 edited: false,
+                grid,
             };
-            let lines = match self.text_of(st, root) {
-                Ok((_, t)) => awareness::span_lines(root, t, s, e),
-                Err(_) => return,
+            let lines = if r.grid.is_some() {
+                self.grid_reservation_lines(st, &r)
+            } else {
+                match self.text_of(st, root) {
+                    Ok((_, t)) => awareness::span_lines(root, t, s, e),
+                    Err(_) => return,
+                }
             };
             self.emit(AuditEvent::Reserved {
                 key: st.key.clone(),
@@ -610,19 +635,28 @@ impl Session {
 
     /// End reservation `k` (`how`); unless it was used by a claim or reset, pass it to the
     /// next waiter.
-    fn end_reservation(&self, st: &mut State, k: usize, how: ReservationEnd, now: u64) {
+    pub(super) fn end_reservation(&self, st: &mut State, k: usize, how: ReservationEnd, now: u64) {
         let r = st.aware.reservations.remove(k);
+        let lines = if r.grid.is_some() {
+            self.grid_reservation_lines(st, &r)
+        } else {
+            self.lines_now(st, &r.root, r.s, r.e)
+        };
         self.emit(AuditEvent::ReservationEnded {
             key: st.key.clone(),
             claim: r.claim,
             pid: r.pid,
             how,
-            lines: self.lines_now(st, &r.root, r.s, r.e),
+            lines,
             version: st.version,
             next_waiter: r.queue.front().cloned(),
         });
-        if !matches!(how, ReservationEnd::Claimed | ReservationEnd::Reset) {
-            self.grant_reservation(st, r.claim, &r.root, (r.s, r.e), r.queue, now);
+        let passes = !matches!(
+            how,
+            ReservationEnd::Claimed | ReservationEnd::Reset | ReservationEnd::Deleted
+        );
+        if passes {
+            self.grant_reservation(st, r.claim, &r.root, (r.s, r.e), r.grid, r.queue, now);
         }
     }
 
@@ -819,6 +853,7 @@ impl Session {
             claim: None,
             claim_note: None,
             remaining_ms: None,
+            span: None,
             overwrite: None,
         };
         let mut out: Vec<Note> = Vec::new();
@@ -887,9 +922,9 @@ impl Session {
     /// batch per reader per [`Config::note_interval_ms`], at most
     /// [`Config::note_batch_max`] per batch.
     ///
-    /// Notes waiting for this reader (an outside save may have removed their text) always come
-    /// first, whatever the lines, the interval or the batch size: any verb that returns notes
-    /// delivers them.
+    /// Notes waiting for this reader (an outside save may have removed their text, or, on a
+    /// grid, overrode their value) always come first, whatever the lines, the interval or the
+    /// batch size: any verb that returns notes delivers them.
     pub(super) fn notes_for(
         &self,
         st: &mut State,
@@ -898,6 +933,10 @@ impl Session {
         lines: Option<(usize, usize)>,
         now: u64,
     ) -> Notes {
+        debug_assert!(
+            !self.is_grid(),
+            "grid notes are delivered by grid_notes_for_edits / batch_notes"
+        );
         let waiting = self.drain_notes(st, i, now);
         let mut out = self.fresh_notes(st, i, root, lines, now);
         if !waiting.is_empty() {
@@ -915,6 +954,8 @@ impl Session {
         out
     }
 
+    /// [`Session::notes_for`] without the waiting notes: what a host's own edit call gets,
+    /// which leaves them where they are (taken, they'd be lost).
     pub(super) fn fresh_notes(
         &self,
         st: &mut State,
@@ -933,14 +974,263 @@ impl Session {
         else {
             return Notes::default();
         };
-        let c = &self.config;
         let reader = st.members[i].p.pid.clone();
-        let raw = self.collect_notes(st, &reader, root, (s, e), Some(c.note_edit_window_ms), now);
+        let window = self.config.note_edit_window_ms;
+        let raw = self.collect_notes(st, &reader, root, (s, e), Some(window), now);
+        let mut out = self.batch_fresh(st, &reader, raw, now);
+        out.notes = Self::notes_as_seen(st, i, out.notes);
+        out
+    }
+
+    /// Raw notes for `reader`, deduped per (reader, other, kind, lines) within
+    /// [`Config::note_repeat_ms`], at most one batch per reader per
+    /// [`Config::note_interval_ms`], at most [`Config::note_batch_max`] per batch.
+    ///
+    /// For member `i`; an App reader (K5) sees the others by handle.
+    pub(super) fn batch_notes(&self, st: &mut State, i: usize, raw: Vec<Note>, now: u64) -> Notes {
+        let reader = st.members[i].p.pid.clone();
+        // notes waiting for this reader (a change overrode its value) always come
+        let waiting = self.drain_notes(st, i, now);
+        let mut out = self.batch_fresh(st, &reader, raw, now);
+        if !waiting.is_empty() {
+            let mut notes = waiting;
+            notes.append(&mut out.notes);
+            out.notes = notes;
+        }
+        out.notes = Self::notes_as_seen(st, i, out.notes);
+        out
+    }
+
+    /// `notes` as member `i` sees them: an App viewer (K5) by handle, anyone else unchanged.
+    fn notes_as_seen(st: &mut State, i: usize, notes: Vec<Note>) -> Vec<Note> {
+        match Self::app_viewer(st, i) {
+            Some(v) => {
+                let mut l = st.handles.lens(&v);
+                notes.into_iter().map(|n| l.note(n)).collect()
+            }
+            None => notes,
+        }
+    }
+
+    /// The store's waiting notes into the mirror, once; the expired ones go (a note lives as
+    /// long as the revert window: past it, the change is gone from the revert records too).
+    pub(super) fn load_notes(&self, st: &mut State, now: u64) -> Result<()> {
+        if st.aware.notes_loaded || !self.structured {
+            return Ok(());
+        }
+        st.aware.notes_loaded = true;
+        let store = self.store(st)?.clone();
+        for (pid, b) in store.overwrite_notes(self.doc_id)? {
+            let mut at = 0;
+            let mut q = Vec::new();
+            while at < b.len() {
+                let Some(o) = Overwrite::decode(&b, &mut at) else {
+                    break;
+                };
+                if now.saturating_sub(o.at_ms) <= self.config.revert_keep_ms {
+                    q.push(Self::overwritten_note(o));
+                }
+            }
+            if q.is_empty() {
+                store.set_overwrite_notes(self.doc_id, &[(pid, Vec::new())])?;
+            } else {
+                st.aware.pending.insert(pid, q);
+            }
+        }
+        Ok(())
+    }
+
+    /// The note for one [`Overwrite`].
+    pub(super) fn overwritten_note(o: Overwrite) -> Note {
+        let line = o.line.unwrap_or(1);
+        Note {
+            pid: crate::session::EXTERNAL_PID.to_owned(),
+            name: crate::session::EXTERNAL_PID.to_owned(),
+            kind: NoteKind::Overwritten,
+            participant_kind: ParticipantKind::Person,
+            lines: LineRange {
+                root: crate::table::ROWS.to_owned(),
+                first: line,
+                last: line,
+            },
+            age_ms: 0,
+            claim: None,
+            claim_note: None,
+            remaining_ms: None,
+            span: None,
+            overwrite: Some(o),
+        }
+    }
+
+    /// `notes` encoded for the store.
+    pub(super) fn encode_notes(notes: &[Note]) -> Vec<u8> {
+        let mut w = Vec::new();
+        for o in notes.iter().filter_map(|n| n.overwrite.as_ref()) {
+            o.encode(&mut w);
+        }
+        w
+    }
+
+    /// A grid doc's notes waiting for `pid`, delivered: gone from the mirror and the store, each
+    /// as `rights` may have it ([`Session::grid_note_for_reader`]; [`Session::drain_notes`] for
+    /// a grid).
+    pub(super) fn drain_grid_notes(
+        &self,
+        st: &mut State,
+        pid: &str,
+        rights: &Rights,
+        now: u64,
+    ) -> Vec<Note> {
+        if self.load_notes(st, now).is_err() {
+            return Vec::new();
+        }
+        let Some(mut q) = st.aware.pending.remove(pid) else {
+            return Vec::new();
+        };
+        if let Ok(store) = self.store(st) {
+            let _ = store.set_overwrite_notes(self.doc_id, &[(pid.to_owned(), Vec::new())]);
+            for o in q.iter_mut().filter_map(|n| n.overwrite.as_mut()) {
+                self.grid_note_for_reader(store, o, rights);
+            }
+        }
+        q
+    }
+
+    /// A grid note as `rights` may have it, as a text doc's ([`Session::note_for_reader`]): the
+    /// version that holds its live value only for a reader with the history right, and never
+    /// for a withheld note (its value was purged); no `restore_from` without history.
+    fn grid_note_for_reader(
+        &self,
+        store: &crate::store::DocStore,
+        o: &mut Overwrite,
+        rights: &Rights,
+    ) {
+        o.version = if rights.history && !o.withheld {
+            o.version_of(self.version_before(store, o.before))
+        } else {
+            None
+        };
+        if !rights.history {
+            o.restore_from = None;
+        }
+        o.no_history = !rights.history;
+    }
+
+    /// A grid doc's waiting [`Overwrite`] notes for a snapshot, each as its reader may have it.
+    /// Someone who can't read the doc now has none here ([`Session::waiting_for_subscribers`]
+    /// for a grid).
+    pub(super) fn grid_waiting_for_subscribers(
+        &self,
+        st: &State,
+    ) -> HashMap<String, Vec<Overwrite>> {
+        let Ok(store) = self.store(st) else {
+            return HashMap::new();
+        };
+        st.aware
+            .pending
+            .iter()
+            .filter_map(|(pid, q)| {
+                let rights = st
+                    .members
+                    .iter()
+                    .find(|m| m.p.pid == *pid)
+                    .map(|m| self.host.rights(&m.p, &st.key))
+                    .filter(|r| r.read)?;
+                let list = q
+                    .iter()
+                    .filter_map(|n| n.overwrite.clone())
+                    .map(|mut o| {
+                        self.grid_note_for_reader(store, &mut o, &rights);
+                        o
+                    })
+                    .collect();
+                Some((pid.clone(), list))
+            })
+            .collect()
+    }
+
+    /// The newest version at or before change `before`: it holds the live value a change after
+    /// it overrode.
+    pub(super) fn version_before(
+        &self,
+        store: &crate::store::DocStore,
+        before: Seq,
+    ) -> Option<crate::store::VersionId> {
+        store
+            .version_infos(self.doc_id)
+            .ok()?
+            .into_iter()
+            .filter(|v| v.seq <= before)
+            .max_by_key(|v| (v.seq, v.id))
+            .map(|v| v.id)
+    }
+
+    /// Queue a grid note `o` for `pid`'s `q`: on its row's note if it has one for this change
+    /// (one note per row per author), at most [`OVERWRITE_PENDING_MAX`] notes per pid, the
+    /// overflow rolled up in the last one ("N more cells overwritten"): never dropped silently.
+    /// (A text doc's notes queue in `live/removed.rs`.)
+    pub(super) fn queue_grid_overwrite(q: &mut Vec<Note>, o: Overwrite) {
+        if o.rule == "cell" && o.row.is_some() {
+            let same = q
+                .iter_mut()
+                .rev()
+                .filter_map(|n| n.overwrite.as_mut())
+                .find(|x| x.rule == "cell" && x.row == o.row && x.change == o.change);
+            if let Some(x) = same {
+                if x.also.len() + 1 < OVERWRITE_CELLS_MAX {
+                    x.also.push(OverwriteCell {
+                        region: o.region,
+                        col: o.col,
+                        yours: o.yours,
+                        file: o.file,
+                        cut: o.cut,
+                    });
+                } else {
+                    x.more += 1;
+                }
+                return;
+            }
+        }
+        if q.len() < OVERWRITE_PENDING_MAX {
+            q.push(Self::overwritten_note(o));
+            return;
+        }
+        let (cells, change, before, at_ms) = (o.cells(), o.change, o.before, o.at_ms);
+        let last = q.last_mut().and_then(|n| n.overwrite.as_mut());
+        match last {
+            Some(r) if r.is_rollup() => {
+                r.more += cells;
+                r.change = change;
+                r.before = r.before.max(before);
+                r.at_ms = at_ms;
+            }
+            _ => {
+                // the last note becomes part of the roll-up too, to keep the bound
+                let old = q.pop().and_then(|n| n.overwrite);
+                let more = cells + old.as_ref().map_or(0, Overwrite::cells);
+                let mut r = o;
+                r.rule = "rollup";
+                r.region.clear();
+                r.row = None;
+                r.line = None;
+                r.col = None;
+                r.yours.clear();
+                r.file.clear();
+                r.cut = false;
+                r.also.clear();
+                r.more = more;
+                q.push(Self::overwritten_note(r));
+            }
+        }
+    }
+
+    fn batch_fresh(&self, st: &mut State, reader: &str, raw: Vec<Note>, now: u64) -> Notes {
+        let c = &self.config;
         st.aware
             .prune_noted(now, c.note_repeat_ms, c.note_interval_ms);
         let key = |n: &Note| {
             (
-                reader.clone(),
+                reader.to_owned(),
                 n.pid.clone(),
                 n.kind,
                 n.lines.root.clone(),
@@ -955,7 +1245,7 @@ impl Session {
         if fresh.is_empty() {
             return Notes::default();
         }
-        if st.aware.batches.contains_key(&reader) {
+        if st.aware.batches.contains_key(reader) {
             return Notes {
                 held: fresh.len(),
                 ..Notes::default()
@@ -973,7 +1263,7 @@ impl Session {
             st.aware.noted.insert(key(n), now);
             st.roster.record(
                 RosterEvent::Note {
-                    to: Who::of(&reader),
+                    to: Who::of(reader),
                     from: Who::of(&n.pid),
                     kind: n.kind,
                     lines: n.lines.clone(),
@@ -982,15 +1272,7 @@ impl Session {
                 self.config.roster_queue,
             );
         }
-        st.aware.batches.insert(reader, now);
-        // an App reader (K5) sees the others by handle
-        let shown = match Self::app_viewer(st, i) {
-            Some(v) => {
-                let mut l = st.handles.lens(&v);
-                shown.into_iter().map(|n| l.note(n)).collect()
-            }
-            None => shown,
-        };
+        st.aware.batches.insert(reader.to_owned(), now);
         Notes {
             notes: shown,
             more,

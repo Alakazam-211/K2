@@ -1,12 +1,12 @@
 //! [`EngineDoc`] on Yrs (wire-compatible with Yjs).
 //!
-//! - One Yrs root per schema root (text roots only, today).
+//! - One Yrs root per text or map root; four per MovableList root (`structured`).
 //! - Offsets are UTF-16 inside Yrs (`OffsetKind::Utf16`), matching Yjs and CodeMirror.
 //!   Hunks arrive in UTF-8 byte offsets and are converted here.
 //! - Wire updates are Yjs v1; stored state is v2 (10-30% smaller in the D0 spike).
 //! - Outside bytes get a cheap shape check first, then decode/apply under `catch_unwind`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
@@ -16,21 +16,28 @@ use yrs::types::text::ChangeKind as YChangeKind;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    Any, Doc, GetString, OffsetKind, Options, Out, PositionMismatch, ReadTxn, Snapshot,
+    Any, Doc, GetString, MapRef, OffsetKind, Options, Out, PositionMismatch, ReadTxn, Snapshot,
     StateVector, Text, TextRef, Transact, Update,
 };
 #[cfg(feature = "conformance")]
 use yrs::{Assoc, IndexedSequence, StickyIndex};
 
+use super::structured::{self, ListRefs, Order};
 use super::{BlameRun, EngineCheck, EngineDoc, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
+use crate::elem::{Edited, ElemState, Facet, Key, Value, WriteId};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::Hunk;
 
 pub(crate) struct YrsDoc {
     // handles drop before their Doc (fields drop in declaration order; rule 8)
     texts: HashMap<&'static str, TextRef>,
+    lists: HashMap<&'static str, ListRefs>,
+    maps: HashMap<&'static str, MapRef>,
     doc: Doc,
+    /// Each MovableList root's live order, computed on first read after a change to that
+    /// root (O(slots)) and kept until the next one; any merged update drops them all.
+    orders: Mutex<HashMap<&'static str, Arc<Order>>>,
     /// An apply left the doc in a state that can't be trusted: updates left pending (the
     /// engine can't encode those reliably), or a failed or panicked apply that may have
     /// half-integrated. Nothing is encoded or edited from a
@@ -42,6 +49,9 @@ pub(crate) struct YrsDoc {
     text_cache: Mutex<HashMap<&'static str, String>>,
     /// The sampled runtime check of the edit path and the text cache (v0.9.3).
     checks: Checks,
+    /// The structured part of the change being made (planned against the doc before any
+    /// change): emitted after the text by whichever path makes it, both when sampled.
+    pending: Option<structured::Plan>,
     /// What the engine's position index reported through its audit hook (v0.9.7: a shadow
     /// check found its marker path and the full walk disagree; the walk was used). Shared
     /// with the hook, which runs inside a transaction and only pushes here.
@@ -207,21 +217,34 @@ fn new_doc(client: u64) -> Doc {
     })
 }
 
-/// Root text `name` of `doc`: the only way this module takes a shared-type handle
-/// (ARCHITECTURE rule 8, v0.9.7). A root's handle stays valid for the doc's life; a nested
-/// type's handle can outlive its type after a remote delete, so the kit never holds one, and
-/// never across an apply. Checked in debug builds and by
-/// `tests::the_engine_holds_only_root_handles`.
+/// Whether `t`'s shared type is one of its doc's roots.
+pub(super) fn is_root(t: &impl AsRef<yrs::branch::Branch>) -> bool {
+    matches!(t.as_ref().id(), BranchID::Root(_))
+}
+
+/// Root text `name` of `doc`. With [`root_map`] and [`root_array`] (C1's map and list
+/// roots), the only ways the engine takes a shared-type handle (ARCHITECTURE rule 8,
+/// v0.9.7). A root's handle stays valid for the doc's life; a nested type's handle can
+/// outlive its type after a remote delete, so the kit never holds one, and never across an
+/// apply. Checked in debug builds and by `root_handles::the_engine_holds_only_root_handles`.
 fn root_text(doc: &Doc, name: &str) -> TextRef {
     let t = doc.get_or_insert_text(name);
-    debug_assert!(
-        matches!(
-            AsRef::<yrs::branch::Branch>::as_ref(&t).id(),
-            BranchID::Root(_)
-        ),
-        "the kit holds only root handles"
-    );
+    debug_assert!(is_root(&t), "the kit holds only root handles");
     t
+}
+
+/// Root map `name` of `doc` (a schema's map root, or one of a list root's maps).
+pub(super) fn root_map(doc: &Doc, name: &str) -> MapRef {
+    let m = doc.get_or_insert_map(name);
+    debug_assert!(is_root(&m), "the kit holds only root handles");
+    m
+}
+
+/// Root array `name` of `doc` (a list root's slots).
+pub(super) fn root_array(doc: &Doc, name: &str) -> yrs::ArrayRef {
+    let a = doc.get_or_insert_array(name);
+    debug_assert!(is_root(&a), "the kit holds only root handles");
+    a
 }
 
 fn guarded<T>(f: impl FnOnce() -> Result<T, DocError>) -> Result<T, DocError> {
@@ -256,6 +279,24 @@ fn roots(doc: &Doc, schema: &Schema) -> HashMap<&'static str, TextRef> {
         .iter()
         .filter(|(_, k)| *k == Kind::Text)
         .map(|(n, _)| (*n, root_text(doc, n)))
+        .collect()
+}
+
+fn list_roots(doc: &Doc, schema: &Schema) -> HashMap<&'static str, ListRefs> {
+    schema
+        .roots
+        .iter()
+        .filter(|(_, k)| *k == Kind::MovableList)
+        .map(|(n, _)| (*n, ListRefs::declare(doc, n)))
+        .collect()
+}
+
+fn map_roots(doc: &Doc, schema: &Schema) -> HashMap<&'static str, MapRef> {
+    schema
+        .roots
+        .iter()
+        .filter(|(_, k)| *k == Kind::Map)
+        .map(|(n, _)| (*n, root_map(doc, n)))
         .collect()
 }
 
@@ -382,6 +423,8 @@ pub(crate) fn insert_clocks(clock_before: u32, edits: &[Edit]) -> Vec<Vec<u32>> 
                 }
                 out
             }
+            // structured roots are written after every text root
+            Edit::List { .. } | Edit::Map { .. } => Vec::new(),
         })
         .collect()
 }
@@ -497,6 +540,7 @@ impl YrsDoc {
         #[cfg(not(any(test, feature = "differential")))]
         let planted = false;
         let (doc, texts) = (&self.doc, &self.texts);
+        let (lists, maps, pending) = (&self.lists, &self.maps, &self.pending);
         let made = guarded(|| {
             let mut txn = {
                 prof!("engine.txn_begin");
@@ -533,6 +577,9 @@ impl YrsDoc {
                     }
                 }
             }
+            if let Some(p) = pending {
+                p.emit(&mut txn, lists, maps);
+            }
             let update = {
                 prof!("engine.encode_update");
                 txn.encode_update_v1()
@@ -565,10 +612,17 @@ impl YrsDoc {
                 .apply_update(u)
                 .map_err(|e| DocError::Load(e.to_string()))
         })?;
+        self.lists = self
+            .lists
+            .keys()
+            .map(|n| (*n, ListRefs::declare(&doc, n)))
+            .collect();
+        self.maps = self.maps.keys().map(|n| (*n, root_map(&doc, n))).collect();
         self.doc = doc;
         self.texts = texts;
         self.poisoned = false;
         self.forget_texts();
+        self.forget_orders();
         Ok(())
     }
 
@@ -679,6 +733,16 @@ impl YrsDoc {
             .keys()
             .map(|n| (*n, root_text(&replica, n)))
             .collect();
+        let rlists: HashMap<&'static str, ListRefs> = self
+            .lists
+            .keys()
+            .map(|n| (*n, ListRefs::declare(&replica, n)))
+            .collect();
+        let rmaps: HashMap<&'static str, MapRef> = self
+            .maps
+            .keys()
+            .map(|n| (*n, root_map(&replica, n)))
+            .collect();
         let full = guarded(|| {
             Ok(self
                 .doc
@@ -692,21 +756,62 @@ impl YrsDoc {
                 .apply_update(u)
                 .map_err(|e| DocError::Apply(e.to_string()))
         })?;
-        let mut txn = replica.transact_mut();
-        for (root, hunks, pos) in plans {
-            let t = &rtexts[root];
-            // Back to front, so earlier offsets stay valid.
-            for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
-                if len16 > 0 {
-                    debug_assert!(u64::from(s16) + u64::from(len16) <= u64::from(t.len(&txn)));
-                    t.remove_range(&mut txn, s16, len16);
-                }
-                if !h.insert.is_empty() {
-                    t.insert(&mut txn, s16, &h.insert);
+        guarded(|| {
+            let mut txn = replica.transact_mut();
+            for (root, hunks, pos) in plans {
+                let t = &rtexts[root];
+                // Back to front, so earlier offsets stay valid.
+                for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
+                    if len16 > 0 {
+                        debug_assert!(u64::from(s16) + u64::from(len16) <= u64::from(t.len(&txn)));
+                        t.remove_range(&mut txn, s16, len16);
+                    }
+                    if !h.insert.is_empty() {
+                        t.insert(&mut txn, s16, &h.insert);
+                    }
                 }
             }
+            if let Some(p) = &self.pending {
+                p.emit(&mut txn, &rlists, &rmaps);
+            }
+            Ok(txn.encode_update_v1())
+        })
+    }
+
+    /// A number that strictly increases across `client`'s changes to this doc: its clock
+    /// plus every clock unit the doc has deleted. A change that writes inserts (the clock
+    /// grows) or removes (the deleted units grow); the [`WriteId`]s of a change carry it.
+    fn change_number(&self, client: ClientId) -> u64 {
+        let txn = self.doc.transact();
+        let deleted: u64 = txn
+            .snapshot()
+            .delete_set
+            .iter()
+            .flat_map(|(_, ranges)| ranges.iter().map(|r| u64::from(r.end - r.start)))
+            .sum();
+        u64::from(txn.state_vector().get(&ClientID::new(client))) + deleted
+    }
+
+    /// A list root's cached live order (computed if a change dropped it).
+    fn order(&self, root: &str) -> Result<Arc<Order>, DocError> {
+        let (name, refs) = self
+            .lists
+            .get_key_value(root)
+            .ok_or_else(|| DocError::Malformed(format!("no list root {root:?}")))?;
+        let mut cache = self.orders.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(o) = cache.get(root) {
+            return Ok(o.clone());
         }
-        Ok(txn.encode_update_v1())
+        let o = Arc::new(structured::order(&self.doc.transact(), refs)?);
+        cache.insert(*name, o.clone());
+        Ok(o)
+    }
+
+    fn forget_orders(&mut self) {
+        self.orders
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
     }
 
     /// The full state, v2, under `catch_unwind` even when the doc looks usable.
@@ -743,13 +848,23 @@ impl YrsDoc {
                 .apply_update(u)
                 .map_err(|e| DocError::Load(e.to_string()))
         })?;
+        let lists = self
+            .lists
+            .keys()
+            .map(|n| (*n, ListRefs::declare(&doc, n)))
+            .collect();
+        let maps = self.maps.keys().map(|n| (*n, root_map(&doc, n))).collect();
         Ok(YrsDoc {
             doc,
             texts,
+            lists,
+            maps,
+            orders: Mutex::new(HashMap::new()),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
             checks,
             positions,
+            pending: self.pending.clone(),
         })
     }
 
@@ -870,6 +985,60 @@ impl YrsDoc {
     }
 }
 
+#[cfg(test)]
+impl YrsDoc {
+    /// A list root's slots in order: (entry, engine client, engine clock). Tests only.
+    pub(crate) fn slot_items(&self, root: &str) -> Vec<(String, u64, u32)> {
+        use yrs::{Array, Assoc, IndexedSequence};
+        let txn = self.doc.transact();
+        let slots = self.lists[root].slots();
+        (0..slots.len(&txn))
+            .map(|i| {
+                let id = *slots
+                    .sticky_index(&txn, i, Assoc::After)
+                    .expect("an element at i")
+                    .id()
+                    .expect("an item ID");
+                let entry = match slots.get(&txn, i) {
+                    Some(Out::Any(Any::String(s))) => s.to_string(),
+                    other => panic!("slot {i}: {other:?}"),
+                };
+                (entry, id.client.get(), id.clock)
+            })
+            .collect()
+    }
+
+    /// The list roots whose live order is cached now. Tests only.
+    pub(crate) fn cached_orders(&self) -> Vec<&'static str> {
+        let mut v: Vec<&'static str> = self
+            .orders
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .keys()
+            .copied()
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// The doc's delete set, as sorted (client, clock range) pairs. Tests only.
+    pub(crate) fn deleted_ranges(&self) -> Vec<(u64, std::ops::Range<u32>)> {
+        let txn = self.doc.transact();
+        let mut v: Vec<(u64, std::ops::Range<u32>)> = txn
+            .snapshot()
+            .delete_set
+            .iter()
+            .flat_map(|(c, rs)| {
+                rs.iter()
+                    .map(move |r| (c.get(), r.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        v.sort_by_key(|(c, r)| (*c, r.start));
+        v
+    }
+}
+
 impl YrsDoc {
     /// Check (as [`EngineDoc::check_update`]) and apply an update from a connection that owns
     /// client `allowed`, decoded once ([`decode_accepted`]): nothing is applied unless every
@@ -935,6 +1104,7 @@ impl YrsDoc {
             return Err(DocError::Pending);
         }
         self.forget_texts();
+        self.forget_orders();
         let applied = guarded(|| {
             self.doc
                 .transact_mut()
@@ -960,7 +1130,7 @@ impl YrsDoc {
 
     /// The delete set as merged clock ranges per client, sorted: equal for equal deletions
     /// however each doc split its blocks.
-    fn deleted_ranges(&self) -> Vec<(u64, Vec<(u32, u32)>)> {
+    fn merged_deleted_ranges(&self) -> Vec<(u64, Vec<(u32, u32)>)> {
         let ds = self.doc.transact().snapshot().delete_set;
         let mut out: Vec<(u64, Vec<(u32, u32)>)> = ds
             .iter()
@@ -987,7 +1157,7 @@ impl YrsDoc {
     /// replicas, so equal docs may encode differently. O(doc).
     pub(crate) fn same_content(&self, other: &YrsDoc) -> bool {
         self.same_state_vector(other)
-            && self.deleted_ranges() == other.deleted_ranges()
+            && self.merged_deleted_ranges() == other.merged_deleted_ranges()
             && self.texts.keys().all(|r| self.text(r) == other.text(r))
     }
 
@@ -1041,6 +1211,47 @@ impl YrsDoc {
         self.apply_decoded(u)
     }
 
+    /// How many runs the current slots of `keys` (in this order) form in list root `root`:
+    /// a run continues while the next key's slot is the next one in the slots array and has
+    /// the next engine ID (same client, clock + 1). `None` when a key has no slot (never
+    /// inserted). O(slots × keys); the suite's lists are small.
+    pub(crate) fn slot_runs(&self, root: &str, keys: &[Key]) -> Result<Option<usize>, DocError> {
+        use yrs::Array;
+        self.usable()?;
+        let refs = self
+            .lists
+            .get(root)
+            .ok_or_else(|| DocError::Malformed(format!("no list root {root:?}")))?;
+        let txn = self.doc.transact();
+        let slots = refs.slots();
+        let mut at: HashMap<String, (u32, u64, u32)> = HashMap::new();
+        for i in 0..slots.len(&txn) {
+            let id = slots
+                .sticky_index(&txn, i, Assoc::After)
+                .and_then(|s| s.id().copied())
+                .ok_or_else(|| DocError::Malformed(format!("slot {i} has no ID")))?;
+            if let Some(Out::Any(Any::String(e))) = slots.get(&txn, i) {
+                at.insert(e.to_string(), (i, id.client.get(), id.clock));
+            }
+        }
+        let mut runs = 0;
+        let mut prev: Option<(u32, u64, u32)> = None;
+        for k in keys {
+            let Some(slot) = structured::slot_of_key(&txn, refs, k.as_str())? else {
+                return Ok(None);
+            };
+            let Some(&here) = at.get(&format!("{slot}\x1f{}", k.as_str())) else {
+                return Ok(None);
+            };
+            let continues = prev.is_some_and(|(p, c, k)| here == (p + 1, c, k + 1));
+            if !continues {
+                runs += 1;
+            }
+            prev = Some(here);
+        }
+        Ok(Some(runs))
+    }
+
     /// A relative position in text root `root` at UTF-16 offset `at16`, stuck to the
     /// character after it (`right`) or before it. `None` past the end, or at the end when
     /// stuck right (no character there).
@@ -1065,13 +1276,19 @@ impl EngineDoc for YrsDoc {
         let checks = Checks::new();
         watch_positions(&doc, &positions, checks.position_every);
         let texts = roots(&doc, schema);
+        let lists = list_roots(&doc, schema);
+        let maps = map_roots(&doc, schema);
         Self {
             doc,
             texts,
+            lists,
+            maps,
+            orders: Mutex::new(HashMap::new()),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
             checks,
             positions,
+            pending: None,
         }
     }
 
@@ -1158,7 +1375,7 @@ impl EngineDoc for YrsDoc {
         self.apply_decoded(u)
     }
 
-    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError> {
+    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
         self.usable()?;
         prof!("engine.edit_as");
         // the canary (v0.9.3): a sampled edit first checks the text cache its positions are
@@ -1171,21 +1388,78 @@ impl EngineDoc for YrsDoc {
         let mut before: Vec<String> = Vec::with_capacity(edits.len());
         let plans: Vec<TextPlan> = edits
             .iter()
-            .map(|e| match e {
+            .filter_map(|e| match e {
                 Edit::Text { root, hunks } => {
                     prof!("engine.positions");
                     let cur = self.text(root);
                     let pos = to_utf16(&cur, hunks);
                     before.push(cur);
-                    (root.as_str(), hunks.as_slice(), pos)
+                    Some((root.as_str(), hunks.as_slice(), pos))
                 }
+                Edit::List { .. } | Edit::Map { .. } => None,
             })
             .collect();
-
-        let update = {
-            prof!("engine.make_change");
-            self.make_change(client, &plans)?
+        let any_text = plans.iter().any(|(_, h, _)| !h.is_empty());
+        // Structured ops are checked and resolved against the doc too (the applied stream
+        // comes from here), and only then written.
+        let structured = edits.iter().any(|e| !matches!(e, Edit::Text { .. }));
+        let planned = if structured {
+            let change = self.change_number(client);
+            let txn = self.doc.transact();
+            Some(structured::plan(
+                &txn,
+                &self.lists,
+                &self.maps,
+                client,
+                change,
+                edits,
+            )?)
+        } else {
+            None
         };
+        let applied = match &planned {
+            Some(p) => p.applied.clone(),
+            None => edits
+                .iter()
+                .map(|e| match e {
+                    Edit::Text { root, hunks } => crate::elem::Applied::Text {
+                        root: root.clone(),
+                        hunks: hunks.clone(),
+                    },
+                    Edit::List { .. } | Edit::Map { .. } => unreachable!("no structured edits"),
+                })
+                .collect(),
+        };
+        if !any_text && !planned.as_ref().is_some_and(structured::Plan::writes) {
+            return Ok(Edited {
+                update: None,
+                applied,
+            });
+        }
+
+        // the structured part is emitted by whichever path makes the change (both, when
+        // the canary samples it), after the text
+        let kept: Vec<(&'static str, Arc<Order>)> = {
+            let cache = self.orders.lock().unwrap_or_else(|p| p.into_inner());
+            cache
+                .iter()
+                .filter(|(r, _)| !edits.iter().any(|e| e.root() == **r))
+                .map(|(r, o)| (*r, o.clone()))
+                .collect()
+        };
+        self.pending = planned;
+        let made = {
+            prof!("engine.make_change");
+            self.make_change(client, &plans)
+        };
+        self.pending = None;
+        // the live order of a list root this change didn't touch stays valid: keep it
+        {
+            let orders = self.orders.get_mut().unwrap_or_else(|p| p.into_inner());
+            orders.clear();
+            orders.extend(kept);
+        }
+        let update = made?;
         prof!("engine.text_cache");
         // the texts it made are known: no walk of the doc to read them again (a root edited
         // twice in one call is read afresh)
@@ -1208,7 +1482,55 @@ impl EngineDoc for YrsDoc {
         if self.checks.now {
             self.check_text_cache();
         }
-        Ok(update)
+        Ok(Edited {
+            update: Some(update),
+            applied,
+        })
+    }
+
+    fn list(&self, root: &str) -> Result<Vec<(Key, Value)>, DocError> {
+        let o = self.order(root)?;
+        structured::list(&self.doc.transact(), &self.lists[root], &o)
+    }
+
+    fn elem(&self, root: &str, key: &str) -> Result<ElemState, DocError> {
+        let o = self.order(root)?;
+        Ok(structured::elem(
+            &self.doc.transact(),
+            &self.lists[root],
+            &o,
+            key,
+        ))
+    }
+
+    fn elem_value(&self, root: &str, key: &str) -> Result<Option<Value>, DocError> {
+        structured::elem_value(&self.doc.transact(), &self.lists[root], key)
+    }
+
+    fn hidden(&self, root: &str) -> Result<BTreeMap<Key, Value>, DocError> {
+        let o = self.order(root)?;
+        structured::hidden(&self.doc.transact(), &self.lists[root], &o)
+    }
+
+    fn places(&self, root: &str) -> Result<Vec<Key>, DocError> {
+        Ok(self.order(root)?.places.clone())
+    }
+
+    fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError> {
+        structured::map(&self.doc.transact(), &self.maps[root])
+    }
+
+    fn map_get(&self, root: &str, key: &str) -> Result<Option<Value>, DocError> {
+        structured::map_get(&self.doc.transact(), &self.maps[root], key)
+    }
+
+    fn winner(&self, root: &str, key: &str, facet: Facet) -> Result<Option<WriteId>, DocError> {
+        let txn = self.doc.transact();
+        match (self.lists.get(root), self.maps.get(root)) {
+            (Some(l), _) => structured::list_winner(&txn, l, key, facet),
+            (None, Some(m)) => structured::map_winner(&txn, m, key, facet),
+            (None, None) => Err(DocError::Malformed(format!("no structured root {root:?}"))),
+        }
     }
 
     /// `client`'s entry of the state vector (0 for a client the doc has never seen), read
@@ -1958,7 +2280,9 @@ mod tests {
         d.edit_as(600, &edits).unwrap();
         let mut total = 0;
         for (e, starts) in edits.iter().zip(&want) {
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                unreachable!("text edits only")
+            };
             let text = d.text(root).unwrap();
             let runs = d.blame_runs(root).unwrap();
             // each live byte offset's (client, clock)
@@ -2001,9 +2325,11 @@ mod tests {
 }
 
 /// ARCHITECTURE rule 8 (v0.9.7): the kit holds only root shared-type handles. The engine
-/// module takes handles in one place, `root_text` (which asserts a root in debug builds),
-/// names no nested type, and reads no nested type out of a value; every doc it makes keeps
-/// root handles only. A future change that starts holding a nested handle fails here.
+/// takes handles in three places, `root_text`, `root_map` and `root_array` (each asserts a
+/// root in debug builds; the map and array ones are C1's map and list roots), names no
+/// nested type but those roots' (`MapRef`, `ArrayRef`, `ListRefs`), and reads no nested
+/// type out of a value; every doc it makes keeps root handles only. A future change that
+/// starts holding a nested handle fails here.
 #[cfg(test)]
 mod root_handles {
     use super::*;
@@ -2013,29 +2339,52 @@ mod root_handles {
         roots: &[("a", Kind::Text), ("b", Kind::Text)],
     };
 
-    fn is_root(t: &TextRef) -> bool {
-        matches!(
-            AsRef::<yrs::branch::Branch>::as_ref(t).id(),
-            BranchID::Root(_)
-        )
+    const G: Schema = Schema {
+        name: "g",
+        roots: &[
+            ("a", Kind::Text),
+            ("l", Kind::MovableList),
+            ("m", Kind::Map),
+        ],
+    };
+
+    /// The code of `src`, without its tests and comments.
+    fn code(src: &str) -> Vec<&str> {
+        src.split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap()
+            .split("#[cfg(test)]\nmod root_handles")
+            .next()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect()
+    }
+
+    /// Every handle `d` holds is a root's.
+    fn all_roots(d: &YrsDoc) -> bool {
+        d.texts.values().all(is_root)
+            && d.maps.values().all(is_root)
+            && d.lists.values().all(ListRefs::are_roots)
     }
 
     #[test]
     fn the_engine_holds_only_root_handles() {
         let src = include_str!("yrs.rs");
-        // the module's code, without its tests and comments
-        let code: Vec<&str> = src
-            .split("#[cfg(test)]\nmod tests")
-            .next()
-            .unwrap()
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect();
+        let structured = include_str!("structured.rs");
+        let code = code(src);
         let takes = code.iter().filter(|l| l.contains("get_or_insert_")).count();
-        assert_eq!(takes, 1, "only root_text takes a shared-type handle");
+        assert_eq!(
+            takes, 3,
+            "only root_text, root_map and root_array take a shared-type handle"
+        );
+        let shared: Vec<&str> = self::code(structured);
+        assert!(
+            !shared.iter().any(|l| l.contains("get_or_insert_")),
+            "the structured module takes handles only through root_map and root_array"
+        );
+        // the map and list roots' types are named (C1); a nested type of any kind is not
         for nested in [
-            "MapRef",
-            "ArrayRef",
             "XmlFragmentRef",
             "XmlElementRef",
             "XmlTextRef",
@@ -2047,8 +2396,8 @@ mod root_handles {
             "BranchPtr",
         ] {
             assert!(
-                !code.iter().any(|l| l.contains(nested)),
-                "the engine module names {nested}: the kit holds only root handles"
+                !code.iter().chain(&shared).any(|l| l.contains(nested)),
+                "the engine names {nested}: the kit holds only root handles"
             );
         }
         // handles drop before their Doc: in every struct of this file (tests included), a
@@ -2068,7 +2417,11 @@ mod root_handles {
             let doc = fields
                 .iter()
                 .position(|l| l.ends_with(": Doc,") || l.ends_with(": yrs::Doc,"));
-            let handle = fields.iter().rposition(|l| l.contains("TextRef"));
+            let handle = fields.iter().rposition(|l| {
+                ["TextRef", "MapRef", "ArrayRef", "ListRefs"]
+                    .iter()
+                    .any(|h| l.contains(h))
+            });
             if let (Some(d), Some(h)) = (doc, handle) {
                 structs += 1;
                 assert!(
@@ -2091,12 +2444,15 @@ mod root_handles {
             );
         }
         // every doc the module makes keeps root handles only
-        let d = YrsDoc::new(&S);
-        assert!(d.texts.values().all(is_root));
-        let state = d.encode_v2().unwrap();
-        let l = YrsDoc::load(&S, &state).unwrap();
-        assert!(l.texts.values().all(is_root));
-        let t = l.twin().unwrap();
-        assert!(t.texts.values().all(is_root));
+        for schema in [&S, &G] {
+            let d = YrsDoc::new(schema);
+            assert!(all_roots(&d));
+            let state = d.encode_v2().unwrap();
+            let l = YrsDoc::load(schema, &state).unwrap();
+            assert!(all_roots(&l));
+            let t = l.twin().unwrap();
+            assert!(all_roots(&t));
+        }
+        assert!(!YrsDoc::new(&G).lists.is_empty() && !YrsDoc::new(&G).maps.is_empty());
     }
 }

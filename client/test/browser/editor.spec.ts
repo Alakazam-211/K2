@@ -165,23 +165,23 @@ test("a rejection's Re-apply and Dismiss work from the keyboard", async ({ page 
   expect(st.docs[0]).toBe(st.server);
 });
 
-test("a rejection Re-apply refuses: from the keyboard, no text changes, the note is announced, Dismiss works", async ({ page }) => {
+test("a rejection Re-apply refuses (a conflict): from the keyboard, no text changes, the note is announced, Dismiss works", async ({ page }) => {
   await load(page, "hello world\n");
-  // editor 0 replaces "world" and its socket drops with the edit (MPC-E000): a replacement, which
-  // Re-apply refuses (not-insertion) rather than put its text beside the old
+  // editor 0 replaces "world" while an outside edit replaces it first (MPC-E111): the server's
+  // rule refuses it again, so Re-apply does
   await page.evaluate(async () => {
     const sc = (window as any).sc;
     sc.editors[0].view.dispatch({ changes: { from: 6, to: 11, insert: "WORLD" }, userEvent: "input.type" });
-    sc.transports[0].drop(false);
+    sc.serverEdit([{ start: 6, end: 11, insert: "earth" }]);
     await sc.settle();
   });
-  await settleLive(page); // the reconnect runs on real timers; its resync rejects the lost edit
+  await settleLive(page);
   await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(1);
   const note = page.locator("#ed0 .mpc-note");
   await expect(note).toHaveAttribute("role", "status"); // a live region: its text is announced
   await expect(note).toBeHidden();
   const before = await state(page);
-  expect(before.server).toBe("hello world\n");
+  expect(before.server).toBe("hello earth\n");
   await page.click("#ed0 .cm-content");
   let found = false;
   for (let i = 0; i < 12 && !found; i++) {
@@ -193,9 +193,9 @@ test("a rejection Re-apply refuses: from the keyboard, no text changes, the note
   await settle(page);
   // refused: the note says check and retype, nothing changed, the row is still there
   await expect(note).toBeVisible();
-  await expect(note).toHaveText("This change deleted or replaced text: nothing was re-applied. Check it, then type what's missing.");
+  await expect(note).toHaveText("Someone else changed this text since: nothing was re-applied. Check it, then type what's missing.");
   let st = await state(page);
-  expect(st.server).toBe("hello world\n");
+  expect(st.server).toBe("hello earth\n");
   expect(st.docs).toEqual([st.server, st.server]);
   expect(st.serverVersion).toBe(before.serverVersion);
   await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(1);
@@ -204,9 +204,84 @@ test("a rejection Re-apply refuses: from the keyboard, no text changes, the note
   await page.keyboard.press("Enter");
   await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(0);
   st = await state(page);
-  expect(st.server).toBe("hello world\n");
+  expect(st.server).toBe("hello earth\n");
   expect(st.docs[0]).toBe(st.server);
   await noProblems(page);
+});
+
+/** Editor 0's "world" replaced by "WORLD" while an outside edit replaced it first: refused. */
+async function conflictRow(page: Page) {
+  await load(page, "hello world\n");
+  await page.evaluate(async () => {
+    const sc = (window as any).sc;
+    sc.editors[0].view.dispatch({ changes: { from: 6, to: 11, insert: "WORLD" }, userEvent: "input.type" });
+    sc.serverEdit([{ start: 6, end: 11, insert: "earth" }]);
+    await sc.settle();
+  });
+  await settleLive(page);
+  await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(1);
+}
+
+/** Tab from the editor until the focused element has class `cls`. */
+async function tabTo(page: Page, cls: string) {
+  await page.click("#ed0 .cm-content");
+  for (let i = 0; i < 16; i++) {
+    await page.keyboard.press("Tab");
+    if (await page.evaluate((c) => document.activeElement?.classList.contains(c) ?? false, cls)) return;
+  }
+  throw new Error(`Tab never reached .${cls}`);
+}
+
+test("Insert my text here, from the keyboard: a preview where it goes, announced, then inserted", async ({ page }) => {
+  await conflictRow(page);
+  const note = page.locator("#ed0 .mpc-note");
+  await expect(note).toHaveAttribute("role", "status");
+  await tabTo(page, "mpc-insert-here");
+  await page.keyboard.press("Enter");
+  // the preview: shown in the editor, announced, nothing inserted yet, focus on Insert
+  await expect(page.locator("#ed0 .cm-mpc-insert-preview")).toHaveText("WORLD");
+  await expect(page.locator("#ed0 .cm-mpc-insert-preview")).toBeVisible();
+  await expect(note).toBeVisible();
+  await expect(note).toHaveText("Your text will go in at line 1, shown in the editor. Insert it, or Cancel. Your edit also removed text; that part isn't redone here.");
+  expect((await state(page)).server).toBe("hello earth\n");
+  expect(await page.evaluate(() => document.activeElement?.classList.contains("mpc-insert-confirm") ?? false)).toBe(true);
+  await page.keyboard.press("Enter");
+  await settle(page);
+  const st = await state(page);
+  expect(st.server).toBe("hello WORLDearth\n");
+  expect(st.docs).toEqual([st.server, st.server]);
+  await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(0);
+  await expect(page.locator("#ed0 .cm-mpc-insert-preview")).toHaveCount(0);
+});
+
+test("Insert my text here: Escape cancels, nothing inserted, focus back on the action", async ({ page }) => {
+  await conflictRow(page);
+  await tabTo(page, "mpc-insert-here");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#ed0 .cm-mpc-insert-preview")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#ed0 .cm-mpc-insert-preview")).toHaveCount(0);
+  await expect(page.locator("#ed0 .mpc-note")).toBeHidden();
+  expect(await page.evaluate(() => document.activeElement?.classList.contains("mpc-insert-here") ?? false)).toBe(true);
+  await settle(page);
+  expect((await state(page)).server).toBe("hello earth\n");
+  await expect(page.locator("#ed0 .mpc-rejections li")).toHaveCount(1);
+});
+
+test("the rejected text is always copyable, from the keyboard (the clipboard, or selected when it refuses)", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+  await conflictRow(page);
+  await tabTo(page, "mpc-copy");
+  await page.keyboard.press("Enter");
+  const note = page.locator("#ed0 .mpc-note");
+  await expect(note).toBeVisible();
+  const said = await note.textContent();
+  if (said === "Copied.") {
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("WORLD");
+  } else {
+    expect(said).toBe("Couldn't copy: the text is selected, copy it with your keyboard.");
+    expect(await page.evaluate(() => document.getSelection()?.toString())).toBe("WORLD");
+  }
 });
 
 test("a dropped socket: the banner, then the resume, and typing goes on", async ({ page }) => {

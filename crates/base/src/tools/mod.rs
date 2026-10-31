@@ -151,6 +151,27 @@ pub struct ReadOutput {
     /// view, the whole doc for `cat`, the selected lines' span for `grep`. `None` for byte
     /// counts, `wc` and `diff`.
     pub touched: Option<(usize, usize)>,
+    /// The doc line each stdout line came from, for `--ids` (`None`: the output isn't lines
+    /// of the doc, e.g. `head -c`, `grep -c`).
+    pub(crate) src: Option<SrcLines>,
+}
+
+/// The doc lines a read verb printed, one per stdout line ([`ReadOutput::src`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SrcLines {
+    /// Lines `a..=b` (1-based) in order; empty when `a > b`.
+    Range(usize, usize),
+    /// One entry per stdout line; 0 for a line that is no doc line (grep's `--`).
+    Each(Vec<usize>),
+}
+
+impl SrcLines {
+    fn at(&self, k: usize) -> usize {
+        match self {
+            SrcLines::Range(a, _) => a + k,
+            SrcLines::Each(v) => v.get(k).copied().unwrap_or(0),
+        }
+    }
 }
 
 impl ReadOutput {
@@ -160,14 +181,45 @@ impl ReadOutput {
             exit,
             view: None,
             touched: None,
+            src: None,
         }
     }
 
-    /// Set the viewing range, and the touched lines to it.
+    /// Set the viewing range, and the touched lines to it; the output is those lines.
     pub(crate) fn showing(mut self, view: Option<(usize, usize)>) -> Self {
         self.view = view;
         self.touched = view;
+        self.src = Some(view.map_or(SrcLines::Range(1, 0), |(a, b)| SrcLines::Range(a, b)));
         self
+    }
+
+    /// `--ids` (CSV contract §3.1): prefix each stdout line with its row's key and a tab
+    /// (`header` for the header's lines, `-` for a line that is no doc line). Output that
+    /// isn't lines of the doc (`head -c`, `grep -c`/`-l`/`-q`) is a usage error.
+    pub(crate) fn with_ids(mut self, map: &crate::table::LineMap) -> Result<Self, ToolError> {
+        if self.stdout.is_empty() {
+            return Ok(self);
+        }
+        let Some(src) = &self.src else {
+            return Err(ToolError::usage(
+                "--ids needs lines of the doc: not with byte counts, -c, -l, -L or -q",
+            ));
+        };
+        let mut out = Vec::with_capacity(self.stdout.len() + self.stdout.len() / 4);
+        for (k, line) in self.stdout.split_inclusive(|&b| b == b'\n').enumerate() {
+            match map.owner(src.at(k)) {
+                Some(crate::table::LineOwner::Row(key)) => {
+                    out.extend_from_slice(key.to_string().as_bytes())
+                }
+                Some(crate::table::LineOwner::Header) => out.extend_from_slice(b"header"),
+                Some(crate::table::LineOwner::Preamble) => out.extend_from_slice(b"preamble"),
+                None => out.push(b'-'),
+            }
+            out.push(b'\t');
+            out.extend_from_slice(line);
+        }
+        self.stdout = out;
+        Ok(self)
     }
 }
 
@@ -182,6 +234,39 @@ pub(crate) struct ForEditArg {
 pub(crate) const FOR_EDIT: args::Opt =
     args::opt("for-edit", None, Some("for-edit"), args::Arity::No);
 pub(crate) const TTL: args::Opt = args::opt("ttl", None, Some("ttl"), args::Arity::Req);
+/// `--ids` (CSV contract §3.1): on `cat`, `head`, `tail`, `grep` and `view`, each line is
+/// prefixed with its row's key. Only a table has keys; elsewhere it is a usage error.
+pub(crate) const IDS: args::Opt = args::opt("ids", None, Some("ids"), args::Arity::No);
+
+/// Take `--for-edit [--ttl MS]` out of a structured read verb's arguments (the kit's, as
+/// `--if-version` is for edits; arguments after `--` are left alone): `Some(ttl)` if given.
+pub(crate) fn take_for_edit(
+    args: &[String],
+) -> Result<(Option<Option<u64>>, Vec<String>), ToolError> {
+    let mut fe = ForEditArg::default();
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--" {
+            rest.push(a.clone());
+            rest.extend(it.cloned());
+            break;
+        }
+        if a == "--for-edit" {
+            fe.on = true;
+        } else if a == "--ttl" {
+            let v = it
+                .next()
+                .ok_or_else(|| ToolError::usage("option '--ttl' requires an argument"))?;
+            fe.ttl_ms = Some(parse_ttl(v)?);
+        } else if let Some(v) = a.strip_prefix("--ttl=") {
+            fe.ttl_ms = Some(parse_ttl(v)?);
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    Ok((fe.finish()?, rest))
+}
 
 impl ForEditArg {
     /// Take `it` if it is `--for-edit` or `--ttl`.
@@ -319,28 +404,199 @@ impl EditOutput {
 /// bounded, no I/O, never calling back into the kit.
 pub type PackEdit = Box<dyn FnOnce(&str, &str, &[u8]) -> Result<EditOutput, ToolError>>;
 
-/// An edit verb a pack adds beside the kit's tools (amendment 6), e.g. Markdown's
-/// `replace-section`. Declared by [`crate::session::Pack::verbs`];
-/// [`crate::session::Session::run_tool`] runs it exactly like a kit edit verb: `parse`
-/// checks the arguments before the doc is touched (an error exits 2 and applies nothing),
-/// then the returned [`PackEdit`] computes on the live text inside `edit_with`, and the
-/// result applies as one change (or, with `text: None`, nothing does). Needs read and
-/// edit. The parity registry ([`crate::parity::Registry::for_pack`]) lists it with the
-/// person actions it serves.
+/// What a pack's structured verb computed (A9): the edits to apply by key (one change; empty:
+/// nothing applies), its stdout, and its exit code (0, 1 for the verb's "no", 4 for an
+/// element it can't find...). A structured **read** verb returns no edits.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct StructOutput {
+    pub edits: Vec<crate::doc::Edit>,
+    pub stdout: Vec<u8>,
+    pub exit: u8,
+    /// A read verb's rows or cells shown, by key (`row list`, `cell get`): with
+    /// `--for-edit`, the kit takes its short claim on them under the read's lock, and the
+    /// heads-up notes about those rows come with the read.
+    pub shown: Option<crate::session::ClaimSpan>,
+    /// The refusal a kit grid verb's "no" is, when it has its own id (`MPC-E806`, `MPC-E807`); the
+    /// others are told apart by exit ([`ToolOutput::refusal`](super::ToolOutput)).
+    pub(crate) refusal: Option<&'static crate::errors::ErrorEntry>,
+}
+
+impl StructOutput {
+    pub fn new(edits: Vec<crate::doc::Edit>, stdout: Vec<u8>, exit: u8) -> Self {
+        StructOutput {
+            edits,
+            stdout,
+            exit,
+            shown: None,
+            refusal: None,
+        }
+    }
+
+    /// Set [`StructOutput::shown`].
+    pub fn showing(mut self, span: crate::session::ClaimSpan) -> Self {
+        self.shown = Some(span);
+        self
+    }
+}
+
+/// What a structured verb computes on (A9): the doc as a [`crate::session::View`], its
+/// stdin, and the pack's codec for the two things the kit never does itself: decoding a
+/// block of records in the doc's dialect ([`VerbCtx::decode_block`]) and mapping rendered
+/// lines to rows ([`VerbCtx::line_map`], `L42`).
+pub struct VerbCtx<'a> {
+    view: &'a crate::session::View,
+    stdin: &'a [u8],
+    pack: &'a dyn crate::session::Pack,
+    codec: &'a [u8],
+    hist: Option<&'a dyn VerbHistory>,
+}
+
+/// The doc's history as a structured verb may read it, under the call's lock (the session
+/// gives it; [`VerbCtx::new`] alone has none).
+pub(crate) trait VerbHistory {
+    /// The doc's version the verb runs on.
+    fn version(&self) -> Seq;
+    /// The last write to one element facet, attributed; `None` without the history right
+    /// or with no write recorded.
+    fn last_write(
+        &self,
+        root: &str,
+        key: &str,
+        facet: crate::elem::Facet,
+    ) -> Option<crate::session::ElemBlame>;
+}
+
+impl<'a> VerbCtx<'a> {
+    pub fn new(
+        view: &'a crate::session::View,
+        stdin: &'a [u8],
+        pack: &'a dyn crate::session::Pack,
+        codec: &'a [u8],
+    ) -> Self {
+        VerbCtx {
+            view,
+            stdin,
+            pack,
+            codec,
+            hist: None,
+        }
+    }
+    pub(crate) fn with_history(mut self, hist: &'a dyn VerbHistory) -> Self {
+        self.hist = Some(hist);
+        self
+    }
+    /// The doc's version the verb runs on (`None` outside a session call).
+    pub fn version(&self) -> Option<Seq> {
+        self.hist.map(|h| h.version())
+    }
+    /// The last write to one element facet (who, in which change), as `blame` reports it;
+    /// `None` if the caller lacks the history right, outside a session call, or with no write
+    /// recorded. E.g. who deleted a row: `(table::ROWS, key, Facet::Existence)`.
+    pub fn last_write(
+        &self,
+        root: &str,
+        key: &str,
+        facet: crate::elem::Facet,
+    ) -> Option<crate::session::ElemBlame> {
+        self.hist.and_then(|h| h.last_write(root, key, facet))
+    }
+    /// `header on|off` on `t` as the pack allows it ([`crate::session::Pack::set_header`]);
+    /// a refusal is exit 2 with the pack's reason, `t` unchanged.
+    pub fn set_header(
+        &self,
+        t: &mut crate::table::Table,
+        on: bool,
+    ) -> Result<Vec<crate::doc::Edit>, ToolError> {
+        self.set_header_declined(t, on)
+            .map_err(|d| ToolError::usage(d.message))
+    }
+    /// [`VerbCtx::set_header`] with the pack's decline as it gave it (its code).
+    pub(crate) fn set_header_declined(
+        &self,
+        t: &mut crate::table::Table,
+        on: bool,
+    ) -> Result<Vec<crate::doc::Edit>, crate::session::Declined> {
+        self.pack.set_header(t, on, self.codec)
+    }
+    pub fn view(&self) -> &'a crate::session::View {
+        self.view
+    }
+    /// The doc's codec settings, as the session held them for this call (the pack's,
+    /// opaque to the kit).
+    pub fn codec(&self) -> &'a [u8] {
+        self.codec
+    }
+    pub fn stdin(&self) -> &'a [u8] {
+        self.stdin
+    }
+    /// `bytes` as records in the doc's dialect ([`crate::session::Pack::decode_block`]); a
+    /// decline is exit 2 with the pack's reason.
+    pub fn decode_block(&self, bytes: &[u8]) -> Result<Vec<crate::table::Record>, ToolError> {
+        self.pack
+            .decode_block(bytes, self.codec)
+            .map_err(|d| ToolError::usage(format!("stdin: {} ({})", d.message, d.code)))
+    }
+    /// Which row each rendered line belongs to ([`crate::session::Pack::line_map`]).
+    pub fn line_map(&self) -> Option<crate::table::LineMap> {
+        self.pack.line_map(self.view, self.codec)
+    }
+}
+
+/// A pack's structured verb, parsed (A9): `(the doc as a View, stdin, the pack's codec) ->
+/// StructOutput`. A pure function of its inputs, run under the session lock (an edit verb
+/// inside [`crate::session::Session::edit_ops_with`]): bounded, no I/O, never calling back
+/// into the kit.
+pub type StructEdit = Box<dyn FnOnce(&VerbCtx<'_>) -> Result<StructOutput, ToolError>>;
+
+#[derive(Clone, Copy)]
+enum VerbFn {
+    /// A text edit verb (amendment 6).
+    Text(fn(&[String]) -> Result<PackEdit, ToolError>),
+    /// A structured edit verb (A9).
+    StructEdit(fn(&[String]) -> Result<StructEdit, ToolError>),
+    /// A structured read verb (A9).
+    StructRead(fn(&[String]) -> Result<StructEdit, ToolError>),
+}
+
+/// A verb a pack adds beside the kit's tools: a **text edit verb** (amendment 6, e.g.
+/// Markdown's `replace-section`, [`PackVerb::edit`]) or, for a structured doc (a
+/// [`crate::table`] pack), a **structured verb** computing ops by key (A9, the CSV pack's
+/// `row insert`, `cell get`: [`PackVerb::structured_edit`], [`PackVerb::structured_read`]).
+/// Declared by [`crate::session::Pack::verbs`]; [`crate::session::Session::run_tool`] runs it
+/// as it runs the kit's verbs: `parse` checks the arguments before the doc is touched (an
+/// error exits 2 and applies nothing), then the parsed call computes on the live doc under
+/// the session lock.
+///
+/// - A text edit verb computes on the live text inside `edit_with`, and the result applies
+///   as one change (or, with `text: None`, nothing does). Needs read and edit.
+/// - A structured edit verb computes on the doc as a [`crate::session::View`] inside
+///   [`crate::session::Session::edit_ops_with`], and its edits apply as one change, by key,
+///   with the same plumbing as the kit's edit verbs: `--if-version V` (doc-wide) and `--base
+///   V` (per element facet, K-BR-12) are taken out of its arguments by the kit (an agent's
+///   structured edit needs one of them), and the host's claim policy applies to the cells,
+///   rows and columns it touches. Needs read and edit.
+/// - A structured read verb computes on a View of the live doc; it returns no edits. Needs
+///   read.
+///
+/// A structured verb's name may be two words (`row insert`): the kit matches `argv[0]
+/// argv[1]` first, then `argv[0]`. The parity registry
+/// ([`crate::parity::Registry::for_pack`]) lists every pack verb with the person actions it
+/// serves; text verbs only for a text pack, structured verbs only for a table pack.
 #[derive(Clone, Copy)]
 pub struct PackVerb {
     name: &'static str,
     usage: &'static str,
     serves: &'static [crate::parity::PersonAction],
     exits: &'static [u8],
-    parse: fn(&[String]) -> Result<PackEdit, ToolError>,
+    run: VerbFn,
 }
 
 impl PackVerb {
-    /// An edit verb. `name` is `argv[0]` (one word, not a kit verb); `usage` its flags, one
-    /// line; `serves` the person actions it serves (at least one); `exits` every exit code
-    /// it can end with (besides the session's refusals); `parse` gets the arguments after
-    /// the verb.
+    /// A text edit verb. `name` is `argv[0]` (one word, not a kit verb); `usage` its flags,
+    /// one line; `serves` the person actions it serves (at least one); `exits` every exit
+    /// code it can end with (besides the session's refusals); `parse` gets the arguments
+    /// after the verb.
     pub const fn edit(
         name: &'static str,
         usage: &'static str,
@@ -353,7 +609,45 @@ impl PackVerb {
             usage,
             serves,
             exits,
-            parse,
+            run: VerbFn::Text(parse),
+        }
+    }
+
+    /// A structured edit verb (A9): as [`PackVerb::edit`], but `name` may be two words
+    /// (`row insert`) and `parse` returns a [`StructEdit`] computing ops by key. `parse`
+    /// gets the arguments after the verb's words, without `--if-version` and `--base`.
+    pub const fn structured_edit(
+        name: &'static str,
+        usage: &'static str,
+        serves: &'static [crate::parity::PersonAction],
+        exits: &'static [u8],
+        parse: fn(&[String]) -> Result<StructEdit, ToolError>,
+    ) -> Self {
+        PackVerb {
+            name,
+            usage,
+            serves,
+            exits,
+            run: VerbFn::StructEdit(parse),
+        }
+    }
+
+    /// A structured read verb (A9, `cell get`, `row list`): its [`StructEdit`] reads the
+    /// View and returns no edits (edits are refused, exit 2). `--if-version` and `--base`
+    /// are refused (exit 2), as for the kit's reads.
+    pub const fn structured_read(
+        name: &'static str,
+        usage: &'static str,
+        serves: &'static [crate::parity::PersonAction],
+        exits: &'static [u8],
+        parse: fn(&[String]) -> Result<StructEdit, ToolError>,
+    ) -> Self {
+        PackVerb {
+            name,
+            usage,
+            serves,
+            exits,
+            run: VerbFn::StructRead(parse),
         }
     }
 
@@ -369,9 +663,46 @@ impl PackVerb {
     pub fn exits(&self) -> &'static [u8] {
         self.exits
     }
-    /// Parse the arguments after the verb (`argv[1..]`).
+
+    /// Read or edit (only [`PackVerb::structured_read`] verbs read).
+    pub fn kind(&self) -> Kind {
+        match self.run {
+            VerbFn::StructRead(_) => Kind::Read,
+            _ => Kind::Edit,
+        }
+    }
+
+    /// A structured verb (A9): ops by key on a structured doc, not text.
+    pub fn is_structured(&self) -> bool {
+        !matches!(self.run, VerbFn::Text(_))
+    }
+
+    /// How many words of `argv` its name takes (1 or 2).
+    pub fn words(&self) -> usize {
+        self.name.split(' ').count()
+    }
+
+    /// Parse a text verb's arguments after the verb (`argv[1..]`). A structured verb: exit 2.
     pub fn parse(&self, args: &[String]) -> Result<PackEdit, ToolError> {
-        (self.parse)(args)
+        match self.run {
+            VerbFn::Text(f) => f(args),
+            _ => Err(ToolError::usage(format!(
+                "{} is a structured verb: it runs on a structured doc",
+                self.name
+            ))),
+        }
+    }
+
+    /// Parse a structured verb's arguments after its words (without `--if-version` and
+    /// `--base`). A text verb: exit 2.
+    pub fn parse_structured(&self, args: &[String]) -> Result<StructEdit, ToolError> {
+        match self.run {
+            VerbFn::StructEdit(f) | VerbFn::StructRead(f) => f(args),
+            VerbFn::Text(_) => Err(ToolError::usage(format!(
+                "{} is a text verb: it runs on a text doc",
+                self.name
+            ))),
+        }
     }
 }
 
@@ -382,6 +713,8 @@ impl std::fmt::Debug for PackVerb {
             .field("usage", &self.usage)
             .field("serves", &self.serves)
             .field("exits", &self.exits)
+            .field("structured", &self.is_structured())
+            .field("kind", &self.kind())
             .finish_non_exhaustive()
     }
 }
@@ -544,6 +877,18 @@ impl Tool {
             Inner::Grep(g) => g.for_edit,
             Inner::Sed(s) => s.for_edit,
             _ => None,
+        }
+    }
+
+    /// `--ids`: a read verb asked for each line's row key (tables only).
+    pub fn ids(&self) -> bool {
+        match &self.inner {
+            Inner::Cat(c) => c.ids,
+            Inner::Head(h) => h.ids,
+            Inner::Tail(t) => t.ids,
+            Inner::View(v) => v.ids,
+            Inner::Grep(g) => g.ids,
+            _ => false,
         }
     }
 

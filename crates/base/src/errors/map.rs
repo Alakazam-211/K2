@@ -77,6 +77,18 @@ impl Refusal for SessionError {
             S::RevertTooOld { seq } => rep(&r::REVERT_TOO_OLD, msg).with("seq", *seq),
             S::NoSuchChange(n) => rep(&r::NO_SUCH_CHANGE, msg).with("seq", *n),
             S::Disk(_) => rep(&r::DISK, msg),
+            S::UnknownElem { root, key, dropped } => {
+                let r = rep(&r::NO_ELEMENT, msg)
+                    .with("verb", "edit")
+                    .with("root", *root)
+                    .with("key", key);
+                match dropped {
+                    Some(d) => r
+                        .with("dropped_in", d.change)
+                        .with("dropped_by", d.by.as_str()),
+                    None => r,
+                }
+            }
             S::Leased {
                 holder,
                 name,
@@ -120,7 +132,48 @@ impl Refusal for SessionError {
             S::Deleted => rep(&r::DELETED, msg),
             S::Closed { reason } => rep(&r::CLOSED, msg).with("reason", *reason),
             S::Broken(_) => rep(&r::BROKEN, msg),
+            S::NeedsBase => rep(&r::NEEDS_BASE, msg),
+            S::AtLimit {
+                what,
+                limit,
+                would_be,
+            } => rep(&r::AT_LIMIT, msg)
+                .with("what", *what)
+                .with("limit", *limit)
+                .with("would_be", *would_be),
+            S::FacetConflict(cs) => rep(&r::FACET_CONFLICT, msg)
+                .with("count", cs.len())
+                .with(
+                    "where",
+                    cs.iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+                .with(
+                    "conflicts",
+                    Value::list(cs.iter().map(|c| {
+                        Value::obj([
+                            ("root", Value::from(&c.root)),
+                            ("key", Value::from(&c.key)),
+                            ("facet", Value::from(facet_word(c.facet))),
+                            ("by", c.by.clone().map_or(Value::Null, Value::from)),
+                            ("change", Value::from(c.change)),
+                            ("now", Value::from(&c.now)),
+                        ])
+                    })),
+                ),
         }
+    }
+}
+
+/// A grid facet's name in details (`facet`).
+fn facet_word(f: crate::elem::Facet) -> &'static str {
+    use crate::elem::Facet;
+    match f {
+        Facet::Value => "value",
+        Facet::Position => "position",
+        Facet::Existence => "existence",
     }
 }
 
@@ -165,6 +218,7 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
             .with("found", *found)
             .with("max", crate::store::STORE_FORMAT),
         S::NewerData { table } => rep(&r::STORE_NEWER, msg).with("table", table.as_str()),
+        S::MarksLost(d) => rep(&r::BASE_EXPIRED, msg).with("doc", *d),
         S::Corrupt(what) => rep(&r::STORE_CORRUPT, msg).with("what", *what),
         S::NoDoc(d) => rep(&r::STORE_NO_DOC, msg).with("doc", *d),
         S::KeyTaken(k) => rep(&r::PATH_TAKEN, msg).with(
@@ -253,6 +307,28 @@ fn doc(e: &DocError, msg: String) -> ErrorReport {
                 .with("hunk", *index)
                 .with("problem", why)
         }
+        D::RootName(name) => rep(&r::BAD_ROOT_NAME, msg).with("root", name),
+        D::Op {
+            root,
+            index,
+            refusal,
+        } => rep(&r::OP_REFUSED, msg)
+            .with("root", root)
+            .with("op", *index)
+            .with("problem", op_refusal_word(refusal)),
+        D::Malformed(_) => rep(&r::MALFORMED_DOC, msg),
+    }
+}
+
+/// A structured op's refusal, by name in details (`problem`).
+fn op_refusal_word(r: &crate::elem::OpRefusal) -> &'static str {
+    use crate::elem::OpRefusal as O;
+    match r {
+        O::UnknownKey(_) => "unknown_key",
+        O::KeyExists(_) => "key_exists",
+        O::SelfAnchor(_) => "self_anchor",
+        O::NotDeleted(_) => "not_deleted",
+        O::BadMapKey(_) => "bad_map_key",
     }
 }
 
@@ -352,14 +428,22 @@ fn regions(cs: &[ConflictRegion]) -> Value {
     Value::List(
         cs.iter()
             .map(|c| {
-                Value::obj([
+                let mut o = vec![
                     ("root", Value::from(&c.root)),
                     ("lines", Value::from(c.lines)),
                     ("kind", Value::from(kind_word(c.kind))),
                     ("base", Value::from(&c.base)),
                     ("ours", Value::from(&c.ours)),
                     ("theirs", Value::from(&c.theirs)),
-                ])
+                ];
+                // a structured doc's element (C1): its key and why it conflicts
+                if let Some(k) = &c.key {
+                    o.push(("key", Value::from(k)));
+                }
+                if let Some(w) = &c.why {
+                    o.push(("why", Value::from(w)));
+                }
+                Value::obj(o)
             })
             .collect(),
     )

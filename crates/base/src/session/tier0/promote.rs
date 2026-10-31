@@ -220,6 +220,18 @@ impl BlobSession {
                 }
             };
             let first = versions.is_empty();
+            // a promotion's target pack is a text pack: every root is text (checked here; the
+            // loops below read each root's text)
+            let _texts: Vec<(&String, &str)> = roots
+                .iter()
+                .map(|(r, n)| {
+                    n.as_text().map(|t| (r, t)).ok_or_else(|| {
+                        SessionError::Broken(format!(
+                            "promotion: root {r:?} of version {vid} isn't text"
+                        ))
+                    })
+                })
+                .collect::<Result<_>>()?;
             let before: Vec<(String, String)> = roots
                 .iter()
                 .map(|(r, _)| Ok((r.clone(), doc.text(r)?)))
@@ -232,7 +244,11 @@ impl BlobSession {
             // restored text, so they are its roots (U23), which the revert record keeps
             // (v0.9.7.2; before, it kept none and a revert put back fresh text)
             let mut ids_before: Vec<(String, Option<Ids>)> = Vec::new();
-            for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
+            for ((root, t), (_, old)) in roots
+                .iter()
+                .map(|(r, n)| (r, n.as_text().unwrap_or_default()))
+                .zip(&before)
+            {
                 let hunks = lines::edit_hunks(old, t);
                 if hunks.is_empty() {
                     continue;
@@ -294,7 +310,11 @@ impl BlobSession {
                     info.on_behalf_of = v.on_behalf_of.clone();
                     let mut record = Vec::new();
                     let mut authored = Vec::new();
-                    for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
+                    for ((root, t), (_, old)) in roots
+                        .iter()
+                        .map(|(r, n)| (r, n.as_text().unwrap_or_default()))
+                        .zip(&before)
+                    {
                         let new = doc.text(root)?;
                         if new != *t {
                             return Err(SessionError::Broken(format!(
@@ -357,6 +377,7 @@ impl BlobSession {
                             on_behalf_of: v.on_behalf_of.clone(),
                             at_ms: v.at_ms,
                             roots: record,
+                            elems: Vec::new(),
                         },
                         span: Some(ClockSpan {
                             client,
@@ -365,6 +386,9 @@ impl BlobSession {
                         }),
                         provenance: Vec::new(),
                         authored: (!widened.is_empty()).then_some(authored),
+                        row_marks: Vec::new(),
+                        col_remap: false,
+                        note_rows: Vec::new(),
                     });
                     entries.push(LogEntry {
                         author: v.author.clone(),
@@ -392,6 +416,7 @@ impl BlobSession {
                 name: v.name.clone(),
                 authors: vec![v.author.clone()],
                 content: roots.clone(),
+                codec: None,
             });
             let version = versions.len() as VersionId;
             text_vid.insert(*vid, version);

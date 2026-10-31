@@ -1,6 +1,14 @@
 //! Agent presence (amendment 13): claims and their ends, waiters, the claim policy, `--for-edit`,
 //! heads-up notes, the activity ring, richer roster rows, conflict reports, and the rule that
 //! none of it ever reaches the store. Public API only.
+//!
+//! On a grid (A10, K-PRES-6, CSV contract §6), with the kit's test table pack
+//! (`tests/grid_pack`): carets and claims by key follow moves and sorts; claims expand at
+//! their ends and end `Deleted` when nothing they cover is live; the claim policy and the
+//! notes judge cells, rows and columns; `write --base` conflicts name the claimants.
+
+#[path = "grid_pack/mod.rs"]
+mod grid_pack;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1559,4 +1567,1231 @@ fn shared_edge_the_policy_and_edited_ends_follow_the_claim_that_takes_the_text()
     let ended: Vec<(ClaimId, ClaimEnd)> = f.ended().into_iter().map(|e| (e.0, e.1)).collect();
     assert_eq!(ended, vec![(ib, ClaimEnd::Edited)]);
     assert_eq!(span(&f, c, ia), (0, nl));
+}
+
+// ---------- grids (A10) ----------
+
+mod grid {
+    use super::*;
+    use k2_mpc_base::elem::{Anchor, Key};
+    use k2_mpc_base::session::{ClaimSpan, EditOptions, GridWrite, GridWriteOptions, View};
+    use k2_mpc_base::table::{Table, TableError, CELLS, ROWS};
+    use k2_mpc_base::Edit;
+
+    /// header + r1..r4
+    const GRID: &str = "id,city\nk1,Oslo\nk2,Rome\nk3,Lima\nk4,Kyiv\n";
+
+    pub(super) struct Gx {
+        _dir: TmpDir,
+        host: Arc<TestHost>,
+        _mgr: SessionManager,
+        pub s: Arc<Session>,
+    }
+
+    pub(super) fn gx(tag: &str) -> Gx {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "k2mb-gpresence-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = Arc::new(TestHost {
+            now: AtomicU64::new(1_000_000),
+            rights: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+        let mut config = Config::default();
+        config.edit_burst = 100_000;
+        config.edit_rate_per_s = 100_000;
+        let mgr = SessionManager::new(store, host.clone(), config);
+        let s = mgr
+            .open(
+                Arc::new(grid_pack::GridLite),
+                &DocKey {
+                    space: "ws".into(),
+                    path: "t.csv".into(),
+                },
+                Some(GRID.as_bytes()),
+            )
+            .unwrap();
+        Gx {
+            _dir: TmpDir(dir),
+            host,
+            _mgr: mgr,
+            s,
+        }
+    }
+
+    pub(super) fn k(s: &str) -> Key {
+        Key::new(s).unwrap()
+    }
+
+    pub(super) fn rows(a: &str, b: &str) -> ClaimSpan {
+        ClaimSpan::Rows {
+            first: k(a),
+            last: k(b),
+        }
+    }
+
+    impl Gx {
+        pub fn join(&self, pid: &str, kind: ParticipantKind) -> ConnId {
+            let p = Participant::new(pid, pid.to_uppercase(), "#123456", kind, "cli");
+            self.s.join(p, Stay::Held).unwrap().conn
+        }
+        /// A table op as `c` (an agent names the live version).
+        pub fn op(
+            &self,
+            c: ConnId,
+            f: impl FnOnce(&mut Table) -> Result<Vec<Edit>, TableError>,
+        ) -> Result<u64, SessionError> {
+            self.op_with(c, ClaimPolicy::Ignore, f)
+        }
+        pub fn op_with(
+            &self,
+            c: ConnId,
+            policy: ClaimPolicy,
+            f: impl FnOnce(&mut Table) -> Result<Vec<Edit>, TableError>,
+        ) -> Result<u64, SessionError> {
+            let v = self.s.status().unwrap().version;
+            let opts = EditOptions::new().policy(policy).if_version(v);
+            match self.s.edit_ops_with(c, &opts, |view: &View| {
+                let mut t = view.table().map_err(|e| e.to_string())?;
+                f(&mut t).map_err(|e| e.to_string())
+            }) {
+                Ok(r) => Ok(r.map_or(0, |r| r.version)),
+                Err(EditWithError::Session(e)) => Err(e),
+                Err(EditWithError::Compute(e)) => panic!("table op: {e}"),
+            }
+        }
+        pub fn tool(
+            &self,
+            c: ConnId,
+            argv: &[&str],
+            policy: ClaimPolicy,
+        ) -> Result<tools::ToolOutput, ToolRunError> {
+            let v = self.s.status().unwrap().version.to_string();
+            let mut argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+            if argv.len() > 1
+                && !["head", "view", "cat", "tail", "grep"].contains(&argv[0].as_str())
+            {
+                argv.extend(["--if-version".to_owned(), v]);
+            }
+            self.s
+                .run_tool_with(c, ROWS, &argv, b"", &ToolOptions::new().policy(policy))
+        }
+        pub fn ended(&self) -> Vec<(ClaimId, ClaimEnd)> {
+            self.host
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    AuditEvent::ClaimEnded { claim, how, .. } => Some((*claim, *how)),
+                    _ => None,
+                })
+                .collect()
+        }
+        pub fn spans(&self, c: ConnId) -> Vec<String> {
+            self.s
+                .claims(c)
+                .unwrap()
+                .iter()
+                .map(|i| format!("{} {}", i.pid, i.span))
+                .collect()
+        }
+        pub fn cell_of(&self, c: ConnId, pid: &str) -> Option<k2_mpc_base::session::CellCursor> {
+            self.s
+                .roster(c)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.participant.pid == pid)
+                .and_then(|e| e.cell)
+        }
+    }
+
+    impl Gx {
+        /// Reservation events so far: ("reserved", pid) or (how, pid).
+        pub fn handoffs(&self) -> Vec<(String, String)> {
+            self.host
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    AuditEvent::Reserved { pid, .. } => Some(("reserved".to_owned(), pid.clone())),
+                    AuditEvent::ReservationEnded { pid, how, .. } => {
+                        Some((how.as_str().to_owned(), pid.clone()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        pub fn advance(&self, ms: u64) {
+            self.host.now.fetch_add(ms, Ordering::SeqCst);
+        }
+    }
+
+    fn ev(how: &str, pid: &str) -> (String, String) {
+        (how.to_owned(), pid.to_owned())
+    }
+
+    /// Hand-off on a grid (C1 must-have (a), as text claims have it): when a grid claim with
+    /// waiters is released, its rows (cells, columns) are reserved for the first waiter; an
+    /// agent other than that waiter can neither claim nor (under `Respect`) edit there; the
+    /// waiter's claim there takes it over (the rest of the queue waits for that claim).
+    #[test]
+    fn grid_claim_hands_off_to_its_waiter() {
+        let g = gx("handoff");
+        let owner = g.join("p2", ParticipantKind::Agent);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let aide = g.join("aide", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        let id =
+            g.s.claim_span(owner, rows("r2", "r3"), None, None, false)
+                .unwrap()
+                .id;
+        assert_eq!(g.s.register_waiter(bot, id).unwrap().position, 1);
+        assert_eq!(g.s.register_waiter(aide, id).unwrap().position, 2);
+        g.s.release_claim(owner, None).unwrap();
+        assert_eq!(g.handoffs(), [ev("reserved", "bot")]);
+        let res = g.s.reservations(p).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(
+            (res[0].pid.as_str(), &res[0].span),
+            ("bot", &rows("r2", "r3"))
+        );
+        assert_eq!((res[0].lines.first, res[0].lines.last), (3, 4));
+        assert_eq!(res[0].waiters, ["aide"]);
+        // another agent can't take it, nor edit there under Respect; a person can edit
+        let e =
+            g.s.claim_span(aide, rows("r3", "r3"), None, None, false)
+                .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "bot"),
+            "{e:?}"
+        );
+        let e = g
+            .op_with(aide, ClaimPolicy::Respect, |t| {
+                t.set_cell(&k("r2"), &k("c1"), "x")
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "bot"),
+            "{e:?}"
+        );
+        g.op_with(aide, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r4"), &k("c1"), "ok")
+        })
+        .unwrap();
+        g.op_with(p, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r2"), &k("c1"), "person")
+        })
+        .unwrap();
+        // the waiter's claim takes it over; the rest of the queue now waits for that claim
+        let c =
+            g.s.claim_span(bot, rows("r2", "r2"), None, None, false)
+                .unwrap();
+        assert_eq!(g.handoffs().last(), Some(&ev("claimed", "bot")));
+        assert!(g.s.reservations(p).unwrap().is_empty());
+        assert_eq!(c.waiters, ["aide"]);
+        // and when that claim ends, aide gets it
+        g.s.release_claim(bot, None).unwrap();
+        assert_eq!(g.handoffs().last(), Some(&ev("reserved", "aide")));
+        assert_eq!(g.s.reservations(p).unwrap()[0].span, rows("r2", "r2"));
+    }
+
+    /// A grid reservation ends as a text one does: the waiter's own edit there uses it (it
+    /// passes on), it lapses after the hand-off time (passes on), and, on a grid, it ends
+    /// `deleted` when every row it held is deleted (nothing passes on). An expired claim
+    /// hands off too.
+    #[test]
+    fn grid_reservations_end_edited_lapsed_or_deleted() {
+        let g = gx("handoff-ends");
+        let owner = g.join("p2", ParticipantKind::Agent);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let aide = g.join("aide", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        // edited: bot's own edit in the rows uses it; aide is next
+        let id =
+            g.s.claim_span(owner, rows("r1", "r1"), None, None, false)
+                .unwrap()
+                .id;
+        g.s.register_waiter(bot, id).unwrap();
+        g.s.register_waiter(aide, id).unwrap();
+        g.s.release_claim(owner, None).unwrap();
+        g.op(bot, |t| t.set_cell(&k("r1"), &k("c2"), "mine"))
+            .unwrap();
+        assert_eq!(
+            g.handoffs(),
+            [
+                ev("reserved", "bot"),
+                ev("edited", "bot"),
+                ev("reserved", "aide")
+            ]
+        );
+        // lapsed: aide doesn't act within the hand-off time; nobody is next
+        g.advance(2_001);
+        assert!(g.s.reservations(p).unwrap().is_empty());
+        assert_eq!(g.handoffs().last(), Some(&ev("lapsed", "aide")));
+        // deleted: the reserved rows go; nothing passes on
+        let id =
+            g.s.claim_span(owner, rows("r3", "r4"), None, None, false)
+                .unwrap()
+                .id;
+        g.s.register_waiter(bot, id).unwrap();
+        g.s.register_waiter(aide, id).unwrap();
+        g.s.release_claim(owner, None).unwrap();
+        assert_eq!(g.handoffs().last(), Some(&ev("reserved", "bot")));
+        g.op(p, |t| t.delete_row(&k("r3"))).unwrap();
+        assert_eq!(g.s.reservations(p).unwrap().len(), 1, "r4 is still live");
+        g.op(p, |t| t.delete_row(&k("r4"))).unwrap();
+        assert_eq!(g.handoffs().last(), Some(&ev("deleted", "bot")));
+        assert!(g.s.reservations(p).unwrap().is_empty(), "nothing passes on");
+        // an expired claim hands off
+        let id =
+            g.s.claim_span(owner, rows("r1", "r2"), Some(1_000), None, false)
+                .unwrap()
+                .id;
+        g.s.register_waiter(bot, id).unwrap();
+        g.advance(1_001);
+        assert_eq!(g.s.reservations(p).unwrap()[0].pid, "bot");
+        assert!(g.ended().contains(&(id, ClaimEnd::Expired)));
+    }
+
+    /// A hand-off reservation expands with its anchors, as the claim it comes from does: a
+    /// row inserted right after its last row joins it (another agent's edit there is then
+    /// refused under Respect); a row inserted away from it doesn't; it ends `deleted` only
+    /// when nothing it holds, the joined row included, is live.
+    #[test]
+    fn grid_reservations_expand_with_their_anchors() {
+        let g = gx("handoff-expand");
+        let owner = g.join("p2", ParticipantKind::Agent);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let aide = g.join("aide", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        let id =
+            g.s.claim_span(owner, rows("r2", "r3"), None, None, false)
+                .unwrap()
+                .id;
+        g.s.register_waiter(bot, id).unwrap();
+        g.s.release_claim(owner, None).unwrap();
+        // a person inserts right after r3: the reservation takes it
+        g.op(p, |t| {
+            t.insert_row(Anchor::After(k("r3")), &["n".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        let res = g.s.reservations(p).unwrap();
+        assert_eq!(res[0].span, rows("r2", "r5"), "{res:?}");
+        assert_eq!((res[0].lines.first, res[0].lines.last), (3, 5));
+        // another agent's edit in the joined row is refused under Respect
+        let e = g
+            .op_with(aide, ClaimPolicy::Respect, |t| {
+                t.set_cell(&k("r5"), &k("c1"), "x")
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "bot"),
+            "{e:?}"
+        );
+        // a row inserted away from it doesn't join
+        g.op(p, |t| {
+            t.insert_row(Anchor::Start, &["top".into()]).map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.s.reservations(p).unwrap()[0].span, rows("r2", "r5"));
+        // before its first row: joins at the start
+        g.op(p, |t| {
+            t.insert_row(Anchor::Before(k("r2")), &["b".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.s.reservations(p).unwrap()[0].span, rows("r7", "r5"));
+        // its rows all deleted, the joined ones too: it ends deleted
+        for r in ["r7", "r2", "r3"] {
+            g.op(p, |t| t.delete_row(&k(r))).unwrap();
+        }
+        assert_eq!(g.s.reservations(p).unwrap().len(), 1, "r5 is still live");
+        g.op(p, |t| t.delete_row(&k("r5"))).unwrap();
+        assert!(g.s.reservations(p).unwrap().is_empty());
+        assert_eq!(g.handoffs().last(), Some(&ev("deleted", "bot")));
+    }
+
+    /// `ClaimPolicy::Respect` on `write_base_grid` (C1 must-have (b)): an agent's merge whose
+    /// applying part touches another's claim is exit 5, nothing applied; elsewhere it
+    /// applies; `Ignore` and a person are never refused.
+    #[test]
+    fn grid_write_base_respects_claims() {
+        let g = gx("write-respect");
+        let owner = g.join("p2", ParticipantKind::Agent);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        g.s.claim_span(owner, rows("r2", "r2"), None, Some("mine".into()), false)
+            .unwrap();
+        let respect = GridWriteOptions::default().policy(ClaimPolicy::Respect);
+        let base = g.s.status().unwrap().version;
+        let claimed = "id,city\nk1,Oslo\nk2,Roma\nk3,Lima\nk4,Kyiv\n";
+        let e =
+            g.s.write_base_grid(bot, base, claimed.as_bytes(), &respect)
+                .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "p2"),
+            "{e:?}"
+        );
+        assert_eq!(tools::session_exit(&e), exit::LEASED);
+        assert_eq!(g.s.status().unwrap().version, base, "nothing applied");
+        // a merge that doesn't touch the claimed row applies
+        let elsewhere = "id,city\nk1,Oslo\nk2,Rome\nk3,Lima\nk4,Lviv\n";
+        let r =
+            g.s.write_base_grid(bot, base, elsewhere.as_bytes(), &respect)
+                .unwrap();
+        assert!(matches!(r.outcome, GridWrite::Applied(_)), "{r:?}");
+        // a row inserted right after the claimed row touches it (claims expand)
+        let base = g.s.status().unwrap().version;
+        let edge = "id,city\nk1,Oslo\nk2,Rome\nnew,Baku\nk3,Lima\nk4,Lviv\n";
+        let e =
+            g.s.write_base_grid(bot, base, edge.as_bytes(), &respect)
+                .unwrap_err();
+        assert!(matches!(e, SessionError::Claimed { .. }), "{e:?}");
+        // Ignore lets the agent through; a person is never refused
+        let base = g.s.status().unwrap().version;
+        let r =
+            g.s.write_base_grid(
+                bot,
+                base,
+                b"id,city\nk1,Oslo\nk2,Roma\nk3,Lima\nk4,Lviv\n",
+                &GridWriteOptions::default(),
+            )
+            .unwrap();
+        assert!(matches!(r.outcome, GridWrite::Applied(_)), "{r:?}");
+        let base = g.s.status().unwrap().version;
+        let person = "id,city\nk1,Oslo\nk2,Milan\nk3,Lima\nk4,Lviv\n";
+        let r =
+            g.s.write_base_grid(p, base, person.as_bytes(), &respect)
+                .unwrap();
+        assert!(matches!(r.outcome, GridWrite::Applied(_)), "{r:?}");
+        // a reservation handed to someone else binds the merge too
+        let id = g.s.claims(p).unwrap()[0].id;
+        let w = g.join("aide", ParticipantKind::Agent);
+        g.s.register_waiter(w, id).unwrap();
+        g.s.release_claim(owner, None).unwrap();
+        let base = g.s.status().unwrap().version;
+        let again = "id,city\nk1,Oslo\nk2,Turin\nk3,Lima\nk4,Lviv\n";
+        let e =
+            g.s.write_base_grid(bot, base, again.as_bytes(), &respect)
+                .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "aide"),
+            "{e:?}"
+        );
+    }
+
+    /// IT `presence::grid_caret_follows_move` (K-PRES-6): a cell caret is a key pair; it
+    /// follows a move and a sort with no transform, and is dropped when its row is deleted.
+    #[test]
+    fn grid_caret_follows_move() {
+        let g = gx("caret");
+        let p = g.join("p1", ParticipantKind::Person);
+        let other = g.join("p2", ParticipantKind::Person);
+        let c =
+            g.s.set_cell_cursor(p, (&k("r2"), &k("c2")), (&k("r2"), &k("c2")))
+                .unwrap();
+        assert_eq!(c.at, Some((2, 2)));
+        assert_eq!(c.name.as_deref(), Some("city"));
+        assert_eq!(c.to_string(), "cell r2/c2 (#2, \"city\")");
+        // another participant moves the row to the end: the caret goes with it
+        g.op(other, |t| t.move_row(&k("r2"), Anchor::End)).unwrap();
+        let c = g.cell_of(other, "p1").expect("the caret is still there");
+        assert_eq!((c.anchor.clone(), c.at), ((k("r2"), k("c2")), Some((4, 2))));
+        assert_eq!(c.lines.map(|l| (l.first, l.last)), Some((5, 5)));
+        // a sort: still the same cell
+        g.op(other, |t| {
+            t.sort(&[k2_mpc_base::table::SortKey::by(k("c2"))])
+        })
+        .unwrap();
+        let c = g.cell_of(other, "p1").unwrap();
+        assert_eq!(c.head, (k("r2"), k("c2")));
+        assert_eq!(c.at, Some((4, 2)), "Rome sorts last");
+        // the same through At::Elem (set_cursor with cells)
+        g.s.set_cursor(
+            p,
+            CELLS,
+            k2_mpc_base::session::At::cell(&k("r1"), &k("c1")),
+            k2_mpc_base::session::At::cell(&k("r3"), &k("c2")),
+        )
+        .unwrap();
+        let c = g.cell_of(other, "p1").unwrap();
+        assert_eq!((c.anchor, c.head), ((k("r1"), k("c1")), (k("r3"), k("c2"))));
+        // a dead cell is refused, and a text position too
+        g.op(other, |t| t.delete_row(&k("r4"))).unwrap();
+        assert!(matches!(
+            g.s.set_cell_cursor(p, (&k("r4"), &k("c1")), (&k("r4"), &k("c1"))),
+            Err(SessionError::BadPosition(_))
+        ));
+        // its row deleted: the caret is dropped
+        g.op(other, |t| t.delete_row(&k("r3"))).unwrap();
+        assert_eq!(g.cell_of(other, "p1"), None);
+        // a column delete drops a caret too
+        g.s.set_cell_cursor(p, (&k("r1"), &k("c2")), (&k("r1"), &k("c2")))
+            .unwrap();
+        g.op(other, |t| t.delete_col(&k("c2"))).unwrap();
+        assert_eq!(g.cell_of(other, "p1"), None);
+    }
+
+    /// IT `presence::claim_ends_deleted` (K-PRES-6): a claim whose rows are all deleted ends
+    /// with `Deleted`; one with a row left keeps covering it (a deleted end keeps its place).
+    #[test]
+    fn claim_ends_deleted() {
+        let g = gx("deleted");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        let id =
+            g.s.claim_span(a, rows("r2", "r3"), None, Some("dedupe".into()), false)
+                .unwrap()
+                .id;
+        g.op(p, |t| t.delete_row(&k("r2"))).unwrap();
+        let info = &g.s.claims(p).unwrap()[0];
+        assert_eq!(
+            info.span,
+            rows("r2", "r3"),
+            "the deleted end keeps its place"
+        );
+        assert_eq!(
+            (info.lines.first, info.lines.last),
+            (3, 3),
+            "only r3 is live"
+        );
+        assert!(g.ended().is_empty());
+        g.op(p, |t| t.delete_row(&k("r3"))).unwrap();
+        assert_eq!(g.ended(), [(id, ClaimEnd::Deleted)]);
+        assert!(g.s.claims(p).unwrap().is_empty());
+        let act = g.s.activity(p, 10).unwrap();
+        assert!(act
+            .iter()
+            .any(|e| e.kind == ActivityKind::ClaimEnded(ClaimEnd::Deleted)));
+        // a column claim ends the same way; a cell claim when its rows (or columns) go
+        let c =
+            g.s.claim_span(
+                a,
+                ClaimSpan::Cols {
+                    first: k("c2"),
+                    last: k("c2"),
+                },
+                None,
+                None,
+                false,
+            )
+            .unwrap()
+            .id;
+        let cells = g.s.claim_span(
+            a,
+            ClaimSpan::Cells {
+                rows: (k("r1"), k("r1")),
+                cols: (k("c1"), k("c1")),
+            },
+            None,
+            None,
+            false,
+        );
+        assert!(
+            matches!(cells, Err(SessionError::BadClaim(_)) | Ok(_)),
+            "{cells:?}"
+        );
+        g.op(p, |t| t.delete_col(&k("c2"))).unwrap();
+        assert!(g.ended().contains(&(c, ClaimEnd::Deleted)));
+        // an undo brings the column back, but an ended claim stays ended
+        assert!(g.s.claims(p).unwrap().iter().all(|i| i.id != c));
+    }
+
+    /// Claims expand with their anchors (as text claims do): a row inserted right after the
+    /// last row or right before the first joins; rows moved in between are members; a row
+    /// inserted elsewhere isn't.
+    #[test]
+    fn grid_claims_expand_with_their_anchors() {
+        let g = gx("expand");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        g.s.claim_span(a, rows("r2", "r3"), None, None, false)
+            .unwrap();
+        // inserted right after r3: joins
+        g.op(p, |t| {
+            t.insert_row(Anchor::After(k("r3")), &["k5".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.spans(p), ["bot rows r2–r5"]);
+        // inserted right before r2: joins
+        g.op(p, |t| {
+            t.insert_row(Anchor::Before(k("r2")), &["k6".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.spans(p), ["bot rows r6–r5"]);
+        let i = &g.s.claims(p).unwrap()[0];
+        assert_eq!((i.lines.first, i.lines.last), (3, 6));
+        // at the start, away from it: not a member
+        g.op(p, |t| {
+            t.insert_row(Anchor::Start, &["k7".into()]).map(|x| x.1)
+        })
+        .unwrap();
+        let i = &g.s.claims(p).unwrap()[0];
+        assert_eq!((i.lines.first, i.lines.last), (4, 7));
+        // r4 moved into the middle: a member now (the span is the rows between its ends)
+        g.op(p, |t| t.move_row(&k("r4"), Anchor::After(k("r2"))))
+            .unwrap();
+        let i = &g.s.claims(p).unwrap()[0];
+        assert_eq!((i.lines.first, i.lines.last), (4, 8));
+    }
+
+    /// Where two participants' claims meet, an insert between them joins one: the inserter's
+    /// own, else the one taken first. They never overlap.
+    #[test]
+    fn grid_claims_meeting_share_nothing() {
+        let g = gx("meet");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let b = g.join("aide", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        // held: their owners' own inserts don't end them
+        g.s.claim_span(a, rows("r1", "r2"), None, None, true)
+            .unwrap();
+        g.s.claim_span(b, rows("r3", "r4"), None, None, true)
+            .unwrap();
+        // p1 (no claim) inserts between r2 and r3: the first taken (bot's) takes it
+        g.op(p, |t| {
+            t.insert_row(Anchor::After(k("r2")), &["x".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.spans(p), ["bot rows r1–r5", "aide rows r3–r4"]);
+        // aide inserts between r5 and r3: aide's own claim takes it (policy Ignore)
+        g.op(b, |t| {
+            t.insert_row(Anchor::After(k("r5")), &["y".into()])
+                .map(|x| x.1)
+        })
+        .unwrap();
+        assert_eq!(g.spans(p), ["bot rows r1–r5", "aide rows r6–r4"]);
+        // a third claim on bot's rows is refused (they overlap), naming bot
+        let e =
+            g.s.claim_span(b, rows("r5", "r5"), None, None, false)
+                .unwrap_err();
+        assert!(
+            matches!(&e, SessionError::Claimed { by, .. } if by == "bot"),
+            "{e:?}"
+        );
+        assert_eq!(tools::session_exit(&e), exit::LEASED);
+    }
+
+    /// The claim policy on grids (contract §6): under `Respect` an agent's change touching
+    /// another's claim is exit 5, nothing applied; touching means a cell inside it, one of its
+    /// rows (or columns) moved, deleted or renamed, or a row inserted between or at its ends.
+    /// A person is never refused; `Ignore` refuses nobody.
+    #[test]
+    fn grid_respect_refuses_agents_touching_a_claim() {
+        let g = gx("respect");
+        let p2 = g.join("p2", ParticipantKind::Agent);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let p = g.join("p1", ParticipantKind::Person);
+        g.s.claim_span(p2, rows("r2", "r2"), None, Some("mine".into()), false)
+            .unwrap();
+        let v0 = g.s.status().unwrap().version;
+        let refused = |r: Result<u64, SessionError>| {
+            assert!(
+                matches!(&r, Err(SessionError::Claimed { by, .. }) if by == "p2"),
+                "{r:?}"
+            );
+        };
+        refused(g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r2"), &k("c1"), "x")
+        }));
+        refused(g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.move_row(&k("r2"), Anchor::End)
+        }));
+        refused(g.op_with(bot, ClaimPolicy::Respect, |t| t.delete_row(&k("r2"))));
+        refused(g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.insert_row(Anchor::After(k("r2")), &["edge".into()])
+                .map(|x| x.1)
+        }));
+        // through a structured verb: exit 5, nothing applied
+        let e = g
+            .tool(
+                bot,
+                &["cell", "set", "--row", "r2", "--col", "c2", "--value", "x"],
+                ClaimPolicy::Respect,
+            )
+            .unwrap_err();
+        assert_eq!(e.exit(), exit::LEASED, "{e}");
+        assert_eq!(g.s.status().unwrap().version, v0, "nothing applied");
+        // elsewhere is fine; a person is never refused; Ignore lets the agent through
+        g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r3"), &k("c1"), "ok")
+        })
+        .unwrap();
+        g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.move_row(&k("r4"), Anchor::Start)
+        })
+        .unwrap();
+        let p4 = g.join("p4", ParticipantKind::Person);
+        g.op_with(p4, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r2"), &k("c1"), "person")
+        })
+        .unwrap();
+        g.op_with(bot, ClaimPolicy::Ignore, |t| {
+            t.set_cell(&k("r2"), &k("c2"), "agent")
+        })
+        .unwrap();
+        // a column claim: renaming or moving the column is touching it; moving a row isn't
+        let c = g.s.claim_span(
+            p,
+            ClaimSpan::Cols {
+                first: k("c1"),
+                last: k("c1"),
+            },
+            None,
+            None,
+            false,
+        );
+        assert!(
+            matches!(c, Err(SessionError::Claimed { .. })),
+            "c1 crosses p2's row: {c:?}"
+        );
+        g.s.release_claim(p2, None).unwrap();
+        g.s.claim_span(
+            p,
+            ClaimSpan::Cols {
+                first: k("c1"),
+                last: k("c1"),
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        refused_by(
+            g.op_with(bot, ClaimPolicy::Respect, |t| t.rename_col(&k("c1"), "who")),
+            "p1",
+        );
+        refused_by(
+            g.op_with(bot, ClaimPolicy::Respect, |t| {
+                t.move_col(&k("c1"), Anchor::End)
+            }),
+            "p1",
+        );
+        refused_by(
+            g.op_with(bot, ClaimPolicy::Respect, |t| {
+                t.set_cell(&k("r1"), &k("c1"), "z")
+            }),
+            "p1",
+        );
+        g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.set_cell(&k("r1"), &k("c2"), "z")
+        })
+        .unwrap();
+        g.op_with(bot, ClaimPolicy::Respect, |t| {
+            t.move_row(&k("r1"), Anchor::End)
+        })
+        .unwrap();
+    }
+
+    fn refused_by(r: Result<u64, SessionError>, who: &str) {
+        assert!(
+            matches!(&r, Err(SessionError::Claimed { by, .. }) if by == who),
+            "{r:?}"
+        );
+    }
+
+    /// The claimant's own change touching its claim ends it (`Edited`) unless it is held.
+    #[test]
+    fn grid_own_edit_ends_claim_unless_held() {
+        let g = gx("own");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let id =
+            g.s.claim_span(a, rows("r1", "r2"), None, None, false)
+                .unwrap()
+                .id;
+        g.op(a, |t| t.set_cell(&k("r3"), &k("c1"), "elsewhere"))
+            .unwrap();
+        assert!(g.ended().is_empty(), "a change elsewhere leaves it");
+        g.op(a, |t| t.set_cell(&k("r2"), &k("c1"), "mine")).unwrap();
+        assert_eq!(g.ended(), [(id, ClaimEnd::Edited)]);
+        let held =
+            g.s.claim_span(a, rows("r1", "r2"), None, None, true)
+                .unwrap()
+                .id;
+        g.op(a, |t| t.set_cell(&k("r1"), &k("c1"), "held")).unwrap();
+        assert!(!g.ended().iter().any(|(c, _)| *c == held));
+        assert_eq!(g.s.claims(a).unwrap().len(), 1);
+    }
+
+    /// `write --base` on a grid names who claims each conflicting region (`claimed_by`), not
+    /// the writer itself, nor claims elsewhere.
+    #[test]
+    fn grid_conflict_names_the_claimants() {
+        let g = gx("conflict");
+        let p2 = g.join("p2", ParticipantKind::Person);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let aide = g.join("aide", ParticipantKind::Agent);
+        let base = g.s.status().unwrap().version;
+        g.op(p2, |t| t.set_cell(&k("r2"), &k("c2"), "Paris"))
+            .unwrap();
+        g.s.claim_span(p2, rows("r2", "r2"), None, None, false)
+            .unwrap();
+        g.s.claim_span(aide, rows("r4", "r4"), None, None, false)
+            .unwrap();
+        g.s.claim_span(bot, rows("r1", "r1"), None, None, false)
+            .unwrap();
+        let body = "id,city\nk1,Bergen\nk2,Roma\nk3,Lima\nk4,Kyiv\n";
+        let r =
+            g.s.write_base_grid(bot, base, body.as_bytes(), &GridWriteOptions::default())
+                .unwrap();
+        let GridWrite::Conflicts(c) = &r.outcome else {
+            panic!("{r:?}")
+        };
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0].claimed_by, ["p2"]);
+        assert_eq!(c[0].written_by.as_deref(), Some("p2"));
+        // a cell in a column someone claims: named too
+        let c2 = g.join("p3", ParticipantKind::Agent);
+        for c in [p2, aide, bot] {
+            g.s.release_claim(c, None).unwrap();
+        }
+        g.s.claim_span(
+            c2,
+            ClaimSpan::Cols {
+                first: k("c2"),
+                last: k("c2"),
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let r =
+            g.s.write_base_grid(bot, base, body.as_bytes(), &GridWriteOptions::default())
+                .unwrap();
+        let GridWrite::Conflicts(c) = &r.outcome else {
+            panic!("{r:?}")
+        };
+        assert_eq!(c[0].claimed_by, ["p3"]);
+    }
+
+    /// A row's conflict names a claim on a column only through a cell in that row one side
+    /// changed since V. Here p3 claims c1, which neither side changed in r2 (`k2,Rome`: the text
+    /// and p2 both changed c2): p3 is not named.
+    #[test]
+    fn grid_row_conflict_skips_a_claim_on_a_column_neither_side_changed() {
+        let g = gx("conflict-unchanged-col");
+        let p2 = g.join("p2", ParticipantKind::Person);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let p3 = g.join("p3", ParticipantKind::Agent);
+        let base = g.s.status().unwrap().version;
+        g.op(p2, |t| t.set_cell(&k("r2"), &k("c2"), "Paris"))
+            .unwrap();
+        g.s.claim_span(
+            p3,
+            ClaimSpan::Cols {
+                first: k("c1"),
+                last: k("c1"),
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let body = "id,city\nk1,Oslo\nk2,Roma\nk3,Lima\nk4,Kyiv\n";
+        let r =
+            g.s.write_base_grid(bot, base, body.as_bytes(), &GridWriteOptions::default())
+                .unwrap();
+        let GridWrite::Conflicts(c) = &r.outcome else {
+            panic!("{r:?}")
+        };
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(
+            c[0].conflict.at,
+            k2_mpc_base::table::Region::Row(k("r2")),
+            "{c:?}"
+        );
+        assert!(c[0].claimed_by.is_empty(), "{c:?}");
+    }
+
+    /// A row's conflict names a claim on a column only the text changed in that row (r2,
+    /// `k2,Rome`): p2 changed its c1, the text its c2, and p3 claims c2.
+    #[test]
+    fn grid_row_conflict_names_a_claim_on_a_column_only_the_text_changed() {
+        let g = gx("conflict-text-col");
+        let p2 = g.join("p2", ParticipantKind::Person);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let p3 = g.join("p3", ParticipantKind::Agent);
+        let base = g.s.status().unwrap().version;
+        g.op(p2, |t| t.set_cell(&k("r2"), &k("c1"), "k2x")).unwrap();
+        g.s.claim_span(
+            p3,
+            ClaimSpan::Cols {
+                first: k("c2"),
+                last: k("c2"),
+            },
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let body = "id,city\nk1,Oslo\nk2,Roma\nk3,Lima\nk4,Kyiv\n";
+        let r =
+            g.s.write_base_grid(bot, base, body.as_bytes(), &GridWriteOptions::default())
+                .unwrap();
+        let GridWrite::Conflicts(c) = &r.outcome else {
+            panic!("{r:?}")
+        };
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(
+            c[0].conflict.at,
+            k2_mpc_base::table::Region::Row(k("r2")),
+            "{c:?}"
+        );
+        assert_eq!(c[0].claimed_by, ["p3"], "{c:?}");
+    }
+
+    /// Notes on a grid (contract §6): a structured verb's change and a read of the rendered
+    /// file say who claimed, selected, viewed or just edited the rows they touched, by key,
+    /// on stderr only (`note: ` lines); stdout never changes.
+    #[test]
+    fn grid_notes_name_who_is_there_by_key() {
+        let g = gx("notes");
+        let p2 = g.join("p2", ParticipantKind::Person);
+        let bot = g.join("bot", ParticipantKind::Agent);
+        let me = g.join("me", ParticipantKind::Agent);
+        g.s.set_cell_cursor(p2, (&k("r2"), &k("c2")), (&k("r2"), &k("c2")))
+            .unwrap();
+        g.s.claim_span(
+            bot,
+            rows("r2", "r3"),
+            Some(300_000),
+            Some("dedupe".into()),
+            false,
+        )
+        .unwrap();
+        let out = g
+            .tool(
+                me,
+                &["cell", "set", "--row", "r2", "--col", "c2", "--value", "x"],
+                ClaimPolicy::Ignore,
+            )
+            .unwrap();
+        let lines = out.notes.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("note: BOT (bot) claimed rows r2–r3 \"dedupe\"")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "note: P2 (p2) has a caret at cell r2/c2 (0 s ago)"),
+            "{lines:?}"
+        );
+        assert!(out.notes.notes.iter().all(|n| n.span.is_some()));
+        assert!(out.stdout.is_empty());
+        // a cell elsewhere: no note
+        g.host.now.fetch_add(10_000, Ordering::SeqCst);
+        let out = g
+            .tool(
+                me,
+                &["cell", "set", "--row", "r4", "--col", "c1", "--value", "y"],
+                ClaimPolicy::Ignore,
+            )
+            .unwrap();
+        assert!(out.notes.is_empty(), "{:?}", out.notes.lines());
+        // a read: the rows on the lines shown (line 3 is r2), once the same notes may repeat
+        g.host.now.fetch_add(61_000, Ordering::SeqCst);
+        let out = g
+            .tool(me, &["view", "--lines", "3,3"], ClaimPolicy::Ignore)
+            .unwrap();
+        assert_eq!(out.stdout, b"k2,x\n");
+        let kinds: Vec<NoteKind> = out.notes.notes.iter().map(|n| n.kind).collect();
+        assert!(
+            kinds.contains(&NoteKind::Claimed) && kinds.contains(&NoteKind::Caret),
+            "{kinds:?}"
+        );
+        // the reader's view is the row, by key: it follows a move
+        let p = g.join("p1", ParticipantKind::Person);
+        g.op(p, |t| t.move_row(&k("r2"), Anchor::End)).unwrap();
+        let me_row =
+            g.s.roster(p)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.participant.pid == "me")
+                .unwrap();
+        assert_eq!(me_row.view.map(|v| (v.first, v.last)), Some((5, 5)));
+    }
+
+    /// `--for-edit` on a grid read takes a short claim on the rows shown; someone else's claim
+    /// there is reported instead.
+    #[test]
+    fn grid_for_edit_claims_the_rows_shown() {
+        let g = gx("foredit");
+        let a = g.join("bot", ParticipantKind::Agent);
+        let b = g.join("aide", ParticipantKind::Agent);
+        let out = g
+            .tool(a, &["head", "-n", "3", "--for-edit"], ClaimPolicy::Ignore)
+            .unwrap();
+        let Some(f) = out.for_edit.as_deref() else {
+            panic!("no for-edit")
+        };
+        let ForEdit::Claimed(c) = f else {
+            panic!("{f:?}")
+        };
+        assert_eq!(c.span, rows("r1", "r2"), "line 1 is the header: rows r1-r2");
+        assert!(c.for_edit);
+        let out = g
+            .tool(
+                b,
+                &["view", "--lines", "3,4", "--for-edit"],
+                ClaimPolicy::Ignore,
+            )
+            .unwrap();
+        assert!(
+            matches!(out.for_edit.as_deref(), Some(ForEdit::Conflict(c)) if c.pid == "bot"),
+            "{:?}",
+            out.for_edit
+        );
+        // an outside edit deleting the rows ends the claim with Deleted (no actor)
+        g.s.flush(a).unwrap();
+        let path = g.s.file_path().unwrap();
+        if let Some(path) = path {
+            std::fs::write(&path, "id,city\nk3,Lima\nk4,Kyiv\n").unwrap();
+            g.s.file_changed().unwrap();
+            assert!(
+                g.ended().iter().any(|(_, how)| *how == ClaimEnd::Deleted),
+                "{:?}",
+                g.ended()
+            );
+        }
+    }
+
+    /// The roster push's grid side (K5 with C1): a cell caret is a
+    /// `RosterEvent::CellCursor`, coalesced like a text caret (moves inside one interval are
+    /// one event, the last place), told again when its position changes under it (a move by
+    /// someone else), and `None` when its row is deleted; an App viewer sees it by handle. A
+    /// grid claim's start and end are pushed too.
+    #[test]
+    fn the_roster_push_carries_cell_carets() {
+        use k2_mpc_base::session::{RosterEvent, Who};
+        let g = gx("roster-cell");
+        let watcher = g.join("w", ParticipantKind::Person);
+        let app = g.join("app", ParticipantKind::App);
+        let p = g.join("p1", ParticipantKind::Person);
+        let other = g.join("p2", ParticipantKind::Person);
+        let rx = g.s.subscribe_roster(watcher).unwrap();
+        let rx_app = g.s.subscribe_roster(app).unwrap();
+        let flush = || {
+            g.advance(1_000);
+            g.s.flush_roster().unwrap();
+        };
+        let drain = |rx: &std::sync::mpsc::Receiver<RosterEvent>| -> Vec<RosterEvent> {
+            let mut v = Vec::new();
+            while let Ok(e) = rx.try_recv() {
+                v.push(e);
+            }
+            v
+        };
+        let cells = |evs: &[RosterEvent]| {
+            evs.iter()
+                .filter_map(|e| match e {
+                    RosterEvent::CellCursor { who, cell, .. } => Some((who.clone(), cell.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        flush();
+        drain(&rx);
+        drain(&rx_app);
+        // three moves inside one interval: one event, the last place
+        for (r, c) in [("r1", "c1"), ("r2", "c1"), ("r3", "c2")] {
+            g.s.set_cell_cursor(p, (&k(r), &k(c)), (&k(r), &k(c)))
+                .unwrap();
+        }
+        flush();
+        let got = cells(&drain(&rx));
+        assert_eq!(got.len(), 1, "{got:?}");
+        let (who, cell) = &got[0];
+        assert_eq!(who, &Who::Pid("p1".into()));
+        let cell = cell.clone().expect("a caret");
+        assert_eq!(cell.head, (k("r3"), k("c2")));
+        assert_eq!(cell.at, Some((3, 2)));
+        // the App viewer's push names it by handle, never the pid
+        let app_got = cells(&drain(&rx_app));
+        assert_eq!(app_got.len(), 1, "{app_got:?}");
+        assert!(app_got[0].0.handle().is_some(), "{app_got:?}");
+        assert_eq!(
+            app_got[0].1.as_ref().map(|c| c.head.clone()),
+            Some(cell.head.clone())
+        );
+        // nothing moved: nothing told
+        flush();
+        assert_eq!(cells(&drain(&rx)), vec![]);
+        // someone else moves its row to the end: the same cell, at its new place
+        g.op(other, |t| t.move_row(&k("r3"), Anchor::End)).unwrap();
+        flush();
+        let got = cells(&drain(&rx));
+        assert_eq!(got.len(), 1, "{got:?}");
+        let moved = got[0].1.clone().expect("still there");
+        assert_eq!((moved.head, moved.at), ((k("r3"), k("c2")), Some((4, 2))));
+        // its row deleted: the caret is gone
+        g.op(other, |t| t.delete_row(&k("r3"))).unwrap();
+        flush();
+        assert_eq!(cells(&drain(&rx)), vec![(Who::Pid("p1".into()), None)]);
+        // a grid claim: its start and its end are pushed
+        let ci =
+            g.s.claim_span(p, rows("r1", "r2"), None, None, false)
+                .unwrap();
+        g.s.release_claim(p, Some(ci.id)).unwrap();
+        flush();
+        let evs = drain(&rx);
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, RosterEvent::ClaimStarted { claim, .. } if *claim == ci.id)),
+            "{evs:?}"
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, RosterEvent::ClaimEnded { claim, .. } if *claim == ci.id)),
+            "{evs:?}"
+        );
+    }
+
+    /// `events_since` (K3) on a grid: its changes are ops by key, which the live window
+    /// (text hunks) can't replay, so a base behind the doc is `MPC-E112 base_expired` (read
+    /// again), never an empty list that would read as "nothing happened"; the doc's own
+    /// version gives none.
+    #[test]
+    fn events_since_on_a_grid_asks_for_a_reload() {
+        let g = gx("events-since");
+        let p = g.join("p1", ParticipantKind::Person);
+        let v0 = g.s.status().unwrap().version;
+        g.op(p, |t| t.set_cell(&k("r1"), &k("c2"), "Bergen"))
+            .unwrap();
+        let v1 = g.s.status().unwrap().version;
+        assert!(v1 > v0);
+        let r = g.s.events_since(p, v0).unwrap_err();
+        assert_eq!((r.id(), r.exit()), ("MPC-E112", 8), "{r:?}");
+        assert_eq!(g.s.events_since(p, v1).unwrap(), vec![]);
+    }
+
+    /// K5 on a grid: an App viewer's cell blame, structure blame, `write --base` conflicts
+    /// and roster name the others by handle, never by pid.
+    #[test]
+    fn an_app_viewer_of_a_grid_sees_no_pid() {
+        let g = gx("app-grid");
+        for pid in ["boxxx", "appxx"] {
+            g.host
+                .rights
+                .lock()
+                .unwrap()
+                .insert(pid.into(), Rights::full());
+        }
+        let a = g.join("anaxx", ParticipantKind::Person);
+        let b = g.join("boxxx", ParticipantKind::Person);
+        let app = g.join("appxx", ParticipantKind::App);
+        let base = g.s.status().unwrap().version;
+        g.op(a, |t| t.set_cell(&k("r1"), &k("c2"), "Bergen"))
+            .unwrap();
+        g.op(b, |t| t.move_row(&k("r2"), Anchor::End)).unwrap();
+        g.s.claim_span(a, rows("r3", "r3"), None, None, false)
+            .unwrap();
+        let no_pid = |what: &str, shown: String| {
+            for pid in ["anaxx", "boxxx", "appxx"] {
+                assert!(
+                    !shown.contains(pid),
+                    "{what}: {pid} reached an App viewer: {shown}"
+                );
+            }
+        };
+        let cell = g.s.blame_cell(app, &k("r1"), &k("c2")).unwrap().unwrap();
+        assert!(cell.author.starts_with('p'), "{cell:?}");
+        no_pid("blame_cell", format!("{cell:?}"));
+        no_pid(
+            "blame_structure",
+            format!("{:?}", g.s.blame_structure(app).unwrap()),
+        );
+        no_pid("roster", format!("{:?}", g.s.roster(app).unwrap()));
+        // a write at the old base over the cell someone else wrote since: a conflict
+        let body = "id,city\nk1,Paris\nk2,Rome\nk3,Lima\nk4,Kyiv\n";
+        let r =
+            g.s.write_base_grid(app, base, body.as_bytes(), &GridWriteOptions::default())
+                .unwrap();
+        assert!(matches!(r.outcome, GridWrite::Conflicts(_)), "{r:?}");
+        no_pid("write_base_grid", format!("{r:?}"));
+        // the same calls by a person still name pids
+        let cell = g.s.blame_cell(b, &k("r1"), &k("c2")).unwrap().unwrap();
+        assert_eq!(cell.author, "anaxx");
+    }
+
+    /// The roster's grid reading is cached between changes (v0.10.0): after every kind of
+    /// change (a move, a sort, a row insert and delete, a column insert, a header switch) and
+    /// after caret moves with no change, the caret's place in the roster and in the push is
+    /// the one the doc gives now (its row's and column's live index in a fresh read).
+    #[test]
+    fn the_cached_grid_reading_follows_every_change() {
+        use k2_mpc_base::session::{RosterEvent, View};
+        let g = gx("roster-cache");
+        let watcher = g.join("w", ParticipantKind::Person);
+        let p = g.join("p1", ParticipantKind::Person);
+        let other = g.join("p2", ParticipantKind::Person);
+        let rx = g.s.subscribe_roster(watcher).unwrap();
+        g.s.set_cell_cursor(p, (&k("r3"), &k("c2")), (&k("r3"), &k("c2")))
+            .unwrap();
+        let expect = |what: &str| {
+            let t = View::of_content(&g.s.read(watcher).unwrap().content)
+                .table()
+                .unwrap();
+            let r = t.live_rows().iter().position(|x| *x == k("r3")).unwrap() + 1;
+            let c = t.live_cols().iter().position(|x| *x == k("c2")).unwrap() + 1;
+            let got = g.cell_of(watcher, "p1").expect("the caret").at;
+            assert_eq!(got, Some((r, c)), "{what}: the roster");
+            g.advance(1_000);
+            g.s.flush_roster().unwrap();
+            let mut last = None;
+            while let Ok(e) = rx.try_recv() {
+                if let RosterEvent::CellCursor { who, cell, .. } = e {
+                    if who == k2_mpc_base::session::Who::Pid("p1".into()) {
+                        last = cell.map(|c| c.at);
+                    }
+                }
+            }
+            if let Some(at) = last {
+                assert_eq!(at, Some((r, c)), "{what}: the push");
+            }
+        };
+        expect("start");
+        g.op(other, |t| t.move_row(&k("r3"), Anchor::Start))
+            .unwrap();
+        expect("a move");
+        g.op(other, |t| {
+            t.sort(&[k2_mpc_base::table::SortKey::by(k("c2"))])
+        })
+        .unwrap();
+        expect("a sort");
+        g.op(other, |t| {
+            Ok(t.insert_row(Anchor::Start, &["k0".into(), "Bern".into()])?
+                .1)
+        })
+        .unwrap();
+        expect("a row inserted before it");
+        g.op(other, |t| t.delete_row(&k("r1"))).unwrap();
+        expect("a row deleted");
+        g.op(other, |t| Ok(t.insert_col(Anchor::Start, Some("n"))?.1))
+            .unwrap();
+        expect("a column inserted before it");
+        g.op(other, |t| t.set_header(false)).unwrap();
+        expect("the header off");
+        // caret moves with no change: still right
+        for (r, c) in [("r2", "c2"), ("r3", "c2")] {
+            g.s.set_cell_cursor(p, (&k(r), &k(c)), (&k(r), &k(c)))
+                .unwrap();
+        }
+        expect("caret moves");
+    }
 }

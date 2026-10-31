@@ -18,9 +18,15 @@
 
 /// (rule id, why [`crate::Doc`]'s engine deviates). Empty for a conforming engine.
 ///
-/// Five entries today: the two YATA orders, two delivery rules where yrs identifies and
-/// checks content by (client, clock) only, and `undo --steps N` committed as N batches.
-/// An earlier entry, `text.no_interleave_backward_multi`, was wrong: its expectation (three
+/// Twelve entries today. Text: the two YATA orders, two delivery rules where yrs identifies
+/// and checks content by (client, clock) only, and `undo --steps N` committed as N batches.
+/// Structured kinds (CSV seam design §5.3): concurrent register writes ordered by client ID
+/// (`mlist.move_lww`, `map.lww`, `table.cell_lww`), a set surviving a concurrent delete
+/// (`map.delete_vs_set`), overwrite stubs (`map.steady_bounded`), YATA's order of list slots
+/// (`mlist.yata_separating_case`), and no write identity for a merged removal
+/// (`stream.merged_writes`). None of the structured ones reaches production on the interim:
+/// a structured doc has no CRDT path there (every change is the kit's, applied by key in
+/// daemon order), so they show only in this suite. An earlier entry, `text.no_interleave_backward_multi`, was wrong: its expectation (three
 /// contiguous runs) is unsatisfiable for any engine meeting the strong list spec on that
 /// script, and Yrs, Yjs, Diamond Types and Loro all give the same order (cross-checked
 /// 2026-10-27). The real Yrs-vs-FugueMax separating case is `text.yata_separating_case`.
@@ -57,6 +63,50 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
          the rule asks one batch (one log append). A single step over several roots is one \
          batch attributed to the undoer, as asserted.",
     ),
+    (
+        "mlist.move_lww",
+        "a move writes the element's position register, a yrs map entry, and yrs orders \
+         concurrent writes of one map entry by client ID (YATA's tie-break), not by \
+         (lamport, agent): a move made after more of its writer's own changes can lose. \
+         Wire-format bound.",
+    ),
+    (
+        "mlist.yata_separating_case",
+        "the list's slots are a yrs array, so YATA orders them: the separating script gives \
+         [lb p f a e rb], splitting one writer's run `f e`; FugueMax gives [lb a p f e rb] \
+         (as text.yata_separating_case). Wire-format bound.",
+    ),
+    (
+        "map.lww",
+        "yrs orders concurrent sets of one map key by client ID (YATA's tie-break), not by \
+         (lamport, agent). Wire-format bound.",
+    ),
+    (
+        "map.delete_vs_set",
+        "a yrs map delete removes only the entry it saw, so a concurrent set always survives \
+         it, whatever (lamport, agent) say. (A list element's delete is a set of its delete \
+         flag, and wins, as E-MLIST-2 asks.)",
+    ),
+    (
+        "map.steady_bounded",
+        "each overwrite of a map key leaves a content-free item stub (content is \
+         garbage-collected, K-PURGE-11), in the live doc and in a doc loaded from its state \
+         (the stored v2 state compresses a regular run of them). Bounded on the interim by \
+         the CSV caps.",
+    ),
+    (
+        "table.cell_lww",
+        "cells are a kit Map, so concurrent sets of one cell are ordered by client ID \
+         (map.lww).",
+    ),
+    (
+        "stream.merged_writes",
+        "a merged update's stream (`Doc::applied_since`, a keyed diff) names each write by \
+         the facet's winner; on yrs a restore removes the delete flag and a map delete \
+         removes the entry, and yrs keeps no identity for a removal, so those two ops carry \
+         no write (`None`), as `winner(Existence)` of a live element is `None`. The native \
+         engine reports every merged op's event ID (E4).",
+    ),
 ];
 
 /// Test-only hooks for driving several replicas of a [`crate::Doc`] in one process
@@ -67,7 +117,7 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
 /// `untrusted-wire` is not needed.
 #[cfg(feature = "conformance")]
 pub mod replica {
-    use crate::{ClientId, Doc, DocError};
+    use crate::{ClientId, Doc, DocError, Key};
 
     /// A relative position in a text root, from [`anchor`]: valid on every replica of the
     /// doc. Opaque.
@@ -89,10 +139,10 @@ pub mod replica {
         doc.events_since(version)
     }
 
-    /// Deliver an update from [`events_since`] (made by another of this kit's docs). An
-    /// update that skips ahead of a client's history is refused with
-    /// [`DocError::MissingDeps`] and changes nothing; otherwise it is applied, and anything
-    /// already known in it is skipped.
+    /// Deliver an update from [`events_since`], or a change's own update (`Doc::edit_as`),
+    /// made by another of this kit's docs in this process. An update that skips ahead of a
+    /// client's history is refused with [`DocError::MissingDeps`] and changes nothing;
+    /// otherwise it is applied, and anything already known in it is skipped.
     pub fn deliver(doc: &mut Doc, update: &[u8]) -> Result<(), DocError> {
         doc.deliver_local(update)
     }
@@ -137,5 +187,13 @@ pub mod replica {
     /// same inserts. Comparable across replicas of one engine only.
     pub fn state(doc: &Doc) -> Vec<(ClientId, u32)> {
         doc.state_clocks()
+    }
+
+    /// How many runs of the engine's ID index the current places of `keys` (in this order)
+    /// take in MovableList root `root`: 1 when they are adjacent slots with consecutive
+    /// engine IDs (a forward chain, `elem::chain` / `elem::reorder`). `None` when a key was
+    /// never inserted.
+    pub fn slot_runs(doc: &Doc, root: &str, keys: &[Key]) -> Result<Option<usize>, DocError> {
+        doc.slot_runs(root, keys)
     }
 }

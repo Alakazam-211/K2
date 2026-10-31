@@ -1266,7 +1266,8 @@ fn a_format_4_store_opens_and_keeps_working() {
             .unwrap()
             .unwrap()
             .value();
-        assert_eq!(v, k2_mpc_base::store::STORE_FORMAT);
+        // a store without structured docs stays at the base format (format 6 is lazy)
+        assert_eq!(v, k2_mpc_base::store::STORE_FORMAT_BASE);
         assert_eq!(v, 5);
         assert_eq!(r.open_table(PROV).unwrap().iter().unwrap().count(), 0);
     }

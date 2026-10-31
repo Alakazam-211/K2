@@ -1156,3 +1156,234 @@ fn the_roll_up_is_golden() {
         ])),
     );
 }
+
+// ---------- a grid doc's notes (v0.10.0) ----------
+
+/// A small CSV-like pack for a grid doc (the grid tests' `Lite`): comma-separated fields, no
+/// quoting.
+struct GridLite;
+const GRID_LITE: k2_mpc_base::schema::Schema = k2_mpc_base::schema::Schema {
+    name: "csv-lite",
+    roots: k2_mpc_base::table::ROOTS,
+};
+
+impl k2_mpc_base::session::Pack for GridLite {
+    fn schema(&self) -> k2_mpc_base::schema::Schema {
+        GRID_LITE
+    }
+    fn decode(
+        &self,
+        b: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        use k2_mpc_base::table::{Field, Shape, Table};
+        let bad = |message: String| k2_mpc_base::session::Declined {
+            code: "malformed",
+            message,
+        };
+        let s = std::str::from_utf8(b).map_err(|_| bad("not UTF-8".into()))?;
+        let recs: Vec<Vec<Field>> = s
+            .lines()
+            .map(|l| {
+                if l.is_empty() {
+                    Vec::new()
+                } else {
+                    l.split(',').map(Field::new).collect()
+                }
+            })
+            .collect();
+        let (_, edits) =
+            Table::import(&recs, false, Shape::detect(&recs)).map_err(|e| bad(e.to_string()))?;
+        let mut d = k2_mpc_base::doc::Doc::new(GRID_LITE).unwrap();
+        d.edit_as(2, &edits).unwrap();
+        Ok(k2_mpc_base::session::PackContent {
+            roots: d.export_neutral().unwrap(),
+            codec: vec![1],
+        })
+    }
+    fn encode(
+        &self,
+        c: &[(String, k2_mpc_base::doc::Neutral)],
+        _: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        let t = k2_mpc_base::session::View::of_content(c)
+            .table()
+            .map_err(|e| k2_mpc_base::session::PackError(e.to_string()))?;
+        let mut out = String::new();
+        for rec in t.render() {
+            let f: Vec<&str> = rec.iter().map(|f| f.value.as_str()).collect();
+            out.push_str(&f.join(","));
+            out.push('\n');
+        }
+        Ok(out.into_bytes())
+    }
+}
+
+/// A grid table op through the host's edit route.
+fn grid_op(
+    s: &Session,
+    c: ConnId,
+    f: impl FnOnce(
+        &mut k2_mpc_base::table::Table,
+    ) -> Result<Vec<k2_mpc_base::doc::Edit>, k2_mpc_base::table::TableError>,
+) {
+    s.edit_ops_with(c, &EditOptions::new(), |v| {
+        let mut t = v.table().map_err(|e| e.to_string())?;
+        f(&mut t).map_err(|e| e.to_string())
+    })
+    .unwrap();
+}
+
+/// A grid doc: Ada (a person who may read history) writes a cell the file never got, and an
+/// outside save writes that same cell: the file wins, and Ada gets a `cell` note naming the row,
+/// the column and the version cut before the save. Then Ada writes another cell of a row the
+/// owner deletes and drops (`rows drop-deleted`): a `dropped_row` note, which names no version
+/// (none holds a dropped row) and carries the value. Both are pushed live to Ada's own
+/// subscription and wait in a later one's snapshot.
+///
+/// `roster_events_overwritten_grid.json`: `about`, `self`, Ada's live stream (`events`, without its
+/// `CellCursor` events: the wire has no encoding of a grid's caret yet) and the
+/// later subscription's snapshot (`final`). The grid's values of the same fields as a text doc's:
+/// `row` set, `cells[].col` set for a cell, `restore_from` null, `not_shown` 0, `no_history`
+/// false, the grid's `source` and `rule`.
+#[test]
+fn a_grid_docs_notes_are_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-golden-{}-grid", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("ws")).unwrap();
+    let path = dir.join("ws/t.csv");
+    std::fs::write(&path, "a,b\nc,d\n").unwrap();
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    host.rights
+        .lock()
+        .unwrap()
+        .insert("ada".into(), Rights::full());
+    host.rights
+        .lock()
+        .unwrap()
+        .insert("own".into(), Rights::full().with_owner(true));
+    let mut config = Config::default();
+    config.edit_rate_per_s = 1_000_000;
+    config.edit_burst = 1_000_000;
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let key = DocKey {
+        space: "ws".into(),
+        path: "t.csv".into(),
+    };
+    let s = mgr
+        .open_file(Arc::new(GridLite), &key, &path, &dir.join("ws"))
+        .unwrap();
+    let _guard = TmpDir(dir.clone());
+    let join = |pid: &str, name: &str, colour: &str| {
+        s.join(
+            Participant::new(pid, name, colour, ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap()
+        .conn
+    };
+    let ada = join("ada", "Ada", "#7c3aed");
+    let own = join("own", "Owner", "#0f766e");
+    let roster = s.subscribe_roster(ada).unwrap();
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let k = |x: &str| k2_mpc_base::elem::Key::new(x).unwrap();
+    tick();
+
+    // 1. a cell the file never got (inside the write delay), then an outside save of that cell
+    host.now.fetch_add(1_000, Ordering::SeqCst);
+    grid_op(&s, ada, |t| t.set_cell(&k("r2"), &k("c2"), "LIVE"));
+    host.now.fetch_add(100, Ordering::SeqCst);
+    std::fs::write(&path, "a,b\nc,FILE\n").unwrap();
+    s.file_changed().unwrap();
+    tick();
+
+    // 2. a cell of a row the owner deletes and drops
+    host.now.fetch_add(1_000, Ordering::SeqCst);
+    grid_op(&s, ada, |t| t.set_cell(&k("r1"), &k("c1"), "MINE"));
+    host.now.fetch_add(1_000, Ordering::SeqCst);
+    grid_op(&s, own, |t| t.delete_row(&k("r1")));
+    s.drop_deleted(own).unwrap();
+    tick();
+
+    let late = drain(&s.subscribe_roster(ada).unwrap());
+    let ros = drain(&roster);
+
+    let pushed = pushes(&ros);
+    assert_eq!(pushed.len(), 2, "{ros:?}");
+    let (cell_note, drop_note) = (pushed[0].1, pushed[1].1);
+    assert_eq!(
+        (cell_note.source, cell_note.rule, cell_note.region.as_str()),
+        ("an outside save", "cell", "r2/c2")
+    );
+    assert_eq!(cell_note.row.as_deref(), Some("r2"));
+    assert_eq!((cell_note.line, cell_note.col), (Some(2), Some(2)));
+    assert!(cell_note.version.is_some(), "{cell_note:?}");
+    assert_eq!(
+        (
+            cell_note.restore_from,
+            cell_note.not_shown,
+            cell_note.no_history
+        ),
+        (None, 0, false)
+    );
+    assert_eq!(
+        (drop_note.source, drop_note.rule),
+        ("rows drop-deleted", "dropped_row")
+    );
+    assert!(drop_note.row.is_some(), "{drop_note:?}");
+    assert!(drop_note.yours.contains("MINE"), "{drop_note:?}");
+    assert_eq!(drop_note.version, None, "no version holds a dropped row");
+    assert_eq!(
+        (
+            drop_note.restore_from,
+            drop_note.not_shown,
+            drop_note.no_history
+        ),
+        (None, 0, false)
+    );
+    // the same notes wait in the later snapshot
+    let key_of = |o: &Overwrite| (o.change, o.row.clone());
+    assert_eq!(
+        waiting(&late[0]).iter().map(key_of).collect::<Vec<_>>(),
+        pushed.iter().map(|(_, o)| key_of(o)).collect::<Vec<_>>()
+    );
+
+    let mut st = Stable::default();
+    let me = self_in(&late[0], "Ada");
+    golden(
+        &golden_dir().join("roster_events_overwritten_grid.json"),
+        &file(Value::obj([
+            (
+                "about",
+                Value::from(
+                    "A grid doc's notes: an outside save wrote a cell Ada had written that the file \
+                     never got (rule `cell`, with its row, column and the version cut before the \
+                     save), then the owner dropped a deleted row holding Ada's cell (`rows \
+                     drop-deleted`, rule `dropped_row`, which no version holds). `events` is Ada's \
+                     live stream, without its cell-cursor events (the wire doesn't encode a \
+                     grid's caret yet); `final` is a later subscription's snapshot with both notes \
+                     waiting.",
+                ),
+            ),
+            ("self", me.clone()),
+            (
+                "events",
+                Value::List(
+                    ros.iter()
+                        .filter(|e| !matches!(e, RosterEvent::CellCursor { .. }))
+                        .map(|e| roster_event(e, &mut st, &me))
+                        .collect(),
+                ),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+    drop(s);
+    let _ = mgr.release();
+}

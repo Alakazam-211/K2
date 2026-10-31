@@ -844,5 +844,16 @@ pub fn kit_blob_cases(action: PersonAction) -> Vec<BlobCase> {
         | P::UndoPartial
         | P::Mention
         | P::Revert => Vec::new(),
+        // grid docs only: `kit_grid_cases`
+        P::RowInsert
+        | P::RowMove
+        | P::RowDelete
+        | P::ColInsert
+        | P::ColMove
+        | P::ColDelete
+        | P::ColRename
+        | P::Sort
+        | P::RestoreElement
+        | P::DropDeleted => Vec::new(),
     }
 }

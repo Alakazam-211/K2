@@ -163,6 +163,52 @@ pub struct CursorAt {
     pub head: LineCol,
 }
 
+/// A caret or selection on a grid, by identity (A10, K-PRES-6): the anchor and head cells
+/// `(row key, column key)`, equal for a caret. A selection is the rectangle between them:
+/// the rows (and columns) between the two keys in the current order. It follows moves and
+/// sorts with no transform; when its row or column is deleted it is dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CellCursor {
+    pub anchor: (crate::elem::Key, crate::elem::Key),
+    pub head: (crate::elem::Key, crate::elem::Key),
+    /// The head cell's live position now, 1-based (`#12` and the column's `#N`).
+    pub at: Option<(usize, usize)>,
+    /// The head column's header text, when it has one.
+    pub name: Option<String>,
+    /// The rendered lines of the rows it covers now (root [`crate::table::ROWS`]).
+    pub lines: Option<LineRange>,
+}
+
+impl CellCursor {
+    /// What it covers, as a claim would ([`super::awareness::ClaimSpan::Cells`]).
+    pub fn span(&self) -> super::awareness::ClaimSpan {
+        super::awareness::ClaimSpan::Cells {
+            rows: (self.anchor.0.clone(), self.head.0.clone()),
+            cols: (self.anchor.1.clone(), self.head.1.clone()),
+        }
+    }
+}
+
+impl std::fmt::Display for CellCursor {
+    /// `cell r7/c2 (#12, "email")`; a selection `cells r7/c2–r9/c4 (#12, "email")`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (r, c) = &self.head;
+        if self.anchor == self.head {
+            write!(f, "cell {r}/{c}")?;
+        } else {
+            write!(f, "cells {}/{}–{r}/{c}", self.anchor.0, self.anchor.1)?;
+        }
+        match (&self.at, &self.name) {
+            (Some((row, _)), Some(n)) => {
+                write!(f, " (#{row}, \"{}\")", super::awareness::one_line(n))
+            }
+            (Some((row, _)), None) => write!(f, " (#{row})"),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// One row of [`super::Session::roster`]: one participant (pid), however many connections
 /// they have. Per-connection state is folded in: role, caret and view come from the most
 /// active connection; away only when every connection is away.
@@ -175,8 +221,10 @@ pub struct RosterEntry {
     /// Every connection has been not visible for [`super::Config::away_after_ms`] (see
     /// [`super::Session::set_visible`]).
     pub away: bool,
-    /// The most active connection's caret that has one.
+    /// The most active connection's caret that has one (a text doc).
     pub cursor: Option<CursorAt>,
+    /// On a grid: the most active connection's cell caret or selection that has one (A10).
+    pub cell: Option<CellCursor>,
     /// The range they are looking at (readers' "viewing highlight"), from the most active
     /// connection that has one.
     pub view: Option<LineRange>,

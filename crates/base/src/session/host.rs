@@ -173,6 +173,8 @@ pub enum Action {
     Purge,
     /// `blame` (text and tier 0).
     Blame,
+    /// `rows drop-deleted` (owner only, K-CSV-7).
+    DropDeleted,
 }
 
 /// What a purge targeted, as [`AuditEvent::Purged`] records it: metadata only (never the
@@ -196,6 +198,10 @@ pub enum PurgedScope {
     Text { bytes: usize },
     /// Participant erasure, to `pseudonym`.
     Participant { pseudonym: String },
+    /// A table's cell (its row and column keys: identities, not content; C1f).
+    Cell { row: String, col: String },
+    /// A table's row (its key; C1f).
+    Row { row: String },
     /// Tier 0: blob versions (`None`: every one but the current).
     BlobVersions {
         version: Option<crate::store::VersionId>,
@@ -263,13 +269,25 @@ pub enum AuditEvent {
     /// [`crate::session::EXTERNAL_PID`]). For a tier-0 blob doc, `seq` is the version the
     /// save became.
     ExternalEdit { key: DocKey, seq: crate::store::Seq },
-    /// Outside save `change` may have removed or replaced text `by` wrote, within the rule's
-    /// bound (`docs/SESSIONS.md`, "When an outside save removes someone's text"). `region` is
-    /// line numbers only: no document text. `rule`: `removed_text`, `replaced_text`,
-    /// `not_computed` (the removal couldn't be read: the save still applied; `by` is `None`),
-    /// `notes_dropped` (the unload hand-off's bound went: `region` says how many). `by` can be
-    /// `kit:external` or `kit:import`: an audit row, but nobody to tell. `version` holds
-    /// the text as it was.
+    /// An outside save (change `change`, by [`crate::session::EXTERNAL_PID`]) overrode
+    /// someone's live work. Two kinds, one per doc kind:
+    /// - a grid doc: the save overrode a live grid element (contract §2.9.1): the file's value
+    ///   won where both sides changed it (`rule`: `cell`, `name`, `quoting`, `edited_row` (the
+    ///   file deleted a row the live side edited), `deleted_row` (the file brought back a row
+    ///   the live side deleted), `moved_row`, and the column forms). `region` names it by key
+    ///   (`r2/c3`, `row r4`, `col c2`, `name of c2`); `by` is who wrote the live value (or
+    ///   deleted, moved the element), when the store knows; `version` the version that holds
+    ///   the live value. A heads-up note goes to `by` too
+    ///   ([`crate::session::Session::take_notes`]).
+    /// - a text doc: the save may have removed or replaced text `by` wrote, within the rule's
+    ///   bound (`docs/SESSIONS.md`, "When an outside save removes someone's text"). `region` is
+    ///   line numbers only: no document text. `rule`: `removed_text`, `replaced_text`,
+    ///   `not_computed` (the removal couldn't be read: the save still applied; `by` is `None`),
+    ///   `notes_dropped` (the unload hand-off's bound went: `region` says how many). `by` can be
+    ///   `kit:external` or `kit:import`: an audit row, but nobody to tell. `version` holds
+    ///   the text as it was.
+    ///
+    /// Never carries content.
     OutsideOverride {
         key: DocKey,
         change: crate::store::Seq,
@@ -285,6 +303,16 @@ pub enum AuditEvent {
     /// [`crate::session::Declined`]). Write-back stops and edits are refused. Tell
     /// participants.
     FileDeclined { key: DocKey, code: &'static str },
+    /// An outside save changed only the file's codec settings (a structured doc: a re-save
+    /// with a BOM, CRLF or another delimiter; the content the same). It is kept as version
+    /// `version` (reason `External`, by [`crate::session::EXTERNAL_PID`]) holding the new
+    /// settings; `description` is the pack's ([`crate::session::Pack::describe_codec_change`]).
+    /// Never carries content.
+    OutsideSettings {
+        key: DocKey,
+        version: crate::store::VersionId,
+        description: String,
+    },
     /// The file is back (after missing or declined).
     FileRestored { key: DocKey },
     /// The file came back holding one of the kit's own recent writes, made since the last
@@ -505,5 +533,16 @@ pub enum AuditEvent {
         by: String,
         scope: PurgedScope,
         counts: crate::store::PurgeCounts,
+    },
+    /// The owner removed a grid's deleted rows and columns from the live sheet (`rows
+    /// drop-deleted`, K-CSV-7) as change `seq`: they can't be restored from the sheet, and
+    /// versions and change records still hold them (not erasure). Counts only, no content.
+    DroppedDeleted {
+        key: DocKey,
+        by: String,
+        seq: crate::store::Seq,
+        rows: usize,
+        cols: usize,
+        cells: usize,
     },
 }

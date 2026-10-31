@@ -1868,10 +1868,22 @@ fn simulate(seed: u64, ticks: usize) {
             }
             if rng.below(2) == 0 {
                 s.file_changed().unwrap();
+                // K-AUD-1's sync check after an outside save too, not only after flushes
+                // (empty unless the doc is clean)
+                assert_eq!(
+                    s.audit_disk_sync().unwrap(),
+                    vec![],
+                    "seed {seed} tick {t}: K-AUD-1 after an outside save"
+                );
             }
         }
         f.advance(200 + rng.below(1_500));
         let r = f.tick();
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "seed {seed} tick {t}: K-AUD-1 after a tick"
+        );
         if std::env::var("SIM_DEBUG").is_ok() {
             let live = text(&s, agents[0]);
             for e in expect.iter().filter(|e| e.starts_with("agent")) {

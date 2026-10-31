@@ -11,6 +11,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod at_base;
 mod blame;
 mod claims;
+mod grid;
+mod grid_presence;
+#[cfg(test)]
+mod grid_tests;
+mod grid_undo;
 mod group;
 mod history;
 mod purge;
@@ -21,6 +26,10 @@ pub use at_base::EditAtBase;
 #[cfg(feature = "conformance")]
 pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
+pub use grid::{
+    AuditReport, AuditViolation, CellBlame, ElemBlame, FacetConflict, GridConflict, GridWrite,
+    GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
+};
 pub use history::{DiffOutput, LogItem, LogQuery};
 pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
 
@@ -28,7 +37,7 @@ use super::awareness::{self, ActivityEntry, ActivityKind, Aware, ClaimPolicy, No
 use super::carry::RevertIndex;
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FlushOutcome, Probe, ReadFile};
-use super::error::{EditWithError, Result, SessionError};
+use super::error::{DroppedBy, EditWithError, Result, SessionError};
 use super::handles::Handles;
 use super::host::{Action, AuditEvent, Host, LeaveReason, Need, PurgedScope, Rights};
 use super::pack::{Declined, Pack, PackError};
@@ -43,14 +52,15 @@ use super::ratelimit::Bucket;
 use super::roster::{self, RosterEvent, RosterHub, Who};
 use super::summary;
 use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
+use super::view::View;
 use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
 use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
 use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
     Approval, ApprovalState, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey, DocMeta, DocStore,
-    HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk, RecordRoot, RevertRecord, RootRuns, Seq,
-    SyncState, Version, VersionReason,
+    ElemCounts, ElemRoot, HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk, RecordRoot,
+    RevertRecord, RootRuns, Seq, SyncState, Version, VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -104,12 +114,14 @@ pub struct FileCopy {
     pub codec: FileCodec,
 }
 
-/// How [`FileBytes`] applied the codec settings. Versions store content only, not the
-/// codec settings in effect then, so a past version is rendered with today's.
+/// How [`FileBytes`] applied the codec settings. A text doc's versions store content only,
+/// not the codec settings in effect then, so a past version is rendered with today's; a
+/// structured doc's (format 6) store them, so its versions render exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FileCodec {
-    /// The current doc, rendered as the write-back writes it: exact.
+    /// The current doc, rendered as the write-back writes it, or a structured doc's version
+    /// with the codec settings it stored: exact.
     Exact,
     /// Rendered with today's line endings, BOM and final newline: exact unless an outside
     /// save changed them since that version.
@@ -128,6 +140,8 @@ pub struct ReadResult {
     pub bytes: Vec<u8>,
     /// Each text root's text, in schema order.
     pub text_by_root: Vec<(String, String)>,
+    /// Every root's content, in schema order (A6): text, a list's live elements, a map.
+    pub content: Vec<(String, Neutral)>,
     /// The version read. A valid `base` for [`Session::write_base`] while it stays cached.
     pub version: Seq,
     /// Who else changed the doc since this participant's previous read (or, on a first read,
@@ -145,6 +159,11 @@ pub struct EditResult {
     pub changed: Vec<LineRange>,
     pub lines_added: usize,
     pub lines_removed: usize,
+    /// Per structured root it changed, its element counts (A6).
+    pub elems: Vec<ElemCounts>,
+    /// Cells it wrote into a deleted row or column (kept, hidden: contract §1.6), each with
+    /// who deleted the row or column (K-CSV-4: reported to the writer and the deleter).
+    pub hidden: Vec<HiddenCellWrite>,
 }
 
 /// Returned by [`Session::write_base`].
@@ -180,6 +199,14 @@ pub struct EditOptions {
     pub policy: ClaimPolicy,
     /// Apply only if the doc is still at this version (default `None`: no guard).
     pub if_version: Option<Seq>,
+    /// A structured edit's base (K-BR-12, `--base V`): refused (exit 1) only if a facet the
+    /// edit touches was written after V by someone else. An agent's structured edit needs
+    /// this or `if_version` ([`SessionError::NeedsBase`] otherwise).
+    pub base: Option<Seq>,
+    /// The version the person's view last rendered (updated on every incoming event, not
+    /// at send time), for a structured edit: refused if a text re-paired a row the edit names
+    /// since then ([`Session::edit_ops`]). Absent, the edit lands at current.
+    pub seen: Option<Seq>,
     /// The undo group token's hash ([`EditOptions::group`]; default `None`: its own step).
     pub(crate) group: Option<u64>,
 }
@@ -197,8 +224,20 @@ impl EditOptions {
     }
 
     /// Apply only if the doc is at version `v` ([`SessionError::Stale`] otherwise).
+    pub fn seen(mut self, v: Seq) -> Self {
+        self.seen = Some(v);
+        self
+    }
+
+    /// The doc's version must still be this, or the edit is refused.
     pub fn if_version(mut self, v: Seq) -> Self {
         self.if_version = Some(v);
+        self
+    }
+
+    /// The structured edit's base version (K-BR-12: checked per element facet).
+    pub fn base(mut self, v: Seq) -> Self {
+        self.base = Some(v);
         self
     }
 
@@ -400,11 +439,40 @@ pub struct ChangeEvent {
     pub client: ClientId,
     pub via: String,
     pub root: String,
-    /// The change, in the coordinates of the root's text before it.
+    /// The change, in the coordinates of the root's text before it (empty for a structured
+    /// root: see `applied`).
     pub hunks: Vec<Hunk>,
     pub at_ms: u64,
     /// The person an assistant agent made this change for (its approval starts `Pending`).
     pub on_behalf_of: Option<String>,
+    /// What the change did to this root (A5): its hunks, or its list or map ops as applied,
+    /// by key, with their write identities.
+    pub applied: crate::elem::Applied,
+    /// Cells it wrote into a deleted row or column, with who deleted it (the deleter's side
+    /// of K-CSV-4).
+    pub hidden: Vec<HiddenCellWrite>,
+}
+
+/// An outside save that changed only the file's codec settings (a re-save with a BOM, CRLF or
+/// another delimiter; the content the same), sent to [`Session::subscribe_settings`]
+/// subscribers (C1k). Not a [`ChangeEvent`]: the doc's content and version don't change (no
+/// change record without an engine update), so a replica that follows changes by version
+/// never sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SettingsChanged {
+    /// The doc's version, unchanged by the re-save.
+    pub version: Seq,
+    /// The version that holds the new settings ([`AuditEvent::OutsideSettings`] names it too).
+    pub settings_version: crate::store::VersionId,
+    /// [`EXTERNAL_PID`]: the file.
+    pub pid: String,
+    pub via: String,
+    pub at_ms: u64,
+    /// The doc's codec settings now (the pack's, opaque to the kit).
+    pub codec: Vec<u8>,
+    /// How they changed ([`super::Pack::describe_codec_change`]).
+    pub description: String,
 }
 
 /// Returned by [`Session::status`].
@@ -470,6 +538,8 @@ struct Member {
     /// The span its latest change touched, in the root's text now (carried: not expanding;
     /// gone once its text is all removed or replaced, `awareness::carry_edit_span`).
     edited: Option<(String, usize, usize)>,
+    /// On a grid: its caret, view and last edit by key (A10).
+    grid: grid_presence::GridPresence,
 }
 
 impl std::ops::Deref for Member {
@@ -528,6 +598,8 @@ struct ReadBase {
     version: Seq,
     at_ms: u64,
     texts: Vec<(&'static str, String)>,
+    /// A structured doc's content at that version, by key (deleted rows where they sit).
+    view: Option<Arc<View>>,
     bytes: usize,
 }
 
@@ -585,6 +657,8 @@ struct State {
     handles: Handles,
     /// Roster subscribers and what they were last told ([`Session::subscribe_roster`]).
     roster: RosterHub,
+    /// Codec-settings subscribers ([`Session::subscribe_settings`]).
+    settings_subs: Vec<(ConnId, SyncSender<SettingsChanged>)>,
     disk: Option<Disk>,
     /// The doc's hash key (in the store; a purge replaces it): every file hash is keyed by
     /// it, so none is a plain content hash, and a purge makes the old ones meaningless.
@@ -593,9 +667,32 @@ struct State {
     aware: Aware,
     /// The verb the change being committed came from (`sed -i`), for the activity ring.
     verb_hint: Option<String>,
+    /// A table's present cells (live or hidden) and columns, counted on first need and kept
+    /// in step by every change (the size limit, K-CSV-7).
+    grid_size: Option<(usize, usize)>,
+    /// A grid's axes and line map as the roster last read them, with the doc's version and
+    /// codec they were read at (the roster push's flush reads them for every caret: O(doc)
+    /// to build, so built once per change, not once per flush; v0.10.0).
+    grid_now: std::cell::RefCell<Option<GridNowCache>>,
+    /// The change being committed goes on no undo stack (`rows drop-deleted`, spec v1.10
+    /// S11); taken by the commit.
+    no_stack: bool,
+    /// The rows the next change marks (a text's non-exact pairs, [`NewChange::row_marks`]).
+    next_row_marks: Vec<crate::elem::Key>,
+    /// The next change remaps the columns (a text's non-exact column mapping).
+    next_col_remap: bool,
+    /// The waiting notes the next change leaves ([`NewChange::note_rows`]).
+    next_note_rows: Vec<(String, Vec<u8>)>,
+    /// Conformance only: outside saves record their writes with no identity, as a write
+    /// merged in from elsewhere whose writer the engine doesn't report (KC7, Yrs only).
+    #[cfg(feature = "conformance")]
+    outside_without_identity: bool,
     /// The undo group token of the edit being committed ([`EditOptions::group`]).
     group_hint: Option<u64>,
 }
+
+/// [`State::grid_now`]: the version and codec a grid reading was made at, and the reading.
+type GridNowCache = (Seq, Vec<u8>, Arc<grid_presence::GridNow>);
 
 const AUTHORS_KEPT: usize = 1024;
 
@@ -687,6 +784,9 @@ struct Disk {
 /// stored synced state at once, a second full decode on every load besides the doc's own; it
 /// stays encoded until the disk path first reads or changes it ([`Replica::get`]), and
 /// decodes then exactly as before (the same state, the same runtime-check settings).
+// one per session with a file, and decoded is its usual state: boxing the doc would only add
+// an indirection to every disk-path read
+#[allow(clippy::large_enum_variant)]
 enum Replica {
     Doc(Doc),
     Stored {
@@ -748,12 +848,30 @@ pub struct Session {
     config: Arc<Config>,
     pack: Arc<dyn Pack>,
     schema: Schema,
+    /// The schema has a structured root (a grid): content is read by key, versions are
+    /// typed, changes are recorded by key (C1c).
+    structured: bool,
     doc_id: DocId,
     state: Mutex<State>,
     last_used_ms: AtomicU64,
     /// The manager's blob store, for a doc promoted from tier 0 that kept tier-0 history
     /// (v0.9.2; `tier0_history.rs`). Set by the manager when it has one.
     blobs: std::sync::OnceLock<Arc<crate::blob::BlobStore>>,
+}
+
+/// Whether a structured change's stream re-identified elements: a list insert, delete,
+/// restore or drop with an effect, or a meta setting (a header switch turns names into a row,
+/// or a row into names).
+fn identity_changed(streams: &[crate::elem::Applied]) -> bool {
+    use crate::elem::{Applied as A, Effect, ListOpKind as K};
+    streams.iter().any(|a| match a {
+        A::List { ops, .. } => ops.iter().any(|o| {
+            !matches!(o.effect, Effect::None { .. })
+                && matches!(o.kind, K::Insert | K::Delete | K::Restore | K::Drop)
+        }),
+        A::Map { root, ops } => root == crate::table::META && ops.iter().any(|o| o.key == "header"),
+        A::Text { .. } => false,
+    })
 }
 
 fn random_client() -> ClientId {
@@ -851,10 +969,12 @@ fn take_d1_extra() -> Vec<(usize, usize)> {
     Vec::new()
 }
 
+/// Each text root's text, in schema order (a structured root has none).
 fn texts_of(doc: &Doc, schema: &Schema) -> Result<Vec<(&'static str, String)>> {
     schema
         .roots
         .iter()
+        .filter(|(_, k)| *k == Kind::Text)
         .map(|(r, _)| Ok((*r, doc.text(r)?)))
         .collect()
 }
@@ -890,7 +1010,9 @@ pub(super) fn ordered_roots(
             .map(|(_, v)| v)
             .collect();
         match (found.as_slice(), kind) {
-            ([v @ Neutral::Text(_)], Kind::Text) => {
+            ([v @ Neutral::Text(_)], Kind::Text)
+            | ([v @ Neutral::List(_)], Kind::MovableList)
+            | ([v @ Neutral::Map(_)], Kind::Map) => {
                 ordered.push(((*name).to_owned(), (*v).clone()))
             }
             _ => {
@@ -939,6 +1061,7 @@ impl Session {
             config,
             pack,
             schema,
+            structured: schema.roots.iter().any(|(_, k)| *k != Kind::Text),
             doc_id,
             last_used_ms: AtomicU64::new(now),
             blobs: std::sync::OnceLock::new(),
@@ -972,12 +1095,21 @@ impl Session {
                 authors,
                 outside_saves: 0,
                 subs: Vec::new(),
+                settings_subs: Vec::new(),
                 handles: Handles::default(),
                 roster: RosterHub::default(),
                 disk: None,
                 hash_key,
                 aware: Aware::default(),
                 verb_hint: None,
+                grid_size: None,
+                grid_now: std::cell::RefCell::new(None),
+                no_stack: false,
+                next_row_marks: Vec::new(),
+                next_col_remap: false,
+                next_note_rows: Vec::new(),
+                #[cfg(feature = "conformance")]
+                outside_without_identity: false,
                 group_hint: None,
             }),
         })
@@ -1045,6 +1177,7 @@ impl Session {
         bytes: &[u8],
     ) -> Result<Self> {
         let schema = pack.schema();
+        let structured = schema.roots.iter().any(|(_, k)| *k != Kind::Text);
         let content = pack.decode(bytes).map_err(SessionError::Declined)?;
         let ordered = ordered_roots(&schema, content.roots)?;
         let mut doc = Doc::new(schema)?;
@@ -1057,17 +1190,18 @@ impl Session {
                 break c;
             }
         };
-        let edits: Vec<Edit> = ordered
-            .iter()
-            .filter_map(|(root, v)| match v {
-                Neutral::Text(t) if !t.is_empty() => Some(Edit::Text {
-                    root: root.clone(),
-                    hunks: diff::hunks("", t),
-                }),
-                Neutral::Text(_) => None,
-            })
+        let edits = grid::import_edits(&ordered);
+        let made = doc.edit_applied(client, &edits)?;
+        let update = made.update;
+        // a structured import's ops, by key (its record and its element writes)
+        let (elems, counts) = grid::elem_records(&made.applied, &edits, &grid::Befores::new());
+        if structured {
+            grid::check_import_size(&config, &schema, &ordered)?;
+        }
+        let edits: Vec<Edit> = edits
+            .into_iter()
+            .filter(|e| matches!(e, Edit::Text { .. }))
             .collect();
-        let update = doc.edit_as(client, &edits)?;
         // each root's imported text: fresh elements from the import client's clocks
         let firsts = crate::engine::insert_clocks(0, &edits);
         let now = host.now_ms();
@@ -1076,7 +1210,7 @@ impl Session {
             pack: schema.name.to_owned(),
             engine: ENGINE_NAME.to_owned(),
             engine_format: ENGINE_FORMAT,
-            codec: content.codec,
+            codec: content.codec.clone(),
             created_ms: now,
             synced_hash: None,
             synced_seq: 0,
@@ -1097,6 +1231,7 @@ impl Session {
             name: None,
             authors: vec![IMPORT_PID.to_owned()],
             content: ordered.clone(),
+            codec: structured.then(|| content.codec.clone()),
         };
         // the bytes are the file's: the doc as imported is what the file holds
         let hash_key = crate::store::fresh_key()?;
@@ -1109,8 +1244,10 @@ impl Session {
             info: ChangeInfo {
                 lines_added: ordered
                     .iter()
-                    .map(|(_, Neutral::Text(t))| t.lines().count() as u64)
+                    .filter_map(|(_, n)| n.as_text())
+                    .map(|t| t.lines().count() as u64)
                     .sum(),
+                elems: counts,
                 ..ChangeInfo::new(ChangeKind::Import, IMPORT_PID, "disk", now)
             },
             record: RevertRecord {
@@ -1119,15 +1256,16 @@ impl Session {
                 at_ms: now,
                 roots: ordered
                     .iter()
-                    .filter(|(_, Neutral::Text(t))| !t.is_empty())
+                    .filter_map(|(root, n)| Some((root, n.as_text()?)))
+                    .filter(|(_, t)| !t.is_empty())
                     .zip(&firsts)
-                    .map(|((root, Neutral::Text(t)), first)| RecordRoot {
+                    .map(|((root, t), first)| RecordRoot {
                         root: root.clone(),
                         empty_after: false,
                         hunks: vec![RecordHunk {
                             start: 0,
                             end: 0,
-                            insert: t.clone(),
+                            insert: (*t).to_owned(),
                             deleted: String::new(),
                             redacted: false,
                             roots: Some(HunkRoots {
@@ -1140,6 +1278,7 @@ impl Session {
                         }],
                     })
                     .collect(),
+                elems,
             },
             span: Some(ClockSpan {
                 client,
@@ -1148,6 +1287,9 @@ impl Session {
             }),
             provenance: Vec::new(),
             authored: None,
+            row_marks: Vec::new(),
+            col_remap: false,
+            note_rows: Vec::new(),
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -1259,6 +1401,7 @@ impl Session {
         let m = st.members.remove(i);
         st.subs.retain(|(c, _, _)| *c != m.conn);
         st.roster.drop_conn(m.conn);
+        st.settings_subs.retain(|(c, _)| *c != m.conn);
         self.conn_gone(st, m.pres.conn);
         if !m.pres.watcher && !st.members.iter().any(|o| o.p.pid == m.pres.p.pid) {
             st.roster.record(
@@ -1473,6 +1616,7 @@ impl Session {
             view: None,
             view_ms: None,
             edited: None,
+            grid: Default::default(),
         });
         self.roster_flush(st, now, false);
         Ok(Joined {
@@ -1556,6 +1700,9 @@ impl Session {
     /// Place this connection's caret or selection (`cursor --at L:C`). Needs edit; readers
     /// use [`Session::set_view`] instead. Returns the caret in byte offsets.
     pub fn set_cursor(&self, conn: ConnId, root: &str, anchor: At, head: At) -> Result<Cursor> {
+        if matches!(anchor, At::Elem { .. }) || matches!(head, At::Elem { .. }) {
+            return self.set_cursor_elem(conn, &anchor, &head);
+        }
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Edit, Action::Cursor, now)?;
@@ -1581,6 +1728,23 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::View, now)?;
+        if self.is_grid() {
+            // the rendered lines, as the rows on them (A10)
+            if range.first == 0 || range.first > range.last {
+                return Err(SessionError::BadPosition(format!(
+                    "lines {}..{}",
+                    range.first, range.last
+                )));
+            }
+            self.set_grid_view(&mut st, i, range.first, range.last, now)
+                .ok_or_else(|| {
+                    SessionError::BadPosition(format!(
+                        "lines {}..{} hold no row of the table",
+                        range.first, range.last
+                    ))
+                })?;
+            return Ok(range);
+        }
         let (_, text) = self.text_of(&st, &range.root)?;
         let count = position::line_count(text);
         if range.first == 0 || range.first > range.last || range.first > count {
@@ -1611,7 +1775,7 @@ impl Session {
         let i = self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
         self.expire_claims(&mut st, now);
         let rows: Vec<RosterEntry> = self
-            .roster_rows(&st, now)
+            .roster_rows(&st, now)?
             .into_iter()
             .map(|r| r.entry)
             .collect();
@@ -1626,15 +1790,35 @@ impl Session {
 
     /// The roster rows from presence now (claims already expired), in roster order, each with
     /// its participant's rights: what [`Session::roster`] returns and the roster push reads.
-    fn roster_rows(&self, st: &State, now: u64) -> Vec<roster::Row> {
+    fn roster_rows(&self, st: &State, now: u64) -> Result<Vec<roster::Row>> {
+        let mut rows = presence::fold_roster(&st.members, now, &self.config, |_| false);
+        if self.is_grid() {
+            let g = self.grid_now_cached(st)?;
+            for (conns, entry, _) in &mut rows {
+                self.grid_roster(st, &g, conns, entry, now);
+            }
+        } else {
+            self.text_roster(st, &mut rows, now);
+        }
+        let rows = rows
+            .into_iter()
+            .map(|(conns, entry, joined)| (conns[0].rights, entry, joined))
+            .collect();
+        Ok(presence::sort_roster_with(rows)
+            .into_iter()
+            .map(|(rights, entry)| roster::Row { entry, rights })
+            .collect())
+    }
+
+    /// The text doc's carets, views, last edits and claims on the roster rows.
+    fn text_roster(&self, st: &State, rows: &mut [presence::Folded<'_, Member>], now: u64) {
         let text = |root: &str| {
             st.texts
                 .iter()
                 .find(|(r, _)| *r == root)
                 .map(|(_, t)| t.as_str())
         };
-        let mut rows = presence::fold_roster(&st.members, now, &self.config, |_| false);
-        for (conns, entry, _) in &mut rows {
+        for (conns, entry, _) in rows.iter_mut() {
             entry.cursor = conns.iter().find_map(|m| {
                 let cur = m.cursor.as_ref()?;
                 let t = text(&cur.root)?;
@@ -1665,14 +1849,6 @@ impl Session {
                 .filter_map(|c| Some(c.info(text(&c.root)?, now)))
                 .collect();
         }
-        let rows = rows
-            .into_iter()
-            .map(|(conns, entry, joined)| (conns[0].rights, entry, joined))
-            .collect();
-        presence::sort_roster_with(rows)
-            .into_iter()
-            .map(|(rights, entry)| roster::Row { entry, rights })
-            .collect()
     }
 
     /// Push this doc's roster to `conn` from now on: a full [`RosterEvent::Snapshot`] first,
@@ -1695,11 +1871,13 @@ impl Session {
         // the others get what is pending first, so the new subscriber starts where they are
         self.roster_flush(&mut st, now, true);
         self.expire_claims(&mut st, now);
-        let rows = self.roster_rows(&st, now);
+        let rows = self.roster_rows(&st, now)?;
         let (tx, rx) = sync_channel(self.config.roster_queue.max(1));
         let version = st.version;
         let watching = Self::watching_count(&st);
         let st = &mut *st;
+        // a grid doc's waiting notes are read from the store once (a text doc's are in memory)
+        let _ = self.load_notes(st, now);
         let pid = st.members[i].p.pid.clone();
         let overwritten = self
             .waiting_for_subscribers(st, now)
@@ -1744,9 +1922,15 @@ impl Session {
             return;
         }
         self.expire_claims(st, now);
-        let rows = self.roster_rows(st, now);
+        // a grid doc whose table can't be read now: nothing is told until it can be
+        let Ok(rows) = self.roster_rows(st, now) else {
+            return;
+        };
         let version = st.version;
         let watching = Self::watching_count(st);
+        // an author who can't read the doc now gets nothing: no event, no count. The note stays
+        // waiting, and is delivered if they can read again (both kinds; a text doc's reader
+        // without history gets no version)
         self.notes_at_flush(st);
         let waiting = if st.roster.owes_snapshot() && !st.aware.pending.is_empty() {
             self.waiting_for_subscribers(st, now)
@@ -1904,6 +2088,18 @@ impl Session {
         Ok(rx)
     }
 
+    /// Outside saves that change only the file's codec settings ([`SettingsChanged`], C1k):
+    /// their own subscription, beside [`Session::subscribe`]'s changes, since they change
+    /// neither the content nor the version. Needs read. A full or dropped receiver is cut off.
+    pub fn subscribe_settings(&self, conn: ConnId) -> Result<Receiver<SettingsChanged>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
+        let (tx, rx) = sync_channel(self.config.subscriber_queue.max(1));
+        st.settings_subs.push((conn, tx));
+        Ok(rx)
+    }
+
     // ----- reading -----
 
     /// The doc as the file would hold it now. Needs read. Records this version as a valid
@@ -1934,23 +2130,36 @@ impl Session {
     /// becomes the connection's viewing range (P4); `touched` (the lines the call looked
     /// at) gets the heads-up notes, the activity row, and, with `for_edit: Some(ttl)`, an
     /// implicit claim. Like `edit_with`'s `f`, it must be bounded and must not call back
-    /// into the kit; a panic is passed on after the lock is released.
+    /// into the kit; a panic is passed on after the lock is released. With `ids` on a grid,
+    /// `f` also gets the rendering's line → row map, taken under the same lock (`--ids`);
+    /// otherwise `None`.
     pub(crate) fn read_with<R>(
         &self,
         conn: ConnId,
         root: &str,
         verb: &str,
         for_edit: Option<Option<u64>>,
-        f: impl FnOnce(&ReadResult, &str) -> (R, Shown),
+        ids: bool,
+        f: impl FnOnce(&ReadResult, &str, Option<&crate::table::LineMap>) -> (R, Shown),
     ) -> Result<(ReadResult, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
+        if self.is_grid() {
+            // a grid's read verbs see its rendered file (CSV contract §3.2)
+            return match self.read_grid_with(&mut st, i, verb, for_edit, ids, now, f)? {
+                Ok(out) => Ok(out),
+                Err(panic) => {
+                    drop(st);
+                    resume_unwind(panic);
+                }
+            };
+        }
         self.text_of(&st, root)?;
         let read = self.read_locked(&mut st, i, now)?;
         let (r, Shown { view, touched }) = {
             let text = self.text_of(&st, root)?.1;
-            match catch_unwind(AssertUnwindSafe(|| f(&read, text))) {
+            match catch_unwind(AssertUnwindSafe(|| f(&read, text, None))) {
                 Ok(r) => r,
                 Err(panic) => {
                     drop(st);
@@ -2001,21 +2210,16 @@ impl Session {
         }
         let version = st.version;
         st.hist.entry(pid.to_owned()).or_default().last_read = Some(version);
-        let content: Vec<(String, Neutral)> = st
-            .texts
-            .iter()
-            .map(|(r, t)| ((*r).to_owned(), Neutral::Text(t.clone())))
-            .collect();
+        let content = self.content(st)?;
         let bytes = self.pack.encode(&content, &st.codec)?;
         self.record_read_base(st, now);
         Ok(ReadResult {
             bytes,
             text_by_root: content
-                .into_iter()
-                .map(|(r, n)| match n {
-                    Neutral::Text(t) => (r, t),
-                })
+                .iter()
+                .filter_map(|(r, n)| Some((r.clone(), n.as_text()?.to_owned())))
                 .collect(),
+            content,
             version,
             contributors_since_last_read: contributors,
         })
@@ -2029,7 +2233,16 @@ impl Session {
                 return;
             }
         }
-        let bytes: usize = st.texts.iter().map(|(_, t)| t.len()).sum();
+        // a structured doc's base is its keyed state (deleted rows where they sit)
+        let view = match self.structured {
+            true => match st.doc.keyed_state() {
+                Ok(k) => Some(Arc::new(View::new(k))),
+                Err(_) => return,
+            },
+            false => None,
+        };
+        let bytes: usize = st.texts.iter().map(|(_, t)| t.len()).sum::<usize>()
+            + view.as_ref().map_or(0, |v| v.bytes());
         if bytes > c.read_bases_max_bytes || c.read_bases_max == 0 {
             return;
         }
@@ -2037,6 +2250,7 @@ impl Session {
             version: st.version,
             at_ms: now,
             texts: st.texts.clone(),
+            view,
             bytes,
         });
         st.read_base_bytes += bytes;
@@ -2088,9 +2302,7 @@ impl Session {
             .content
             .into_iter()
             .find(|(r, _)| r == root)
-            .map(|(_, n)| match n {
-                Neutral::Text(t) => t,
-            }))
+            .and_then(|(_, n)| n.into_text()))
     }
 
     /// Version, participants, log size, memory estimate, declined reason. Metadata only.
@@ -2130,6 +2342,14 @@ impl Session {
         if_version: Option<Seq>,
     ) -> Result<EditResult> {
         prof!("session.edit");
+        if edits.iter().any(|e| !matches!(e, Edit::Text { .. })) {
+            // structured edits carry their guards (an agent's base, the size limits)
+            let opts = EditOptions {
+                if_version,
+                ..EditOptions::default()
+            };
+            return self.edit_ops(conn, edits, &opts);
+        }
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
@@ -2503,6 +2723,10 @@ impl Session {
             Action::Redo
         };
         let i = self.admit_edit(&mut st, conn, action, now)?;
+        if self.structured {
+            // by element (spec v1.10 §6a)
+            return self.undo_redo_structured(&mut st, i, req, origin, now);
+        }
         let st = &mut *st;
         let pid = st.members[i].p.pid.clone();
         let h = st.hist.entry(pid.clone()).or_default();
@@ -2580,6 +2804,7 @@ impl Session {
                     kind,
                     of: None,
                     restores: Some(p.restores),
+                    elem_restores: grid::ElemRestores::default(),
                 }
             })
             .collect();
@@ -2653,6 +2878,13 @@ impl Session {
         let mut st = self.lock()?;
         Self::clear_stacks(&mut st);
         Ok(())
+    }
+
+    /// The doc's keyed state (deleted elements included). Test-only (feature `conformance`,
+    /// off by default): the undo spec's grid trace test compares it with its oracle's.
+    #[cfg(feature = "conformance")]
+    pub fn keyed_state_for_tests(&self) -> Result<crate::elem::KeyedState> {
+        Ok(self.lock()?.doc.keyed_state()?)
     }
 
     /// `pid`'s undo and redo stack depths in this doc. Test-only (feature `conformance`,
@@ -2746,8 +2978,14 @@ impl Session {
     fn normalize(&self, edits: Vec<Edit>) -> Result<Vec<Edit>> {
         let mut seen: Vec<String> = Vec::with_capacity(edits.len());
         let mut out = Vec::with_capacity(edits.len());
+        let structured = edits.iter().any(|e| !matches!(e, Edit::Text { .. }));
+        if structured {
+            return self.normalize_structured(edits);
+        }
         for e in edits {
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                unreachable!("text edits only here")
+            };
             if seen.contains(&root) {
                 return Err(SessionError::BadEdit(format!(
                     "root {root:?} appears twice in one edit; give all its hunks in one Edit"
@@ -2829,9 +3067,17 @@ impl Session {
             kind,
             of,
             restores,
+            elem_restores: grid::ElemRestores::default(),
         };
         let (res, mut done) = self.commit(st, i, vec![step], now, versions)?;
-        if let Some((seq, regions)) = done.pop().flatten() {
+        // a structured change is reversed by its record: its stack entry has no regions
+        // (spec v1.10); `drop-deleted` goes on no stack (S11)
+        let stack = !std::mem::take(&mut st.no_stack);
+        if let Some((seq, regions)) = done
+            .pop()
+            .flatten()
+            .filter(|(_, r)| stack && (!r.is_empty() || self.structured))
+        {
             let pid = st.members[i].p.pid.clone();
             let batch = Batch {
                 seq,
@@ -2847,13 +3093,14 @@ impl Session {
         Ok(res)
     }
 
-    /// A version of `texts` at log position `seq`, with the authors since the last one.
+    /// A version of `snap` (content, codec settings: [`Session::snapshot`]) at log position
+    /// `seq`, with the authors since the last one.
     fn version_of(
         st: &State,
         seq: Seq,
         reason: VersionReason,
         name: Option<String>,
-        texts: &[(&'static str, String)],
+        snap: Snapshot,
         now: u64,
     ) -> Version {
         let mut authors: Vec<String> = Vec::new();
@@ -2872,7 +3119,8 @@ impl Session {
             reason,
             name,
             authors,
-            content: neutral(texts),
+            content: snap.0,
+            codec: snap.1,
         }
     }
 
@@ -2906,11 +3154,21 @@ impl Session {
         } else {
             Vec::new()
         };
+        // a structured doc's content before an agent's change (its version, if it cuts one)
+        // (a change with no list op touches no row: it can't cut a version, so no snapshot)
+        let lists = steps[0]
+            .edits
+            .iter()
+            .any(|e| matches!(e, Edit::List { ops, .. } if !ops.is_empty()));
+        let orig_snap = match agent_cut && self.structured && lists {
+            true => Some(self.snapshot(st)?),
+            false => None,
+        };
         let version_before = st.version;
         let mut applied: Vec<Applied> = Vec::new();
         let mut which: Vec<Option<usize>> = Vec::with_capacity(n_steps);
         for step in steps {
-            match self.apply_local(st, i, step.edits, step.restores) {
+            match self.apply_local(st, i, step.edits, step.restores, step.elem_restores) {
                 Ok(Some(mut a)) => {
                     a.kind = step.kind;
                     a.of = step.of;
@@ -2935,18 +3193,36 @@ impl Session {
         }
         if agent_cut {
             let a = &applied[0];
-            let lines = a.added.max(a.removed);
-            let total: usize = orig.iter().map(|(_, t)| position::line_count(t)).sum();
             let c = &self.config;
-            if lines > c.agent_version_lines
-                || lines.saturating_mul(100) > total.saturating_mul(c.agent_version_percent)
-            {
+            let cut = match &orig_snap {
+                // K-HIST-4 for grids: 20 rows or 10% of rows (a sort counts the rows moved)
+                Some((content, _)) => {
+                    let total: usize = content
+                        .iter()
+                        .map(|(_, n)| match n {
+                            Neutral::List(l) => l.len(),
+                            _ => 0,
+                        })
+                        .sum();
+                    a.touched > c.agent_version_elems
+                        || a.touched.saturating_mul(100)
+                            > total.saturating_mul(c.agent_version_percent)
+                }
+                None => {
+                    let lines = a.added.max(a.removed);
+                    let total: usize = orig.iter().map(|(_, t)| position::line_count(t)).sum();
+                    lines > c.agent_version_lines
+                        || lines.saturating_mul(100) > total.saturating_mul(c.agent_version_percent)
+                }
+            };
+            if cut {
+                let snap = orig_snap.unwrap_or_else(|| (neutral(&orig), None));
                 let v = Self::version_of(
                     st,
                     version_before,
                     VersionReason::BeforeAgent,
                     None,
-                    &orig,
+                    snap,
                     now,
                 );
                 versions.insert(0, v);
@@ -2966,12 +3242,34 @@ impl Session {
                 update: std::mem::take(&mut a.update),
                 on_behalf_of: obo.clone(),
             });
+            // the rows a text left on their keys by a non-exact pairing; and a marked row an
+            // undo, redo, revert or restore changes is re-marked at its own version: a client
+            // that read the text can't write to it either
+            let mut row_marks = std::mem::take(&mut st.next_row_marks);
+            let mut col_remap = std::mem::take(&mut st.next_col_remap);
+            if matches!(
+                a.kind,
+                ChangeKind::Undo | ChangeKind::Redo | ChangeKind::Revert | ChangeKind::Restore
+            ) {
+                let store = self.store(st)?;
+                for k in grid::rows_of_elems(&a.elems) {
+                    if store.row_mark(self.doc_id, k.as_str())?.is_some() {
+                        row_marks.push(k);
+                    }
+                }
+                if a.elems.iter().any(|r| r.root == crate::table::COLS)
+                    && store.col_remap(self.doc_id)?.is_some()
+                {
+                    col_remap = true;
+                }
+            }
             changes.push(NewChange {
                 info: ChangeInfo {
                     of: a.of,
                     on_behalf_of: obo.clone(),
                     lines_added: a.added as u64,
                     lines_removed: a.removed as u64,
+                    elems: a.counts.clone(),
                     ..ChangeInfo::new(a.kind, &pid, &via, now)
                 },
                 record: RevertRecord {
@@ -2979,11 +3277,15 @@ impl Session {
                     on_behalf_of: obo.clone(),
                     at_ms: now,
                     roots: std::mem::take(&mut a.record),
+                    elems: std::mem::take(&mut a.elems),
                 },
                 span: a.span.map(|(start, end)| ClockSpan { client, start, end }),
                 provenance: std::mem::take(&mut a.prov_rows),
                 // D1 widened it: the store keeps what the channel reports (v0.9.7)
                 authored: a.widened.then(|| a.roots.clone()),
+                row_marks,
+                col_remap,
+                note_rows: std::mem::take(&mut st.next_note_rows),
             });
         }
         let appended = {
@@ -3014,6 +3316,8 @@ impl Session {
         let (mut added, mut removed) = (0, 0);
         let mut last_end = None;
         let mut regions_of = Vec::with_capacity(applied.len());
+        let (mut elems, mut hidden) = (Vec::new(), Vec::new());
+        let mut streams: Vec<crate::elem::Applied> = Vec::new();
         for ((a, seq), e) in applied.into_iter().zip(&seqs).zip(&entries) {
             prof!("commit.bookkeeping");
             st.log_entries += 1;
@@ -3033,18 +3337,54 @@ impl Session {
                     hunks: hunks.clone(),
                     at_ms: now,
                     on_behalf_of: obo.clone(),
+                    applied: crate::elem::Applied::Text {
+                        root: root.clone(),
+                        hunks: hunks.clone(),
+                    },
+                    hidden: Vec::new(),
                 };
                 Self::broadcast(st, &ev);
             }
+            for x in &a.stream {
+                let ev = ChangeEvent {
+                    version: *seq,
+                    pid: pid.clone(),
+                    client,
+                    via: via.clone(),
+                    root: x.root().to_owned(),
+                    hunks: Vec::new(),
+                    at_ms: now,
+                    on_behalf_of: obo.clone(),
+                    applied: x.clone(),
+                    hidden: if x.root() == crate::table::CELLS {
+                        a.hidden.clone()
+                    } else {
+                        Vec::new()
+                    },
+                };
+                Self::broadcast(st, &ev);
+            }
+            self.grid_size_after(st, &a.stream);
+            streams.extend(a.stream.iter().cloned());
             if n_steps == 1 {
                 changed = a.changed;
                 (added, removed) = (a.added, a.removed);
+                elems = a.counts;
+                hidden = a.hidden;
             }
             last_end = a.last_end.or(last_end);
             regions_of.push(Some((*seq, a.regions)));
         }
         st.version = *seqs.last().expect("one seq per entry");
         Self::mark_dirty(st, now);
+        self.grid_presence_after(st, Some(i), &streams, now);
+        // a grid change that re-identified elements (rows or columns inserted, deleted,
+        // restored or dropped; a header switch) and left the doc rendering the synced bytes:
+        // the replica becomes the doc now, so an outside save merged later, after more
+        // unwritten edits, has a base with the live doc's identities (contract §2.9.1)
+        if self.structured && identity_changed(&streams) {
+            self.resync_if_synced(st)?;
+        }
         if n_steps > 1 {
             for (root, before) in &orig {
                 let after = &self.text_of(st, root)?.1;
@@ -3097,6 +3437,8 @@ impl Session {
                 changed,
                 lines_added: added,
                 lines_removed: removed,
+                elems,
+                hidden,
             },
             done,
         ))
@@ -3156,8 +3498,12 @@ impl Session {
         i: usize,
         edits: Vec<Edit>,
         restores: Option<Vec<Option<Vec<Ids>>>>,
+        elem_restores: grid::ElemRestores,
     ) -> Result<Option<Applied>> {
         prof!("session.apply_local");
+        if edits.iter().any(|e| !matches!(e, Edit::Text { .. })) {
+            return self.apply_structured(st, i, edits, elem_restores);
+        }
         let client = st.members[i].client;
         let pid = st.members[i].p.pid.clone();
         // D1 applies to a fresh change: no roots given (undo, redo and revert put back
@@ -3168,7 +3514,12 @@ impl Session {
         let mut restores = restores.map(Vec::into_iter);
         for e in edits {
             prof!("session.validate");
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                return Err(SessionError::BadEdit(format!(
+                    "root {:?}: sessions take text edits only",
+                    e.root()
+                )));
+            };
             let (_, text) = self.text_of(st, &root)?;
             diff::validate(text, &hunks).map_err(DocError::from)?;
             let r = restores.as_mut().and_then(Iterator::next).flatten();
@@ -3202,7 +3553,9 @@ impl Session {
             let tokens = self.d1_tokens();
             let extra = take_d1_extra();
             for (k, e) in canon.iter_mut().enumerate() {
-                let Edit::Text { root, hunks } = e;
+                let Edit::Text { root, hunks } = e else {
+                    unreachable!("a text edit (structured edits take their own path)")
+                };
                 if hunks.is_empty() {
                     continue;
                 }
@@ -3238,12 +3591,19 @@ impl Session {
             added: 0,
             removed: 0,
             last_end: None,
+            elems: Vec::new(),
+            counts: Vec::new(),
+            stream: Vec::new(),
+            touched: 0,
+            hidden: Vec::new(),
         };
         let mut prov = st.prov.take().expect("built above");
         for (((e, restored), firsts), authored) in
             canon.into_iter().zip(roots_of).zip(firsts).zip(channel)
         {
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                unreachable!("canonical edits are text edits (checked above)")
+            };
             if hunks.is_empty() {
                 continue;
             }
@@ -3486,6 +3846,16 @@ impl Session {
         }
     }
 
+    /// Send a [`SettingsChanged`] to every settings subscriber; one that is full or gone is
+    /// cut off.
+    fn broadcast_settings(st: &mut State, ev: &SettingsChanged) {
+        st.settings_subs
+            .retain(|(_, tx)| match tx.try_send(ev.clone()) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+            });
+    }
+
     /// Send an event to every subscriber; one that is full or gone is cut off.
     fn broadcast(st: &mut State, ev: &ChangeEvent) {
         let handles = &mut st.handles;
@@ -3526,7 +3896,9 @@ impl Session {
     }
 
     /// A tool run's output (`run_tool_with`) as `conn` may see it: an App viewer's (K5) names
-    /// the others by handle. Its notes are lensed where they are made; the rest here.
+    /// the others by handle. Its notes are lensed where they are made (`batch_notes`), and a
+    /// grid verb's printed attributions under the verb's lock (`LockedHistory`); the rest
+    /// here.
     pub(crate) fn tool_output_as_seen(
         &self,
         conn: ConnId,
@@ -3557,6 +3929,11 @@ impl Session {
                         awareness::ForEdit::Conflict(c) => awareness::ForEdit::Conflict(l.claim(c)),
                         awareness::ForEdit::NotTaken(e) => awareness::ForEdit::NotTaken(l.error(e)),
                     }));
+                }
+                if let Some(c) = o.changed.as_mut() {
+                    for h in &mut c.hidden {
+                        h.relabel(|p| l.pid(p));
+                    }
                 }
                 Ok(o)
             }
@@ -3647,6 +4024,7 @@ impl Session {
                     m.cursor = None;
                     m.view = None;
                     m.edited = None;
+                    m.grid = Default::default();
                 }
                 self.end_all_claims(st, awareness::ClaimEnd::Reset);
                 for h in st.hist.values_mut() {
@@ -3657,6 +4035,7 @@ impl Session {
                 st.loaded_seq = version;
                 st.reverts = None;
                 st.prov = None;
+                st.grid_size = None;
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -3928,6 +4307,38 @@ impl Session {
         self.pack.verbs().iter().find(|v| v.name() == name).copied()
     }
 
+    /// The pack's own verb `argv` names: a two-word name (`row insert`) first, then
+    /// `argv[0]`; never when `argv[0]` is a kit verb.
+    pub(crate) fn pack_verb_for(&self, argv: &[String]) -> Option<crate::tools::PackVerb> {
+        let first = argv.first()?;
+        if crate::tools::is_kit_verb(first) {
+            return None;
+        }
+        if let Some(second) = argv.get(1) {
+            let two = format!("{first} {second}");
+            if let Some(v) = self.pack.verbs().iter().find(|v| v.name() == two) {
+                return Some(*v);
+            }
+        }
+        self.pack
+            .verbs()
+            .iter()
+            .find(|v| v.name() == first)
+            .copied()
+    }
+
+    /// The pack and the doc's codec settings now: what a structured verb's
+    /// [`crate::tools::VerbCtx`] decodes a block and maps lines with.
+    pub(crate) fn pack_and_codec(&self) -> Result<(Arc<dyn Pack>, Vec<u8>)> {
+        let st = self.lock()?;
+        Ok((self.pack.clone(), st.codec.clone()))
+    }
+
+    /// The doc is a [`crate::table`] (a grid).
+    pub(crate) fn is_table(&self) -> bool {
+        crate::table::is_table(&self.schema)
+    }
+
     pub(crate) fn schema_name(&self) -> &'static str {
         self.schema.name
     }
@@ -4039,7 +4450,13 @@ impl Session {
         }
         // claims end (waiting hosts are told), then the presence extras go with the session
         self.end_all_claims(&mut st, awareness::ClaimEnd::Left);
-        let waiting = std::mem::take(&mut st.aware.pending);
+        // a text doc's waiting notes go to the manager for the doc's next session; a grid
+        // doc's are in its store, and its next session reads them there (`load_notes`)
+        let waiting = if self.structured {
+            HashMap::new()
+        } else {
+            std::mem::take(&mut st.aware.pending)
+        };
         st.aware = Aware::default();
         st.closed = Some(reason);
         st.store = None;
@@ -4170,7 +4587,8 @@ impl Session {
     /// the next outside edit is made) must hold the doc's text **on the doc's elements**.
     /// Same text on other elements is the stale base that corrupted an outside edit after
     /// a change that moved no byte (fixed in v0.9.4): the file and the doc agree, so
-    /// comparing them can't see it. Returns what differs, by root (metadata only); empty
+    /// comparing them can't see it. A structured doc's replica must hold the doc's keyed state
+    /// (keys, values, places), root by root. Returns what differs, by root (metadata only); empty
     /// when nothing does, or when the session has no file or isn't clean. Never changes
     /// anything. O(doc): a blame of each root on the doc and on the replica.
     ///
@@ -4178,7 +4596,11 @@ impl Session {
     /// update it couldn't integrate ([`SyncDrift::Pending`]; O(1)).
     pub fn audit_disk_sync(&self) -> Result<Vec<SyncDrift>> {
         let mut st = self.lock()?;
-        let st = &mut *st;
+        self.disk_drift(&mut st)
+    }
+
+    /// [`Session::audit_disk_sync`] under the lock (also the grid audit's sync check).
+    fn disk_drift(&self, st: &mut State) -> Result<Vec<SyncDrift>> {
         let mut out = Vec::new();
         if st.doc.unresolved() {
             out.push(SyncDrift::Pending { replica: false });
@@ -4193,6 +4615,16 @@ impl Session {
         }
         if !out.is_empty() || !clean {
             return Ok(out);
+        }
+        if self.structured {
+            // a structured doc's outside edit is aligned on the replica's keyed state (its
+            // keys, values and places): it must be the doc's, root by root
+            let (doc, synced) = (st.doc.keyed_state()?, replica.keyed_state()?);
+            for ((root, a), (_, b)) in doc.roots.iter().zip(&synced.roots) {
+                if a != b {
+                    out.push(SyncDrift::Elements { root: root.clone() });
+                }
+            }
         }
         for (root, text) in &st.texts {
             if replica.text(root)? != *text {
@@ -4214,6 +4646,22 @@ impl Session {
             }
         }
         Ok(out)
+    }
+
+    /// Test-only: apply `edits` to the disk replica alone (a planted violation of a structured
+    /// doc for [`Session::audit_disk_sync`]). Leaves the doc, the store and the sync point as
+    /// they are.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn plant_replica_edits_for_tests(&self, edits: &[Edit]) -> Result<()> {
+        let mut st = self.lock()?;
+        let d = st
+            .disk
+            .as_mut()
+            .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
+        d.replica
+            .get()?
+            .edit_applied(random_client().max(2), edits)?;
+        Ok(())
     }
 
     /// Test-only (the soak's diagnosis, v0.9.7): the live doc's texts read afresh from the
@@ -4354,8 +4802,32 @@ impl Session {
                 hunks,
             }],
         )?;
-        // out of date, as a change since the sync would leave it (v0.9.5: the marker is the
-        // change counter)
+        // out of date, as a change since the sync would leave it (the marker is the change
+        // counter)
+        d.synced_seq = version.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Test-only: apply `edits` to the disk replica only, as a fresh client (a planted
+    /// violation for [`Session::audit_disk_sync`] on a structured doc: a row under another
+    /// key, a header switch the replica never got), and mark it out of date in memory, as a
+    /// change since the sync would (the marker is the change counter). Leaves the doc and
+    /// the store as they are.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn plant_disk_replica_edits_for_tests(&self, edits: &[Edit]) -> Result<()> {
+        let mut st = self.lock()?;
+        let version = st.version;
+        let d = st
+            .disk
+            .as_mut()
+            .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
+        let client = loop {
+            let c = random_client();
+            if c > 1 {
+                break c;
+            }
+        };
+        d.replica.get()?.edit_as(client, edits)?;
         d.synced_seq = version.wrapping_add(1);
         Ok(())
     }
@@ -4506,7 +4978,34 @@ impl Session {
     // --- internals ---
 
     fn render(&self, st: &State) -> Result<Vec<u8>> {
-        Ok(self.pack.encode(&neutral(&st.texts), &st.codec)?)
+        Ok(self.pack.encode(&self.content(st)?, &st.codec)?)
+    }
+
+    /// Every root's content, in schema order: text from the session's texts, structured
+    /// roots read from the doc (O(root)).
+    fn content(&self, st: &State) -> Result<Vec<(String, Neutral)>> {
+        if !self.structured {
+            return Ok(neutral(&st.texts));
+        }
+        self.schema
+            .roots
+            .iter()
+            .map(|(r, k)| {
+                let n = match k {
+                    Kind::Text => Neutral::Text(self.text_of(st, r)?.1.to_owned()),
+                    Kind::MovableList => Neutral::List(st.doc.list(r)?),
+                    Kind::Map => Neutral::Map(st.doc.map(r)?),
+                    other => return Err(DocError::Unsupported(*other).into()),
+                };
+                Ok(((*r).to_owned(), n))
+            })
+            .collect()
+    }
+
+    /// What a version of the doc as it is now holds: its content, and for a structured doc
+    /// its codec settings (a text doc's versions never stored them: format 5 stays as is).
+    fn snapshot(&self, st: &State) -> Result<Snapshot> {
+        Ok((self.content(st)?, self.structured.then(|| st.codec.clone())))
     }
 
     fn estimate(&self, st: &State) -> u64 {
@@ -4693,7 +5192,9 @@ impl Session {
         self.owners(st)?;
         let tokens = self.d1_tokens();
         for e in edits.iter_mut() {
-            let Edit::Text { root, hunks } = e;
+            let Edit::Text { root, hunks } = e else {
+                unreachable!("a text edit (structured edits take their own path)")
+            };
             if hunks.is_empty() {
                 continue;
             }
@@ -4721,6 +5222,9 @@ impl Session {
     /// back on new elements), written back or not, can't misplace the save (since v0.1.0;
     /// v0.9.4 closed it only while the doc rendered the synced bytes).
     fn ingest(&self, st: &mut State, bytes: &[u8], h: Vec<u8>, now: u64) -> Result<DiskCheck> {
+        if self.structured {
+            return self.ingest_structured(st, bytes, h, now);
+        }
         let content = match self.pack.decode(bytes) {
             Ok(c) => c,
             Err(why) => return self.decline(st, why),
@@ -4738,7 +5242,10 @@ impl Session {
         let mut edits = Vec::new();
         // the merge's own hunks, whole lines (for the notes: `live/removed.rs`)
         let mut merge_sides: Vec<(String, Vec<Hunk>)> = Vec::new();
-        for (root, Neutral::Text(t)) in &roots {
+        for (root, n) in &roots {
+            let Some(t) = n.as_text() else {
+                unreachable!("`ordered_roots` takes text roots only")
+            };
             let synced = st
                 .disk
                 .as_mut()
@@ -4917,7 +5424,7 @@ impl Session {
                 st.version,
                 VersionReason::BeforeExternal,
                 None,
-                &before,
+                (neutral(&before), None),
                 now,
             ));
         }
@@ -4933,7 +5440,9 @@ impl Session {
         let root_hunks: Vec<(&'static str, Vec<Hunk>)> = edits
             .iter()
             .map(|e| {
-                let Edit::Text { root, hunks: given } = e;
+                let Edit::Text { root, hunks: given } = e else {
+                    unreachable!("a text edit (structured edits take their own path)")
+                };
                 let (root, old) = before
                     .iter()
                     .find(|(r, _)| r == root)
@@ -4996,14 +5505,18 @@ impl Session {
                 edits
                     .iter()
                     .flat_map(|e| {
-                        let Edit::Text { hunks, .. } = e;
+                        let Edit::Text { hunks, .. } = e else {
+                            unreachable!("a text edit (structured edits take their own path)")
+                        };
                         hunks.iter().map(|h| h.insert.encode_utf16().count() as u32)
                     })
                     .sum::<u32>(),
                 "the outside edit's insert clocks"
             );
             for (e, firsts) in edits.iter().zip(&firsts) {
-                let Edit::Text { root, hunks } = e;
+                let Edit::Text { root, hunks } = e else {
+                    unreachable!("a text edit (structured edits take their own path)")
+                };
                 let old = &before.iter().find(|(r, _)| r == root).expect("a root").1;
                 let pairs: Vec<(Ids, Ids)> = hunks
                     .iter()
@@ -5065,6 +5578,7 @@ impl Session {
                 on_behalf_of: None,
                 at_ms: now,
                 roots: record,
+                elems: Vec::new(),
             },
             span: Some(ClockSpan {
                 client,
@@ -5079,6 +5593,9 @@ impl Session {
                     .map(|(root, hunks)| ((*root).to_owned(), told_of(root, hunks)))
                     .collect()
             }),
+            row_marks: Vec::new(),
+            col_remap: false,
+            note_rows: Vec::new(),
         };
         versions.push(Version {
             seq,
@@ -5087,6 +5604,7 @@ impl Session {
             name: None,
             authors: vec![EXTERNAL_PID.to_owned()],
             content: neutral(&after),
+            codec: None,
         });
         meta.synced_seq = seq;
         let sync = SyncState {
@@ -5133,9 +5651,15 @@ impl Session {
                     client,
                     via: "disk".to_owned(),
                     root: root.to_owned(),
-                    hunks: told,
+                    hunks: told.clone(),
                     at_ms: now,
                     on_behalf_of: None,
+                    // the change as the hunk channel and the live window carry it (authored)
+                    applied: crate::elem::Applied::Text {
+                        root: root.to_owned(),
+                        hunks: told,
+                    },
+                    hidden: Vec::new(),
                 },
             );
         }
@@ -5298,8 +5822,11 @@ impl Session {
     ) -> Result<(Vec<u8>, bool)> {
         // the doc's texts as they are now (`st.texts` follows after the bookkeeping)
         let mut held = true;
-        for (root, Neutral::Text(t)) in file {
-            held &= st.doc.text(root)? == *t;
+        for (root, n) in file {
+            let Some(t) = n.as_text() else {
+                unreachable!("`ordered_roots` takes text roots only")
+            };
+            held &= st.doc.text(root)? == t;
         }
         if held {
             // the stored synced state is the doc's
@@ -5546,6 +6073,10 @@ pub(crate) fn probe_error(path: &Path, p: &Probe) -> SessionError {
     SessionError::BadPath(probe_problem(path, p))
 }
 
+/// A version's content and, for a structured doc, its codec settings
+/// ([`Session::snapshot`]).
+type Snapshot = (Vec<(String, Neutral)>, Option<Vec<u8>>);
+
 /// What a loaded or imported doc starts from.
 struct Init {
     doc_id: DocId,
@@ -5567,6 +6098,8 @@ struct Step {
     of: Option<u64>,
     /// An undo, redo or revert: per edit, per hunk, the roots it puts back (U23).
     restores: Option<Vec<Option<Vec<Ids>>>>,
+    /// A structured undo, redo or revert: per `(root, key)`, the value write it puts back.
+    elem_restores: grid::ElemRestores,
 }
 
 /// Ids as the store keeps roots.
@@ -5625,6 +6158,14 @@ struct Applied {
     added: usize,
     removed: usize,
     last_end: Option<(String, usize)>,
+    /// A structured change: its ops by key per root (record v3), its counts, the applied
+    /// stream (A5), the list elements it touched (version cuts), and the cells it wrote
+    /// into deleted rows or columns.
+    elems: Vec<ElemRoot>,
+    counts: Vec<ElemCounts>,
+    stream: Vec<crate::elem::Applied>,
+    touched: usize,
+    hidden: Vec<HiddenCellWrite>,
 }
 
 /// The log's bytes, times this, must reach the snapshot's for a compaction past

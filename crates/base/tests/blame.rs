@@ -4,6 +4,14 @@
 //! them (undo spec U18a), purged changes marked `erased` and erased participants shown by
 //! pseudonym, the history right, tier 0's pointer blame, and a property test against a
 //! model of who typed every character. Public API only.
+//!
+//! On a grid (A12, K-HIST-11, CSV contract §5.5), with the kit's test table pack
+//! (`tests/grid_pack`): a rendered line goes to its row's latest cell write (moves and sorts
+//! author nothing), the header to the latest name write, a value put back by an undo blames
+//! its original write; `blame --structure` gives who inserted each row and who last moved it.
+
+#[path = "grid_pack/mod.rs"]
+mod grid_pack;
 
 use std::collections::HashMap;
 use std::fs;
@@ -871,6 +879,225 @@ proptest! {
             let t: Vec<u8> = chars.iter().map(|c| c.0).filter(|&c| c != b'\n').collect();
             prop_assert_eq!(l.text.as_bytes(), &t[..]);
         }
+    }
+}
+
+// ---------- grids (A12) ----------
+
+mod grid {
+    use super::*;
+    use k2_mpc_base::elem::{Anchor, Key};
+    use k2_mpc_base::session::{EditOptions, EditWithError, View};
+    use k2_mpc_base::table::{SortKey, Table, TableError, ROWS};
+
+    const GRID: &str = "id,city\nk1,Oslo\nk2,Rome\nk3,Lima\n";
+
+    /// p1 and p2 with every right but owner (p3 is granted per test).
+    fn people(f: &Fx) {
+        for p in ["p1", "p2"] {
+            f.grant(p, Rights::full());
+        }
+    }
+
+    fn k(s: &str) -> Key {
+        Key::new(s).unwrap()
+    }
+
+    fn open_grid(f: &Fx, name: &str) -> Arc<Session> {
+        let p = f.ws.join(name);
+        fs::write(&p, GRID).unwrap();
+        let key = DocKey {
+            space: "ws".into(),
+            path: name.into(),
+        };
+        f.mgr
+            .open_file(Arc::new(grid_pack::GridLite), &key, &p, &f.ws)
+            .unwrap()
+    }
+
+    fn op(
+        s: &Session,
+        c: ConnId,
+        f: impl FnOnce(&mut Table) -> Result<Vec<k2_mpc_base::Edit>, TableError>,
+    ) -> u64 {
+        let v = s.status().unwrap().version;
+        match s.edit_ops_with(c, &EditOptions::new().if_version(v), |view: &View| {
+            let mut t = view.table().map_err(|e| e.to_string())?;
+            f(&mut t).map_err(|e| e.to_string())
+        }) {
+            Ok(r) => r.expect("a change").version,
+            Err(EditWithError::Session(e)) => panic!("{e}"),
+            Err(EditWithError::Compute(e)) => panic!("{e}"),
+        }
+    }
+
+    fn authors(b: &Blame) -> Vec<(usize, &str, &str)> {
+        b.lines
+            .iter()
+            .map(|l| (l.line, l.text.as_str(), l.author.as_str()))
+            .collect()
+    }
+
+    /// Lines blame to their rows' latest cell writes; the header to the latest name write;
+    /// a sort and a move author nothing; an outside edit is `kit:external`.
+    #[test]
+    fn grid_lines_blame_their_rows_latest_cell_write() {
+        let f = fx("grid-lines");
+        people(&f);
+        let s = open_grid(&f, "t.csv");
+        let p1 = join(&s, person("p1"));
+        let bot = join(&s, agent("bot"));
+        f.advance(1_000);
+        let set = op(&s, p1, |t| t.set_cell(&k("r2"), &k("c2"), "Roma"));
+        f.advance(1_000);
+        op(&s, bot, |t| t.rename_col(&k("c1"), "who"));
+        f.advance(1_000);
+        // a sort and a move: content keeps its authors
+        op(&s, bot, |t| t.sort(&[SortKey::by(k("c2"))]));
+        op(&s, bot, |t| t.move_row(&k("r1"), Anchor::Start));
+        let b = s.blame(p1, ROWS, None).unwrap();
+        assert_eq!(
+            authors(&b),
+            [
+                (1, "who,city", "bot"),
+                (2, "k1,Oslo", "kit:import"),
+                (3, "k3,Lima", "kit:import"),
+                (4, "k2,Roma", "p1"),
+            ]
+        );
+        assert_eq!(b.lines[3].change, Some(set));
+        // -L, rendered as for text
+        let r = s
+            .blame(
+                p1,
+                ROWS,
+                Some(LineRange {
+                    root: ROWS.into(),
+                    first: 4,
+                    last: 9,
+                }),
+            )
+            .unwrap();
+        assert_eq!(authors(&r), [(4, "k2,Roma", "p1")]);
+        assert!(r.render(|_| None).contains("p1"));
+        // a row with no present cell blames its insert
+        f.advance(1_000);
+        op(&s, bot, |t| t.insert_row(Anchor::End, &[]).map(|x| x.1));
+        let b = s.blame(p1, ROWS, None).unwrap();
+        assert_eq!(authors(&b).last(), Some(&(5, "", "bot")));
+        // an outside save
+        s.flush(p1).unwrap();
+        let p = f.ws.join("t.csv");
+        let t = fs::read_to_string(&p).unwrap();
+        fs::write(&p, t.replace("Lima", "Cusco")).unwrap();
+        s.file_changed().unwrap();
+        let b = s.blame(p1, ROWS, None).unwrap();
+        assert_eq!(authors(&b)[2], (3, "k3,Cusco", EXTERNAL_PID));
+        // a bad range, and the history right
+        let e = s.blame(
+            p1,
+            ROWS,
+            Some(LineRange {
+                root: ROWS.into(),
+                first: 9,
+                last: 9,
+            }),
+        );
+        assert!(matches!(e, Err(SessionError::BadPosition(_))), "{e:?}");
+        f.grant("p3", Rights::editor());
+        let p3 = join(&s, person("p3"));
+        assert!(matches!(
+            s.blame(p3, ROWS, None),
+            Err(SessionError::Forbidden {
+                need: Need::History
+            })
+        ));
+        assert!(matches!(
+            s.blame_structure(p3),
+            Err(SessionError::Forbidden {
+                need: Need::History
+            })
+        ));
+    }
+
+    /// IT `blame::restored_cell_shows_original` at line grain: a value an undo put back blames
+    /// its original write, with the restorer.
+    #[test]
+    fn grid_line_of_a_restored_cell_shows_the_original() {
+        let f = fx("grid-restored");
+        people(&f);
+        let s = open_grid(&f, "t.csv");
+        let p1 = join(&s, person("p1"));
+        let p2 = join(&s, person("p2"));
+        f.advance(1_000);
+        let first = op(&s, p1, |t| t.set_cell(&k("r1"), &k("c2"), "Bergen"));
+        f.advance(1_000);
+        op(&s, p2, |t| t.set_cell(&k("r1"), &k("c2"), "Molde"));
+        f.advance(1_000);
+        let u = s
+            .undo_with(p2, &UndoRequest::steps(1).mode(UndoMode::All))
+            .unwrap();
+        assert!(matches!(u, UndoOutcome::Applied { .. }), "{u:?}");
+        let b = s.blame(p1, ROWS, None).unwrap();
+        let l = &b.lines[1];
+        assert_eq!((l.text.as_str(), l.author.as_str()), ("k1,Bergen", "p1"));
+        assert_eq!(l.change, Some(first));
+        assert_eq!(l.restored_by.as_deref(), Some("p2"));
+        assert!(l.restored_in.is_some());
+    }
+
+    /// `blame --structure`: per row, who inserted it and who last moved it (and nobody when it
+    /// never moved); columns too; an undo of a move puts the position back (no mover).
+    #[test]
+    fn blame_structure_inserted_and_moved_by() {
+        let f = fx("grid-structure");
+        people(&f);
+        let s = open_grid(&f, "t.csv");
+        let p1 = join(&s, person("p1"));
+        let bot = join(&s, agent("bot"));
+        f.advance(1_000);
+        op(&s, bot, |t| {
+            t.insert_row(Anchor::After(k("r1")), &["k4".into(), "Kyiv".into()])
+                .map(|x| x.1)
+        });
+        f.advance(1_000);
+        let mv = op(&s, p1, |t| t.move_row(&k("r3"), Anchor::Start));
+        let b = s.blame_structure(p1).unwrap();
+        let rows: Vec<(String, usize, String, Option<String>)> = b
+            .rows
+            .iter()
+            .map(|p| {
+                (
+                    p.key.to_string(),
+                    p.at,
+                    p.inserted.as_ref().unwrap().author.clone(),
+                    p.moved.as_ref().map(|m| m.author.clone()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("r3".into(), 1, "kit:import".into(), Some("p1".into())),
+                ("r1".into(), 2, "kit:import".into(), None),
+                ("r4".into(), 3, "bot".into(), None),
+                ("r2".into(), 4, "kit:import".into(), None),
+            ]
+        );
+        assert_eq!(b.rows[0].moved.as_ref().unwrap().change, mv);
+        assert_eq!(b.cols.len(), 2);
+        assert!(b.cols.iter().all(|c| c.moved.is_none()));
+        // p1 undoes her move: r3 goes back, and nobody moved it
+        s.undo_with(p1, &UndoRequest::steps(1).mode(UndoMode::All))
+            .unwrap();
+        let b = s.blame_structure(p1).unwrap();
+        let r3 = b.rows.iter().find(|p| p.key.as_str() == "r3").unwrap();
+        assert_eq!(r3.at, 4);
+        assert!(r3.moved.is_none(), "{r3:?}");
+        // a text doc has none
+        let t = f.open("n.md", "x\n");
+        let c = join(&t, person("p1"));
+        assert!(t.blame_structure(c).is_err());
     }
 }
 

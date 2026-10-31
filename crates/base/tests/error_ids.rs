@@ -7,6 +7,8 @@
 //! only grows: blessing refuses to drop or change a line).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+mod grid_pack;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,9 +20,9 @@ use k2_mpc_base::errors::{
 };
 use k2_mpc_base::parity::{PersonAction, Registry, Tier};
 use k2_mpc_base::session::{
-    AnyFile, ApprovalState, AuditEvent, Config, ConnId, DiskCheck, Host, LineRange, LogQuery, Pack,
-    Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
-    TextFilePack, UndoMode, UndoRequest,
+    AnyFile, ApprovalState, AuditEvent, Config, ConnId, DiskCheck, EditOptions, Host, LineRange,
+    LogQuery, Pack, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager,
+    Stay, TextFilePack, UndoMode, UndoRequest,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::text::diff::Hunk;
@@ -775,6 +777,104 @@ fn walk() -> Seen {
     seen.res(b.read(x)); // E513
     f.mgr.release().unwrap();
     seen.res(f.mgr.open(Arc::new(MD), &key("d2.md"), Some(b"x\n"))); // E514
+
+    // ---- the grid (8xx, C1): the grid test pack, through its verbs and edits
+    // header + r1, r2 by c1, c2: 4 cells, the most there may be
+    let f = fx("grid", |c| c.grid_max_cells = 4);
+    let s = f
+        .mgr
+        .open(
+            Arc::new(grid_pack::GridLite),
+            &key("t.csv"),
+            Some(b"id,city\nk1,Oslo\nk2,Rome\n"),
+        )
+        .unwrap();
+    let p = f.person(&s, "gp", Rights::full());
+    let a = f.agent(&s, "ga", Rights::editor());
+    let rows = k2_mpc_base::table::ROWS;
+    let v0 = s.status().unwrap().version.to_string();
+    // an agent's grid edit with no base
+    seen.tool(s.run_tool(
+        a,
+        rows,
+        &argv(&["cell", "set", "--row", "r1", "--col", "c2", "--value", "x"]),
+        b"",
+    )); // E801
+        // a fifth cell: the table is at its size limit
+    seen.tool(s.run_tool(
+        p,
+        rows,
+        &argv(&["row", "insert", "--end", "--values", "k3,Lima"]),
+        b"",
+    )); // E802
+        // someone else wrote the cell after the agent's base
+    let o = s
+        .run_tool(
+            p,
+            rows,
+            &argv(&[
+                "cell", "set", "--row", "r1", "--col", "c2", "--value", "Bergen",
+            ]),
+            b"",
+        )
+        .unwrap();
+    assert_eq!(o.exit, 0, "{o:?}");
+    seen.tool(s.run_tool(
+        a,
+        rows,
+        &argv(&[
+            "cell", "set", "--row", "r1", "--col", "c2", "--value", "y", "--base", &v0,
+        ]),
+        b"",
+    )); // E803
+        // an op on a key the list never had
+    seen.res(s.edit_ops(
+        p,
+        vec![Edit::List {
+            root: rows.into(),
+            ops: vec![k2_mpc_base::elem::ListOp::Delete {
+                key: k2_mpc_base::elem::Key::new("r99").unwrap(),
+            }],
+        }],
+        &EditOptions::new(),
+    )); // E804
+        // a verb on a deleted row
+    let o = s
+        .run_tool(p, rows, &argv(&["row", "delete", "--row", "r2"]), b"")
+        .unwrap();
+    assert_eq!(o.exit, 0, "{o:?}");
+    seen.tool(s.run_tool(
+        p,
+        rows,
+        &argv(&["cell", "get", "--row", "r2", "--col", "c2"]),
+        b"",
+    )); // E805
+        // a header switched on with no row, over names kept while it was off
+    let s = f
+        .mgr
+        .open(Arc::new(grid_pack::GridLite), &key("h.csv"), Some(b"id\n"))
+        .unwrap();
+    let p = f.person(&s, "hp", Rights::full());
+    for a in [
+        &["col", "delete", "--col", "c1"][..],
+        &["header", "off"],
+        &["col", "restore", "--col", "c1"],
+    ] {
+        let o = s.run_tool(p, rows, &argv(a), b"").unwrap();
+        assert_eq!(o.exit, 0, "{a:?}: {o:?}");
+    }
+    seen.tool(s.run_tool(p, rows, &argv(&["header", "on"]), b"")); // E806
+                                                                   // a header switched on where the only live row is blank
+    let s = f
+        .mgr
+        .open(Arc::new(grid_pack::GridLite), &key("b.csv"), Some(b"x\n\n"))
+        .unwrap();
+    let p = f.person(&s, "bp", Rights::full());
+    for a in [&["header", "off"][..], &["row", "delete", "--row", "#1"]] {
+        let o = s.run_tool(p, rows, &argv(a), b"").unwrap();
+        assert_eq!(o.exit, 0, "{a:?}: {o:?}");
+    }
+    seen.tool(s.run_tool(p, rows, &argv(&["header", "on"]), b"")); // E807
     seen
 }
 

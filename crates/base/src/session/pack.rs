@@ -3,9 +3,11 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use super::view::View;
 use crate::codec::text_file::{self, Eol, FileFormat};
-use crate::doc::Neutral;
+use crate::doc::{Edit, Neutral};
 use crate::schema::{Kind, Schema};
+use crate::table::{self, LineMap, Table};
 
 /// A file decoded into doc content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,22 @@ impl fmt::Display for Declined {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.message, self.code)
     }
+}
+
+/// What [`Pack::reconcile`] made of a file's new bytes: the edits that make the doc as the
+/// file last held it into what the file holds now (one change, applied **by key**), and the
+/// file's codec settings now (an outside save can change the dialect).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Reconciled {
+    pub edits: Vec<Edit>,
+    pub codec: Vec<u8>,
+    /// A table's rows the file left exact ([`table::Reconciled::exact_rows`], v0.10.0). Any
+    /// other kept row merges as one unit: a pack that reports none gets the strict reading, so
+    /// it can't leave the row rule off by leaving this out. Ignored for text.
+    pub exact_rows: Vec<crate::elem::Key>,
+    /// The column mapping was exact ([`table::Reconciled::cols_exact`]): false (the default) is
+    /// the strict reading, a remap, which refuses every keyed write from an older base.
+    pub cols_exact: bool,
 }
 
 /// A pack failed to encode (bad stored codec settings) or returned content that doesn't fit
@@ -85,6 +103,49 @@ pub trait Pack: Send + Sync {
         }
     }
 
+    /// A block of records in the doc's dialect (a structured verb's stdin: `cells set`'s
+    /// pasted block, `row insert`'s values), decoded with the doc's `codec` settings. The kit
+    /// never parses a file format itself: a table pack implements this with its codec.
+    /// Default: declined `unsupported` (the verb exits 2 with the reason).
+    fn decode_block(&self, bytes: &[u8], codec: &[u8]) -> Result<Vec<table::Record>, Declined> {
+        let _ = (bytes, codec);
+        Err(Declined {
+            code: "unsupported",
+            message: "this pack reads no block of records from stdin".into(),
+        })
+    }
+
+    /// `header on|off` on a table (the grid verbs' `header`): the edits that switch `t`'s
+    /// header, applied to `t`. **The rule lives in [`table::Table::set_header`]** (the switch
+    /// never changes the rendered bytes; a blank only row can't become the header), and the
+    /// default delegates to it. A pack overrides this only to decline more for its format
+    /// (the verb exits 2 with the reason, nothing applied); it never re-implements the rule.
+    fn set_header(
+        &self,
+        t: &mut table::Table,
+        on: bool,
+        codec: &[u8],
+    ) -> Result<Vec<crate::doc::Edit>, Declined> {
+        let _ = codec;
+        t.set_header(on).map_err(|e| Declined {
+            // the refusal with its own id keeps its name (MPC-E806 at the verb)
+            code: match e {
+                table::TableError::HeaderNamesUnrendered => "header_names_unrendered",
+                table::TableError::HeaderOnlyRowBlank => "header_only_row_blank",
+                _ => "refused",
+            },
+            message: e.to_string(),
+        })
+    }
+
+    /// How an outside save changed only the file's codec settings (a CSV re-saved with a BOM,
+    /// CRLF or another delimiter: the content the same), from `old` to `new`, for the log and
+    /// `show` (computed when read, never stored). Default: "codec settings changed".
+    fn describe_codec_change(&self, old: &[u8], new: &[u8]) -> String {
+        let _ = (old, new);
+        "codec settings changed".to_owned()
+    }
+
     /// The pack's own edit verbs (Markdown's `replace-section`), beside the kit's text
     /// tools. [`super::Session::run_tool`] routes a verb no kit tool has by this name, and
     /// [`crate::parity::Registry::for_pack`] registers them for the parity harness. A name
@@ -93,6 +154,93 @@ pub trait Pack: Send + Sync {
     fn verbs(&self) -> &'static [crate::tools::PackVerb] {
         &[]
     }
+
+    /// A file has no keys (A8): its new bytes (an outside save, a text edit verb's result,
+    /// an agent's `write --base` body), as edits against `synced`, the doc as the file last
+    /// held it. A structured doc's session applies them **by key** to the live doc (CSV
+    /// seam design §7.7), so changes the file never got are kept. For a table, `synced`'s
+    /// key counters are the live doc's, so keys minted here are new to the live doc too.
+    ///
+    /// Default: [`default_reconcile`] (decode, then a minimal text diff per text root, or
+    /// for a [`crate::table`] schema the aligner [`table::reconcile`]). A file that doesn't
+    /// decode is [`Declined`] (it opens the old way until it decodes again).
+    fn reconcile(&self, synced: &View, bytes: &[u8], codec: &[u8]) -> Result<Reconciled, Declined> {
+        let _ = codec;
+        default_reconcile(self, synced, bytes)
+    }
+
+    /// Which element each rendered line of `content` belongs to (A8: `L42` addressing, blame
+    /// lines, views), or `None` when lines are the text itself (a text pack). Default: for a
+    /// [`crate::table`] schema, [`Table::line_map`]; a codec that writes lines of its own in
+    /// front (a `sep=;` preamble) overrides it to account for them.
+    fn line_map(&self, content: &View, codec: &[u8]) -> Option<LineMap> {
+        let _ = codec;
+        if table::is_table(&self.schema()) {
+            content.table().ok().map(|t| t.line_map())
+        } else {
+            None
+        }
+    }
+}
+
+/// [`Pack::reconcile`]'s default: decode `bytes`, then
+/// - every root text: each text root's edit from `synced`'s text, whole lines first
+///   ([`crate::text::lines::edit_hunks`]);
+/// - a [`crate::table`] schema: the decoded table's rendering, aligned to `synced`'s table
+///   by [`table::reconcile`] (rows and columns matched by content, keys kept, moves found);
+/// - anything else: declined `cannot_reconcile` (the pack overrides it).
+pub fn default_reconcile<P: Pack + ?Sized>(
+    pack: &P,
+    synced: &View,
+    bytes: &[u8],
+) -> Result<Reconciled, Declined> {
+    let content = pack.decode(bytes)?;
+    let schema = pack.schema();
+    let cant = |why: String| Declined {
+        code: "cannot_reconcile",
+        message: why,
+    };
+    if schema.roots.iter().all(|(_, k)| *k == Kind::Text) {
+        let mut edits = Vec::new();
+        for (root, n) in &content.roots {
+            let new = n
+                .as_text()
+                .ok_or_else(|| cant(format!("root {root:?} isn't text")))?;
+            let old = synced.text(root).unwrap_or_default();
+            // whole lines first, as every edit given as a new text (v0.9.7.1's one pairing
+            // rule): a character-trimmed diff pairs lines that start alike one line off
+            let hunks = crate::text::lines::edit_hunks(old, new);
+            if !hunks.is_empty() {
+                edits.push(Edit::Text {
+                    root: root.clone(),
+                    hunks,
+                });
+            }
+        }
+        return Ok(Reconciled {
+            edits,
+            codec: content.codec,
+            exact_rows: Vec::new(),
+            cols_exact: false,
+        });
+    }
+    if !table::is_table(&schema) {
+        return Err(cant(format!(
+            "pack {:?} has structured roots and no reconcile",
+            schema.name
+        )));
+    }
+    let old = synced.table().map_err(|e| cant(e.to_string()))?;
+    let new = Table::from_keyed(View::of_content(&content.roots).keyed())
+        .map_err(|e| cant(e.to_string()))?;
+    let records = new.render();
+    let r = table::reconcile(&old, &records).map_err(|e| cant(e.to_string()))?;
+    Ok(Reconciled {
+        edits: r.edits,
+        codec: content.codec,
+        exact_rows: r.exact_rows,
+        cols_exact: r.cols_exact,
+    })
 }
 
 /// A pack for a plain-text file type in a few lines: one text root named

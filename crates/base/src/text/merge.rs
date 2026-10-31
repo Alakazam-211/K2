@@ -87,7 +87,11 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
 /// side that wrote its last line ([`end_is_open`]). A conflict's ranges are on `base`, its
 /// line numbers in `base`, ours and theirs ([`Conflict`]).
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
+    // the planted faults exist only in test builds and with the `differential` feature: a
+    // plain build compiles the checks out (the same path as when none is planted)
+    #[cfg(any(test, feature = "differential"))]
     let planted = mutant();
+    #[cfg(any(test, feature = "differential"))]
     if planted == Some(Planted::CharSides) {
         let (a, b) = (diff::hunks(base, ours), diff::hunks(base, theirs));
         return merge_sets(base, &a, &b, theirs, at_end, |i, j| a[i] == b[j]);
@@ -101,11 +105,14 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merg
                 .collect(),
         ),
         Merge::Clean(c) => {
+            #[cfg(any(test, feature = "differential"))]
             let open = if planted == Some(Planted::EndFollowsTheirs) {
                 is_open(theirs)
             } else {
                 end_is_open(base, ours, theirs, &a, &b, &c.hunks, &c.text)
             };
+            #[cfg(not(any(test, feature = "differential")))]
+            let open = end_is_open(base, ours, theirs, &a, &b, &c.hunks, &c.text);
             let mut text = c.text;
             if open {
                 text.pop();
@@ -657,8 +664,10 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
 }
 
 /// The planted faults, as this module names them: the kit's own copy of
-/// [`crate::differential::MergeMutant`], which exists only in test builds and with the
-/// `differential` feature (a host's build has neither: every fault is then absent).
+/// [`crate::differential::MergeMutant`]'s text-merge series, which exists only in test builds
+/// and with the `differential` feature (a host's build has neither, nor this enum: every fault
+/// is then absent, and its checks are compiled out).
+#[cfg(any(test, feature = "differential"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Planted {
     CharSides,
@@ -668,16 +677,12 @@ enum Planted {
 #[cfg(any(test, feature = "differential"))]
 fn mutant() -> Option<Planted> {
     use crate::differential::MergeMutant as M;
-    crate::differential::merge_mutant().map(|m| match m {
-        M::CharSides => Planted::CharSides,
-        M::EndFollowsTheirs => Planted::EndFollowsTheirs,
+    crate::differential::merge_mutant().and_then(|m| match m {
+        M::CharSides => Some(Planted::CharSides),
+        M::EndFollowsTheirs => Some(Planted::EndFollowsTheirs),
+        // the grid's merge faults (xxxii)–(xxxvii) are not this merge's
+        _ => None,
     })
-}
-
-#[cfg(not(any(test, feature = "differential")))]
-#[inline(always)]
-fn mutant() -> Option<Planted> {
-    None
 }
 
 #[cfg(test)]

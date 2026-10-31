@@ -337,6 +337,18 @@ UNACCEPTED = e("MPC-E152", "unaccepted", Session, 3, "K-SEC-2", SYNC,
      happens again.")
     .indirect("the sync wire: an update this build does not accept");
 
+BAD_ROOT_NAME = e("MPC-E153", "bad_root_name", Session, 2, "K-SCH-1", &["(host)"],
+    "schema root name {root}: names must be non-empty, unique and free of '/'",
+    "A pack's schema names a root the kit can't store (empty, holding '/', or twice). The \
+     pack has to fix its schema; this file type can't open live until then.")
+    .indirect("a pack with a bad schema (C1)");
+
+MALFORMED_DOC = e("MPC-E154", "malformed_doc", Session, 2, "K-SEC-5", ANY,
+    "the doc's state is malformed: {reason}",
+    "The doc holds something the kit never writes (a bug, or a damaged store). Nothing was \
+     applied. Don't retry: report it to the host's operator with this message.")
+    .indirect("a damaged doc state (C1)");
+
 // 160–169: the catalog itself and the engine's seam
 
 UNKNOWN_ID = e("MPC-E160", "unknown_error_id", Session, 4, "the catalog (docs/ERRORS.md)",
@@ -680,28 +692,56 @@ NO_BLOB = e("MPC-E710", "no_blob", Blob, 4, "K-T0-1", ANY,
     .indirect("a blob index row removed under a version");
 
 // ---------------------------------------------------------------- 8xx structured and CSV
-// reserved for the CSV grid work (C1c's refusals); C1 wires them.
+// the CSV grid work (C1): wired at the C1 merge with main (v0.10.0); the walk in
+// tests/error_ids.rs reaches them on a grid doc (the grid test pack).
 
 NEEDS_BASE = e("MPC-E801", "needs_base", Structured, 2, "K-BR-12", &["cell set", "@change"],
     "an agent's grid edit needs a base: read first and pass --base",
     "Agents edit tables against what they read. Read the table first (it prints the \
-     version), then run the edit again with --base <version>.")
-    .reserved("CSV grids (C1c)");
+     version), then run the edit again with --base <version>.");
 
 AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (KC4)", &["@change"],
     "this table is at its size limit ({limit} {what}, deleted rows included); the owner can \
      free space with `rows drop-deleted`",
     "The table can't grow past its limit (details.what: cells or columns); nothing was \
      applied and nothing was dropped. Remove rows or columns first, or ask an owner to run \
-     rows drop-deleted to free the space deleted rows still hold.")
-    .reserved("CSV grids (C1c)");
+     rows drop-deleted to free the space deleted rows still hold.");
 
 FACET_CONFLICT = e("MPC-E803", "facet_conflict", Structured, 1, "K-BR-12 (KC7)",
     &["@change"],
     "{count} element(s) changed since your base: {where}",
     "Someone changed the same cells or rows after the version you read. Nothing was \
-     applied. Read again, redo your change on the new values, and pass the new --base.")
-    .reserved("CSV grids (C1c)");
+     applied. Read again, redo your change on the new values, and pass the new --base.");
+
+OP_REFUSED = e("MPC-E804", "op_refused", Structured, 2, "K-SCH-2 (C1)", &["@change"],
+    "op {op} on root {root}: {problem}",
+    "One of the edit's row, column or cell operations can't apply (an unknown or reused \
+     key, a move next to itself, dropping a live element); nothing of the change was \
+     applied. List the rows or columns again (row list, col list) and use the keys shown.");
+
+NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3 (C1)",
+    &["@pack"],
+    "{verb}: {line}",
+    "The row, column or cell the verb names is unknown or deleted (stdout says which, and \
+     who deleted it when you may read history). A raw keyed cell write naming a row or \
+     column the table doesn't know (dropped, or never in it) is refused the same way, whole. \
+     Nothing was applied. List the live ones (row list, col list), or restore a deleted one \
+     first (row restore, col restore).");
+
+HEADER_NAMES_UNRENDERED = e("MPC-E806", "header_names_unrendered", Structured, 2,
+    "CSV contract §1.4 (C1)", &["@pack"],
+    "the columns have names that would appear as a header line; clear them or add a row first",
+    "The table has no row, and its columns still hold names from before the header was \
+     switched off: switching it on would write them as a header line, changing the file. \
+     Nothing was applied. Clear the names (col rename) or add a row first, then switch.");
+
+HEADER_ONLY_ROW_BLANK = e("MPC-E807", "header_only_row_blank", Structured, 2,
+    "CSV contract §1.4 (C1)", &["@pack"],
+    "header on: the only row is a blank line, and a blank header line with nothing after it \
+     isn't written (the file would change); add a non-blank row first",
+    "The table's only row is blank: as the header it would be a blank header line with \
+     nothing after it, which isn't written, so the file would change. Nothing was applied. \
+     Add a row with values first (row insert), then switch the header on.");
 
 // ---------------------------------------------------------------- 9xx limits
 

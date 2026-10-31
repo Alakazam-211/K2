@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use super::action::PersonAction;
-use super::registry::{verb_form, Api, Registry, Tier};
+use super::registry::{Api, Registry, Tier};
 use crate::doc::Edit;
 use crate::session::{
     Approval, ApprovalState, At, AuditEvent, ChangeEvent, ChangeKind, Config, ConnId, CursorAt,
@@ -56,7 +56,7 @@ pub enum RowStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParityRow {
     pub action: PersonAction,
-    /// The verbs serving it (registry forms, see [`verb_form`]); each needs a case.
+    /// The verbs serving it (registry forms, see [`super::verb_form`]); each needs a case.
     pub verbs: &'static [&'static str],
     /// Verbs of this row that must not be registered (not built yet, or N/A).
     pub absent: &'static [&'static str],
@@ -319,6 +319,11 @@ pub struct Stage {
 
 impl Stage {
     fn new(pack: Arc<dyn Pack>, initial: &str) -> Result<Self, String> {
+        Self::new_at(pack, initial, DOC_PATH)
+    }
+
+    /// A world whose doc's file is `path` (a plain name: the grid stage's `table.csv`).
+    pub(super) fn new_at(pack: Arc<dyn Pack>, initial: &str, path: &str) -> Result<Self, String> {
         let dir = TmpDir::new()?;
         let host = Arc::new(ParityHost {
             now: AtomicU64::new(1_700_000_000_000),
@@ -327,11 +332,11 @@ impl Stage {
         let store = DocStore::open(dir.0.join("docs.redb")).map_err(|e| format!("store: {e}"))?;
         let mgr = SessionManager::new(Arc::new(store), host.clone(), Config::default());
         let root_dir = dir.0.join("docs");
-        let file = root_dir.join(DOC_PATH);
+        let file = root_dir.join(path);
         std::fs::write(&file, initial).map_err(|e| format!("write doc: {e}"))?;
         let key = DocKey {
             space: "ws".into(),
-            path: DOC_PATH.into(),
+            path: path.into(),
         };
         let session = mgr
             .open_file(pack.clone(), &key, &file, &root_dir)
@@ -371,6 +376,11 @@ impl Stage {
     /// The session (for others' actions).
     pub fn session(&self) -> &Arc<Session> {
         &self.session
+    }
+
+    /// The observer's connection (full rights; reads, roster, log).
+    pub fn observer(&self) -> ConnId {
+        self.observer
     }
     pub fn manager(&self) -> &SessionManager {
         &self.mgr
@@ -500,6 +510,59 @@ impl Stage {
             .unwrap_or_default())
     }
 
+    /// A grid doc's content by key, as the observer reads it (A11: rows and columns in
+    /// order, cells, names, quoting, meta).
+    pub fn content(&self) -> Result<Vec<(String, crate::doc::Neutral)>, String> {
+        Ok(self
+            .session
+            .read(self.observer)
+            .map_err(|e| format!("observer read: {e}"))?
+            .content)
+    }
+
+    /// The live table (a grid doc), as the observer reads it.
+    pub fn table(&self) -> Result<crate::table::Table, String> {
+        crate::session::View::of_content(&self.content()?)
+            .table()
+            .map_err(|e| format!("table: {e}"))
+    }
+
+    /// `pid` (joined with [`Stage::other`] or [`Stage::assistant`]; a person if not yet)
+    /// edits a grid doc with a [`crate::table`] op builder (an agent names the live version
+    /// as its base). Returns the version after.
+    pub fn grid_as(
+        &mut self,
+        pid: &str,
+        f: impl FnOnce(&mut crate::table::Table) -> Result<Vec<Edit>, crate::table::TableError>,
+    ) -> Result<Seq, String> {
+        let c = match self.others.get(pid) {
+            Some(c) => *c,
+            None => self.other(pid, ParticipantKind::Person)?,
+        };
+        let v = self.version()?;
+        let r = self
+            .session
+            .edit_ops_with(
+                c,
+                &crate::session::EditOptions::new().if_version(v),
+                |view| {
+                    let mut t = view.table().map_err(|e| e.to_string())?;
+                    f(&mut t).map_err(|e| e.to_string())
+                },
+            )
+            .map_err(|e| format!("{pid} grid edit: {e:?}"))?;
+        r.map(|r| r.version)
+            .ok_or_else(|| format!("{pid}'s grid edit changed nothing"))
+    }
+
+    /// The connection of another participant (joined with [`Stage::other`]).
+    pub fn conn_of(&self, pid: &str) -> Result<ConnId, String> {
+        self.others
+            .get(pid)
+            .copied()
+            .ok_or_else(|| format!("{pid} hasn't joined"))
+    }
+
     /// The doc's version now.
     pub fn version(&self) -> Result<Seq, String> {
         Ok(self.session.status().map_err(|e| e.to_string())?.version)
@@ -547,6 +610,33 @@ pub struct Person<'a> {
     stage: &'a mut Stage,
     conn: Option<ConnId>,
     rx: Option<Receiver<ChangeEvent>>,
+}
+
+impl<'a> Person<'a> {
+    pub(super) fn on(stage: &'a mut Stage) -> Self {
+        Person {
+            stage,
+            conn: None,
+            rx: None,
+        }
+    }
+}
+
+impl<'a> Agent<'a> {
+    pub(super) fn on(stage: &'a mut Stage, registry: &'a Registry, action: PersonAction) -> Self {
+        Agent {
+            stage,
+            registry,
+            conn: None,
+            rx: None,
+            problems: Vec::new(),
+            action,
+        }
+    }
+
+    pub(super) fn take_problems(&mut self) -> Vec<Failure> {
+        std::mem::take(&mut self.problems)
+    }
 }
 
 impl Person<'_> {
@@ -660,6 +750,34 @@ impl Person<'_> {
         self.stage.session.redo_with(c, &UndoRequest::steps(1))
     }
 
+    /// A grid doc's table as the tab shows it (a read).
+    pub fn table(&mut self) -> Result<crate::table::Table, String> {
+        let c = self.conn()?;
+        let r = self.stage.session.read(c).map_err(|e| e.to_string())?;
+        crate::session::View::of_content(&r.content)
+            .table()
+            .map_err(|e| format!("table: {e}"))
+    }
+
+    /// A grid editor command: a [`crate::table`] op builder on the live table, applied by key
+    /// as one change ([`Session::edit_ops_with`]).
+    pub fn grid_edit(
+        &mut self,
+        f: impl FnOnce(&mut crate::table::Table) -> Result<Vec<Edit>, crate::table::TableError>,
+    ) -> Result<Option<EditResult>, SessionError> {
+        let c = self.conn().map_err(SessionError::BadEdit)?;
+        self.stage
+            .session
+            .edit_ops_with(c, &crate::session::EditOptions::new(), |view| {
+                let mut t = view.table().map_err(|e| e.to_string())?;
+                f(&mut t).map_err(|e| e.to_string())
+            })
+            .map_err(|e| match e {
+                crate::session::EditWithError::Session(e) => e,
+                crate::session::EditWithError::Compute(m) => SessionError::BadEdit(m),
+            })
+    }
+
     /// The tab subscribes to changes.
     pub fn subscribe(&mut self) -> Result<(), String> {
         let c = self.conn()?;
@@ -723,6 +841,16 @@ pub enum VerbValue {
     ClaimsReleased(Vec<crate::session::ClaimId>),
     /// `activity`.
     Activity(Vec<crate::session::ActivityEntry>),
+    /// A grid: `follow` (their cell caret or selection).
+    Cell(Option<crate::session::CellCursor>),
+    /// A grid: `show --version` (the version's content by key).
+    Content(Vec<(String, crate::doc::Neutral)>),
+    /// A grid: `write --base V`.
+    GridWrite(Box<crate::session::GridWriteReport>),
+    /// A grid: `blame --cell R,C`.
+    CellBlame(Option<Box<crate::session::ElemBlame>>),
+    /// A grid: `blame --structure`.
+    Structure(crate::session::StructureBlame),
     /// `export`, `export --version` (P24): what the export wrote, the doc version it is
     /// (tier 0: the version id) and how the codec was applied.
     Export {
@@ -875,7 +1003,7 @@ impl Agent<'_> {
     /// session refusal).
     pub fn verb(&mut self, argv: &[&str], stdin: &[u8]) -> Result<VerbOut, String> {
         let argv: Vec<String> = argv.iter().map(|s| (*s).to_owned()).collect();
-        let form = verb_form(&argv);
+        let form = self.registry.form_of(&argv);
         let Some(spec) = self.registry.get(&form).copied() else {
             self.problems.push(Failure::MissingVerb {
                 action: self.action,
@@ -965,6 +1093,11 @@ impl Agent<'_> {
         let s = self.stage.session.clone();
         let root = self.stage.root();
         let v = |value: VerbValue| Ok(Bound::Value(value, 0));
+        if crate::table::is_table(&self.stage.pack.schema()) {
+            if let Some(b) = self.bind_grid(form, args, stdin, used)? {
+                return Ok(b);
+            }
+        }
         match form {
             "open" => {
                 self.join(Stay::Held, used)?;
@@ -1275,6 +1408,150 @@ impl Agent<'_> {
     }
 }
 
+/// `blame --cell` with no write recorded for the cell (absent, never written, or an unknown
+/// row or column): the refusal's message.
+fn no_cell_write(row: &crate::elem::Key, col: &crate::elem::Key) -> String {
+    format!("cell {row}/{col} has no write to blame (absent, or not in the table)")
+}
+
+/// `R,C` (a cell by its keys).
+fn cell_arg(s: &str) -> Result<(crate::elem::Key, crate::elem::Key), String> {
+    let (r, c) = s.split_once(',').ok_or_else(|| format!("not R,C: {s:?}"))?;
+    Ok((key_arg(r)?, key_arg(c)?))
+}
+
+fn key_arg(s: &str) -> Result<crate::elem::Key, String> {
+    crate::elem::Key::new(s).map_err(|e| format!("not a key: {s:?} ({e})"))
+}
+
+/// `A..B` (two keys).
+fn key_pair(s: &str) -> Result<(crate::elem::Key, crate::elem::Key), String> {
+    let (a, b) = s
+        .split_once("..")
+        .ok_or_else(|| format!("not A..B: {s:?}"))?;
+    Ok((key_arg(a)?, key_arg(b)?))
+}
+
+impl Agent<'_> {
+    /// The reference binding of the kit's verbs whose grid form differs (A10-A12): `cursor
+    /// --cell`, `claim --rows/--cols/--cells`, `follow`, `write --base V` (merged by key),
+    /// `show --version`, `blame --cell`, `blame --structure`, `rows drop-deleted`. `None`:
+    /// the text binding applies.
+    fn bind_grid(
+        &mut self,
+        form: &str,
+        args: &[String],
+        stdin: &[u8],
+        used: &mut Vec<Api>,
+    ) -> Result<Option<Bound>, BindError> {
+        use crate::session::ClaimSpan;
+        let s = self.stage.session.clone();
+        let some = |value: VerbValue, exit: u8| Ok(Some(Bound::Value(value, exit)));
+        match form {
+            "cursor" => {
+                let at = cell_arg(&arg_after(args, "--cell")?)?;
+                let to = match arg_after(args, "--to") {
+                    Ok(t) => cell_arg(&t)?,
+                    Err(_) => at.clone(),
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::SetCursor);
+                s.set_cell_cursor(c, (&at.0, &at.1), (&to.0, &to.1))?;
+                some(VerbValue::None, 0)
+            }
+            "claim"
+                if !args
+                    .iter()
+                    .any(|a| a == "--lines" || a.starts_with("--lines=")) =>
+            {
+                let span = if let Ok(r) = arg_after(args, "--rows") {
+                    let (first, last) = key_pair(&r)?;
+                    ClaimSpan::Rows { first, last }
+                } else if let Ok(c) = arg_after(args, "--cols") {
+                    let (first, last) = key_pair(&c)?;
+                    ClaimSpan::Cols { first, last }
+                } else {
+                    let cells = arg_after(args, "--cells")?;
+                    let (a, b) = cells.split_once("..").ok_or("--cells R1,C1..R2,C2")?;
+                    let (a, b) = (cell_arg(a)?, cell_arg(b)?);
+                    ClaimSpan::Cells {
+                        rows: (a.0, b.0),
+                        cols: (a.1, b.1),
+                    }
+                };
+                let ttl = arg_after(args, "--ttl").ok().map(|t| num(&t)).transpose()?;
+                let note = arg_after(args, "--note").ok();
+                let hold = args.iter().any(|a| a == "--hold");
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Claim);
+                let info = s.claim_span(c, span, ttl, note, hold)?;
+                some(VerbValue::Claim(Box::new(info)), 0)
+            }
+            "follow" => {
+                let pid = positional(args).ok_or("follow needs a pid")?.clone();
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Roster);
+                let cell = s
+                    .roster(c)?
+                    .into_iter()
+                    .find(|e| e.participant.pid == pid)
+                    .and_then(|e| e.cell);
+                let exit = if cell.is_some() { 0 } else { 1 };
+                some(VerbValue::Cell(cell), exit)
+            }
+            "write" => {
+                let base = arg_after(args, "--base")?;
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::WriteBase);
+                let mut opts = crate::session::GridWriteOptions::default();
+                if args.iter().any(|a| a == "--partial") {
+                    opts = opts.partial();
+                }
+                if args.iter().any(|a| a == "--respect-claims") {
+                    opts = opts.policy(crate::session::ClaimPolicy::Respect);
+                }
+                // `--base live` replaces the grid (reconciled by key against the live table)
+                let out = if base == "live" {
+                    let seen = s.read(c)?.version;
+                    s.write_live_grid(c, seen, stdin, &opts)?
+                } else {
+                    s.write_base_grid(c, num(&base)?, stdin, &opts)?
+                };
+                let exit = out.exit();
+                some(VerbValue::GridWrite(Box::new(out)), exit)
+            }
+            "show --version" => {
+                let vid = num(&arg_after(args, "--version")?)?;
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Show);
+                some(VerbValue::Content(s.show_content(c, vid)?), 0)
+            }
+            "blame --cell" => {
+                let (r, col) = cell_arg(&arg_after(args, "--cell")?)?;
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::BlameCell);
+                // no write recorded: the kit's address-outside-the-doc refusal, as `blame -L`
+                // past the end (bad_position, exit 2)
+                let b = s
+                    .blame_cell(c, &r, &col)?
+                    .ok_or_else(|| SessionError::BadPosition(no_cell_write(&r, &col)))?;
+                some(VerbValue::CellBlame(Some(Box::new(b))), 0)
+            }
+            "blame --structure" => {
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::BlameStructure);
+                some(VerbValue::Structure(s.blame_structure(c)?), 0)
+            }
+            "rows drop-deleted" => {
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::DropDeleted);
+                some(VerbValue::Edit(s.drop_deleted(c)?), 0)
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
 /// The new file and key for `mv <to>` (inside the doc's folder).
 pub fn rename_target(stage: &Stage, to: &str) -> Result<(PathBuf, DocKey), String> {
     if to.contains('/') || to.is_empty() || to.starts_with('.') {
@@ -1393,12 +1670,12 @@ pub struct Observation {
     pub output: Output,
 }
 
-struct Mark {
-    seq: Seq,
-    version_id: u64,
+pub(super) struct Mark {
+    pub(super) seq: Seq,
+    pub(super) version_id: u64,
 }
 
-fn mark(stage: &Stage) -> Result<Mark, String> {
+pub(super) fn mark(stage: &Stage) -> Result<Mark, String> {
     Ok(Mark {
         seq: stage.version()?,
         version_id: stage.versions()?.iter().map(|v| v.id).max().unwrap_or(0),

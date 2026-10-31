@@ -111,7 +111,9 @@ Reconnecting).
 `view` (the `EditorView`), `text`, `version`, `state`, `rights`, `roster`, `rejected`,
 `pending`; `on(event, cb)` (returns an unsubscribe); `undo()` / `redo()` (the server's, for this
 participant); `reapply(id)` (a `ReapplyResult`: `applied`, `already-present`, `unknown`,
-`unavailable`; see Rejections) / `dismiss(id)`; `reveal({first, last})` (scroll to lines and mark
+`unavailable`; see Rejections) / `dismiss(id)`; `insertHere(id)` / `confirmInsert()` /
+`cancelInsert()` ("Insert my text here", an `InsertResult`) and `copyRejected(id)` (see
+Rejections); `reveal({first, last})` (scroll to lines and mark
 them for a moment); `follow(handle | null)` (keep a participant's caret in view);
 `setVisible(v)`; `reconnectNow()`; `destroy()`.
 
@@ -170,9 +172,9 @@ off. Selections are the participant's colour at `--mpc-selection-alpha`.
 A change the server refused (or that met competing text) leaves the text and is listed below
 the editor: the text that wasn't applied, **Re-apply** and **Dismiss** (buttons, reachable with
 Tab and Enter), and a click on the text reveals where it was. In the text, a wavy underline or a
-struck-through ghost marks the place. `reapply(id)` inserts the typed text where it was as a new
-edit and returns `{status: "applied"}`, but only where that is the server's place for it (below);
-`unavailable`: read-only, no such rejection, or an IME composition under way.
+struck-through ghost marks the place. `reapply(id)` puts the change back where the server would
+put it, as a new edit, and returns `{status: "applied"}` (below); `unavailable`: read-only, no
+such rejection, or an IME composition under way.
 
 **A change whose reply was lost** (`MPC-E000`: the resync after a reconnect didn't list it) is
 marked `mayHaveApplied: true`, and its row says so ("This change may already be in the
@@ -187,7 +189,7 @@ record, never by matching text:
   doesn't count, and neither does someone else's identical change (another ID).
 - **Re-apply** asks `LiveText.presence`: `present` (it landed): nothing applied, the rejection
   dismissed, `already-present`; `absent` (the history covers every version since and no change
-  from that ID is in it): on to the guards below, as any rejection; `unknown` (the history doesn't
+  from that ID is in it): placed by the rule below, as any rejection; `unknown` (the history doesn't
   reach back that far, or an undo or redo was unanswered on that connection, whose change would
   carry the same ID): nothing applied, the rejection kept, a note asks the person to check and
   retype, `unknown`. Re-apply applies only when the record shows the change absent.
@@ -196,32 +198,58 @@ record, never by matching text:
   the late frame lands. When it lands, `duplicateRisk {rejection, landed, reapplied}` fires and a
   note says the text may be in twice. A host that follows the rule never applies the late frame.
 
-**Re-apply puts text back only where the server would put it.** It re-inserts the typed text at
-the start of the change's region, which is the server's place for it only when the change is a
-**single pure insertion**, its region has moved through **the server's own changes** (no reload
-since), **nothing else was inserted at exactly that point** since, and **no text around that
-point, or at its edge, was deleted or replaced** since. Anything else applies
-nothing, keeps the rejection, shows a "check and retype" note, and returns `{status: "unknown",
-reason}` (`LiveText.reapplyGuard(id)` gives the reason; `LiveText.reapply` returns `null`):
+**Re-apply puts a change back where the server would put it** (`LiveText.placeRejection`):
+the change exactly as it was sent (the `edit` frame's hunks, on the text at the frame's base) is
+rebased through every change since that base, with the server's own rule (`rebaseOurs`, as
+`edit_at_base` does), then through the person's own pending changes (theirs first: the server
+applies them first). The result goes out as a **fresh edit at the current version**, and it is
+**its own undo step** (never composed with the typing around it). Every hunk lands in its own
+place: a deletion is deleted again, a replacement replaces, a change with several hunks puts each
+back, and at a tie the change goes after what was inserted at its place since. It is never placed
+by its region.
 
-| `reason` | The change | Why Re-apply would get it wrong | Note |
-|---|---|---|---|
-| `multi-hunk` | more than one hunk | all its text would go back in one place, not each hunk's | `strings.multiHunk` |
-| `not-insertion` | a deletion or a replacement | Re-apply only re-inserts typed text: a deletion would change nothing, a replacement's text would land beside the text it replaced | `strings.notInsertion` |
-| `reloaded` | made before a reload (`MPC-E112`, a divergence, a welcome with `text`), or open across one | its place moved by a diff of the texts, not by the server's changes (a change pending at the reload has no place at all) | `strings.reloaded` |
-| `tie` | something else was inserted at exactly its place since (by anyone, the person included) | the server puts a later change after the one at its place; Re-apply would put it before | `strings.tie` |
-| `deleted-around` | text around its place, or at its edge, was deleted or replaced since (by anyone, the person included; a change that met competing text is one) | its place snapped to the deletion's start and stays there even if that deletion is refused or undone; the server refuses an insertion inside a deletion it applied, and never saw one it refused. The edge counts because a change reaches the editor mirrored around the person's own pending text: a deletion the server sees around the place can end exactly at it here | `strings.deletedAround` |
-| `cant-tell` | (a lost reply) the record can't tell whether it landed | above | `strings.cantTell` |
+| Result | When | Note |
+|---|---|---|
+| `applied` | the rule places it | none |
+| `already-present` | nothing is left to apply (its deletion was made by someone else since), or presence found it landed | `strings.alreadyPresent` |
+| `unknown`, `reason: "conflict"` | the change met someone else's change since: the rebase refuses it, as the server did or would (`MPC-E111`, foreseen or queued: a queued change that never went out left only by meeting competing text), or it meets the person's own pending text | `strings.conflictReapply` |
+| `unknown`, `reason: "cant-place"` | the history doesn't cover every version since its base: a reload since (`MPC-E112`, a divergence, a welcome with `text`), or more changes than the history keeps (512) | `strings.cantPlace` |
+| `unknown`, `reason: "cant-tell"` | (a lost reply) the record can't tell whether it landed | `strings.cantTell` |
 
-Presence comes first: a lost change found `present` is `already-present` whatever its shape (a
-deletion someone already made included). A later version restores every change through the
-server's rebase rule, refusing on a conflict.
+Refused changes keep their row, its text selectable and copyable, with a "check and retype"
+note. Presence comes first: a lost change is placed only once the record shows it absent.
 
-`partly-present` is gone from `ReapplyResult` (`applied`, `already-present`, `unknown`,
-`unavailable`; `reason` says why `unknown`: `cant-tell`, `multi-hunk`, `not-insertion`,
-`reloaded`, `tie` or `deleted-around`). An insertion refused for competing text (`MPC-E111`) was
-inside a deletion, so it is `deleted-around`: what Re-apply still applies is a lost reply found
-absent, a rate limit and the like.
+**"Insert my text here"** is the person's own choice for a **single-hunk** rejection with typed
+text, beside Re-apply: useful when Re-apply refuses a conflict and the person wants their words
+back anyway. It doesn't follow the server's rule: it inserts the typed text at the change's place
+as the editor tracked it, and never deletes. So it **shows first, inserts second**:
+
+1. **Insert my text here…** (`insertHere(id)`, `{status: "previewing", line}`): the typed text is
+   drawn in the editor where it would go (`cm-mpc-insert-preview`, a dashed ghost that moves with
+   any change made meanwhile), the line is scrolled into view and marked, and the note says where
+   ("Your text will go in at line N, shown in the editor. Insert it, or Cancel.", announced:
+   `role="status"`; when the rejected edit was a replacement or a deletion, it adds "Your edit
+   also removed text; that part isn't redone here.", `strings.insertRemovedText`). Nothing is
+   inserted. The row's buttons become **Insert** (focused) and
+   **Cancel**.
+2. **Insert** (`confirmInsert()`): the text goes in where the preview showed it, as a new edit and
+   its own undo step; the rejection is dismissed (`applied`). **Cancel** or **Escape**
+   (`cancelInsert()`): nothing inserted, focus back on the action.
+
+A lost change is checked by presence first, as for Re-apply (`already-present`, or `unknown` with
+`cant-tell`). A change with more than one hunk has no Insert action (`unknown`, `multi-hunk`): it
+has no one place.
+
+**The rejected text is always copyable**: every row with text has **Copy** (`copyRejected(id)`),
+which writes the text to the clipboard ("Copied."); when the clipboard refuses (no permission, an
+insecure page), it selects the row's text instead and says so, for the person to copy with their
+keyboard. The row's text is selectable in any case.
+
+v0.9.8.2's single-hunk guards are gone. `LiveText.reapplyGuard` is **deprecated** (a stub over
+`placeRejection`: `ok`, `conflict` or `cant-place`; removed in the release after this one): use
+`placeRejection` and `Placement`. The reasons `multi-hunk`, `not-insertion`, `reloaded`, `tie` and
+`deleted-around` stay in `ReapplyResult`'s type for one release and are never returned; their
+strings stay too, unused.
 
 ## Theming
 
@@ -229,16 +257,24 @@ CSS variables on `.mpc-editor` (the defaults in parentheses): `--mpc-bg` (`Canva
 (`CanvasText`), `--mpc-font`, `--mpc-font-size` (14px), `--mpc-line-height` (1.5),
 `--mpc-caret-width` (2px), `--mpc-label-fg`, `--mpc-selection-alpha` (0.25), `--mpc-rejected`,
 `--mpc-banner-bg`, `--mpc-banner-fg`, `--mpc-focus`. `--mpc-user` is set inline per participant.
-Stable classes: `cm-mpc-caret`, `cm-mpc-caret-name`, `cm-mpc-selection`, `cm-mpc-rejected`,
+Stable classes: `cm-mpc-caret`, `cm-mpc-caret-name`, `cm-mpc-selection`, `cm-mpc-rejected`, `cm-mpc-insert-preview`,
 `mpc-banner`, `mpc-roster`, `mpc-rejections`; the frame has `data-state`.
 
 ## The binding (what changed from `codemirrorLive`)
 
 - **No `doc.toString()` per keystroke.** A byte index (`ByteIndex`) keeps each line's UTF-8
-  length, updates only the lines a transaction touches, and converts offsets from the line.
+  length in blocks of lines, updates only the blocks a transaction touches, and converts offsets
+  from the line.
+- **No whole-text rebuild per edit.** `LiveText` keeps its texts in a rope: a keystroke costs the
+  chunk it lands in, not the document (p95 under 1 ms at 1 MB and 2 ms at 4 MB on a build node;
+  `test/bench/live-text-bench.ts`). `LiveText.text` and the handle's `text` are built on their
+  first read after a change: O(document) then, so prefer the `change` event's hunks to reading
+  `text` on every change.
 - **Remote changes are held, then dispatched together** outside any update, and **never during
   an IME composition**: the editor's document is left alone until `compositionend`, while the
-  person's composing text still goes to the replica (mapped over the held changes). Nothing is
+  person's composing text still goes to the replica (mapped over the held changes). The held
+  document and its byte index are kept up to date change by change, so a keystroke during a
+  composition never re-indexes the whole document. Nothing is
   lost or doubled, and the editor shows the server's text once the composition ends.
 - **The server owns undo; a CodeMirror history is refused.** `mountLiveEditor` throws a
   `LiveEditorError` with code `MPC-EDITOR-HISTORY` when the host's `extensions` include
@@ -259,15 +295,18 @@ Stable classes: `cm-mpc-caret`, `cm-mpc-caret-name`, `cm-mpc-selection`, `cm-mpc
   typing, outside edits, undo and dropped sockets; `EDITOR_RUNS` sets the run count). Both run
   in jsdom against the fake server (`test/fake-server.ts`, `test/fake-live.ts`).
 - `npm run test:browser` (Playwright, pinned): the editor in real browsers. Everything is under
-  `client/` (`playwright.config.ts`, `test/browser/`). Pick browsers by project:
+  `client/` (`playwright.config.ts`, `test/browser/`). **Chromium only by default**; set
+  `MPC_BROWSERS` to run others (comma-separated: `chromium`, `webkit`):
 
   ```sh
-  npx playwright install chromium         # or webkit
-  npx playwright test --project=chromium  # or --project=webkit
+  npx playwright install chromium && npx playwright test                       # Chromium
+  npx playwright install webkit && MPC_BROWSERS=webkit npx playwright test     # WebKit
   ```
 
-  A selected browser that can't launch fails the run; nothing is skipped for it. Tests only
-  for one browser say so (`test.skip` on the browser's name).
+  WebKit needs its system libraries on the machine (Playwright's `install-deps` lists them);
+  run it only where they are. An unknown name in `MPC_BROWSERS`, or a selected browser that
+  can't launch, fails the run; nothing is skipped for it. Tests only for one browser say so
+  (`test.skip` on the browser's name).
 
 Browsers are downloaded into the job's folder when `PLAYWRIGHT_BROWSERS_PATH` points there; a
 runner without a cache downloads them on every run.

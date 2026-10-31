@@ -230,6 +230,49 @@ pub(crate) fn take_if_version(
     Ok((v.get(), rest))
 }
 
+/// `--if-version V` and `--base V` taken out of a structured pack verb's arguments (A9):
+/// (if-version, base, the rest). As [`take_if_version`]; `--base` takes a version as reads
+/// print it (`1842` or `v1842`), at most once; options end at `--`.
+pub(crate) type Guards = (
+    Option<crate::store::Seq>,
+    Option<crate::store::Seq>,
+    Vec<String>,
+);
+
+pub(crate) fn take_guards(args: &[String]) -> Result<Guards, ToolError> {
+    let (v, args) = take_if_version(args)?;
+    let mut b = super::IfVersionArg::default();
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    let set = |b: &mut super::IfVersionArg, val: &str| {
+        b.set(val).map_err(|e| {
+            ToolError::usage(
+                e.to_string()
+                    .replace("--if-version", "--base")
+                    .replace("if-version", "base"),
+            )
+        })
+    };
+    while let Some(a) = it.next() {
+        if a == "--" {
+            rest.push(a.clone());
+            rest.extend(it.cloned());
+            break;
+        }
+        if a == "--base" {
+            let val = it
+                .next()
+                .ok_or_else(|| ToolError::usage("option '--base' requires an argument"))?;
+            set(&mut b, val)?;
+        } else if let Some(val) = a.strip_prefix("--base=") {
+            set(&mut b, val)?;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    Ok((v, b.get(), rest))
+}
+
 /// Parse a count: decimal digits with an optional GNU size suffix (`b` 512, `K`/`KiB`
 /// 1024, `kB` 1000, `M`, `MB`, `MiB`, `G`, `GB`, `GiB`). Saturates instead of overflowing,
 /// as huge counts mean "everything".
@@ -314,6 +357,25 @@ mod tests {
         assert!(matches!(p(&["--nope"]), Err(ToolError::Unsupported { .. })));
         assert!(matches!(p(&["-e"]), Err(ToolError::Usage(_))));
         assert!(matches!(p(&["--line-number=3"]), Err(ToolError::Usage(_))));
+    }
+
+    #[test]
+    fn structured_verbs_guards_are_taken_out() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (v, b, rest) =
+            take_guards(&a(&["--row", "r1", "--base", "v4", "--if-version=9"])).unwrap();
+        assert_eq!((v, b, rest), (Some(9), Some(4), a(&["--row", "r1"])));
+        let (v, b, rest) = take_guards(&a(&["--base=3", "--", "--base", "x"])).unwrap();
+        assert_eq!((v, b, rest), (None, Some(3), a(&["--", "--base", "x"])));
+        for bad in [
+            &["--base"][..],
+            &["--base", "x"],
+            &["--base", "1", "--base=1"],
+        ] {
+            let e = take_guards(&a(bad)).unwrap_err();
+            assert!(e.to_string().contains("--base"), "{bad:?}: {e}");
+            assert!(!e.to_string().contains("if-version"), "{bad:?}: {e}");
+        }
     }
 
     #[test]

@@ -175,6 +175,11 @@ export function invert(old: string, hunks: readonly Hunk[]): Hunk[] {
  * `t0`: the text `t0` keeps, in order, with what replaces each gap between kept parts.
  */
 export function compose(t0: string, a: readonly Hunk[], b: readonly Hunk[]): Hunk[] {
+  return composeLen(utf8Len(t0), a, b);
+}
+
+/** `compose` given only the length of `t0` in UTF-8 bytes (all it needs of the text). */
+export function composeLen(len0: number, a: readonly Hunk[], b: readonly Hunk[]): Hunk[] {
   // the text after `a`, as pieces: kept ranges of t0 (bytes) and inserted strings
   type Piece = { keep: [number, number] } | { ins: string };
   const ps: Piece[] = [];
@@ -184,7 +189,6 @@ export function compose(t0: string, a: readonly Hunk[], b: readonly Hunk[]): Hun
     if (h.insert) ps.push({ ins: h.insert });
     at = h.end;
   }
-  const len0 = utf8Len(t0);
   if (at < len0) ps.push({ keep: [at, len0] });
   // apply `b` to the pieces: walk them with t1 offsets
   const out: Piece[] = [];

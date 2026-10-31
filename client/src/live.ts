@@ -8,9 +8,10 @@
 // it will refuse) leaves the text, and `onRejected` hands it to the host with where it was,
 // so the person can re-apply it at the new base.
 
-import { apply, compose, coalesce, invert, utf8Len, validate, type Hunk } from "./hunk";
+import { coalesce, composeLen, utf8Len, type Hunk } from "./hunk";
 import { Bias, transform } from "./position";
-import { Carried } from "./rebase";
+import { Carried, rebaseOurs } from "./rebase";
+import { Rope } from "./rope";
 import {
   ERR,
   FRAME_MARGIN,
@@ -63,17 +64,21 @@ export interface Rejection {
 }
 
 /**
- * Whether single-hunk Re-apply can put a rejection back where it was (`LiveText.reapplyGuard`):
- * `ok`, or why not. Re-apply inserts the typed text at the region's start, which is the server's
- * place for it only for a pure insertion (`not-insertion`: it deleted or replaced text, which
- * Re-apply wouldn't redo), whose region came through the server's changes (`reloaded`: a reload
- * since moved it by a diff), with nothing else inserted at that point since (`tie`: the server
- * puts a later change after it; Re-apply would put it before), and no text around that point
- * deleted or replaced since (`deleted-around`: the region snapped to the deletion's start; the
- * server refuses an insertion inside a deletion it applied, and never saw one it refused).
- * `multi-hunk`: its text would go back in one place, not each hunk's.
+ * Where Re-apply puts a rejected change (`LiveText.placeRejection`): `hunks` on the current text,
+ * as the server would apply the change had it been sent at its base and applied now (empty: it
+ * is all in the text already); or why it can't: `conflict` (the change met competing text since:
+ * the server refused it, or would), `cant-place` (the history doesn't reach back to its base: a
+ * reload since, or more changes than the history keeps).
  */
-export type ReapplyGuard = "ok" | "multi-hunk" | "not-insertion" | "reloaded" | "tie" | "deleted-around";
+export type Placement = { hunks: Hunk[] } | { refused: "conflict" | "cant-place" };
+
+/**
+ * @deprecated v0.9.8.2's single-hunk guard verdict, kept for one release (removed in the
+ * release after): `LiveText.reapplyGuard` now answers from `placeRejection`: `ok` when the rule
+ * places the change, else `conflict` or `cant-place`. The other values are never returned. Use
+ * `placeRejection` and `Placement`.
+ */
+export type ReapplyGuard = "ok" | "conflict" | "cant-place" | "multi-hunk" | "not-insertion" | "reloaded" | "tie" | "deleted-around";
 
 /** Whether a rejected change whose reply was lost has landed (`LiveText.presence`). */
 export type Presence = "present" | "absent" | "unknown";
@@ -134,7 +139,7 @@ interface Entry {
   /** `hunks` as the server will carry them (E-LIVE r2.3): as sent, through every change since
    * its base; reset to exactly what's sent when it's sent. `hunks` is its canonical form. */
   carried: Carried;
-  before: string;
+  before: Rope;
   group: string | undefined;
   ops: OpId[];
   /** Set once sent. */
@@ -142,6 +147,8 @@ interface Entry {
   base?: number;
   /** The as-made form, for a rejection. */
   made: { hunks: Hunk[]; base: number };
+  /** The `edit` frame's hunks and base, once it went out (or was refused at the frame cap). */
+  sent?: { hunks: Hunk[]; base: number };
   /** The connection's client ID when it was sent: a change applied from it carries this one. */
   sentClient?: number;
   /** In flight, but the server will refuse it (it met competing text): not in the text. */
@@ -171,9 +178,9 @@ const HISTORY = 512;
 
 export class LiveText {
   readonly root: string;
-  private serverText: string;
+  private serverText: Rope;
   private _version: number;
-  private _text: string;
+  private _text: Rope;
   private inflight: Entry | null = null;
   private queue: Entry[] = [];
   private nextOp = 1;
@@ -202,13 +209,8 @@ export class LiveText {
   /** Rejections whose region can't be trusted for Re-apply: made by a reload, or open across
    * one (their regions moved through a diff, not the server's changes). */
   private reloaded = new Set<number>();
-  /** Rejections something else was inserted at exactly the point of, since: the server would
-   * put the change on the other side of it (ours after, at a tie). */
-  private tied = new Set<number>();
-  /** Rejections whose point was inside (or at the edge of) text deleted or replaced since: the
-   * region snapped to the deletion's start, and stays there if that deletion is undone or
-   * refused. */
-  private snapped = new Set<number>();
+  /** Each open rejection's change as sent (`edit`'s hunks and base): what Re-apply rebases. */
+  private sentOf = new Map<number, { hunks: Hunk[]; base: number }>();
   /** Client IDs whose connection went with an undo or redo unanswered. */
   private undoLostOn = new Set<number>();
   /** Changes whose reply was lost, by the client ID they went out on, watched for a late
@@ -250,8 +252,8 @@ export class LiveText {
     this.root = opts.root ?? "source";
     this.clientId = opts.client;
     this.selfHandle = opts.self;
-    this.serverText = snapshot.text;
-    this._text = snapshot.text;
+    this.serverText = Rope.of(snapshot.text);
+    this._text = this.serverText;
     this._version = snapshot.version;
     this.historyFrom = snapshot.version;
     this.unsub = t.onFrame((f) => this.onFrame(f));
@@ -259,7 +261,7 @@ export class LiveText {
 
   /** The client's text: the server's at `version`, with its own pending changes. */
   get text(): string {
-    return this._text;
+    return this._text.toString();
   }
   /** The latest server version this client has seen. */
   get version(): number {
@@ -288,18 +290,18 @@ export class LiveText {
    */
   applyLocal(hunks: readonly Hunk[], opts: { group?: string } = {}): OpId {
     if (this.dead) throw new Error("LiveText is closed");
-    const bad = validate(this._text, hunks);
+    const bad = this._text.validate(hunks);
     if (bad) throw new Error(`invalid hunks (${bad.kind} at ${bad.index})`);
     const id = this.nextOp++;
     const hs = coalesce(hunks);
     if (hs.length === 0) return id;
     const before = this._text;
-    this._text = apply(before, hs);
+    this._text = before.apply(hs);
     this.moveRejected(hs);
     this.emit("change", { hunks: hs, by: null, local: true });
     const last = this.queue[this.queue.length - 1];
     if (last && last.group === opts.group) {
-      last.hunks = compose(last.before, last.hunks, hs);
+      last.hunks = composeLen(last.before.length8, last.hunks, hs);
       last.carried = Carried.of(last.hunks);
       last.made = { hunks: last.hunks, base: this._version };
       last.ops.push(id);
@@ -463,30 +465,65 @@ export class LiveText {
     this.forget(id);
   }
 
-  /** Whether Re-apply can put rejection `id` back where it was (`ReapplyGuard`); `null` when
-   * there's no such rejection. Presence (`presence`) is the caller's, before this. */
-  reapplyGuard(id: number): ReapplyGuard | null {
+  /**
+   * Where Re-apply puts rejection `id` (`Placement`), by the server's rule: its change as sent
+   * (the `edit` frame's hunks, on the text at the frame's base) rebased through every change
+   * since that base, as `edit_at_base` would (`rebaseOurs`), then through this replica's own
+   * pending changes (ours after: the server applies those first). `null`: no such rejection.
+   * Presence (`presence`) is the caller's, before this: a change that may have landed must be
+   * found absent first.
+   *
+   * Refused: `conflict` when either rebase meets competing text, or the change never went out (a
+   * queued change leaves only by meeting competing text); `cant-place` when the history doesn't
+   * cover every version since the base (a reload since, or past its length). Never placed by
+   * its region.
+   */
+  placeRejection(id: number): Placement | null {
     const r = this._rejected.find((x) => x.id === id);
     if (!r) return null;
-    if (r.hunks.length > 1) return "multi-hunk";
-    const h = r.hunks[0];
-    if (!h || h.start !== h.end) return "not-insertion";
-    if (this.reloaded.has(id)) return "reloaded";
-    if (this.tied.has(id)) return "tie";
-    if (this.snapped.has(id)) return "deleted-around";
-    return "ok";
+    if (this.reloaded.has(id)) return { refused: "cant-place" };
+    const sent = this.sentOf.get(id);
+    if (!sent) return { refused: "conflict" };
+    if (sent.base < this.historyFrom) return { refused: "cant-place" };
+    // the history after the base: one entry per version, every version to this one
+    const at = this.history.findIndex((h) => h.version > sent.base);
+    const since = at < 0 ? [] : this.history.slice(at);
+    if (since.length !== this._version - sent.base || (since.length > 0 && since[0].version !== sent.base + 1)) {
+      return { refused: "cant-place" };
+    }
+    const placed = rebaseOurs(sent.hunks, since.map((h) => h.hunks));
+    if ("conflict" in placed) return { refused: "conflict" };
+    let c = Carried.of(placed.ok);
+    for (const e of [...(this.inflight && !this.inflight.doomed ? [this.inflight] : []), ...this.queue]) {
+      const t = c.through(e.hunks, 0);
+      if ("conflict" in t) return { refused: "conflict" };
+      c = t.ok;
+    }
+    return { hunks: c.hunks() };
   }
 
-  /** Re-apply a rejection's typed text at the start of its region, as a new local edit. Only
-   * when `reapplyGuard` says `ok`; anything else is refused (`null`, the rejection kept): a
-   * later version restores changes through the server's rebase rule. */
+  /**
+   * @deprecated Use `placeRejection` (removed in the release after this one). `ok` when the rule
+   * places the change (or nothing is left to apply), else why not (`conflict`, `cant-place`);
+   * `null`: no such rejection. v0.9.8.2's other reasons are never returned.
+   */
+  reapplyGuard(id: number): ReapplyGuard | null {
+    const p = this.placeRejection(id);
+    if (!p) return null;
+    return "refused" in p ? p.refused : "ok";
+  }
+
+  /**
+   * Re-apply rejection `id` where the server would put it (`placeRejection`), as a new local
+   * edit; the rejection is dismissed. `null`, the rejection kept, when it's refused; `null`, the
+   * rejection dismissed, when nothing is left to apply. Presence is the caller's, before this.
+   */
   reapply(id: number, opts: { group?: string } = {}): OpId | null {
-    const r = this._rejected.find((x) => x.id === id);
-    if (!r) return null;
-    if (this.reapplyGuard(id) !== "ok") return null;
+    const p = this.placeRejection(id);
+    if (!p || "refused" in p) return null;
     this.dismiss(id);
-    if (!r.text) return null;
-    return this.applyLocal([{ start: r.region.start, end: r.region.start, insert: r.text }], opts);
+    if (p.hunks.length === 0) return null;
+    return this.applyLocal(p.hunks, opts);
   }
 
   /**
@@ -497,9 +534,9 @@ export class LiveText {
     this.rejectAll(null);
     // every open region now moves by a diff of the texts, not the server's changes
     for (const r of this._rejected) this.reloaded.add(r.id);
-    const old = this._text;
-    this.serverText = snapshot.text;
-    this._text = snapshot.text;
+    const old = this._text.toString();
+    this.serverText = Rope.of(snapshot.text);
+    this._text = this.serverText;
     this._version = snapshot.version;
     this.seenAt = "all"; // the snapshot has every root's change at its version
     this.history = [];
@@ -651,15 +688,15 @@ export class LiveText {
     this.settled.add(e.op!);
     if (this.stash?.op === e.op) this.stash = null;
     if (e.doomed) return this.diverged("the server applied a change the client saw conflict");
-    const after = apply(e.before, e.hunks);
+    const after = e.before.apply(e.hunks);
     if (hunks.length > 0) {
       const at = this.placeOf(version, this.root);
       if (at === "seen" || at === "gap") return this.diverged(`ack at ${version} after ${this._version}`);
-      const got = apply(this.serverText, hunks);
-      if (got !== after) return this.diverged("the server's rebase differs from the client's");
+      const got = this.serverText.apply(hunks);
+      if (!got.equals(after)) return this.diverged("the server's rebase differs from the client's");
       this.serverText = got;
       this.advance(version, this.root, hunks, e.sentClient ?? this.clientId);
-    } else if (after !== this.serverText) {
+    } else if (!after.equals(this.serverText)) {
       return this.diverged("the server applied nothing where the client changed text");
     }
     this.emit("ack", { ops: e.ops, version: this._version });
@@ -709,7 +746,7 @@ export class LiveText {
           if (this.lost.size > WATCH_MAX) this.lost.delete(this.lost.keys().next().value!);
         }
       }
-      const inv = invert(e.before, e.hunks);
+      const inv = e.before.invert(e.hunks);
       const reg = this.regionOf(e);
       this.recarry(inv, this.serverText, [{ rej, ...reg }], null);
     }
@@ -766,12 +803,12 @@ export class LiveText {
       this.advance(ev.version, ev.root, [], ev.client);
       return;
     }
-    const bad = validate(this.serverText, ev.hunks);
+    const bad = this.serverText.validate(ev.hunks);
     if (bad) return this.diverged(`an incoming change doesn't fit (${bad.kind})`);
     const hs = coalesce(ev.hunks);
     this.advance(ev.version, ev.root, hs, ev.client);
     const old = this.serverText;
-    this.serverText = apply(old, hs);
+    this.serverText = old.apply(hs);
     this.recarry(hs, this.serverText, [], ev.pid);
     this.checkLanded(ev);
     this.sendCursor();
@@ -871,7 +908,7 @@ export class LiveText {
    */
   private recarry(
     x: Hunk[],
-    newBase: string,
+    newBase: Rope,
     regions: Array<{ rej: Rejection; start: number; end: number }>,
     by: Handle | null,
   ): void {
@@ -889,35 +926,39 @@ export class LiveText {
         e.carried = r.ok;
         const hs = r.ok.hunks();
         for (const g of regions) {
-          this.notePlace(g.rej.id, g.start, hs);
           g.start = transform(g.start, hs, Bias.Before);
           g.end = transform(g.end, hs, Bias.After);
         }
         e.hunks = hs;
         e.before = base;
-        base = apply(base, e.hunks);
+        base = base.apply(e.hunks);
         x = nx;
         keep.push(e);
         continue;
       }
       // competing text: e leaves; later entries see "undo e, then x"
-      const oldAfter = apply(e.before, e.hunks);
+      const oldAfter = e.before.apply(e.hunks);
       const rej = this.rejection(e, null);
       const reg = this.regionOf(e);
       // the region in the new base: e's range carried through x
-      this.notePlace(rej.id, reg.start, x);
       regions.push({
         rej,
         start: transform(reg.start, x, Bias.Before),
         end: transform(reg.end, x, Bias.After),
       });
-      x = compose(oldAfter, invert(e.before, e.hunks), x);
+      x = composeLen(oldAfter.length8, e.before.invert(e.hunks), x);
       if (e === this.inflight) e.doomed = rej;
     }
     this.queue = keep.filter((e) => e !== this.inflight);
     this._text = base;
-    const check = apply(oldText, x);
-    if (check !== base) return this.diverged("the carried change doesn't reproduce the text");
+    if (chain.length === 0 && regions.length === 0) {
+      // nothing pending was carried: `x` is the incoming change itself and the text is the
+      // server's, so the full check would recompute `newBase`. Its length is checked instead.
+      if (base.length8 !== oldText.length8 + grow8(x)) return this.diverged("the carried change doesn't reproduce the text");
+    } else {
+      const check = oldText.apply(x);
+      if (!check.equals(base)) return this.diverged("the carried change doesn't reproduce the text");
+    }
     if (x.length) {
       this.moveRejected(x);
       this.emit("change", { hunks: x, by, local: false });
@@ -941,6 +982,7 @@ export class LiveText {
       }
       e.op = this.nextWire++;
       e.base = this._version;
+      e.sent = { hunks: e.hunks, base: this._version };
       e.carried = Carried.of(e.hunks); // the server carries exactly what's sent
       e.sentClient = this.clientId;
       this.inflight = e;
@@ -969,7 +1011,7 @@ export class LiveText {
 
   private sendCursor(): void {
     if (!this.cursor || this.inflight || this.queue.length) return;
-    const len = utf8Len(this._text);
+    const len = this._text.length8;
     const a = Math.min(this.cursor.anchor, len);
     const h = Math.min(this.cursor.head, len);
     const key = `${this._version}:${a}:${h}`;
@@ -979,8 +1021,10 @@ export class LiveText {
   }
 
   private rejection(e: Entry, error: ErrorReport | null): Rejection {
+    const id = this.nextRejection++;
+    if (e.sent) this.sentOf.set(id, e.sent);
     return {
-      id: this.nextRejection++,
+      id,
       ops: e.ops,
       hunks: e.made.hunks,
       base: e.made.base,
@@ -1007,7 +1051,7 @@ export class LiveText {
     this.inflight = null;
     this.queue = [];
     if (all.length === 0) return;
-    const old = this._text;
+    const old = this._text.toString();
     for (const e of all) {
       const rej = this.rejection(e, error);
       rej.region = { start: 0, end: 0 }; // no place: Re-apply refuses it (`reloaded`)
@@ -1016,7 +1060,7 @@ export class LiveText {
       this.emit("rejected", rej);
     }
     this._text = this.serverText;
-    const d = diffText(old, this._text);
+    const d = diffText(old, this._text.toString());
     if (d.length) {
       this.moveRejected(d);
       this.emit("change", { hunks: d, by: null, local: false });
@@ -1037,7 +1081,6 @@ export class LiveText {
   private moveRejected(hs: readonly Hunk[]): void {
     const doomed = this.inflight?.doomed;
     for (const r of doomed ? [...this._rejected, doomed] : this._rejected) {
-      this.notePlace(r.id, r.region.start, hs);
       const start = transform(r.region.start, hs, Bias.Before);
       r.region = { start, end: Math.max(start, transform(r.region.end, hs, Bias.After)) };
     }
@@ -1071,25 +1114,9 @@ export class LiveText {
     } else this.pushHistory(version, hunks, client);
   }
 
-  /**
-   * Change `hs` moves a rejection's point `at`: something inserted exactly there (a tie: the
-   * server would put the rejected change after it, Re-apply at the region's start before it), or
-   * text deleted or replaced around it or touching it (the region snaps to the deletion's start).
-   * Touching counts: a change reaches the replica mirrored around the person's own pending text,
-   * so a deletion the server sees around the point can end (or start) exactly at it here.
-   */
-  private notePlace(id: number, at: number, hs: readonly Hunk[]): void {
-    for (const h of hs) {
-      if (h.start > at) break;
-      if (h.start === at && h.insert.length > 0) this.tied.add(id);
-      else if (h.start < h.end && at <= h.end) this.snapped.add(id);
-    }
-  }
-
   private forget(id: number): void {
     this.reloaded.delete(id);
-    this.tied.delete(id);
-    this.snapped.delete(id);
+    this.sentOf.delete(id);
   }
 
   private pushHistory(version: number, hunks: Hunk[], client: number | undefined): void {
@@ -1148,6 +1175,13 @@ export function diffText(a: string, b: string): Hunk[] {
       insert: b.slice(p, b.length - s),
     },
   ];
+}
+
+/** How many UTF-8 bytes `hunks` add to the text they apply to (negative: remove). */
+function grow8(hunks: readonly Hunk[]): number {
+  let n = 0;
+  for (const h of hunks) n += utf8Len(h.insert) - (h.end - h.start);
+  return n;
 }
 
 /** A frame's JSON size in UTF-8 bytes when it is over `limit`, else `null` (cheap for small

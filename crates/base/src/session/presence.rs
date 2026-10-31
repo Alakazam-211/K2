@@ -121,6 +121,10 @@ pub(crate) fn participants<M: Deref<Target = Presence>>(members: &[M]) -> usize 
     p.len()
 }
 
+/// One row of [`fold_roster`]: the pid's connections (most active first), its entry, and
+/// when it first joined.
+pub(crate) type Folded<'a, M> = (Vec<&'a M>, RosterEntry, u64);
+
 /// The roster fold: one row per pid, its connections most active first (latest edit or
 /// caret move, then latest call, then newest), with the kind-independent fields filled.
 /// `editing(pid)` forces the editor role for a pid with edit rights (a lease holder). The
@@ -131,7 +135,7 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
     now: u64,
     c: &Config,
     editing: impl Fn(&str) -> bool,
-) -> Vec<(Vec<&'a M>, RosterEntry, u64)> {
+) -> Vec<Folded<'a, M>> {
     let recent = |t: Option<u64>| t.is_some_and(|t| now.saturating_sub(t) < c.editor_window_ms);
     // members are in join order, so pids come out in order of first join; watchers (past
     // participants_max) have no row
@@ -177,6 +181,7 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
                 role,
                 away,
                 cursor: None,
+                cell: None,
                 view: None,
                 last_edit_ms: conns.iter().filter_map(|m| m.last_edit_ms).max(),
                 stay,

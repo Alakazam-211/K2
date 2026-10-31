@@ -163,6 +163,7 @@ fn versions_and_the_named_guard() {
             "source".into(),
             Neutral::Text(format!("text at {seq} 🎉\n")),
         )],
+        codec: None,
     };
     let a = s.put_version(id, &v(1, VersionReason::Import)).unwrap();
     let b = s
@@ -228,6 +229,7 @@ fn damaged_records_are_errors_not_panics() {
         name: None,
         authors: vec![],
         content: vec![],
+        codec: None,
     });
     good.push(0); // trailing byte
     assert!(dec_version(&good).is_err());
@@ -331,7 +333,8 @@ fn doc_round_trips_through_log_and_compaction() {
                 reason: VersionReason::Idle,
                 name: None,
                 authors: vec!["agent:a".into()],
-                content: rebuilt.export_neutral(),
+                content: rebuilt.export_neutral().unwrap(),
+                codec: None,
             },
         )
         .unwrap();
@@ -357,6 +360,7 @@ fn create_imported_is_one_unit() {
         name: None,
         authors: vec!["kit:import".into()],
         content: vec![("source".into(), Neutral::Text("hello\n".into()))],
+        codec: None,
     };
     let (id, seq, vid) = s
         .create_imported(
@@ -507,8 +511,9 @@ fn older_formats_are_stamped_current_and_newer_refused() {
             .unwrap()
             .unwrap()
             .value();
-        assert_eq!(f, STORE_FORMAT);
-        assert_eq!(STORE_FORMAT, 5);
+        // stamped the base format: format 6 comes only with a structured doc
+        assert_eq!(f, STORE_FORMAT_BASE);
+        assert_eq!((STORE_FORMAT_BASE, STORE_FORMAT), (5, 6));
         drop(r);
         let w = s.begin_write().unwrap();
         w.open_table(META)
@@ -517,10 +522,20 @@ fn older_formats_are_stamped_current_and_newer_refused() {
             .unwrap();
         w.commit().unwrap();
     }
-    assert!(matches!(
-        DocStore::open(d.db()),
-        Err(StoreError::Newer { found: 6 })
-    ));
+    // a format-6 store opens as is (no downgrade to 5)
+    assert_eq!(DocStore::open(d.db()).unwrap().format().unwrap(), 6);
+    {
+        let s = DocStore::open(d.db()).unwrap();
+        let w = s.begin_write().unwrap();
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 7u64)
+            .unwrap();
+        w.commit().unwrap();
+    }
+    let e = DocStore::open(d.db()).err().expect("refused");
+    assert_eq!(e, StoreError::Newer { found: 7 });
+    assert_eq!(e.to_string(), "store is format 7; this build reads up to 6");
 }
 
 /// A blob doc in `s` (space `ws-1`) with its import by `kit:import`.
@@ -636,7 +651,7 @@ fn a_format_3_store_is_upgraded_in_place_with_its_approvals() {
         .unwrap()
         .unwrap()
         .value();
-    assert_eq!(f, STORE_FORMAT);
+    assert_eq!(f, STORE_FORMAT_BASE);
     drop(r);
     assert_eq!(
         s.blob_approvals(id).unwrap(),
@@ -682,6 +697,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
                 roots,
             }],
         }],
+        elems: Vec::new(),
     };
     // version 1, as a format-4 build wrote it: decodes with unknown roots
     let v1: Vec<u8> = {
@@ -738,6 +754,9 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
             root: (3, 10),
         }],
         authored: None,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
     };
     s.commit_changes(id, &[entry], &[change], &[]).unwrap();
     let got = s
@@ -914,7 +933,14 @@ fn every_table_is_listed_once() {
     let n = listed.len();
     listed.dedup();
     assert_eq!(listed.len(), n, "a table is listed twice");
-    let lazy = ["authored".to_owned()];
+    // `authored` comes with the first widened change; `elem_writes` with the first
+    // structured record (format 6's upgrade, C1)
+    let lazy = [
+        "authored".to_owned(),
+        "elem_writes".to_owned(),
+        "row_marks".to_owned(),
+        "overwrite_notes".to_owned(),
+    ];
     let eager: Vec<String> = listed
         .iter()
         .filter(|t| !lazy.contains(t))
@@ -924,7 +950,7 @@ fn every_table_is_listed_once() {
         found, eager,
         "a fresh store: every listed table but the lazy ones"
     );
-    assert!(listed.contains(&lazy[0]));
+    assert!(lazy.iter().all(|t| listed.contains(t)));
     // nothing but a widened change creates it: not a delete, a window prune, a purge, a
     // rewrite or a reopen
     let id = s.create(&meta("a.md")).unwrap();
@@ -941,6 +967,7 @@ fn every_table_is_listed_once() {
             sync: None,
             key: [7; 32],
             erase: None,
+            elems: None,
         },
     )
     .unwrap();
@@ -998,6 +1025,7 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
                     },
                 ],
             }],
+            elems: Vec::new(),
         },
         span: None,
         provenance: Vec::new(),
@@ -1005,6 +1033,9 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
             "source".into(),
             vec![hunk(2, 5, secret), hunk(6, 10, "SEED")],
         )]),
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
     };
     let (sa, sb) = ("ALPHA-SECRET-QXJZ", "BRAVO-SECRET-VKWP");
     for (id, secret) in [(a, sa), (b, sb)] {
@@ -1120,6 +1151,7 @@ fn authored_hunks_side_table() {
                 })
                 .collect(),
         }],
+        elems: Vec::new(),
     };
     let change = |rec: RevertRecord, authored: Option<RootHunks>| NewChange {
         info: ChangeInfo::new(ChangeKind::Edit, "ag", "cli", 5),
@@ -1127,6 +1159,9 @@ fn authored_hunks_side_table() {
         span: None,
         provenance: Vec::new(),
         authored,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
     };
     let widened = record(&[(0, 5, "woRD-SECRET1", "wordX"), (6, 10, "SEED", "seed")]);
     let authored: RootHunks = vec![(
@@ -1198,6 +1233,7 @@ fn authored_hunks_side_table() {
         sync: None,
         key: [7; 32],
         erase: None,
+        elems: None,
     };
     s.purge_doc(id, &purge(Pick::None)).unwrap();
     let rec = s.revert_record(id, 1).unwrap().unwrap();

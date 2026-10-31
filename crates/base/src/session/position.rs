@@ -143,19 +143,38 @@ pub struct LineRange {
     pub last: usize,
 }
 
-/// A position as a caller gives it: a byte offset, or `line:col` (`cursor --at L:C`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A position as a caller gives it: a byte offset, or `line:col` (`cursor --at L:C`) in a
+/// text root; or, in a structured doc, an element by identity (A10).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum At {
     Byte(usize),
     Line(LineCol),
+    /// An element by identity (A10, K-PRES-6): on a grid ([`crate::table`]), a cell, `root`
+    /// [`crate::table::CELLS`] and `key` its cell key ([`crate::table::cell_key`]; `cursor
+    /// --cell R,C`). Keys are stable: it needs no transform, and it is dropped when its row
+    /// or column is deleted. Never a position in a text root.
+    Elem {
+        root: String,
+        key: String,
+    },
 }
 
 impl At {
-    /// The byte offset in `text`, or `None` when out of range or inside a character.
-    pub fn resolve(self, text: &str) -> Option<usize> {
+    /// A grid cell (`root` [`crate::table::CELLS`]).
+    pub fn cell(row: &crate::elem::Key, col: &crate::elem::Key) -> Self {
+        At::Elem {
+            root: crate::table::CELLS.to_owned(),
+            key: crate::table::cell_key(row, col),
+        }
+    }
+
+    /// The byte offset in `text`, or `None` when out of range or inside a character (an
+    /// element: always `None`).
+    pub fn resolve(&self, text: &str) -> Option<usize> {
         match self {
-            At::Byte(b) => text.is_char_boundary(b).then_some(b),
-            At::Line(lc) => offset(text, lc),
+            At::Byte(b) => text.is_char_boundary(*b).then_some(*b),
+            At::Line(lc) => offset(text, *lc),
+            At::Elem { .. } => None,
         }
     }
 }

@@ -1,0 +1,21 @@
+MPC-E153 bad_root_name (sessions and edits)
+exit:     2
+message:  schema root name {root}: names must be non-empty, unique and free of '/'
+next:     A pack's schema names a root the kit can't store (empty, holding '/', or twice). The pack has to fix its schema; this file type can't open live until then.
+rule:     K-SCH-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E153",
+  "name": "bad_root_name",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "schema root name {root}: names must be non-empty, unique and free of '/'",
+  "next": "A pack's schema names a root the kit can't store (empty, holding '/', or twice). The pack has to fix its schema; this file type can't open live until then.",
+  "rule": "K-SCH-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

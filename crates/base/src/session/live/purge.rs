@@ -5,11 +5,23 @@
 //! the kit holds goes. To take text out of the doc too, edit it out first, then purge (or
 //! pass [`PurgeRequest::and_remove`] with a text scope: the session deletes every live
 //! copy as an ordinary change by the owner, then purges, under one lock).
+//!
+//! **Structured docs** (grids; C1f, A13, CSV seam design §7.4): content is values (cells,
+//! hidden cells of deleted rows and columns, column names, any map or list value). Purge
+//! reaches them in typed versions, revert records (version 3), the log, the snapshot, the
+//! sync replica and the file, and redacts a value **whole** (a register has no sub-value
+//! identity). Overwritten values are gone from the re-encoded state (GC on, K-PURGE-11).
+//! [`PurgeScope::Cell`] and [`PurgeScope::Row`] target a table's elements;
+//! [`PurgeScope::Text`] matches every value, live or hidden, in every version and record;
+//! `and_remove` sets each live or hidden value holding the text to that value without it.
 
 use super::*;
+use crate::elem::{Key, KeyedRoot, KeyedState, ListOp, MapOp, Value};
 use crate::store::{
-    fresh_key, DocPurge, Needles, Pick, PurgeCounts, RewriteReport, VersionId, MIN_MATCH,
+    fresh_key, DocPurge, ElemPick, Needles, Pick, PurgeCounts, RevertRecord, RewriteReport,
+    VersionId, MIN_MATCH,
 };
+use crate::table;
 
 /// What a purge targets ([`PurgeRequest`]).
 #[derive(Clone, PartialEq, Eq)]
@@ -35,6 +47,13 @@ pub enum PurgeScope {
     /// counts, and purge the content of every change they authored, as
     /// [`PurgeScope::Changes`]. Present connections of `pid` are removed.
     Participant { pid: String, pseudonym: String },
+    /// A table's cell (`purge --cell R,C`, C1f): every value it ever held, redacted whole in
+    /// every version and change record, and every other copy of those values (8-byte
+    /// windows) as [`PurgeScope::Changes`] finds them. Its live value stays.
+    Cell { row: Key, col: Key },
+    /// A table's row (`purge --row R`, C1f): as [`PurgeScope::Cell`] for every cell keyed by
+    /// it, under any column, at any time.
+    Row { row: Key },
 }
 
 /// Never prints the text of [`PurgeScope::Text`].
@@ -51,6 +70,8 @@ impl std::fmt::Debug for PurgeScope {
                     "Participant {{ pid: <erased>, pseudonym: {pseudonym:?} }}"
                 )
             }
+            Self::Cell { row, col } => write!(f, "Cell {{ row: {row}, col: {col} }}"),
+            Self::Row { row } => write!(f, "Row {{ row: {row} }}"),
         }
     }
 }
@@ -217,6 +238,101 @@ fn deletions(text: &str, t: &str) -> Vec<Hunk> {
         .collect()
 }
 
+/// Every value of a structured doc, live or hidden: `(root, key, value)` (a map's values, a
+/// list's live and deleted elements' values).
+fn live_values(k: &KeyedState) -> impl Iterator<Item = (&str, &str, &str)> + '_ {
+    k.roots.iter().flat_map(|(root, r)| {
+        let vals: Vec<(&str, &Value)> = match r {
+            KeyedRoot::Map(m) => m.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+            KeyedRoot::List { live, hidden, .. } => live
+                .iter()
+                .map(|(k, v)| (k.as_str(), v))
+                .chain(hidden.iter().map(|(k, v)| (k.as_str(), v)))
+                .collect(),
+            _ => Vec::new(),
+        };
+        vals.into_iter().filter_map(move |(k, v)| match v {
+            Value::Str(s) => Some((root.as_str(), k, s.as_str())),
+            Value::Null => None,
+        })
+    })
+}
+
+/// `and_remove` on structured roots: each value, live or hidden, holding `t` set to itself
+/// without it (repeatedly, so a removal can't join two halves into a new copy).
+fn value_removals(k: &KeyedState, t: &str) -> Vec<Edit> {
+    let strip = |s: &str| {
+        let mut s = s.to_owned();
+        while s.contains(t) {
+            s = s.replace(t, "");
+        }
+        s
+    };
+    let mut out = Vec::new();
+    for (root, r) in &k.roots {
+        match r {
+            KeyedRoot::Map(m) => {
+                let ops: Vec<MapOp> = m
+                    .iter()
+                    .filter_map(|(key, v)| match v {
+                        Value::Str(s) if s.contains(t) => Some(MapOp::Set {
+                            key: key.clone(),
+                            value: Value::Str(strip(s)),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+                if !ops.is_empty() {
+                    out.push(Edit::Map {
+                        root: root.clone(),
+                        ops,
+                    });
+                }
+            }
+            KeyedRoot::List { live, hidden, .. } => {
+                let ops: Vec<ListOp> = live
+                    .iter()
+                    .map(|(k, v)| (k, v))
+                    .chain(hidden.iter())
+                    .filter_map(|(key, v)| match v {
+                        Value::Str(s) if s.contains(t) => Some(ListOp::Set {
+                            key: key.clone(),
+                            value: Value::Str(strip(s)),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+                if !ops.is_empty() {
+                    out.push(Edit::List {
+                        root: root.clone(),
+                        ops,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The values a record's structured ops held (before and after) on the elements `pick`
+/// takes.
+fn op_values(rec: &RevertRecord, pick: impl Fn(&str, &str) -> bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for root in &rec.elems {
+        for o in root.ops.iter().filter(|o| pick(&root.root, &o.key)) {
+            for v in [&o.value_before, &o.value_after] {
+                if let Some(Value::Str(s)) = v {
+                    if !s.is_empty() {
+                        out.push(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 impl Session {
     /// **Purge** (K-PURGE-1…7, -13): remove the content `req` targets from everything the kit
     /// holds for this doc, keeping change ids, authors, lengths and times as metadata. Owner
@@ -246,6 +362,7 @@ impl Session {
         // check the scope before anything changes
         let mut picks = (Pick::None, Pick::None);
         let mut erase: Option<(String, String)> = None;
+        let mut elems: Option<ElemPick> = None;
         let mut summary = PurgedScope::History;
         match &req.scope {
             PurgeScope::History => picks = (Pick::All, Pick::All),
@@ -325,6 +442,33 @@ impl Session {
                     pseudonym: pseudonym.clone(),
                 };
             }
+            PurgeScope::Cell { row, col } => {
+                if !table::is_table(&self.schema) {
+                    return Err(SessionError::BadEdit("purge --cell is for tables".into()));
+                }
+                elems = Some(ElemPick {
+                    root: table::CELLS.to_owned(),
+                    keys: vec![table::cell_key(row, col)],
+                    prefixes: Vec::new(),
+                });
+                summary = PurgedScope::Cell {
+                    row: row.to_string(),
+                    col: col.to_string(),
+                };
+            }
+            PurgeScope::Row { row } => {
+                if !table::is_table(&self.schema) {
+                    return Err(SessionError::BadEdit("purge --row is for tables".into()));
+                }
+                elems = Some(ElemPick {
+                    root: table::CELLS.to_owned(),
+                    keys: Vec::new(),
+                    prefixes: vec![format!("{row}{}", table::CELL_SEP)],
+                });
+                summary = PurgedScope::Row {
+                    row: row.to_string(),
+                };
+            }
         }
         if req.and_remove && !matches!(req.scope, PurgeScope::Text(_)) {
             return Err(SessionError::BadEdit(
@@ -335,7 +479,7 @@ impl Session {
         let mut removed = None;
         if let (true, PurgeScope::Text(t)) = (req.and_remove, &req.scope) {
             let i = self.admit_edit(st, conn, Action::Purge, now)?;
-            let edits: Vec<Edit> = st
+            let mut edits: Vec<Edit> = st
                 .texts
                 .iter()
                 .map(|(root, text)| Edit::Text {
@@ -344,6 +488,9 @@ impl Session {
                 })
                 .filter(|e| matches!(e, Edit::Text { hunks, .. } if !hunks.is_empty()))
                 .collect();
+            if self.structured {
+                edits.extend(value_removals(&st.doc.keyed_state()?, t));
+            }
             if !edits.is_empty() {
                 // a purge's removal is no authorship: roots given (none put back), so D1
                 // leaves it as it is (v0.9.7)
@@ -380,12 +527,36 @@ impl Session {
                         }
                     }
                 }
+                texts.extend(op_values(rec, |_, _| true));
             }
             outside_window = match pick {
                 Pick::Range(a, b) => (*a..=*b).filter(|s| !held.contains(s)).count() as u64,
                 Pick::Set(set) => set.iter().filter(|s| !held.contains(s)).count() as u64,
                 _ => 0,
             };
+        }
+        // a table's elements: every value they held, in every record and version
+        if let Some(e) = &elems {
+            for (_, rec) in store.revert_records(self.doc_id)? {
+                texts.extend(op_values(&rec, |root, key| e.has(root, key)));
+            }
+            for info in store.version_infos(self.doc_id)? {
+                let v = store.version(self.doc_id, info.id)?;
+                for (root, n) in &v.content {
+                    let vals: Vec<(&str, &Value)> = match n {
+                        Neutral::Map(m) => m.iter().map(|(k, x)| (k.as_str(), x)).collect(),
+                        Neutral::List(l) => l.iter().map(|(k, x)| (k.as_str(), x)).collect(),
+                        Neutral::Text(_) => Vec::new(),
+                    };
+                    for (k, x) in vals {
+                        if let Value::Str(s) = x {
+                            if e.has(root, k) && !s.is_empty() {
+                                texts.push(s.clone());
+                            }
+                        }
+                    }
+                }
+            }
         }
         let needles = Needles::new(
             texts.iter().map(|t| t.as_bytes()),
@@ -416,8 +587,11 @@ impl Session {
             st.aware.forget(pid);
             st.handles.forget(pid);
         }
-        // waiting notes hold capped text: a purge takes it, keeping the fact and the count
-        self.withhold_notes(st);
+        // a text doc's waiting notes hold capped text (in memory): a purge takes it, and the
+        // pushes not yet sent lose it too, keeping the fact and the count (a grid's are below)
+        if !self.structured {
+            self.withhold_notes(st);
+        }
         // the new state: re-encoded from the live doc (GC on: no deleted content)
         let state = match st.doc.encode_state() {
             Ok(s) => s,
@@ -471,11 +645,16 @@ impl Session {
                 (None, None) => None,
             }
         };
-        let live_matches = st
+        let mut live_matches: usize = st
             .texts
             .iter()
             .map(|(_, t)| needles.text_spans(t).len())
             .sum();
+        if self.structured {
+            live_matches += live_values(&st.doc.keyed_state()?)
+                .filter(|(_, _, v)| needles.hits(v.as_bytes()))
+                .count();
+        }
         let purge = DocPurge {
             head: st.version,
             state: &state,
@@ -485,7 +664,23 @@ impl Session {
             sync: sync.clone(),
             key,
             erase: erase.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
+            elems,
         };
+        // a grid doc's waiting notes hold capped values: a purge takes them all, keeping the
+        // fact and the count, before the file is rewritten (in the store too; a text doc's are
+        // memory only, and never touch the store)
+        if self.structured {
+            self.load_notes(st, now)?;
+            // the waiting notes, and the pushes not yet sent, as a text doc's
+            self.withhold_notes(st);
+            let rows: Vec<(String, Vec<u8>)> = st
+                .aware
+                .pending
+                .iter()
+                .map(|(pid, q)| (pid.clone(), Self::encode_notes(q)))
+                .collect();
+            store.set_overwrite_notes(self.doc_id, &rows)?;
+        }
         let mut counts = store.purge_doc(self.doc_id, &purge)?;
         counts.undo_batches = undo_batches;
         counts.read_bases = read_bases;

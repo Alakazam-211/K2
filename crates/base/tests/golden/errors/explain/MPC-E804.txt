@@ -1,0 +1,21 @@
+MPC-E804 op_refused (structured and CSV)
+exit:     2
+message:  op {op} on root {root}: {problem}
+next:     One of the edit's row, column or cell operations can't apply (an unknown or reused key, a move next to itself, dropping a live element); nothing of the change was applied. List the rows or columns again (row list, col list) and use the keys shown.
+rule:     K-SCH-2 (C1)
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E804",
+  "name": "op_refused",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "op {op} on root {root}: {problem}",
+  "next": "One of the edit's row, column or cell operations can't apply (an unknown or reused key, a move next to itself, dropping a live element); nothing of the change was applied. List the rows or columns again (row list, col list) and use the keys shown.",
+  "rule": "K-SCH-2 (C1)",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

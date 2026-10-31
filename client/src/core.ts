@@ -1,6 +1,6 @@
 // Everything but the CodeMirror binding, for hosts without CodeMirror (no peer needed).
 export { LiveText, diffText, frameBytes } from "./live";
-export type { ChangeInfo, LiveOptions, OpId, ReapplyGuard, Rejection, RemoteCaret, UndoResult } from "./live";
+export type { ChangeInfo, LiveOptions, OpId, Placement, ReapplyGuard, Rejection, RemoteCaret, UndoResult } from "./live";
 export { transform, Bias } from "./position";
 export { Carried, rebaseOurs, rebaseIncoming, mapPoint, mapRange } from "./rebase";
 export type { LiveConflict, RebaseResult } from "./rebase";

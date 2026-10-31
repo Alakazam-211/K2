@@ -23,6 +23,8 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | history | kit | `Session::undo_with`, `redo_with`, `revert`, `restore`, `name_version`, `versions`, `log`, `diff_version`, `show` ([Undo and redo](#undo-and-redo), [Versions and history](#versions-and-history), [Revert](#revert)) |
 | agent presence | kit | `Session::claim`, `renew_claim`, `release_claim`, `claims`, `claim_remaining_ms`, `register_waiter`, `cancel_waiter`, `activity`; `ClaimPolicy` on edits; `Notes` on `run_tool` ([Agent presence](#agent-presence-amendment-13)) |
 
+A host's audit event (`Host::on_event`) is emitted after its change commits: a crash right after a commit can lose the event; the store's history is the record.
+
 **Host rules.** `Host` methods are called **with a session locked**. They must be quick and
 must not call back into the kit, or they deadlock. Events carry metadata only, never doc content.
 
@@ -539,8 +541,10 @@ Audit events `Joined` and `Left` carry both `pid` and `conn`. Claims add `ClaimT
 connection) needs read. It returns a `Receiver<RosterEvent>`:
 - first a `Snapshot { version, members }`: the `roster()` rows, each with its `Who` and rights;
 - then deltas: `Joined`, `Left { reason }`, `Rights`, `Role`, `Away`, `Cursor { who,
-  cursor, version }` (anchor and head, or none), `ClaimStarted` and `ClaimEnded` (lines and
-  the doc's version), and `Note` (a heads-up delivered to `to` about `from`).
+  cursor, version }` (anchor and head, or none), on a grid `CellCursor { who, cell, version }`
+  (the cell caret or selection by key, `RosterEntry::cell`, or none; v0.10.0), `ClaimStarted`
+  and `ClaimEnded` (lines and the doc's version; a grid claim's too), and `Note` (a heads-up
+  delivered to `to` about `from`).
 - **Carets come with their version** (v0.9.7): a `Cursor`'s byte offsets (and `line:col`) are
   positions in the root's text at its `version`, and every caret in a `Snapshot` is at the
   snapshot's `version`. Both are read together, under the session lock, when the event is
@@ -548,7 +552,7 @@ connection) needs read. It returns a `Receiver<RosterEvent>`:
   at its carried place, with the version after those edits. A client whose text is at
   another version maps the caret through the changes between (`events_since`, or the
   `ChangeEvent`s it has); an edit past a caret moves nothing and sends no new event.
-- **Coalesced** over `roster_interval_ms`: role, rights, away and the caret are compared with
+- **Coalesced** over `roster_interval_ms`: role, rights, away and the caret (text or cell) are compared with
   what was last told, so a caret moved ten times is one event at its last place. Joins,
   leaves, claim starts and ends and notes are recorded as they happen and **never** coalesced.
 - **Delivered when the host drives it**: `SessionManager::flush_rosters()` (or `tick`, or
@@ -1044,7 +1048,7 @@ same spot would then land inside it. So the edit paths that diff (`edit_with`,
 | `Session::file_moved(new_path)` | the file now lives at `new_path` |
 | `Session::flush(conn)` | needs read; `FlushOutcome { written, hash (HMAC-SHA256 hex of the doc's bytes under the doc's key: compare only with this doc's hashes; a purge changes it), disk }` |
 | `Session::file_path()` | the path as given |
-| `Session::audit_disk_sync()` | K-AUD-1's sync check (v0.9.4): when the doc is `Clean`, the disk replica must hold the doc's text on the doc's elements; returns `SyncDrift::Text { root }` / `Elements { root }` for each root that doesn't (metadata only), empty otherwise. In any disk state (v0.9.5), `SyncDrift::Pending { replica }` when the doc or the replica holds an update it couldn't integrate (missing dependencies) or is poisoned. Read-only, O(doc) (a blame of each root on both): for a nightly audit or a test, not the edit path |
+| `Session::audit_disk_sync()` | K-AUD-1's sync check (v0.9.4): when the doc is `Clean`, the disk replica must hold the doc's text on the doc's elements; returns `SyncDrift::Text { root }` / `Elements { root }` for each root that doesn't (metadata only), empty otherwise. A structured doc's replica must hold the doc's keyed state (keys, values, places), root by root (`Elements { root }`); its outside edits align on the replica after the same re-sync. In any disk state (v0.9.5), `SyncDrift::Pending { replica }` when the doc or the replica holds an update it couldn't integrate (missing dependencies) or is poisoned. Read-only, O(doc) (a blame of each root on both): for a nightly audit or a test, not the edit path |
 
 `DiskState`: `Clean`, `Dirty { since_ms }`, `Missing`, `Declined(reason)`. `DiskCheck`:
 `Unchanged`, `OwnWrite`, `Ingested { version }`, `Missing`, `Declined(Declined)`.
@@ -1300,6 +1304,8 @@ no content (it is idempotent).
 | `Versions { from, to }` | those versions' content (entries and names stay) | the text of the changes between them |
 | `Text(String)` | (none) | the text (`purge --text`, read from stdin), at least 8 bytes |
 | `Participant { pid, pseudonym }` | the revert records of every change `pid` authored | their text; plus the renaming below |
+| `Cell { row, col }` (tables) | every value the cell held, in every version and record | those values |
+| `Row { row }` (tables) | every value of every cell keyed by the row, under any column | those values |
 
 "Searched for" means: wherever any **8-byte window** of the text appears in a version's text or another change's revert record, that span or hunk is
 redacted too, so a copy made by a later change, a version cut while it was live, or the
@@ -1336,10 +1342,29 @@ In order, under the session's lock:
    forgotten.
 5. **The store file is rewritten** (below), so no freed page keeps a purged byte.
 6. `AuditEvent::Purged { key, by, scope: PurgedScope, counts: PurgeCounts }`: the scope
-   without its text (`Text { bytes }`, `Participant { pseudonym }`), counts only.
+   without its text (`Text { bytes }`, `Participant { pseudonym }`, `Cell { row, col }` and
+   `Row { row }` by key), counts only.
+
+### Structured docs (grids, C1f)
+
+Content is **values**: a map's values and a list's element values, so a table's cells
+(**hidden ones too**: cells of deleted rows and columns), its column names, and any value of
+another structured root. Purge reaches them in typed versions, revert records (version 3),
+the log, the snapshot, the sync replica and the file, and redacts a value **whole** (a
+register has no sub-value identity): in a version it becomes empty, with a
+`VersionInfo::redacted` entry `{root}/{key}` (start 0, the value's byte length); in a record
+the op's values before and after become empty and the op is marked redacted, so a revert or
+undo turning that value back is a conflict of kind `ConflictKind::Erased` (an insert, delete,
+restore or move over it plans as before: it needs no value). A value overwritten in the live
+doc is gone from the re-encoded state (GC on). `Text` matches every value, live or hidden,
+whole or by 8-byte window (so a secret split across two cells is reached through each half of
+8+ bytes); `and_remove` sets each live or hidden value holding the text to that value without
+it (one owner's change), and `live_matches` counts the values the purged content still
+matches. Keys are identities, not content: they stay. `PurgeCounts::values` counts the values
+redacted.
 
 `PurgeOutcome { counts, live_matches, removed, not_reached, rewrite }`. `PurgeCounts`:
-`log_entries`, `versions`, `revert_hunks`, `bytes`, `attributions`, `undo_batches`,
+`log_entries`, `versions`, `revert_hunks`, `bytes`, `values` (structured), `attributions`, `undo_batches`,
 `read_bases` (and the tier-0 counts below: `blob_versions`, `blobs_removed`,
 `conflict_copies`, `approvals`). `not_reached` lists `NotReached::ALWAYS` and what
 applied to this purge (below); the host prints it with `NotReached::describe` and tells the
@@ -1507,6 +1532,7 @@ Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amend
 | `Leased` / `NoLease` / `Blob(_)` / `NoBlobStore` | tier 0: see [Tier 0](#tier-0-any-file) | 5 / 2 / 1 (`TooLarge`, `NotFound` 4; `Store(e)` as `Store(e)`) / 4 |
 | `Claimed { id, by, name, lines: (first, last), remaining_ms, note }` | someone else's live claim, or a hand-off reservation held for someone else (an agent's claim or `Respect` edit): nothing applied | 5 (as `Leased`) |
 | `NoClaim(Option<ClaimId>)` | no live claim by that id (or, no id: you hold none) | 4 |
+| `UnknownElem { root, key, dropped }` | a table's raw keyed cell write (`edit_ops`) names a row or column the table doesn't know: dropped (`dropped`: the drop's change and who ran it, while its record is in the revert window) or never in it; the whole edit is refused, nothing applied. `MPC-E805 no_element`, as the grid verbs' unknown key. A deleted key the table knows stays a hidden write | 4 |
 | `ClaimContended { id, waiters, remaining_ms }` | renewing or holding a claim others wait for | 2 |
 | `BadClaim(_)` | not your claim, waiting on your own, a zero TTL, too many claims, several and no id | 2 |
 
@@ -1997,6 +2023,146 @@ created; nothing is backfilled, since every element made before is its own root)
 format-4 build refuses a format-5 store with `StoreError::Newer { found: 5 }`. Content lives only in `reverts` (and versions, the log, snapshots and the sync
 replica); a purge redacts them all ([Erasure](#erasure)). Changes made before this slice have no summary or record (`revert` says too old).
 Deleting a doc erases its rows here too ([Deleting docs](#deleting-docs)).
+
+## Structured docs (C1, kit v0.10.0)
+
+The grid's contract (the model, verbs, exits and the outside save's merge) is the CSV
+pack's: `k2-mpc-csv: docs/CSV-CONTRACT.md`; sections cited here as "contract §N".
+
+A pack whose schema has structured roots (MovableList, Map: a grid, `table::ROOTS`) opens
+like a text pack. What differs (`session/live/grid.rs`, `store/structured.rs`):
+
+- **Edits** are ops by key: `Session::edit_ops(conn, edits, &EditOptions)` and
+  `edit_ops_with(conn, &opts, |view| edits)` (a `View`: the doc by key, deleted rows where
+  they sit). One change, attributed, under the lock, version guard and rate limit, as text
+  edits. `ChangeEvent::applied` carries the applied stream (A5); `ReadResult::content`
+  every root; `EditResult::elems` the counts and `::hidden` the cells written into deleted
+  rows, with who deleted the row (also on the event, for the deleter). A change edits text
+  roots or structured roots, never both.
+- **Agents need a base** (K-BR-12): without `EditOptions::base` or `if_version`, an agent's
+  structured edit is `NeedsBase` (exit 2). `base(V)` refuses (`FacetConflict`, exit 1,
+  nothing applied) only when a facet the edit touches (per op: a key's value; an insert's
+  anchor; a moved, deleted or restored element's position and existence; a row delete's
+  hidden cells) was written after V by someone else, judged by **write identity** from
+  `elem_writes`; a write with no identity counts as someone else's (KC7). People need no
+  base. Facets a verb wants checked beyond its ops (a sort's every row) are the verb's to
+  add (C1i).
+- **Size limits** (K-CSV-7, KC4; `Config::grid_max_cells` 25,000 present cells, live or
+  hidden, and `grid_max_cols` 1,024): a change that would grow a table past one is
+  `AtLimit` (exit 2: "this table is at its size limit (… cells, deleted rows included); the
+  owner can free space with `rows drop-deleted`"); a change that doesn't grow it always
+  passes, so nothing is ever trapped or dropped. An import over a limit is declined
+  `too_large`; an outside save over it declines the file (it is never written).
+- **`Session::drop_deleted`** (`rows drop-deleted`, owner only; others `Forbidden {
+  need: Owner }`, exit 3): removes deleted rows and columns with their cells, names and
+  quote exceptions from the live sheet (`ListOp::Drop`, map deletes) as one attributed
+  change, audited (`AuditEvent::DroppedDeleted`, counts only). Not erasure: versions and
+  records keep them, and a version restore brings them back under their keys.
+- **History**: typed versions (with the codec settings); `restore` by identity (revive,
+  delete, re-insert keys dropped since, the minimal moves as forward chains, then sets; a
+  table's key counters never go back); `revert` from the record by key (a delete comes back
+  by restore; an insert, restore, move or set is undone unless someone else wrote that
+  facet since: a conflict, `--partial` applies the rest; a dropped element can't come
+  back); `blame_elem` / `blame_cell` (a value put back by a revert blames its original
+  write, with `restored_by`); `show_content`. Agent version cuts count rows
+  (`Config::agent_version_elems`). Purge of structured docs (C1f) is refused plainly
+  until that slice.
+- **Undo, redo and revert by element** (C1e, `docs/SPEC-UNDO.md` v1.10 §6a): a stack entry
+  is a change, and undo, redo and revert each reverse a change's record by key
+  (`session/live/grid_undo.rs`). Per op, newest first, each judged on what the earlier
+  ones leave: `already` when the live facet already equals what the inverse would write
+  (nothing applied, never a conflict, never redone); a conflict when the facet's holder,
+  resolved through `restores_write`, isn't the change's own write, resolved (the caller's
+  own later write included), or the element was dropped; else the inverse (a delete comes
+  back by undelete, under its key, with its hidden cells), recording the write it puts
+  back on every facet. A header switch is one region. `drop-deleted` is on no stack. The
+  modes (`--steps N`, `--partial`, `--drop`, `--for`) are as for text. The oracle is
+  `spec_undo::grid`; `crates/spec-undo/tests/grid_traces.rs` compares it with the kit
+  after every step.
+- **Files**: `Pack::reconcile(synced, bytes, codec)` aligns the file's new bytes to the doc
+  as the file last held it (its key counters raised to the live doc's), and the edits apply
+  **by key** to the live doc and the replica, so changes the file never got are kept;
+  `Pack::line_map` gives rendered line → row. Defaults: the text diff, or for a table
+  `table::reconcile` / `Table::line_map`. `write_base_grid(conn, V, body, opts)` is
+  `table::merge3` over the body aligned to V and the live table; each `GridConflict` adds
+  who last wrote the region, its live index and its rendered lines.
+- **Tables and the codec's rules (C1k):** the header line is written only when the header
+  is on and the table has a live row or a name on a live column (`Table::header_renders`,
+  the CSV codec's rule): a header-on table with neither renders as an empty file, and a lone
+  blank line is no header (an import reads it header off; an outside save of one blank line
+  to a header-on table switches the header off). The aligner keeps a row's key by position
+  when it is in its unchanged slot (a run of new rows between the same two kept rows as an
+  equal run of old rows: a blank line edited, a one-column cell edited); a row moved and
+  rewritten is still a new row. `header on|off` never changes the rendering
+  (`Table::set_header`, the default of `Pack::set_header`): `off` where no header line is
+  written only changes the setting; `on` where the only live row is blank is refused
+  (`TableError::HeaderOnlyRowBlank`, exit 2 at the verb, nothing applied). An edit closure
+  reads the doc's codec settings from its view (`View::codec`, `VerbCtx::codec`); a pack's
+  line map gives a line of the codec's own (`sep=;`) to `LineOwner::Preamble`, no row's
+  (`LN` on it is exit 4, `--ids` prints `preamble`).
+- **The value limit** is `Config::grid_max_value_len` (default 64 KiB,
+  `table::DEFAULT_MAX_VALUE_LEN`; raise or lower it): a change that writes a longer cell
+  value or column name is `AtLimit { what: "value bytes" }` (exit 2), raw ops included; the
+  table of a view the session hands out carries the limit (`Table::max_value`), so a closure's
+  table ops refuse the same; an import holding a longer value is declined `too_large`, and
+  so is an outside save (the aligner reads the file under the knob).
+- **An outside save that changes only the codec settings** (a re-save with a BOM, CRLF or
+  another delimiter; the content the same) is an attributed outside change, never silent:
+  a version (reason `External`, by `EXTERNAL_PID`) holds the new settings; the doc's log and
+  version don't move (no change record without an engine update). `log` lists it as
+  `LogItem::Settings { version, description }` and `Session::settings_change(conn, vid)`
+  gives `show`'s note, both described when read by `Pack::describe_codec_change(old, new)`
+  (default "codec settings changed") against the version before; `AuditEvent::
+  OutsideSettings { key, version, description }` tells the host, and
+  `Session::subscribe_settings(conn)` delivers a `SettingsChanged` (the unchanged doc
+  version, the settings version, the new codec settings, the description): a distinct event,
+  not a `ChangeEvent`, since a re-save that moves no content has no change record and so no
+  new version (a replica following changes by version would take a repeated one as seen).
+  Packs' tests build in-memory docs as an import does with
+  `session::test_support::import_edits` (feature `test-support`).
+- **`Session::audit`**: the lost-edit audit's grid form (K-AUD-1): the log replays to the
+  live doc; every `elem_writes` row is the doc's winner (else a dropped or silent write; a
+  live element that isn't is lost); every element and key the doc holds was acknowledged;
+  every structured op in the revert window is in the index or superseded; a clean synced
+  file holds the rendering.
+
+**Store format 6, lazily** (K-FMT-10 item 22): typed versions (record 3), revert records 3
+(ops by key, with each facet's previous holder), change records 2 (element counts) and the
+`elem_writes` table appear only with a structured doc. A store is stamped 6 in the
+transaction that writes its first one; a store that never holds one stays at 5
+(`STORE_FORMAT_BASE`) byte for byte, so v0.9.x reads and writes it as before (checked by a
+v0.9.2 build on a store this build used). A format-5 build refuses a format-6 store with
+one line: `store is format 6; this build reads up to 5`.
+
+### Outside saves on a grid, beside v0.9.7's line-by-line rule (Option B)
+
+v0.9.7 merges a text doc's outside save line by line (`text::merge::merge3_keep_both`). A
+grid's outside save is the keyed three-way merge (`table::merge3_outside`; the CSV contract
+§2.9.1, `k2-mpc-csv: docs/CSV-CONTRACT.md`).
+Reviewed at the C1 merge with v0.9.7:
+
+- **The same:** the save is merged three-way against the **live** doc (dirty or not), with
+  the disk replica as the base (the doc itself whenever it renders the synced bytes: the one
+  change-counter marker, `synced_seq == version`, shared with text), never against a stale
+  replica. Only what differs is applied: a text save's hunks are trimmed to the characters
+  they change (then widened by D1); a grid save writes only the elements it changes, by key,
+  so every cell it didn't touch keeps its author. A row one side deleted and the other left
+  untouched stays deleted (never brought back); a row the live doc deleted and the file
+  edited comes back (restored, with the file's change), as an edited line does. A row is a
+  record: nothing is joined to the next one. An earlier write of the kit's coming back after
+  a person's save is their edit, as for text (v0.9.5's echo rule).
+- **Different by design: two people's changes to one line.** Text never splices one line:
+  where both changed it, both versions are kept, each a line of its own. A grid merges the
+  different cells of one row (cells have identity), and where both changed **one cell** the
+  file wins (the later write) and the live value is kept: in the version cut before the
+  save, a heads-up note to its author (`NoteKind::Overwritten`) and
+  `AuditEvent::OutsideOverride`. A cell is a register: it can't hold both.
+- **The one deliberate difference in ordering:** at a gap where both sides inserted, text
+  puts the **live** lines first; a grid puts the **file's** rows first (they land right after
+  their left neighbour in the file: the CSV contract §2.9.1, `k2-mpc-csv: docs/CSV-CONTRACT.md`,
+  and the CHANGELOG's grid gap rule,
+  5c64fc6). Both are deterministic; the grid's order is the one the kit's model and the G1
+  grid model use.
 
 ## Store: the host's table
 

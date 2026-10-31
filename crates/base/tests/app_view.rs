@@ -5,11 +5,16 @@
 //! fence, `--for-edit` claims and conflicts); for a tier-0 blob doc: the
 //! roster, leases, reads, versions, the log, blame, approvals, and lease refusals) is
 //! scanned for every pid in the doc, its own included; any one found fails. Handles are per
-//! viewer, stable across its reconnects, and independent between viewers. No absolute path
+//! viewer, stable across its reconnects, and independent between viewers. On a grid doc
+//! (C1) the same holds for the grid verbs' output through `run_tool` (`cell get --json`'s
+//! author, a deleted element's "by" line, a `--for-edit` claim or conflict, the fence, hidden
+//! writes and refusals), grid blame and `write --base` by key. No absolute path
 //! reaches a viewer either (K7): a file session's disk error is shown relative to its
 //! workspace. Public API only.
 
 use std::collections::HashMap;
+
+mod grid_pack;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -518,6 +523,249 @@ fn no_absolute_path_reaches_an_app_viewer() {
     assert!(e.to_string().contains(&name[..40]), "{e}");
     assert!(!e.to_string().contains("<outside>"), "{e}");
     seen.assert_no_pid();
+}
+
+// ---------- a grid doc (C1) ----------
+
+/// An App viewer of a grid doc: every grid verb whose output can name a participant, run by
+/// the viewer through `run_tool`, plus grid blame and `write --base` by key, holds no pid
+/// (its own included), only handles; the same verbs run by a person name pids (the scan is
+/// not vacuous).
+#[test]
+fn an_app_viewers_grid_verbs_hold_no_pid() {
+    use k2_mpc_base::elem::Key;
+    use k2_mpc_base::session::{ClaimSpan, GridWriteOptions};
+    use k2_mpc_base::table::ROWS;
+    let f = fx("grid");
+    let grid = "id,city\nk1,Oslo\nk2,Rome\nk3,Lima\nk4,Kyiv\nk5,Pune\n";
+    let s = f
+        .mgr
+        .open(
+            Arc::new(grid_pack::GridLite),
+            &DocKey {
+                space: "ws".into(),
+                path: "t.csv".into(),
+            },
+            Some(grid.as_bytes()),
+        )
+        .unwrap();
+    let join = |pid: &str, kind| {
+        // a display name, never the pid (names are shown)
+        let name = format!("Name {}", pid.len());
+        s.join(
+            Participant::new(pid, name, "#123456", kind, "tab"),
+            Stay::Held,
+        )
+        .unwrap()
+        .conn
+    };
+    let app = join(APP, ParticipantKind::App);
+    let change_rx = s.subscribe(app).unwrap();
+    let base = s.status().unwrap().version;
+    // the others: alice writes a cell and deletes a row, the agent claims a row, the helper
+    // (for alice) writes another cell
+    let alice = join(ALICE, ParticipantKind::Person);
+    let agent = join(AGENT, ParticipantKind::Agent);
+    let helper = {
+        let p = Participant::new(HELPER, "Helper", "#654321", ParticipantKind::Agent, "cli")
+            .on_behalf_of(ALICE);
+        s.join(p, Stay::Held).unwrap().conn
+    };
+    let run = |c: ConnId, argv: &str, stdin: &str| {
+        let argv: Vec<String> = argv.split(' ').map(str::to_owned).collect();
+        s.run_tool_with(c, ROWS, &argv, stdin.as_bytes(), &ToolOptions::new())
+    };
+    let ok = |c: ConnId, argv: &str| {
+        let o = run(c, argv, "").unwrap();
+        assert_eq!(o.exit, 0, "{argv}: {}", String::from_utf8_lossy(&o.stdout));
+        o
+    };
+    ok(alice, "cell set --row r2 --col c2 --value Bergen");
+    let v = s.status().unwrap().version;
+    ok(
+        helper,
+        &format!("cell set --row r3 --col c2 --value Quito --base {v}"),
+    );
+    ok(alice, "row delete --row r4");
+    s.claim_span(
+        agent,
+        ClaimSpan::Rows {
+            first: Key::new("r5").unwrap(),
+            last: Key::new("r5").unwrap(),
+        },
+        None,
+        Some("checking".into()),
+        false,
+    )
+    .unwrap();
+    f.advance(1_000);
+
+    let mut seen = Seen::default();
+    let mut tool =
+        |what: &str,
+         r: Result<k2_mpc_base::tools::ToolOutput, k2_mpc_base::tools::ToolRunError>| {
+            match r {
+                Ok(o) => {
+                    seen.add(what, &o);
+                    seen.0.push_str(&format!(
+                        "\n{}\n{}\n{}",
+                        String::from_utf8_lossy(&o.stdout),
+                        o.stderr_summary,
+                        o.notes
+                    ));
+                    if let Some(fe) = &o.for_edit {
+                        seen.0.push_str(&format!("\n{fe}"));
+                    }
+                    if let Some(r) = &o.refusal {
+                        seen.0
+                            .push_str(&format!("\n{}\n{}", r.plain(), r.to_json()));
+                    }
+                    o
+                }
+                Err(e) => {
+                    seen.add(what, &e);
+                    seen.0.push_str(&format!("\n{e}"));
+                    panic!("{what}: {e}");
+                }
+            }
+        };
+    // who wrote a cell (alice; the helper for alice)
+    let o = tool(
+        "cell get --json r2",
+        run(app, "cell get --row r2 --col c2 --json", ""),
+    );
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("\"author\":\"p"),
+        "{o:?}"
+    );
+    tool(
+        "cell get --json r3",
+        run(app, "cell get --row r3 --col c2 --json", ""),
+    );
+    // a deleted row: exit 4 naming who deleted it
+    let o = tool(
+        "cell get deleted",
+        run(app, "cell get --row r4 --col c2", ""),
+    );
+    assert_eq!(o.exit, 4);
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("(by p"),
+        "{o:?}"
+    );
+    let v = s.status().unwrap().version;
+    tool(
+        "row move deleted",
+        run(app, &format!("row move --row r4 --start --base {v}"), ""),
+    );
+    // reads over the agent's claim: a --for-edit conflict, notes; the fence's contributors
+    let o = tool("row list --for-edit", run(app, "row list --for-edit", ""));
+    assert!(o.for_edit.is_some(), "{o:?}");
+    tool("cat --ids", run(app, "cat --ids", ""));
+    // its own --for-edit claim on rows nobody holds
+    let o = tool(
+        "cell get --for-edit",
+        run(app, "cell get --row r1 --col c1 --for-edit", ""),
+    );
+    assert!(o.for_edit.is_some(), "{o:?}");
+    // a write into the deleted row (hidden, with its deleter)
+    let o = tool(
+        "cells set hidden",
+        run(
+            app,
+            &format!(
+                "cell set --row r4 --col c1 --value x --base {}",
+                s.status().unwrap().version
+            ),
+            "",
+        ),
+    );
+    seen.add("hidden", &o.changed);
+    // (a grid verb refuses a write into a deleted row, exit 4, so the hidden write comes as a
+    // raw keyed write by alice into r4, the row she deleted, as a concurrent client's would)
+    let _ = drain(&change_rx);
+    let w = s
+        .edit_ops(
+            alice,
+            vec![k2_mpc_base::Edit::Map {
+                root: k2_mpc_base::table::CELLS.into(),
+                ops: vec![k2_mpc_base::elem::MapOp::Set {
+                    key: k2_mpc_base::table::cell_key(
+                        &Key::new("r4").unwrap(),
+                        &Key::new("c1").unwrap(),
+                    ),
+                    value: k2_mpc_base::elem::Value::str("x"),
+                }],
+            }],
+            &EditOptions::new(),
+        )
+        .unwrap();
+    // alice's own result names pids (the scan is not vacuous) ...
+    assert_eq!(w.hidden.len(), 1, "{w:?}");
+    assert!(
+        w.hidden[0].message.contains(ALICE),
+        "{}",
+        w.hidden[0].message
+    );
+    // ... and the App viewer's change stream (the lens: `relabel`) names handles, never pids
+    let streamed: Vec<String> = drain(&change_rx)
+        .iter()
+        .flat_map(|c| c.hidden.iter().map(|h| h.message.clone()))
+        .collect();
+    println!(
+        "hidden, as alice sees it: {:?}; as the App viewer does: {streamed:?}",
+        w.hidden[0].message
+    );
+    assert_eq!(streamed.len(), 1, "{streamed:?}");
+    let m = &streamed[0];
+    assert!(
+        m.starts_with("r4: c1 set by ") && m.contains(" in a row deleted by "),
+        "{m}"
+    );
+    for p in [ALICE, AGENT, HELPER, APP] {
+        assert!(!m.contains(p), "pid {p} in the App viewer's message: {m}");
+    }
+    seen.add("hidden, streamed", &streamed);
+    // a refusal naming someone: a claim over the agent's
+    let e = s
+        .claim_span(
+            app,
+            ClaimSpan::Rows {
+                first: Key::new("r5").unwrap(),
+                last: Key::new("r5").unwrap(),
+            },
+            None,
+            None,
+            false,
+        )
+        .expect_err("claimed");
+    seen.refusal("claim refused", &e);
+    // blame and write --base by key
+    seen.add(
+        "blame_cell",
+        s.blame_cell(app, &Key::new("r2").unwrap(), &Key::new("c2").unwrap())
+            .unwrap(),
+    );
+    seen.add("blame_structure", s.blame_structure(app).unwrap());
+    let body = "id,city\nk1,Paris\nk2,Rome\nk3,Lima\nk5,Pune\n";
+    seen.add(
+        "write --base",
+        s.write_base_grid(app, base, body.as_bytes(), &GridWriteOptions::default())
+            .unwrap(),
+    );
+    seen.add("roster", s.roster(app).unwrap());
+    seen.add("log", s.log(app, &LogQuery::default()).unwrap());
+    seen.assert_no_pid();
+
+    // a person sees pids in the same output
+    let person = join("pid-person-viewer", ParticipantKind::Person);
+    let o = run(person, "cell get --row r2 --col c2 --json", "").unwrap();
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains(ALICE),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let o = run(person, "cell get --row r4 --col c2", "").unwrap();
+    assert!(String::from_utf8_lossy(&o.stdout).contains(ALICE), "{o:?}");
 }
 
 /// What `run_tool` hands an App viewer holds no pid (its own included): a read's fence

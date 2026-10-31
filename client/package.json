@@ -1,6 +1,6 @@
 {
   "name": "k2-mpc-client",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Live text editing over the kit's hunk channel: a text replica, the kit's rebase rules, a CodeMirror 6 binding, and a mountable live editor.",
   "private": true,
   "type": "module",

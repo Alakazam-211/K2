@@ -36,6 +36,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use redb::{ReadableTable, TableDefinition};
 
 use super::enc::{R, W};
+use super::structured::{self, ElemCounts, ElemRoot};
 use super::{
     dec_redactions, dec_version, DocId, DocStore, Seq, StoreError, Version, VersionId,
     VersionReason,
@@ -218,6 +219,8 @@ pub struct ChangeInfo {
     pub on_behalf_of: Option<String>,
     pub lines_added: u64,
     pub lines_removed: u64,
+    /// Per structured root it changed, its element counts (empty for a text change).
+    pub elems: Vec<ElemCounts>,
 }
 
 impl ChangeInfo {
@@ -232,6 +235,7 @@ impl ChangeInfo {
             on_behalf_of: None,
             lines_added: 0,
             lines_removed: 0,
+            elems: Vec::new(),
         }
     }
 }
@@ -299,6 +303,8 @@ pub(crate) struct RevertRecord {
     pub on_behalf_of: Option<String>,
     pub at_ms: u64,
     pub roots: Vec<RecordRoot>,
+    /// The change's structured ops, by root (record version 3, format 6).
+    pub elems: Vec<ElemRoot>,
 }
 
 impl RevertRecord {
@@ -356,6 +362,13 @@ pub(crate) struct NewChange {
     /// they differ from the record's (v0.9.7). `None` (or the record's own hunks) writes no
     /// row.
     pub authored: Option<RootHunks>,
+    /// The rows this change marks ([`super::structured::ROW_MARKS`]).
+    pub row_marks: Vec<crate::elem::Key>,
+    /// This change remapped the columns (a text's non-exact column mapping): a doc-level mark.
+    pub col_remap: bool,
+    /// The participants' waiting notes this change leaves (`(pid, encoded)`, whole; empty
+    /// bytes: none left), in its transaction ([`super::structured::OVERWRITE_NOTES`]).
+    pub note_rows: Vec<(String, Vec<u8>)>,
 }
 
 /// The carried bounds of one record, as of log position `carried_to`.
@@ -401,6 +414,10 @@ pub(crate) struct RevertStats {
 /// A span of a version a purge removed (K-PURGE-2, -4): `len` bytes of root `root` from
 /// byte `start`, in the coordinates of the version's text before any purge. The version
 /// keeps its entry; its text is stored, shown, diffed and restored without the span.
+///
+/// For a structured root (C1f) a value is redacted whole: `root` is `{root}/{key}` (root
+/// names never hold `/`), `start` 0 and `len` the value's byte length; the version keeps
+/// the key, with an empty value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Redaction {
@@ -446,9 +463,10 @@ pub(crate) struct RevertWindow {
 
 // ----- encodings -----
 
+/// Change record 1, or 2 (format 6) with element counts after the shape.
 pub(super) fn enc_change(c: &ChangeInfo, shape: &[RootShape]) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1)
+    w.u8(if c.elems.is_empty() { 1 } else { 2 })
         .u8(c.kind.to_u8())
         .u8(u8::from(c.of.is_some()))
         .u64(c.of.unwrap_or(0))
@@ -465,6 +483,9 @@ pub(super) fn enc_change(c: &ChangeInfo, shape: &[RootShape]) -> Vec<u8> {
             w.u64(s).u64(e).u64(n);
         }
     }
+    if !c.elems.is_empty() {
+        structured::enc_counts(&mut w, &c.elems);
+    }
     w.0
 }
 
@@ -474,7 +495,8 @@ pub(super) fn dec_change(
     with_shape: bool,
 ) -> Result<(ChangeInfo, Vec<RootShape>), StoreError> {
     let mut r = R::new(b, "change");
-    if r.u8()? != 1 {
+    let ver = r.u8()?;
+    if ver != 1 && ver != 2 {
         return Err(StoreError::Corrupt("change record version"));
     }
     let kind = ChangeKind::from_u8(r.u8()?)?;
@@ -494,9 +516,12 @@ pub(super) fn dec_change(
         on_behalf_of: r.opt_str()?,
         lines_added: r.u64()?,
         lines_removed: r.u64()?,
+        elems: Vec::new(),
     };
+    let mut info = info;
     let mut shape = Vec::new();
-    if with_shape {
+    // the shape comes before the counts: read it to reach them
+    if with_shape || ver >= 2 {
         let n = r.u32()? as usize;
         for _ in 0..n.min(b.len()) {
             let root = r.str()?;
@@ -509,6 +534,9 @@ pub(super) fn dec_change(
                 hunks.push((r.u64()?, r.u64()?, r.u64()?));
             }
             shape.push(RootShape { root, hunks });
+        }
+        if ver >= 2 {
+            info.elems = structured::dec_counts(&mut r, b.len())?;
         }
         r.end()?;
     }
@@ -536,9 +564,11 @@ fn dec_runs(r: &mut R<'_>, total: usize) -> Result<RootRuns, StoreError> {
 
 /// Revert record version 2 (store format 5): version 1 with, after each hunk, its roots
 /// (`0`: unknown; `1`: the inserted elements' roots, then the deleted elements', as runs).
+/// Version 3 (format 6, a change with structured ops): version 2, then the structured roots'
+/// ops by key (`structured::enc_elem_roots`). A text change's record stays version 2.
 pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(2)
+    w.u8(if rec.elems.is_empty() { 2 } else { 3 })
         .str(&rec.author)
         .opt_str(rec.on_behalf_of.as_deref())
         .u64(rec.at_ms)
@@ -565,14 +595,17 @@ pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
             }
         }
     }
+    if !rec.elems.is_empty() {
+        structured::enc_elem_roots(&mut w, &rec.elems);
+    }
     w.0
 }
 
-/// Decodes revert records version 1 (no roots) and 2.
+/// Decodes revert records version 1 (no roots), 2 and 3.
 pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
     let mut r = R::new(b, "revert record");
     let v = r.u8()?;
-    if v != 1 && v != 2 {
+    if !(1..=3).contains(&v) {
         return Err(StoreError::Corrupt("revert record version"));
     }
     let (author, on_behalf_of, at_ms) = (r.str()?, r.opt_str()?, r.u64()?);
@@ -619,12 +652,18 @@ pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
             hunks,
         });
     }
+    let elems = if v >= 3 {
+        structured::dec_elem_roots(&mut r, b.len())?
+    } else {
+        Vec::new()
+    };
     r.end()?;
     Ok(RevertRecord {
         author,
         on_behalf_of,
         at_ms,
         roots,
+        elems,
     })
 }
 
@@ -789,7 +828,7 @@ fn dec_stats(b: &[u8]) -> Result<RevertStats, StoreError> {
 fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> {
     let mut r = R::new(b, "version");
     let ver = r.u8()?;
-    if ver != 1 && ver != 2 {
+    if !(1..=3).contains(&ver) {
         return Err(StoreError::Corrupt("version record version"));
     }
     let (seq, at_ms, reason, name, authors) = (
@@ -832,6 +871,9 @@ pub(super) fn put_changes(
     if changes.is_empty() {
         return Ok(());
     }
+    if changes.iter().any(|c| !c.record.elems.is_empty()) {
+        structured::upgrade(w)?;
+    }
     let mut ct = w.open_table(CHANGES)?;
     let mut rt = w.open_table(REVERTS)?;
     let mut it = w.open_table(REVERT_INDEX)?;
@@ -842,6 +884,17 @@ pub(super) fn put_changes(
     let mut at = None;
     let mut stats = stats_in(&st, id)?;
     for (&seq, c) in seqs.iter().zip(changes) {
+        // the structured ops' index first: it fills each op's earlier holder into the record
+        let mut filled;
+        let c = if c.record.elems.is_empty() {
+            c
+        } else {
+            filled = c.clone();
+            structured::put_elem_writes(w, id, seq, &mut filled.record.elems)?;
+            &filled
+        };
+        structured::put_row_marks(w, id, seq, &c.row_marks, c.col_remap)?;
+        structured::put_note_rows(w, id, &c.note_rows)?;
         let shape = c.record.shape();
         ct.insert((id, seq), enc_change(&c.info, &shape).as_slice())?;
         if let Some(k) = c.span.filter(|k| k.end > k.start) {
@@ -1639,6 +1692,7 @@ mod tests {
                         roots: None,
                     }],
                 }],
+                elems: Vec::new(),
             };
             let start = if obo.is_some() { 8 } else { 0 };
             let span = Some(ClockSpan {
@@ -1654,6 +1708,9 @@ mod tests {
                     span,
                     provenance: Vec::new(),
                     authored: None,
+                    row_marks: Vec::new(),
+                    col_remap: false,
+                    note_rows: Vec::new(),
                 },
             )
         };

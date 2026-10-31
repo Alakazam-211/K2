@@ -453,6 +453,16 @@ impl Session {
             self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
             self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
             let st = &mut *st;
+            if self.is_grid() {
+                if self.schema.kind_of(root).is_none() {
+                    return Err(DocError::NoRoot {
+                        schema: self.schema.name,
+                        root: root.to_owned(),
+                    }
+                    .into());
+                }
+                return self.blame_grid(st, root, lines);
+            }
             self.text_of(st, root)?;
             let sampled = self.checked_prov(st)?;
             st.blame_checks += u64::from(sampled);

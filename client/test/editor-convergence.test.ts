@@ -3,7 +3,7 @@
 // links with more drops, and the fixed seeds of past failures.
 
 import { describe, expect, it } from "vitest";
-import { run, withHunkOnlyRecognition, withoutPresenceCheck, withoutReapplyGuard, type RunOptions } from "./editor-harness";
+import { run, withHunkOnlyRecognition, withoutPresenceCheck, withRegionPlacement, type RunOptions } from "./editor-harness";
 import { runrec } from "./runrec";
 
 /**
@@ -14,15 +14,20 @@ import { runrec } from "./runrec";
  *   client saw conflict"; first seen as seed 51, before the wire contract's client IDs);
  * - `no-presence-check`: on a host without the reconnect rule an edit on a dropped socket lands
  *   after the resync (a false MPC-E000, which the client recognises by its client ID);
- *   without that recognition and Re-apply's check, and without Re-apply's tie guard (the late
- *   edit lands at its very place, which the guard sees as a tie), Re-apply puts the text in
- *   twice. With the check out but the tie guard in, the run still passes: two layers.
+ *   without that recognition and Re-apply's check, Re-apply puts the text in twice;
+ * - `region-placement`: a lost change with more than one hunk, re-applied: the harness's oracle
+ *   (the server's rule over the server's own log) must agree with where Re-apply put it, and
+ *   M1's placement (all the text at the region's start) must fail it (the Re-apply scan, seeds
+ *   1-500, strict host, lists the seeds where the two differ).
  * Seed 27's shape (a kept edit and a second drop) and the race itself are scripted in
  * `editor.test.ts`.
  */
-type Fixed = { seed: number; opts?: RunOptions; fault: "hunk-only" | "no-presence-check" };
+type Fixed = { seed: number; opts?: RunOptions; fault: "hunk-only" | "no-presence-check" | "region-placement" };
 const SLOW: RunOptions = { steps: 50, drops: 6, maxLatency: 120 };
 const FIXED_SEEDS: Fixed[] = [
+  // the multi-hunk race: a lost change with two hunks, placed by the server's rule
+  { seed: 77, opts: { reapplyAll: true }, fault: "region-placement" },
+  { seed: 213, opts: { reapplyAll: true }, fault: "region-placement" },
   // found by the scan (job bcc38413, seeds 1-1500)
   { seed: 688, fault: "hunk-only" },
   { seed: 1231, fault: "hunk-only" },
@@ -44,15 +49,14 @@ describe("mounted editors converge (jsdom)", () => {
       expect(s.typed, `seed ${seed} typed nothing`).toBeGreaterThan(0);
       if (fault === "hunk-only") {
         await expect(withHunkOnlyRecognition(() => run(seed, opts)), `seed ${seed} under hunk-only recognition`).rejects.toThrow();
+      } else if (fault === "region-placement") {
+        expect(s.reapplied["applied"] ?? 0, `seed ${seed}: nothing re-applied`).toBeGreaterThan(0);
+        await expect(withRegionPlacement(() => run(seed, opts)), `seed ${seed} under M1's region placement`).rejects.toThrow(/server's rule/);
       } else {
         const o: RunOptions = { ...opts, host: "no-rule", noRuleLeave: "keepalive", fastNotice: true, lateOldFrames: 200, reapplyAll: true };
         const g = await run(seed, o);
         expect(g.falseE000, `seed ${seed}: no false MPC-E000 without the rule`).toBeGreaterThan(0);
-        await expect(withoutPresenceCheck(() => run(seed, o)), `seed ${seed} without Re-apply's check (the tie guard in)`).resolves.toBeDefined();
-        await expect(
-          withoutPresenceCheck(() => withoutReapplyGuard("tie", () => run(seed, o))),
-          `seed ${seed} without Re-apply's check and its tie guard`,
-        ).rejects.toThrow(/twice/);
+        await expect(withoutPresenceCheck(() => run(seed, o)), `seed ${seed} without Re-apply's check`).rejects.toThrow(/twice/);
       }
     }
     runrec("client_editor_fixed_seeds", { seeds: FIXED_SEEDS.length });

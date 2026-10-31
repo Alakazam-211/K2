@@ -3,6 +3,72 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.11.0 (kit tag v0.10.0.1)
+
+The live editor's M2, on kit v0.10.0. No wire change: hosts built for 0.10.0 carry 0.11.0 as
+is. `WIRE.md`: `set_cursor_at` is planned for kit v0.10.1 (was "v0.9.9"). What a host wiring
+the editor in needs to know, with the items deferred to kit v0.10.1 and their fallbacks: the
+kit's CHANGELOG under v0.10.0.1.
+
+- **Browser tests run Chromium only by default:** `MPC_BROWSERS` (comma-separated: `chromium`,
+  `webkit`) names others, and an unknown name fails the run. A bare `playwright test` no longer
+  selects WebKit, which needs system libraries most runners lack. `tools/README.md` gives the
+  full-checkout gate and the WebKit client-only job as two separate commands.
+- **The replica's text is a rope** (M2): `LiveText` keeps its texts in a persistent chunked
+  rope (`src/rope.ts`) instead of rebuilding a whole string on every edit. A keystroke, a remote
+  change and a `since` replay no longer scan the document. Measured on a build node, one core,
+  p95 per acknowledged keystroke: 0.37 ms at 1 MB (was 18.1 ms) and 0.77 ms at 4 MB (was
+  73.2 ms); a 500-event `since` at 1 MB: 73 ms (was 6.9 s). The API is unchanged: `text` is still
+  a string, built on its first read after a change and cached.
+- **Re-apply by the server's rule** (M2): a rejected change goes back where the server would put
+  it: the change as sent, rebased from its base through every change since (`rebaseOurs`), then
+  through the person's own pending changes, sent fresh at the current version as its own undo
+  step. Deletions, replacements, changes with several hunks and ties all go back in place;
+  `already-present` when nothing is left to apply. Refused: `conflict` (it met someone else's
+  change) and `cant-place` (a reload since, or past the 512-change history). This replaces
+  v0.9.8.2's single-hunk guards; `LiveText.placeRejection` and `Placement` are new, and
+  `reapplyGuard` is deprecated (below).
+  The Re-apply scan (seeds 1–500) gives back every change the guards refused that the rule
+  places, with 0 differences from the rule.
+- **A faster `since` replay:** `recarry`'s self-check is a length check on the plain incoming
+  path (nothing pending), and the rope's edit copies its unchanged chunk list instead of
+  rebuilding it. A 500-event `since` at 1 MB, p50 of 20 runs, interleaved in one job on a busy
+  build node: ASCII 78–98 ms before, 53–63 ms after; CJK/emoji 41–47 ms before, 17–21 ms after.
+- **The rope has two levels** (M2, step d): chunks in blocks of about 32, each block with its
+  own starts. An edit rebuilds the chunks it touches in at most three blocks and copies the list
+  of blocks (about 30 at 1 MB), not the list of chunks. A 500-event `since` at 1 MB, p50 of 20
+  runs interleaved in one job against the one-level rope: ASCII 50 ms → 23–33 ms; CJK/emoji
+  13 ms → 16 ms (both well under the 100 ms target). The property test gains runs with tiny
+  blocks (edits across block edges) and a planted fault in the block sums it must catch.
+- **No re-index during an IME composition:** while remote changes are held, the binding keeps
+  the held document (the editor's plus the held changes) and its byte index up to date change by
+  change; a keystroke no longer builds a byte index of the whole document. A test checks the
+  held document and index against `live.text` after every change of a composition; the bench
+  prints the composition keystroke at 1 MB and 4 MB.
+- **The editor's byte index keeps line lengths in blocks**: a keystroke copies the touched block
+  and the list of blocks, not every line's length (O(lines / 256)).
+- Tests: a differential property test of both against plain strings (random edits, CJK, emoji
+  and surrogate pairs at chunk edges, empty and 1 MB documents, every offset conversion), with
+  a planted fault (a chunk's cached UTF-8 length off by one) it must catch. The bench
+  (`test/bench/live-text-bench.ts`, `M2_BENCH_GATE=1`) fails when a target is missed: p95 per
+  keystroke under 1 ms at 1 MB and 2 ms at 4 MB, a 500-event `since` under 100 ms at 1 MB.
+- **"Insert my text here"** (M2): a single-hunk action the person chooses, beside Re-apply. It
+  first shows the typed text in the editor where it would go (announced in the note,
+  `role="status"`; for a replacement or deletion the note adds that the removal isn't redone),
+  and inserts it only on **Insert** (its own undo step); **Cancel** or Escape inserts nothing. Presence is checked first for a lost change. Handle: `insertHere(id)`,
+  `confirmInsert()`, `cancelInsert()`, `InsertResult`; class `cm-mpc-insert-preview`.
+- **Copy** on every rejection with text (`copyRejected(id)`): to the clipboard, or the text
+  selected when the clipboard refuses. The row's text is selectable.
+- New strings: `insertHere`, `insertConfirm`, `insertCancel`, `insertPreview`, `insertRemovedText`, `insertMultiHunk`,
+  `copy`, `copied`, `copyFailed`, `conflictReapply`, `cantPlace`.
+
+**Deprecated**
+- `LiveText.reapplyGuard(id)` and the type `ReapplyGuard` (from v0.9.8.2): a stub over
+  `placeRejection` for this release (`ok`, `conflict` or `cant-place`; the old reasons are never
+  returned). Use `LiveText.placeRejection(id)` and `Placement`; `reapplyGuard` goes in the
+  following release. `ReapplyResult`'s old reasons and their strings stay in the types, unused,
+  and go with it.
+
 ## 0.10.0 (kit tag v0.9.8.2)
 
 - **The live editor, M1:** `mountLiveEditor` (`k2-mpc-client/editor`). See `EDITOR.md`, and the

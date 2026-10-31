@@ -2,9 +2,12 @@
 //! version) and the `export` contract (the registry, the identity exporter, a test exporter
 //! for the contract). Public API only.
 //!
-//! Grid docs (k2-mpc-base's C1) get their `file_at` round trip at the C1 ↔ main round.
+//! Grid docs (k2-mpc-base's C1): `file_at` round-trips at every version, before and after
+//! structural changes (`grid_file_at_round_trips_every_version`).
 
 use std::collections::HashMap;
+
+mod grid_pack;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -748,4 +751,116 @@ fn walk(d: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+// ---------- grid docs (C1) ----------
+
+/// `file_at` on a grid doc (the C1 ↔ main round): at each named version, before and after
+/// structural changes (a row moved, a row deleted, a column inserted, the header switched),
+/// the bytes are `pack.encode` of that version's content (`show_content`) with the codec
+/// settings the version stored, and the file the doc rendered then; `Exact` (a grid's
+/// versions store their codec settings); the doc version is the version's. After more
+/// changes the old versions still render as they were, and `file_now` is the live file.
+#[test]
+fn grid_file_at_round_trips_every_version() {
+    use k2_mpc_base::doc::Edit;
+    use k2_mpc_base::elem::{Anchor, Key};
+    use k2_mpc_base::session::{EditOptions, Pack, View};
+    use k2_mpc_base::table::{Table, TableError};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "k2mb-export-grid-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _tmp = TmpDir(dir.clone());
+    let host = Arc::new(H {
+        now: AtomicU64::new(1_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host, Config::default());
+    let s = mgr
+        .open(
+            Arc::new(grid_pack::GridLite),
+            &DocKey {
+                space: "ws".into(),
+                path: "t.csv".into(),
+            },
+            Some(b"id,city\nk1,Oslo\nk2,Rome\nk3,Lima\nk4,Kyiv\n"),
+        )
+        .unwrap();
+    let c = s
+        .join(
+            Participant::new("p", "P", "#1", ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap()
+        .conn;
+    let k = |x: &str| Key::new(x).unwrap();
+    let op = |f: &dyn Fn(&mut Table) -> Result<Vec<Edit>, TableError>| {
+        s.edit_ops_with(c, &EditOptions::new(), |v: &View| {
+            let mut t = v.table().map_err(|e| e.to_string())?;
+            f(&mut t).map_err(|e| e.to_string())
+        })
+        .unwrap()
+        .expect("a change");
+    };
+    type Step<'a> = (
+        &'a str,
+        &'a dyn Fn(&mut Table) -> Result<Vec<Edit>, TableError>,
+    );
+    let steps: [Step; 5] = [
+        ("cell", &|t| t.set_cell(&k("r2"), &k("c2"), "Bergen")),
+        ("row moved", &|t| t.move_row(&k("r3"), Anchor::Start)),
+        ("row deleted", &|t| t.delete_row(&k("r4"))),
+        ("column inserted", &|t| {
+            let (_, e) = t.insert_col(Anchor::End, Some("pop"))?;
+            Ok(e)
+        }),
+        ("header off", &|t| t.set_header(false)),
+    ];
+    let mut want = Vec::new();
+    let v0 = s.name_version(c, "seed", None).unwrap();
+    want.push(("seed", v0, s.read(c).unwrap()));
+    for (what, f) in steps {
+        op(f);
+        let vid = s.name_version(c, what, None).unwrap();
+        want.push((what, vid, s.read(c).unwrap()));
+    }
+    let check = |want: &[(&str, u64, k2_mpc_base::session::ReadResult)]| {
+        for (what, vid, r) in want {
+            let got = s.file_at(c, *vid).unwrap();
+            let content = s.show_content(c, *vid).unwrap();
+            let encoded = grid_pack::GridLite.encode(&content, &[1]).unwrap();
+            assert_eq!(
+                got.bytes, encoded,
+                "{what}: pack.encode of the version's content"
+            );
+            assert_eq!(got.bytes, r.bytes, "{what}: the file then");
+            assert_eq!(got.version, r.version, "{what}: the doc version");
+            assert_eq!(got.codec, FileCodec::Exact, "{what}");
+            let mut out = Vec::new();
+            let copy = s.file_at_to(c, *vid, &mut out).unwrap();
+            assert_eq!(
+                (out, copy.codec),
+                (got.bytes, FileCodec::Exact),
+                "{what}: streamed"
+            );
+        }
+    };
+    check(&want);
+    // the versions differ (each step changed the table or its keys), and stay as they were
+    // after more changes
+    assert_ne!(want[0].2.bytes, want[1].2.bytes);
+    op(&|t| t.set_cell(&k("r1"), &k("c2"), "Paris"));
+    check(&want);
+    let now = s.file_now(c).unwrap();
+    let r = s.read(c).unwrap();
+    assert_eq!(
+        (now.bytes, now.version, now.codec),
+        (r.bytes, r.version, FileCodec::Exact)
+    );
 }

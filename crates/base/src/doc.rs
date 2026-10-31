@@ -4,7 +4,10 @@
 //! - wire and store bytes are opaque `Vec<u8>`;
 //! - edits are data ([`Edit`]), applied as one participant in one change;
 //! - positions never cross the API (text edits are [`Hunk`]s in UTF-8 byte offsets of the
-//!   current text; wire positions are the engine's own relative positions).
+//!   current text; list elements are named by [`Key`]s, writes by opaque [`WriteId`]s; wire
+//!   positions are the engine's own relative positions).
+//! - Structured kinds (MovableList, Map): ops, readers and the applied stream are in
+//!   [`crate::elem`].
 //!
 //! **Untrusted bytes.** Functions that decode bytes from a remote client (`encode_diff`,
 //! `check_client_update`, `apply_client_update`) exist only with the `untrusted-wire`
@@ -27,6 +30,12 @@
 //!   with the doc's size ([`Doc::set_edit_check_scale`]), so the check's cost per edit stays
 //!   bounded.
 
+use std::collections::BTreeMap;
+
+use crate::elem::{
+    keyed_diff, Applied, Edited, ElemState, Facet, Key, KeyedRoot, KeyedState, ListOp, MapOp,
+    OpRefusal, Value, WriteId,
+};
 use crate::engine::{BlameRun, EngineDoc, YrsDoc};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::{self, Hunk, HunkError};
@@ -116,19 +125,68 @@ pub enum DocError {
     Unsupported(Kind),
     #[error(transparent)]
     Hunk(#[from] HunkError),
+    /// A schema's root name: empty, holding `/` (the engine's layout uses it), or twice.
+    #[error("schema root name {0:?}: names must be non-empty, unique and free of '/'")]
+    RootName(String),
+    /// A structured op is refused; nothing of the change is applied.
+    #[error("op {index} on root {root:?}: {refusal}")]
+    Op {
+        root: String,
+        index: usize,
+        refusal: OpRefusal,
+    },
+    /// The doc holds something the kit never writes (a bug or a damaged store).
+    #[error("the doc's state is malformed: {0}")]
+    Malformed(String),
 }
 
 /// A root's content as plain data, independent of the engine (versions, export, restore).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Neutral {
     Text(String),
+    /// A MovableList's live elements, in order.
+    List(Vec<(Key, Value)>),
+    /// A Map's keys and values.
+    Map(BTreeMap<String, Value>),
+}
+
+impl Neutral {
+    /// The text, for a text root.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Neutral::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn into_text(self) -> Option<String> {
+        match self {
+            Neutral::Text(t) => Some(t),
+            _ => None,
+        }
+    }
 }
 
 /// One change to one root, as data. A participant's edit is a list of these, applied together.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edit {
     /// Replace ranges of a text root (hunks against its current text).
     Text { root: String, hunks: Vec<Hunk> },
+    /// Ops on a MovableList root, applied in order ([`crate::elem::ListOp`]).
+    List { root: String, ops: Vec<ListOp> },
+    /// Ops on a Map root, applied in order ([`crate::elem::MapOp`]).
+    Map { root: String, ops: Vec<MapOp> },
+}
+
+impl Edit {
+    /// The root the edit changes.
+    pub fn root(&self) -> &str {
+        match self {
+            Edit::Text { root, .. } | Edit::List { root, .. } | Edit::Map { root, .. } => root,
+        }
+    }
 }
 
 /// A doc on a pack's schema.
@@ -145,10 +203,16 @@ pub(crate) fn check_client(id: ClientId) -> Result<(), DocError> {
     }
 }
 
+/// Every kind implemented; root names non-empty, unique and free of `/` (a MovableList root
+/// `R` is several engine roots named `R/...`, so `/` would let two roots collide).
 fn check_schema(schema: &Schema) -> Result<(), DocError> {
-    for (_, k) in schema.roots {
+    for (i, (name, k)) in schema.roots.iter().enumerate() {
         if !k.implemented() {
             return Err(DocError::Unsupported(*k));
+        }
+        if name.is_empty() || name.contains('/') || schema.roots[..i].iter().any(|(n, _)| n == name)
+        {
+            return Err(DocError::RootName((*name).to_owned()));
         }
     }
     Ok(())
@@ -186,21 +250,79 @@ impl Doc {
         Ok(d)
     }
 
-    /// Every root's content as plain data, in schema order.
-    pub fn export_neutral(&self) -> Vec<(String, Neutral)> {
+    /// Every root's content as plain data, in schema order. Fails only on a malformed doc.
+    pub fn export_neutral(&self) -> Result<Vec<(String, Neutral)>, DocError> {
         self.schema
             .roots
             .iter()
-            .map(|(name, kind)| match kind {
-                Kind::Text => ((*name).to_owned(), Neutral::Text(self.inner.text(name))),
-                // check_schema refuses unimplemented kinds, so only Text reaches here
-                other => unreachable!("unimplemented kind {other:?} in a live doc"),
+            .map(|(name, kind)| {
+                let n = match kind {
+                    Kind::Text => Neutral::Text(self.inner.text(name)),
+                    Kind::MovableList => Neutral::List(self.inner.list(name)?),
+                    Kind::Map => Neutral::Map(self.inner.map(name)?),
+                    // check_schema refuses unimplemented kinds
+                    other => unreachable!("unimplemented kind {other:?} in a live doc"),
+                };
+                Ok(((*name).to_owned(), n))
             })
             .collect()
     }
 
     pub fn schema(&self) -> &Schema {
         &self.schema
+    }
+
+    /// Every root's content by key, deleted list elements' values included: the state a
+    /// keyed diff compares ([`Doc::applied_since`]). O(doc). Fails only on a malformed doc.
+    pub fn keyed_state(&self) -> Result<KeyedState, DocError> {
+        let roots = self
+            .schema
+            .roots
+            .iter()
+            .map(|(name, kind)| {
+                let r = match kind {
+                    Kind::Text => KeyedRoot::Text(self.inner.text(name)),
+                    Kind::MovableList => KeyedRoot::List {
+                        live: self.inner.list(name)?,
+                        hidden: self.inner.hidden(name)?,
+                        places: self.inner.places(name)?,
+                    },
+                    Kind::Map => KeyedRoot::Map(self.inner.map(name)?),
+                    // check_schema refuses unimplemented kinds
+                    other => unreachable!("unimplemented kind {other:?} in a live doc"),
+                };
+                Ok(((*name).to_owned(), r))
+            })
+            .collect::<Result<_, DocError>>()?;
+        Ok(KeyedState { roots })
+    }
+
+    /// What changed since `before` (this doc's [`Doc::keyed_state`], taken earlier), as an
+    /// applied stream: how a **merged update** (another replica's changes, applied as
+    /// bytes) reports what it did, derived by a keyed diff ([`crate::elem::keyed_diff`],
+    /// CSV seam design §4.2). Each op's write is the facet's winner now, `None` where this
+    /// engine keeps no identity (a restore, a map delete). A change made here reports its
+    /// own ops exactly ([`Doc::edit_applied`]); for the same change the two agree, up to the
+    /// writes this engine can't name. O(doc).
+    pub fn applied_since(
+        &self,
+        before: &KeyedState,
+    ) -> Result<Vec<Applied<Option<WriteId>>>, DocError> {
+        let after = self.keyed_state()?;
+        let mut err = None;
+        let out = keyed_diff(before, &after, |root, key, facet| {
+            match self.inner.winner(root, key, facet) {
+                Ok(w) => w,
+                Err(e) => {
+                    err.get_or_insert(e);
+                    None
+                }
+            }
+        });
+        match err {
+            Some(e) => Err(e),
+            None => Ok(out),
+        }
     }
 
     fn root(&self, root: &str, wanted: Kind) -> Result<(), DocError> {
@@ -222,6 +344,64 @@ impl Doc {
     pub fn text(&self, root: &str) -> Result<String, DocError> {
         self.root(root, Kind::Text)?;
         Ok(self.inner.text(root))
+    }
+
+    /// List root `root`'s elements in place order, live and deleted (a deleted element keeps
+    /// its place). O(slots) when the order isn't cached.
+    pub(crate) fn places(&self, root: &str) -> Result<Vec<Key>, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.places(root)
+    }
+
+    /// A MovableList root's live elements, in order, with their values. O(elements).
+    pub fn list(&self, root: &str) -> Result<Vec<(Key, Value)>, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.list(root)
+    }
+
+    /// Where `key` is in a MovableList root: live (and at which index), deleted, or never
+    /// inserted. O(1) between changes (the live order is cached).
+    pub fn elem(&self, root: &str, key: &Key) -> Result<ElemState, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.elem(root, key.as_str())
+    }
+
+    /// The value of a MovableList root's element, live or deleted; `None` if `key` was never
+    /// inserted.
+    pub fn elem_value(&self, root: &str, key: &Key) -> Result<Option<Value>, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.elem_value(root, key.as_str())
+    }
+
+    /// A Map root's keys and values.
+    pub fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError> {
+        self.root(root, Kind::Map)?;
+        self.inner.map(root)
+    }
+
+    pub fn map_get(&self, root: &str, key: &str) -> Result<Option<Value>, DocError> {
+        self.root(root, Kind::Map)?;
+        self.inner.map_get(root, key)
+    }
+
+    /// The write that holds a register now (engine answer E4): for a MovableList element its
+    /// `Value`, `Position` or `Existence` facet, for a Map key its `Value`. O(1). `None` when
+    /// no write holds it: an absent map key or an unknown element, a value never set since an
+    /// insert that gave none, and the existence of a live element (on this engine an undelete
+    /// leaves no identity, so only a delete is a winner of that facet).
+    pub fn winner(&self, root: &str, key: &str, facet: Facet) -> Result<Option<WriteId>, DocError> {
+        match self.schema.kind_of(root) {
+            Some(Kind::MovableList | Kind::Map) => self.inner.winner(root, key, facet),
+            Some(k) => Err(DocError::WrongKind {
+                root: root.to_owned(),
+                wanted: Kind::Map,
+                actual: k,
+            }),
+            None => Err(DocError::NoRoot {
+                schema: self.schema.name,
+                root: root.to_owned(),
+            }),
+        }
     }
 
     /// Encoded state vector (what this doc has), for sync step 1.
@@ -279,27 +459,44 @@ impl Doc {
     }
 
     /// Apply `edits` as participant `client`, as one change. Returns the update to broadcast
-    /// and log, or `None` when nothing changes.
+    /// and log, or `None` when nothing changes ([`Doc::edit_applied`] also says what each op
+    /// did).
     pub fn edit_as(
         &mut self,
         client: ClientId,
         edits: &[Edit],
     ) -> Result<Option<Vec<u8>>, DocError> {
+        Ok(self.edit_applied(client, edits)?.update)
+    }
+
+    /// [`Doc::edit_as`], with the applied stream (A5): per edit, in order, its text hunks,
+    /// or each structured op as applied (live indices and values before and after, the
+    /// op's [`WriteId`], its effect). Structured ops are checked one by one in order, each
+    /// against the state the previous ones left; a refused op ([`DocError::Op`]) refuses
+    /// the whole change. Ops that change nothing (deleting a deleted element, restoring a
+    /// live one, deleting an absent map key) are reported with [`crate::elem::Effect::None`];
+    /// when every op is one and no text changes, `update` is `None`.
+    pub fn edit_applied(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
         check_client(client)?;
-        let mut any = false;
+        let mut text = false;
         for e in edits {
             match e {
                 Edit::Text { root, hunks } => {
                     let current = self.text(root)?;
                     diff::validate(&current, hunks)?;
-                    any |= !hunks.is_empty();
+                    text |= !hunks.is_empty();
                 }
+                Edit::List { root, .. } => self.root(root, Kind::MovableList)?,
+                Edit::Map { root, .. } => self.root(root, Kind::Map)?,
             }
         }
-        if !any {
-            return Ok(None);
+        if !text && edits.iter().all(|e| matches!(e, Edit::Text { .. })) {
+            return Ok(Edited {
+                update: None,
+                applied: Vec::new(),
+            });
         }
-        self.inner.edit_as(client, edits).map(Some)
+        self.inner.edit_as(client, edits)
     }
 
     /// Sample one edit in `every` for the runtime check of the edit path and the engine's
@@ -430,6 +627,19 @@ impl Doc {
         self.inner.snapshot_for_tests().1
     }
 
+    /// Deliver everything `from` has that this doc lacks: two of this kit's docs in one
+    /// process, kit-made bytes only (the concurrency tests' merge). Unit tests only.
+    #[cfg(test)]
+    pub(crate) fn merge_from(&mut self, from: &Doc) -> Result<(), DocError> {
+        let update = from.inner.encode_diff(&self.inner.state_vector())?;
+        self.inner.apply_trusted(&update)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn engine(&self) -> &YrsDoc {
+        &self.inner
+    }
+
     /// Deliver everything `from` has that this doc lacks. Both docs are this kit's, in one
     /// process: the diff is encoded against this doc's own state vector and applied as
     /// trusted bytes. Test-only ([`crate::conformance::replica`]).
@@ -456,6 +666,14 @@ impl Doc {
     #[cfg(feature = "conformance")]
     pub(crate) fn deliver_local(&mut self, update: &[u8]) -> Result<(), DocError> {
         self.inner.deliver_local(update)
+    }
+
+    /// How many runs the current places of `keys` form in list root `root` (adjacent slots,
+    /// consecutive engine IDs); `None` when a key was never inserted. Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn slot_runs(&self, root: &str, keys: &[Key]) -> Result<Option<usize>, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.slot_runs(root, keys)
     }
 
     /// A relative position at byte offset `at` of text root `root`, stuck to the character

@@ -36,13 +36,14 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, conformance, s
   evidence) echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" ;;
   # bundled with STRIP_DOCS=1 since v0.9.7 (the K5 run_tool test put it 600 characters
   # past a job's 120,000 inline; it runs no doctests; tools/README.md)
-  base-c) echo "$KIT_LIB" $(for t in $C; do printf ' crates/base/tests/%s.rs' "$t"; done) ;;
+  # app_view's grid case uses the grid test pack (C1)
+  base-c) echo "$KIT_LIB" $(for t in $C; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/grid_pack ;;
   base-d) echo "$KIT_LIB" $(for t in $D; do printf ' crates/base/tests/%s.rs' "$t"; done) ;;
   # the error surface (v0.10): its tests, the error goldens, the generated docs/ERRORS.md, the
   # mpc example
-  errors) echo "$KIT_LIB" $(for t in $E; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/golden/errors docs/ERRORS.md crates/base/examples ;;
+  errors) echo "$KIT_LIB" $(for t in $E; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/golden/errors docs/ERRORS.md crates/base/examples crates/base/tests/grid_pack ;;
   # live_edit and its shared vectors since v0.9.8 (base-a2 was at a job's limit)
-  base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json" ;;
+  base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/parity_grid.rs crates/base/tests/grid_pack crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json" ;;
   # without the kit's `differential` module (feature-gated; the suite never turns it on) and
   # the reference model's binaries (never built as a dependency): v0.9.5, the part was one
   # chunk over a job's limit (65), twice
@@ -51,7 +52,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, conformance, s
   # job's limit, 65 chunks)
   # bundled with STRIP_DOCS=1 since v0.9.7 (D1 put it at 145,656 inline characters;
   # tools/README.md)
-  spec-undo) echo "$KIT_LIB crates/spec-undo spec/quint/undo_diff.qnt" ;;
+  spec-undo) echo "$KIT_LIB crates/spec-undo spec/quint/undo_diff.qnt docs/SPEC-UNDO.md" ;;
   # K10's build-time guard, checked from inside the repo and as a host would build (no cargo
   # check of tests: the lib alone)
   wire-guard) echo "$KIT_LIB tools/tests/wire-guard.sh" ;;

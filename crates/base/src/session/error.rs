@@ -66,6 +66,18 @@ pub enum SessionError {
     /// No change at that log position (`revert`), or no such version. Exit 4.
     #[error("no change or version {0} in this doc")]
     NoSuchChange(u64),
+    /// A cell write ([`super::Session::edit_ops`]) under a row or a column the table doesn't
+    /// know: dropped by `rows drop-deleted` (`dropped`: the drop's change and who ran it, while
+    /// the store still holds its record), or never in it. Its cell could never be seen,
+    /// restored or swept, so the whole edit is refused; nothing applied. `MPC-E805
+    /// no_element`, exit 4, as the grid verbs' unknown key. A deleted key the table still
+    /// knows stays a hidden write (csv contract §4.3).
+    #[error("{}", unknown_elem_text(root, key, dropped.as_ref()))]
+    UnknownElem {
+        root: &'static str,
+        key: String,
+        dropped: Option<DroppedBy>,
+    },
     /// Reading or writing the file failed. Nothing is lost: the doc keeps its changes and
     /// write-back retries.
     #[error("disk: {0}")]
@@ -125,6 +137,25 @@ pub enum SessionError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Pack(#[from] PackError),
+    /// A grid change would take the table past a size limit (K-CSV-7, KC4): nothing applied,
+    /// and nothing already in the table is dropped. Exit 2. `what` is `cells` or `columns`;
+    /// or `value bytes` for a cell value or column name longer than
+    /// `Config::grid_max_value_len` (C1k; `would_be` is its length).
+    #[error("{}", at_limit(what, *limit, *would_be))]
+    AtLimit {
+        what: &'static str,
+        limit: usize,
+        /// What the change would have made it.
+        would_be: usize,
+    },
+    /// An agent's grid edit names no base (K-BR-12): exit 2, "read first and pass --base".
+    #[error("an agent's grid edit needs a base: read first and pass --base")]
+    NeedsBase,
+    /// `--base V`: a facet the edit touches was written after V by someone else (K-BR-12;
+    /// on this engine a write with no identity counts as someone else's, KC7). Nothing
+    /// applied. Exit 1.
+    #[error("{} changed since your base: {}", if .0.len() == 1 { "1 element" } else { "elements" }, .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join("; "))]
+    FacetConflict(Vec<super::live::FacetConflict>),
     /// This session handle was unloaded from the pool; open the doc again.
     #[error("session unloaded; open the doc again")]
     Unloaded,
@@ -158,6 +189,14 @@ pub enum EditWithError<E> {
     Compute(E),
 }
 
+/// [`SessionError::AtLimit`]'s message.
+fn at_limit(what: &str, limit: usize, would_be: usize) -> String {
+    if what == "value bytes" {
+        return format!("a value or name is {would_be} bytes; the limit is {limit} bytes");
+    }
+    format!("this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`")
+}
+
 impl SessionError {
     /// This error with every absolute path in its text made safe to show (K7, v0.9.8):
     /// [`crate::errors::redact`] over `root` (inside it, relative; elsewhere, `<outside>`).
@@ -186,5 +225,27 @@ impl SessionError {
             }
             other => other,
         }
+    }
+}
+
+/// The `rows drop-deleted` that dropped a key ([`SessionError::UnknownElem`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedBy {
+    pub change: Seq,
+    pub by: String,
+    pub at_ms: u64,
+}
+
+fn unknown_elem_text(root: &str, key: &str, dropped: Option<&DroppedBy>) -> String {
+    match dropped {
+        Some(d) => format!(
+            "{root}: {key} was dropped (rows drop-deleted by {} in change {}); a dropped key \
+             never comes back; nothing applied",
+            d.by, d.change
+        ),
+        None => format!(
+            "{root}: {key} is not in this table (never added, or dropped before the kept \
+             history); nothing applied"
+        ),
     }
 }

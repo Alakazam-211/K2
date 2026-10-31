@@ -53,7 +53,8 @@ impl Pack for TwoRoots {
             content
                 .iter()
                 .find(|(r, _)| r == name)
-                .map(|(_, Neutral::Text(t))| t.clone())
+                .and_then(|(_, n)| n.as_text())
+                .map(str::to_owned)
                 .ok_or_else(|| PackError(format!("no root {name}")))
         };
         Ok(format!("{}{SEP}{}", text(ROOTS[0])?, text(ROOTS[1])?).into_bytes())

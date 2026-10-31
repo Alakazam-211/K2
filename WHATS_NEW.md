@@ -3,10 +3,159 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.7
+## 0.46.7 — Apps run their own chat
 
-### Chat (Sew)
-- **K2 now installs and upgrades to Sew 0.6.0, which lets an App govern its own chat Space** (App-governed Spaces need it); upgrade an existing chat server with `k2 hostchat upgrade`, and note that going back to 0.5.0 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.6.0 changes Sew's data.
+0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.
+`k2 publish` sites are private by default, can sit behind a PIN, and can run your dev server with hot reload.
+Hosted mailboxes can forward to outside addresses like Gmail or Outlook, after the person at that address confirms.
+People and agents can now edit the same file at once with live docs. Your prompt stash syncs between your desktop and your phone.
+K2 for Windows (still an Alpha) stops flashing console windows, gets Gardens, a working tray, terminal copy and paste, and editor menus.
+
+### When you update
+- **New published sites are private.** A site you or an agent publish from now on opens only for you and your Admins, until someone shares it with a PIN or makes it public (see "Publishing" below). Sites that were public before 0.46.7 stay public. One card lists them so you can make each one private with a click.
+- **New `k2 publish run --skin` sites are refused.** Sites already on `--skin` keep running. A folder of files is now an App: `k2 app init --template static`.
+- **No going back after a multiplayer core is turned on.** The first time a core is on, K2 creates its docs store in a format (5) that older versions can't read, so that server can't go back to an older K2.
+- **Going back to Sew 0.5.0 after upgrading to 0.6.0 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.0 changes Sew's data.
+- **The chat core is now called Chat / Voice Hosting** wherever K2 names it to people (Settings, cards, help). The "Manage Sew" switch is now "Manage Chat / Voice Hosting". Commands (`k2 hostchat`, `k2 chat`) and settings are unchanged.
+- **Live touch is on in the Mobile tab.** If you turned it off before 0.46.7, turn it off again from the device's **⋯** menu.
+
+### Chat and voice (Sew) and App-governed Spaces
+- **K2 now installs and upgrades to Sew 0.6.0, which lets an App govern its own chat Space.** Upgrade an existing chat server with `k2 hostchat upgrade`. (Going back to 0.5.0 afterwards needs `k2 hostchat rollback --accept-data-loss`, because 0.6.0 changes Sew's data.)
+- **An App can decide who sees which channel.** First you, in person, give the App a chat key (`k2 app grant <app> --kind chat-key`, with a confirm). The App's manifest then maps its own roles to private channels and levels. Switch the Space over with `k2 hostchat app-space governance <app> <space> app`; you or an Admin do this in person, and an agent asks on a card. From then on the App's users get chat without a chat grant each (up to the key's limit), and the App's server can add, rename and archive channels and set who is in them while it runs (`chat.channels`, `chat.setChannels`, with helpers in K2's server SDK). `k2 app chat <app>` shows the key, who governs the Space, its channels and each person's.
+- **Things to know about App-governed Spaces.** When a Space switches to App-governed, you and your Admins leave it, and K2 won't add people who sign in to your server to it. The home client can't govern a Space. Turning the key off, or removing the App, ends the App's chat sessions. `k2 chat space create --app` makes a new Space owned by the App in one step.
+- **K2 fetches Sew for you.** `k2 hostchat enable` and `upgrade` (and voice and rollback) now download the release K2 is pinned to and check it against K2's own checksum. No `--tarball` needed. A server with no internet gets the exact address, checksum and command to fetch it by hand.
+- **Sew's recovery key is kept in the vault.** You no longer have to copy it somewhere safe. K2 saves it as `sew-recovery-key`, and existing installs get the copy at the next start. You or an Admin can see it with `k2 hostchat recovery-key` or **Reveal** in Settings → Vault, with a confirm. Agents never see it.
+- **Give an App its public address later.** `k2 app expose <app> --tunnel` gives an App that was installed without `--tunnel` its public address, with the same logins, grants, secrets and Spaces. Before, you had to re-create it. `--local` takes the address away again.
+- **Sew follows an App's address within seconds** after you bind a Space, change the App's primary domain or expose it, instead of up to 10 minutes later.
+- **App users named like someone on your server now get chat.** An App user whose username matches your login or an Admin's is a separate person, and now gets chat as themselves. If the handle is taken, their chat handle gets a short suffix.
+- **Guides for Apps with chat and voice:** `k2 study chat-voice` (setup, who does each step) and `k2 study chat-voice-rooms` (voice rooms and channels).
+- **Voice channels show as voice** in `k2 chat channels`, and an App's address takes request headers up to 128 KiB, the same limit as Sew.
+- **An assistant agent can make a Space.** It's no longer refused as the Space's manager. Role commands now check Sew's role order first and say what a person needs to do.
+- **`chat.createChannel` on a name a voice channel already uses** now answers `channel_type_mismatch`, instead of a general failure.
+- **An App's `chat.member`, `chat.whois` and `chat.createChannel` calls now reach K2** through the App's own address. In 0.46.6 they were refused.
+- **`k2 app user add --test` finds an App published with `--skin`.**
+
+### Publishing: who may open a site, and dev servers
+- **Choose who may open each published site.** `k2 publish visibility <name> private|pin|public`. **Private** opens only for you and your Admins, after K2 checks who they are. **PIN** asks for a PIN first. **Public** is open to anyone with the address; it needs a reason and an owner or Admin. Visitors who fail the check never reach your site.
+- **A PIN never passes through an agent.** An agent can make its own site private. To use a PIN or make a site public, it asks on a card, and you type any PIN into K2's own form. The PIN never goes on a command line.
+- **Open a private site anywhere.** In a K2 tab it just opens. For another browser, `k2 publish open <name>` gives a one-time link. `k2 publish sessions <name> --revoke-all` signs everyone out.
+- **In the app:** each site in the Published panel and in Settings → K2 Connect → URLs has a chip showing who may open it, plus **Make private**, **Share with a PIN** and **Make public**.
+- **K2 warns when a private site can be reached another way,** for example when its program listens on every network address and not only on this computer.
+- **Run your dev server through K2.** `k2 publish run --dev` serves a dev server from the live folder, with hot reload through the site's address. It's private until you share it. It stops after `--idle` (60 minutes by default) and starts again for the next visitor who passes K2's check. On Linux, `--mem` and `--cpus` cap it. An agent's first dev server waits for you. A dev server can't be made public by an agent; share it with a PIN instead.
+- **`k2 publish ps` shows who may open each site.** `--long` adds why a site is public and a dev server's limits.
+
+### Email and hosted mail
+- **Forward a mailbox to an outside address.** `k2 hostmail forward set <mailbox> --to you@gmail.com` (or Outlook, or any address). K2 first emails that address a confirm link, which works for 24 hours. Nothing is forwarded until someone clicks it, and only mail that arrives after the click is forwarded. A copy stays in the mailbox unless you add `--no-keep`.
+- **Forwarding sends only good mail.** Spam, mail that fails DMARC, and bounces stay in the mailbox. Forwarding is limited to 100 an hour per mailbox and 1,000 an hour per server; above that, mail waits in the queue. Past 500 a day, the forward pauses.
+- **A forward pauses itself when it should.** It pauses when the outside address stops existing, when too many messages are refused, or at the daily limit. If too many of the server's forwards are refused, all of them pause. You, your Admins and the mailbox's person get a notice when a forward starts or pauses. The person at the outside address can click **Stop** at any time.
+- **Manage forwards** with `k2 hostmail forward show|pause|resume|unset|list`, or in Settings → Email Hosting → a mailbox → **Forwarding**, which shows the state, the confirm link, the last 24 hours and recent events.
+- **People can forward their own mailbox.** Link a mailbox to its person with `k2 hostmail person link <mailbox> <login>`. They can then use `k2 mail forward` or the same Settings panel.
+- **Agents that manage hosted mail can set forwards** on the mailboxes they manage. Only a person can resume a forward that paused itself.
+
+### Live docs
+- **Live docs: people and agents edit the same file at once.** A Markdown file in a workspace can be a live doc. Every change is attributed, everyone can see who else is there (`k2 doc who`), and each person and agent has their own undo. K2 keeps the file on disk up to date and merges edits from other programs. Agents use `k2 doc` for reading, editing, history, versions, restore and blame. `k2 study docs` has the guide.
+- **Multiplayer is off until you turn it on.** Settings → Cores → **Multiplayer** lists each kind of file K2 can co-edit (Markdown, text and code, any other file), each with its own switch. The server's owner or an Admin turns them on for everyone on that server. While a core is off, those files open exactly as before, and agents' `k2 doc` leaves them alone (it says `core_off`). Agents and headless servers use `k2 doc cores`.
+- **Turning a core off is safe while people are editing.** K2 writes every change to the file first, then closes the live docs at once; their history stays. If a file can't be written (a full disk, a read-only folder), the switch still turns off. The change is kept in K2's history and written when the core is turned on again. A save from another editor while the core is off is taken in the next time it's on.
+- **Code, config and plain text are live docs, like Markdown.** This covers any text file in a workspace: code, config, HTML/XML/SVG source, diagram sources, `.txt`, logs, and `.csv`/`.tsv` as text. They open for live editing with presence, attribution, everyone's own undo and the full `k2 doc` verbs. In a CSV, edits to different rows merge. A row is one line, so an agent's write to a row someone else changed conflicts. A sorted or moved row loses its identity, so an agent's edit to it conflicts too.
+- **Every other file is a live doc too, without live merging.** This covers images, PDFs, office files, archives and binaries, and text K2 can't edit live: not UTF-8, a NUL byte, mixed line endings, or over 1 MiB for a log and 4 MiB otherwise. These get presence (`k2 doc who`), a lease (`k2 doc lease`), versions and restore. `k2 doc status` says why a text file isn't live. When a program saves such a file while someone holds its lease, both are kept: the save is current, and the replaced content stays as a version and as a copy under `.k2/conflicts/`. Files over 32 MiB are declined.
+- **Agents take turns on lines.** `k2 doc claim --lines 40,60` says "I'm working on these lines". Another agent's edit there is refused and put in line. The refusal shows in its terminal and in Chatter, and K2 tells it when the lines are free. Claims never hold people back.
+- **Agents' edits are checked against what they read.** If the doc changed since an agent last read it, the edit is refused and the agent reads again. If an agent's write touches a line someone else changed, the write is refused as a conflict, and the agent re-reads and tries again. Agent writes merge by whole lines, so two similar lines never blend into one. These checks still apply after a restart.
+- **Undo only reverses your own changes.** It never changes a word someone else wrote. If someone has since changed one of your words, that word is theirs, and your undo leaves it and tells you. Text an undo puts back keeps its original author (`k2 doc blame` shows who restored it).
+- **Exact-text replace:** `k2 doc replace --old "teh" --new "the" notes.md`, with no regex to escape.
+- **A save from another editor merges with live edits not yet written to the file.** Both are kept, line by line, the same way every time. Also hardening.
+- **If another editor saves an old copy over your text, K2 tells you.** You (or the person an agent wrote for) get a note with the text that may be gone, exactly as you wrote it, so you can paste it back, plus the version that holds it. Agents see it on their next `k2 doc` command. Reverting such a save puts the text back under its original author.
+- **Export a copy of a doc.** `k2 doc export --to as-is notes.md` writes the doc as it is now beside it, as `notes.v42.md`. `--version` exports a past version. An export never changes the doc or its history.
+
+### Prompt stash
+- **Save a prompt for later.** Press ⌘S (Ctrl+S on Windows and Linux) in a Thread's message box or the terminal bar, or pick **+ → Save to stash**. Attached files are saved with it. When the box is empty, a bookmark left of **Send** opens your stash, and picking one puts it back in the box.
+- **The stash is in every box where you write to an agent:** Threads, the terminal bar, project chat, a ticket's discussion, Grok Bot chat and the Conversation widget in Gardens and Apps.
+- **Stash any Thread message** from its menu (see Threads below), and use **Save for later** in the Inbox.
+- **The stash holds 50 prompts** and asks before it's full.
+- **Your stash syncs between your devices,** the same devices Homes Sync uses: the desktop app, the web client and your phone with K2 Companion 4.1.5 or later. Attached files stay on the device that saved them. Picking a prompt on another device says where its file is.
+
+### Windows (Alpha)
+- **No more console windows popping up.** K2's background helpers start without a window, K2 reads the power plan directly instead of running a program every minute, and a helper that fails to start no longer shows an "unable to start correctly" box.
+- **Gardens on Windows.** The Zen toggle (Ctrl+Alt+Z) and Settings → Gardens / Local Data now show in the Windows app.
+- **The tray brings K2 back.** **Show K2** is first in the tray menu, and a left click on the icon opens K2. Starting K2 again, or opening a `k2://` link, shows the window that's already running instead of a second copy.
+- **Copy and paste in the terminal with Ctrl+Shift+C and Ctrl+Shift+V,** as in Windows Terminal. Plain Ctrl+C still goes to the program.
+- **Paste files copied in File Explorer into a terminal** as their paths.
+- **Open in your editor and terminal.** K2 finds VS Code, Cursor, Windsurf, Zed and Sublime Text, and **Open in Terminal** opens Windows Terminal in that folder.
+- **Show in File Explorer works,** and deleting files says Recycle Bin.
+- **Windows wording.** K2 says "This PC" and asks for your password where it said "This Mac" and offered Touch ID.
+- **Right-click the title bar** for the Windows menu (Restore, Move, Size, Minimize, Maximize, Close). The menu says **Exit**, and the minimize, maximize and close buttons are full Windows size.
+- **Settings → Accessibility now shows only on macOS,** where its checks apply.
+- **Fixes on Windows:** stopping a published service waits until its programs have exited, so starting it again right away works. Restoring the vault and moving a server's vault work. A sign-in K2 was checking joins its known account. An App user with heartbeat rights can edit a heartbeat's wakeup file. Short error replies no longer arrive empty. Attached file paths show one kind of slash. When the app's update check falls back, it links the Windows installer.
+
+#### Windows Alpha: known issues
+- **The installer is unsigned,** so Windows SmartScreen warns when you run it. Choose **More info → Run anyway**.
+- **Agents stop when the daemon restarts or updates.** Keeping agents running through a restart comes to Windows in 0.47.
+- **An existing Claude login isn't adopted as the default.** Add it again from Settings → Tokens. [CHECK on Windows before release]
+- **The `k2` CLI needs Git for Windows** (it runs in Git Bash). K2 tells you when it's missing.
+
+### Apps
+- **Static Apps.** A folder of files can be an App with no server code. K2's own file server serves it, with a single-page fallback, your own 404 page, headers and caching set in the manifest. It runs on the App runtime with rollback, like any App, and comes back right away after a restart. Start one with `k2 app init --template static`.
+- **Starters for Tauri, static and Node Apps.** `k2 app init --template tauri|static|node-api` never overwrites your files. `k2 study tauri` walks through the K2 side of a Tauri app from start to finish.
+- **An update feed for your Tauri apps.** `k2 app updates push` publishes a signed build to a channel, and `promote`, `rollback` and `pull` manage what installs. `stats` shows downloads and check-ins by day, platform and version, with no IP addresses. Each App's settings have a **Releases** panel with its channels, files, downloads and active users.
+- **`k2 app status <app>`: how an App is, on one screen.** It shows the deploy, health, the App's own checks, errors in the last hour, resources, addresses, phone pairing and the update feed, with the exact command for anything red or yellow.
+- **`k2 capabilities`** lists what this server and your compute nodes can do. Each "no" comes with its reason and its fix.
+- **`k2 explain <id>`.** Every App refusal has an id, with what it means, the fix and who can fix it. A refused `k2 app` command now prints a `fix:` line.
+- **An App's own checks.** A manifest's `host.checks` lists up to 10 requests K2 makes after every switch to live. A failed check wakes the App's agent once. Checks never block a deploy.
+- **Phone link files as an App setting.** `k2 app links` serves your iOS and Android link files on the App's address, with or without phone pairing.
+- **`k2 app deploy|build|validate <folder> --manifest <file>`** uses a manifest kept outside the folder.
+- **No push for a Thread the person is reading in your App's own client.** An App's server can now say the person has the Thread open (`push.viewing`).
+- **Removing a workspace or uninstalling an App asks before people lose access.** If an App still has people's logins, chat, shared secrets or chat Spaces, K2 lists what each App would lose and asks first: **Uninstall anyway**, or `--drop-access` on `k2 app uninstall`, `k2 app release` and `k2 workspace remove`. Nothing is half done.
+
+### Mobile tab
+- **A real phone on screen.** Each device is drawn in its own frame: an iPhone with its island, an Android phone with its camera, a tablet with a thin bezel. The device's controls sit on a rail beside it (Home, Back, Recents, Rotate, Light/Dark, Screenshot), and the start-up screen shows inside the phone.
+- **Type into the device.** Click the screen to type. Keys, input methods, ⌘V paste and editing shortcuts go to the device until you press Esc. The **⋯** menu lists the shortcuts.
+- **Touch that follows your finger.** Live touch is now on by default: scrolling follows the drag, long press and flick work, the mouse wheel and two-finger trackpad scroll the device, and pinch works with Ctrl+wheel or ⌥-drag.
+- **Smoother video** where your computer can decode it, with a fallback to the old stream.
+- **Screenshots go to the Thread.** A screenshot shows a thumbnail with **Attach to Thread** and **Copy path**. Rotation is animated, and below 720 px wide the pane switches between Thread and Device.
+- **Choose which pinned tabs a workspace shows.** Workspace settings → **Tabs** has **Show the Design tab** and **Show the Mobile tab**. Right-click a pinned Design or Mobile tab to remove it, or use `k2 workspace design-tab|mobile-tab`.
+- **The person holding the device no longer sees "is using the device".**
+
+### Agents, sessions and worktrees
+- **`k2 sessions`: who is working in this workspace.** It lists live sessions and their state, and past conversations from Claude, Codex, Grok, Gemini, Cursor, Pi and Hermes, which you can search and reopen as a helper with the same history (`k2 sessions open`). `k2 msg --session <id>` reaches whoever holds a conversation. `k2 study sessions` has the guide.
+- **Helpers in their own worktree.** `k2 sidecar new <name> --worktree` gives a helper its own branch and folder. `review`, `interrupt` and `retire` work as you'd expect. **Land** is for people only and asks on a card. At each turn's end, a card on the helper's Thread lists the files it changed.
+- **The Workbench Garden.** **New Garden → Workbench** shows your agents' tasks in their worktrees, sorted by what needs you. Pick one to see its Thread, its diffs and commits and its test runs on compute, then **Land**, **Ask for changes** or **Discard** (K2 asks you first).
+- **One conversation never runs twice.** Opening an agent's own conversation from Chat history now goes to its Chat tab, instead of starting a second copy that fights over the same history.
+- **Agents on other servers keep their own color** on Home and in the Add Agent picker.
+
+### Threads
+- **A menu on every message.** Right-click, long-press or **⋯**: **Reply**, **Reply to selection**, **Copy** and **Save to stash**. A reply starts with a short `↩ #N name:` line and the quote. Agents read that message whole with `k2 thread <addr> --seq N`.
+- **Copy buttons** on code blocks and links in chat messages: Threads, Gardens, App surfaces, project chat and feedback.
+- **Choose the start page.** Settings → General → **Start page**: Home or Agents.
+
+### Phone and notifications
+- **Longer notifications, and Threads that are current when you open them on your phone.** Sealed notifications can now carry longer messages, and the phone hears about Thread changes that didn't send an alert, so it can catch up. Needs K2 Companion 4.1.5 or later. 
+- **`k2 push device remove <id>`** drops one phone's registration (owner or Admin). `k2 push devices` shows a short fingerprint for each phone, never its token.
+
+### Vault and permission cards
+- **An agent can ask to give its own service or App a secret.** With permission cards on, `k2 publish secret add` and `k2 vault grant --to service` for a secret a person gave now end with the line to ask. You, an Owner or an Admin allow it on a card, with a confirm.
+- **An App's agent can ask to add or remove a login on its App** on a card. `k2 app grant list` now shows an agent the logins on its own Apps.
+- **An agent can set chat for its own App's guests** (`k2 app user chat … --app <its App>`) when it has the guests-chat grant and may manage its Apps' users. Before, it was refused.
+- **Accepting a secret another agent sends is your consent.** After you accept it, that workspace's agents can use the copy, up to what the accept card showed, without a second confirm. `k2 vault send --delivery fetch|file|env` lets the sender choose how it arrives, and every answer says how to use the secret.
+
+### Security
+- **Links clicked in a terminal now only open web and email links.** A `file://` link to a file in one of your workspaces opens in K2's own viewer. Other link types show a short note and open nothing.
+- **Git actions only touch what they should.** Removing a worktree only removes a worktree of that workspace. A merge never overwrites uncommitted changes. Aborting a merge, resolving a conflict, deleting a branch and creating a worktree act only on a K2 workspace.
+- **Only you set or clear Sew's home client.** It sees every Space each person is in, so Admins and agents can no longer change it. Each change carries your approval to Sew and is logged.
+- **An App login you marked as an agent's never gets a person's chat pass** or a seat in the App's Space.
+- **K2 talks to its own mail server directly,** never through a proxy set on the machine.
+- **Another server can only set an agent's color,** never other styling.
+
+### Fixes
+- **Compute: `--with` works again** when the sibling repo's commit isn't on the node yet (broken since 0.46.6). A node's job log now keeps the server's reason when a transfer is refused.
+- **K2 Connect responds faster.** Each request through the tunnel skips a delay of up to about 40 ms.
+- **A slow name lookup can't hold a visitor's connection** to a site open past its time limit.
+- **An App guest's first uploads, sent in parallel, no longer fail** as a protected link.
+- **Warning cards use a soft warning tint** instead of solid yellow.
+
+### Known issues
+- **Outside forwarding needs mail server 0.16.25 or later.** On an older one, `k2 hostmail forward set` to an outside address is refused with the upgrade hint, and a forward shows as held (`upgrade_required`) until you run `k2 hostmail upgrade`. Forwards between mailboxes on the same server work on any version.
+- **The live editor view isn't in the app yet.** For now, live docs are edited with `k2 doc` (agents and terminals). An edit you save in the app's file tab is merged as an outside edit.
+- **Deleting a line and typing it again while someone rewrites it live can keep both lines.** Check those lines afterwards.
+- **Custom domains through K2 Connect,** for a server on a home or office connection (announced for 0.46.7 in 0.46.6's notes), moved to 0.46.8.
 
 ## 0.46.6 — A phone beside your agent
 

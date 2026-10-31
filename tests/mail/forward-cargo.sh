@@ -20,7 +20,8 @@ case "$cmd" in
     rc=0
     cargo test -p k2-core --lib -- mail_forward db::tests "$@" || rc=1
     cargo test -p k2-daemon --lib -- mail::forward mail::sieve_user mail::sieve_lockdown email_notify::tests::v_ \
-      email_notify::tests::webhook mail_routes routes::route_policy "$@" || rc=1
+      email_notify::tests::webhook email_notify::tests::n6_ email_notify::webhook mail::defaults \
+      mail_routes routes::route_policy "$@" || rc=1
     exit $rc ;;
   *) echo "usage: $0 check|test|targeted [cargo args…]" >&2; exit 2 ;;
 esac

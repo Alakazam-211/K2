@@ -457,6 +457,10 @@ pub fn change_and_sync(
     let synced = with_io(|io| sync_locked(io, address_id, Why::Change, &ctx));
     let id = row.id.clone();
     let row = reread(&id, row);
+    // Outside the lock: the webhook follows the outside forwards, and the
+    // box brake catches a forward activated while it holds (FW3).
+    drop(_g);
+    super::forward_outcomes::after_change(&row);
     match synced {
         Ok(_) => Ok(row),
         Err(e) => {

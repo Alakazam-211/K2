@@ -1955,6 +1955,18 @@ impl StalwartClient {
         }
     }
 
+    /// Outside forwards (FW3, FW-A13): create one `x:MtaOutboundThrottle`.
+    /// Returns its id. (Never an `x:MtaQueueQuota`: FW-A14.)
+    pub fn outbound_throttle_create(&self, body: serde_json::Value) -> Result<String, String> {
+        let resp = self.registry_call("x:MtaOutboundThrottle/set", serde_json::json!({ "create": { CREATE_TAG: body } }))?;
+        parse_set_created_id("x:MtaOutboundThrottle/set", &resp)
+    }
+
+    pub fn outbound_throttle_destroy(&self, id: &str) -> Result<(), String> {
+        let resp = self.registry_call("x:MtaOutboundThrottle/set", serde_json::json!({ "destroy": [id] }))?;
+        parse_set_destroyed("x:MtaOutboundThrottle/set", id, &resp)
+    }
+
     pub fn webhook_destroy(&self, id: &str) -> Result<(), String> {
         let resp = self.registry_call("x:WebHook/set", serde_json::json!({ "destroy": [id] }))?;
         parse_set_destroyed("x:WebHook/set", id, &resp)

@@ -145,6 +145,8 @@ pub mod external;
 pub mod external_imap;
 pub mod external_smtp;
 pub mod forward;
+/// Outside forwards: webhook outcomes, caps, auto-pause, the box brake.
+pub mod forward_outcomes;
 /// Outside forwards: rows → Sieve (prd-hostmail-external-forwarding-v1).
 pub mod forward_sync;
 /// Outside forwards: the destination's confirm link.

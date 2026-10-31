@@ -1076,6 +1076,15 @@ impl Worker {
                 Ok(())
             }
             ClientFrame::Hello => Ok(()),
+            // The app showed the removed-text notes: delivered, so no later
+            // snapshot repeats them. No reply; a refusal (no read right) is
+            // nothing to tell.
+            ClientFrame::TakeNotes => {
+                if let Err(e) = self.session.take_notes(self.conn) {
+                    log_debug!("[docs/live] take_notes on {}: {e}", host::key_label(&self.key));
+                }
+                Ok(())
+            }
             ClientFrame::View { root, first, last } => {
                 let root = root.unwrap_or_else(|| ROOT.to_string());
                 let _ = self.session.set_view(self.conn, LineRange { root, first, last });

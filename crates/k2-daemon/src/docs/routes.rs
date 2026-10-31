@@ -324,7 +324,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     }
     // Settings → Cores → Multiplayer: the switches (read-only, any caller).
     if path == super::cores::CORES_ROUTE {
-        return super::cores::cores_route(caller);
+        return super::cores::cores_route_for(caller, input.str("path").as_deref());
     }
     if path == STATUS && input.str("path").is_none_or(|p| p.trim().is_empty()) {
         return ok(json!({ "pool": super::pool_json() }));

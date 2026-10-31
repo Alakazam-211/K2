@@ -750,6 +750,30 @@ async fn the_live_socket_end_to_end() {
         "B didn't write the line, so B isn't told: {b_frames:?}"
     );
     let _ = a.drain(300).await;
+    // A push doesn't consume the note: a new socket's snapshot still holds
+    // it. Once the app has shown it (`take_notes`), it's delivered, and a
+    // later snapshot doesn't repeat it.
+    let snapshot_notes = |frames: &[J]| -> Option<usize> {
+        frames
+            .iter()
+            .find(|f| ty(f) == "roster_event" && f["event"]["kind"] == "snapshot")
+            .map(|f| f["event"]["overwritten"].as_array().map_or(0, Vec::len))
+    };
+    let mut n1 = open(&live_url(port, OWNER, &doc, "")).await;
+    assert_eq!(ty(&n1.next("n1 welcome").await), "welcome");
+    let (snap1, _) = n1.until("n1 snapshot", |f| ty(f) == "roster_event" && f["event"]["kind"] == "snapshot").await;
+    assert_eq!(snapshot_notes(&[snap1.clone()]), Some(1), "waiting before take_notes: {snap1}");
+    let _ = n1.sink.send(Message::Close(None)).await;
+    drop(n1);
+    a.send(json!({"type":"take_notes"})).await;
+    let _ = a.drain(300).await;
+    let mut n2 = open(&live_url(port, OWNER, &doc, "")).await;
+    assert_eq!(ty(&n2.next("n2 welcome").await), "welcome");
+    let (snap, _) = n2.until("n2 snapshot", |f| ty(f) == "roster_event" && f["event"]["kind"] == "snapshot").await;
+    assert_eq!(snapshot_notes(&[snap.clone()]), Some(0), "delivered by take_notes: {snap}");
+    let _ = n2.sink.send(Message::Close(None)).await;
+    drop(n2);
+    let _ = b.drain(300).await;
 
     // Switching it off (a settings flip, the one path): the kit's host close
     // writes the doc back and closes the session, then the open sockets end

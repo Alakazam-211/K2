@@ -466,6 +466,22 @@ fn open_now(caller: &DocCaller) -> BTreeMap<&'static str, (usize, usize, Vec<Str
     out
 }
 
+/// `GET /cli/docs/cores?path=P`: the rows, plus `file` for one file name,
+/// so a client keeps no file-name rules (the Live view opens only on a file
+/// whose core is on). By the name alone: nothing is resolved, read or
+/// opened, so it says nothing about which files exist (any caller, as the
+/// rows). `file`: `{core, on, liveView}` (`liveView`: the core has a live
+/// editor for people: Markdown and the text pack, not any-file).
+pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
+    let r = cores_route(caller);
+    let Some(p) = path.map(str::trim).filter(|p| !p.is_empty()) else { return r };
+    let Ok(mut v) = serde_json::from_str::<Value>(&r.body) else { return r };
+    let tier = Tier::of(p);
+    let core = core_of(tier);
+    v["file"] = json!({ "core": core, "on": is_on(core), "liveView": tier != Tier::Blob });
+    CliResponse { body: v.to_string(), ..r }
+}
+
 /// `GET /cli/docs/cores`: one row per core, from the daemon (Settings and
 /// `k2 doc cores` say the same thing). Read-only; any caller.
 pub fn cores_route(caller: &DocCaller) -> CliResponse {
@@ -715,6 +731,29 @@ pub(crate) mod tests {
             assert!(again.is_empty(), "no change, no flip");
             assert_eq!(audit_lines(AUDIT_SWITCH).len(), 1, "one audit line, for the one flip");
             assert_eq!(audit_lines(AUDIT_SWITCH)[0]["outcome"], "core=markdown on=true closed=0 written=0 failed=0");
+            all_off();
+        });
+    }
+
+    /// `?path=`: a file's core and whether it's on, by its name alone (no
+    /// file needed), and whether that core has a live editor; no `file`
+    /// without a path.
+    #[test]
+    fn the_read_route_names_a_files_core_by_its_name() {
+        let _m = mirror_lock();
+        crate::test_support::with_temp_home(|| {
+            all_off();
+            set("markdown", true);
+            let file = |p: &str| -> Value {
+                let v: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some(p)).body).expect("json");
+                assert_eq!(v["cores"].as_array().map(Vec::len), Some(3), "the rows are still there");
+                v["file"].clone()
+            };
+            assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
+            assert_eq!(file("src/main.rs"), json!({"core": "text", "on": false, "liveView": true}));
+            assert_eq!(file("photo.png"), json!({"core": "any-file", "on": false, "liveView": false}));
+            let none: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some("  ")).body).expect("json");
+            assert!(none.get("file").is_none(), "{none}");
             all_off();
         });
     }

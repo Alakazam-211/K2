@@ -103,6 +103,15 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
             ),
         ));
     }
+    // §7: the install's home client (Hearth) never governs a Space; said
+    // before a confirm is spent.
+    if to == "app" && is_home_client(&app)? {
+        return Err(no(
+            "home_client_cannot_govern",
+            409,
+            format!("App '{app}' is this install's home client (it sees every Space a person is in), so it never governs a Space; govern with another App"),
+        ));
+    }
     let method = super::routes::need_person(
         who,
         v,
@@ -135,6 +144,12 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
         "Back to Sew's own rules: people manage the Space in chat; private channels and levels stay as they are."
     };
     Ok(json!({"ok": true, "app": app, "spaceId": space, "governance": to, "changed": changed, "hint": hint}))
+}
+
+/// Is `app` (a service id) the install's home client?
+fn is_home_client(app: &str) -> R<bool> {
+    let rows = hook::home_settings().map_err(|e| no("db_error", 500, e))?;
+    Ok(rows.iter().any(|r| r.subject == hook::home::HOME_SUBJECT && r.body.get("app_id").and_then(Value::as_str) == Some(app)))
 }
 
 /// `GET /cli/sew/app-chat?app=<app>`.
@@ -184,5 +199,23 @@ mod tests {
         let f = governance(&Who::Owner, &body("maybe")).expect_err("bad value");
         assert_eq!((f.code, f.status), ("bad_request", 400));
         assert_eq!(governance_secret_id(APP, "5101", "app"), format!("{APP}:5101:app"));
+    }
+
+    /// §7: the home client (Hearth) never governs a Space: refused before
+    /// a confirm is asked; switching back to sew is not a governance grab.
+    #[test]
+    fn the_home_client_never_governs_a_space() {
+        let _home = k2_core::test_env::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        assert!(hook::set_home_client(Some(APP), "owner").expect("home client"));
+        for who in [Who::Owner, Who::Login { username: "ada".into(), role: Role::Admin }] {
+            let f = governance(&who, &body("app")).expect_err("the home client");
+            assert_eq!((f.code, f.status), ("home_client_cannot_govern", 409), "{who:?}");
+        }
+        let f = governance(&Who::Owner, &body("sew")).expect_err("no confirm token");
+        assert_eq!((f.code, f.status), ("owner_confirm_required", 403), "sew is not refused for the home client");
+        assert!(hook::set_home_client(None, "owner").expect("clear"));
+        let f = governance(&Who::Owner, &body("app")).expect_err("no confirm token");
+        assert_eq!((f.code, f.status), ("owner_confirm_required", 403), "another App: the confirm, as before");
     }
 }

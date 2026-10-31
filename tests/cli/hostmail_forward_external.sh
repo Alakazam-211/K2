@@ -14,7 +14,10 @@
 #   * person_only, owner_only resume and destination_stopped refusals exit
 #     with the right code and tell the caller what to do;
 #   * the help has no "k2-forward" and no "not Gmail" (FW-A21);
-#   * k2 mail forward is a verb now (no longer "moved to hostmail").
+#   * k2 mail forward is a verb now (no longer "moved to hostmail");
+#   * an older mail server: set prints upgrade_required with the
+#     `k2 hostmail upgrade` hint (exit 1), and show says the forward is held
+#     ("not forwarding: the mail server needs upgrading").
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -81,6 +84,8 @@ class H(BaseHTTPRequestHandler):
         if p in ("/cli/mail/forward", "/cli/mail/self/forward") and self.command == "POST":
             to = body.get("to", "")
             addr = body.get("address") or "me@brand.test"
+            if addr.startswith("oldbox@"):
+                return reply(self, 409, {"ok": False, "error": {"code": "upgrade_required", "hint": "outside forwarding needs the mail server upgraded: k2 hostmail upgrade (same-box forwards work as they are)"}})
             if to.endswith("@gmail.test"):
                 return reply(self, 202, {"ok": True, "address": addr, "to": to, "keep": body.get("keep", True),
                                          "kind": "external", "state": "pending_verify", "sentVia": "system",
@@ -92,6 +97,9 @@ class H(BaseHTTPRequestHandler):
             if addr.startswith("none@"):
                 return reply(self, 200, {"ok": True, "address": addr, "to": None, "keep": False, "forward": None, "events": []})
             f = dict(PENDING if addr.startswith("pending@") else PAUSED, address=addr)
+            if addr.startswith("oldbox@"):
+                f.update(pauseReason="upgrade_required",
+                         pauseWords="not forwarding: the mail server needs upgrading: k2 hostmail upgrade")
             return reply(self, 200, {"ok": True, "address": addr, "to": None, "keep": False, "forward": f,
                                      "events": [{"id": "e1", "forwardId": "f1", "event": "paused", "actor": "k2",
                                                  "detail": {"reason": "refused"}, "at": 1700000500}]})
@@ -180,6 +188,23 @@ out="$("$K2" hostmail forward show none@brand.test)"
 printf '%s' "$out" | grep -q 'forward=none' || fail "no forward must print forward=none: $out"
 "$K2" hostmail forward show sales@brand.test --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["forward"]["pauseReason"]=="refused", d' \
     || fail "show --json must carry the route JSON"
+
+# ── an older mail server (upgrade_required) ─────────────────────────────
+set +e
+out="$("$K2" hostmail forward set oldbox@brand.test --to me@gmail.test 2>&1)"; rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "upgrade_required must exit 1 (got $rc): $out"
+printf '%s' "$out" | grep -q 'upgrade_required' || fail "set must print the code: $out"
+printf '%s' "$out" | grep -q 'k2 hostmail upgrade' || fail "set must print the upgrade hint: $out"
+out="$("$K2" hostmail forward show oldbox@brand.test)"
+printf '%s' "$out" | grep -q 'state=paused  reason=upgrade_required' || fail "held show must print the reason: $out"
+printf '%s' "$out" | grep -q 'not forwarding: the mail server needs upgrading: k2 hostmail upgrade' || fail "held show must say it isn't forwarding: $out"
+printf '%s' "$out" | grep -q 'resumes by itself after the upgrade' || fail "held show must say how it lifts: $out"
+printf '%s' "$out" | grep -q 'paused because' && fail "held show must not print the generic pause line: $out"
+"$K2" hostmail forward --help | grep -q 'upgrade_required' || fail "forward --help must name upgrade_required"
+"$K2" hostmail forward set --help | grep -q 'upgrade_required' || fail "forward set --help must name upgrade_required"
+"$K2" hostmail forward resume --help | grep -q 'upgrade_required' || fail "forward resume --help must name upgrade_required"
+"$K2" study mail | grep -q 'upgrade_required' || fail "k2 study mail must name upgrade_required"
 
 # ── pause / resume / unset / list ───────────────────────────────────────
 "$K2" hostmail forward pause sales@brand.test | grep -q 'forward paused for sales@brand.test' || fail "pause output"

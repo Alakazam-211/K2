@@ -178,6 +178,8 @@ describe('resumeRule (mirrors the daemon)', () => {
     expect(resumeRule('staff', 'revoked').can).toBe(false)
     expect(resumeRule('person', 'air_gap').can).toBe(false)
     expect(resumeRule('staff', 'receive_only').can).toBe(false)
+    expect(resumeRule('staff', 'upgrade_required').can).toBe(false)
+    expect(resumeRule('staff', 'upgrade_required').why).toContain('k2 hostmail upgrade')
     expect(resumeRule('person', 'box_brake').can).toBe(false)
     expect(resumeRule('staff', 'box_brake').can).toBe(true)
     expect(resumeRule('person', 'refused').can).toBe(true)

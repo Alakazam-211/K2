@@ -160,6 +160,7 @@ pub fn reason_words(reason: &str) -> &'static str {
         store::P_RECEIVE_ONLY => "the mailbox's domain is receive-only",
         store::P_AIR_GAP => "air-gap is on",
         store::P_MANUAL => "someone paused it",
+        store::P_UPGRADE => "not forwarding: the mail server needs upgrading: k2 hostmail upgrade",
         _ => "of a rule",
     }
 }

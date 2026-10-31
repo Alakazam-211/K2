@@ -315,7 +315,12 @@ pub fn verified_ok(conn: &rusqlite::Connection, f: &Forward) -> bool {
 fn apply_holds(f: Forward, mb: &Mailbox, ctx: &Ctx) -> Result<(Forward, Option<String>), String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let hold = hold_reason(&f, mb, ctx, !f.is_external() || verified_ok(&conn, &f));
+    // After the reasons above: a mail server too old for outside forwards
+    // holds an active one visibly (paused `upgrade_required`), and lifts
+    // the hold after `k2 hostmail upgrade`.
+    let hold = hold_reason(&f, mb, ctx, !f.is_external() || verified_ok(&conn, &f)).or_else(|| {
+        (f.is_external() && f.state != store::ST_PENDING_VERIFY && !outside_forward_supported()).then_some(store::P_UPGRADE)
+    });
     let mv = |to: &str, reason: Option<&str>| {
         store::transition(&conn, &f.id, to, &store::Change { reason, actor: ACTOR_K2, ..Default::default() }, ctx.now)
             .map_err(|e| e.to_string())

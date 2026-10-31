@@ -305,4 +305,17 @@ fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
     crate::mail::forward_sync::set_test_version(Some(Some("0.16.25".to_string())));
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
     assert_eq!(st, 202, "the pinned version: {v}");
+    // Confirmed, then the box's mail server reads as older: show says it is
+    // held for the upgrade (not active), and resume refuses (it lifts itself).
+    let tok = last_token(&t, "k2ev_");
+    vpages::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
+    assert_eq!(show()["forward"]["state"], "active");
+    crate::mail::forward_sync::set_test_version(Some(Some("0.16.10".to_string())));
+    crate::mail::forward_sync::sync_mailbox(&format!("ma-{MB}"), crate::mail::forward_sync::Why::Periodic).expect("sync");
+    let s = show();
+    assert_eq!((s["forward"]["state"].clone(), s["forward"]["pauseReason"].clone(), s["to"].clone()), (json!("paused"), json!("upgrade_required"), J::Null), "{s}");
+    assert!(s["forward"]["pauseWords"].as_str().unwrap_or("").contains("k2 hostmail upgrade"), "{s}");
+    assert_eq!(t.io.forward(ACC), None, "nothing leaves");
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("held")), "{v}");
 }

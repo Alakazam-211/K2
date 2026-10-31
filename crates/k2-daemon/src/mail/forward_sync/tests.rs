@@ -332,15 +332,26 @@ fn an_older_mail_server_gets_no_outside_block() {
     create(&aid, "old@brand.test", "me@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v));
     let inside = seed_mailbox("in@brand.test", "direct");
     create(&inside, "in@brand.test", "old@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None);
+    let row = || {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::live_for_address(&conn, &aid).expect("live").expect("row")
+    };
     for ver in [Some("0.16.10".to_string()), None] {
         set_test_version(Some(ver.clone()));
         let s = sync_mailbox(&aid, Why::Change).expect("sync");
-        assert!(s.blocked, "{ver:?}");
+        assert_eq!(s.held.as_deref(), if ver.is_some() { Some(store::P_UPGRADE) } else { None }, "{ver:?}: {s:?}");
         assert_eq!(io.forward("acc-old"), None, "{ver:?}");
+        // Visible: the row is paused for the upgrade, not "active".
+        let r = row();
+        assert_eq!((r.state.as_str(), r.pause_reason.as_deref()), (store::ST_PAUSED, Some(store::P_UPGRADE)), "{ver:?}");
         sync_mailbox(&inside, Why::Change).expect("sync");
         assert!(io.forward("acc-in").is_some(), "same-box on {ver:?}");
     }
+    // A person can't resume it by hand; `k2 hostmail upgrade` lifts it.
     set_test_version(Some(Some("0.16.25-k2.1".to_string())));
-    sync_mailbox(&aid, Why::Change).expect("sync");
+    let s = sync_mailbox(&aid, Why::Change).expect("sync");
+    assert_eq!(s.held.as_deref(), Some(""), "lifted: {s:?}");
+    assert_eq!(row().state, store::ST_ACTIVE);
     assert!(io.forward("acc-old").is_some_and(|f| f.guard.is_some()));
 }

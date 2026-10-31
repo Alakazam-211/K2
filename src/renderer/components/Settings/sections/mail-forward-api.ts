@@ -25,6 +25,7 @@ export type PauseReason =
   | 'box_brake'
   | 'receive_only'
   | 'air_gap'
+  | 'upgrade_required'
   | 'manual'
 
 export interface ForwardVerify {
@@ -146,6 +147,9 @@ export function isStaffRefusal(err: unknown): boolean {
 export function resumeRule(viewer: ForwardViewer, reason: string | null): { can: boolean; why: string | null } {
   if (reason === 'revoked') {
     return { can: false, why: 'The destination clicked Stop. Set the forward again to send a new confirm link.' }
+  }
+  if (reason === 'upgrade_required') {
+    return { can: false, why: 'Not forwarding: the mail server needs upgrading (k2 hostmail upgrade). It resumes by itself after the upgrade.' }
   }
   if (reason === 'air_gap' || reason === 'receive_only') {
     return { can: false, why: 'K2 resumes it by itself when that changes.' }

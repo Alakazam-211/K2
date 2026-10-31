@@ -50,10 +50,13 @@ pub const P_RECEIVE_ONLY: &str = "receive_only";
 pub const P_AIR_GAP: &str = "air_gap";
 /// Someone paused it by hand.
 pub const P_MANUAL: &str = "manual";
+/// The mail server is older than the one outside forwards need (or its
+/// version is unknown): `k2 hostmail upgrade`.
+pub const P_UPGRADE: &str = "upgrade_required";
 
 /// Pauses K2 lifts by itself when the cause goes away (the reconcile).
 pub fn auto_lifts(reason: &str) -> bool {
-    reason == P_RECEIVE_ONLY || reason == P_AIR_GAP
+    reason == P_RECEIVE_ONLY || reason == P_AIR_GAP || reason == P_UPGRADE
 }
 
 // ── events (`mail_forward_events.event`) ────────────────────────────

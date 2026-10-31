@@ -13,7 +13,7 @@
 # carry neither key.
 #
 # k2 explain: a live id, a retired id, an alias, an unknown id (exit 4),
-# --json, the list by area, a Markdown kit id (no k2 doc yet: exit 4), and
+# --json, the list by area, a Markdown kit id (handed to k2 doc explain), and
 # `k2 study app-errors`.
 #
 # Hermetic: HOME is a throwaway dir, every K2_*/K2SO_* var is unset, no
@@ -152,9 +152,13 @@ rc="$(ex)"
 expect_eq "explain list: exit 0" "$rc" "0"
 expect_has "explain list: by area" "$(cat "$SANDBOX/out")" "deploy (validate, build, deploy, rollback):"
 expect_has "explain list: retired marked" "$(cat "$SANDBOX/out")" "static_not_on_runtime (retired)"
+# A Markdown kit id goes to `k2 doc explain` now that this K2 has k2 doc
+# (0.46.7 multiplayer): it reads the kit's registry from the daemon, so
+# with none here it is daemon_unreachable, never the old "no k2 doc yet".
 rc="$(ex MPC-E301)"
-expect_eq "explain kit id: exit 4 until k2 doc" "$rc" "4"
-expect_has "explain kit id: says why" "$(cat "$SANDBOX/err")" "Markdown kit id"
+expect_eq "explain kit id: handed to k2 doc explain (no daemon here)" "$rc" "1"
+expect_has "explain kit id: asked the daemon" "$(cat "$SANDBOX/err")" "daemon_unreachable"
+if grep -q "no k2 doc yet" "$SANDBOX/err"; then bad "explain kit id: still says no k2 doc yet"; else ok "explain kit id: k2 doc is here"; fi
 rc="$(ex a b)"
 expect_eq "explain two ids: usage exit 2" "$rc" "2"
 

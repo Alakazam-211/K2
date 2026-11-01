@@ -28,6 +28,14 @@ import { useZenShown } from '@/lib/zen/zen-view'
 import { RoomFailureGate, roomFailureActions, useRoomFailure } from './RoomFailure'
 import { hostPool } from '@/lib/host-pool-instance'
 import type { PinnedRoom } from '@/stores/room'
+import type { ServerScope } from '@/kessel/server-scope'
+import { useRemoteWarmPing } from '@/lib/remote-warm-ping'
+
+/** Keeps the shown room's connection to its server warm (no UI). */
+function RoomWarmPing({ scope, shown }: { scope: ServerScope; shown: boolean }): null {
+  useRemoteWarmPing(scope, shown)
+  return null
+}
 
 /** What a room's access notice says (Home M5), and, for an older server,
  *  the label of its "Switch to {server}" button (0.43.2 Z5: with the old
@@ -115,6 +123,7 @@ function PinnedRoomShell({ entry, shown }: { entry: HomeRoomEntry; shown: boolea
       onKeyDownCapture={() => homeRooms.input(entry.address)}
       onFocusCapture={() => homeRooms.focused(entry.address)}
     >
+      <RoomWarmPing scope={room.scope} shown={shown} />
       <RoomProvider room={room} shown={shown}>
         <RoomFailureGate hostKey={room.scope.hostKey}>
           <div className="flex h-full min-h-0 w-full flex-col">

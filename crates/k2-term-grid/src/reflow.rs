@@ -38,7 +38,7 @@ pub fn reflow_grid(grid: &GridUpdate, target_cols: u16, target_rows: u16) -> Gri
     // in the full reflowed history. The viewer can use this to build a
     // continuous scrollable buffer: absolute_row = display_offset + row.
     let total = reflowed.len();
-    let start = if total > target_rows as usize { total - target_rows as usize } else { 0 };
+    let start = total.saturating_sub(target_rows as usize);
     let visible: Vec<CompactLine> = reflowed[start..]
         .iter()
         .enumerate()
@@ -193,7 +193,7 @@ fn wrap_logical_line(logical: &LogicalLine, target_cols: u16) -> Vec<CompactLine
                     return None; // No overlap
                 }
                 // Clamp span to chunk boundaries and shift to local positions
-                let local_s = if span.s >= chunk_start { span.s - chunk_start } else { 0 };
+                let local_s = span.s.saturating_sub(chunk_start);
                 let local_e = if span.e < chunk_end { span.e - chunk_start } else { chunk_end - chunk_start - 1 };
                 Some(StyleSpan {
                     s: local_s,

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.11 (2026-11-01): pairs with kit v0.10.0.3
+
+**Requires `k2-mpc-base` v0.10.0.3** (v0.10.0.2 plus the disk-sync fix). This pack's code and
+tests are unchanged from v0.2.10.
+
+- Pairs with kit v0.10.0.3: the disk-sync fix.
+- `Cargo.lock`: k2-mpc-base 0.10.0+3 (only the kit's crate version moves); the crate version.
+
 ## v0.2.10 (2026-10-31): pairs with kit v0.10.0.2
 
 **Requires `k2-mpc-base` v0.10.0.2** (v0.10.0.1 plus the licence; no kit code change). This

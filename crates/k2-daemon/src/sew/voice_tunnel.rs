@@ -325,13 +325,15 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
     sup::helper_check(env)?;
     let _l = sup::begin(env)?;
     let mut st = st;
+    // Read before the new cert replaces the recorded host.
+    let from = voice::tier(&st).to_string();
+    let had_dns = voice::has_turn_dns(&st);
+    let dns_label = st.label.clone().unwrap_or_else(|| label.clone());
     let (chain, key_pem) = issue_or_reuse(env, &label, &mut st)?;
     voice::save(env, &mut st);
     let body = media_keys(&h, &chain, &key_pem);
     sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes()))
         .map_err(|e| no("media_reconfigure_failed", 500, e))?;
-    let from = voice::tier(&st).to_string();
-    let had_dns = voice::has_turn_dns(&st);
     voice::update(env, |s| {
         s.turn_tier = Some(TIER_TUNNEL.to_string());
         s.node_ip = node_ip();
@@ -341,8 +343,8 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
     env.ops.front_routes_changed();
     let mut warnings = Vec::new();
     if had_dns {
-        if let Err(e) = env.ops.cp("DELETE", &format!("/turn/dns/{label}"), None) {
-            warnings.push(format!("the old turn-{label}.k2.dev A record was not removed (it names this box's IP): {e}"));
+        if let Err(e) = env.ops.cp("DELETE", &format!("/turn/dns/{dns_label}"), None) {
+            warnings.push(format!("the old turn-{dns_label}.k2.dev A record was not removed (it names this box's IP): {e}"));
         }
     }
     let served = lane_and_served(env, &h, st.cert_leaf_sha256.as_deref(), &mut warnings);

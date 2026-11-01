@@ -11,11 +11,11 @@
 //! - **Loss:** a missing packet with later packets already here is lost:
 //!   FEC from the next packet when it's here, else concealment.
 //! - **Empty buffer:** the tick is concealed and the playout clock stops. The
-//!   next packet decides what the gap was. The next sequence number with a
-//!   later timestamp means the sender was in DTX: the gap counts as DTX and
-//!   the new talkspurt is held for the target delay. Anything else means a
-//!   stall or loss: the gap counts as concealment and playout resumes at
-//!   once.
+//!   next packet decides what the gap was. A timestamp later than its
+//!   sequence number accounts for means the sender paused (DTX): the gap
+//!   counts as DTX (less any lost packets) and the new talkspurt is held for
+//!   the target delay. Anything else means a stall or loss: the gap counts
+//!   as concealment and playout resumes at once.
 //! - **Too much delay** (after a stall, or when the target falls): one
 //!   packet is skipped every few ticks until the delay is near the target.
 
@@ -275,9 +275,15 @@ impl JitterBuffer {
                     self.n.late += 1;
                     return;
                 }
-                if ext_seq == self.next_seq && ext_ts > self.play_ts + HALF_FRAME {
-                    // The sender stopped sending (DTX) and resumed.
-                    self.n.dtx += self.pending as u64;
+                let missing = ext_seq - self.next_seq;
+                let expected_ts = self.play_ts + missing * FRAME;
+                if ext_ts > expected_ts + HALF_FRAME {
+                    // The sender stopped sending (DTX) and resumed, maybe
+                    // after `missing` packets were lost: those were
+                    // concealment, the rest of the gap was DTX.
+                    let lost = (missing.min(self.pending as i64)) as u32;
+                    self.count_concealed(lost);
+                    self.n.dtx += (self.pending - lost) as u64;
                     self.pending = 0;
                     self.next_seq = ext_seq;
                     self.play_ts = ext_ts;
@@ -711,6 +717,34 @@ mod tests {
         assert_eq!(st.loss_pct, 0.0);
         // The gap (30 frames) plus the re-buffer before the new talkspurt.
         assert!(st.frames_dtx >= 30 && st.frames_dtx <= 34, "{st:?}");
+    }
+
+    #[test]
+    fn a_loss_just_before_dtx_keeps_the_timeline() {
+        let mut s = Sim::new();
+        for i in 0..50u16 {
+            if i != 49 {
+                s.send(i, i as u32 * 960, i as u64 * 20 + 5);
+            }
+        }
+        // Packet 49 is lost, then 600 ms of DTX.
+        for k in 0..20u16 {
+            let frame = 80 + k as u32;
+            s.send(49 + 1 + k, frame * 960, frame as u64 * 20 + 5);
+        }
+        s.run_until(100 * 20 + 300);
+        let st = s.jb.stats();
+        assert_eq!(st.frames_concealed, 1, "{st:?}");
+        assert!(st.frames_dtx >= 28, "{st:?}");
+        // Packet 50 plays the target delay after it arrived, as the first
+        // packet of a talkspurt should (not late because of the loss).
+        let first_50 = s
+            .out
+            .iter()
+            .position(|n| matches!(n, Next::Decode(b) if seq_of(b) == 50))
+            .unwrap();
+        assert!((first_50 as u64 * 20) >= 80 * 20 + 5 + 40, "tick {first_50}");
+        assert!((first_50 as u64 * 20) <= 80 * 20 + 5 + 80, "tick {first_50}");
     }
 
     #[test]

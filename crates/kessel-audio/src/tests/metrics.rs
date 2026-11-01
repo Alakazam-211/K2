@@ -98,6 +98,11 @@ fn s1_far_end_only_erle() {
                 ("t_to_20db_s".into(), t20.unwrap_or(f64::NAN)),
             ],
         );
+        let aec_delay = run.stats.aec_delay_ms.expect("the echo canceller reports its delay");
+        report(&format!("S1 {}", room.name), &[("aec_delay_ms".into(), aec_delay as f64)]);
+        // The echo path's delay is 60 ms (the render reference is fed in the
+        // same 10 ms block it is played).
+        assert!((45..=75).contains(&aec_delay), "{}: AEC delay {aec_delay} ms", room.name);
         assert!(e_steady >= 30.0, "{}: steady ERLE {e_steady:.1} dB < 30", room.name);
         let t20 = t20.unwrap_or_else(|| panic!("{}: never reached 20 dB ERLE", room.name));
         assert!(t20 <= 1.0, "{}: {t20:.2} s to 20 dB ERLE", room.name);

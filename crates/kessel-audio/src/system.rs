@@ -403,7 +403,7 @@ impl System {
             }
         }
 
-        if self.last_poll.elapsed() < shared.device_poll {
+        if shared.device_poll.is_zero() || self.last_poll.elapsed() < shared.device_poll {
             return;
         }
         self.last_poll = Instant::now();
@@ -445,6 +445,26 @@ impl System {
                 }
                 Act::Nothing => {}
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_errors_map_to_stable_codes() {
+        let cases = [
+            (ErrorKind::DeviceBusy, ErrorCode::DeviceBusy),
+            (ErrorKind::PermissionDenied, ErrorCode::NoPermission),
+            (ErrorKind::DeviceNotAvailable, ErrorCode::NoDevice),
+            (ErrorKind::HostUnavailable, ErrorCode::NoDevice),
+            (ErrorKind::UnsupportedConfig, ErrorCode::UnsupportedConfig),
+            (ErrorKind::BackendError, ErrorCode::Backend),
+        ];
+        for (kind, code) in cases {
+            assert_eq!(open_err(cpal::Error::new(kind)).code, code, "{kind:?}");
         }
     }
 }

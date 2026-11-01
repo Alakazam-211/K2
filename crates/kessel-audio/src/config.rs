@@ -80,7 +80,8 @@ pub struct EngineConfig {
     pub levels_interval_ms: u32,
     /// Level at or above which a stream counts as speaking, dBov.
     pub speaking_threshold_dbov: f32,
-    /// How often to look for added or removed devices.
+    /// How often to look for added or removed devices (hot-plug). Zero
+    /// turns polling off; device errors are still handled.
     pub device_poll_interval: Duration,
     /// How often the processing thread wakes to move audio. Must be well
     /// under 10 ms.

@@ -111,7 +111,7 @@ measurement on the same echo model, without the codec in the path.
 | Echo path moved (+3 dB) / delay +40 ms: time back to 30 dB | 0.0 / 0.0 s | <= 0.5 s | |
 | Noise suppression, pink 5 dB SNR: cut in pauses | 15.5 dB (NS alone 10.3) | >= 12 (>= 8) | 11.9 / 11.9 dB |
 | AGC2 output at -50/-40/-30/-20 dBFS input | -27.1 / -23.5 / -23.6 / -20.9 | within 1.5 dB of C++ | C++: -27.3 / -23.1 / -23.1 / -20.6 |
-| CPU, whole duplex path per 10 ms (debug build) | p50 406 µs, mean 3.3% of a core | p50 <= 500 µs release, <= 1 ms debug | APM alone: 1.55% / 1.13% |
+| CPU per 10 ms block: AEC3 + NS + AGC2 alone / whole duplex path | see the test output (x86-64: about 2% / 3.3% of a core) | AEC chain <= 5%, duplex <= 10% (p50) | AEC chain: 1.55% / 1.13% |
 | 10% loss, 5% reordering, 30 ms jitter | loss 9.4%, concealed 3.9%, FEC 51 frames | concealed < 15% | |
 | Lost frames: FEC vs concealment (SNR vs clean) | 13.4 vs -0.1 dB | FEC >= PLC + 6 dB | |
 

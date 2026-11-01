@@ -391,9 +391,43 @@ impl Host for K2Host {
             AuditEvent::Recovered { key, error } => {
                 log_debug!("[docs] WARN: store write failed for {}; session reloaded: {error}", key_label(key))
             }
+            // Kit v0.10.0.3: the first sync after a reopen found the stored
+            // disk replica (the merge base for the next outside save) stale
+            // and reloaded it from the doc. Should never fire: a kit bug to
+            // report. Byte lengths only, never content.
+            AuditEvent::DiskReplicaRepaired { key, doc_len, replica_len } => {
+                log_disk_replica_repaired(key, *doc_len, *replica_len)
+            }
+            // `AuditEvent` is `#[non_exhaustive]` (the kit adds events in
+            // patch releases), so a catch-all is required; it logs the event
+            // rather than dropping it.
             other => log_debug!("[docs] event {other:?}"),
         }
     }
+}
+
+/// The warn line for [`AuditEvent::DiskReplicaRepaired`]. Stable prefix
+/// `[docs] WARN: disk replica repaired` (grep for it). `key` is the doc's
+/// `<project id>:<workspace-relative path>` ([`key_label`]), never an
+/// absolute path; the lengths are bytes; never content.
+pub fn disk_replica_repaired_line(key: &DocKey, doc_len: u64, replica_len: u64) -> String {
+    format!(
+        "[docs] WARN: disk replica repaired key={} doc_len={doc_len} replica_len={replica_len} (kit bug: report it to K2 Cores)",
+        key_label(key)
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the disk-replica-repaired lines logged on this thread.
+    static REPAIRED_LINES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn log_disk_replica_repaired(key: &DocKey, doc_len: u64, replica_len: u64) {
+    let line = disk_replica_repaired_line(key, doc_len, replica_len);
+    log_debug!("{line}");
+    #[cfg(test)]
+    REPAIRED_LINES.with(|v| v.borrow_mut().push(line));
 }
 
 /// `<workspace>/.k2/conflicts` for a file: the nearest folder above it that
@@ -515,5 +549,22 @@ mod tests {
         );
         let blob = purged_outcome(&key, &PurgedScope::BlobVersions { version: None }, &c);
         assert!(blob.contains("scope=blob_versions:all_but_current"), "{blob}");
+    }
+
+    #[test]
+    fn a_disk_replica_repair_is_logged_as_a_warn_line_with_lengths_only() {
+        REPAIRED_LINES.with(|v| v.borrow_mut().clear());
+        let key = DocKey { space: "proj-123".into(), path: "notes/a.md".into() };
+        let ev = AuditEvent::DiskReplicaRepaired { key, doc_len: 120, replica_len: 87 };
+        K2Host::default().on_event(&ev);
+        let got = REPAIRED_LINES.with(|v| v.borrow().clone());
+        assert_eq!(
+            got,
+            vec![
+                "[docs] WARN: disk replica repaired key=proj-123:notes/a.md doc_len=120 replica_len=87 (kit bug: report it to K2 Cores)"
+                    .to_string()
+            ],
+            "the event must reach its own arm (not the catch-all) and log exactly one line"
+        );
     }
 }

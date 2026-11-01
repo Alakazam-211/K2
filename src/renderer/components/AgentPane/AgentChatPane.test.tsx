@@ -123,6 +123,9 @@ vi.mock('@/stores/session-events', async () => {
     onAgentIdentityChanged: () => () => {},
     // The chat header's Token picker refetches on this event.
     onLlmAccountsChanged: () => () => {},
+    // The Thread shown while the pinned Chat is ensured (remote Thread
+    // load Fix 1) asks who is viewing.
+    onNotifyPrefsChanged: () => () => {},
   }
 })
 
@@ -242,6 +245,7 @@ vi.stubGlobal('WebSocket', FakeWS)
 import { AgentChatPane } from './AgentChatPane'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
+import { sessionViewTabStorageKey } from '@/components/SessionView/sessionViewTab'
 
 // Home M3 — the pane reads its room: the mocked tabs store, this suite's
 // project list, and an activity sink (MS68). The scope is the primary one,
@@ -1146,5 +1150,57 @@ describe('Continue in a new chat — pinned session switcher', () => {
     expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(false)
     expect(h.addTabToGroup).not.toHaveBeenCalled()
     expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+  })
+})
+
+describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () => {
+  const handled = testRoom({
+    tabs: useTabsStore,
+    projects: [{ id: 'proj-1', path: '/ws', handle: 'sales', workspaces: [] } as never],
+    activity: { setViewing: vi.fn() },
+    activeSet: {
+      getState: () => ({ activeProjectIds: h.activeIds.value }),
+      getInitialState: () => ({ activeProjectIds: h.activeIds.value }),
+      subscribe: () => () => {},
+    },
+  })
+  const getRoutes = (): string[] => h.daemonCliGet.mock.calls.map((c) => c[0])
+
+  it('the Thread is shown and read while ensure-pinned-chat is still in flight; the known handle needs no lookup', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await gate
+        return mountEnsure()
+      }
+      return undefined
+    })
+    // This conversation was last shown as the Thread.
+    localStorage.setItem(sessionViewTabStorageKey('local', 'claude-restored'), 'thread')
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="claude-restored" />)
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('thread', expect.objectContaining({ addr: 'sales', limit: 25 })))
+    // The ensure has not answered: the terminal side still says so.
+    expect(lastEnsureCall()).not.toBeNull()
+    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+    expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy()
+    expect(screen.getByTestId('thread-overlay-pane')).toBeTruthy()
+    expect(screen.getAllByText('Loading session…').length).toBeGreaterThan(0)
+    // The room's list had the handle: no address round trip.
+    expect(getRoutes()).not.toContain('sessions/list-for-workspace')
+    expect(getRoutes()).not.toContain('workspace/handle')
+    await act(async () => release())
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.queryByTestId('agent-session-ensuring')).toBeNull()
+    localStorage.removeItem(sessionViewTabStorageKey('local', 'claude-restored'))
+    h.daemonCliPost.mockImplementation(async () => mountEnsure())
+  })
+
+  it('a list without the handle looks the address up as before', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(getRoutes()).toContain('sessions/list-for-workspace'))
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
   })
 })

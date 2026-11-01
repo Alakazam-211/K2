@@ -28,6 +28,9 @@ import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import type { SplitPaneView } from '@/components/SessionView/sessionViewTab'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
+import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
+import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
+import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
@@ -749,8 +752,19 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     setSplitLeft,
     setSplitRight,
   } = useSessionViewTab(overlayConv, room.scope)
-  const [overlayAddr, setOverlayAddr] = useState('')
+  // research-remote-thread-load-v1 Fix 1: the pinned Chat's Thread answers
+  // at the workspace handle, which the room's project list (the list a Home
+  // row opened by) already has. Known: use it, no lookup round trip.
+  // Unknown (a list from before handles): look it up as before.
+  const knownHandle = useRoomProjects(
+    (ps) => (ps.find((p) => p.id === projectId) ?? ps.find((p) => p.path === projectPath))?.handle?.trim() ?? '',
+  )
+  const [overlayAddr, setOverlayAddr] = useState(knownHandle)
   useEffect(() => {
+    if (knownHandle) {
+      setOverlayAddr(knownHandle)
+      return
+    }
     let cancelled = false
     resolvePinnedChatCopyableAddress(room.scope, projectPath, projectId)
       .then((a) => {
@@ -760,7 +774,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return () => {
       cancelled = true
     }
-  }, [projectPath, projectId])
+  }, [projectPath, projectId, knownHandle])
 
   // Latest onDaemonSessionRemoved in a ref so the session-events
   // subscription (deps: projectPath/projectId) fires the CURRENT
@@ -770,6 +784,14 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   useEffect(() => {
     onDaemonSessionRemovedRef.current = onDaemonSessionRemoved
   }, [onDaemonSessionRemoved])
+
+  // Fix 1: the Thread's first read goes out while the pinned Chat is still
+  // being ensured (a remote server only; a Thread view mounted meanwhile
+  // shares this read), so it paints from the view cache when it shows.
+  useEffect(() => {
+    if (phase.kind !== 'ensuring' || !overlayAddr) return
+    void prefetchThread(room.scope, overlayAddr)
+  }, [phase.kind, overlayAddr, room.scope])
 
   // The canonical conversation id currently pinned (from the last ensure
   // / the SessionAdded event) — any harness's session since Slice 4.
@@ -1150,11 +1172,34 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   }
 
   if (phase.kind === 'ensuring') {
+    // Fix 1: a view that shows the Thread shows it now, beside the
+    // terminal's "Loading session…", instead of waiting for the ensure.
+    const threadShown =
+      overlayAddr !== '' &&
+      (viewTab === 'thread' || (viewTab === 'split' && (splitLeft === 'thread' || splitRight === 'thread')))
+    if (!threadShown) {
+      return (
+        <>
+        {continueDialog}
+        <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
+          Loading session…
+        </div>
+        </>
+      )
+    }
     return (
       <>
       {continueDialog}
-      <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
-        Loading session…
+      <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+        {header}
+        <EnsuringThreadBody
+          viewTab={viewTab}
+          splitLeft={splitLeft}
+          splitRight={splitRight}
+          addr={overlayAddr}
+          conversationId={overlayConv}
+          displayName={displayName}
+        />
       </div>
       </>
     )
@@ -1205,6 +1250,53 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       </PinnedSessionBody>
     </div>
     </>
+  )
+}
+
+/** While the pinned Chat is being ensured: the Thread (and Chatter), with
+ *  "Loading session…" where the terminal will be. No message box yet: it
+ *  comes with the terminal pane a moment later. */
+function EnsuringThreadBody({
+  viewTab,
+  splitLeft,
+  splitRight,
+  addr,
+  conversationId,
+  displayName,
+}: {
+  viewTab: SessionViewTab
+  splitLeft: SplitPaneView
+  splitRight: SplitPaneView
+  addr: string
+  conversationId: string | null
+  displayName?: string
+}): React.JSX.Element {
+  const loading = (
+    <div
+      className="flex-1 min-h-0 flex items-center justify-center text-xs text-[var(--color-text-muted)]"
+      data-testid="agent-session-loading"
+    >
+      Loading session…
+    </div>
+  )
+  const thread = (
+    <ThreadOverlayColumn addr={addr} conversationId={conversationId} active composeBar={null} agentName={displayName || addr} />
+  )
+  return (
+    <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-ensuring">
+      <SplitSessionColumns
+        showSplit={viewTab === 'split'}
+        hidePty={viewTab !== 'split'}
+        left={splitLeft}
+        right={splitRight}
+        terminal={loading}
+        sharedTerminal={loading}
+        renderView={(view) =>
+          view === 'thread' ? thread : <ChatterOverlayPane addr={addr} conversationId={conversationId} active />
+        }
+        single={thread}
+      />
+    </div>
   )
 }
 

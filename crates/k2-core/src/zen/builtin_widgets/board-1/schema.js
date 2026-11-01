@@ -213,6 +213,8 @@
           if (!Array.isArray(v[em])) bad('{"<person>": ["👍", …]}')
           for (const who of v[em]) { const k = strOf(who, key, 80); if (!k) continue; (byPerson[k] = byPerson[k] || []).push(em) }
         }
+        // In REACTIONS order (the older shape's key order isn't the same everywhere it's read).
+        for (const k of Object.keys(byPerson)) byPerson[k].sort((a, b) => REACTIONS.indexOf(a) - REACTIONS.indexOf(b))
       }
       const out = {}
       for (const who of Object.keys(byPerson)) {

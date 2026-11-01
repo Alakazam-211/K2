@@ -139,7 +139,8 @@
         async get(ref, o) { log.blobGets.push([ref, o || null]); const b = blobs.get(ref); if (!b) throw K2E('not_found'); return { ref, mime: b.mime, name: b.name, size: b.bytes.length, blob: new g.Blob([b.bytes], { type: b.mime }) } },
         async url(ref, o) { const b = blobs.get(ref); if (!b) throw K2E('not_found'); const u = urlOf(ref, o && o.px, b.bytes, b.mime); log.urls.push([ref, (o && o.px) || 0]); return u },
       },
-      async open(url) { log.links.push(url); return { ok: true } },
+      // window.__declineOpen: the person says no on K2's card (window.__opened lists every ask).
+      async open(url) { log.links.push(url); (g.__opened = g.__opened || []).push(url); return { ok: !g.__declineOpen } },
       async download(name, data, o) {
         const bytes = typeof data === 'function' ? await data() : data
         log.downloads.push({ name, data: bytes, mime: o && o.mime })

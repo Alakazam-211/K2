@@ -204,6 +204,9 @@ describe('k2:board@1 schema (data format 1)', () => {
 
   it('reads reactions per person (turning the older per-emoji shape round) and votes per person', () => {
     expect(S.clean('sticky', { reactions: { '👍': ['Ada', 'agent:helper'], '🎉': ['Ada'] } }).reactions).toEqual({ Ada: ['👍', '🎉'], 'agent:helper': ['👍'] })
+    // The older shape is read in REACTIONS order, whatever order its keys came in; new reactions keep add order.
+    expect(S.clean('sticky', { reactions: { '🎉': ['Ada'], '⭐': ['Ada'], '👍': ['Ada'] } }).reactions).toEqual({ Ada: ['👍', '🎉', '⭐'] })
+    expect(S.clean('sticky', { reactions: { 'person:owner': ['⭐', '👍'] } }).reactions).toEqual({ 'person:owner': ['⭐', '👍'] })
     expect(S.clean('sticky', { reactions: { 'person:owner': ['👍', '👍', '🔥'], 'agent:x': [] } }).reactions).toEqual({ 'person:owner': ['👍', '🔥'] })
     expect(code(() => S.clean('sticky', { reactions: { 'person:owner': ['🍕'] } }))).toEqual({ code: 'bad_field', field: 'reactions', max: undefined })
     expect(S.clean('sticky', { votes: { 'person:owner': 2, 'agent:x': 0 } }).votes).toEqual({ 'person:owner': 2 })

@@ -373,6 +373,9 @@ pub fn fetch_account(primary: &str, token: &str) -> Result<AccountSubdomains, St
     crate::airgap::refuse()?;
     let parsed = get_subdomains(token)?;
     let tier = tier_of_connected(&parsed.subdomains, primary);
+    // Every live answer refreshes the cached tier (the refresh rule above
+    // [`TIER_FRESH`]).
+    note_tier(primary, tier.clone());
     Ok(AccountSubdomains {
         map: SubdomainMap::from_rows(primary, parsed.subdomains),
         tier,
@@ -690,12 +693,195 @@ pub fn reset_for_primary(primary: &str) -> bool {
     *expected_primary_slot()
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(primary.clone());
+    // The plan tier was the old name's: a new name starts unknown.
+    *tier_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
     let map = SubdomainMap {
         primary,
         targets: HashMap::new(),
     };
     persist(&map);
     store(map)
+}
+
+// ── The plan tier, cached (voice rooms PRD v1.9 §8, S7; vs-live V21) ──────
+//
+// Gates that ask "is this box Pro?" on a hot path (voice rooms, the Pro
+// watch that starts Sew) read this cache instead of a live GET per call.
+//
+// **Refresh rule.**
+// - The connector's subdomain loop refreshes it with the map, every
+//   `lease::RENEW_INTERVAL` (60 s) while the tunnel's E2E is on; every other
+//   live `GET /subdomains` ([`fetch_account`]: publish's Pro gate, the
+//   on-demand refresh route, [`refresh_tier`]) records its reading too.
+// - A reading younger than [`TIER_FRESH`] (5 min) is `fresh`.
+// - Older, up to [`TIER_GRACE`] (1 h): `stale`. Gates keep its answer, so a
+//   control-plane blip never closes voice rooms, and say it is stale.
+// - Older than [`TIER_GRACE`], none yet, or for another subdomain:
+//   `unknown`. Gates treat unknown as not Pro (fail closed).
+// - A tunnel identity change ([`reset_for_primary`]) forgets it.
+// Nothing is written to disk: a restarted daemon is `unknown` until the
+// loop's first fetch (seconds after the tunnel starts).
+
+/// A tier reading younger than this is current.
+pub const TIER_FRESH: Duration = Duration::from_secs(5 * 60);
+/// A failed refresh keeps the last reading usable this long.
+pub const TIER_GRACE: Duration = Duration::from_secs(60 * 60);
+
+/// One reading of the connected row's plan tier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TierReading {
+    /// The subdomain it was read for (lowercase).
+    pub primary: String,
+    /// `"pro"` | `"single"` | `"free"`; `None` when the control plane sent
+    /// no tier for the connected row.
+    pub tier: Option<String>,
+    /// Unix seconds of the fetch.
+    pub fetched_at: i64,
+}
+
+impl TierReading {
+    pub fn is_pro(&self) -> bool {
+        self.tier.as_deref() == Some("pro")
+    }
+}
+
+/// What a gate sees ([`tier_view`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TierView {
+    /// Younger than [`TIER_FRESH`].
+    Fresh(TierReading),
+    /// Between [`TIER_FRESH`] and [`TIER_GRACE`]: still used.
+    Stale(TierReading),
+    /// None, too old, or for another subdomain: not Pro.
+    Unknown,
+}
+
+impl TierView {
+    /// Pro, by the rule above (unknown is not Pro).
+    pub fn is_pro(&self) -> bool {
+        match self {
+            TierView::Fresh(r) | TierView::Stale(r) => r.is_pro(),
+            TierView::Unknown => false,
+        }
+    }
+    /// `fresh` | `stale` | `unknown`.
+    pub fn state(&self) -> &'static str {
+        match self {
+            TierView::Fresh(_) => "fresh",
+            TierView::Stale(_) => "stale",
+            TierView::Unknown => "unknown",
+        }
+    }
+    pub fn reading(&self) -> Option<&TierReading> {
+        match self {
+            TierView::Fresh(r) | TierView::Stale(r) => Some(r),
+            TierView::Unknown => None,
+        }
+    }
+}
+
+fn tier_slot() -> &'static std::sync::Mutex<Option<TierReading>> {
+    static SLOT: std::sync::Mutex<Option<TierReading>> = std::sync::Mutex::new(None);
+    &SLOT
+}
+
+/// Called when a reading's tier differs from the previous one for the same
+/// subdomain (the first reading counts): `(new, previous tier)`.
+type TierHook = fn(&TierReading, Option<&str>);
+
+fn tier_hook() -> &'static std::sync::RwLock<Option<TierHook>> {
+    static H: std::sync::RwLock<Option<TierHook>> = std::sync::RwLock::new(None);
+    &H
+}
+
+/// The daemon's tier watch installs this at boot (one hook; a second call
+/// replaces it).
+pub fn set_tier_hook(hook: TierHook) {
+    *tier_hook().write().unwrap_or_else(|p| p.into_inner()) = Some(hook);
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record a reading taken now ([`fetch_account`] calls this).
+pub fn note_tier(primary: &str, tier: Option<String>) {
+    note_tier_at(primary, tier, now_unix());
+}
+
+/// [`note_tier`] at `now` (unix seconds). A reading for a subdomain the
+/// tunnel no longer serves (a fetch that raced a tunnel identity change)
+/// is dropped. Fires the tier hook when the tier changed.
+pub fn note_tier_at(primary: &str, tier: Option<String>, now: i64) {
+    let primary = primary.trim().to_ascii_lowercase();
+    if primary.is_empty() {
+        return;
+    }
+    if let Some(expected) = expected_primary_slot().lock().unwrap_or_else(|p| p.into_inner()).as_deref() {
+        if expected != primary {
+            return;
+        }
+    }
+    let reading = TierReading { primary: primary.clone(), tier, fetched_at: now };
+    let previous = {
+        let mut slot = tier_slot().lock().unwrap_or_else(|p| p.into_inner());
+        let prev = slot.as_ref().filter(|r| r.primary == primary).map(|r| r.tier.clone());
+        *slot = Some(reading.clone());
+        prev
+    };
+    let changed = match &previous {
+        Some(prev) => *prev != reading.tier,
+        None => true,
+    };
+    if changed {
+        let hook = *tier_hook().read().unwrap_or_else(|p| p.into_inner());
+        if let Some(h) = hook {
+            h(&reading, previous.flatten().as_deref());
+        }
+    }
+}
+
+/// The last reading for `primary`, however old (`None`: none for it).
+pub fn cached_tier(primary: &str) -> Option<TierReading> {
+    let primary = primary.trim().to_ascii_lowercase();
+    tier_slot().lock().unwrap_or_else(|p| p.into_inner()).clone().filter(|r| r.primary == primary)
+}
+
+/// The cached tier for `primary` by the refresh rule. Never a network call.
+pub fn tier_view(primary: &str) -> TierView {
+    tier_view_at(primary, now_unix())
+}
+
+/// [`tier_view`] at `now` (unix seconds).
+pub fn tier_view_at(primary: &str, now: i64) -> TierView {
+    let Some(r) = cached_tier(primary) else { return TierView::Unknown };
+    let age = now.saturating_sub(r.fetched_at).max(0) as u64;
+    if age < TIER_FRESH.as_secs() {
+        TierView::Fresh(r)
+    } else if age < TIER_GRACE.as_secs() {
+        TierView::Stale(r)
+    } else {
+        TierView::Unknown
+    }
+}
+
+/// One live `GET /subdomains` for the tier alone (a gate that found the
+/// cache unknown and may wait on the network, e.g. the Pro watch at boot).
+/// Records the reading; a failure leaves the cache as it was.
+pub fn refresh_tier(primary: &str, token: &str) -> Result<TierReading, String> {
+    fetch_account(primary, token)?;
+    cached_tier(primary).ok_or_else(|| "the control plane's answer was for another subdomain".to_string())
+}
+
+/// Test-only: forget the cached tier and the hook.
+#[cfg(any(test, feature = "test-util"))]
+pub fn clear_tier_for_test() {
+    *tier_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
+    *tier_hook().write().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
 /// Test-only: forget the expected primary so later tests in this binary
@@ -1237,5 +1423,113 @@ mod tests {
         let _ = swap_and_changed(SubdomainMap::default());
         assert_eq!(load_persisted("rosson"), None, "unreadable file is ignored");
         let _ = swap_and_changed(SubdomainMap::default());
+    }
+
+    // ── the cached plan tier (voice rooms PRD v1.9 §8, S7) ───────────────
+
+    static HOOK_SEEN: std::sync::Mutex<Vec<(String, Option<String>, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+    fn record_hook(r: &TierReading, prev: Option<&str>) {
+        HOOK_SEEN.lock().unwrap().push((r.primary.clone(), r.tier.clone(), prev.map(str::to_string)));
+    }
+
+    /// The refresh rule: fresh under 5 min, stale (still used) up to 1 h,
+    /// then unknown = not Pro; another subdomain is unknown; the hook fires
+    /// only when the tier changes; a tunnel identity change forgets it; a
+    /// reading for a name the tunnel no longer serves is dropped.
+    #[test]
+    fn the_cached_tier_follows_the_refresh_rule() {
+        let _g = crate::themes::HOME_LOCK.lock();
+        let _home = crate::test_env::TempHome::new();
+        clear_expected_primary_for_test();
+        clear_tier_for_test();
+        HOOK_SEEN.lock().unwrap().clear();
+        set_tier_hook(record_hook);
+        let t0 = 1_800_000_000;
+        assert_eq!(tier_view_at("rosson", t0), TierView::Unknown, "nothing read yet");
+        assert!(!tier_view_at("rosson", t0).is_pro(), "unknown is not Pro");
+
+        note_tier_at("Rosson", Some("pro".into()), t0);
+        let v = tier_view_at("rosson", t0 + 10);
+        assert!(matches!(v, TierView::Fresh(_)) && v.is_pro(), "{v:?}");
+        assert_eq!(v.state(), "fresh");
+        assert_eq!(v.reading().map(|r| r.fetched_at), Some(t0));
+        let stale = tier_view_at("rosson", t0 + TIER_FRESH.as_secs() as i64);
+        assert_eq!(stale.state(), "stale");
+        assert!(stale.is_pro(), "a stale Pro reading is still Pro (a control-plane blip closes nothing)");
+        let old = tier_view_at("rosson", t0 + TIER_GRACE.as_secs() as i64);
+        assert_eq!(old, TierView::Unknown, "past the grace: unknown");
+        assert!(!old.is_pro());
+        assert_eq!(tier_view_at("other", t0 + 10), TierView::Unknown, "another subdomain");
+
+        // The same tier again: no hook. A change: the hook, with the old tier.
+        note_tier_at("rosson", Some("pro".into()), t0 + 60);
+        note_tier_at("rosson", Some("free".into()), t0 + 120);
+        assert!(!tier_view_at("rosson", t0 + 130).is_pro(), "downgrade seen on the next reading");
+        note_tier_at("rosson", None, t0 + 180);
+        assert_eq!(tier_view_at("rosson", t0 + 190).reading().and_then(|r| r.tier.clone()), None);
+        assert_eq!(
+            *HOOK_SEEN.lock().unwrap(),
+            vec![
+                ("rosson".to_string(), Some("pro".to_string()), None),
+                ("rosson".to_string(), Some("free".to_string()), Some("pro".to_string())),
+                ("rosson".to_string(), None, Some("free".to_string())),
+            ]
+        );
+
+        // A tunnel identity change forgets it; a late reading for the old
+        // name is dropped.
+        note_tier_at("rosson", Some("pro".into()), t0 + 200);
+        reset_for_primary("newname");
+        assert_eq!(cached_tier("rosson"), None);
+        note_tier_at("rosson", Some("pro".into()), t0 + 210);
+        assert_eq!(cached_tier("rosson"), None, "a reading for the old name is dropped");
+        note_tier_at("newname", Some("single".into()), t0 + 220);
+        assert_eq!(cached_tier("newname").and_then(|r| r.tier), Some("single".to_string()));
+
+        clear_expected_primary_for_test();
+        clear_tier_for_test();
+        let _ = swap_and_changed(SubdomainMap::default());
+    }
+
+    /// Every live `GET /subdomains` ([`fetch_account`], so the refresh loop
+    /// and [`refresh_tier`] too) records the connected row's tier.
+    #[test]
+    fn a_live_fetch_records_the_tier() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for body in [
+                r#"{"subdomains":[{"label":"rosson","primary":true,"tier":"pro","connected":true}]}"#,
+                r#"{"subdomains":[{"label":"rosson","primary":true,"tier":"free","connected":true}]}"#,
+            ] {
+                let Ok((mut sock, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        let _g = crate::themes::HOME_LOCK.lock();
+        let _home = crate::test_env::TempHome::new();
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        clear_expected_primary_for_test();
+        clear_tier_for_test();
+        let a = fetch_account("rosson", "tok_tier").expect("first fetch");
+        assert_eq!(a.tier.as_deref(), Some("pro"));
+        let v = tier_view("rosson");
+        assert!(matches!(v, TierView::Fresh(_)) && v.is_pro(), "{v:?}");
+        let r = refresh_tier("rosson", "tok_tier").expect("second fetch");
+        assert_eq!(r.tier.as_deref(), Some("free"));
+        assert!(!tier_view("rosson").is_pro(), "the downgrade is cached at once");
+        drop(cp);
+        clear_tier_for_test();
     }
 }

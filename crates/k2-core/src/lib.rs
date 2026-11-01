@@ -275,6 +275,9 @@ pub mod homes_sync;
 /// stash-sync-v1 (0.46.7): a person's prompt stash synced between their
 /// devices (records only; attachment bytes stay on the devices).
 pub mod stash_sync;
+/// Voice rooms (0.46.8, prd-k2-voice-rooms-v1): the `voice_rooms_preview`
+/// switch (`K2_VOICE_ROOMS`), default off.
+pub mod voice_preview;
 // Phase 2.5c: workspace lifecycle + state + identity + launch helpers.
 // Post-Phase-2.1 "workspace == agent" 1:1 means these are
 // workspace-scoped concerns; was scattered under `agents/`.

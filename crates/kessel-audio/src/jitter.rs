@@ -570,9 +570,6 @@ mod tests {
                 })
                 .collect()
         }
-        fn count(&self, f: impl Fn(&Next) -> bool) -> usize {
-            self.out.iter().filter(|n| f(n)).count()
-        }
     }
 
     #[test]

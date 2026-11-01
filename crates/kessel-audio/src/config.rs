@@ -43,6 +43,16 @@ impl Default for Backend {
     }
 }
 
+impl Backend {
+    fn null_device(&self) -> Option<&NullDevice> {
+        match self {
+            Backend::Null(d) => Some(d),
+            #[cfg(feature = "cpal")]
+            Backend::System { .. } => None,
+        }
+    }
+}
+
 /// Everything [`crate::AudioEngine::start`] needs.
 #[derive(Debug)]
 pub struct EngineConfig {
@@ -126,7 +136,7 @@ impl EngineConfig {
         if self.processing_poll.is_zero() || self.processing_poll >= Duration::from_millis(10) {
             return bad("processing_poll must be between 0 and 10 ms");
         }
-        if let Backend::Null(d) = &self.backend {
+        if let Some(d) = self.backend.null_device() {
             if d.sample_rate < 8_000 || d.sample_rate > 384_000 || d.sample_rate % 100 != 0 {
                 return bad("null device sample_rate must be 8000..=384000 and a multiple of 100");
             }

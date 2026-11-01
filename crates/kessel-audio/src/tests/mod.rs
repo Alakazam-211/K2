@@ -106,7 +106,6 @@ pub(crate) struct CallRun {
     /// Wall time per 10 ms block (render + capture).
     pub(crate) block_ns: Vec<u64>,
     pub(crate) stats: Stats,
-    pub(crate) frames_sent: usize,
 }
 
 /// Drive a core: the far-end schedule is received as participant FAR_ID;
@@ -155,14 +154,12 @@ pub(crate) fn run_core(
     }
     let mut stats = Stats::default();
     core.fill_stats(&mut stats);
-    let frames_sent = frames.len();
     let out = decode_capture(&frames, n_blocks * BLOCK_SAMPLES);
     CallRun {
         rendered,
         out,
         block_ns,
         stats,
-        frames_sent,
     }
 }
 

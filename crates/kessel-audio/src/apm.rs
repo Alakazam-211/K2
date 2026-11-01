@@ -69,11 +69,17 @@ impl ProcessingConfig {
     }
 }
 
-/// AGC2 adaptive-digital headroom, in dB. sonora 0.2.0's default (5 dB)
-/// settles about 0.7 to 1.6 dB quieter than the C++ WebRTC library with the
-/// same settings; this value brings it back in line (measured on LibriSpeech
-/// against the C++ library, see the crate README).
-pub const AGC2_HEADROOM_DB: f32 = 5.0;
+/// AGC2 adaptive-digital headroom, in dB.
+///
+/// With WebRTC's default of 5 dB, sonora 0.2.0 settles 0.7 to 1.6 dB
+/// quieter than the C++ WebRTC library. Measured on LibriSpeech speech
+/// against the C++ library (5.0 / 4.0 / 3.4 / 3.0 dB swept), 4 dB matches
+/// it best: AGC2 alone at -40 and -30 dBFS input lands at -22.8 and
+/// -23.0 dBFS (C++: -23.1, -23.1); the full chain on near-end speech at
+/// -23.5 dBFS (C++: -22.9) and in double talk at -25.5 dBFS (C++: -25.4).
+/// Every level is within 0.6 dB of the C++ library, against up to 1.6 dB
+/// with 5 dB. Quiet (-50 dBFS) and loud (-20 dBFS) input are unaffected.
+pub const AGC2_HEADROOM_DB: f32 = 4.0;
 
 pub(crate) struct Apm {
     inner: Option<sonora::AudioProcessing>,
@@ -82,6 +88,10 @@ pub(crate) struct Apm {
 
 impl Apm {
     pub(crate) fn new(cfg: &ProcessingConfig) -> Self {
+        Self::with_agc_headroom(cfg, AGC2_HEADROOM_DB)
+    }
+
+    pub(crate) fn with_agc_headroom(cfg: &ProcessingConfig, headroom_db: f32) -> Self {
         if !cfg.any() {
             return Apm {
                 inner: None,
@@ -110,7 +120,7 @@ impl Apm {
             gain_controller2: cfg.gain_control.then(|| GainController2 {
                 input_volume_controller: false,
                 adaptive_digital: Some(AdaptiveDigital {
-                    headroom_db: AGC2_HEADROOM_DB,
+                    headroom_db,
                     ..AdaptiveDigital::default()
                 }),
                 fixed_digital: FixedDigital::default(),

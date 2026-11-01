@@ -360,3 +360,45 @@ fn cpu_full_duplex_under_five_percent_of_a_core() {
     );
     assert!(p50 <= 500.0, "median block {p50:.0} µs (> 5% of a core)");
 }
+
+/// The AGC2 tuning holds: with the tuned headroom, speech at -40 and
+/// -30 dBFS comes out louder than with WebRTC's default headroom by about
+/// the 1 dB the C++ comparison asked for.
+#[test]
+fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
+    use crate::apm::{Apm, AGC2_HEADROOM_DB};
+    let processing = ProcessingConfig {
+        echo_cancellation: false,
+        noise_suppression: None,
+        gain_control: true,
+        high_pass: true,
+    };
+    let room = &ROOMS[0];
+    let mut rng = Rng::new(6100);
+    let pose = laptop_pose(room, &mut rng);
+    let n = secs(30.0);
+    let near_dry = talker_track(&TALKERS[2], &mut rng, n);
+    for lvl in [-40.0f64, -30.0] {
+        let near = near_at_mic(&near_dry, room, &pose, lvl);
+        let mask = active_frames(&near);
+        let mic = mic_from(&[near.as_slice()], &mut rng);
+        let run = |headroom: f32| -> f64 {
+            let mut apm = Apm::with_agc_headroom(&processing, headroom);
+            let zeros = [0.0f32; BLOCK_SAMPLES];
+            let mut out = vec![0.0f32; mic.len()];
+            for (i, b) in mic.chunks_exact(BLOCK_SAMPLES).enumerate() {
+                apm.render(&zeros);
+                apm.capture(b, &mut out[i * BLOCK_SAMPLES..(i + 1) * BLOCK_SAMPLES]);
+            }
+            level_on(&out, &mask, 1500, 3000)
+        };
+        let default = run(5.0);
+        let tuned = run(AGC2_HEADROOM_DB);
+        report(
+            &format!("S6 tuning input {lvl}"),
+            &[("default_dbfs".into(), default), ("tuned_dbfs".into(), tuned)],
+        );
+        let lift = tuned - default;
+        assert!((0.4..=1.6).contains(&lift), "input {lvl}: tuning lifted the level {lift:.2} dB");
+    }
+}

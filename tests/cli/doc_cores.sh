@@ -126,16 +126,17 @@ has "$OUT" "Multiplayer cores on this server (the owner or an Admin turns them o
 has "$OUT" "  markdown   off   Markdown core (Beta): .md and .markdown files" "markdown row"
 has "$OUT" "  text       off   Text and code core (Beta): code, config, plain text, logs, CSV/TSV as text" "text row"
 has "$OUT" "  any-file   off   Any other file (Beta): presence, a lease, versions and restore (agents only for now)" "any-file row"
+has "$OUT" "  board      off   Board (Beta): the Board Garden (a whiteboard for you and your agents)" "board row"
 has "$OUT" "While a core is off, k2 doc refuses its files (core_off, exit 3) and people open them the usual way." "list footer"
-ok "k2 doc cores lists three cores, all off"
+ok "k2 doc cores lists four cores, all off"
 cli -- doc cores --json
 want_rc 0 "list --json"
-jok "$OUT" 'j["ok"] is True and j["canChange"] is True and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file"] and j["later"] == ["CSV grid", "Word"]' "--json is the daemon's answer"
+jok "$OUT" 'j["ok"] is True and j["canChange"] is True and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board"] and j["later"] == ["CSV grid", "Word"]' "--json is the daemon's answer"
 
 echo "== bad usage =="
 cli -- doc cores on word
 want_rc 2 "unknown core"
-has "$ERR" "no such core: word (markdown, text, any-file)" "unknown core message"
+has "$ERR" "no such core: word (markdown, text, any-file, board)" "unknown core message"
 cli -- doc cores flip markdown
 want_rc 2 "bad action"
 cli -- doc cores on
@@ -164,7 +165,7 @@ ok "an agent with a real passport and cell socket"
 AGENT_ENV=(K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$AG")
 cli "${AGENT_ENV[@]}" -- doc cores --json
 want_rc 0 "agent list"
-jok "$OUT" 'j["canChange"] is False and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file"] and not any(c["on"] for c in j["cores"])' "an agent lists the cores (canChange false)"
+jok "$OUT" 'j["canChange"] is False and [c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board"] and not any(c["on"] for c in j["cores"])' "an agent lists the cores (canChange false)"
 settings_before="$(cat "$SB/.k2/settings.json" 2>/dev/null || echo none)"
 audit_before="$(cat "$SB"/.k2/*audit*.jsonl 2>/dev/null | grep -c '"doc-core-switch"' || true)"
 cli "${AGENT_ENV[@]}" -- doc cores on markdown

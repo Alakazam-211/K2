@@ -1829,6 +1829,15 @@ fn v_links_use_the_box_host_without_a_stored_door_and_never_a_derived_skin_host(
     let tok = token_in_last_mail(&f, "k2ev_");
     let p = verify::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
     assert!(p.status.starts_with("200") && p.html.contains("Confirmed"), "{p:?}");
+    // Set-password links share the host choice (the same field bug): K2's
+    // own page (owner resets, a temporary password's changeUrl) and an
+    // App's invite / reset page when it has none of its own.
+    let k2_page = crate::app_user_invites::k2_set_password_page().expect("the box host is safe");
+    assert_eq!(k2_page.as_deref(), Some("https://box.k2.dev/cli/skin/password/set"));
+    let host_settings = k2_core::skin::invites::settings(k2_core::skin::HOST_APP_ID).expect("host settings");
+    assert_eq!(host_settings.set_password_url, None, "the fixture's box login has no page of its own");
+    let app_page = crate::app_user_invites::set_password_page(&host_settings);
+    assert_eq!(app_page.as_deref(), Some("https://box.k2.dev/cli/skin/password/set"), "never skin.box.k2.dev/reset");
 
     // A stored front door wins over the box host.
     k2_core::skin::set_front_door("connect", Some("https://door.brand.test/"), None, None).expect("door");
@@ -1837,6 +1846,9 @@ fn v_links_use_the_box_host_without_a_stored_door_and_never_a_derived_skin_host(
     let text = f.engine.sent.lock().unwrap().last().cloned().expect("sent").email.to_string();
     assert!(text.contains("https://door.brand.test/cli/email/verify?t=k2ev_"), "{text}");
     assert!(!text.contains("https://box.k2.dev/cli/email/"), "{text}");
+    let k2_page = crate::app_user_invites::k2_set_password_page().expect("stored door is safe");
+    assert_eq!(k2_page.as_deref(), Some("https://door.brand.test/cli/skin/password/set"));
+    assert_eq!(crate::app_user_invites::set_password_page(&host_settings).as_deref(), Some("https://door.brand.test/reset"), "a stored door keeps its /reset");
 
     // An App's host is refused (the fixture's App `shop` answers on
     // `shop.box.k2.dev`): nothing is sent, no row is left.

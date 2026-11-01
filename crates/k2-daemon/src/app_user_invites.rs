@@ -246,8 +246,11 @@ pub fn invite_sender(app: &str, app_ws: Option<&str>, by: &By, from: Option<&str
 /// K2's own set-password page on this box's front door
 /// (`<front door>/cli/skin/password/set`): served by K2 from bundled bytes
 /// (the daemon, or the gateway, never a skin root, a UI port or an App).
-/// `Ok(None)` when the box has no front door URL. Owner resets always land
-/// here (security review 2026-10-25, item 1).
+/// The host is [`k2_front_door_url`]'s: the stored front door, else the
+/// box's own tunnel host, never a derived `skin.<sub>` host the relay may
+/// not route. `Ok(None)` when the box has neither. Owner resets always
+/// land here (security review 2026-10-25, item 1), and so does a
+/// temporary password's `changeUrl` when the App has no page of its own.
 ///
 /// `Err(why)`: the front door can't carry an owner reset (verification
 /// review 2026-10-26, item 2): not `https://` (only exact
@@ -255,8 +258,7 @@ pub fn invite_sender(app: &str, app_ws: Option<&str>, by: &By, from: Option<&str
 /// App's (a public domain or label an App answers on: the box's router
 /// would hand `/cli/skin/password/set` to that App, whose agent reads it).
 pub fn k2_set_password_page() -> Result<Option<String>, String> {
-    let Some(door) = skin::effective_front_door().ok().and_then(|d| d.url) else { return Ok(None) };
-    front_door_page(&door, &app_hosts()).map(Some)
+    k2_front_door_url(crate::skin_gateway::SET_PASSWORD_PATH)
 }
 
 /// Another of K2's own public pages, for a link K2 mails someone
@@ -293,16 +295,11 @@ fn box_public_url() -> Option<String> {
 }
 
 /// [`k2_front_door_url`]'s base: the stored front door, else the box's
-/// tunnel URL, checked like [`front_door_page`]. `Ok(None)`: neither.
+/// tunnel URL, checked by [`front_door_base`]. `Ok(None)`: neither.
 fn mail_link_base(stored: Option<&str>, box_url: Option<&str>, app_hosts: &[String]) -> Result<Option<String>, String> {
     let pick = |u: Option<&str>| u.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let Some(door) = pick(stored).or_else(|| pick(box_url)) else { return Ok(None) };
     front_door_base(&door, app_hosts).map(Some)
-}
-
-/// [`k2_set_password_page`] for front door `door` given every App host.
-fn front_door_page(door: &str, app_hosts: &[String]) -> Result<String, String> {
-    Ok(format!("{}{}", front_door_base(door, app_hosts)?, crate::skin_gateway::SET_PASSWORD_PATH))
 }
 
 /// `door` without a trailing `/`, when K2's own pages may live on it:
@@ -441,18 +438,29 @@ pub(crate) fn box_label() -> String {
         .unwrap_or_else(|| "this K2 server".to_string())
 }
 
-/// The App's set-password page: its own `setPasswordUrl`, else the box
-/// front door's `/reset`, else none.
+/// The App's set-password page (App invite and reset mails): its own
+/// `setPasswordUrl`, else the STORED front door's `/reset`, else K2's own
+/// set-password page on the box's own tunnel host (`https://<sub>.k2.dev`,
+/// https and never an App's host, see [`k2_front_door_url`]), else none.
+/// Never a derived `skin.<sub>` host: the relay routes that label only
+/// once the Caddy front door registered it. The daemon itself serves no
+/// `/reset`, so the box-host fallback is K2's page (same `#token`, same
+/// `POST /cli/skin/password/reset`).
 pub fn set_password_page(settings: &invites::InviteSettings) -> Option<String> {
-    if let Some(u) = &settings.set_password_url {
-        return Some(u.clone());
+    let stored = skin::get_front_door().ok().and_then(|d| d.url);
+    app_set_password_page(settings.set_password_url.as_deref(), stored.as_deref(), box_public_url().as_deref(), &app_hosts())
+}
+
+/// [`set_password_page`] on its inputs.
+fn app_set_password_page(own: Option<&str>, stored: Option<&str>, box_url: Option<&str>, app_hosts: &[String]) -> Option<String> {
+    if let Some(u) = own {
+        return Some(u.to_string());
     }
-    skin::effective_front_door()
-        .ok()
-        .and_then(|d| d.url)
-        .map(|u| u.trim().trim_end_matches('/').to_string())
-        .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
-        .map(|u| format!("{u}/reset"))
+    if let Some(door) = stored.map(str::trim).filter(|s| !s.is_empty()) {
+        let door = door.trim_end_matches('/');
+        return (door.starts_with("https://") || door.starts_with("http://")).then(|| format!("{door}/reset"));
+    }
+    mail_link_base(None, box_url, app_hosts).ok().flatten().map(|b| format!("{b}{}", crate::skin_gateway::SET_PASSWORD_PATH))
 }
 
 /// The App's name for mails (`host`: the box).
@@ -1544,10 +1552,10 @@ mod tests {
     #[test]
     fn the_owner_reset_page_needs_a_safe_front_door() {
         let apps = vec!["shop.rosson.k2.dev".to_string(), "shop.example.com".to_string()];
-        assert_eq!(front_door_page("https://rosson.k2.dev/", &apps).unwrap(), "https://rosson.k2.dev/cli/skin/password/set");
-        assert_eq!(front_door_page("http://localhost:7001", &apps).unwrap(), "http://localhost:7001/cli/skin/password/set");
+        assert_eq!(front_door_base("https://rosson.k2.dev/", &apps).unwrap(), "https://rosson.k2.dev");
+        assert_eq!(front_door_base("http://localhost:7001", &apps).unwrap(), "http://localhost:7001");
         for bad in ["http://rosson.k2.dev", "https://shop.rosson.k2.dev", "https://SHOP.example.com/", "http://localhost.evil.example", "ftp://x", "https://u@rosson.k2.dev"] {
-            assert!(front_door_page(bad, &apps).is_err(), "{bad}");
+            assert!(front_door_base(bad, &apps).is_err(), "{bad}");
         }
     }
 
@@ -1579,6 +1587,23 @@ mod tests {
         }
         // Neither: no base.
         assert_eq!(base(None, None), Ok(None));
+    }
+
+    /// App invite / reset mails: the App's own page wins; a stored front
+    /// door keeps its `/reset`; with none stored, K2's own page on the
+    /// box's main host (never `skin.<sub>`); never an App's host.
+    #[test]
+    fn app_invite_pages_fall_back_to_k2s_page_on_the_box_host() {
+        let apps = vec!["shop.box.k2.dev".to_string()];
+        let page = |own: Option<&str>, stored: Option<&str>, b: Option<&str>| app_set_password_page(own, stored, b, &apps);
+        assert_eq!(page(Some("https://shop.example.com/pw"), Some("https://door.test"), Some("https://box.k2.dev")).as_deref(), Some("https://shop.example.com/pw"));
+        assert_eq!(page(None, Some("https://door.test/"), Some("https://box.k2.dev")).as_deref(), Some("https://door.test/reset"));
+        assert_eq!(page(None, None, Some("https://box.k2.dev")).as_deref(), Some("https://box.k2.dev/cli/skin/password/set"));
+        assert_eq!(page(None, Some(" "), Some("https://box.k2.dev")).as_deref(), Some("https://box.k2.dev/cli/skin/password/set"));
+        assert_eq!(page(None, Some("ftp://door.test"), Some("https://box.k2.dev")), None, "a stored non-http door stays none");
+        assert_eq!(page(None, None, Some("https://shop.box.k2.dev")), None, "never an App's host");
+        assert_eq!(page(None, None, Some("http://box.k2.dev")), None, "https only");
+        assert_eq!(page(None, None, None), None);
     }
 
     /// Item 8: every card answer works without a sender and mints nothing

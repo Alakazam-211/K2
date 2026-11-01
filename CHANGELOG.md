@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.9 (2026-10-31): pairs with kit v0.10.0.2
+
+**Requires `k2-mpc-base` v0.10.0.2** (v0.10.0.1 plus the licence; no kit code change). This
+pack's code and tests are unchanged from v0.7.8.
+
+- **Licence: MIT OR Apache-2.0**, as the kit and the engine: `LICENSE-MIT` and `LICENSE-APACHE`
+  at the root, `license` in the crate (by `license.workspace`). README and NOTICE.md say so. No
+  code change.
+- `Cargo.lock`: k2-mpc-base 0.10.0+2 (only the kit's crate version moves); the crate version.
+
 ## v0.7.8 (2026-10-30): pairs with kit v0.10.0
 
 **Requires `k2-mpc-base` v0.10.0** (C1: structured kinds and the grid, for CSV, on top of

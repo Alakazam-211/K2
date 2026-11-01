@@ -1,5 +1,9 @@
 # Third-party notices
 
+This pack is licensed under MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`; see the
+README). The notices below are for the third-party code it builds on, which keeps its own
+licence.
+
 This pack builds on [k2-mpc-base](https://github.com/Alakazam-211/k2-mpc-base)
 (the multiplayer kit, v0.3.0), which carries its own NOTICE: yrs (MIT), regex-automata
 (MIT OR Apache-2.0), redb (MIT OR Apache-2.0), thiserror (MIT OR Apache-2.0), and

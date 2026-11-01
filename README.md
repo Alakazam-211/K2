@@ -17,4 +17,12 @@ Markdown, byte for byte.
   one person on one doc (`docs/DEMO.md`, which also has a script to replay it on a host).
 
 Check this repo out next to `k2-mpc-base` (sibling directories).
-Status: early. Licence: not yet chosen.
+Status: early. Licence: MIT OR Apache-2.0 (below).
+
+## Licence
+
+Licensed under either of the Apache License, Version 2.0 (`LICENSE-APACHE`) or the MIT licence
+(`LICENSE-MIT`), at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in this work, as defined in the Apache-2.0 licence, is
+dual-licensed as above, without any additional terms or conditions. The kit it builds on has
+the same licence; third-party code keeps its own (see `NOTICE.md`).

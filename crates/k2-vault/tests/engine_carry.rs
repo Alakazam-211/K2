@@ -48,33 +48,37 @@ fn engine_credentials_mint_once_and_rotate_only_when_accepted() {
     assert!(v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).is_err());
 }
 
-/// Sew's recovery key (Rosson 2026-10-30): a system secret K2 writes, that
-/// the Owner or an Admin may reveal with a confirm. An agent (even an IT
-/// agent) never sees it, can't read it, grant it or change it; nothing
-/// delivers it; Sew's other engine secrets stay never shown.
+/// Sew's launch key (voice rooms PRD v1.9 §2.7; `sew-recovery-key` before
+/// 0.46.8): a system secret K2 writes, that only the Owner (the owner
+/// token or an Owner login) may reveal, with a confirm. An Admin or a
+/// Member is refused; an agent (even an IT agent) never sees it, can't read
+/// it, grant it or change it; nothing delivers it; Sew's other engine
+/// secrets stay never shown.
 #[test]
-fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
-    let t = TestDir::new("sew-recovery");
+fn the_sew_launch_key_is_owner_revealable_and_agent_proof() {
+    let t = TestDir::new("sew-launch");
     let (v, _) = open(&t, "v");
-    let key = "k2test-sew-recovery-key-value-0123456789abc";
-    let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), "sew-recovery-key", Kind::Password);
+    let key = "k2test-sew-launch-key-value-0123456789abcde";
+    let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), "sew-launch-key", Kind::Password);
     r.default_delivery = Some(Delivery::None);
     r.delivery_ceiling = Some(Delivery::None);
-    r.description = "Sew recovery key (chat/voice server)".into();
+    r.description = "Sew launch key (chat/voice server)".into();
     // A person can't create it; K2 can.
     assert_eq!(v.put(r.clone(), SecretBytes::from_slice(key.as_bytes()), &Actor::Owner).expect_err("person").code, "vault_system_namespace");
     v.put(r, SecretBytes::from_slice(key.as_bytes()), &Actor::System("sew".into())).expect("system put");
     v.engine_ensure("sew", "db-password", Gen::Random32).expect("ensure");
-    let sel = Selector::system(Scope::engine("sew"), "sew-recovery-key");
+    let sel = Selector::system(Scope::engine("sew"), "sew-launch-key");
 
     let tok = v.confirm.mint("reveal", None, "owner", "test");
     let proof = v.confirm.take(&tok, "reveal", None, "owner").expect("proof");
     assert_eq!(v.reveal(&sel, &Actor::Owner, &proof).expect("owner reveals").expose(), key.as_bytes());
+    let owner_login = Actor::Login { username: "olu".into(), role: Role::Owner };
+    assert_eq!(v.reveal(&sel, &owner_login, &proof).expect("an Owner login reveals").expose(), key.as_bytes());
     let admin = Actor::Login { username: "ana".into(), role: Role::Admin };
-    assert_eq!(v.reveal(&sel, &admin, &proof).expect("admin reveals").expose(), key.as_bytes());
+    assert_eq!(v.reveal(&sel, &admin, &proof).err().expect("admin refused").code, "vault_owner_required");
     assert_eq!(v.reveal(&sel, &Actor::Owner, &HumanProof::None).err().expect("no confirm").code, "vault_confirm_required");
     let member = Actor::Login { username: "m".into(), role: Role::Member };
-    assert!(v.reveal(&sel, &member, &proof).is_err());
+    assert_eq!(v.reveal(&sel, &member, &proof).err().expect("member refused").code, "vault_owner_required");
     assert_eq!(
         v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).err().expect("never").code,
         "vault_system_namespace"
@@ -85,7 +89,7 @@ fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
         assert!(v.reveal(&sel, &a, &proof).is_err(), "agent reveal (manage={manage})");
         assert!(v.meta(&sel, &a).is_err(), "agent sees metadata (manage={manage})");
         let all = v.list(&ListFilter { include_system: true, ..Default::default() }, &a).expect("list");
-        assert!(all.iter().all(|m| m.name != "sew-recovery-key"), "agent lists it (manage={manage})");
+        assert!(all.iter().all(|m| m.name != "sew-launch-key"), "agent lists it (manage={manage})");
         let g = GrantRequest {
             selector: sel.clone(),
             consumer: Consumer::workspace("ws1"),

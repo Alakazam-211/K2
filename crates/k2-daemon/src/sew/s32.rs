@@ -129,8 +129,9 @@ pub fn emit(reason: &str) {
 /// `status.you`. A hint for clients (enable / grey out); every route still
 /// checks on its own (S32-A5: a 200 on status is not permission).
 ///
-/// Person-only steps follow S29's gate: purge is the owner's (token or
-/// Owner login); the recovery key and `drop-prev` are the owner's or an
+/// Person-only steps follow S29's gate: purge and the launch key
+/// (`canRecoveryKey`, Owner only since 0.46.8, voice rooms PRD v1.9 §2.7)
+/// are the owner's (token or Owner login); `drop-prev` is the owner's or an
 /// Admin login's (S29 shipped `PersonFloor::Admin` in 0.46.3); each with a
 /// vault confirm, never a passport.
 pub fn you(who: &Who) -> Value {
@@ -141,16 +142,12 @@ pub fn you(who: &Who) -> Value {
         "isOwner": person && who.is_owner(),
         "isAdmin": person && who.is_admin(),
         "passport": passport,
-        "canRecoveryKey": person && if RECOVERY_KEY_ADMIN { who.is_admin() } else { who.is_owner() },
+        "canRecoveryKey": person && who.is_owner(),
         "canPurge": person && who.is_owner(),
         // `chat_pass::mint::owner_gate`: the owner token or an Owner login.
         "canOpenAsOwner": person && who.is_owner(),
     })
 }
-
-/// Whether an Admin login (with its own confirm) may reveal the recovery
-/// key: `true` since S29 landed (0.46.3, `route_policy` Admin floor).
-pub const RECOVERY_KEY_ADMIN: bool = true;
 
 // ── status decoration ───────────────────────────────────────────────────
 

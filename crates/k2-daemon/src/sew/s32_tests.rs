@@ -126,7 +126,8 @@ fn status_you_says_what_this_caller_may_do() {
         // canManage, isOwner, isAdmin, canRecoveryKey, canPurge, canOpenAsOwner
         (Who::Owner, [true, true, true, true, true, true]),
         (login(Role::Owner), [true, true, true, true, true, true]),
-        (login(Role::Admin), [true, false, true, RECOVERY_KEY_ADMIN, false, false]),
+        // 0.46.8: the launch key is the owner's only (voice rooms PRD v1.9 §2.7).
+        (login(Role::Admin), [true, false, true, false, false, false]),
         (login(Role::Member), [false, false, false, false, false, false]),
         // Manage Sew on: manage yes, every person-only step no.
         (agent("w-it"), [true, false, false, false, false, false]),

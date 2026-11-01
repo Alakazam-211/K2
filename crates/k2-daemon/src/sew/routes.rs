@@ -10,10 +10,11 @@
 //!   "Manage Sew" (`chat_manage`) on. A K2 shell tab counts as agent-level
 //!   here (plan S30 amend 1): it needs the switch too. Turning the switch on
 //!   is `/cli/agent-access/set` (Owner/Admin), never an agent verb.
-//! - **Person-only** (purge, the recovery key, `rotate-master drop-prev`):
-//!   a person AND a fresh vault confirm bound to this install. Purge is the
-//!   owner's (token or Owner login); the recovery key and drop-prev also
-//!   take an Admin login (K2's lean, [`PersonFloor`]). The confirm is bound
+//! - **Person-only** (purge, the launch key `recovery-key`, `rotate-master
+//!   drop-prev`): a person AND a fresh vault confirm bound to this install.
+//!   Purge and the launch key are the owner's (token or Owner login; the
+//!   launch key since 0.46.8, voice rooms PRD v1.9 §2.7); drop-prev also
+//!   takes an Admin login (K2's lean, [`PersonFloor`]). The confirm is bound
 //!   to this install (`confirmToken` from `/cli/vault/confirm/finish`, action
 //!   `sew-purge` / `sew-recovery-key` / `sew-drop-prev`, `secretId` = the
 //!   install id or `none`). Never a passport, even with Manage Sew on. On
@@ -205,12 +206,13 @@ pub fn need_manage(who: &Who) -> R<()> {
 /// Who may do a person-only step besides needing a confirm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersonFloor {
-    /// The owner token or an Owner Connect login (purge).
+    /// The owner token or an Owner Connect login (purge; the launch key
+    /// since 0.46.8, voice rooms PRD v1.9 §2.7).
     Owner,
-    /// The owner, or an Owner/Admin Connect login (the recovery key,
-    /// `drop-prev`). K2's lean on Rosson's open question (2026-10-15):
-    /// "Connect owners/admins manage the Sew install", and the confirm
-    /// still proves a person; purge stays the owner's.
+    /// The owner, or an Owner/Admin Connect login (`drop-prev`). K2's lean
+    /// on Rosson's open question (2026-10-15): "Connect owners/admins manage
+    /// the Sew install", and the confirm still proves a person; purge and
+    /// the launch key stay the owner's.
     Admin,
 }
 
@@ -738,17 +740,22 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/server/recovery-key" => {
             let v = json_body(body)?;
-            let method = need_person(who, &v, CONFIRM_RECOVERY, &confirm_secret_id(), PersonFloor::Admin)?;
-            // The key lives in the vault (`sew-recovery-key`): the vault's
-            // own reveal checks this person and the proof again.
+            // 0.46.8 (voice rooms PRD v1.9 §2.7): the alias of `k2 vault
+            // reveal sew-launch-key --scope engine:sew`, the owner's only
+            // (the owner token or an Owner login); Admins and Members are
+            // refused. The confirm action keeps its old name
+            // (`sew-recovery-key`), so CLIs and cards from 0.46.7 still work.
+            let method = need_person(who, &v, CONFIRM_RECOVERY, &confirm_secret_id(), PersonFloor::Owner)?;
+            // The key lives in the vault (`sew-launch-key`): the vault's own
+            // reveal checks this person and the proof again.
             let actor = match who {
                 Who::Owner => k2_vault::Actor::Owner,
                 Who::Login { username, role } => k2_vault::Actor::Login { username: username.clone(), role: crate::vault::actor::role_of(*role) },
-                _ => return Err(no("owner_only", 403, "only the server's owner or an admin does this, with a confirm")),
+                _ => return Err(no("owner_only", 403, "only the server's owner does this, with a confirm")),
             };
             let proof = k2_vault::HumanProof::Confirmed { method: method.clone() };
             let r = sup::recovery_key(&env, &actor, &proof)?;
-            crate::vault::auth_audit("sew-recovery-key", &who.label(), &format!("shown via {method}"), "cli");
+            crate::vault::auth_audit(super::secrets::LAUNCH_NAME, &who.label(), &format!("shown via {method}"), "cli");
             Ok(r)
         }
         // S32 (K27 routes, K31): app URL, off-box copies, App Spaces.

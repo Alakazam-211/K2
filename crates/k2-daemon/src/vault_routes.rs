@@ -301,6 +301,17 @@ pub fn scope_for(c: &VaultCaller, scope: Option<&str>, workspace: Option<&str>, 
             Ok(Scope::session(s))
         }
         "workspace" | "ws" => Ok(Scope::workspace(ws_id(workspace)?)),
+        // K2's own secrets by engine (`--scope engine:sew`, voice rooms PRD
+        // v1.9 §2.7: `k2 vault reveal sew-launch-key --scope engine:sew`).
+        // Always the `system` namespace ([`selector`]); only K2 changes
+        // those, and only the listed ones are ever revealed.
+        e if e.starts_with("engine:") => {
+            let id = &e["engine:".len()..];
+            if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+                return Err(err("bad_scope", 400, format!("unknown engine in scope {e}")));
+            }
+            Ok(Scope::engine(id))
+        }
         "" => {
             if workspace.is_some() || c.workspace_id().is_some() {
                 Ok(Scope::workspace(ws_id(workspace)?))
@@ -321,8 +332,10 @@ pub fn selector(c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
     }
     let name = s.name.as_deref().filter(|x| !x.is_empty()).ok_or_else(|| err("name_required", 400, "name the secret"))?;
     let scope = scope_for(c, s.scope.as_deref(), s.workspace.as_deref(), s.session.as_deref())?;
+    // An engine scope only ever holds K2's own (`system`) secrets.
+    let system = s.system || scope.kind == ScopeKind::Engine;
     Ok(Selector::Name {
-        namespace: if s.system { Namespace::System } else { Namespace::User },
+        namespace: if system { Namespace::System } else { Namespace::User },
         scope,
         name: name.to_string(),
     })

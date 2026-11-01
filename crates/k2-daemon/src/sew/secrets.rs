@@ -11,14 +11,22 @@
 //! The key text is Sew's recovery form: 32 random bytes as 43 base64url
 //! characters without padding (S29 G9).
 //!
-//! The recovery key (Rosson 2026-10-30: "move that to the vault"): K2
-//! keeps a copy of the current master key in the vault under the fixed
-//! name [`RECOVERY_NAME`] (`system`, scope `engine:sew`, delivered to
-//! nobody), so the owner no longer saves it by hand: the vault's own
-//! recovery key and backups cover it. It is the one system secret a person
-//! may reveal (`k2_vault::policy::PERSON_REVEALABLE_SYSTEM`): the Owner or
-//! an Admin, with a confirm, in `k2 hostchat recovery-key` or Settings →
-//! Vault. Agents never see it, read it or grant it.
+//! The launch key (Rosson 2026-10-30: "move that to the vault"; renamed
+//! from `sew-recovery-key` in 0.46.8, voice rooms PRD v1.9 §2.7): K2 keeps
+//! a copy of the current master key in the vault under the fixed name
+//! [`LAUNCH_NAME`] (`system`, scope `engine:sew`, delivered to nobody), so
+//! the owner no longer saves it by hand: the vault's own recovery key and
+//! backups cover it, and moving off K2 (Sew's export/import, SW-8) needs
+//! it. It is the one system secret a person may reveal
+//! (`k2_vault::policy::PERSON_REVEALABLE_SYSTEM`): the Owner only (the
+//! owner token or an Owner login), with a confirm, in `k2 vault reveal
+//! sew-launch-key --scope engine:sew`, `k2 hostchat recovery-key` (the
+//! alias) or Settings → Vault. Admins, Members and agents are refused.
+//!
+//! A box from before 0.46.8 holds the item as [`LEGACY_NAME`]; the daemon
+//! moves it at start ([`SewSecrets::migrate_legacy`]): the value is written
+//! under the new name first, and the old one is destroyed only once the
+//! new one holds it, so the key is never lost on the way.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -26,24 +34,32 @@ use std::sync::Mutex;
 use base64::Engine;
 use k2_vault::{Actor, HumanProof};
 
-/// The recovery key's vault name (scope `engine:sew`, `system`).
-pub const RECOVERY_NAME: &str = "sew-recovery-key";
+/// The launch key's vault name (scope `engine:sew`, `system`).
+pub const LAUNCH_NAME: &str = "sew-launch-key";
+/// Its name before 0.46.8 (moved to [`LAUNCH_NAME`] at daemon start).
+pub const LEGACY_NAME: &str = "sew-recovery-key";
 /// Its label in Settings → Vault and `k2 vault list --system`.
-pub const RECOVERY_LABEL: &str = "Sew recovery key (chat/voice server)";
+pub const LAUNCH_LABEL: &str = "Sew launch key (chat/voice server)";
 
 pub trait SewSecrets: Send + Sync {
     fn store(&self, kind: &str, secret: &str) -> Result<String, String>;
     fn resolve(&self, sref: &str) -> Result<Option<String>, String>;
     fn delete(&self, sref: &str) -> Result<(), String>;
-    /// Write the recovery key copy ([`RECOVERY_NAME`]); the same value
-    /// again adds no version.
+    /// Write the launch key copy ([`LAUNCH_NAME`]); the same value again
+    /// adds no version.
     fn put_recovery(&self, key: &str) -> Result<(), String>;
-    /// The recovery key copy, for the daemon only (sync checks).
+    /// The launch key copy, for the daemon only (sync checks).
     fn recovery(&self) -> Result<Option<String>, String>;
-    /// The recovery key for a person: the vault's own reveal (Owner/Admin
+    /// The launch key for a person: the vault's own reveal (the Owner only,
     /// with a confirm; audited as a vault reveal). `Ok(None)`: no copy.
     fn reveal_recovery(&self, actor: &Actor, proof: &HumanProof) -> Result<Option<String>, (String, String)>;
+    /// Delete the launch key (purge), under its old name too.
     fn delete_recovery(&self) -> Result<(), String>;
+    /// Move a pre-0.46.8 [`LEGACY_NAME`] item to [`LAUNCH_NAME`]: write the
+    /// value under the new name when it has none, then destroy the old one
+    /// (only once the new name holds a value). `Ok(true)`: it moved one.
+    /// No old item: `Ok(false)`, nothing written.
+    fn migrate_legacy(&self) -> Result<bool, String>;
 }
 
 /// The live store: the open vault, looked up on every call.
@@ -61,8 +77,8 @@ fn refstore() -> Result<crate::vault::refstore::VaultRefStore, String> {
     Ok(crate::vault::refstore::VaultRefStore::new(vault()?, "sew", "sew"))
 }
 
-fn recovery_sel() -> k2_vault::Selector {
-    k2_vault::Selector::system(k2_vault::Scope::engine("sew"), RECOVERY_NAME)
+fn launch_sel() -> k2_vault::Selector {
+    k2_vault::Selector::system(k2_vault::Scope::engine("sew"), LAUNCH_NAME)
 }
 
 impl SewSecrets for VaultSecrets {
@@ -78,14 +94,14 @@ impl SewSecrets for VaultSecrets {
     fn put_recovery(&self, key: &str) -> Result<(), String> {
         use k2_vault::{Delivery, Kind, Namespace, PutMode, PutRequest, Scope, SecretBytes, SecretStore};
         if key.is_empty() {
-            return Err("the recovery key is empty".into());
+            return Err("the launch key is empty".into());
         }
-        let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), RECOVERY_NAME, Kind::Password);
-        // Delivered to nobody, ever: a person reveals it, nothing else.
+        let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), LAUNCH_NAME, Kind::Password);
+        // Delivered to nobody, ever: the owner reveals it, nothing else.
         r.default_delivery = Some(Delivery::None);
         r.delivery_ceiling = Some(Delivery::None);
         r.origin = "system:sew".into();
-        r.description = RECOVERY_LABEL.into();
+        r.description = LAUNCH_LABEL.into();
         r.mode = PutMode::Upsert;
         r.idempotent = true;
         vault()?
@@ -94,19 +110,34 @@ impl SewSecrets for VaultSecrets {
             .map_err(|e| format!("vault: {}", e.code))
     }
     fn recovery(&self) -> Result<Option<String>, String> {
-        refstore()?.resolve(RECOVERY_NAME)
+        refstore()?.resolve(LAUNCH_NAME)
     }
     fn reveal_recovery(&self, actor: &Actor, proof: &HumanProof) -> Result<Option<String>, (String, String)> {
         use k2_vault::SecretStore;
         let v = vault().map_err(|e| ("vault_closed".to_string(), e))?;
-        match v.reveal(&recovery_sel(), actor, proof) {
+        match v.reveal(&launch_sel(), actor, proof) {
             Ok(b) => String::from_utf8(b.expose().to_vec()).map(Some).map_err(|_| ("vault_error".into(), "stored key isn't text".into())),
             Err(e) if e.status == 404 || e.code == "secret_destroyed" => Ok(None),
             Err(e) => Err((e.code.to_string(), e.hint.to_string())),
         }
     }
     fn delete_recovery(&self) -> Result<(), String> {
-        refstore()?.delete(RECOVERY_NAME)
+        let rs = refstore()?;
+        rs.delete(LAUNCH_NAME)?;
+        rs.delete(LEGACY_NAME)
+    }
+    fn migrate_legacy(&self) -> Result<bool, String> {
+        let rs = refstore()?;
+        let Some(old) = rs.resolve(LEGACY_NAME)? else { return Ok(false) };
+        if rs.resolve(LAUNCH_NAME)?.is_none() {
+            self.put_recovery(&old)?;
+        }
+        // Never destroy the old copy unless the new name now holds a key.
+        if rs.resolve(LAUNCH_NAME)?.is_none() {
+            return Err(format!("{LAUNCH_NAME} was not written; {LEGACY_NAME} kept"));
+        }
+        rs.delete(LEGACY_NAME)?;
+        Ok(true)
     }
 }
 
@@ -116,9 +147,11 @@ pub struct MemSecrets {
     pub map: Mutex<HashMap<String, String>>,
     pub fail_store: Mutex<bool>,
     n: Mutex<u32>,
-    /// The recovery key copy, and every value written to it (versions).
+    /// The launch key copy, and every value written to it (versions).
     pub recovery: Mutex<Option<String>>,
     pub recovery_writes: Mutex<Vec<String>>,
+    /// A pre-0.46.8 `sew-recovery-key` item ([`LEGACY_NAME`]).
+    pub legacy: Mutex<Option<String>>,
 }
 
 impl SewSecrets for MemSecrets {
@@ -162,13 +195,25 @@ impl SewSecrets for MemSecrets {
     /// The vault's own rule ([`k2_vault::policy::can_reveal_secret`]).
     fn reveal_recovery(&self, actor: &Actor, proof: &HumanProof) -> Result<Option<String>, (String, String)> {
         let Some(k) = self.recovery.lock().unwrap().clone() else { return Ok(None) };
-        k2_vault::policy::can_reveal_secret(actor, k2_vault::Namespace::System, &k2_vault::Scope::engine("sew"), RECOVERY_NAME, proof)
+        k2_vault::policy::can_reveal_secret(actor, k2_vault::Namespace::System, &k2_vault::Scope::engine("sew"), LAUNCH_NAME, proof)
             .map_err(|e| (e.code.to_string(), e.hint.to_string()))?;
         Ok(Some(k))
     }
     fn delete_recovery(&self) -> Result<(), String> {
         *self.recovery.lock().unwrap() = None;
+        *self.legacy.lock().unwrap() = None;
         Ok(())
+    }
+    fn migrate_legacy(&self) -> Result<bool, String> {
+        if *self.fail_store.lock().unwrap() {
+            return Err("vault: vault_not_open".into());
+        }
+        let Some(old) = self.legacy.lock().unwrap().clone() else { return Ok(false) };
+        if self.recovery()?.is_none() {
+            self.put_recovery(&old)?;
+        }
+        *self.legacy.lock().unwrap() = None;
+        Ok(true)
     }
 }
 
@@ -240,45 +285,55 @@ mod tests {
         assert_eq!(s.resolve(&r).unwrap(), None);
     }
 
-    /// Rosson 2026-10-30: Sew's recovery key in the vault, owner-only. A
-    /// `system` secret named `sew-recovery-key` (scope `engine:sew`,
-    /// labelled, delivered to nobody); the Owner (or an Admin) reveals it
-    /// with a confirm; an agent never sees it, reads it, grants it or
-    /// destroys it, even with "manage server-wide secrets" on.
+    /// Voice rooms PRD v1.9 §2.7: Sew's launch key in the vault, Owner
+    /// only. A `system` secret named `sew-launch-key` (scope `engine:sew`,
+    /// labelled, delivered to nobody); the Owner (the owner token or an
+    /// Owner login) reveals it with a confirm; an Admin or a Member is
+    /// refused; an agent never sees it, reads it, grants it or destroys it,
+    /// even with "manage server-wide secrets" on. A pre-0.46.8
+    /// `sew-recovery-key` moves to the new name without losing the key.
+    /// One test: they share the process's test vault.
     #[test]
-    fn the_recovery_key_is_an_owner_only_system_secret_in_the_vault() {
-        use k2_vault::{AgentActor, Consumer, Delivery, GrantRequest, ListFilter, Namespace, Requester, Role, Scope, SecretStore, Use};
+    fn the_launch_key_is_an_owner_only_system_secret_in_the_vault() {
+        use k2_vault::{
+            AgentActor, Consumer, Delivery, GrantRequest, Kind, ListFilter, Namespace, PutMode, PutRequest, Requester, Role, Scope,
+            SecretBytes, SecretStore, Use,
+        };
         let s = VaultSecrets;
         let v = crate::vault::ensure_test_vault();
         let key = generate_master_key().unwrap();
         s.put_recovery(&key).unwrap();
-        let sel = recovery_sel();
+        let sel = launch_sel();
         let m = v.meta(&sel, &Actor::Owner).expect("owner sees it");
-        assert_eq!((m.namespace, m.scope.clone(), m.name.as_str()), (Namespace::System, Scope::engine("sew"), RECOVERY_NAME));
+        assert_eq!((m.namespace, m.scope.clone(), m.name.as_str()), (Namespace::System, Scope::engine("sew"), LAUNCH_NAME));
+        assert_eq!(m.name, "sew-launch-key");
         assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::None, Delivery::None));
-        assert_eq!(m.description, RECOVERY_LABEL);
+        assert_eq!(m.description, LAUNCH_LABEL);
         assert_eq!(s.recovery().unwrap().as_deref(), Some(key.as_str()));
         // The same value again adds no version.
         let v1 = m.latest_version;
         s.put_recovery(&key).unwrap();
         assert_eq!(v.meta(&sel, &Actor::Owner).unwrap().latest_version, v1);
 
-        // Owner and Admin reveal with a confirm; nobody without one.
+        // The Owner reveals with a confirm; nobody without one; Admins and
+        // Members never.
         let ok = HumanProof::Confirmed { method: "vault-password".into() };
         assert_eq!(s.reveal_recovery(&Actor::Owner, &ok).unwrap().as_deref(), Some(key.as_str()));
-        let admin = Actor::Login { username: "ana".into(), role: Role::Admin };
-        assert_eq!(s.reveal_recovery(&admin, &ok).unwrap().as_deref(), Some(key.as_str()));
+        let owner_login = Actor::Login { username: "olu".into(), role: Role::Owner };
+        assert_eq!(s.reveal_recovery(&owner_login, &ok).unwrap().as_deref(), Some(key.as_str()));
         assert_eq!(s.reveal_recovery(&Actor::Owner, &HumanProof::None).unwrap_err().0, "vault_confirm_required");
+        let admin = Actor::Login { username: "ana".into(), role: Role::Admin };
+        assert_eq!(s.reveal_recovery(&admin, &ok).unwrap_err().0, "vault_owner_required");
         let member = Actor::Login { username: "m".into(), role: Role::Member };
-        assert_eq!(s.reveal_recovery(&member, &ok).unwrap_err().0, "vault_admin_required");
+        assert_eq!(s.reveal_recovery(&member, &ok).unwrap_err().0, "vault_owner_required");
 
         // Agents: invisible, unreadable, ungrantable, unchangeable.
         for manage in [false, true] {
             let a = Actor::Agent(AgentActor { workspace_id: "w-sew".into(), session_id: Some("s1".into()), shell: false, vault_manage: manage });
-            assert!(s.reveal_recovery(&a, &ok).is_err(), "reveal (manage={manage})");
+            assert_eq!(s.reveal_recovery(&a, &ok).unwrap_err().0, "vault_owner_required", "reveal (manage={manage})");
             assert!(v.meta(&sel, &a).is_err(), "meta (manage={manage})");
             let all = v.list(&ListFilter { include_system: true, ..Default::default() }, &a).unwrap();
-            assert!(all.iter().all(|m| m.name != RECOVERY_NAME), "listed (manage={manage})");
+            assert!(all.iter().all(|m| m.name != LAUNCH_NAME), "listed (manage={manage})");
             let g = GrantRequest {
                 selector: sel.clone(),
                 consumer: Consumer::workspace("w-sew"),
@@ -311,5 +366,39 @@ mod tests {
         s.put_recovery(&key2).unwrap();
         assert_eq!(s.recovery().unwrap().as_deref(), Some(key2.as_str()));
         s.delete_recovery().unwrap();
+
+        // The upgrade: a box from before 0.46.8 holds `sew-recovery-key`.
+        let legacy_key = generate_master_key().unwrap();
+        let put_legacy = |k: &str| {
+            let mut r = PutRequest::new(Namespace::System, Scope::engine("sew"), LEGACY_NAME, Kind::Password);
+            r.default_delivery = Some(Delivery::None);
+            r.delivery_ceiling = Some(Delivery::None);
+            r.origin = "system:sew".into();
+            r.mode = PutMode::Upsert;
+            v.put(r, SecretBytes::from_slice(k.as_bytes()), &Actor::System("sew".into())).expect("legacy put");
+        };
+        put_legacy(&legacy_key);
+        let legacy_sel = k2_vault::Selector::system(Scope::engine("sew"), LEGACY_NAME);
+        // Until it moves, the old name is Owner-only too (an upgrade never
+        // widens who can read it).
+        assert_eq!(v.reveal(&legacy_sel, &Actor::Owner, &ok).expect("owner").expose(), legacy_key.as_bytes());
+        assert_eq!(v.reveal(&legacy_sel, &admin, &ok).err().expect("admin").code, "vault_owner_required");
+        assert_eq!(s.migrate_legacy(), Ok(true), "moved");
+        assert_eq!(s.recovery().unwrap().as_deref(), Some(legacy_key.as_str()), "the same key under the new name");
+        assert_eq!(s.reveal_recovery(&Actor::Owner, &ok).unwrap().as_deref(), Some(legacy_key.as_str()));
+        assert_eq!(refstore().unwrap().resolve(LEGACY_NAME).unwrap(), None, "the old name is gone");
+        assert_eq!(s.migrate_legacy(), Ok(false), "nothing left to move");
+        // Both names present (a move cut short after writing): the new one
+        // wins (the start-up sync then makes it the current master key) and
+        // the old one goes.
+        put_legacy("an-older-copy-left-behind-0123456789abcdefg");
+        assert_eq!(s.migrate_legacy(), Ok(true));
+        assert_eq!(s.recovery().unwrap().as_deref(), Some(legacy_key.as_str()), "the new name is never overwritten by the old");
+        assert_eq!(refstore().unwrap().resolve(LEGACY_NAME).unwrap(), None);
+        // Purge deletes both names.
+        put_legacy(&legacy_key);
+        s.delete_recovery().unwrap();
+        assert_eq!(s.recovery().unwrap(), None);
+        assert_eq!(refstore().unwrap().resolve(LEGACY_NAME).unwrap(), None);
     }
 }

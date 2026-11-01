@@ -624,8 +624,8 @@ fn purge_checks_the_hostname_first_and_deletes_vault_keys_last() {
     assert_eq!(t.row().status, "error");
     t.ops.clear();
     let r = purge(&t.env(), "lztek", true).unwrap();
-    assert_eq!(t.secrets.recovery().unwrap(), None, "the purge removes the vault's sew-recovery-key");
-    assert!(r["warning"].as_str().unwrap().contains("K2 deleted sew-recovery-key from the vault"), "{r}");
+    assert_eq!(t.secrets.recovery().unwrap(), None, "the purge removes the vault's sew-launch-key");
+    assert!(r["warning"].as_str().unwrap().contains("K2 deleted sew-launch-key from the vault"), "{r}");
     assert_eq!(r["purged"], true);
     assert_eq!(r["teardown"], "sew", "a known binary: Sew's own purge, unchanged");
     assert!(r.get("note").is_none());
@@ -1510,7 +1510,7 @@ fn rotation_swaps_refs_resets_the_recovery_alarm_and_keeps_the_key_on_stdin() {
     assert_eq!(r["kekId"], kek_id(&new_key).unwrap());
     // The vault's recovery key follows the new master key; nothing asks a
     // person to save it.
-    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(new_key.as_str()), "rotation updates sew-recovery-key");
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(new_key.as_str()), "rotation updates sew-launch-key");
     assert_eq!(t.secrets.recovery_writes.lock().unwrap().len(), 2, "enable + rotation");
     assert!(r.get("warning").is_none(), "{r}");
     assert!(!r["next"].as_str().unwrap().contains("save the NEW"), "{r}");
@@ -1534,26 +1534,30 @@ fn confirmed() -> k2_vault::HumanProof {
     k2_vault::HumanProof::Confirmed { method: "vault-password".into() }
 }
 
-/// `k2 hostchat recovery-key` reads the vault's `sew-recovery-key` through
-/// the vault's own reveal rule: the Owner or an Admin with a confirm; an
-/// agent or a Member never, even past the route.
+/// `k2 hostchat recovery-key` (the alias) reads the vault's
+/// `sew-launch-key` through the vault's own reveal rule: the Owner only
+/// (the owner token or an Owner login), with a confirm; an Admin, a Member
+/// or an agent never, even past the route (voice rooms PRD v1.9 §2.7).
 #[test]
-fn the_recovery_key_is_revealed_from_the_vault_with_a_person_confirm() {
+fn the_launch_key_is_revealed_from_the_vault_to_the_owner_only() {
     let t = t();
     t.enabled();
     let r = recovery_key(&t.env(), &k2_vault::Actor::Owner, &confirmed()).unwrap();
     assert_eq!(r["recoveryKey"], t.master_key());
-    assert_eq!(r["vaultName"], "sew-recovery-key");
-    assert!(r["warning"].as_str().unwrap().contains("in the vault (sew-recovery-key)"), "{r}");
+    assert_eq!(r["vaultName"], "sew-launch-key");
+    assert!(r["warning"].as_str().unwrap().contains("in the vault (sew-launch-key"), "{r}");
     assert!(t.row().recovery_shown_at.is_some());
-    let admin = k2_vault::Actor::Login { username: "ana".into(), role: k2_vault::Role::Admin };
-    assert_eq!(recovery_key(&t.env(), &admin, &confirmed()).unwrap()["recoveryKey"], t.master_key());
-    // The vault's rule, not just the route's: no confirm, a Member, an agent.
+    let owner_login = k2_vault::Actor::Login { username: "olu".into(), role: k2_vault::Role::Owner };
+    assert_eq!(recovery_key(&t.env(), &owner_login, &confirmed()).unwrap()["recoveryKey"], t.master_key());
+    // The vault's rule, not just the route's: no confirm; an Admin, a
+    // Member, an agent (even with "manage server-wide secrets").
     assert_eq!(recovery_key(&t.env(), &k2_vault::Actor::Owner, &k2_vault::HumanProof::None).unwrap_err().code, "owner_confirm_required");
+    let admin = k2_vault::Actor::Login { username: "ana".into(), role: k2_vault::Role::Admin };
+    assert_eq!(recovery_key(&t.env(), &admin, &confirmed()).unwrap_err().code, "owner_only");
     let member = k2_vault::Actor::Login { username: "m".into(), role: k2_vault::Role::Member };
-    assert_eq!(recovery_key(&t.env(), &member, &confirmed()).unwrap_err().code, "owner_confirm_required");
+    assert_eq!(recovery_key(&t.env(), &member, &confirmed()).unwrap_err().code, "owner_only");
     let agent = k2_vault::Actor::Agent(k2_vault::AgentActor { workspace_id: "w".into(), session_id: None, shell: false, vault_manage: true });
-    assert_eq!(recovery_key(&t.env(), &agent, &confirmed()).unwrap_err().code, "owner_confirm_required");
+    assert_eq!(recovery_key(&t.env(), &agent, &confirmed()).unwrap_err().code, "owner_only");
     // A missing copy (an older install the start has not reached yet) is
     // written first, then revealed from the vault.
     *t.secrets.recovery.lock().unwrap() = None;
@@ -1569,12 +1573,12 @@ fn enable_keeps_the_recovery_key_in_the_vault_and_status_never_asks_to_save_it()
     let t = t();
     t.enable().unwrap();
     let key = t.master_key();
-    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(key.as_str()), "enable wrote sew-recovery-key");
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(key.as_str()), "enable wrote sew-launch-key");
     assert_eq!(*t.secrets.recovery_writes.lock().unwrap(), vec![key.clone()], "one write");
     let s = status(&t.env(), false);
     assert_eq!(s["recoveryKeyInVault"], true, "{s}");
     assert_eq!(s["recoveryKeySaved"], true, "{s}");
-    assert_eq!(s["recoveryKeyVaultName"], "sew-recovery-key", "{s}");
+    assert_eq!(s["recoveryKeyVaultName"], "sew-launch-key", "{s}");
     assert!(!s["alarms"].as_array().unwrap().iter().any(|a| a == "k2_recovery_key_not_saved"), "{s}");
     assert!(!s.to_string().contains(&key), "the key never rides the status");
     for c in t.ops.calls.lock().unwrap().iter() {
@@ -1611,6 +1615,39 @@ fn an_existing_install_backfills_the_recovery_key_once_at_start() {
     // No install: nothing to do.
     store::delete().unwrap();
     assert_eq!(sync_recovery_copy(&t.env()), Ok(false));
+}
+
+/// The 0.46.8 upgrade (voice rooms PRD v1.9 §2.7): a box whose vault holds
+/// the item as `sew-recovery-key` gets it as `sew-launch-key` at the
+/// daemon's start, with the same key; the old name goes only once the new
+/// one holds it. A closed vault at start retries; nothing is lost.
+#[test]
+fn the_start_moves_sew_recovery_key_to_sew_launch_key_without_losing_it() {
+    let t = t();
+    t.enabled();
+    let key = t.master_key();
+    // As 0.46.7 left it: the copy under the old name only.
+    *t.secrets.recovery.lock().unwrap() = None;
+    *t.secrets.legacy.lock().unwrap() = Some(key.clone());
+    t.secrets.recovery_writes.lock().unwrap().clear();
+    *t.secrets.fail_store.lock().unwrap() = true;
+    assert!(!backfill_recovery_at_start(&t.env()), "vault closed: retried");
+    assert_eq!(t.secrets.legacy.lock().unwrap().as_deref(), Some(key.as_str()), "the old copy is kept until the move");
+    *t.secrets.fail_store.lock().unwrap() = false;
+    assert!(backfill_recovery_at_start(&t.env()));
+    assert_eq!(t.secrets.recovery().unwrap().as_deref(), Some(key.as_str()), "the same key, under sew-launch-key");
+    assert!(t.secrets.legacy.lock().unwrap().is_none(), "sew-recovery-key is gone");
+    assert_eq!(*t.secrets.recovery_writes.lock().unwrap(), vec![key.clone()], "one write");
+    assert_eq!(status(&t.env(), false)["recoveryKeyInVault"], true);
+    // A later start has nothing to move or copy.
+    assert!(backfill_recovery_at_start(&t.env()));
+    assert_eq!(t.secrets.recovery_writes.lock().unwrap().len(), 1);
+    // A reveal before the start got there moves it first.
+    *t.secrets.recovery.lock().unwrap() = None;
+    *t.secrets.legacy.lock().unwrap() = Some(key.clone());
+    let r = recovery_key(&t.env(), &k2_vault::Actor::Owner, &confirmed()).unwrap();
+    assert_eq!(r["recoveryKey"], key);
+    assert!(t.secrets.legacy.lock().unwrap().is_none());
 }
 
 #[test]

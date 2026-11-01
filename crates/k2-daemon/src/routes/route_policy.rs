@@ -1591,7 +1591,8 @@ pub const ROUTES: &[Route] = &[
     // 0.46.6 (Sew 2026-10-27): `sew install --reconfigure` by hand, and
     // `k2 hostchat restart` (Manage Sew in the handler).
     post("/cli/sew/server/reconfigure", Admin),
-    post("/cli/sew/server/recovery-key", Admin),
+    // 0.46.8 (voice rooms PRD v1.9 §2.7): the launch key is the owner's only.
+    post("/cli/sew/server/recovery-key", Owner),
     post("/cli/sew/server/restart", Admin),
     post("/cli/sew/server/restore", Admin),
     post("/cli/sew/server/rollback", Admin),

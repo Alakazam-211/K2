@@ -30189,8 +30189,11 @@ elif s in ("server", "session", "workspace"):
     o["scope"] = s
 elif s.startswith("session:"):
     o["scope"] = "session"; o["session"] = s.split(":", 1)[1]
+elif s.startswith("engine:"):
+    # K2s own secrets by engine (k2 vault reveal sew-launch-key --scope engine:sew).
+    o["scope"] = s
 elif s:
-    print("usage: --scope ws:<name>|server|session", file=sys.stderr); sys.exit(2)
+    print("usage: --scope ws:<name>|server|session|engine:<engine>", file=sys.stderr); sys.exit(2)
 print(json.dumps(o))' "$s"
 }
 
@@ -31146,6 +31149,11 @@ People only, from your own terminal or SSH login (not a K2 terminal):
 show a value after a confirm (Touch ID or the vault password).
 
 Example: k2 vault reveal STRIPE_KEY
+
+K2's own secrets are never shown, except Sew's launch key (the key Sew's
+chat and voice data is sealed with), which the server's owner may see:
+  k2 vault reveal sew-launch-key --scope engine:sew
+Admins, Members and agents are refused.
 EOF
             ;;
         recovery) cat <<'EOF'
@@ -43090,7 +43098,7 @@ cmd_schema() {
       "args": [{"name": "group", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
-    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
+    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
     {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Chat / Voice Hosting (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
     {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
@@ -65340,8 +65348,8 @@ cmd_mail_access() {
 
 # ── k2 hostchat — the Sew chat (and voice) server on this box ───────────
 # Sew S29 K14 over /cli/sew/*. Owner/admin, or an agent whose workspace has
-# "Manage Sew" (chat_manage) on; person-only steps (purge: the owner;
-# recovery key, dropping the old master key: the owner or an admin) need a
+# "Manage Sew" (chat_manage) on; person-only steps (purge and the launch
+# key: the owner; dropping the old master key: the owner or an admin) need a
 # vault confirm from a terminal outside K2. Setup links print to stdout only (never stderr).
 # Exit: 0 ok · 1 you said no at a [y/N] prompt · 2 bad request · 3 refused / infra.
 
@@ -65360,8 +65368,10 @@ Server:
          --identity picks how people sign in. It is fixed for the life of an
          install: changing it later means a fresh install (k2 hostchat purge,
          then enable). Default k2; standalone = Sew's own password logins.
-         Sew's recovery key: K2 keeps it in the K2 vault as sew-recovery-key,
-         so you don't need to copy it (see it: k2 hostchat recovery-key).
+         Sew's launch key (its recovery key): K2 keeps it in the K2 vault as
+         sew-launch-key, so you don't need to copy it. Only the server's owner
+         can see it: k2 vault reveal sew-launch-key --scope engine:sew (or
+         k2 hostchat recovery-key).
          --recovery-key-file FILE brings an existing key (to reuse Sew data
          already on this box); K2 keeps that one in the vault too (a key
          different from the one the vault holds is refused; K2 leaves the
@@ -65473,8 +65483,10 @@ Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's pub
 Person only (outside K2, with Touch ID / your login / the vault password):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
-  k2 hostchat recovery-key                  (the owner or an admin; shows the vault's sew-recovery-key,
-                                             also in Settings → Vault → K2's own secrets)
+  k2 hostchat recovery-key                  (the owner only; shows Sew's launch key, the vault's
+                                             sew-launch-key: the same as k2 vault reveal sew-launch-key
+                                             --scope engine:sew, also in Settings → Vault → K2's own
+                                             secrets. Admins, members and agents are refused)
   k2 hostchat rotate-master --drop-prev     (the owner or an admin)
   k2 hostchat open [--print]                (the owner)
          a one-time 60 s link to Sew's web app as its install owner. You
@@ -65605,9 +65617,19 @@ if verb in ("status",):
         line("copy error", sh.get("lastError"))
     mi = v.get("mirror") or {}
     if mi.get("kind"):
-        line("key mirror", mi.get("path") if mi.get("kind") == "dir" else "none")
+        line("key mirror", (mi.get("path") + (" (follows the off-box folder)" if mi.get("tied") else "")) if mi.get("kind") == "dir" else "none")
+    tie = mi.get("tie") or {}
+    if tie.get("state") == "pending":
+        line("key mirror", "waiting: %s" % (tie.get("error") or "K2 retries on its own"))
     if v.get("recoveryKeyInVault"):
-        line("recovery key", "in the K2 vault as %s; to see it: k2 hostchat recovery-key" % (v.get("recoveryKeyVaultName") or "sew-recovery-key"))
+        lk = v.get("recoveryKeyVaultName") or "sew-launch-key"
+        line("launch key", "in the K2 vault as %s (the owner only); to see it: k2 vault reveal %s --scope engine:sew" % (lk, lk))
+    mo = v.get("moveOffK2") or {}
+    if mo.get("line"):
+        line("move off K2", mo.get("line"))
+    au = v.get("autoSetup") or {}
+    if au.get("line"):
+        line("set up", au.get("line"))
     mt = v.get("meet") or {}
     if mt.get("app"):
         line("meet", "%s → App %s" % (mt.get("url"), mt.get("app")))
@@ -66043,7 +66065,7 @@ if v.get("ok") is False:
         recovery-key)
             _hostchat_person
             local id tok; id="$(_hostchat_install_id)"
-            tok="$(_vault_confirm_token sew-recovery-key "$id" "Show Sew's recovery key")" || exit 3
+            tok="$(_vault_confirm_token sew-recovery-key "$id" "Show Sew's launch key")" || exit 3
             _hostchat_call POST /cli/sew/server/recovery-key "$(_compute_json K2_CJ_confirmToken="$tok")" tcp
             _hostchat_print recovery-key "$as_json" ;;
         config)

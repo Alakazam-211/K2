@@ -1482,3 +1482,56 @@ fn not_found_names_only_scopes_the_caller_can_see() {
         assert_eq!(s, 200, "{v}");
     });
 }
+
+/// Voice rooms PRD v1.9 §2.7: `k2 vault reveal sew-launch-key --scope
+/// engine:sew` is the vault's normal reveal for Sew's launch key: the
+/// owner token or an Owner login, with a confirm bound to it. An Admin is
+/// refused even with its own confirm; a Member or an agent never gets a
+/// value; Sew's other engine secrets stay never shown; a bad engine scope
+/// is refused.
+#[test]
+fn the_sew_launch_key_reveals_by_engine_scope_to_the_owner_only() {
+    let t = vault();
+    let mut req = PutRequest::new(Namespace::System, Scope::engine("sew"), "sew-launch-key", Kind::Password);
+    req.default_delivery = Some(Delivery::None);
+    req.delivery_ceiling = Some(Delivery::None);
+    t.v.put(req, SecretBytes::from_slice(SENTINEL.as_bytes()), &Actor::System("sew".into())).expect("put launch key");
+    t.v.engine_ensure("sew", "db-password", k2_vault::engine::Gen::Random32).expect("engine secret");
+    let id = t.v.meta(&k2_vault::Selector::system(Scope::engine("sew"), "sew-launch-key"), &Actor::Owner).expect("meta").id;
+    let sel = json!({ "name": "sew-launch-key", "scope": "engine:sew" });
+    let with_tok = |tok: String| {
+        let mut b = sel.clone();
+        b["confirmToken"] = json!(tok);
+        b
+    };
+    // The owner token, with a confirm bound to this secret.
+    let tok = t.v.confirm.mint("reveal", Some(&id), "owner", "vault-password");
+    let (s, v) = call(&t, REVEAL, &owner(), with_tok(tok));
+    assert_eq!(s, 200, "{v}");
+    let got = base64::engine::general_purpose::STANDARD.decode(v["valueB64"].as_str().expect("b64")).expect("decode");
+    assert_eq!(got, SENTINEL.as_bytes());
+    // An Owner login, with its own confirm.
+    let tok = t.v.confirm.mint("reveal", Some(&id), "connect:lee", "connect-password");
+    let (s, v) = call(&t, REVEAL, &login(Role::Owner), with_tok(tok));
+    assert_eq!(s, 200, "{v}");
+    // An Admin, even with its own confirm.
+    let tok = t.v.confirm.mint("reveal", Some(&id), "connect:lee", "connect-password");
+    let (s, v) = call(&t, REVEAL, &login(Role::Admin), with_tok(tok));
+    assert_eq!((s, code(&v)), (403, "vault_owner_required"), "{v}");
+    assert!(v.get("valueB64").is_none(), "{v}");
+    // A Member and an agent get no value.
+    let (s, v) = call(&t, REVEAL, &login(Role::Member), sel.clone());
+    assert_eq!(s, 403, "{v}");
+    let (s, v) = call(&t, REVEAL, &agent("ws1", true), sel.clone());
+    assert_eq!(s, 403, "{v}");
+    // Sew's other engine secrets stay never shown, even to the owner.
+    let db_id = t.v.meta(&k2_vault::Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner).expect("meta").id;
+    let tok = t.v.confirm.mint("reveal", Some(&db_id), "owner", "vault-password");
+    let (s, v) = call(&t, REVEAL, &owner(), json!({ "name": "db-password", "scope": "engine:sew", "confirmToken": tok }));
+    assert_eq!((s, code(&v)), (403, "vault_system_namespace"), "{v}");
+    // A bad engine name is refused before any lookup.
+    for bad in ["engine:", "engine:../sew", "engine:Sew"] {
+        let (s, v) = call(&t, REVEAL, &owner(), json!({ "name": "sew-launch-key", "scope": bad }));
+        assert_eq!((s, code(&v)), (400, "bad_scope"), "{bad}: {v}");
+    }
+}

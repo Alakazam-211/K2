@@ -108,6 +108,29 @@ async fn the_follower_reads_states_then_changes_and_resyncs_after_a_restart() {
     assert!(occupancy::snapshot().1.is_empty());
     assert_eq!(occupancy::feed_status().resyncs, 1);
 
+    // sew-56 v1.3: a change may repeat (the fake re-sends the one at the
+    // cursor) and a move is `left {reason: moved}` then `joined`: the
+    // follower's view stays exact and a repeat moves nothing.
+    sew.set_voice_feed_repeats(true);
+    sew.voice_join(SPACE, "room-1", OWNER).expect("owner joins again");
+    let (step, _) = feed.step(&c, SPACE, 0).await.expect("changes");
+    assert!(step.changed());
+    let (step, _) = feed.step(&c, SPACE, 0).await.expect("a repeat");
+    assert_eq!(step, Step::Changes { count: 1, changed: false }, "the repeated join changes nothing");
+    assert_eq!(people_in(&room1), vec![("owner".to_string(), false)]);
+    // room-2 is closing (above), so the move goes to a new room-3.
+    sew.add_voice_channel(SPACE, "room-3");
+    let room3 = sew.channels(SPACE)["room-3"].id.to_string();
+    sew.voice_join(SPACE, "room-1", ADMIN).expect("ada joins");
+    sew.voice_join(SPACE, "room-3", ADMIN).expect("ada moves");
+    let (step, _) = feed.step(&c, SPACE, 0).await.expect("join + move");
+    assert!(step.changed());
+    let (step, _) = feed.step(&c, SPACE, 0).await.expect("a repeat");
+    assert_eq!(step, Step::Changes { count: 1, changed: false });
+    assert_eq!(people_in(&room1), vec![("owner".to_string(), false)]);
+    assert_eq!(people_in(&room3), vec![(ADMIN.to_string(), false)]);
+    sew.set_voice_feed_repeats(false);
+
     // A different Space id starts over from its snapshot.
     sew.add_server_space("7002");
     let (step, _) = feed.step(&c, "7002", 0).await.expect("other space");

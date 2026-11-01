@@ -310,7 +310,9 @@ fn join_renews_an_expired_session_once_and_maps_sew_refusals() {
     sew.answer(
         &join,
         503,
-        json!({"ok": false, "error": {"code": "voice_unavailable", "hint": "down", "details": {"engine": "media_path_down", "media_path_reason": "voice_lane_down"}}}),
+        // sew-56 v1.3 SW-11: the reason, not the code, says voice_unavailable.
+        json!({"ok": false, "error": {"code": "unavailable", "hint": "voice is unavailable",
+               "details": {"reason": "voice_unavailable", "engine": "media_path_down", "media_path_reason": "voice_lane_down"}}}),
     );
     let d = deps(sew.clone());
     let mo = person("mo", UUID_MO, Role::Member, "tok-mo-1");
@@ -324,8 +326,43 @@ fn join_renews_an_expired_session_once_and_maps_sew_refusals() {
     let r = bff::join(&mo, "room-1", &json!({}), &rooms, &d).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (503, "voice_unavailable"));
     assert_eq!(r.details.as_ref().unwrap()["engine"], "media_path_down");
+    assert_eq!(r.details.as_ref().unwrap()["reason"], "voice_unavailable");
+    assert!(r.hint.contains("voice_lane_down"), "the media path reason is named: {}", r.hint);
     assert_eq!(r.retry_after_secs, Some(bff::RETRY_SECS));
     bff::forget_all();
+}
+
+/// sew-56 v1.3: a change already in `states` may repeat, and a move is
+/// `left {reason: moved}` then `joined`: applying is idempotent.
+#[test]
+fn occupancy_applies_repeats_and_moves_idempotently() {
+    let mut o = Occupancy::default();
+    let ada = format!("k2:connect:{UUID_ADA}");
+    let snap = VoiceStatesResponse { states: vec![st("901", "6", &ada, "t0")], cursor: "1.4".into() };
+    o.replace(&snap, &names);
+    let joined = MgmtVoiceChange {
+        seq: 4,
+        kind: "joined".into(),
+        channel_id: "901".into(),
+        member_id: Some("6".into()),
+        state: Some(st("901", "6", &ada, "t0")),
+        ..Default::default()
+    };
+    let (changed, _) = o.apply(&[joined.clone(), joined.clone()], &names);
+    assert!(!changed, "a join already in the snapshot, twice, moves nothing");
+    let moved = vec![
+        MgmtVoiceChange { seq: 5, kind: "left".into(), channel_id: "901".into(), member_id: Some("6".into()), reason: Some("moved".into()), ..Default::default() },
+        MgmtVoiceChange { seq: 6, kind: "joined".into(), channel_id: "902".into(), member_id: Some("6".into()), state: Some(st("902", "6", &ada, "t1")), ..Default::default() },
+    ];
+    let (changed, _) = o.apply(&moved, &names);
+    assert!(changed);
+    let before = o.by_channel();
+    assert!(!before.contains_key("901"));
+    assert_eq!(before["902"].len(), 1);
+    // The same batch again (a repeat from the cursor): the same end state.
+    let (changed, _) = o.apply(&moved[1..], &names);
+    assert!(!changed, "the repeated joined moves nothing");
+    assert_eq!(o.by_channel(), before);
 }
 
 #[test]

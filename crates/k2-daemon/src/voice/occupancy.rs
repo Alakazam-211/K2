@@ -115,6 +115,13 @@ impl Occupancy {
 
     /// Apply feed changes in order. Returns whether anything moved and the
     /// room states seen.
+    ///
+    /// Idempotent (sew-56 v1.3): a change already reflected in `states`
+    /// may come again, so `joined`/`updated` overwrite the member's one
+    /// entry, `left` for someone not here is a no-op, and a repeated
+    /// join, update or leave reports no movement (a repeated room note is
+    /// harmless: lane B's ledger write is idempotent). A move arrives as `left {reason:
+    /// moved}` then `joined` in the new channel.
     pub fn apply(&mut self, changes: &[MgmtVoiceChange], name: &dyn Fn(Option<&ExternalId>, &str) -> String) -> (bool, Vec<RoomNote>) {
         let mut changed = false;
         let mut notes = Vec::new();
@@ -343,7 +350,14 @@ impl Feed {
         let path = sew_wire::voice_changes_path(space_id, &cursor, wait_s, FEED_LIMIT);
         let timeout = long_poll_timeout(Duration::from_secs(u64::from(wait_s)));
         let r = c.get_with_timeout(&path, timeout).await.map_err(|e| format!("voice/changes: {e}"))?;
-        if r.status == 410 && sew_error_reason(&r) == sew_wire::reasons::CURSOR_EXPIRED {
+        // 410 cursor_expired (a restart, a pruned ring) and, sew-56 v1.3,
+        // 400 validation_failed on `after` (a cursor this Sew never handed
+        // out, e.g. after a restore): start again from the snapshot.
+        let bad_after = r.status == 400 && {
+            let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap_or_default();
+            v.pointer("/error/details/field").and_then(|f| f.as_str()) == Some("after")
+        };
+        if bad_after || (r.status == 410 && sew_error_reason(&r) == sew_wire::reasons::CURSOR_EXPIRED) {
             self.cursor = None;
             set_status(|s| s.resyncs += 1);
             return Ok((Step::Expired, Vec::new()));

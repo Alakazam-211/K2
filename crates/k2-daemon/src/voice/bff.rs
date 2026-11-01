@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 
 use k2_core::connect_users::Role;
 use k2_core::tool_hook::admin_space::{self, RoomRow};
-use k2_core::tool_hook::sew_wire::ExternalId;
+use k2_core::tool_hook::sew_wire::{self, ExternalId};
 use k2_core::tool_hook::ConnectChatGate;
 
 use super::occupancy::Occupant;
@@ -114,9 +114,16 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
     if is("channel_full") {
         return Refusal::new(409, "room_full", if hint.is_empty() { "this room is full".to_string() } else { hint });
     }
-    if code == "voice_unavailable" {
-        let details = a.body.pointer("/error/details").cloned().unwrap_or(Value::Null);
-        let why = details.get("media_path_reason").and_then(Value::as_str).map(str::to_string);
+    // sew-56 v1.3 SW-11: the join/move refusal is a 503 whose
+    // `details.reason` is `voice_unavailable` (branch on the reason, not the
+    // code); `media_path_refusal` reads the media-path-down case.
+    if reason == sew_wire::reasons::VOICE_UNAVAILABLE || code == sew_wire::reasons::VOICE_UNAVAILABLE {
+        let mut details = a.body.pointer("/error/details").cloned().unwrap_or_else(|| json!({}));
+        let api: Option<sew_wire::ApiError> = a.body.get("error").cloned().and_then(|e| serde_json::from_value(e).ok());
+        let why = api.as_ref().and_then(|e| sew_wire::media_path_refusal(a.status, e)).filter(|w| !w.is_empty());
+        if let Some(o) = details.as_object_mut() {
+            o.entry("reason").or_insert_with(|| json!(sew_wire::reasons::VOICE_UNAVAILABLE));
+        }
         let h = match why {
             Some(w) => format!("voice on this server is unavailable ({w})"),
             None => "voice on this server is restarting; try again in a moment".to_string(),
@@ -503,7 +510,9 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
                 format!("voice on this server is unavailable ({}): its network lane is down", state.reason_text()),
             )
             .details(json!({
-                "engine": k2_core::tool_hook::sew_wire::ENGINE_MEDIA_PATH_DOWN,
+                // The same shape Sew's own refusal has (sew-56 v1.3 SW-11).
+                "reason": sew_wire::reasons::VOICE_UNAVAILABLE,
+                "engine": sew_wire::ENGINE_MEDIA_PATH_DOWN,
                 "media_path_reason": state.reason_text(),
                 "lane": state,
                 "heldMs": held_ms,

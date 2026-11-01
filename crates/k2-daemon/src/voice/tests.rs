@@ -34,6 +34,7 @@ fn ready_facts() -> HostingFacts {
         flags: VoiceFeatures { server_governed_space: true, mgmt_voice_states: true, voice_channel_closing: true, ..Default::default() },
         space: Some(SpaceRow { space_id: Some("7001".into()), state: SPACE_READY.into(), ..Default::default() }),
         tier: Tier::Ok,
+        not_pro_reason: None,
         count: 1,
         lane: LaneState::not_applicable(),
     }
@@ -53,7 +54,6 @@ fn hosting_state_follows_the_table_in_order() {
             "voice_off",
         ),
         (Box::new(|f: &mut HostingFacts| f.tier = Tier::NotPro), "not_pro"),
-        (Box::new(|f: &mut HostingFacts| f.tier = Tier::Unknown), "starting"),
         (Box::new(|f: &mut HostingFacts| f.flags.voice_channel_closing = false), "voice_off"),
         (Box::new(|f: &mut HostingFacts| f.count = 0), "count_zero"),
         (Box::new(|f: &mut HostingFacts| f.lane = LaneState::reconnecting("frpc-voice exited")), "voice_lane_reconnecting"),
@@ -513,13 +513,13 @@ struct Preview;
 impl Preview {
     fn on() -> (std::sync::MutexGuard<'static, ()>, Preview) {
         let g = lane::test_lock();
-        k2_core::voice_rooms::set_enabled(true);
+        k2_core::voice_preview::set_enabled(true);
         (g, Preview)
     }
 }
 impl Drop for Preview {
     fn drop(&mut self) {
-        k2_core::voice_rooms::set_enabled(false);
+        k2_core::voice_preview::set_enabled(false);
     }
 }
 
@@ -533,7 +533,7 @@ fn routes_are_dark_with_the_preview_off() {
     if std::env::var("K2_VOICE_ROOMS").is_ok() {
         panic!("K2_VOICE_ROOMS is set in the test environment; unset it for this test");
     }
-    k2_core::voice_rooms::set_enabled(false);
+    k2_core::voice_preview::set_enabled(false);
     let r = routes::handle(routes::ROOMS, Caller::OwnerToken, "owner", false, b"");
     assert_eq!(r.status, "404 Not Found");
     assert_eq!(body(&r)["error"]["code"], "voice_rooms_off");

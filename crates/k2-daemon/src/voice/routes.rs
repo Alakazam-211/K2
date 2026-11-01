@@ -378,10 +378,10 @@ fn status_view() -> CliResponse {
     ok(json!({
         "ok": true,
         "server": label(),
-        "preview": voice_rooms::enabled(),
+        "preview": k2_core::voice_preview::enabled(),
         "tunnelPreview": voice_rooms::tunnel_enabled(),
         "hosting": hosting,
-        "tier": voice_rooms::hosting(),
+        "tier": super::pro_view(),
         "count": count,
         // Lane A owns the real media tier; until it lands this reads the
         // tunnel preview switch.
@@ -620,7 +620,7 @@ fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
 /// One `/cli/voice/*` call (blocking; the dispatcher runs it on the
 /// blocking pool: a held join waits up to 20 s).
 pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body: &[u8]) -> CliResponse {
-    if !voice_rooms::enabled() {
+    if !k2_core::voice_preview::enabled() {
         return dark();
     }
     if is_post_route(path) && !is_post {

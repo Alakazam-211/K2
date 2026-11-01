@@ -65517,7 +65517,10 @@ if verb == "rooms":
             print("      %s%s" % (o.get("user"), (" (" + ", ".join(flags) + ")") if flags else ""))
 elif verb == "status":
     print("hosting:    %s" % hosting_line())
-    print("rooms:      %s (tier %s)" % (v.get("count"), v.get("tier")))
+    t = v.get("tier")
+    if isinstance(t, dict):
+        t = "%s, %s reading" % (t.get("state"), t.get("reading")) + ((": " + t["reason"]) if t.get("reason") else "")
+    print("rooms:      %s (plan: %s)" % (v.get("count"), t))
     sp = v.get("space") or {}
     print("K2 Admin Space: %s%s" % (sp.get("state") or "not made yet", (" " + sp["spaceId"]) if sp.get("spaceId") else ""))
     if sp.get("why"):

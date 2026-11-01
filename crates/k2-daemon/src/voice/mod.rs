@@ -63,7 +63,10 @@ pub struct HostingFacts {
     pub chat_on: bool,
     pub flags: VoiceFeatures,
     pub space: Option<SpaceRow>,
+    /// Lane E's Pro gate (`sew::pro_gate`).
     pub tier: Tier,
+    /// The Pro gate's reason when not Pro (its plan, or "not known yet").
+    pub not_pro_reason: Option<String>,
     pub count: u32,
     pub lane: LaneState,
 }
@@ -95,8 +98,7 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         _ => return h("starting", "Turning on voice rooms…", Some("the K2 Admin Space is being made".into())),
     }
     match f.tier {
-        Tier::NotPro => return h("not_pro", "Voice rooms need the Pro plan.", None),
-        Tier::Unknown => return h("starting", "Turning on voice rooms…", Some("the plan hasn't been read yet".into())),
+        Tier::NotPro => return h("not_pro", "Voice rooms need the Pro plan.", f.not_pro_reason.clone()),
         Tier::Ok => {}
     }
     if !f.flags.voice_channel_closing {
@@ -114,21 +116,43 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
 
 /// The live facts.
 pub fn hosting_facts() -> HostingFacts {
-    let preview = k2_core::voice_rooms::enabled();
+    let preview = k2_core::voice_preview::enabled();
     let skin = k2_core::paths::k2_home().join("skin.db").exists();
     let chat_on = preview
         && skin
         && k2_core::tool_hook::get_target(k2_core::tool_hook::CHAT_KIND).ok().flatten().is_some_and(|t| t.enabled);
+    let (tier, not_pro_reason) = pro_tier();
     HostingFacts {
         linux: cfg!(target_os = "linux"),
         preview,
         chat_on,
         flags: if chat_on { k2_core::tool_hook::sew_voice_features().unwrap_or_default() } else { VoiceFeatures::default() },
         space: if chat_on { k2_core::tool_hook::admin_space_view().ok().and_then(|v| v.space) } else { None },
-        tier: k2_core::voice_rooms::hosting(),
+        tier,
+        not_pro_reason,
         count: k2_core::app_settings::load().voice_rooms_count,
         lane: lane::state(),
     }
+}
+
+/// Lane E's Pro gate (the cached plan tier; never the network), or a
+/// test's stand-in (`voice_rooms::hosting_override`). Same rule as lane
+/// B's `voice_admin` sweep.
+pub fn pro_tier() -> (Tier, Option<String>) {
+    if let Some(t) = k2_core::voice_rooms::hosting_override() {
+        return (t, None);
+    }
+    let env = crate::sew::supervisor::live();
+    match crate::sew::pro_gate::require_pro(&env) {
+        Ok(()) => (Tier::Ok, None),
+        Err(e) => (Tier::NotPro, Some(e.hint.clone())),
+    }
+}
+
+/// Lane E's `hosting` JSON for `k2 voice status` (`{state: pro|not_pro,
+/// tier, reading, fetchedAt, reason?}`).
+pub fn pro_view() -> serde_json::Value {
+    crate::sew::pro_gate::hosting(&crate::sew::supervisor::live())
 }
 
 /// This server's hosting state now.

@@ -273,7 +273,7 @@ fn set_status(f: impl FnOnce(&mut FeedStatus)) {
 /// Tell clients the rooms view moved: `voice_rooms_changed {rev}`.
 /// Nothing goes out while the preview is off.
 pub fn emit_rooms_changed() {
-    if !k2_core::voice_rooms::enabled() {
+    if !k2_core::voice_preview::enabled() {
         return;
     }
     let rev = REV.fetch_add(1, Ordering::Relaxed) + 1;
@@ -422,12 +422,12 @@ static HOSTS_ROOMS: AtomicBool = AtomicBool::new(false);
 /// `/boot-status` feature): the preview on, Linux, the Admin Space ready,
 /// Sew able to hold rooms, Pro, and at least one room.
 pub fn hosts_rooms() -> bool {
-    HOSTS_ROOMS.load(Ordering::Relaxed) && k2_core::voice_rooms::enabled()
+    HOSTS_ROOMS.load(Ordering::Relaxed) && k2_core::voice_preview::enabled()
 }
 
 /// What the follower follows now: a mgmt client and the Admin Space id.
 fn follow_target() -> Option<(MgmtClient, String)> {
-    if !k2_core::voice_rooms::enabled() {
+    if !k2_core::voice_preview::enabled() {
         return None;
     }
     let flags = k2_core::tool_hook::sew_voice_features().ok()?;

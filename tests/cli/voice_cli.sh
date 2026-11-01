@@ -100,7 +100,7 @@ class H(BaseHTTPRequestHandler):
             out = ROOMS
         elif p == "/cli/voice/status":
             out = {"ok": True, "hosting": {"state": "voice_off", "line": "Voice isn't set up: this server's Sew is too old for voice rooms.", "detail": "sew_too_old"},
-                   "count": 1, "tier": "ok", "space": {"spaceId": "7001", "state": "ready"}, "members": [], "rooms": [],
+                   "count": 1, "tier": {"state": "pro", "reading": "fresh"}, "space": {"spaceId": "7001", "state": "ready"}, "members": [], "rooms": [],
                    "holds": [], "lane": {"state": "not_applicable"}, "feed": {"state": "live"}}
         elif p == "/cli/voice/settings":
             out = {"ok": True, "count": b.get("count"), "closing": ["room-2"] if b.get("count", 9) < 2 else [], "closeNowAt": 1 if b.get("now") else None}
@@ -178,6 +178,7 @@ assert_eq "rooms --json is the raw body" "$(python3 -c 'import json,sys; print(j
 run owner voice status
 assert_contains "status: hosting state and detail" "$out" "voice_off: Voice isn't set up"
 assert_contains "status: detail" "$out" "(sew_too_old)"
+assert_contains "status: the Pro gate reading" "$out" "(plan: pro, fresh reading)"
 
 echo "== owner actions =="
 run owner voice set rooms 1 --now

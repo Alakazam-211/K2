@@ -8303,7 +8303,7 @@ async fn handle_one_request(
         // logins live in route_policy; the handler classifies every caller.
         // A held join waits up to 20 s on the blocking pool (M11).
         p if crate::voice::routes::is_route(p) => {
-            if !k2_core::voice_rooms::enabled() {
+            if !k2_core::voice_preview::enabled() {
                 let _ = stream.read(&mut buf).await;
                 let r = crate::voice::routes::dark();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

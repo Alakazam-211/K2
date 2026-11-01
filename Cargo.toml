@@ -30,6 +30,9 @@ members = [
     "crates/k2-term-grid",
     "crates/k2-term-wire",
     "crates/k2-export",
+    # Voice audio pipeline (devices, AEC/NS/AGC, Opus, jitter buffers);
+    # MIT OR Apache-2.0, Kessel family.
+    "crates/kessel-audio",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos
@@ -52,6 +55,27 @@ opt-level = 1
 opt-level = 3
 
 [profile.dev.package.fontdue]
+opt-level = 3
+
+# kessel-audio's DSP and codec dependencies: real-time audio needs them
+# optimised even in dev builds (and its CPU tests measure them).
+[profile.dev.package.sonora]
+opt-level = 3
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+[profile.dev.package.sonora-agc2]
+opt-level = 3
+[profile.dev.package.sonora-ns]
+opt-level = 3
+[profile.dev.package.sonora-common-audio]
+opt-level = 3
+[profile.dev.package.sonora-fft]
+opt-level = 3
+[profile.dev.package.sonora-simd]
+opt-level = 3
+[profile.dev.package.ropus]
+opt-level = 3
+[profile.dev.package.rubato]
 opt-level = 3
 
 [profile.release]

@@ -1,0 +1,32 @@
+# cargo-deny policy for kessel-audio:
+#   cargo deny --manifest-path crates/kessel-audio/Cargo.toml check licenses bans
+# tests/licences.rs enforces the same licence rules in `cargo test`.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    # MPL-2.0, pulled by cpal's `realtime` feature.
+    { crate = "audio_thread_priority" },
+]

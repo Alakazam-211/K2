@@ -551,16 +551,19 @@ fn own_call(p: &Person, call_id: &str) -> Result<Call, Refusal> {
 /// `POST /cli/voice/session/leave {callId?}`: leave the person's call.
 /// With no `callId` it leaves whatever call the person is in.
 pub fn leave(p: &Person, call_id: Option<&str>, d: &Deps) -> Result<Value, Refusal> {
-    let room = match call_id {
-        Some(id) => Some(own_call(p, id)?.room),
-        None => None,
+    let (room, channel) = match call_id {
+        Some(id) => {
+            let c = own_call(p, id)?;
+            (Some(c.room), Some(c.channel_id))
+        }
+        None => (None, None),
     };
     let a = as_person(p, d, paths::ME_VOICE_LEAVE, &json!({}))?;
     calls().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, c| c.sid != p.ident.sid);
     if !a.ok() {
         return Err(sew_refusal(&a));
     }
-    Ok(json!({ "ok": true, "left": true, "room": room }))
+    Ok(json!({ "ok": true, "left": true, "room": room, "channelId": channel }))
 }
 
 /// The call's own Sew routes the BFF forwards (§9.1 allowlist).

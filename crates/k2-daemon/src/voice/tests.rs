@@ -431,6 +431,7 @@ fn leave_and_the_call_routes_stay_on_the_persons_own_call() {
     assert_eq!(v["sew"]["self_mute"], true);
     let v = bff::leave(&ada, Some(&call), &d).expect("leave");
     assert_eq!(v["room"], "room-1");
+    assert_eq!(v["channelId"], "901");
     assert_eq!(bff::counts().1, 0);
     assert_eq!(bff::leave(&ada, Some(&call), &d).unwrap_err().code, "call_not_found");
     bff::leave(&ada, None, &d).expect("leave without a call id leaves whatever call");

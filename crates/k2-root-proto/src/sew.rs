@@ -263,8 +263,9 @@ pub struct SewRelease {
 }
 
 /// The PostgreSQL major Sew's private `sew-db` runs on, for the pinned
-/// releases (0.2.x, 0.3.x). Always passed as `sew install`'s `pg_major`:
-/// without it Sew takes the highest major under `/usr/lib/postgresql` at
+/// releases (0.2.x, 0.3.x). Always passed as a first `sew install`'s
+/// `pg_major` (never on `install --reconfigure`: there the install's own
+/// `sew.toml` keeps its major, which may differ): without it Sew takes the highest major under `/usr/lib/postgresql` at
 /// install time, and from 0.46.3 K2 installs PGDG 17 next to 16 for its own
 /// databases, so a fresh install could silently land on 17. Moves with the
 /// pin (a Sew release that wants another major bumps it here, in the same
@@ -1373,20 +1374,40 @@ impl InstallRequest {
     /// the daemon). `daemon_uid` is the caller check's uid, never an input
     /// field: Sew writes it to `[mgmt] allow_uids` itself (SW5
     /// `mgmt_allow_uids`, SW7), so the daemon reaches the mgmt socket
-    /// without a supplementary group and K2 never edits `sew.toml`.
+    /// without a supplementary group and K2 never edits `sew.toml`. A first
+    /// install always names [`SEW_PG_MAJOR`] (`pg_major`).
     pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
-        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid)
+        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid, PgMajorInput::Pinned)
     }
 }
 
-/// Sew SW5 `InstallInputs` (shared by `install` and `install reconfigure`).
-fn install_inputs(provider: &str, jwks_url: Option<&str>, daemon_uid: u32) -> serde_json::Value {
+/// Whether Sew's `InstallInputs` name a Postgres major.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PgMajorInput {
+    /// `install`: `pg_major` = [`SEW_PG_MAJOR`], never Sew's "highest
+    /// found" (Sew writes the config now).
+    Pinned,
+    /// `install --reconfigure`: no `pg_major` key at all. On an existing
+    /// install Sew's own `sew.toml` (`[db] pg_major`) decides, but a
+    /// `pg_major` given must still have its binaries present, so naming 16
+    /// refuses (exit 3) a sew-db on another major (sewlab: only Postgres
+    /// 17). Without one, the "majors ambiguous" refusal applies only to a
+    /// first install with no config (Sew 2026-11-01).
+    FromConfig,
+}
+
+/// Sew SW5 `InstallInputs` (shared by `install` and `install reconfigure`;
+/// `pg` says whether the major is named).
+fn install_inputs(provider: &str, jwks_url: Option<&str>, daemon_uid: u32, pg: PgMajorInput) -> serde_json::Value {
     let mut v = serde_json::json!({
         "provider": provider,
         "profile": "shared",
-        "pg_major": SEW_PG_MAJOR,
         "mgmt_allow_uids": [daemon_uid],
     });
+    match pg {
+        PgMajorInput::Pinned => v["pg_major"] = serde_json::json!(SEW_PG_MAJOR),
+        PgMajorInput::FromConfig => {}
+    }
     if let Some(u) = jwks_url {
         v["k2_jwks_url"] = serde_json::json!(u);
     }
@@ -1395,7 +1416,8 @@ fn install_inputs(provider: &str, jwks_url: Option<&str>, daemon_uid: u32) -> se
 
 /// `engine sew install reconfigure` stdin (protocol 11, 0.46.6): what
 /// `install` takes minus the master key (the install's keys stay). The
-/// helper adds `pg_major` and the daemon's uid, exactly as for `install`.
+/// helper adds the daemon's uid, as for `install`, but never `pg_major`:
+/// the install's own config keeps its Postgres major.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReconfigureRequest {
@@ -1429,8 +1451,10 @@ impl ReconfigureRequest {
         Ok(())
     }
 
+    /// No `pg_major` key: Sew's config on the box keeps its major
+    /// ([`PgMajorInput::FromConfig`]).
     pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
-        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid)
+        install_inputs(self.provider(), self.jwks_url.as_deref(), daemon_uid, PgMajorInput::FromConfig)
     }
 }
 
@@ -2132,6 +2156,44 @@ mod tests {
             "/mnt/$(id)",
         ] {
             assert!(!mirror_path_ok(bad), "{bad}");
+        }
+    }
+
+    /// Sew 2026-11-01: `install --reconfigure` names no Postgres major (the
+    /// install's `sew.toml` decides; a named 16 refuses a sew-db on 17),
+    /// while a first install still pins [`SEW_PG_MAJOR`]. Both providers.
+    #[test]
+    fn reconfigure_inputs_name_no_pg_major_but_install_inputs_do() {
+        let jwks = "http://127.0.0.1:38471/v1/chat/jwks";
+        let rc: ReconfigureRequest = serde_json::from_str(&format!(r#"{{"jwksUrl":"{jwks}"}}"#)).unwrap();
+        rc.validate().unwrap();
+        let ri = rc.sew_inputs(1001);
+        let keys: Vec<&str> = ri.as_object().expect("an object").keys().map(String::as_str).collect();
+        assert!(!keys.contains(&"pg_major"), "reconfigure must not name a Postgres major: {ri}");
+        assert_eq!(ri["provider"], "k2");
+        assert_eq!(ri["profile"], "shared");
+        assert_eq!(ri["k2_jwks_url"], jwks);
+        assert_eq!(ri["mgmt_allow_uids"], serde_json::json!([1001]));
+        let sa: ReconfigureRequest = serde_json::from_str(r#"{"provider":"standalone"}"#).unwrap();
+        sa.validate().unwrap();
+        let si = sa.sew_inputs(1001);
+        assert!(si.get("pg_major").is_none(), "standalone reconfigure must not name a Postgres major: {si}");
+        assert!(si.get("k2_jwks_url").is_none());
+        // The same request as a first install pins the major.
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let ins: InstallRequest = serde_json::from_str(&format!(r#"{{"jwksUrl":"{jwks}","masterKey":"{key}"}}"#)).unwrap();
+        let ii = ins.sew_inputs(1001);
+        assert_eq!(ii["pg_major"], serde_json::json!(16), "{ii}");
+        // Otherwise the two bodies are the same.
+        let mut ii_minus = ii.clone();
+        ii_minus.as_object_mut().unwrap().remove("pg_major");
+        assert_eq!(ii_minus, ri);
+        // A major on reconfigure stdin never parses (deny_unknown_fields).
+        for bad in [
+            format!(r#"{{"jwksUrl":"{jwks}","pg_major":17}}"#),
+            format!(r#"{{"jwksUrl":"{jwks}","pgMajor":16}}"#),
+        ] {
+            assert!(serde_json::from_str::<ReconfigureRequest>(&bad).is_err(), "{bad}");
         }
     }
 

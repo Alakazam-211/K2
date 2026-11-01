@@ -920,8 +920,9 @@ fn install(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
 /// `sew install --reconfigure --config-json <staged json>` (protocol 11):
 /// the pinned version's installer over an existing install, after an
 /// upgrade from Sew 0.3.0. Same inputs as [`install`] minus the master
-/// key; the caller's uid (never input) rides `mgmt_allow_uids`. Sew starts
-/// nothing; the daemon restarts `sew` after.
+/// key and `pg_major` (the install's sew.toml keeps its own major); the
+/// caller's uid (never input) rides `mgmt_allow_uids`. Sew starts nothing;
+/// the daemon restarts `sew` after.
 fn install_reconfigure(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
     let req: ReconfigureRequest = parse_json(stdin, "reconfigure refused: input")?;
     req.validate().map_err(Fail::argv)?;

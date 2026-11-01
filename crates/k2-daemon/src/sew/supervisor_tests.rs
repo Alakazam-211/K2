@@ -875,6 +875,9 @@ fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() 
     let mut st = helper_ok(11, true, pinned().version);
     st.version_json.as_mut().unwrap()["namespaces"]["sewreconf"] = json!(true);
     *t.ops.helper.lock().unwrap() = st;
+    // Sew 2026-11-01 (sewlab): a sew-db on another major (only 17 here)
+    // is the install's own business; no K2 check on this path demands 16.
+    *t.ops.pg.lock().unwrap() = vec![17];
     let out = reconfigure_step(&env).expect("reconfigure");
     assert_eq!(out["sewExit"], 0);
     let calls = t.ops.calls.lock().unwrap().clone();
@@ -882,6 +885,7 @@ fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() 
     let body: Value = serde_json::from_slice(rc.stdin.as_deref().expect("stdin")).unwrap();
     assert!(body["jwksUrl"].as_str().unwrap().ends_with("/v1/chat/jwks"), "{body}");
     assert!(body.get("masterKey").is_none(), "the install keeps its keys: {body}");
+    assert!(body.get("pg_major").is_none() && body.get("pgMajor").is_none(), "no Postgres major: {body}");
     let eff = t.ops.effects();
     let i = eff.iter().position(|e| e == "engine sew install reconfigure").unwrap();
     assert_eq!(eff[i + 1], "engine sew systemctl restart", "{eff:?}");
@@ -2076,8 +2080,8 @@ fn purge_types_back_sews_public_host_and_forgets_k2s_sew_records() {
 
 // ── sew-db's PostgreSQL major is pinned (Sew ask, 2026-10-20) ────────────
 
-/// 0.46.3 installs PGDG 17 for K2's own databases. A box with only 17 must
-/// not pass Sew's preflight (Sew would be told pg_major 16 and fail, or
+/// 0.46.3 installs PGDG 17 for K2's own databases. On a first install, a
+/// box with only 17 must not pass Sew's preflight (Sew would be told pg_major 16 and fail, or
 /// without it silently take 17); 16 next to 17 passes; enable refuses
 /// before any effect.
 #[test]
@@ -2101,6 +2105,41 @@ fn preflight_needs_exactly_sews_pg_major_not_any_newer() {
     assert_eq!(pg_check(&t)["status"], "ok");
     *t.ops.pg.lock().unwrap() = vec![];
     assert!(pg_check(&t)["detail"].as_str().unwrap().contains("no PostgreSQL server binaries"));
+}
+
+/// Sew 2026-11-01: once Sew has written its install, enable never runs
+/// `sew install` again and `install --reconfigure` names no major, so the
+/// install's own sew.toml keeps its major. An install whose sew-db runs on
+/// another one (sewlab: only Postgres 17) is not refused; a first install
+/// (above) and one whose install step was undone (uninstall) still need 16.
+#[test]
+fn preflight_lets_an_existing_install_keep_its_own_pg_major() {
+    let t = t();
+    t.enabled();
+    let pg_check = |t: &T| {
+        preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check")
+    };
+    *t.ops.pg.lock().unwrap() = vec![17];
+    let c = pg_check(&t);
+    assert_eq!(c["status"], "ok", "{c}");
+    assert!(c["detail"].as_str().unwrap().contains("[17]"), "{c}");
+    // A resumed enable over that install passes and never re-runs `sew install`.
+    store::update(1, |r| r.status = "error".into()).expect("update").expect("row");
+    t.ops.clear();
+    t.enable().expect("enable over an existing install on PostgreSQL 17");
+    let eff = t.ops.effects();
+    assert!(!eff.iter().any(|e| e == "engine sew install"), "{eff:?}");
+    assert_eq!(t.row().status, "running");
+    // No PostgreSQL binaries at all still fail, installed or not.
+    *t.ops.pg.lock().unwrap() = vec![];
+    assert_eq!(pg_check(&t)["status"], "fail");
+    // Uninstall clears the install step: the next enable runs `sew install`
+    // (told pg_major 16), so 16 is needed again.
+    uninstall(&t.env(), false).unwrap();
+    *t.ops.pg.lock().unwrap() = vec![17];
+    let c = pg_check(&t);
+    assert_eq!(c["status"], "fail", "{c}");
+    assert!(c["detail"].as_str().unwrap().contains("[17] found, not 16"), "{c}");
 }
 
 // ── item 12 (0.46.5): upgrade-only test builds and accepted binaries ─────

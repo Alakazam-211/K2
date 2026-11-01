@@ -419,12 +419,24 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         )),
         None => c.push(check("systemd", "fail", "systemctl --version unreadable", "Sew needs systemd 250 or newer")),
     }
-    // Exactly the major `sew install` is told (`pg_major`), never "any ≥ 16":
-    // K2's own PGDG 17 next to it must not satisfy this check.
+    // A first install: exactly the major `sew install` is told (`pg_major`),
+    // never "any ≥ 16": K2's own PGDG 17 next to it must not satisfy this
+    // check. Once Sew has written its install (the enable step `install`
+    // is done, so enable never runs `sew install` again and reconfigure
+    // names no major), the install's sew.toml keeps its own major, which
+    // may differ (sewlab's sew-db runs on 17): any complete major passes.
     let pg = env.ops.pg_majors();
     let want = pin::SEW_PG_MAJOR;
+    let installed = store::load().is_some_and(|r| step_done(&r.enable_progress, "install"));
     if pg.contains(&want) {
         c.push(check("postgres", "ok", format!("PostgreSQL {want} binaries (sew-db)"), ""));
+    } else if installed && !pg.is_empty() {
+        c.push(check(
+            "postgres",
+            "ok",
+            format!("PostgreSQL {pg:?} binaries; this Sew install's own config names its major (sew-db)"),
+            "",
+        ));
     } else {
         c.push(check(
             "postgres",
@@ -1074,8 +1086,9 @@ fn install_refusal(exit: i64, out: &Value) -> String {
     let code = out.pointer("/sew/error/code").and_then(Value::as_str).unwrap_or("");
     if code == "pg_major_ambiguous" || m.contains("pg_major_ambiguous") {
         return format!(
-            "exit {exit}: Sew can't tell which Postgres major to use (pg_major_ambiguous): {m}. K2 always asks for \
-             Postgres {}; make sure /usr/lib/postgresql/{}/bin is complete (k2 hostchat preflight)",
+            "exit {exit}: Sew can't tell which Postgres major to use (pg_major_ambiguous): {m}. A first install asks \
+             for Postgres {}; make sure /usr/lib/postgresql/{}/bin is complete (k2 hostchat preflight). A reconfigure \
+             names no major (the install's own sew.toml does): check that Sew's config is still on the box",
             pin::SEW_PG_MAJOR,
             pin::SEW_PG_MAJOR
         );

@@ -788,7 +788,7 @@ fn tier_slot() -> &'static std::sync::Mutex<Option<TierReading>> {
 
 /// Called when a reading's tier differs from the previous one for the same
 /// subdomain (the first reading counts): `(new, previous tier)`.
-type TierHook = fn(&TierReading, Option<&str>);
+pub type TierHook = fn(&TierReading, Option<&str>);
 
 fn tier_hook() -> &'static std::sync::RwLock<Option<TierHook>> {
     static H: std::sync::RwLock<Option<TierHook>> = std::sync::RwLock::new(None);

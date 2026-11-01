@@ -351,6 +351,15 @@ pub struct EnableRequest {
     pub provider: Option<String>,
     /// Also set up voice once chat runs (K13).
     pub voice: Option<super::voice::InstallRequest>,
+    /// S6 (voice rooms PRD v1.9 §7.2): stop after Sew's own `install`
+    /// (master key, launch key, binary, config, units): units stay stopped,
+    /// no database runs; the row is left `disabled` with
+    /// `enableProgress.setupOnly`. A later normal enable starts it.
+    pub setup_only: bool,
+    /// K2 started this itself (S6's set-up or its Pro start): the RAM and
+    /// disk checks are the small-box floor's ([`super::autosetup::floor`],
+    /// checked before), so they warn here instead of refusing.
+    pub auto: bool,
 }
 
 impl EnableRequest {
@@ -498,8 +507,11 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         (Some(p), _) => c.push(check("source", "ok", format!("--tarball {}", p.display()), "")),
         (None, false) => c.push(source_check(env, &arch)),
     }
+    // S6: K2's own set-up and Pro start check the small-box floor
+    // (`autosetup::floor`) before they get here; these two only warn then.
+    let fail = if req.auto { "warn" } else { "fail" };
     match env.ops.mem_total() {
-        Some(m) if m < 4 * GIB => c.push(check("ram", "fail", gib(m), "Sew on a K2 box needs at least 4 GiB of RAM")),
+        Some(m) if m < 4 * GIB => c.push(check("ram", fail, gib(m), "Sew on a K2 box needs at least 4 GiB of RAM")),
         Some(m) => {
             let split = memory_split(m);
             let detail = format!(
@@ -517,14 +529,17 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         None => c.push(check("ram", "warn", "MemTotal unreadable", "")),
     }
     match env.ops.disk_free("/var/lib") {
-        Some(f) if f < 10 * GIB => c.push(check("disk", "fail", format!("{} free on /var/lib", gib(f)), "Sew needs 10 GiB free on /var/lib")),
+        Some(f) if f < 10 * GIB => c.push(check("disk", fail, format!("{} free on /var/lib", gib(f)), "Sew needs 10 GiB free on /var/lib")),
         Some(f) if f < 20 * GIB => c.push(check("disk", "warn", format!("{} free on /var/lib", gib(f)), "20 GiB or more is safer")),
         Some(f) => c.push(check("disk", "ok", format!("{} free on /var/lib", gib(f)), "")),
         None => c.push(check("disk", "warn", "statvfs(/var/lib) failed", "")),
     }
     let sew_active = env.ops.unit(UNIT_SEW).is_active();
     if !sew_active && env.ops.port_taken("127.0.0.1", SEW_CLIENT_PORT, false) {
-        c.push(check("port", "fail", format!("127.0.0.1:{SEW_CLIENT_PORT} is taken"), "Sew's client API listens there"));
+        // A set-up that starts nothing doesn't need the port yet (the start
+        // checks it again).
+        let st = if req.setup_only { "warn" } else { "fail" };
+        c.push(check("port", st, format!("127.0.0.1:{SEW_CLIENT_PORT} is taken"), "Sew's client API listens there"));
     } else {
         c.push(check("port", "ok", format!("127.0.0.1:{SEW_CLIENT_PORT}"), ""));
     }
@@ -737,6 +752,10 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
     set_current(&mut row.enable_progress, Some("master-key"));
     if let Some(p) = row.enable_progress.as_mut() {
         p["provider"] = json!(req.provider());
+        // S6: who started this run (K2's set-up / Pro start, or a person),
+        // and whether it stops once Sew is installed.
+        p["auto"] = json!(req.auto);
+        p["setupOnly"] = json!(req.setup_only);
     }
     store::save(&row).map_err(|e| no("db_error", 500, e))?;
     Ok(Ok(latch))
@@ -755,7 +774,7 @@ pub fn enable_machine(env: &Env, req: &EnableRequest) -> Result<(), String> {
         changed("enable-failed");
         return Err(msg);
     }
-    changed("enabled");
+    changed(if req.setup_only { "set-up" } else { "enabled" });
     Ok(())
 }
 
@@ -963,6 +982,26 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         // sew.service that was already up must restart to read it.
         allow_changed = out.pointer("/allowUid/restartNeeded").and_then(Value::as_bool).unwrap_or(false);
         done(env, "install");
+    }
+
+    // S6 (voice rooms PRD v1.9 §7.2): set up, not started. Units stay
+    // stopped and no database runs until a normal enable (the Pro start or
+    // a person) resumes from here: master-key, stage and install are marked.
+    if req.setup_only {
+        let _ = helper(env, &["unstage"], None);
+        let now = env.ops.now();
+        save_enable(env, |r| {
+            r.status = "disabled".into();
+            r.installed_version = Some(pin_v.into());
+            r.installed_at = r.installed_at.or(Some(now));
+            r.last_error = None;
+            set_current(&mut r.enable_progress, None);
+            if let Some(p) = r.enable_progress.as_mut() {
+                p["result"] = json!("set-up");
+                p["setupOnly"] = json!(true);
+            }
+        });
+        return Ok(());
     }
 
     // 5+. systemd and the links: EVERY enable.
@@ -1548,11 +1587,16 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         json!({"protocol": st.protocol, "sew": helper_check(env).is_ok(), "error": helper_check(env).err().map(|f| f.code)})
     };
     let Some(row) = store::load() else {
-        return json!({
+        let mut body = json!({
             "ok": true, "supported": true, "state": "not-installed", "consistent": true,
             "pinnedVersion": pinned().version, "pinPlaceholder": pinned_artifact(&env.ops.arch()).is_err(),
             "helper": helper_json,
         });
+        // Voice rooms S6 (dark unless the preview is on).
+        if let Some(a) = super::autosetup::status(env) {
+            body["autoSetup"] = a;
+        }
+        return body;
     };
     let now = env.ops.now();
     let db = env.ops.unit(UNIT_DB);
@@ -1646,6 +1690,14 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "lastError": row.last_error,
         "purgeConfirmHostname": purge_hostname(env, &row),
     });
+    // Voice rooms S7 (§6.4): what voice makes public, and the ports it needs.
+    if body["voice"].is_object() {
+        body["voice"]["exposure"] = super::pro_gate::exposure(env);
+    }
+    // Voice rooms S6 (dark unless the preview is on).
+    if let Some(a) = super::autosetup::status(env) {
+        body["autoSetup"] = a;
+    }
     if with_health {
         let disk = box_status(env);
         body["onDiskVersion"] = disk.as_ref().and_then(|s| on_disk(s).1).map(Value::from).unwrap_or(Value::Null);
@@ -1891,8 +1943,18 @@ pub fn spawn_background() {
             if let Some(r) = super::s32::ship_tick(&env) {
                 k2_core::log_debug!("[sew] ship tick: {r}");
             }
+            // Voice rooms S6/S7 (0.46.8): both do nothing unless the voice
+            // rooms preview is on. Set-up on every Linux box and the Pro
+            // start (in their own thread), then the ports file for K2
+            // Web's host firewall.
+            super::autosetup::tick(env);
+            if let Some(p) = super::pro_gate::sync_ports_file(&env) {
+                k2_core::log_debug!("[sew] ports file: {p}");
+            }
         }
     });
+    // The Pro watch hears a plan-tier change at once (status refetch).
+    k2_core::tunnel::subdomains::set_tier_hook(super::autosetup::on_tier_change);
 }
 
 // ── the S27 grant hook's chat target ─────────────────────────────────────
@@ -2169,6 +2231,9 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
             k2_core::log_debug!("[sew] purge: record {rec}: {e}");
         }
     }
+    // Voice rooms S6 (§7.4): a purge opts this box out of K2 setting Sew
+    // up again on its own; only a person's enable brings it back.
+    super::autosetup::opt_out(env, "purge");
     // Sew's purge removed sew-media too: drop K2's voice record, TURN DNS
     // record, nested label and TURN key.
     let voice_left = super::voice::forget(env, &super::voice::load(env));

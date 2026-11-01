@@ -65653,6 +65653,9 @@ if verb in ("status",):
         if p.get("result") in ("running", "error"):
             line("voice step", "%s (%s)" % (p.get("step"), p.get("result")))
         line("voice error", vo.get("lastError"))
+        ex = vo.get("exposure") or {}
+        if ex.get("note"):
+            line("exposure", ex.get("note"))
 elif verb in ("preflight", "media-preflight"):
     print("ready" if v.get("ready") else "NOT ready")
     for c in v.get("checks") or []:

@@ -466,6 +466,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                 recovery_key_file: abs_path(&v, "recoveryKeyFile")?,
                 provider,
                 voice,
+                ..Default::default()
             };
             let with_voice = req.voice.is_some();
             match sup::enable_begin(&env, &req)? {

@@ -41,13 +41,20 @@
 //! - [`s32`]: the S32 daemon side (K26 status fields + emit points, the
 //!   app-url / ship / mirror routes, the off-box shipper, K31's App Space
 //!   routes).
+//! - [`autosetup`]: voice rooms S6 (0.46.8, dark behind the preview): Sew
+//!   set up on every Linux box, started by the Pro tier watch, with the
+//!   small-box floor.
+//! - [`pro_gate`]: voice rooms S7: the host's Pro gate (cached tier), the
+//!   direct-mode exposure note and the ports file.
 
+pub mod autosetup;
 pub mod fetch;
 pub mod health;
 pub mod governed;
 pub mod home;
 pub mod meet;
 pub mod ops;
+pub mod pro_gate;
 pub mod routes;
 pub mod s32;
 pub mod secrets;

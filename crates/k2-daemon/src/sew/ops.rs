@@ -190,6 +190,23 @@ pub trait SewOps: Send + Sync {
         let _ = path;
         Err(MIRROR_DIR_PENDING.to_string())
     }
+
+    // ── the plan tier (voice rooms PRD v1.9 §8, S7) ───────────────────────
+    /// This box's plan tier, cached by the tunnel's refresh loop
+    /// (`k2_core::tunnel::subdomains::tier_view` for [`Self::box_label`];
+    /// never a network call). No label: unknown.
+    fn plan_tier(&self) -> k2_core::tunnel::subdomains::TierView {
+        match self.box_label() {
+            Some(l) => k2_core::tunnel::subdomains::tier_view(&l),
+            None => k2_core::tunnel::subdomains::TierView::Unknown,
+        }
+    }
+
+    /// The voice rooms preview (`voice_rooms_preview` / `K2_VOICE_ROOMS`,
+    /// [`k2_core::voice_preview`]); off by default.
+    fn voice_preview(&self) -> bool {
+        k2_core::voice_preview::enabled()
+    }
 }
 
 /// What [`SewOps::mirror_dir`] answers while no root helper verb makes the
@@ -806,6 +823,10 @@ pub mod fake {
         /// `Some(e)` = it fails with `e` (default: a helper without the
         /// protocol-12 verb, [`super::MIRROR_DIR_PENDING`]).
         pub mirror_dir_fail: Mutex<Option<String>>,
+        /// [`SewOps::plan_tier`] (default: unknown, i.e. not Pro).
+        pub tier: Mutex<k2_core::tunnel::subdomains::TierView>,
+        /// [`SewOps::voice_preview`] (default off).
+        pub preview: Mutex<bool>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -903,7 +924,22 @@ pub mod fake {
                 release_source: Mutex::new(crate::sew::fetch::Source::offline()),
                 mirror_dirs: Mutex::new(vec![]),
                 mirror_dir_fail: Mutex::new(Some(super::MIRROR_DIR_PENDING.to_string())),
+                tier: Mutex::new(k2_core::tunnel::subdomains::TierView::Unknown),
+                preview: Mutex::new(false),
             }
+        }
+
+        /// Set [`SewOps::plan_tier`]: `Some(tier)` = a fresh reading for
+        /// this box's label, `None` = unknown.
+        pub fn set_tier(&self, tier: Option<&str>) {
+            *self.tier.lock().unwrap() = match tier {
+                Some(t) => k2_core::tunnel::subdomains::TierView::Fresh(k2_core::tunnel::subdomains::TierReading {
+                    primary: "lztek".into(),
+                    tier: Some(t.to_string()),
+                    fetched_at: *self.clock.lock().unwrap(),
+                }),
+                None => k2_core::tunnel::subdomains::TierView::Unknown,
+            };
         }
 
         pub fn queue_cp(&self, call: &str, answer: Result<Value, CpError>) {
@@ -1467,6 +1503,12 @@ pub mod fake {
         }
         fn passthrough_supported(&self) -> bool {
             *self.passthrough.lock().unwrap()
+        }
+        fn plan_tier(&self) -> k2_core::tunnel::subdomains::TierView {
+            self.tier.lock().unwrap().clone()
+        }
+        fn voice_preview(&self) -> bool {
+            *self.preview.lock().unwrap()
         }
         fn mirror_dir(&self, path: &str) -> Result<(), String> {
             if let Some(e) = self.mirror_dir_fail.lock().unwrap().clone() {

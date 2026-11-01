@@ -331,22 +331,25 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
     // space that landed on the wrap boundary. Trimming it made the
     // copy handler's wrapped-line join fuse the words around the
     // boundary ("has a" copied as "hasa").
-    while !wrapped {
-        let Some(last) = out.last_mut() else {
-            break;
-        };
-        if run_decorates_blanks(last) {
-            break;
-        }
-        let trimmed_len = last.text.trim_end_matches(' ').len();
-        if trimmed_len == 0 {
-            out.pop();
-            run_cols.pop();
-        } else {
-            let removed = last.text.len() - trimmed_len;
-            last.text.truncate(trimmed_len);
-            *run_cols.last_mut().expect("run_cols tracks out") -= removed;
-            break;
+    //
+    // The loop ends on every path: an empty row, a decorated run, or a
+    // partial trim break out; an all-blank run is popped, so `out`
+    // shrinks each time round.
+    if !wrapped {
+        while let Some(last) = out.last_mut() {
+            if run_decorates_blanks(last) {
+                break;
+            }
+            let trimmed_len = last.text.trim_end_matches(' ').len();
+            if trimmed_len == 0 {
+                out.pop();
+                run_cols.pop();
+            } else {
+                let removed = last.text.len() - trimmed_len;
+                last.text.truncate(trimmed_len);
+                *run_cols.last_mut().expect("run_cols tracks out") -= removed;
+                break;
+            }
         }
     }
     // Stamp the column span only where it differs from the char count
@@ -466,17 +469,6 @@ pub enum EmitDecision {
     Skip,
 }
 
-/// Inspect Term damage + scrollback growth and produce the
-/// cheapest correct update. Caller holds the Term lock for the
-/// duration of this call; we reset damage before returning so the
-/// next call starts from a clean slate.
-///
-/// State transitions:
-///   - paused + no-emit-yet → Skip
-///   - first emit → Full snapshot
-///   - full damage → Full snapshot (cheaper than listing every row)
-///   - nothing changed → Skip
-///   - otherwise → Delta of damaged rows + appended scrollback
 /// Consume the Term's accumulated damage WITHOUT encoding a
 /// frame, keeping `state` coherent (`last_history_size` especially).
 /// Used by the shared grid emitter when a session has zero viewers:
@@ -493,6 +485,18 @@ pub fn drain_damage<L: EventListener>(term: &mut Term<L>, state: &mut EmitState)
     state.last_history_size = term.grid().history_size();
 }
 
+/// Inspect Term damage + scrollback growth and produce the
+/// cheapest correct update. Caller holds the Term lock for the
+/// duration of this call; we reset damage before returning so the
+/// next call starts from a clean slate.
+///
+/// State transitions:
+///   - first emit → Full snapshot
+///   - full damage → Full snapshot (cheaper than listing every row)
+///   - nothing changed → Skip (alacritty_terminal 0.26 always damages
+///     the cursor line, so after the first emit this is in practice a
+///     Delta carrying just the cursor row)
+///   - otherwise → Delta of damaged rows + appended scrollback
 pub fn build_emit<L: EventListener>(
     pane_id: &str,
     term: &mut Term<L>,
@@ -734,6 +738,34 @@ mod tests {
         assert_eq!(row_text(&wrapped_row), "1234567 ");
         assert_eq!(wrapped_row.last().unwrap().wrapped, Some(true));
         assert_eq!(row_text(&continuation), "x");
+    }
+
+    #[test]
+    fn encode_trims_several_blank_runs_then_stops() {
+        // The trim loop's pop-and-continue path: a row ending in three
+        // undecorated blank runs of different styles (bold spaces,
+        // italic spaces, then the default padding). Each is popped in
+        // turn, the loop stops at "hi", and the column spans stay in
+        // step with the runs.
+        let term = term_with(20, 4, b"hi\x1b[1m   \x1b[0;3m   \x1b[0m");
+        let runs = encode_row_runs(term.grid(), Line(0), 20);
+        assert_eq!(row_text(&runs), "hi");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cols, None);
+        assert_eq!(runs[0].wrapped, None);
+    }
+
+    #[test]
+    fn encode_keeps_every_blank_run_on_a_wrapped_row() {
+        // A wrapped row whose tail is two undecorated blank runs: no
+        // trimming at all (the loop must not run), and the wrap flag
+        // lands on the last run.
+        let term = term_with(8, 4, b"abcd\x1b[1m  \x1b[0m  x");
+        let wrapped_row = encode_row_runs(term.grid(), Line(0), 8);
+        assert_eq!(row_text(&wrapped_row), "abcd    ");
+        assert_eq!(wrapped_row.len(), 3);
+        assert_eq!(wrapped_row.last().unwrap().wrapped, Some(true));
+        assert_eq!(row_text(&encode_row_runs(term.grid(), Line(1), 8)), "x");
     }
 
     #[test]

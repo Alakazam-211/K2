@@ -13,6 +13,7 @@ export type {
   ClientFrame,
   CloseEvent,
   CloseReason,
+  Device,
   ErrorReport,
   Handle,
   LineSpan,

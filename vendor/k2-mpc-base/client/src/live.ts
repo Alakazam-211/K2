@@ -16,9 +16,11 @@ import {
   ERR,
   FRAME_MARGIN,
   FRAME_MAX,
+  type CaretAt,
   type ChangeEvent,
   type ClientFrame,
   type CloseReason,
+  type Device,
   type ErrorReport,
   type Handle,
   type RosterEntry,
@@ -108,6 +110,17 @@ export interface RemoteCaret {
   /** In UTF-8 bytes of the client's current text. */
   anchor: number;
   head: number;
+  /** The connection this caret is on (`Device.client`), when the host sends per-connection
+   * carets (kit v0.10.1); absent from an older host (one caret a participant). */
+  client?: number;
+  /** This connection's own caret: always `false`, since `carets()` never returns it (kept so a
+   * host merging its own caret into the list can tell them apart). */
+  isSelf: boolean;
+  /** Another connection of this connection's own participant (the same person in another tab
+   * or on another device). The host decides how to show it; the library draws nothing. */
+  sameUser: boolean;
+  /** The host's label for that connection (`Device.label`), when it gave one. */
+  label?: string;
 }
 
 /** The reply to an `undo` or `redo` (the `undone` frame). */
@@ -208,6 +221,17 @@ interface Events {
 const WATCH_MAX = 64;
 
 const HISTORY = 512;
+
+/** A participant's devices, the one whose caret is the participant's (`RosterEntry.cursor`,
+ * the most active connection's) first, the rest in their order. */
+function mostActiveFirst(r: RosterEntry): Device[] {
+  const devices = r.devices ?? [];
+  const c = r.cursor;
+  const same = (d: Device) =>
+    !!c && !!d.cursor && d.cursor.root === c.root && d.cursor.anchor === c.anchor && d.cursor.head === c.head;
+  const i = devices.findIndex(same);
+  return i <= 0 ? devices : [devices[i], ...devices.slice(0, i), ...devices.slice(i + 1)];
+}
 
 export class LiveText {
   readonly root: string;
@@ -490,17 +514,35 @@ export class LiveText {
     this.t.send({ type: "snapshot", op: this.snapshotOp });
   }
 
-  /** Remote carets, mapped to the current text. */
+  /**
+   * Remote carets, mapped to the current text. From a host that sends per-connection carets
+   * (`RosterEntry.devices`, `cursor` events with `client`; kit v0.10.1): one caret a connection,
+   * every other connection of this participant's own included (`sameUser`), never this
+   * connection's (`LiveOptions.client`, `welcome.client`); a participant's carets come most
+   * active first, so the first with a handle is the one an older host showed. Without a
+   * client ID this connection can't tell its own, and hides every connection of its own
+   * participant. From an older host (no `devices`): one caret a participant, its own skipped.
+   */
   carets(): RemoteCaret[] {
     const out: RemoteCaret[] = [];
-    for (const r of this._roster) {
-      const c = r.cursor;
-      if (r.self || r.handle === this.selfHandle || !c || c.root !== this.root) continue;
+    const push = (r: RosterEntry, c: CaretAt | null | undefined, extra: Partial<RemoteCaret>) => {
+      if (!c || c.root !== this.root) return;
       const v = c.version ?? this._version;
       const anchor = this.mapFromVersion(c.anchor, v);
       const head = this.mapFromVersion(c.head, v);
-      if (anchor === null || head === null) continue;
-      out.push({ handle: r.handle, name: r.name, colour: r.colour, anchor, head });
+      if (anchor === null || head === null) return;
+      out.push({ handle: r.handle, name: r.name, colour: r.colour, anchor, head, isSelf: false, sameUser: false, ...extra });
+    };
+    for (const r of this._roster) {
+      const own = r.self === true || r.handle === this.selfHandle;
+      if (!r.devices) {
+        if (!own) push(r, r.cursor, {});
+        continue;
+      }
+      for (const d of mostActiveFirst(r)) {
+        if (own && (this.clientId === undefined || d.client === this.clientId)) continue;
+        push(r, d.cursor, { client: d.client, sameUser: own, ...(d.label !== undefined ? { label: d.label } : {}) });
+      }
     }
     return out;
   }
@@ -888,7 +930,11 @@ export class LiveText {
 
   /** A caret without a version is in the text at the version this client has now. */
   private stamp(e: RosterEntry): RosterEntry {
-    if (e.cursor && e.cursor.version === undefined) return { ...e, cursor: { ...e.cursor, version: this._version } };
+    const at = (c: CaretAt | null | undefined) => (c && c.version === undefined ? { ...c, version: this._version } : c);
+    if (e.cursor && e.cursor.version === undefined) e = { ...e, cursor: at(e.cursor) };
+    if (e.devices?.some((d) => d.cursor && d.cursor.version === undefined)) {
+      e = { ...e, devices: e.devices.map((d) => ({ ...d, cursor: at(d.cursor) ?? null })) };
+    }
     return e;
   }
 
@@ -931,12 +977,25 @@ export class LiveText {
       case "away":
         set(ev.who, { away: ev.away });
         break;
-      case "cursor":
+      case "cursor": {
         // the kit gives the version beside the caret; the host may put it inside
-        set(ev.who, {
-          cursor: ev.cursor ? { ...ev.cursor, version: ev.cursor.version ?? ev.version } : null,
-        });
+        const cursor = ev.cursor ? { ...ev.cursor, version: ev.cursor.version ?? ev.version } : null;
+        // the participant's caret, as before (the host's last event a flush is that caret)
+        const patch: Partial<RosterEntry> = { cursor };
+        if (ev.client !== undefined) {
+          // one connection's caret (kit v0.10.1): kept per (handle, client); a connection with
+          // no caret (gone, or dropped it) leaves the list
+          const i = at(ev.who);
+          const was = i >= 0 ? (list[i].devices ?? []) : [];
+          const k = was.findIndex((d) => d.client === ev.client);
+          const client = ev.client;
+          if (!cursor) patch.devices = was.filter((d) => d.client !== client);
+          else if (k >= 0) patch.devices = was.map((d, j) => (j === k ? { ...d, cursor } : d));
+          else patch.devices = [...was, { client, cursor }];
+        }
+        set(ev.who, patch);
         break;
+      }
       case "watching":
         this.watching = ev.count;
         break;

@@ -88,8 +88,11 @@ export type RosterEvent =
   | { kind: "rights"; who: Handle; rights: string }
   | { kind: "role"; who: Handle; role: string }
   | { kind: "away"; who: Handle; away: boolean }
-  /** `version`: the doc version the caret's offsets are in (also put inside `cursor`). */
-  | { kind: "cursor"; who: Handle; cursor: CaretAt | null; version?: number }
+  /** `version`: the doc version the caret's offsets are in (also put inside `cursor`).
+   * `client` (kit v0.10.1): the connection whose caret this is (a `Device.client`); absent from
+   * an older host, and on the participant's own caret (`RosterEntry.cursor`), which a host
+   * sends without it when the last per-connection event wasn't that caret. */
+  | { kind: "cursor"; who: Handle; cursor: CaretAt | null; version?: number; client?: number }
   | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; [k: string]: unknown }
   | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
@@ -124,6 +127,17 @@ export type RosterEvent =
   /** The host closed this doc's live session (`reason`, its code): the last event; the subscription ends. */
   | { kind: "closed"; reason: string };
 
+/** One connection of a participant (the kit's `Device`, v0.10.1): the same person in two tabs
+ * or on two devices is one `RosterEntry` with two of these. */
+export interface Device {
+  /** The connection's client ID (its `welcome.client`). */
+  client: number;
+  /** This connection's caret, if it has one. */
+  cursor: CaretAt | null;
+  /** The host's label for the connection ("another tab"), when it gave one. Never doc text. */
+  label?: string;
+}
+
 /** One participant as the host shows them (from the kit's `RosterMember`). */
 export interface RosterEntry {
   /** `RosterMember.who` as a string. */
@@ -138,6 +152,9 @@ export interface RosterEntry {
   away: boolean;
   /** The participant's most active caret, if any. */
   cursor?: CaretAt | null;
+  /** Each of the participant's connections with its own caret (kit v0.10.1, text docs). Absent
+   * from an older host: then `cursor` is the participant's only caret. */
+  devices?: Device[];
   /** `RosterMember.rights`, when the host sends it. */
   rights?: Rights;
   /** This connection itself. */

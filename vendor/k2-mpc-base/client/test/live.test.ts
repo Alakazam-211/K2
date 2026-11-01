@@ -166,7 +166,7 @@ describe("LiveText", () => {
         { handle: "p1", name: "Me", colour: "#00f", kind: "person", role: "editor", away: false, self: true },
       ],
     });
-    expect(l.carets()).toEqual([{ handle: "p2", name: "Ada", colour: "#f00", anchor: 6, head: 6 }]);
+    expect(l.carets()).toEqual([{ handle: "p2", name: "Ada", colour: "#f00", anchor: 6, head: 6, isSelf: false, sameUser: false }]);
     w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(0, 0, ">")] });
     expect(w.sent.filter((f) => f.type === "cursor")).toEqual([
       { type: "cursor", root: "source", version: 2, anchor: 1, head: 1 },
@@ -254,7 +254,7 @@ describe("LiveText", () => {
     w.deliver({ type: "roster_event", event: { kind: "cursor", who: "p2", cursor: { root: "source", anchor: 5, head: 5 } } });
     expect(l.roster.find((r) => r.handle === "p2")?.cursor?.version).toBe(3);
     w.deliver({ type: "change", event: ev(4, [h(0, 0, ">>")]) });
-    expect(l.carets()).toEqual([{ handle: "p2", name: "Ada", colour: "#f00", anchor: 7, head: 7 }]);
+    expect(l.carets()).toEqual([{ handle: "p2", name: "Ada", colour: "#f00", anchor: 7, head: 7, isSelf: false, sameUser: false }]);
     w.deliver({ type: "roster_event", event: { kind: "watching", count: 4 } });
     expect(l.watchers).toBe(4);
     w.deliver({ type: "roster_event", event: { kind: "left", who: "p2" } });

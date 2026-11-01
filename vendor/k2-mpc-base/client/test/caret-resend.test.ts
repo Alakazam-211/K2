@@ -28,10 +28,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function setup(handles: string[]) {
+function setup(handles: string[], opts: { olderHost?: boolean } = {}) {
   const net = new Net();
   const server = new FakeServer(net, TEXT);
-  server.caretRoute = { names: NAMES };
+  server.caretRoute = { names: NAMES, olderHost: opts.olderHost };
   const r = rng(5);
   const host = new FakeLiveHost(net, server, () => 2);
   setDefaultLiveTimers(netTimers(net, r.next)); // the replicas' throttle on the fake clock
@@ -192,11 +192,11 @@ describe("the caret's re-send after remote changes", () => {
     expect(s.firstSeen - s.t0, "the caret took longer than one throttle window to recover").toBeLessThanOrEqual(CARET_RESEND_MS + 50);
   });
 
-  it("documents today's limit: the same person on two devices never sees the other device's caret", async () => {
-    // TODAY'S LIMIT, not the goal: the roster is one row per person (the kit folds carets by
-    // pid, the first connection with one wins), and a replica skips its own handle's row
-    // (`LiveText.carets`). Per-connection presence (next step) changes this test.
-    const { net, server, eds } = setup(["p1", "p1", "p2"]);
+  it("an older host keeps 0.11's limit: the same person on two devices never sees the other device's caret", async () => {
+    // A host without per-connection carets (kit before v0.10.1, the route's `olderHost`): the
+    // roster is one row per person (the first connection with a caret wins), and a replica
+    // skips its own handle's row (`LiveText.carets`), exactly as 0.11 did.
+    const { net, server, eds } = setup(["p1", "p1", "p2"], { olderHost: true });
     const [A1, A2, B] = eds;
     await settle(net);
     A2.view.dispatch({ selection: { anchor: 10 } });
@@ -215,6 +215,36 @@ describe("the caret's re-send after remote changes", () => {
     expect(caretOf(B, "Ada")).toBe(30);
     expect(A2.view.dom.querySelectorAll(".cm-mpc-caret").length).toBe(0);
     expect(A1.view.dom.querySelectorAll(".cm-mpc-caret").length).toBe(0);
+  });
+
+  it("per-connection carets (kit v0.10.1): the same person on two devices sees the other device's caret", async () => {
+    // A current host: a `Device` per connection and `client` on `cursor` events. Each device
+    // shows the other's caret (drawn here by the kit's own editor, named as the person), never
+    // its own; another person sees both.
+    const { net, server, eds } = setup(["p1", "p1", "p2"]);
+    const [A1, A2, B] = eds;
+    await settle(net);
+    A2.view.dispatch({ selection: { anchor: 10 } });
+    await settle(net);
+    server.caretTick();
+    await settle(net);
+    expect(caretOf(A1, "Ada"), "the other device's caret, in the first").toBe(10);
+    expect(A2.view.dom.querySelectorAll(".cm-mpc-caret").length, "its own caret is not drawn").toBe(0);
+    expect(caretOf(B, "Ada")).toBe(10);
+    A1.view.dispatch({ selection: { anchor: 30 } });
+    await settle(net);
+    server.caretTick();
+    await settle(net);
+    expect(caretOf(A2, "Ada"), "the first device's caret, in the second").toBe(30);
+    expect(caretOf(A1, "Ada"), "the second's stays in the first").toBe(10);
+    expect(caretsNamed(A1, "Ada")).toBe(1);
+    expect(caretsNamed(A2, "Ada")).toBe(1);
+    expect(caretsNamed(B, "Ada"), "one caret a connection").toBe(2);
+    // B types before both carets: each device's caret of the other moves with the text
+    type(B, 0, "xy");
+    await settle(net);
+    expect(caretOf(A1, "Ada")).toBe(12);
+    expect(caretOf(A2, "Ada")).toBe(32);
   });
 });
 

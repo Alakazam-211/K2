@@ -3,6 +3,39 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## Unreleased
+
+**Per-connection carets.** The same person on two devices or in two tabs sees their other
+connection's caret, as Google Docs shows one login's other tabs. Library only (`live.ts`,
+`wire.ts`, `index.ts`, `core.ts`): `src/editor/*` is unchanged, and the library marks carets and
+draws nothing (no UI text). Additive: from an older host the client does exactly what 0.11.1 did.
+
+- **Wire types:** `RosterEntry.devices?: Device[]` (`Device = {client, cursor, label?}`, exported)
+  and `cursor` events' `client?` (kit v0.10.1, `WIRE.md` "The roster").
+- **The roster fold** keeps carets per (handle, client): a `cursor` event with `client` updates
+  that connection's device (a `null` caret removes it: the connection left or dropped its
+  caret); every `cursor` event still sets the entry's `cursor`, as before.
+- **`carets()`** with `devices` on an entry: one caret a connection, most active first (so
+  `find` by handle gets the caret an older host showed); this connection's own
+  (`LiveOptions.client`, `welcome.client`) never; another connection of this participant with
+  `sameUser: true`; without a client ID, every connection of its own participant is hidden.
+  With no `devices` (an older host): one caret a participant, its own skipped, as 0.11.1.
+- **`RemoteCaret` gains** `client?` (the connection, when the host sends per-connection
+  carets), `isSelf` (always `false`: this connection is never returned), `sameUser` and
+  `label?` (the host's label for the connection). Existing fields and their meaning are
+  unchanged.
+- **A device's label** arrives with a snapshot (a `cursor` event carries none): a connection
+  that joins after this one subscribed has no label until the next snapshot.
+- **Tests:** `test/carets-per-conn.test.ts`: connections of one person each see the others'
+  carets, mapped across remote edits; their own is never returned (snapshot or events); no
+  client ID hides the own participant's; other people are one caret a connection; an older
+  host is the 0.11.1 `carets()` exactly (a copy of it, 40 random runs); planted faults
+  (skipping by handle again, one caret a person) fail. The fake host's caret route sends
+  `devices` and `client` as the kit does (`caretRoute.olderHost` for the old route), through
+  which two tabs of one person see each other's carets and a tab that leaves takes its caret
+  with it. The goldens gain `devices` and `client`; `roster_events_devices.json` (new) folds to
+  the kit's per-connection carets.
+
 ## 0.11.1 (unreleased; kit tag v0.10.0.3)
 
 A fix for remote carets, client-side only: no wire change, no new dependency. `package.json`

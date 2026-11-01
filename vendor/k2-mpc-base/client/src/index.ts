@@ -21,6 +21,7 @@ export type {
   Handle,
   LineSpan,
   ConnectOptions,
+  Device,
   LiveTransport,
   ParticipantInfo,
   Rights,

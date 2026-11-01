@@ -210,6 +210,20 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
 - A versioned `set_cursor_at(conn, root, version, anchor, head)` that maps in the kit is
   planned for kit v0.10.1; a host can then pass the frame through.
 - Carets coming the other way carry their version: [JSON encodings](#json-encodings).
+- **Per-connection carets (kit v0.10.1, additive).** The same person on two devices or in two
+  tabs sees their other connection's caret, as one login's other tabs show in Google Docs.
+  The kit's roster rows stay one per participant; on a text doc each row gains `devices` (one
+  `{client, cursor, label?}` a connection, in join order), and each `cursor` event gains
+  `client`, the connection whose caret moved ([The roster](#the-roster)). `carets()` then
+  returns one caret a connection, another connection of this participant's own with
+  `sameUser: true`, and never this connection's own (`welcome.client`); with no `devices` (an
+  older host) it returns one caret a participant and skips its own, as before. The library
+  draws nothing and has no text for these: the host shows them.
+- **A connection's label** is the host's, given at join (`Session::join_with` with
+  `JoinOptions::label`: "another tab", "Chrome on Mac"); the kit cleans it (control characters
+  out, trimmed, at most 64 characters) and carries it on `Device.label` (the wire's `label`,
+  left out when there is none). It is never doc text.
+- **A connection's label arrives with the next roster snapshot** (`cursor` events carry none).
 
 ## Reconnecting
 
@@ -347,14 +361,20 @@ a frame over it, and the host refuses one cleanly:
 ## The roster
 
 - **A roster entry** is `{handle, name, colour, kind, role, away, cursor, rights}` (+ `self`
-  when the host marks it); `cursor` is `{root, anchor, head, version, anchor_lc, head_lc}` or
-  `null`. `self` marks this connection's own participant (or the client compares `handle` with
-  `LiveOptions.self`, i.e. `welcome.self`).
+  when the host marks it, + `devices` on a text doc from kit v0.10.1); `cursor` is `{root,
+  anchor, head, version, anchor_lc, head_lc}` or `null`, the participant's most active
+  connection's caret. `self` marks this connection's own participant (or the client compares
+  `handle` with `LiveOptions.self`, i.e. `welcome.self`).
+- **`devices`** (kit v0.10.1, additive: absent from an older host, on a grid, and for tier 0):
+  one `{client, cursor, label?}` per connection of the participant, in join order: `client`
+  its client ID (`welcome.client` on that connection), `cursor` its own caret or `null`,
+  `label` the host's label for it when there is one. A client knows its own connection by
+  `client` and hides only that one.
 - **A roster event** mirrors the kit's `RosterEvent`, tagged by `kind`: `snapshot {version,
   members, watching, overwritten?}` (always first; a later one replaces everything;
   `overwritten` only when this subscriber has waiting notes, [below](#the-overwritten-event)), `joined {who,
   participant: {name, colour, kind, via}, rights}`, `left {who, reason}`, `rights {who,
-  rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version}`,
+  rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version, client?}`,
   `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version}`,
   `claim_ended {who, claim, how, lines, version}`, `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
@@ -370,6 +390,15 @@ a frame over it, and the host refuses one cleanly:
 - **Members' order isn't significant.** The kit lists editors first, then viewers, then away
   (`Session::roster`); a client that folds the events may keep join order. Compare rosters as a
   set keyed by `handle`.
+- **`cursor`'s `client`** (kit v0.10.1, additive): the connection whose caret this is. The kit
+  sends one event per connection whose caret changed (a connection that left with a caret:
+  `cursor: null`), so a client keeps carets per `(who, client)`. **A client that ignores
+  `client`** and keeps one caret a participant (the last event's) stays right: within a flush
+  a participant's events end with the one whose caret is the participant's (`entry.cursor`),
+  and when the last per-connection event isn't that caret (a connection left, or dropped its
+  caret, while another still has one) the kit sends one more `cursor` **without `client`**
+  carrying the participant's caret. A participant with one connection gets the same events as
+  before, each with its `client`.
 - **A caret's `version`:** the doc version its offsets are in. The kit gives it beside the
   caret (`RosterEvent::Cursor.version`; a snapshot's carets are at the snapshot's `version`);
   the host puts it inside the caret object too. Without one, the client takes its own version
@@ -398,7 +427,8 @@ the kit's own final roster.
 | `claim` | `claim-N` (`ClaimId`'s `Display`) |
 | `lines` | `{root, first, last}`, 1-based, inclusive |
 | a caret (`CursorAt`) | `{root, anchor, head, version, anchor_lc, head_lc}`: `anchor`/`head` bytes at `version`; `anchor_lc`/`head_lc` the kit's `LineCol` as `"line:col"`, both 1-based, the column counted in characters (Unicode scalar values), for display only |
-| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights` |
+| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None` |
+| `RosterEvent::Cursor` → `cursor` | `{kind: "cursor", who, cursor, version}`, then `client` (v0.10.1) only when the event's `client` is `Some`: the connection's client ID |
 | `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, rule, details}`. Clients key on `id`; `message` and `next` are for people |
 | `RosterEvent::Overwritten {to, overwrite}` → `overwritten` | `{kind: "overwritten", to, change, version, restore_from, source, rule, row, line, cells, more, not_shown, withheld, no_history, message}`, every field always present: `to` = `to` (`Who`'s `Display`, the subscriber's own, since the kit sends it only to its author's subscriptions); `change`, `source`, `rule`, `more`, `not_shown`, `withheld`, `no_history` = the `Overwrite`'s fields of those names; `version`, `restore_from`, `row`, `line` = the `Overwrite`'s `Option`s, `null` when `None`; `cells` (below); `message` = the `Overwrite`'s `Display` (`to_string()`), which holds the person's text |
 | `cells` | in order: first `{region, col, yours, file, cut}` from the `Overwrite`'s own top-level `region`, `col`, `yours`, `file`, `cut` (its first place), then one `{region, col, yours, file, cut}` per entry of `also` (an `OverwriteCell`, same fields), in `also`'s order. `col` is `null` when `None`. A roll-up (`rule: "rollup"`, `Overwrite::is_rollup`) has no place: `cells: []` (its `region` is empty; don't send it) |

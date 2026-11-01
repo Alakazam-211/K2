@@ -67,6 +67,14 @@ async fn setup(flags: &[&str], preview: bool, hosting: Hosting) -> Env {
     voice_rooms::set_hosting_for_tests(Some(hosting));
     hook::set_target(CHAT_KIND, true, Some(sew.socket.to_str().unwrap()), Some(sew.token_file.to_str().unwrap()), "owner-token")
         .expect("enable chat target");
+    // The main DB is one per process (not per TempHome): start each test
+    // with no default Space and no agent access.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_default_space(&conn, None, "test", 0).expect("clear default space");
+        conn.execute("DELETE FROM sew_chat_access", []).expect("clear access");
+    }
     Env { _home: home, sew }
 }
 

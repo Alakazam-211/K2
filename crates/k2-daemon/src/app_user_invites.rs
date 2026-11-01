@@ -259,18 +259,56 @@ pub fn k2_set_password_page() -> Result<Option<String>, String> {
     front_door_page(&door, &app_hosts()).map(Some)
 }
 
-/// Another of K2's own pages on the box front door (`<door><path>`), with
-/// the same rules as [`k2_set_password_page`]: https (or exact localhost),
-/// never an App's host. Email Notifications' confirm and stop pages
-/// (`/cli/email/verify`, `/cli/email/stop`).
+/// Another of K2's own public pages, for a link K2 mails someone
+/// (`<base><path>`): Email Notifications' confirm and stop pages
+/// (`/cli/email/verify`, `/cli/email/stop`), which a mailbox forward's
+/// confirm and every notice's stop link use too. Same rules as
+/// [`k2_set_password_page`] (https or exact localhost, never an App's
+/// host), but the base is a host that really reaches this daemon:
+///
+/// 1. the front door URL the owner STORED (Settings → Apps → front door,
+///    `k2 app front-door … --url`), else
+/// 2. the box's own tunnel URL `https://<sub>.k2.dev` (the primary tunnel
+///    label always routes to the daemon), unless air-gap is on.
+///
+/// Never the derived `https://skin.<sub>.k2.dev`
+/// ([`skin::effective_front_door`]): the relay routes that nested label
+/// only after the Caddy front door registered it, so on most boxes it
+/// answers 404 "Unknown subdomain" and a mailed link could never be used.
 pub fn k2_front_door_url(path: &str) -> Result<Option<String>, String> {
-    let Some(page) = k2_set_password_page()? else { return Ok(None) };
-    let base = page.strip_suffix(crate::skin_gateway::SET_PASSWORD_PATH).unwrap_or(&page);
+    let stored = skin::get_front_door().ok().and_then(|d| d.url);
+    let Some(base) = mail_link_base(stored.as_deref(), box_public_url().as_deref(), &app_hosts())? else {
+        return Ok(None);
+    };
     Ok(Some(format!("{base}{path}")))
+}
+
+/// The box's own tunnel URL (`https://<sub>.k2.dev`), when it has a tunnel
+/// label and air-gap is off.
+fn box_public_url() -> Option<String> {
+    if k2_core::airgap::enabled() {
+        return None;
+    }
+    k2_core::tunnel::config::load().ok().and_then(|c| c.public_url())
+}
+
+/// [`k2_front_door_url`]'s base: the stored front door, else the box's
+/// tunnel URL, checked like [`front_door_page`]. `Ok(None)`: neither.
+fn mail_link_base(stored: Option<&str>, box_url: Option<&str>, app_hosts: &[String]) -> Result<Option<String>, String> {
+    let pick = |u: Option<&str>| u.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let Some(door) = pick(stored).or_else(|| pick(box_url)) else { return Ok(None) };
+    front_door_base(&door, app_hosts).map(Some)
 }
 
 /// [`k2_set_password_page`] for front door `door` given every App host.
 fn front_door_page(door: &str, app_hosts: &[String]) -> Result<String, String> {
+    Ok(format!("{}{}", front_door_base(door, app_hosts)?, crate::skin_gateway::SET_PASSWORD_PATH))
+}
+
+/// `door` without a trailing `/`, when K2's own pages may live on it:
+/// https (or exact localhost) and not a host an App answers on (the box's
+/// router would hand K2's page to that App, whose agent reads it).
+fn front_door_base(door: &str, app_hosts: &[String]) -> Result<String, String> {
     let door = door.trim().trim_end_matches('/').to_string();
     let Some((_, host, _)) = invites::url_host(&door) else {
         return Err(format!("the front door ({door}) is not an http(s) URL"));
@@ -278,9 +316,9 @@ fn front_door_page(door: &str, app_hosts: &[String]) -> Result<String, String> {
     invites::check_set_password_url(&door, std::slice::from_ref(&host))
         .map_err(|_| format!("the front door ({door}) is not https:// (only http://localhost or http://127.0.0.1 may be plain)"))?;
     if app_hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
-        return Err(format!("the front door's host {host} is an App's domain or label: that App would get K2's set-password page"));
+        return Err(format!("the front door's host {host} is an App's domain or label: that App would get K2's own pages (set-password, email confirm)"));
     }
-    Ok(format!("{door}{}", crate::skin_gateway::SET_PASSWORD_PATH))
+    Ok(door)
 }
 
 /// Every host an App (or a labelled service) answers on or could: each
@@ -388,12 +426,16 @@ pub fn owner_reset_sender(app: &str, from: Option<&str>) -> Result<Option<Sender
     }))
 }
 
-/// How the owner is named in a mail: the box's front door host, else
-/// "this K2 server".
+/// How the owner is named in a mail: the host of the stored front door,
+/// else of the box's own tunnel URL (the host K2's mailed links use, see
+/// [`k2_front_door_url`]; never a derived `skin.<sub>` host the relay may
+/// not route), else "this K2 server".
 pub(crate) fn box_label() -> String {
-    skin::effective_front_door()
+    skin::get_front_door()
         .ok()
         .and_then(|d| d.url)
+        .filter(|u| !u.trim().is_empty())
+        .or_else(box_public_url)
         .and_then(|u| u.split("://").nth(1).map(|h| h.split('/').next().unwrap_or(h).to_string()))
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "this K2 server".to_string())
@@ -1507,6 +1549,36 @@ mod tests {
         for bad in ["http://rosson.k2.dev", "https://shop.rosson.k2.dev", "https://SHOP.example.com/", "http://localhost.evil.example", "ftp://x", "https://u@rosson.k2.dev"] {
             assert!(front_door_page(bad, &apps).is_err(), "{bad}");
         }
+    }
+
+    /// Mailed links (email confirm / stop): the stored front door wins;
+    /// with none stored, the box's own tunnel URL (never a derived
+    /// `skin.<sub>` host the relay may not route); never an App's host.
+    #[test]
+    fn mailed_links_use_the_stored_door_else_the_box_host_never_an_app() {
+        let apps = vec!["shop.box.k2.dev".to_string(), "shop.example.com".to_string()];
+        let base = |s: Option<&str>, b: Option<&str>| mail_link_base(s, b, &apps);
+        // No stored door: the box's main host.
+        let got = base(None, Some("https://box.k2.dev")).expect("box host is safe").expect("a base");
+        assert_eq!(got, "https://box.k2.dev");
+        assert!(!got.contains("skin."), "{got}");
+        let got = base(Some("  "), Some("https://box.k2.dev/")).expect("blank stored door is none").expect("a base");
+        assert_eq!(got, "https://box.k2.dev");
+        // A stored door wins over the box host.
+        let got = base(Some("https://box.brand.test/"), Some("https://box.k2.dev")).expect("stored is safe").expect("a base");
+        assert_eq!(got, "https://box.brand.test");
+        // An App's host is refused, stored or not; plain http too.
+        for (stored, boxu) in [
+            (Some("https://shop.box.k2.dev"), Some("https://box.k2.dev")),
+            (Some("https://SHOP.example.com/"), None),
+            (None, Some("https://shop.box.k2.dev")),
+            (Some("http://box.brand.test"), Some("https://box.k2.dev")),
+        ] {
+            let r = base(stored, boxu);
+            assert!(r.is_err(), "{stored:?} / {boxu:?} must be refused, got {r:?}");
+        }
+        // Neither: no base.
+        assert_eq!(base(None, None), Ok(None));
     }
 
     /// Item 8: every card answer works without a sender and mints nothing

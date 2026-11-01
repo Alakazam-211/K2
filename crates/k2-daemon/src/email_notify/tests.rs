@@ -1798,6 +1798,57 @@ fn v_people_read_and_remove_their_own_admins_anyones_and_senders_are_refused() {
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_front_door")), "{v}");
 }
 
+/// Field bug (0.46.7, a customer box): with no stored front door the
+/// confirm link used the derived `https://skin.<sub>.k2.dev`, which the
+/// relay answers 404 "Unknown subdomain" for unless the Caddy front door
+/// registered that label, so no forward could be confirmed. Mailed links
+/// now use the box's own tunnel host; a stored front door still wins; an
+/// App's host is still refused.
+#[test]
+fn v_links_use_the_box_host_without_a_stored_door_and_never_a_derived_skin_host() {
+    let f = fx("vhost");
+    use verify::{ADDRESS_SET_PATH as SET, VERIFY_PATH};
+    let cfg = k2_core::tunnel::config::config_path();
+    std::fs::create_dir_all(cfg.parent().expect("tunnel.json dir")).expect("mkdir .k2");
+    std::fs::write(&cfg, r#"{"subdomain":"box"}"#).expect("tunnel.json");
+    let door = k2_core::skin::get_front_door().expect("door row");
+    assert_eq!(door.url, None, "the fixture stores no front door: {door:?}");
+    let sys = system_sender_on();
+
+    // No stored door, no `skin` label: the box's main host.
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "me@x.test"}), &[]);
+    assert_eq!(st, 200, "{v}");
+    let mail = f.engine.sent.lock().unwrap().last().cloned().expect("sent");
+    assert_eq!(mail.from, sys.address);
+    let text = mail.email.to_string();
+    assert!(text.contains("https://box.k2.dev/cli/email/verify?t=k2ev_"), "{text}");
+    assert!(text.contains("https://box.k2.dev/cli/email/stop?t=k2es_"), "{text}");
+    assert!(!text.contains("skin.box.k2.dev"), "never the derived skin host: {text}");
+    assert!(text.contains("The owner of box.k2.dev"), "named by the host the link uses: {text}");
+    // The token in that link confirms (the page is the daemon's, any host).
+    let tok = token_in_last_mail(&f, "k2ev_");
+    let p = verify::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
+    assert!(p.status.starts_with("200") && p.html.contains("Confirmed"), "{p:?}");
+
+    // A stored front door wins over the box host.
+    k2_core::skin::set_front_door("connect", Some("https://door.brand.test/"), None, None).expect("door");
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "me2@x.test"}), &[]);
+    assert_eq!(st, 200, "{v}");
+    let text = f.engine.sent.lock().unwrap().last().cloned().expect("sent").email.to_string();
+    assert!(text.contains("https://door.brand.test/cli/email/verify?t=k2ev_"), "{text}");
+    assert!(!text.contains("https://box.k2.dev/cli/email/"), "{text}");
+
+    // An App's host is refused (the fixture's App `shop` answers on
+    // `shop.box.k2.dev`): nothing is sent, no row is left.
+    k2_core::skin::set_front_door("connect", Some("https://shop.box.k2.dev"), None, None).expect("door");
+    let n = f.engine.sent.lock().unwrap().len();
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "me3@x.test"}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_front_door")), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("a hint");
+    assert!(hint.contains("shop.box.k2.dev is an App's domain or label"), "{v}");
+    assert_eq!(f.engine.sent.lock().unwrap().len(), n, "nothing sent on an App host");
+}
+
 // ── part 2, N6: outcomes, suppressions, auto-pause ───────────────────
 
 fn dsn_report(id: &str, envelope_id: &str, rcpt: &str, action: &str, status: &str) -> engine::RawReport {

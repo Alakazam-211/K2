@@ -365,6 +365,11 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     // K2's own set-password page (agent-app-users): always the daemon,
     // never the UI port, so an owner's reset link never lands on an App.
     push_handle(out, "/cli/skin/password/set", daemon);
+    // Email Notifications' confirm and stop pages (public; the link's
+    // token is the credential): a mailed link on a stored front door must
+    // reach the daemon, not this filter's 403. Exact matchers only.
+    push_handle(out, "/cli/email/verify", daemon);
+    push_handle(out, "/cli/email/stop", daemon);
     push_handle(out, "/cli/thread", daemon);
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
@@ -1333,6 +1338,12 @@ mod tests {
             !file.contains("/cli/skin/password/forgot"),
             "forgot stays off the leftover door: {file}"
         );
+        // Mailed confirm / stop links on a stored front door reach the
+        // daemon (exact paths, never a `/cli/email/*` glob).
+        assert!(file.contains("handle /cli/email/verify {"), "{file}");
+        assert!(file.contains("handle /cli/email/stop {"), "{file}");
+        assert!(!file.contains("handle /cli/email/*"), "{file}");
+        assert!(!file.contains("/cli/email/events"), "the delivery webhook stays loopback-only: {file}");
         assert!(
             file.contains(PATH_FILTER_ERROR),
             "catch-all 403 JSON missing: {file}"

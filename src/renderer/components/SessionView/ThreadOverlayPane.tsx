@@ -10,8 +10,11 @@ import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import { useRoom } from '@/components/Room/RoomContext'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
+import { wasPendingBubble } from './threadOutbox'
 import {
+  discardThreadPost,
   isVoidedHitl,
+  retryThreadPost,
   sameThreadItem,
   type OverlayDoc,
   type OverlayThreadItem,
@@ -133,7 +136,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const viewer = useMemo(() => viewerNow, [viewerKey])
   const isTabVisible = useIsTabVisible()
-  const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
+  const { items, outbox, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: roomScope,
     addr,
@@ -143,7 +146,11 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     viewing: active && isTabVisible,
   })
 
-  const visible = useMemo(() => items.filter((it) => !isVoidedHitl(it.doc)), [items])
+  // This window's unconfirmed sends draw last, as pending bubbles (Fix 3).
+  const visible = useMemo(() => {
+    const shown = items.filter((it) => !isVoidedHitl(it.doc))
+    return outbox.length > 0 ? [...shown, ...outbox] : shown
+  }, [items, outbox])
   const keys = useMemo(() => visible.map((it) => it.id), [visible])
   // Rows get stable callbacks (the memoized rows compare them by identity):
   // the latest hook functions through refs.
@@ -236,7 +243,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     const el = listRef.current
     if (!el) return
     syncListScrollRef.current(el)
-  }, [items, turn, isTabVisible, bottomInset])
+  }, [items, outbox, turn, isTabVisible, bottomInset])
 
   useEffect(() => {
     if (!isTabVisible) return
@@ -309,7 +316,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     >
       <ThreadZenStyles />
       {/* 0.46.1: the agent's open clone proposals (Owner/Admin), Review / Deny. */}
-      <CloneProposalsBanner addr={addr} refreshKey={visible.length} />
+      <CloneProposalsBanner addr={addr} refreshKey={visible.length - outbox.length} />
       <div
         ref={listRef}
         data-testid="thread-overlay-list"
@@ -377,7 +384,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 cardContext={cardContext}
                 onHandoffDecide={handoffDecide}
                 handoffRemoteHost={handoffRemoteHost}
-                still={win.wasDrawn(it.id)}
+                still={win.wasDrawn(it.id) || wasPendingBubble(it.id)}
               />
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
@@ -497,12 +504,14 @@ export function ThreadItemRow({
   const workspace = cardContext?.workspace
   const server = cardContext?.server
   const secret = useMemo(() => ({ workspace, server }), [workspace, server])
+  const pending = item.pending
   return (
     <ThreadBubble
       item={item}
-      mine={mine}
-      author={author}
-      timeLabel={formatRelativeTime(item.doc.created_at, now)}
+      // A pending bubble is always this window's own send.
+      mine={pending ? true : mine}
+      author={pending ? 'You' : author}
+      timeLabel={pending ? (pending.state === 'failed' ? 'Not sent' : 'Sending…') : formatRelativeTime(item.doc.created_at, now)}
       viewer={viewer}
       nowSec={now}
       onAnswer={onAnswer}
@@ -512,6 +521,40 @@ export function ThreadItemRow({
       onHandoffDecide={onHandoffDecide}
       handoffRemoteHost={handoffRemoteHost}
       still={still}
+      pending={pending?.state}
+      footer={pending?.state === 'failed' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} /> : undefined}
     />
+  )
+}
+
+/** Under a "Not sent" bubble: Retry (the same post, the same id) and
+ *  Discard. The reason is the hover text. */
+function PendingSendActions({ clientMsgId, error }: { clientMsgId: string; error?: string }): JSX.Element {
+  const link: CSSProperties = {
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    color: 'inherit',
+    font: 'inherit',
+    textDecoration: 'underline',
+    cursor: 'pointer',
+  }
+  return (
+    <span data-thread-pending-actions="" title={error}>
+      <button
+        type="button"
+        style={link}
+        data-thread-retry=""
+        onClick={() => {
+          void retryThreadPost(clientMsgId)
+        }}
+      >
+        Retry
+      </button>
+      {' · '}
+      <button type="button" style={link} data-thread-discard="" onClick={() => discardThreadPost(clientMsgId)}>
+        Discard
+      </button>
+    </span>
   )
 }

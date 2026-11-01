@@ -145,7 +145,7 @@ describe('sidecar thread send address', () => {
     typeAndSend('ship the notes')
     await waitFor(() => {
       expect(threadPosts()).toEqual([
-        ['thread/post', { addr: 'sales/reviewer', text: 'ship the notes', via: 'compose' }],
+        ['thread/post', { addr: 'sales/reviewer', text: 'ship the notes', via: 'compose', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) }],
       ])
     })
     expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull()
@@ -232,7 +232,7 @@ describe('Thread survives a tab rename (S4)', () => {
     typeAndSend('and the lint')
     await waitFor(() => {
       expect(threadPosts()).toEqual([
-        ['thread/post', { addr: 'sales/reviewer', text: 'and the lint', via: 'compose' }],
+        ['thread/post', { addr: 'sales/reviewer', text: 'and the lint', via: 'compose', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) }],
       ])
     })
   })
@@ -270,7 +270,7 @@ describe('Thread survives a tab rename (S4)', () => {
       const posts = threadPosts()
       expect(posts[posts.length - 1]).toEqual([
         'thread/post',
-        { addr: 'sales/reviewer', text: 'and the lint', via: 'compose' },
+        { addr: 'sales/reviewer', text: 'and the lint', via: 'compose', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) },
       ])
     })
   })

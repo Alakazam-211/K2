@@ -142,6 +142,13 @@ export const REPORTED_FEATURES = {
    *  `multiplayerCores` key on `settings/update` and `doc_cores_changed`.
    *  Settings → Cores → Multiplayer shows only for a server with it. */
   'docs-cores-v1': 'docs-cores-v1',
+  /** post-idempotency-v1 (0.46.8, crates/k2-daemon/src/client_msg_id.rs):
+   *  `POST /cli/thread/post` and `POST /cli/project-group/msg` take an
+   *  optional `clientMsgId` (1–64 of `[A-Za-z0-9_-]`); a repeat answers the
+   *  stored post with `duplicate: true`, a key used in another chat is 409
+   *  `client_msg_id_reused`. The id is sent only to a server with it (an
+   *  older one drops it); the pending bubble then matches by text. */
+  'post-idempotency-v1': 'post-idempotency-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

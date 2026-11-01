@@ -19,6 +19,7 @@ const threadHook = vi.hoisted(() => ({
   hasMore: false,
   loadingOlder: false,
   loaded: true,
+  outbox: [] as unknown[],
   loadOlder: async () => {},
 }))
 

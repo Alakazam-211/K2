@@ -419,8 +419,16 @@ export async function postProjectGroupMessage(
   scope: ServerScope,
   group: string,
   body: string,
+  /** post-idempotency-v1: the post's own id (only to a server that lists
+   *  the feature; the caller checks). A repeat with the same id answers the
+   *  stored line with `duplicate: true` and posts nothing again. */
+  clientMsgId?: string,
 ): Promise<PostedProjectGroupMessage> {
-  return daemonCliPost<PostedProjectGroupMessage>(scope, 'project-group/msg', { group, body })
+  return daemonCliPost<PostedProjectGroupMessage>(scope, 'project-group/msg', {
+    group,
+    body,
+    ...(clientMsgId ? { clientMsgId } : {}),
+  })
 }
 
 // ── Pure helpers (unit-tested in projects-api.test.ts) ────────────────────

@@ -57,8 +57,13 @@
 //      then the snapshot replaces them. While only the cache is shown
 //      (`fromCache`), nothing is marked read. The first page read is shared
 //      with a read already on its way (`threadRead.ts`).
+//  10. This window's unconfirmed sends (`threadOutbox.ts`, Fix 3) come back
+//      as `outbox`: pending bubbles to draw after `items`. One goes as soon
+//      as the server's copy is in `items` (matched by `clientMsgId`, or by
+//      text and time on a server without post-idempotency-v1), whichever
+//      way it came; never both.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { getDaemonWs, daemonWsBase } from '@/kessel/daemon-ws'
 import { jittered } from '@/lib/backoff'
@@ -90,6 +95,7 @@ import { createViewingSender, windowIsLookedAt, type ViewingSender } from './thr
 import { useAutoMarkRead } from '@/stores/unread'
 import { peekThreadView, readThreadView, saveThreadView } from './threadViewCache'
 import { readThreadFirstPage } from './threadRead'
+import { outboxKey, outboxSettle, reconcileOutbox, useOutbox } from './threadOutbox'
 import {
   isThreadAddressMiss,
   publishThreadAddress,
@@ -174,6 +180,9 @@ export function useOverlayThread(opts: {
   loaded: boolean
   /** The messages shown are the view cache's, not yet the server's. */
   fromCache: boolean
+  /** This window's sends the server hasn't confirmed: pending bubbles to
+   *  draw after `items` (`item.pending` says sending or failed). */
+  outbox: OverlayThreadItem[]
   /** The agent's Thread turn, live or just ended (TW11); null when none. */
   turn: ThreadTurn | null
   /** The server reports Thread turns (`daemon-activity`). False: `turn` is
@@ -754,6 +763,23 @@ export function useOverlayThread(opts: {
     [scope, addr],
   )
 
+  // §10: pending bubbles, minus the ones the server's copy already answers
+  // (those are settled out of the outbox right after).
+  const outboxEntries = useOutbox(outboxKey(scope, addr))
+  const baselinesRef = useRef(new Map<string, Set<string>>())
+  const reconciled = useMemo(() => {
+    const baselines = baselinesRef.current
+    for (const e of outboxEntries) {
+      if (!baselines.has(e.clientMsgId)) baselines.set(e.clientMsgId, new Set(items.map((it) => it.id)))
+    }
+    return reconcileOutbox(outboxEntries, items, baselines)
+  }, [outboxEntries, items])
+  useEffect(() => {
+    for (const m of reconciled.matched) outboxSettle(m.entry.clientMsgId, m.id)
+    const live = new Set(outboxEntries.map((e) => e.clientMsgId))
+    for (const id of [...baselinesRef.current.keys()]) if (!live.has(id)) baselinesRef.current.delete(id)
+  }, [reconciled, outboxEntries])
+
   // §9: what this view holds after the server's read goes to the view
   // cache (remote only; coalesced there). Never the cache's own paint.
   useEffect(() => {
@@ -784,6 +810,7 @@ export function useOverlayThread(opts: {
     loadingOlder,
     loaded,
     fromCache,
+    outbox: reconciled.pending,
     turn,
     turnsReported: scope.serverSupports('daemon-activity'),
     currentAddr: addressInfo.currentAddr,

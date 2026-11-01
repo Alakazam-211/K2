@@ -382,6 +382,10 @@ export interface ThreadBubbleProps {
   /** Drawn again by the render window (useRenderWindow): no message-in
    *  animation, it was on screen before. */
   still?: boolean
+  /** This window's send the server hasn't confirmed (remote Thread load
+   *  Fix 3): `sending` draws a little faded, `failed` as usual (its footer
+   *  says what to do). No message menu on either. */
+  pending?: 'sending' | 'failed'
 }
 
 function shallowSame(a: object | null | undefined, b: object | null | undefined): boolean {
@@ -416,6 +420,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.onHandoffDecide === b.onHandoffDecide &&
     a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
+    a.pending === b.pending &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
   )
@@ -436,6 +441,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   handoffRemoteHost = null,
   footer,
   still = false,
+  pending,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -459,7 +465,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   const source = useThreadAttachmentSource()
   const offer = threadStashOffer(item)
   const menuText = offer ? stashOfferView(offer).saved : bodyText
-  const menuOn = !!source && kind !== 'secret' && (menuText.trim().length > 0 || !!reply)
+  const menuOn = !pending && !!source && kind !== 'secret' && (menuText.trim().length > 0 || !!reply)
   const fromLabel = mine ? item.doc.from?.trim() || 'you' : author.split(' · via ')[0]
   const replyAddr = source?.addr ?? ''
   const menuArgs = useMemo<ThreadMessageMenuArgs>(
@@ -495,8 +501,15 @@ export const ThreadBubble = memo(function ThreadBubble({
       data-status={item.doc.choice?.status || item.doc.secret?.status || item.doc.handoff?.status || ''}
       data-mine={mine ? '' : undefined}
       data-zen-message-still={still ? '' : undefined}
+      data-pending={pending}
       className="flex flex-col"
-      style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: threadBubbleMaxWidth(narrow), minWidth: 0, gap: 3 }}
+      style={{
+        alignSelf: mine ? 'flex-end' : 'flex-start',
+        maxWidth: threadBubbleMaxWidth(narrow),
+        minWidth: 0,
+        gap: 3,
+        ...(pending === 'sending' ? { opacity: 0.6 } : {}),
+      }}
     >
       {bubble && <div
         ref={bubbleRef}

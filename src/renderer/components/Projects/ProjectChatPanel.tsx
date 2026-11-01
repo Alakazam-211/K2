@@ -101,6 +101,7 @@ import { useToastStore } from '@/stores/toast'
 import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
+import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionView/threadOutbox'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -297,13 +298,26 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     }
   }, [loadingEarlier, load, growTop])
 
+  // post-idempotency-v1 (remote Thread load Fix 3): a send that failed on
+  // the way keeps its id, and sending the same words again re-sends that
+  // id, so a post that did land is never posted twice. A new text gets a
+  // new id; an id is never re-keyed for the same text.
+  const retryIdRef = useRef<{ group: string; text: string; id: string } | null>(null)
   const send = useCallback((draft: string): void => {
     const text = draft.trim()
     if (!text || busy) return
     setBusy(true)
     setSendError(null)
-    postProjectGroupMessage(primaryScope(), show.id, text)
+    const scope = primaryScope()
+    let clientMsgId: string | undefined
+    if (scope.serverSupports(POST_IDEMPOTENCY_FEATURE)) {
+      const kept = retryIdRef.current
+      clientMsgId = kept && kept.group === show.id && kept.text === text ? kept.id : newClientMsgId()
+      retryIdRef.current = { group: show.id, text, id: clientMsgId }
+    }
+    postProjectGroupMessage(scope, show.id, text, clientMsgId)
       .then((posted) => {
+        retryIdRef.current = null
         draftApi.current?.set('')
         clearProjectChatDraft(show.id)
         // The person's own message: the list lands on it when it shows.

@@ -7,9 +7,20 @@ import {
   threadErrorText,
 } from '@/lib/thread-address-bus'
 import type { ServerScope } from '@/kessel/server-scope'
-import { httpCodeOf } from '@/lib/daemon-http-error'
+import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
 import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
+import {
+  newClientMsgId,
+  outboxAdd,
+  outboxDrop,
+  outboxGet,
+  outboxKey,
+  outboxMark,
+  outboxSettle,
+  POST_IDEMPOTENCY_FEATURE,
+  type PendingMark,
+} from './threadOutbox'
 import { readPermissionCard, type PermissionCardData } from './permissionCardView'
 
 // ── Permission cards (prd-agent-settings-cards-v1 rev 3.1 §4.2, §17.1) ────
@@ -47,9 +58,11 @@ export const OVERLAY_PAGE_SIZE = 25
  *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
  *  never drew from a loaded Thread, and a files-only post was an empty
  *  bubble). */
-type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context' | 'stash'>
+type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId'>
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
+  // post-idempotency-v1: the sender's own id (a pending bubble matches it).
+  if (typeof src.clientMsgId === 'string' && src.clientMsgId) out.clientMsgId = src.clientMsgId
   const w = src.widget
   if (w && typeof w === 'object' && !Array.isArray(w)) {
     const o = w as Record<string, unknown>
@@ -361,6 +374,10 @@ export interface OverlayDoc {
    *  for one agent turn, read from git at the turn's start and end (never
    *  the transcript). `body` is the plain line for older renderers. */
   changes?: ThreadChangesDoc | null
+  /** post-idempotency-v1 (0.46.8): the id the sender gave its post. This
+   *  window's pending bubble for the post is matched by it. Absent on posts
+   *  sent without one and on older servers. */
+  clientMsgId?: string | null
 }
 
 /** `doc.stash` on a `stash.offer` card. */
@@ -481,6 +498,9 @@ export interface OverlayThreadItem {
    *  no `created_at`). The server's stamp replaces it on merge, and a local
    *  time never replaces a server one. */
   localTime?: true
+  /** Display only: this window's send the server hasn't confirmed yet
+   *  (`threadOutbox.ts`). Never on a server item. */
+  pending?: PendingMark
 }
 
 export interface OverlaySnapshot {
@@ -623,14 +643,32 @@ export type ThreadComposeResult =
   /** `contextRefused`: the server took the message but not its Board
    *  context (thread-context-v1), and says why. */
   | { ok: true; item: OverlayThreadItem | null; contextRefused?: { code: string; message: string } }
-  /** `code`: the daemon's refusal code when it sent one (`attachment_*`). */
-  | { ok: false; error: string; code?: string }
+  /** `code`: the daemon's refusal code when it sent one (`attachment_*`).
+   *  `kept`: the send failed on the way (network, a 5xx, a reused id) and
+   *  stays in the Thread as a "Not sent" bubble with Retry (only for a
+   *  send made with `pending`); the draft need not come back. */
+  | { ok: false; error: string; code?: string; kept?: boolean }
 
 /** One file on a compose post (`thread-attachments-v1`). */
 export interface ThreadPostAttachment {
   path: string
   line?: number
   lineEnd?: number
+}
+
+/** Compose-bar text when a Thread send's address no longer resolves. */
+export const THREAD_ADDRESS_MOVED =
+  "This chat's address changed. Looking up the new one; your draft is still here, send again."
+
+/** A failed send worth showing as "Not sent · Retry" (the same post may
+ *  still go): no answer at all, a server error, a timeout or rate limit,
+ *  or a reused id (409 `client_msg_id_reused`: never re-keyed). Any other
+ *  refusal returns the draft instead. */
+export function isRetryableThreadSendError(e: unknown): boolean {
+  if (httpCodeOf(e) === 'client_msg_id_reused') return true
+  const status = httpStatusOf(e)
+  if (status === null) return true
+  return status >= 500 || status === 408 || status === 429
 }
 
 /**
@@ -640,12 +678,14 @@ export interface ThreadPostAttachment {
  * (`ingestOverlayThreadItem`) without waiting on the overlay socket. A
  * `via=compose` post wakes a dormant session and injects `[thread:<addr>]`
  * into the agent's PTY (overlay_routes.rs). The Agents page compose bar and
- * Zen's compose both send through here. Throws on a transport error.
+ * Zen's compose both send through here.
+ *
+ * post-idempotency-v1 (research-remote-thread-load-v1 Fix 3): the post
+ * carries a `clientMsgId` when the server lists the feature. With
+ * `extra.pending` the words show in the Thread at once as a pending bubble
+ * (`threadOutbox.ts`); a send that fails on the way stays there as
+ * "Not sent" (`kept`) and Retry sends the same id again.
  */
-/** Compose-bar text when a Thread send's address no longer resolves. */
-export const THREAD_ADDRESS_MOVED =
-  "This chat's address changed. Looking up the new one; your draft is still here, send again."
-
 export async function postThreadCompose(
   scope: ServerScope,
   addr: string,
@@ -664,6 +704,9 @@ export async function postThreadCompose(
     /** thread-context-v1: the Board context chip the person saw. Only to a
      *  server that reports the feature (the caller checks). */
     context?: ThreadContextBody
+    /** Fix 3: show the message in the Thread at once as a pending bubble
+     *  until the server confirms it. Only for a post with words. */
+    pending?: boolean
   },
 ): Promise<ThreadComposeResult> {
   const body: {
@@ -674,6 +717,7 @@ export async function postThreadCompose(
     origin?: ThreadWidgetOrigin
     attachments?: ThreadPostAttachment[]
     context?: ThreadContextBody
+    clientMsgId?: string
   } = {
     addr,
     text,
@@ -695,31 +739,88 @@ export async function postThreadCompose(
       ...(typeof a.lineEnd === 'number' ? { lineEnd: a.lineEnd } : {}),
     }))
   }
+  // A send without a pending bubble has no Retry: it goes as before.
+  if (!extra?.pending || !text.trim()) return sendThreadPost(scope, addr, text, body, null)
+  // post-idempotency-v1: the post's own id (what Retry sends again), only
+  // to a server that takes it.
+  const keyed = scope.serverSupports(POST_IDEMPOTENCY_FEATURE)
+  const clientMsgId = newClientMsgId()
+  if (keyed) body.clientMsgId = clientMsgId
+  outboxAdd({
+    clientMsgId,
+    key: outboxKey(scope, addr),
+    scope,
+    addr,
+    text,
+    body,
+    keyed,
+    createdAtSec: Math.floor(Date.now() / 1000),
+    state: 'sending',
+  })
+  return sendThreadPost(scope, addr, text, body, clientMsgId)
+}
+
+/** Send a failed bubble again: the same body, the SAME id. */
+export function retryThreadPost(clientMsgId: string): Promise<ThreadComposeResult> {
+  const e = outboxGet(clientMsgId)
+  if (!e) return Promise.resolve({ ok: false, error: 'This message is no longer waiting to be sent.' })
+  outboxMark(clientMsgId, 'sending')
+  return sendThreadPost(e.scope, e.addr, e.text, e.body, clientMsgId)
+}
+
+/** Drop a failed bubble (the person's Discard). */
+export function discardThreadPost(clientMsgId: string): void {
+  outboxDrop(clientMsgId)
+}
+
+async function sendThreadPost(
+  scope: ServerScope,
+  addr: string,
+  text: string,
+  body: Record<string, unknown>,
+  /** The pending bubble this send settles, or null. */
+  pendingId: string | null,
+): Promise<ThreadComposeResult> {
   let resp: Record<string, unknown>
   try {
     resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
   } catch (e) {
+    // The server's copy already showed (a frame beat the failed answer):
+    // it was sent.
+    if (pendingId && !outboxGet(pendingId)) return { ok: true, item: null }
     // Thread survives a tab rename (S4): a 404 on this address (an older
     // daemon after a rename) makes the sidecar view look it up again; the
     // person sees why the send did not post (Side finding C).
     if (isThreadAddressMiss(e)) {
+      if (pendingId) outboxDrop(pendingId)
       requestThreadAddressRelookup(addr)
       return { ok: false, error: THREAD_ADDRESS_MOVED }
     }
-    const text = threadErrorText(e)
+    const errText = threadErrorText(e)
     const code = httpCodeOf(e)
     // S4: a refused file says which rule, in words (the daemon's hint).
-    const refusal = threadAttachmentRefusalText(e, text)
-    return { ok: false, error: refusal ?? text, ...(code ? { code } : {}) }
+    const refusal = threadAttachmentRefusalText(e, errText)
+    const error = refusal ?? errText
+    if (pendingId) {
+      if (isRetryableThreadSendError(e)) {
+        outboxMark(pendingId, 'failed', error)
+        return { ok: false, error, ...(code ? { code } : {}), kept: true }
+      }
+      outboxDrop(pendingId)
+    }
+    return { ok: false, error, ...(code ? { code } : {}) }
   }
   if (resp?.ok === false) {
+    if (pendingId) outboxDrop(pendingId)
     return { ok: false, error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }
   }
   if (typeof resp?.movedFrom === 'string' && typeof resp.addr === 'string' && resp.addr !== addr) {
     requestThreadAddressRelookup(addr, resp.addr)
   }
+  // `duplicate: true` (a retry of a post the server already has) is sent.
   const item = overlayItemFromThreadPost(resp, text)
   if (item) ingestOverlayThreadItem(item)
+  if (pendingId) outboxSettle(pendingId, item?.id ?? null)
   const refused = resp?.contextRefused
   if (refused && typeof refused === 'object' && !Array.isArray(refused)) {
     const r = refused as Record<string, unknown>
@@ -750,6 +851,8 @@ function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
   return (
     a.seq === b.seq &&
     a.localTime === b.localTime &&
+    a.pending?.state === b.pending?.state &&
+    a.pending?.error === b.pending?.error &&
     JSON.stringify(a.doc) === JSON.stringify(b.doc)
   )
 }
@@ -759,7 +862,13 @@ function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
  *  memoized Thread rows compare by. */
 export function sameThreadItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
   if (a === b) return true
-  return a.id === b.id && a.collection === b.collection && (a.doc === b.doc ? a.seq === b.seq && a.localTime === b.localTime : sameItem(a, b))
+  return (
+    a.id === b.id &&
+    a.collection === b.collection &&
+    (a.doc === b.doc
+      ? a.seq === b.seq && a.localTime === b.localTime && a.pending?.state === b.pending?.state && a.pending?.error === b.pending?.error
+      : sameItem(a, b))
+  )
 }
 
 /**

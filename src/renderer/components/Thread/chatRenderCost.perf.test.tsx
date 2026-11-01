@@ -94,6 +94,7 @@ const thread = vi.hoisted(() => {
       loadOlder: async () => {},
       turn: null as unknown,
       turnsReported: true,
+      outbox: [] as unknown[],
       currentAddr: 'sales',
       pastAddresses: [] as string[],
     },

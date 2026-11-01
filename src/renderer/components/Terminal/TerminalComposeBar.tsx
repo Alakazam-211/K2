@@ -801,9 +801,25 @@ export function TerminalComposeBar({
           // A Reply: the quote and its reference line, then the words.
           replyTo ? formatThreadReply(replyTo, text) : text,
           command,
-          files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })) } : undefined,
+          // Remote Thread load Fix 3: the words show in the Thread at once
+          // as a pending bubble until the server confirms them.
+          files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })), pending: true } : { pending: true },
         )
-        if (!result.ok) {
+        if (!result.ok && result.kept) {
+          // It failed on the way and waits in the Thread as "Not sent" with
+          // Retry (the same post): the draft does not come back, the reply
+          // chip and files went with it.
+          setThreadAddrError(null)
+          if (replyTo) reply.clear()
+          if (files.length > 0) {
+            const sent = new Set(files.map((f) => f.path))
+            setThreadFiles((cur) => cur.filter((f) => !sent.has(f.path)))
+          }
+          if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
+          setHistoryIndex(-1)
+          historyDraftRef.current = ''
+          setSlashCommand(null)
+        } else if (!result.ok) {
           // The draft and its file chips stay (a refused file: the whole
           // post was refused), with the daemon's reason.
           setDraft((cur) => (cur.length === 0 ? text : cur))

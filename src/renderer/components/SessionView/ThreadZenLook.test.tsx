@@ -39,6 +39,7 @@ const h = vi.hoisted(() => {
     loadOlder: async () => {},
     turn: null as unknown,
     turnsReported: true,
+    outbox: [] as unknown[],
     currentAddr: 'sales',
     pastAddresses: [] as string[],
   }
@@ -67,7 +68,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { zenEmptyThreadText as zenWidgetEmptyText } from '@/components/Zen/widgets/ZenConversationWidget'
-import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
+import { coerceThreadTurn, discardThreadPost, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
+import { outboxEntriesFor, outboxKey } from './threadOutbox'
 import { SessionViewChromeContext, type SessionViewChromeValue } from './sessionViewChrome'
 import { ThreadComposeDrawerContext } from './threadComposeDrawer'
 import { ThreadItemRow, ThreadOverlayPane } from './ThreadOverlayPane'
@@ -306,8 +308,53 @@ describe('the Thread\'s message box (Zen look)', () => {
     fireEvent.change(box(), { target: { value: 'ship the release' } })
     fireEvent.keyDown(box(), { key: 'Enter' })
     await waitFor(() => expect(threadPosts()).toHaveLength(1))
-    expect(threadPosts()[0]).toEqual({ addr: 'sales', text: 'ship the release', via: 'compose', command: '/goal' })
+    // The local daemon takes post-idempotency-v1: the post carries its id.
+    expect(threadPosts()[0]).toEqual({ addr: 'sales', text: 'ship the release', via: 'compose', command: '/goal', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) })
     expect(inject).not.toHaveBeenCalled()
+  })
+
+  it('Enter shows the message as a pending bubble; a send that fails on the way stays there as "Not sent" (no draft back, no error line)', async () => {
+    renderBar()
+    let fail!: (e: unknown) => void
+    h.daemonCliPost.mockImplementationOnce(() => new Promise((_res, rej) => (fail = rej)))
+    fireEvent.change(box(), { target: { value: 'over a bad tunnel' } })
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    await waitFor(() => expect(threadPosts()).toHaveLength(1))
+    const cid = threadPosts()[0].clientMsgId as string
+    const pendingFor = () => outboxEntriesFor(outboxKey(primaryScope(), 'sales'))
+    expect(pendingFor().map((e) => [e.clientMsgId, e.text, e.state])).toEqual([[cid, 'over a bad tunnel', 'sending']])
+    expect(box().value).toBe('')
+    await act(async () => fail(new TypeError('Load failed')))
+    await waitFor(() => expect(pendingFor()[0]?.state).toBe('failed'))
+    expect(box().value).toBe('')
+    expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull()
+    discardThreadPost(cid)
+  })
+
+  it('a pending bubble is the person\'s own, a little faded, "You · Sending…"; failed reads "Not sent" with Retry · Discard', () => {
+    const item = (state: 'sending' | 'failed'): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: Number.MAX_SAFE_INTEGER,
+      id: 'pending:abc',
+      localTime: true,
+      pending: { clientMsgId: 'abc', state, ...(state === 'failed' ? { error: 'Load failed' } : {}) },
+      doc: { id: 'pending:abc', kind: 'text', from: '', body: 'hello', via: 'compose', created_at: 1 },
+    })
+    const { rerender } = render(<ThreadItemRow item={item('sending')} />)
+    const row = document.querySelector('[data-zen-message="pending:abc"]') as HTMLElement
+    expect(row.getAttribute('data-pending')).toBe('sending')
+    expect(row.hasAttribute('data-mine')).toBe(true)
+    expect(row.style.opacity).toBe('0.6')
+    expect(row.querySelector('[data-zen-message-meta]')?.textContent).toBe('You · Sending…')
+    expect(row.querySelector('[data-thread-retry]')).toBeNull()
+    rerender(<ThreadItemRow item={item('failed')} />)
+    const failed = document.querySelector('[data-zen-message="pending:abc"]') as HTMLElement
+    expect(failed.getAttribute('data-pending')).toBe('failed')
+    expect(failed.style.opacity).toBe('')
+    expect(failed.querySelector('[data-zen-message-meta]')?.textContent).toBe('You · Not sent')
+    const actions = failed.querySelector('[data-thread-pending-actions]') as HTMLElement
+    expect(actions.textContent).toBe('Retry · Discard')
+    expect(actions.getAttribute('title')).toBe('Load failed')
   })
 
   it('Esc, Ctrl+C, Ctrl+B and an empty Enter reach the agent\'s PTY; the draft stays', () => {

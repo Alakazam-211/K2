@@ -36,6 +36,7 @@ const threadHook = vi.hoisted(() => ({
   loadOlder: async () => {},
   turn: null as ThreadTurn | null,
   turnsReported: true,
+  outbox: [] as unknown[],
 }))
 
 vi.mock('./useOverlayThread', () => ({

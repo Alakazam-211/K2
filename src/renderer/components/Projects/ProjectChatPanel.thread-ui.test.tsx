@@ -205,6 +205,34 @@ describe('project chat in the Thread look', () => {
     expect(sent.querySelector('[data-zen-message-footer]')?.textContent).toBe('delivered to Ada')
   })
 
+  it('post-idempotency-v1: a send that failed on the way re-sends the same words with the same id; a new text gets a new id', async () => {
+    noteServerVersion('local', '0.46.8', ['thread-read-v1', 'daemon-activity', 'post-idempotency-v1'])
+    await mount()
+    const posted = (): Array<Record<string, unknown>> =>
+      cli.post.mock.calls.filter(([p]) => p === 'project-group/msg').map(([, b]) => b as Record<string, unknown>)
+    const base = cli.post.getMockImplementation()!
+    cli.post.mockImplementationOnce(async () => {
+      throw new TypeError('Load failed')
+    })
+    const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'ship it' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText(/Load failed/)).toBeTruthy())
+    expect(input.value).toBe('ship it')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(posted()).toHaveLength(2))
+    await waitFor(() => expect(input.value).toBe(''))
+    const [first, retry] = posted()
+    expect(first).toEqual({ group: 'g1', body: 'ship it', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) })
+    expect(retry).toEqual(first)
+    cli.post.mockImplementation(base)
+    fireEvent.change(input, { target: { value: 'next one' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(posted()).toHaveLength(3))
+    expect(posted()[2].clientMsgId).toMatch(/^[0-9a-f]{32}$/)
+    expect(posted()[2].clientMsgId).not.toBe(first.clientMsgId)
+  })
+
   it('unread: on screen and focused, the newest seq is marked read; the bell mutes the chat', async () => {
     await mount()
     await waitFor(() => expect(cli.post).toHaveBeenCalledWith('project-group/read', { group: 'g1', seq: 3 }))

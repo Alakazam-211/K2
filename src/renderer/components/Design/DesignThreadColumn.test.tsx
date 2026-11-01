@@ -30,6 +30,7 @@ vi.mock('@/components/SessionView/useOverlayThread', () => ({
       loadOlder: async () => {},
       turn: null,
       turnsReported: true,
+      outbox: [] as unknown[],
       currentAddr: opts.addr,
       pastAddresses: [],
     }

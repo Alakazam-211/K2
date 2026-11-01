@@ -274,10 +274,14 @@ fn caret(c: &CursorAt, version: Seq) -> Value {
     ])
 }
 
-/// `RosterMember` → the wire's entry `{handle, name, colour, kind, role, away, cursor, rights}`.
+/// `RosterMember` → the wire's entry `{handle, name, colour, kind, role, away, cursor, rights}`,
+/// then `devices` (kit v0.10.1) only when the kit gives some (a text doc): one
+/// `{client, cursor, label?}` per connection of the participant, in join order,
+/// `label` only when the host gave one. A client hides only its own
+/// connection's caret (`welcome.client`) and shows the person's other tabs.
 fn member(m: &RosterMember, version: Seq) -> Value {
     let p = &m.entry.participant;
-    Value::obj([
+    let mut fields = vec![
         ("handle", who(&m.who)),
         ("name", Value::from(p.name.as_str())),
         ("colour", Value::from(p.colour.as_str())),
@@ -286,7 +290,21 @@ fn member(m: &RosterMember, version: Seq) -> Value {
         ("away", Value::from(m.entry.away)),
         ("cursor", m.entry.cursor.as_ref().map_or(Value::Null, |c| caret(c, version))),
         ("rights", Value::from(rights(m.rights))),
-    ])
+    ];
+    if !m.entry.devices.is_empty() {
+        let devices = m.entry.devices.iter().map(|d| {
+            let mut o = vec![
+                ("client", Value::from(d.client)),
+                ("cursor", d.cursor.as_ref().map_or(Value::Null, |c| caret(c, version))),
+            ];
+            if let Some(l) = &d.label {
+                o.push(("label", Value::from(l.as_str())));
+            }
+            Value::obj(o)
+        });
+        fields.push(("devices", Value::List(devices.collect())));
+    }
+    Value::obj(fields)
 }
 
 /// One `overwritten` event (WIRE.md "The `overwritten` event", kit
@@ -388,12 +406,22 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
         RosterEvent::Away { who: w, away, .. } => {
             Value::obj([("kind", Value::from("away")), ("who", who(w)), ("away", Value::from(*away))])
         }
-        RosterEvent::Cursor { who: w, cursor, version, .. } => Value::obj([
-            ("kind", Value::from("cursor")),
-            ("who", who(w)),
-            ("cursor", cursor.as_ref().map_or(Value::Null, |c| caret(c, *version))),
-            ("version", Value::from(*version)),
-        ]),
+        // `client` (kit v0.10.1): the connection whose caret this is; absent
+        // on the participant's own caret, which the kit sends last in a flush
+        // when the connections' events didn't end on it (old clients keep one
+        // caret a person: the last event's).
+        RosterEvent::Cursor { who: w, cursor, version, client, .. } => {
+            let mut fields = vec![
+                ("kind", Value::from("cursor")),
+                ("who", who(w)),
+                ("cursor", cursor.as_ref().map_or(Value::Null, |c| caret(c, *version))),
+                ("version", Value::from(*version)),
+            ];
+            if let Some(c) = client {
+                fields.push(("client", Value::from(*c)));
+            }
+            Value::obj(fields)
+        }
         RosterEvent::ClaimStarted { who: w, claim, lines: l, note, hold, for_edit, expires_ms, version, .. } => {
             Value::obj([
                 ("kind", Value::from("claim_started")),

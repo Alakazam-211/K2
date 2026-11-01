@@ -97,7 +97,7 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_mpc_base::session::position::{transform, At, Bias, LineRange};
 use k2_mpc_base::session::{
-    ChangeEvent, ClaimPolicy, ConnId, EditOptions, RosterEvent, Session, SessionError, Stay,
+    ChangeEvent, ClaimPolicy, ConnId, EditOptions, JoinOptions, RosterEvent, Session, SessionError, Stay,
 };
 use k2_mpc_base::store::{DocKey, Seq};
 use k2_mpc_base::DocError;
@@ -441,12 +441,19 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         }
     }
     let mut session = super::routes::open(&rt, &t).map_err(|e| route_open_error(e, core))?;
-    let joined = match session.join(participant.clone(), Stay::Held) {
+    // The connection's label on the roster (kit v0.10.1, `Device::label`:
+    // "another tab", "Chrome on Mac"), shown beside the caret of a person's
+    // other tabs. None for now. TODO(K2): where it comes from is K2's call:
+    // a socket param the app sends (`?device=`; the app knows its own window
+    // and machine), or the socket's User-Agent mapped to a short name. Never
+    // doc text; the kit trims it to 64 characters.
+    let join_opts = JoinOptions::new();
+    let joined = match session.join_with(participant.clone(), Stay::Held, &join_opts) {
         // Unloaded, or closed by K2 (a core switched off), between the open
         // and the join: open once more (the gate then says core_off).
         Err(SessionError::Unloaded | SessionError::Closed { .. }) => {
             session = super::routes::open(&rt, &t).map_err(|e| route_open_error(e, core))?;
-            session.join(participant, Stay::Held)
+            session.join_with(participant, Stay::Held, &join_opts)
         }
         r => r,
     }

@@ -12,7 +12,11 @@
 //! the vendored kit and encodes what they yield with K2's encoder ([`super`]),
 //! then applies the kit's own two rewrites (random client ids → fixed numbers;
 //! claim ids numbered in order of appearance) and compares the pretty JSON with
-//! each file.
+//! each file. Kit v0.10.1: every text-doc member carries `devices` (one
+//! `{client, cursor, label?}` a connection) and every `cursor` event its
+//! `client`, so the file scenarios' client IDs are rewritten too (the kit's
+//! numbers by pid), and `roster_events_devices.json` pins one person on three
+//! connections.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,8 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::errors::{ErrorReport, Value};
 use k2_mpc_base::session::{
-    At, AuditEvent, ChangeEvent, Config, ConnId, EditOptions, Host, LineRange, Participant, ParticipantKind, Rights,
-    RosterEvent, Session, SessionManager, Stay, TextFilePack,
+    At, AuditEvent, ChangeEvent, Config, ConnId, EditOptions, Host, JoinOptions, LineRange, Participant, ParticipantKind,
+    Rights, RosterEvent, Session, SessionManager, Stay, TextFilePack,
 };
 use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::Hunk;
@@ -51,6 +55,7 @@ const ROSTER_OVERWRITTEN_APP: &str = kit_golden!("roster_events_overwritten_app.
 const ROSTER_CLOSED: &str = kit_golden!("roster_events_closed.json");
 const ROSTER_CLOSED_APP: &str = kit_golden!("roster_events_closed_app.json");
 const ROSTER_ROLLUP: &str = kit_golden!("roster_events_rollup.json");
+const ROSTER_DEVICES: &str = kit_golden!("roster_events_devices.json");
 
 struct TestHost {
     now: AtomicU64,
@@ -544,6 +549,20 @@ struct FileFx {
     mgr: SessionManager,
     key: DocKey,
     s: Arc<Session>,
+    /// Each joined connection's client ID → its fixed number ([`fixed_client`]).
+    clients: Mutex<HashMap<u64, u64>>,
+}
+
+/// The kit's fixed numbers for the file scenarios' client IDs (kit v0.10.1:
+/// their members carry `devices`): the main scenario's, by pid.
+fn fixed_client(pid: &str) -> u64 {
+    match pid {
+        "ada" => MAX_CLIENT_ID,
+        "agent-7" => 2,
+        "widget" => 3,
+        "bob" => 4,
+        other => panic!("no fixed client ID for {other}"),
+    }
 }
 
 impl Drop for FileFx {
@@ -566,14 +585,20 @@ impl FileFx {
         let mgr = SessionManager::new(store, host.clone(), config);
         let key = DocKey { space: "ws".into(), path: "notes.md".into() };
         let s = mgr.open_file(Arc::new(TextFilePack::new("markdown", 4 << 20)), &key, &file, &dir.join("ws")).expect("open");
-        FileFx { dir, file, host, mgr, key, s }
+        FileFx { dir, file, host, mgr, key, s, clients: Mutex::new(HashMap::new()) }
     }
     fn tick(&self) {
         self.host.now.fetch_add(300, Ordering::SeqCst);
         self.mgr.flush_rosters();
     }
     fn join(&self, pid: &str, name: &str, colour: &str, kind: ParticipantKind, via: &str) -> ConnId {
-        self.s.join(Participant::new(pid, name, colour, kind, via), Stay::Held).expect("join").conn
+        let j = self.s.join(Participant::new(pid, name, colour, kind, via), Stay::Held).expect("join");
+        self.clients.lock().expect("clients").insert(j.client, fixed_client(pid));
+        j.conn
+    }
+    /// The kit's rewrite for this run's client IDs.
+    fn stable(&self) -> Stable {
+        Stable { clients: self.clients.lock().expect("clients").clone(), ..Stable::default() }
     }
     fn text(&self, c: ConnId) -> String {
         self.s.read(c).expect("read").text_by_root.into_iter().find(|(r, _)| r == ROOT).expect("root").1
@@ -616,9 +641,18 @@ fn self_in(snap: &RosterEvent, name: &str) -> Value {
 }
 
 /// K2's encoding of a subscriber's stream (`me`: its own `who`, the `to` of
-/// its snapshot's waiting notes).
-fn encoded(evs: &[RosterEvent], me: &Value) -> Value {
-    Value::List(evs.iter().map(|e| roster_event_for(e, me.clone()).expect("a known roster event")).collect())
+/// its snapshot's waiting notes), with the kit's client ID rewrite.
+fn encoded(evs: &[RosterEvent], me: &Value, st: &mut Stable) -> Value {
+    let mut v = Value::List(evs.iter().map(|e| roster_event_for(e, me.clone()).expect("a known roster event")).collect());
+    st.rewrite(&mut v);
+    v
+}
+
+/// [`roster_event_for`] with the kit's client ID rewrite.
+fn encoded_one(e: &RosterEvent, me: &Value, st: &mut Stable) -> Value {
+    let mut v = roster_event_for(e, me.clone()).expect("a known roster event");
+    st.rewrite(&mut v);
+    v
 }
 
 /// The kit's `outside_saves_and_the_hosts_close_are_golden`, encoded by K2:
@@ -668,19 +702,20 @@ fn k2s_live_encoder_writes_the_kits_overwritten_and_closed_goldens() {
     }
     assert!(!ros_bob.iter().any(|e| matches!(e, RosterEvent::Overwritten { .. })), "only the author's subscriptions");
 
+    let mut st = f.stable();
     for (lens, name, evs, later, want_ow, want_closed) in [
         ("", "Ada", &ros, &late, ROSTER_OVERWRITTEN, ROSTER_CLOSED),
         ("_app", "Widget", &ros_app, &late_app, ROSTER_OVERWRITTEN_APP, ROSTER_CLOSED_APP),
     ] {
         let me = self_in(&later[0], name);
-        let fin = roster_event_for(&later[0], me.clone()).expect("snapshot");
-        let got_ow = file(Value::obj([("self", me.clone()), ("events", encoded(evs, &me)), ("final", fin)]));
+        let fin = encoded_one(&later[0], &me, &mut st);
+        let got_ow = file(Value::obj([("self", me.clone()), ("events", encoded(evs, &me, &mut st)), ("final", fin)]));
         same(
             &format!("roster_events_overwritten{lens}.json"),
             &members_by_handle(want_ow),
             &members_by_handle(&got_ow),
         );
-        let got_closed = file(Value::obj([("self", me.clone()), ("events", encoded(later, &me))]));
+        let got_closed = file(Value::obj([("self", me.clone()), ("events", encoded(later, &me, &mut st))]));
         same(&format!("roster_events_closed{lens}.json"), &members_by_handle(want_closed), &members_by_handle(&got_closed));
     }
 }
@@ -710,6 +745,7 @@ fn k2s_live_encoder_writes_the_kits_rollup_golden() {
     assert_eq!(pushed.len(), n, "every save pushes");
     let tail = &pushed[n - 3..];
     let me = self_in(&late[0], "Ada");
+    let mut st = f.stable();
     let got = file(Value::obj([
         (
             "about",
@@ -723,8 +759,55 @@ fn k2s_live_encoder_writes_the_kits_rollup_golden() {
         ("self", me.clone()),
         ("saves", Value::from(n)),
         ("pushed", Value::from(pushed.len())),
-        ("tail", Value::List(tail.iter().map(|e| roster_event_for(e, me.clone()).expect("encoded")).collect())),
-        ("final", roster_event_for(&late[0], me.clone()).expect("snapshot")),
+        ("tail", Value::List(tail.iter().map(|e| encoded_one(e, &me, &mut st)).collect())),
+        ("final", encoded_one(&late[0], &me, &mut st)),
     ]));
     same("roster_events_rollup.json", &members_by_handle(ROSTER_ROLLUP), &members_by_handle(&got));
+}
+
+/// The kit's `per_connection_carets_are_golden` (kit v0.10.1), encoded by K2:
+/// `roster_events_devices.json`. One person on three connections (two
+/// labelled by the host) and Bob: every member carries `devices`, every
+/// `cursor` its `client`, and when the most active connection leaves with its
+/// caret a `cursor` with no `client` gives Ada's caret now.
+#[test]
+fn k2s_live_encoder_writes_the_kits_devices_golden() {
+    let f = FileFx::new("devices");
+    let ada = |opts: JoinOptions| {
+        f.s.join_with(Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"), Stay::Held, &opts)
+            .expect("ada joins")
+    };
+    let t1 = ada(JoinOptions::new());
+    let bob = f.join("bob", "Bob", "#16a34a", ParticipantKind::Person, "tab");
+    let mut st = f.stable();
+    st.clients.insert(t1.client, MAX_CLIENT_ID);
+    let roster = f.s.subscribe_roster(t1.conn).expect("roster");
+    let t2 = ada(JoinOptions::new().label("another tab"));
+    let t3 = ada(JoinOptions::new().label("Phone"));
+    st.clients.insert(t2.client, 5);
+    st.clients.insert(t3.client, 6);
+    f.tick();
+
+    let at = |line: usize| f.text(t1.conn).match_indices('\n').nth(line - 2).expect("line").0 + 1;
+    f.s.set_cursor(t1.conn, ROOT, At::Byte(0), At::Byte(0)).expect("t1's caret");
+    f.host.now.fetch_add(10, Ordering::SeqCst);
+    f.s.set_cursor(t2.conn, ROOT, At::Byte(at(3)), At::Byte(at(3))).expect("t2's caret");
+    f.tick();
+    f.s.set_cursor(t3.conn, ROOT, At::Byte(at(5)), At::Byte(at(5) + 3)).expect("t3's selection");
+    f.tick();
+    f.type_at(bob, 0, "by bob\n");
+    f.tick();
+    f.s.leave(t3.conn).expect("t3 leaves");
+    f.tick();
+
+    let ros = drain(&roster);
+    let late = drain(&f.s.subscribe_roster(t1.conn).expect("late"));
+    let me = self_in(&late[0], "Ada");
+    let got = file(Value::obj([
+        ("self", me.clone()),
+        ("client", Value::from(MAX_CLIENT_ID)),
+        ("events", encoded(&ros, &me, &mut st)),
+        ("final", encoded_one(&late[0], &me, &mut st)),
+    ]));
+    same("roster_events_devices.json", &members_by_handle(ROSTER_DEVICES), &members_by_handle(&got));
 }

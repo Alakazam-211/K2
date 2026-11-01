@@ -68,6 +68,7 @@ is K2's own (`ZenIcon`), not Lucide.
 | **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
 | **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The ISC icons do **not** relicense the product. |
+| **Board widget** | Lucide icons (ISC), © Lucide Contributors: `crop`, `plus` and `minus` in `crates/k2-core/src/zen/builtin_widgets/board-1/icons.js` match Lucide's `crop`, `plus` and `minus` path for path. Board's other icons are its own drawing. |
 
 > ISC License
 >
@@ -86,6 +87,16 @@ is K2's own (`ZenIcon`), not Lucide.
 > WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 > ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 > OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+## Contributed: Board (Garden widget) — licence pending
+
+The Board Garden's whiteboard widget is **Board by Baden Ballard (Alakazam Labs)**.
+
+| | |
+|--|--|
+| **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget), ported from Board's own widget |
+| **Author** | Baden Ballard (Alakazam Labs) |
+| **License** | **Licence pending: the author's MIT grant is awaited; not to be released until it is.** |
 
 ## Third-party: Public Suffix List (MPL-2.0) and BIP-39 word list (MIT)
 

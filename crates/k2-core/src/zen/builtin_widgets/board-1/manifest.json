@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "name": "Board",
+  "description": "An infinite whiteboard you and your agents build together: sticky notes, shapes, lines, frames, cards, tables, mind maps, comments and pictures.",
+  "entry": "index.html",
+  "caps": [
+    "store:read",
+    "store:write",
+    "thread:post",
+    "agents:read",
+    "links:open",
+    "downloads:save",
+    "uploads:pick"
+  ],
+  "reasons": {
+    "store:read": "to load your boards, and see changes as you and your agents make them",
+    "store:write": "to save your boards on this computer, where agents you allow can read and change them",
+    "thread:post": "to tell the chat beside the board which board you're on, and to start a message about it",
+    "agents:read": "to list the agents that can work on a board, so you can chat with them",
+    "links:open": "to open a link on the board in your browser when you click Open",
+    "downloads:save": "to save a board you export, as a file or a picture, to your Downloads",
+    "uploads:pick": "to add pictures to a board from your files, or by dropping them on it"
+  },
+  "requires": {
+    "libs": ["k2-png@1"]
+  }
+}

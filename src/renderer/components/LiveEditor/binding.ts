@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/binding.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/binding.ts (deleted from the kit in v0.10.2).
 // The live editor's CodeMirror binding: one `LiveText` shown in one `EditorView`.
 //
 // - Local transactions become hunks through the byte index (`bytes.ts`): no `doc.toString()`
@@ -11,6 +11,10 @@
 //   same document either way round).
 // - The editor's own history is kept out: remote changes never enter it, and undo and redo
 //   (keys, the browser's Edit menu) go to the server, ahead of any keymap the host adds.
+// - Other people's carets and the person's rejected changes are drawn from the library's
+//   presence and marks data (`live.participants()`, `live.marks()`; PRESENCE.md), whose
+//   offsets are UTF-16 of `live.text`: the editor's document whenever nothing is held, which
+//   is the only time they are drawn. Bytes are converted only for the text itself.
 
 import {
   ChangeSet,
@@ -33,8 +37,7 @@ import {
 } from "@codemirror/view";
 import { historyField } from "@codemirror/commands";
 import { remoteChange } from "./codemirror";
-import type { Hunk } from "@k2/mpc-client";
-import type { LiveText, Rejection } from "@k2/mpc-client";
+import type { Hunk, LiveText, Mark, Range16 } from "@k2/mpc-client";
 import { ByteIndex } from "./bytes";
 import { readableOn } from "./colour";
 
@@ -69,13 +72,16 @@ export function changesOf(doc: Text, idx: ByteIndex, hunks: readonly Hunk[]): Ch
   return ChangeSet.of(specs, doc.length);
 }
 
-/** A caret to draw: positions in UTF-8 bytes of `live.text`. */
+/** A remote connection's caret to draw (from `live.participants()`): positions in UTF-16 code
+ * units of `live.text`. */
 export interface CaretView {
   handle: string;
   name: string;
   colour: string;
-  anchor: number;
+  /** Where its caret (and name) is drawn. */
   head: number;
+  /** Its selections (`Participant.selections`): each non-empty one is shaded. */
+  selections: readonly Range16[];
   /** Show its name now (labels `active`: it moved lately; `always`: always). */
   label: boolean;
   /** The connection it is on (one person can have several: tabs, devices); absent from an
@@ -83,7 +89,9 @@ export interface CaretView {
   client?: number;
   /** Another connection of this person's own (the same person in another tab or on another
    * device): drawn dashed, its name "You · other tab" (or the host's label). */
-  sameUser?: boolean;
+  sameUser: boolean;
+  /** The person is away (the roster's `away`): drawn dimmed. */
+  away: boolean;
 }
 
 /** A caret's key: one person's connections each get their own (K2, 2026-10-31). */
@@ -104,9 +112,9 @@ export interface BindingHooks {
   redo(): void;
   /** Carets to draw now. */
   carets(): CaretView[];
-  /** The text "Insert my text here" would insert, and where (bytes of `live.text`), while the
+  /** The text "Insert my text here" would insert, and where (UTF-16 of `live.text`), while the
    * person looks at it before inserting; `null`: none. */
-  preview?(): { byte: number; text: string } | null;
+  preview?(): { at: number; text: string } | null;
 }
 
 const setCarets = StateEffect.define<DecorationSet>();
@@ -131,8 +139,9 @@ class CaretWidget extends WidgetType {
     readonly colour: string,
     readonly label: boolean,
     readonly below: boolean,
-    readonly key: string = "",
-    readonly sameUser: boolean = false,
+    readonly key: string,
+    readonly sameUser: boolean,
+    readonly away: boolean,
   ) {
     super();
   }
@@ -143,12 +152,13 @@ class CaretWidget extends WidgetType {
       o.label === this.label &&
       o.below === this.below &&
       o.key === this.key &&
-      o.sameUser === this.sameUser
+      o.sameUser === this.sameUser &&
+      o.away === this.away
     );
   }
   toDOM() {
     const el = document.createElement("span");
-    el.className = "cm-mpc-caret" + (this.sameUser ? " cm-mpc-caret-same" : "");
+    el.className = "cm-mpc-caret" + (this.sameUser ? " cm-mpc-caret-same" : "") + (this.away ? " cm-mpc-caret-away" : "");
     el.setAttribute("aria-hidden", "true");
     if (this.key) el.dataset.mpcCaret = this.key;
     el.style.setProperty("--mpc-user", this.colour);
@@ -214,6 +224,8 @@ export class Binding {
   private view: EditorView | null = null;
   private dead = false;
   private historySeen = false;
+  /** A local edit made on `live` directly is under way (`editThroughLive`). */
+  private direct = false;
   /** This connection's caret in bytes of `live.text`, as last told to `live`. */
   caret: { anchor: number; head: number } | null = null;
   /** Times the editor had to be reset to `live.text` (a bug if ever non-zero). */
@@ -279,7 +291,8 @@ export class Binding {
     this.view = view;
     this.offs.push(
       this.live.onChange((e) => {
-        if (!e.local) this.remote(e.hunks);
+        // the editor's own edits are in it already; one made on `live` directly isn't
+        if (!e.local || this.direct) this.remote(e.hunks);
       }),
     );
     this.schedule();
@@ -371,14 +384,55 @@ export class Binding {
     const view = this.view;
     if (!view || this.dead || this.held) return;
     const doc = view.state.doc;
-    const idx = view.state.field(byteIndex);
     view.dispatch({
       effects: [
-        setCarets.of(caretDecorations(doc, idx, this.hooks.carets())),
-        setRejected.of(rejectedDecorations(doc, idx, this.live.rejected)),
-        setPreview.of(previewDecorations(doc, idx, this.hooks.preview?.() ?? null)),
+        setCarets.of(caretDecorations(doc, this.hooks.carets())),
+        setRejected.of(markDecorations(doc, this.live.marks())),
+        setPreview.of(previewDecorations(doc, this.hooks.preview?.() ?? null)),
       ],
     });
+  }
+
+  /** A fresh undo group token of `kind` for an edit the host makes (Re-apply, Insert my text
+   * here): an undo step of its own, never composed with the typing around it. */
+  newGroup(kind: string): string {
+    this.kind = kind;
+    return `${kind}-${++this.group}`;
+  }
+
+  /**
+   * Run `f`, which makes the person's own edit on `live` directly (`live.reapply`,
+   * `live.insertHere`: the library applies and sends it), and put that edit in the editor at
+   * once, as a remote change goes in (never sent again, kept out of the editor's history), with
+   * the person's caret at its end. Not while a composition holds changes (`holding`): the host
+   * checks that first.
+   */
+  editThroughLive<T>(f: () => T): T {
+    // anything held waits for the microtask flush: put it in first, so only this edit is held
+    if (this.held) this.flush();
+    this.direct = true;
+    let out: T;
+    try {
+      out = f();
+    } finally {
+      this.direct = false;
+    }
+    const view = this.view;
+    const changes = this.held;
+    if (!view || this.dead || !changes || this.isComposing) return out;
+    let end = 0;
+    changes.iterChanges((_fromA, _toA, _fromB, toB) => {
+      end = toB;
+    });
+    this.unhold();
+    view.dispatch({
+      changes,
+      selection: { anchor: end },
+      annotations: [remoteChange.of(true), Transaction.addToHistory.of(false)],
+      filter: false,
+    });
+    this.redraw();
+    return out;
   }
 
   // ---- local
@@ -391,9 +445,8 @@ export class Binding {
     }
     for (const tr of u.transactions) {
       if (!isLocal(tr)) continue;
-      // a Re-apply is an undo step of its own: never composed with the typing around it
-      const kind = tr.isUserEvent("input.reapply") ? "reapply" : tr.isUserEvent("input") ? "input" : tr.isUserEvent("delete") ? "delete" : (tr.annotation(Transaction.userEvent) ?? "other");
-      if (kind !== this.kind || kind === "reapply") {
+      const kind = tr.isUserEvent("input") ? "input" : tr.isUserEvent("delete") ? "delete" : (tr.annotation(Transaction.userEvent) ?? "other");
+      if (kind !== this.kind) {
         this.kind = kind;
         this.group++;
       }
@@ -462,22 +515,7 @@ export class Binding {
     this.hooks.repaired?.(reason);
   }
 
-  // ---- positions for the host
-
-  /** CodeMirror changes for `hunks` (UTF-8 bytes of `live.text`), or null (a composition is
-   * holding remote changes, or a hunk is off a character boundary). */
-  changesFor(hunks: readonly Hunk[]): ChangeSet | null {
-    const view = this.view;
-    if (!view || this.held) return null;
-    return changesOf(view.state.doc, view.state.field(byteIndex), hunks);
-  }
-
-  /** The UTF-16 position in the editor of a byte offset of `live.text` (or -1). */
-  posOf(byte: number): number {
-    const view = this.view;
-    if (!view || this.held) return -1;
-    return view.state.field(byteIndex).posAt(view.state.doc, byte);
-  }
+  // ---- for the host
 
   /** Mark lines `first..last` (1-based) for a moment, and scroll them into view. */
   reveal(first: number, last: number, ms = 1600): void {
@@ -497,47 +535,51 @@ export class Binding {
   }
 }
 
+/** A UTF-16 offset of `live.text` that is a position in `doc` (always, unless a repair of the
+ * editor is under way: then nothing is drawn there). */
+const inDoc = (doc: Text, pos: number) => pos >= 0 && pos <= doc.length;
+
 /** Decorations for remote carets and selections. */
-export function caretDecorations(doc: Text, idx: ByteIndex, carets: readonly CaretView[]): DecorationSet {
+export function caretDecorations(doc: Text, carets: readonly CaretView[]): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   // A stable order (by key) so two carets at one spot (one person's two tabs) keep theirs from
   // update to update: the widgets are reused, not swapped (no flicker).
   const ordered = [...carets].sort((x, y) => (caretKey(x) < caretKey(y) ? -1 : caretKey(x) > caretKey(y) ? 1 : 0));
   for (const c of ordered) {
-    const a = idx.posAt(doc, c.anchor);
-    const h = idx.posAt(doc, c.head);
-    if (a < 0 || h < 0) continue;
-    const [from, to] = a <= h ? [a, h] : [h, a];
-    if (from < to) {
+    if (!inDoc(doc, c.head)) continue;
+    const key = caretKey(c);
+    for (const sel of c.selections) {
+      const [from, to] = sel.anchor <= sel.head ? [sel.anchor, sel.head] : [sel.head, sel.anchor];
+      if (from >= to || !inDoc(doc, from) || !inDoc(doc, to)) continue;
       ranges.push(
         Decoration.mark({
-          class: "cm-mpc-selection" + (c.sameUser ? " cm-mpc-selection-same" : ""),
-          attributes: { style: `--mpc-user: ${c.colour}`, "data-mpc-caret": caretKey(c) },
+          class: "cm-mpc-selection" + (c.sameUser ? " cm-mpc-selection-same" : "") + (c.away ? " cm-mpc-selection-away" : ""),
+          attributes: { style: `--mpc-user: ${c.colour}`, "data-mpc-caret": key },
         }).range(from, to),
       );
     }
     // on the first line a label above the caret would be cut off: put it below
-    const below = doc.lineAt(h).number === 1;
-    ranges.push(Decoration.widget({ widget: new CaretWidget(c.name, c.colour, c.label, below, caretKey(c), c.sameUser === true), side: 1 }).range(h));
+    const below = doc.lineAt(c.head).number === 1;
+    ranges.push(Decoration.widget({ widget: new CaretWidget(c.name, c.colour, c.label, below, key, c.sameUser, c.away), side: 1 }).range(c.head));
   }
   return Decoration.set(ranges, true);
 }
 
-function previewDecorations(doc: Text, idx: ByteIndex, p: { byte: number; text: string } | null): DecorationSet {
-  if (!p) return Decoration.none;
-  const at = idx.posAt(doc, p.byte);
-  if (at < 0) return Decoration.none;
-  return Decoration.set([Decoration.widget({ widget: new PreviewWidget(p.text), side: -1 }).range(at)]);
+function previewDecorations(doc: Text, p: { at: number; text: string } | null): DecorationSet {
+  if (!p || !inDoc(doc, p.at)) return Decoration.none;
+  return Decoration.set([Decoration.widget({ widget: new PreviewWidget(p.text), side: -1 }).range(p.at)]);
 }
 
-function rejectedDecorations(doc: Text, idx: ByteIndex, rejected: readonly Rejection[]): DecorationSet {
+/** Decorations for the person's rejected changes (`live.marks()`): the place underlined, or
+ * (nothing left there: a deletion's place, a replacement whose text went) the typed text struck
+ * through. */
+function markDecorations(doc: Text, marks: readonly Mark[]): DecorationSet {
   const ranges: Range<Decoration>[] = [];
-  for (const r of rejected) {
-    const from = idx.posAt(doc, r.region.start);
-    const to = idx.posAt(doc, r.region.end);
-    if (from < 0 || to < 0) continue;
-    if (from < to) ranges.push(Decoration.mark({ class: "cm-mpc-rejected", attributes: { "data-mpc-rejection": String(r.id) } }).range(from, to));
-    else if (r.text) ranges.push(Decoration.widget({ widget: new RejectedWidget(r.text), side: -1 }).range(from));
+  for (const m of marks) {
+    const { from, to } = m.range;
+    if (!inDoc(doc, from) || !inDoc(doc, to)) continue;
+    if (from < to) ranges.push(Decoration.mark({ class: "cm-mpc-rejected", attributes: { "data-mpc-rejection": String(m.id) } }).range(from, to));
+    else if (m.text) ranges.push(Decoration.widget({ widget: new RejectedWidget(m.text), side: -1 }).range(from));
   }
   return Decoration.set(ranges, true);
 }

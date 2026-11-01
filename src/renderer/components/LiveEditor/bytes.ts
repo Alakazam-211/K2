@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/bytes.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/bytes.ts (deleted from the kit in v0.10.2).
 // UTF-16 <-> UTF-8 offsets on a CodeMirror document without flattening it. The index keeps each
 // line's length in UTF-8 bytes in blocks of lines; an update rebuilds only the blocks of the lines
 // a transaction touches and copies the list of blocks (one pointer per block), so a keystroke

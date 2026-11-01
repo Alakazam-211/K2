@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/codemirror.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's codemirror.ts (deleted from the kit in v0.10.2).
 // The CodeMirror 6 binding: an editor showing one `LiveText`. Local transactions become hunks
 // (UTF-16 to UTF-8 bytes here, and only here); remote changes become CodeMirror changes;
 // remote carets and selections show as decorations with each participant's name and colour;

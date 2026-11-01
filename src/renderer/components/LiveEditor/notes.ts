@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/notes.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/notes.ts (deleted from the kit in v0.10.2).
 // The roster events the editor reads by name: the kit's removed-text note (the `overwritten`
 // roster event of the kit's outside-removal notes, v0.9.7.2 / v0.9.8.1; `wire.ts` types it in
 // full too, and test/golden.test.ts holds both to the kit's JSON) and claims.

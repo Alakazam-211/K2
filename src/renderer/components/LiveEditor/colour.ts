@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/colour.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/colour.ts (deleted from the kit in v0.10.2).
 // Readable text on a participant's colour: black or white, whichever contrasts more (WCAG 2
 // relative luminance). Colours the parser doesn't know get white.
 

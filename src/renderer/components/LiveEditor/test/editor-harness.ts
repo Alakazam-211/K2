@@ -10,9 +10,7 @@ import { mountLiveEditor, type LiveEditorHandle } from "../mount";
 import { apply, byteToIndex, coalesce, utf8Len, type Hunk } from "@k2/mpc-client";
 import { Carried, rebaseOurs } from "@k2/mpc-client";
 import { Bias, transform } from "@k2/mpc-client";
-import { LiveText } from "@k2/mpc-client";
-// The default timers hook is the library's test seam (not in its public index).
-import { setDefaultLiveTimers } from "../../../../../vendor/k2-mpc-base/client/src/live";
+import { FRAME_MS, LiveText, type FrameScheduler } from "@k2/mpc-client";
 import type { ChangeEvent } from "@k2/mpc-client";
 import { FakeLiveHost, microtasks, netTimers, type FakeLiveTransport } from "../../../../../vendor/k2-mpc-base/client/test/fake-live";
 import { FakeServer, Net, rng } from "../../../../../vendor/k2-mpc-base/client/test/fake-server";
@@ -66,6 +64,12 @@ export interface RunResult {
   lateDiscarded: number;
 }
 
+/** The presence and marks deliveries (`LiveEditorOptions.schedule`) on the fake clock: one
+ * `FRAME_MS` timer a delivery, as the library's default without `requestAnimationFrame`. */
+export function frames(timers: { set(f: () => void, ms: number): unknown }): FrameScheduler {
+  return (deliver) => void timers.set(deliver, FRAME_MS);
+}
+
 export async function run(seed: number, opts: RunOptions = {}): Promise<RunResult> {
   const r = rng(seed);
   const net = new Net();
@@ -77,12 +81,10 @@ export async function run(seed: number, opts: RunOptions = {}): Promise<RunResul
   const maxLatency = opts.maxLatency ?? 1 + r.int(30);
   const host = new FakeLiveHost(net, server, () => r.int(maxLatency + 1));
   const eds: Ed[] = [];
-  // the replicas' caret re-send throttle on the fake clock too (a run stays deterministic)
-  const wasTimers = setDefaultLiveTimers(netTimers(net, () => 0));
+  // each editor's replica runs on its editor's timers (the fake clock): a run stays deterministic
   try {
     return await runIn(seed, opts, r, net, server, maxLatency, host, eds);
   } finally {
-    setDefaultLiveTimers(wasTimers);
     if (opts.trace) {
       for (const a of server.log) console.log(`TRACE log v${a.version} ${a.pid} client ${a.client} ${JSON.stringify(a.hunks)} | before ${JSON.stringify(a.before)}`);
       for (const [k, v] of server.appliedAt) console.log(`TRACE applied ${k} at v${v}`);
@@ -121,6 +123,9 @@ async function runIn(
       transport: t,
       mode: r.next() < 0.5 ? "markdown" : "plain",
       timers: netTimers(net, r.next),
+      // presence and marks delivered at once: no fake-clock frames, so the fixed seeds'
+      // schedules stay as they were scanned
+      schedule: (deliver) => deliver(),
       reconnect: { minMs: 1, maxMs: 30 },
     });
     const e: Ed = { h, t, ops: new Map(), typed: 0, e000: [], diverged: [], errors: [] };

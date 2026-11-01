@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/theme.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/theme.ts (deleted from the kit in v0.10.2).
 // The editor's default look: every value comes from a CSS variable on `.mpc-editor`, so a host
 // themes it without overriding selectors. `--mpc-user` (and `--mpc-user-fg`, a readable text
 // colour on it) is set inline per participant.
@@ -66,6 +66,11 @@ export const editorTheme = EditorView.baseTheme({
   ".cm-mpc-caret-same": { borderLeftStyle: "dashed" },
   ".cm-mpc-caret-same .cm-mpc-caret-name": { fontStyle: "italic" },
   ".cm-mpc-selection-same": {
+    backgroundColor: `color-mix(in srgb, var(--mpc-user) calc(${v("--mpc-selection-alpha")} * 50%), transparent)`,
+  },
+  // someone away (the roster's `away`): their caret and selection dimmed
+  ".cm-mpc-caret-away": { opacity: "0.5" },
+  ".cm-mpc-selection-away": {
     backgroundColor: `color-mix(in srgb, var(--mpc-user) calc(${v("--mpc-selection-alpha")} * 50%), transparent)`,
   },
   ".cm-mpc-caret-name-shown": { opacity: "1" },

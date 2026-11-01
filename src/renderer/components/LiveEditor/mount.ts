@@ -1,4 +1,4 @@
-// Copied from vendor/k2-mpc-base/client/src/editor/mount.ts (K2 owns this copy; see ./index.ts).
+// K2's own editor code (see ./index.ts); started from k2-mpc-client 0.11.0's editor/mount.ts (deleted from the kit in v0.10.2).
 // `mountLiveEditor`: a live CodeMirror editor for one text root, in plain DOM. It owns the
 // connection's life (connect, welcome, live; on a drop, backoff and `connect({resume})`, then
 // a resync; past the server's window, a snapshot), the binding, the carets, a roster strip,
@@ -9,7 +9,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import type { Hunk } from "@k2/mpc-client";
+import type { FrameScheduler, Hunk, InsertRefusal, Mark, Participant } from "@k2/mpc-client";
 import { LiveText, type Rejection } from "@k2/mpc-client";
 import { canRetry } from "@k2/mpc-client";
 import type {
@@ -248,8 +248,12 @@ export interface LiveEditorOptions {
     /** The roster strip; `false`: none (the host draws its own from `roster`). */
     roster?: ((entries: readonly RosterEntry[], click: (handle: Handle) => void) => HTMLElement) | false;
   };
-  /** Timers and randomness (tests drive them). */
+  /** Timers and randomness (tests drive them); also the replica's clock (caret re-sends, when
+   * a remote caret was last active). */
   timers?: Timers;
+  /** When other people's carets and the rejected changes redraw after they change
+   * (`LiveOptions.schedule`): default at most once an animation frame. Tests drive it. */
+  schedule?: FrameScheduler;
   /** How long a snapshot request may take before a fresh connect replaces it (default 10 s). */
   snapshotTimeoutMs?: number;
 }
@@ -404,8 +408,12 @@ class LiveEditor implements LiveEditorHandle {
   private landedIds = new Set<number>();
   /** The rejection whose "Insert my text here" is being previewed. */
   private previewId: number | null = null;
-  /** When each caret last moved, by `caretKey` (a person's connections each have one). */
-  private caretsSeen = new Map<string, { key: string; until: number }>();
+  /**
+   * The carets already in the doc when it opened (the first roster), by `caretKey`, with their
+   * `lastActiveAt` then: with labels `active` their names stay hidden until they move (a caret
+   * first seen later shows its name, as one that moves does). `null` until the first roster.
+   */
+  private openingCarets: Map<string, number> | null = null;
   private readonly ls = new Map<keyof LiveEditorEvents, Set<(v: never) => void>>();
   private readonly offs: Array<() => void> = [];
   private readonly frameListeners = new Set<(f: ServerFrame) => void>();
@@ -528,43 +536,60 @@ class LiveEditor implements LiveEditorHandle {
       this.showNote(this.strings.alreadyPresent);
       return { status: "already-present" };
     }
-    const r = this.rejected.find((x) => x.id === id);
-    if (!r) return unavailable;
+    const m = this.markOf(id);
+    if (!m) return unavailable;
     if (b.holding) return unavailable; // during a composition
-    if (r.mayHaveApplied) {
-      // its reply was lost: Re-apply only when the server's record shows it never landed
-      const p = live.presence(id);
-      if (p === "present") {
-        this.dismiss(id);
-        this.showNote(this.strings.alreadyPresent);
-        return { status: "already-present" };
-      }
-      if (p !== "absent") {
-        this.showNote(this.strings.cantTell);
-        return { status: "unknown", reason: "cant-tell" };
-      }
+    // its reply was lost: Re-apply only when the server's record shows it never landed (the
+    // mark's `presence`; `absent` for a change the server refused)
+    if (m.presence === "present") return this.alreadyPresent(id);
+    if (m.presence !== "absent") {
+      this.showNote(this.strings.cantTell);
+      return { status: "unknown", reason: "cant-tell" };
     }
     // where the server would put it: its change as sent, rebased from its base (never by region)
-    const p = live.placeRejection(id);
-    if (p === null) return unavailable;
-    if ("refused" in p) {
-      this.showNote(p.refused === "conflict" ? this.strings.conflictReapply : this.strings.cantPlace);
-      return { status: "unknown", reason: p.refused };
+    switch (m.placement) {
+      case "conflict":
+      case "cant-place":
+        this.showNote(m.placement === "conflict" ? this.strings.conflictReapply : this.strings.cantPlace);
+        return { status: "unknown", reason: m.placement };
+      case "in-text":
+        return this.alreadyPresent(id);
     }
-    if (p.hunks.length === 0) {
-      this.dismiss(id);
-      this.showNote(this.strings.alreadyPresent);
-      return { status: "already-present" };
-    }
-    const changes = b.changesFor(p.hunks);
-    if (!changes) return unavailable;
-    const last = p.hunks[p.hunks.length - 1];
-    const caret = changes.mapPos(b.posOf(last.end), 1);
-    this.view.dispatch({ changes, selection: { anchor: caret }, userEvent: "input.reapply" });
-    if (r.mayHaveApplied) live.noteReapplied(id);
+    b.editThroughLive(() => live.reapply(id, { group: b.newGroup("reapply") }));
+    if (m.mayHaveApplied) live.noteReapplied(id);
     this.dismiss(id);
     this.showNote("");
     return { status: "applied" };
+  }
+
+  /** The rejection `id` as the library's mark (`live.marks()`), if it is open. */
+  private markOf(id: number): Mark | undefined {
+    return this.live?.marks().find((m) => m.id === id);
+  }
+
+  /** It is in the text already: dismissed, and the note says so. */
+  private alreadyPresent(id: number): { status: "already-present" } {
+    this.dismiss(id);
+    this.showNote(this.strings.alreadyPresent);
+    return { status: "already-present" };
+  }
+
+  /** What "Insert my text here" says when the library refuses it (`insertHerePreview`,
+   * `insertHere`). */
+  private insertRefused(id: number, refused: InsertRefusal): InsertResult {
+    switch (refused) {
+      case "already-present":
+        this.alreadyPresent(id);
+        return { status: "already-present" };
+      case "cant-tell":
+        this.showNote(this.strings.cantTell);
+        return { status: "unknown", reason: "cant-tell" };
+      case "multi-hunk":
+        this.showNote(this.strings.insertMultiHunk);
+        return { status: "unknown", reason: "multi-hunk" };
+      case "unavailable":
+        return { status: "unavailable" };
+    }
   }
 
   /** A short status line under the rejections (empty: none). */
@@ -590,35 +615,19 @@ class LiveEditor implements LiveEditorHandle {
       this.showNote(this.strings.alreadyPresent);
       return { status: "already-present" };
     }
-    const r = this.rejected.find((x) => x.id === id);
-    if (!r || !r.text || b.holding) return unavailable;
-    if (r.hunks.length > 1) {
-      this.showNote(this.strings.insertMultiHunk);
-      return { status: "unknown", reason: "multi-hunk" };
-    }
-    if (r.mayHaveApplied) {
-      // the same check as Re-apply: never insert a change that may be in already
-      const p = live.presence(id);
-      if (p === "present") {
-        this.dismiss(id);
-        this.showNote(this.strings.alreadyPresent);
-        return { status: "already-present" };
-      }
-      if (p !== "absent") {
-        this.showNote(this.strings.cantTell);
-        return { status: "unknown", reason: "cant-tell" };
-      }
-    }
-    const pos = b.posOf(r.region.start);
-    if (pos < 0) return unavailable;
-    const line = this.view.state.doc.lineAt(pos).number;
+    if (b.holding) return unavailable;
+    // the library's checks: typed text, one hunk (one place), then a lost reply's record
+    const p = live.insertHerePreview(id);
+    if ("refused" in p) return this.insertRefused(id, p.refused);
+    const doc = this.view.state.doc;
+    if (p.at > doc.length) return unavailable;
+    const line = doc.lineAt(p.at).number;
     this.previewId = id;
     this.renderRejections();
     b.redraw();
     this.reveal({ first: line, last: line });
     // a replacement or deletion: say that only the typed text goes back, never the removal
-    const removed = r.hunks[0].start < r.hunks[0].end;
-    this.showNote(this.strings.insertPreview.replace("{line}", String(line)) + (removed ? ` ${this.strings.insertRemovedText}` : ""));
+    this.showNote(this.strings.insertPreview.replace("{line}", String(line)) + (p.removed ? ` ${this.strings.insertRemovedText}` : ""));
     (this.dom.rejections.querySelector(`li[data-rejection="${id}"] .mpc-insert-confirm`) as HTMLElement | null)?.focus();
     return { status: "previewing", line };
   }
@@ -633,14 +642,16 @@ class LiveEditor implements LiveEditorHandle {
       this.showNote(this.strings.alreadyPresent);
       return { status: "already-present" };
     }
-    const r = this.rejected.find((x) => x.id === id);
-    if (!r || !r.text) return { status: "unavailable" };
-    const pos = b.posOf(r.region.start);
-    if (pos < 0) return { status: "unavailable" };
     this.previewId = null;
-    // its own undo step (the binding gives every input.reapply transaction its own group)
-    this.view.dispatch({ changes: { from: pos, insert: r.text }, selection: { anchor: pos + r.text.length }, userEvent: "input.reapply.here" });
-    if (r.mayHaveApplied) live.noteReapplied(id);
+    // the library inserts it where the preview showed, as its own undo step, notes a lost
+    // reply's change as re-applied (`onDuplicateRisk`), and dismisses it
+    const done = b.editThroughLive(() => live.insertHere(id, { group: b.newGroup("insert-here") }));
+    if ("refused" in done) {
+      const out = this.insertRefused(id, done.refused);
+      this.renderRejections();
+      b.redraw();
+      return out;
+    }
     this.dismiss(id);
     this.showNote("");
     return { status: "applied" };
@@ -897,15 +908,23 @@ class LiveEditor implements LiveEditorHandle {
   // ---- the replica
 
   private start(w: Welcome): void {
-    const live = new LiveText({ text: w.text!, version: w.version }, this.proxy(), { root: this.root, self: w.self, client: w.client });
+    const live = new LiveText({ text: w.text!, version: w.version }, this.proxy(), {
+      root: this.root,
+      self: w.self,
+      client: w.client,
+      // one clock for the editor and the replica: `lastActiveAt` is compared with it
+      timers: this.timers,
+      ...(this.opts.schedule ? { schedule: this.opts.schedule } : {}),
+    });
     this.live = live;
     const binding = new Binding(live, {
       undo: () => this.undo(),
       redo: () => this.redo(),
       carets: () => this.caretViews(),
       preview: () => {
-        const r = this.previewId === null ? undefined : this.rejected.find((x) => x.id === this.previewId);
-        return r ? { byte: r.region.start, text: r.text } : null;
+        if (this.previewId === null) return null;
+        const p = live.insertHerePreview(this.previewId);
+        return "refused" in p ? null : { at: p.at, text: p.text };
       },
       local: () => this.pendingChanged(),
       historyAdded: () => this.emit("error", { id: HISTORY_ERROR, message: HISTORY_MESSAGE }),
@@ -925,7 +944,7 @@ class LiveEditor implements LiveEditorHandle {
       }),
       live.onRejected((rej) => {
         const r = rej as EditorRejection;
-        r.mayHaveApplied = r.error?.id === "MPC-E000" && r.asOf !== undefined;
+        r.mayHaveApplied = this.markOf(r.id)?.mayHaveApplied === true;
         this.emit("rejected", r);
         if (r.error?.id === "MPC-E111") this.emit("conflict", { rejection: r, error: r.error });
         this.renderRejections();
@@ -933,12 +952,19 @@ class LiveEditor implements LiveEditorHandle {
         this.pendingChanged();
       }),
       live.onRoster((entries) => {
-        this.noteCarets(entries);
+        if (!this.openingCarets) {
+          this.openingCarets = new Map(live.participants().filter((p) => p.caret && !p.isSelf).map((p) => [caretKey(p), p.lastActiveAt]));
+        }
         this.emit("roster", entries);
         this.renderRoster();
+      }),
+      // carets and marks redraw from the library's data, at most once a delivery (a frame)
+      live.onParticipants(() => {
         this.binding?.schedule();
+        // after the redraw's flush: the positions are in the editor's document then
         queueMicrotask(() => this.scrollToFollowed());
       }),
+      live.onMarks(() => this.binding?.schedule()),
       live.onRosterEvent((ev) => this.onRosterEvent(ev)),
       live.onLanded((l) => {
         this.landedIds.add(l.rejection.id);
@@ -1062,60 +1088,66 @@ class LiveEditor implements LiveEditorHandle {
 
   // ---- carets and labels
 
-  private noteCarets(entries: readonly RosterEntry[]): void {
-    const now = this.timers.now();
-    const note = (id: string, c: RosterEntry["cursor"]): void => {
-      const key = c ? `${c.root}:${c.anchor}:${c.head}:${c.version ?? ""}` : "";
-      const was = this.caretsSeen.get(id);
-      if (!was || was.key !== key) this.caretsSeen.set(id, { key, until: was ? now + ACTIVE_LABEL_MS : 0 });
-    };
-    for (const e of entries) {
-      // one entry a person; per-connection carets (kit v0.10.1) each on their own key
-      if (e.devices) for (const d of e.devices) note(caretKey({ handle: e.handle, client: d.client }), d.cursor);
-      else note(e.handle, e.cursor);
-    }
-    if (this.labels === "active") this.scheduleLabelExpiry();
-  }
-
-  private scheduleLabelExpiry(): void {
-    if (this.labelTimer !== null) this.timers.clear(this.labelTimer);
-    this.labelTimer = null;
-    const now = this.timers.now();
-    let next = Infinity;
-    for (const s of this.caretsSeen.values()) if (s.until > now) next = Math.min(next, s.until);
-    if (next === Infinity) return;
-    this.labelTimer = this.timers.set(() => {
-      this.labelTimer = null;
-      this.binding?.schedule();
-      this.scheduleLabelExpiry();
-    }, next - now + 1);
-  }
-
+  /** The carets to draw: every other connection with a caret (`live.participants()`, never
+   * this one), its name shown per `labels`. */
   private caretViews(): CaretView[] {
     const live = this.live;
     if (!live) return [];
     const now = this.timers.now();
-    return live.carets().map((c) => ({
-      handle: c.handle,
-      // this person's own other tab or device: "You · other tab", or the host's label for it
-      name: c.sameUser ? (c.label ? this.strings.youOn.replace("{label}", c.label) : this.strings.youElsewhere) : c.name,
-      colour: c.colour,
-      anchor: c.anchor,
-      head: c.head,
-      ...(c.client !== undefined ? { client: c.client } : {}),
-      sameUser: c.sameUser === true,
-      label: this.labels === "always" || (this.labels === "active" && (this.caretsSeen.get(caretKey(c))?.until ?? 0) > now),
-    }));
+    let hideAt = Infinity;
+    const out: CaretView[] = [];
+    for (const p of live.participants()) {
+      if (p.isSelf || !p.caret) continue;
+      const active = this.labels === "active" && this.recentlyActive(p, now);
+      if (active) hideAt = Math.min(hideAt, p.lastActiveAt + ACTIVE_LABEL_MS);
+      out.push({
+        handle: p.handle,
+        ...(p.client !== undefined ? { client: p.client } : {}),
+        // this person's own other tab or device: "You · other tab", or the host's label for it
+        name: p.sameUser ? (p.label ? this.strings.youOn.replace("{label}", p.label) : this.strings.youElsewhere) : p.name,
+        colour: p.colour,
+        head: p.caret.head,
+        selections: p.selections,
+        sameUser: p.sameUser,
+        away: p.away,
+        label: this.labels === "always" || active,
+      });
+    }
+    if (this.labels === "active") this.hideLabelsAt(hideAt);
+    return out;
+  }
+
+  /** A caret moved (or its connection typed) in the last `ACTIVE_LABEL_MS` (`lastActiveAt`, on
+   * this editor's clock); a caret that was there when the doc opened only once it has moved. */
+  private recentlyActive(p: Participant, now: number): boolean {
+    const key = caretKey(p);
+    const opening = this.openingCarets?.get(key);
+    if (opening !== undefined) {
+      if (p.lastActiveAt === opening) return false;
+      this.openingCarets!.delete(key);
+    }
+    return now < p.lastActiveAt + ACTIVE_LABEL_MS;
+  }
+
+  /** Redraw when the first shown name is due to hide (`Infinity`: none shown). */
+  private hideLabelsAt(at: number): void {
+    if (this.labelTimer !== null) this.timers.clear(this.labelTimer);
+    this.labelTimer = null;
+    if (at === Infinity) return;
+    this.labelTimer = this.timers.set(() => {
+      this.labelTimer = null;
+      this.binding?.schedule();
+    }, at - this.timers.now() + 1);
   }
 
   private scrollToFollowed(): void {
     const live = this.live;
     const b = this.binding;
-    if (!this.following || !live || !b || this.destroyed) return;
-    const c = live.carets().find((x) => x.handle === this.following);
-    if (!c) return;
-    const pos = b.posOf(c.head);
-    if (pos >= 0) this.view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "nearest" }) });
+    // positions are in `live.text`: the editor's document unless changes are held
+    if (!this.following || !live || !b || b.holding || this.destroyed) return;
+    const p = live.participants().find((x) => x.handle === this.following && x.caret !== null);
+    if (!p?.caret || p.caret.head > this.view.state.doc.length) return;
+    this.view.dispatch({ effects: EditorView.scrollIntoView(p.caret.head, { y: "nearest" }) });
   }
 
   // ---- the frame's parts
@@ -1211,11 +1243,11 @@ class LiveEditor implements LiveEditorHandle {
         },
         copy: () => this.copyRejected(rej.id),
         reveal: () => {
-          const pos = this.binding?.posOf(rej.region.start) ?? -1;
-          if (pos >= 0) {
-            const line = this.view.state.doc.lineAt(pos).number;
-            this.reveal({ first: line, last: line });
-          }
+          const m = this.markOf(rej.id);
+          const doc = this.view.state.doc;
+          if (!m || !this.binding || this.binding.holding || m.range.from > doc.length) return;
+          const line = doc.lineAt(m.range.from).number;
+          this.reveal({ first: line, last: line });
         },
       };
       const li = doc.createElement("li");
@@ -1270,13 +1302,21 @@ class LiveEditor implements LiveEditorHandle {
           });
         } else {
           li.append(again);
-          if (rej.text && rej.hunks.length === 1) li.append(button("mpc-insert-here", this.strings.insertHere, () => actions.insertHere()));
+          if (this.offersInsertHere(rej.id)) li.append(button("mpc-insert-here", this.strings.insertHere, () => actions.insertHere()));
         }
         if (rej.text) li.append(button("mpc-copy", this.strings.copy, () => void actions.copy()));
         li.append(dismiss);
       }
       list.append(li);
     }
+  }
+
+  /** A row offers "Insert my text here" when the library would place it: typed text, one hunk.
+   * A lost reply's record (`already-present`, `cant-tell`) is checked when it's used, and says
+   * why then. */
+  private offersInsertHere(id: number): boolean {
+    const p = this.live?.insertHerePreview(id);
+    return !!p && (!("refused" in p) || p.refused === "already-present" || p.refused === "cant-tell");
   }
 
   // ---- events

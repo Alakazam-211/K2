@@ -26,7 +26,7 @@ import { LiveText } from "@k2/mpc-client";
 import { byteToIndex, indexToByte, utf8Len } from "@k2/mpc-client";
 import type { ClientFrame, LiveTransport, ServerFrame } from "@k2/mpc-client";
 import { FakeLiveHost, type FakeLiveTransport, microtasks, netTimers, settle } from "../../../../../vendor/k2-mpc-base/client/test/fake-live";
-import { withoutPresenceCheck, withRegionPlacement } from "./editor-harness";
+import { frames, withoutPresenceCheck, withRegionPlacement } from "./editor-harness";
 import { FakeServer, Net, rng } from "../../../../../vendor/k2-mpc-base/client/test/fake-server";
 import { randomEdit, randomText } from "../../../../../vendor/k2-mpc-base/client/test/random-edits";
 
@@ -44,7 +44,8 @@ function setup(text: string, n = 1, o: Partial<LiveEditorOptions> & { rights?: "
     const el = document.createElement("div");
     document.body.append(el);
     const t = host.transport(`p${i + 1}`, { rights: o.rights });
-    const h = mountLiveEditor(el, { transport: t, timers: netTimers(net, r.next), reconnect: { minMs: 5, maxMs: 40 }, ...o });
+    const timers = netTimers(net, r.next);
+    const h = mountLiveEditor(el, { transport: t, timers, schedule: frames(timers), reconnect: { minMs: 5, maxMs: 40 }, ...o });
     const log = {} as Log;
     for (const k of ["state", "roster", "rights", "change", "pending", "ack", "rejected", "conflict", "note", "claim", "reload", "closed", "error", "participantClick"] as const) {
       (log as Record<string, unknown[]>)[k] = [];
@@ -272,6 +273,64 @@ describe("mountLiveEditor", () => {
     expect(byKey().size).toBe(4);
   });
 
+  it("two tabs of one person, through a host with per-connection carets: two carets (UTF-16, past CJK and emoji), as participants() lists them", async () => {
+    const net = new Net();
+    const server = new FakeServer(net, "日本🎉 one\ntwo\n");
+    server.caretRoute = { names: { ada: "Ada", bob: "Bob" } };
+    const host = new FakeLiveHost(net, server, () => 1);
+    const mount = (handle: string) => {
+      const el = document.createElement("div");
+      document.body.append(el);
+      const t = host.transport(handle);
+      const timers = netTimers(net, () => 0.5);
+      return { t, h: mountLiveEditor(el, { transport: t, timers, schedule: frames(timers), labels: "always" }) };
+    };
+    const tab1 = mount("ada");
+    const tab2 = mount("ada");
+    const bob = mount("bob");
+    await settle(net);
+    server.caretTick();
+    await settle(net);
+    tab1.h.view.dispatch({ selection: { anchor: 5 } }); // before "one", after the emoji
+    tab2.h.view.dispatch({ selection: { anchor: 9, head: 11 } }); // "tw"
+    await settle(net);
+    server.caretTick();
+    await settle(net);
+    await microtasks();
+    const c1 = tab1.t.conn!;
+    const c2 = tab2.t.conn!;
+    const carets = (h: LiveEditorHandle) => new Map(([...h.view.dom.querySelectorAll(".cm-mpc-caret")] as HTMLElement[]).map((c) => [c.dataset.mpcCaret!, c]));
+    // Bob: both of Ada's tabs, one caret each, where participants() puts them
+    const seen = carets(bob.h);
+    expect([...seen.keys()].sort()).toEqual([`ada#${c1}`, `ada#${c2}`].sort());
+    expect(bob.h.view.posAtDOM(seen.get(`ada#${c1}`)!)).toBe(5);
+    expect(bob.h.view.posAtDOM(seen.get(`ada#${c2}`)!)).toBe(11);
+    expect(bob.h.view.dom.querySelector(`.cm-mpc-selection[data-mpc-caret="ada#${c2}"]`)?.textContent).toBe("tw");
+    for (const k of seen.keys()) expect(seen.get(k)!.querySelector(".cm-mpc-caret-name")!.textContent).toBe("Ada");
+    const live = (h: LiveEditorHandle) => (h as unknown as { live: LiveText }).live;
+    const listed = live(bob.h)
+      .participants()
+      .filter((p) => p.handle === "ada")
+      .map((p) => [p.client, p.caret, p.sameUser]);
+    expect(listed.sort()).toEqual(
+      [
+        [c1, { anchor: 5, head: 5 }, false],
+        [c2, { anchor: 9, head: 11 }, false],
+      ].sort(),
+    );
+    // each of Ada's tabs: the other one, dashed, "You · other tab"; never its own
+    for (const [me, other] of [
+      [tab1, c2],
+      [tab2, c1],
+    ] as const) {
+      const mine = carets(me.h);
+      expect([...mine.keys()]).toEqual([`ada#${other}`]);
+      expect(mine.get(`ada#${other}`)!.classList.contains("cm-mpc-caret-same")).toBe(true);
+      expect(mine.get(`ada#${other}`)!.querySelector(".cm-mpc-caret-name")!.textContent).toBe(DEFAULT_STRINGS.youElsewhere);
+    }
+    for (const x of [tab1, tab2, bob]) x.h.destroy();
+  });
+
   it("labels `active`: a caret's name shows after it moves, then hides", async () => {
     const { net, server, eds, ts } = setup("abc\ndef\n", 1, { labels: "active" });
     await settle(net);
@@ -448,7 +507,7 @@ describe("mountLiveEditor", () => {
         document.body.append(el);
         const t = host.transport(p);
         const transport = p === "p1" && oldKept ? keptOutside(t) : t;
-        const h = mountLiveEditor(el, { transport, timers: netTimers(net, () => 0.5), reconnect: { minMs: 5, maxMs: 5 } });
+        const h = mountLiveEditor(el, { transport, timers: netTimers(net, () => 0.5), schedule: frames(netTimers(net, () => 0.5)), reconnect: { minMs: 5, maxMs: 5 } });
         if (p === "p1") h.on("rejected", (r) => rejected.push(r));
         eds.push(h);
         ts.push(t);
@@ -540,7 +599,7 @@ describe("mountLiveEditor", () => {
         const el = document.createElement("div");
         document.body.append(el);
         const t = host.transport(p);
-        const h = mountLiveEditor(el, { transport: t, timers: netTimers(net, () => 0.5), reconnect: { minMs: 5, maxMs: 5 } });
+        const h = mountLiveEditor(el, { transport: t, timers: netTimers(net, () => 0.5), schedule: frames(netTimers(net, () => 0.5)), reconnect: { minMs: 5, maxMs: 5 } });
         if (p === "p1") {
           h.on("rejected", (r) => ev.rejected.push(r));
           h.on("landed", (l) => ev.landed.push(l));
@@ -807,7 +866,7 @@ describe("mountLiveEditor", () => {
     const el = document.createElement("div");
     document.body.append(el);
     const t = server.live("p1", () => 1); // the wire contract's own fake transport
-    const h = mountLiveEditor(el, { transport: t, timers: netTimers(net, rng(3).next), reconnect: { minMs: 5, maxMs: 40 } });
+    const h = mountLiveEditor(el, { transport: t, timers: netTimers(net, rng(3).next), schedule: frames(netTimers(net, () => 0)), reconnect: { minMs: 5, maxMs: 40 } });
     const closed: Array<{ reason: string; error?: { id: string } }> = [];
     h.on("closed", (c) => closed.push(c));
     await settle(net);
@@ -1377,7 +1436,7 @@ describe("Insert my text here", () => {
     expect(eds[0].rejected).toEqual([]);
     expect(preview(eds[0])).toBeNull();
     const last = edits(ts[0]).at(-1);
-    expect(last?.type === "edit" && last.group?.startsWith("reapply-")).toBe(true);
+    expect(last?.type === "edit" && last.group?.startsWith("insert-here-")).toBe(true);
   });
 
   it("Cancel (or Escape) inserts nothing and keeps the rejection", async () => {
@@ -1407,6 +1466,45 @@ describe("Insert my text here", () => {
     expect(eds[0].confirmInsert()).toEqual({ status: "applied" });
     await settle(net);
     expect(server.text).toBe("XX\nhello WORLDearth\n");
+  });
+
+  it("the preview and the rejected mark are drawn where the library says (insertHerePreview, marks: UTF-16, past CJK and emoji), and the text goes in there", async () => {
+    const s = setup("日本🎉 world\n", 1);
+    await settle(s.net);
+    const [h] = s.eds;
+    const live = (h as unknown as { live: LiveText }).live;
+    // "world" (UTF-16 5..10, bytes 11..16) replaced while someone replaced it first: a conflict
+    h.view.dispatch({ changes: { from: 5, to: 10, insert: "WÖRLD😀" }, userEvent: "input.type" });
+    const at8 = utf8Len("日本🎉 ");
+    s.server.serverEdit([{ start: at8, end: at8 + 5, insert: "earth" }]);
+    await settle(s.net);
+    // and an emoji line above it, after the rejection: everything moves
+    s.server.serverEdit([{ start: 0, end: 0, insert: "😀\n" }]);
+    await settle(s.net);
+    await microtasks();
+    expect(doc(h)).toBe("😀\n日本🎉 earth\n");
+    const rej = s.logs[0].rejected[0];
+    const [mark] = live.marks();
+    expect(mark.id).toBe(rej.id);
+    expect(mark.text).toBe("WÖRLD😀");
+    // the mark as drawn: the library's range, in the editor's (UTF-16) positions
+    const drawn = h.view.dom.querySelector(`[data-mpc-rejection="${rej.id}"]`) ?? h.view.dom.querySelector(".cm-mpc-rejected-text");
+    expect(drawn, "the rejected change is drawn").not.toBeNull();
+    expect(h.view.posAtDOM(drawn!)).toBe(mark.range.from);
+    expect(h.insertHere(rej.id)).toEqual({ status: "previewing", line: 2 });
+    const p = live.insertHerePreview(rej.id);
+    if ("refused" in p) throw new Error(`insertHerePreview refused: ${p.refused}`);
+    expect(p).toEqual({ at: 8, text: "WÖRLD😀", removed: true });
+    const widget = h.view.dom.querySelector(".cm-mpc-insert-preview")!;
+    expect(widget.textContent).toBe(p.text);
+    expect(h.view.posAtDOM(widget)).toBe(p.at);
+    expect(h.confirmInsert()).toEqual({ status: "applied" });
+    // the person's caret after the inserted text
+    expect(h.view.state.selection.main.head).toBe(p.at + p.text.length);
+    await settle(s.net);
+    expect(s.server.text).toBe("😀\n日本🎉 WÖRLD😀earth\n");
+    expect(doc(h)).toBe(s.server.text);
+    expect(live.marks()).toEqual([]);
   });
 
   it("a pure insertion's preview note doesn't mention removed text", async () => {

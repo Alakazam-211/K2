@@ -616,12 +616,18 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(stash.querySelector('[stroke]')).toBeNull()
     expect(Number(plus.querySelector('rect')?.getAttribute('width'))).toBe(2)
     const { w, outer, inner } = stashBookmarkShape(12)
-    expect(inner[0]).toEqual([2, 2])
-    expect(inner[1]).toEqual([w - 2, 2])
-    const [, , [bx, by], [ax, ay]] = outer
-    const [, , [ix, iy]] = inner
-    const dist = Math.abs((ay - by) * ix - (ax - bx) * iy + ax * by - ay * bx) / Math.hypot(ay - by, ax - bx)
-    expect(dist).toBeCloseTo(2, 6)
+    // Option D (Rosson 2026-11-01): both top corners cut 2px at 45°, exactly as the
+    // options page drew it.
+    expect(w).toBe(10)
+    expect(outer.map(([x, y]) => [x, y])).toEqual([[2, 0], [8, 0], [10, 2], [10, 12], [5, 8], [0, 12], [0, 2]])
+    const r = (pts: Array<[number, number]>): number[][] => pts.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)])
+    expect(r(inner)).toEqual([[2.828, 2], [7.172, 2], [8, 2.828], [8, 7.839], [5, 5.439], [2, 7.839], [2, 2.828]])
+    // the line is 2px everywhere: across a cut corner and across the notch
+    const gap = (a: [number, number], b: [number, number], p: [number, number]): number =>
+      Math.abs((b[1] - a[1]) * p[0] - (b[0] - a[0]) * p[1] + b[0] * a[1] - b[1] * a[0]) / Math.hypot(b[1] - a[1], b[0] - a[0])
+    expect(gap(outer[0], outer[6], inner[0])).toBeCloseTo(2, 6)
+    expect(gap(outer[1], outer[2], inner[2])).toBeCloseTo(2, 6)
+    expect(gap(outer[3], outer[4], inner[3])).toBeCloseTo(2, 6)
   })
 
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {

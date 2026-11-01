@@ -164,6 +164,11 @@ export function stashBookmarkShape(ink: number = STASH_BOOKMARK_INK): {
   const w = Math.round(ink * (5 / 6))
   const t = STASH_BOOKMARK_WEIGHT
   const notch = Math.round(h * 0.3)
+  // Both top corners cut at 45° (Rosson 2026-11-01, option D: the square Style's chamfer):
+  // `cut` along each edge; the hole's corner lines are the same cuts moved t inward, so the
+  // line stays t wide across them (t·(√2 − 1) further along each edge).
+  const cut = Math.round(h / 6)
+  const holeCut = cut + t * (Math.SQRT2 - 1)
   // The bottom edges run from each corner (0|w, h) up to the notch (w/2, h - notch);
   // the hole's are the same lines moved t inward.
   const half = w / 2
@@ -171,25 +176,30 @@ export function stashBookmarkShape(ink: number = STASH_BOOKMARK_INK): {
   const apexY = h - notch - (t * len) / half
   const cornerY = h - notch + ((half - t) * notch - t * len) / half
   const outer: Array<[number, number]> = [
-    [0, 0],
-    [w, 0],
+    [cut, 0],
+    [w - cut, 0],
+    [w, cut],
     [w, h],
     [half, h - notch],
     [0, h],
+    [0, cut],
   ]
   const inner: Array<[number, number]> = [
-    [t, t],
-    [w - t, t],
+    [holeCut, t],
+    [w - holeCut, t],
+    [w - t, holeCut],
     [w - t, cornerY],
     [half, apexY],
     [t, cornerY],
+    [t, holeCut],
   ]
   return { w, h, outer, inner }
 }
 
 /** The bookmark drawn the way the box's "+" and "/" are (Rosson 2026-10-31:
  *  same weight and height): filled, in pixel units, a 2px line, its ink
- *  exactly as tall as the "+". */
+ *  exactly as tall as the "+"; both top corners chamfered (option D,
+ *  Rosson 2026-11-01, .k2/mockups/stash-icon-options.html). */
 export function ComposeBookmarkGlyph({ ink = STASH_BOOKMARK_INK }: { ink?: number }): JSX.Element {
   const { w, h, outer, inner } = stashBookmarkShape(ink)
   const path = (pts: Array<[number, number]>): string =>

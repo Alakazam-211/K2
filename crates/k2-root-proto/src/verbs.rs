@@ -318,6 +318,14 @@ pub enum SewVerb {
     /// The mgmt token (`sewsvc_…`) for the daemon: SW7 lets its uid onto the
     /// socket without the `sew-mgmt` group, so it can't read the file.
     Token,
+    /// Stdin: [`crate::sew::MirrorDirRequest`] (protocol 12, 0.46.8,
+    /// `namespaces.sewmirror`): create Sew's keyring mirror folder
+    /// `<ship path>/sew-keyring-<install id>/` owned by `sew:sew`, mode 0700,
+    /// never through a link (SW-8; the daemon then points `keys.mirror.path`
+    /// at it with `config`). The ship folder must exist; an existing mirror
+    /// folder is kept (owner and mode reset). Sew writes the mirror as `sew`,
+    /// which the daemon can't create for it.
+    MirrorDir,
     /// Stdin: [`crate::sew::MediaRequest`] → `sew media install
     /// --config-json` with the staged media tarball (Sew writes its own
     /// sysctl drop-in when `sysctl` is `apply`). TURN TLS PEM text in the
@@ -386,6 +394,7 @@ impl SewVerb {
             ["drop-prev"] => Self::DropPrev,
             ["restore", id] if crate::sew::bundle_id_ok(id) => Self::Restore(id.to_string()),
             ["token"] => Self::Token,
+            ["mirror-dir"] => Self::MirrorDir,
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
             ["media", "upgrade"] => Self::MediaUpgrade,
@@ -429,6 +438,7 @@ impl SewVerb {
             Self::DropPrev => s(&["drop-prev"]),
             Self::Restore(id) => s(&["restore", id]),
             Self::Token => s(&["token"]),
+            Self::MirrorDir => s(&["mirror-dir"]),
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
             Self::MediaUpgrade => s(&["media", "upgrade"]),
@@ -475,6 +485,7 @@ impl SewVerb {
             | Self::DropPrev
             | Self::Restore(_)
             | Self::Token
+            | Self::MirrorDir
             | Self::MediaInstall
             | Self::MediaUninstall
             | Self::MediaUpgrade
@@ -493,6 +504,7 @@ impl SewVerb {
             Self::Install
             | Self::InstallReconfigure
             | Self::Config
+            | Self::MirrorDir
             | Self::MediaInstall
             | Self::MediaReconfigure { .. }
             | Self::MediaTurnCert => {
@@ -530,6 +542,7 @@ impl SewVerb {
             Self::DropPrev,
             Self::Restore("20260927T031512Z".into()),
             Self::Token,
+            Self::MirrorDir,
             Self::MediaInstall,
             Self::MediaUninstall,
             Self::MediaUpgrade,
@@ -2819,6 +2832,7 @@ mod tests {
             &["engine", "sew", "drop-prev"],
             &["engine", "sew", "restore", "20260927T031512Z"],
             &["engine", "sew", "token"],
+            &["engine", "sew", "mirror-dir"],
             &["engine", "sew", "install", "reconfigure"],
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],

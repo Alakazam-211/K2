@@ -76,9 +76,14 @@
 //!   shipped it unchanged): the :80 front for custom domains Path B / PB-8
 //!   (`front http install|remove|status`: the canned `k2-front-80.socket`
 //!   handed to the daemon like :443's), under `namespaces.front80`,
-//!   [`FRONT80_MIN_PROTOCOL`]. Another 0.46.8 lane that needs a helper
-//!   change joins 12 here with its own namespace flag; never 13 before 12
-//!   ships.
+//!   [`FRONT80_MIN_PROTOCOL`]; the voice tunnel's new `MediaRequest` keys
+//!   `turn_trusted_cidrs` and `ice_relay_only` (voice rooms PRD §6.6 M7/M9; an
+//!   11 helper refuses any unknown key) under `namespaces.sewtunnel`,
+//!   [`SEW_TUNNEL_MIN_PROTOCOL`]; and `engine sew mirror-dir` (the keyring
+//!   mirror folder `<ship>/sew-keyring-<install id>/`, created `sew:sew 0700`,
+//!   SW-8) under `namespaces.sewmirror`, [`SEW_MIRROR_DIR_MIN_PROTOCOL`].
+//!   Another 0.46.8 lane that needs a helper change joins 12 here with its own
+//!   namespace flag; never 13 before 12 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -117,6 +122,13 @@ pub const SEW_MIN_PROTOCOL: u32 = 7;
 /// `engine sew install reconfigure` (0.46.6). Gated on this AND
 /// `namespaces.sewreconf == true` in `helper version`.
 pub const SEW_RECONFIGURE_MIN_PROTOCOL: u32 = 11;
+/// The voice tunnel's media keys (`turn_trusted_cidrs`, `ice_relay_only`;
+/// 0.46.8, voice rooms §6.6 M7/M9). Gated on this AND
+/// `namespaces.sewtunnel == true`: an older helper refuses the request.
+pub const SEW_TUNNEL_MIN_PROTOCOL: u32 = 12;
+/// `engine sew mirror-dir` (0.46.8, SW-8 keyring mirror folder). Gated on
+/// this AND `namespaces.sewmirror == true`.
+pub const SEW_MIRROR_DIR_MIN_PROTOCOL: u32 = 12;
 /// `apps podman install|uninstall` (K2's Podman 5 bundle, 0.46.1 lane P).
 /// Rides 0.46.1's one helper bump, 8 (7 shipped in 0.46.0 for Sew).
 pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
@@ -300,6 +312,12 @@ mod tests {
         assert_eq!(PROTOCOL, 12, "protocol 12 = 0.46.8's one bump (the :80 front); 11 = 0.46.6's (Sew install reconfigure)");
         assert_eq!(FRONT80_MIN_PROTOCOL, 12, "the :80 front joins 0.46.8's one bump");
         assert_eq!(SEW_RECONFIGURE_MIN_PROTOCOL, 11, "Sew reconfigure joins 0.46.6's one bump");
+        assert_eq!(SEW_TUNNEL_MIN_PROTOCOL, 12, "the voice tunnel joins 0.46.8's one bump");
+        assert_eq!(SEW_MIRROR_DIR_MIN_PROTOCOL, 12, "mirror-dir joins 0.46.8's one bump; never its own");
+        assert!(
+            crate::verbs::catalog().iter().any(|v| v.argv() == ["engine", "sew", "mirror-dir"]),
+            "protocol 12 carries engine sew mirror-dir"
+        );
         assert_eq!(CREDS_MIN_PROTOCOL, 10, "creds joins 0.46.4's one bump; never 11 before 10 ships");
         let creds: Vec<_> = crate::verbs::catalog().into_iter().filter(|v| v.namespace() == "creds").collect();
         assert_eq!(creds.len(), 6, "creds status|put|bind|unbind|restart|remove: {creds:?}");

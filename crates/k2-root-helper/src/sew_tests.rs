@@ -94,6 +94,8 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     // additive, so the Sew namespace is still here).
     assert_eq!(v["protocol"], 12, "11 was 0.46.6's one bump; 12 is 0.46.8's (additive)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
+    assert_eq!(v["namespaces"]["sewtunnel"], true, "the voice tunnel's media keys (0.46.8)");
+    assert_eq!(v["namespaces"]["sewmirror"], true, "mirror-dir (0.46.8)");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::SEW_MIN_PROTOCOL));
     assert_eq!(v["namespaces"]["sew"], true);
@@ -1824,6 +1826,85 @@ fn media_reconfigure_sets_the_voice_url_without_a_tarball() {
         sew_calls(&t)[1].0,
         vec!["media", "install", "--reconfigure", "--restart", "--now", "--config-json", path.as_str(), "--json"]
     );
+}
+
+/// Protocol 12 (voice rooms §6.6 M7/M9): the tunnel tier's keys reach Sew's
+/// config JSON as sent; anything but loopback CIDRs is refused before Sew
+/// runs, and no node IP is needed.
+#[test]
+fn media_reconfigure_carries_the_tunnel_keys() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"changed":["/etc/sew/sew.toml [voice.ops]"],"restart_required":[]}"#);
+    let seen = capture_turn_files(&t);
+    for bad in [
+        &br#"{"turn_trusted_cidrs":["0.0.0.0/0"],"ice_relay_only":true}"#[..],
+        br#"{"turn_trusted_cidrs":[],"ice_relay_only":true}"#,
+        br#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
+        br#"{"ice_relay_only":"true"}"#,
+    ] {
+        assert_eq!(t.call_in(&["engine", "sew", "media", "reconfigure"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    assert!(sew_calls(&t).is_empty());
+    ok(&t.call_in(
+        &["engine", "sew", "media", "reconfigure", "restart-now"],
+        br#"{"turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"ice_relay_only":true}"#,
+    ));
+    let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
+    assert_eq!(
+        j,
+        serde_json::json!({
+            "turn_domain": "turn.box.k2.dev",
+            "turn_trusted_cidrs": ["127.0.0.1/32", "::1/128"],
+            "ice_relay_only": true,
+            "profile": "shared",
+        })
+    );
+}
+
+/// Protocol 12 (SW-8): `engine sew mirror-dir` makes the keyring mirror
+/// folder under an existing ship folder, never through a link, and runs
+/// nothing of Sew.
+#[test]
+fn mirror_dir_makes_the_keyring_folder_under_the_ship_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = box_root();
+    let body = br#"{"shipPath":"/mnt/backup","installId":"48831765147549701"}"#;
+    assert_eq!(t.call_in(&["engine", "sew", "mirror-dir"], body).code, exit::STATE, "no ship folder yet");
+    std::fs::create_dir_all(t.p("/mnt/backup")).unwrap();
+    let o = t.call_in(&["engine", "sew", "mirror-dir"], body);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["path"], "/mnt/backup/sew-keyring-48831765147549701");
+    assert_eq!(v["created"], true);
+    let dir = t.p("/mnt/backup/sew-keyring-48831765147549701");
+    let meta = std::fs::symlink_metadata(&dir).unwrap();
+    assert!(meta.is_dir());
+    assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    // Idempotent: kept, mode reset.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let o = t.call_in(&["engine", "sew", "mirror-dir"], body);
+    ok(&o);
+    assert_eq!(json(&o)["created"], false);
+    assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+    // Never through a link: a linked mirror folder or a linked ship folder.
+    std::fs::create_dir_all(t.p("/mnt/other")).unwrap();
+    std::os::unix::fs::symlink(t.p("/mnt/other"), t.p("/mnt/backup/sew-keyring-1")).unwrap();
+    let o = t.call_in(&["engine", "sew", "mirror-dir"], br#"{"shipPath":"/mnt/backup","installId":"1"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    std::os::unix::fs::symlink(t.p("/mnt/other"), t.p("/mnt/linked")).unwrap();
+    let o = t.call_in(&["engine", "sew", "mirror-dir"], br#"{"shipPath":"/mnt/linked","installId":"1"}"#);
+    assert_ne!(o.code, 0, "a linked ship folder is refused");
+    assert!(!t.p("/mnt/other/sew-keyring-1").exists());
+    for bad in [
+        &br#"{"shipPath":"/var/lib/sew","installId":"1"}"#[..],
+        br#"{"shipPath":"/mnt/backup","installId":"none"}"#,
+        br#"{"shipPath":"/mnt/backup"}"#,
+        br#"{"shipPath":"/mnt/backup","installId":"1","mode":"0777"}"#,
+    ] {
+        assert_eq!(t.call_in(&["engine", "sew", "mirror-dir"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    assert!(sew_calls(&t).is_empty(), "Sew never runs");
 }
 
 /// front443: `passthrough` reaches only a Sew that knows it (0.2.1+). An

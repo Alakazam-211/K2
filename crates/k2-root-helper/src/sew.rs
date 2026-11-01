@@ -146,6 +146,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         }
         SewVerb::Restore(id) => restore(ctx, id),
         SewVerb::Token => token(ctx),
+        SewVerb::MirrorDir => mirror_dir(ctx, stdin),
         SewVerb::MediaInstall => media_install(ctx, stdin),
         SewVerb::MediaUpgrade => media_upgrade(ctx),
         SewVerb::MediaRollback => media_rollback(ctx),
@@ -964,6 +965,55 @@ fn config(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
         results.push(json!({"key": k, "result": r}));
     }
     Ok(json!({"sewExit": 0, "results": results}))
+}
+
+/// `engine sew mirror-dir` (protocol 12, SW-8): Sew's keyring mirror folder
+/// `<ship>/sew-keyring-<install id>/`, owned by `sew:sew`, mode 0700, under
+/// an existing ship folder reached without a link. An existing folder is
+/// kept (owner and mode reset) unless it belongs to someone other than
+/// `sew` or root. Never follows a link, never creates the ship folder.
+fn mirror_dir(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
+    let req: MirrorDirRequest = parse_json(stdin, "mirror-dir refused: input")?;
+    req.validate().map_err(Fail::argv)?;
+    let ship = match ctx.dir(&req.ship_path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Fail::state("mirror-dir refused: the ship folder does not exist"));
+        }
+        Err(e) => return Err(Fail::io_err("mirror-dir refused: ship folder", e)),
+    };
+    let (uid, gid) = if ctx.real_owners {
+        let (u, g) = crate::sys::ids_of_user("sew")
+            .ok_or_else(|| Fail::state("mirror-dir refused: no sew account (Sew is not installed)"))?;
+        if u == 0 {
+            return Err(Fail::state("mirror-dir refused: the sew account is uid 0"));
+        }
+        (u, g)
+    } else {
+        // Tests: ourselves (they never run as root).
+        // SAFETY: no preconditions.
+        unsafe { (libc::getuid(), libc::getgid()) }
+    };
+    let name = req.dir_name();
+    let n = OsStr::new(&name);
+    let created = match ship.kind(n).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Missing => {
+            ship.mkdir(n, 0o700).map_err(|e| Fail::io_err("mkdir", e))?;
+            true
+        }
+        Kind::Dir => false,
+        _ => return Err(Fail::state("mirror-dir refused: a link or a file is where the mirror folder goes")),
+    };
+    let d = ship.sub(n).map_err(|e| Fail::io_err("mirror-dir refused: open", e))?;
+    if !created {
+        let st = d.stat_self().map_err(|e| Fail::io_err("stat", e))?;
+        if st.st_uid != uid && st.st_uid != 0 {
+            return Err(Fail::state("mirror-dir refused: the mirror folder belongs to another user"));
+        }
+    }
+    d.fchown(uid, gid).map_err(|e| Fail::io_err("chown", e))?;
+    d.fchmod(0o700).map_err(|e| Fail::io_err("chmod", e))?;
+    Ok(json!({"path": req.mirror_path(), "created": created, "owner": "sew", "mode": "0700"}))
 }
 
 fn rotate_master(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {

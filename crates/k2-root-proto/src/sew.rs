@@ -1806,6 +1806,29 @@ pub struct MediaRequest {
     /// [`turn_key_pem_ok`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_key_pem: Option<String>,
+    /// Protocol 12 (0.46.8, voice rooms §6.6 M7): `voice.ops.
+    /// turn_trusted_cidrs`, the peers sew-media takes PROXY v2 from: a
+    /// non-empty subset of [`TURN_TRUSTED_LOOPBACK`] (frpc-voice dials from
+    /// loopback). An 11 helper refuses the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_trusted_cidrs: Option<Vec<String>>,
+    /// Protocol 12 (§6.6 M9): `voice.ops.ice_relay_only`: `true` with the
+    /// tunnel tier (no host or srflx candidates), `false` in direct mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ice_relay_only: Option<bool>,
+}
+
+/// The only PROXY v2 sources K2 lets sew-media trust (§6.6 M7): loopback,
+/// where frpc-voice dials from. Sew's own default (`127.0.0.0/8`) is wider,
+/// so K2 sets these explicitly.
+pub const TURN_TRUSTED_LOOPBACK: [&str; 2] = ["127.0.0.1/32", "::1/128"];
+
+/// A trusted-CIDR list K2 may send: non-empty, each entry one of
+/// [`TURN_TRUSTED_LOOPBACK`], none twice.
+pub fn turn_trusted_cidrs_ok(cidrs: &[String]) -> bool {
+    !cidrs.is_empty()
+        && cidrs.iter().all(|c| TURN_TRUSTED_LOOPBACK.contains(&c.as_str()))
+        && cidrs.iter().enumerate().all(|(i, c)| !cidrs[..i].contains(c))
 }
 
 impl MediaRequest {
@@ -1862,7 +1885,15 @@ impl MediaRequest {
             }
             _ => return Err("media refused: turn_cert_pem and turn_key_pem go together"),
         }
+        if self.turn_trusted_cidrs.as_deref().is_some_and(|c| !turn_trusted_cidrs_ok(c)) {
+            return Err("media refused: turn_trusted_cidrs");
+        }
         Ok(())
+    }
+
+    /// The request carries a protocol-12 key (the voice tunnel's).
+    pub fn needs_tunnel_keys(&self) -> bool {
+        self.turn_trusted_cidrs.is_some() || self.ice_relay_only.is_some()
     }
 
     /// True when this request carries TURN TLS material.
@@ -1889,6 +1920,41 @@ impl MediaRequest {
         }
         v["profile"] = serde_json::json!("shared");
         v
+    }
+}
+
+/// `engine sew mirror-dir` stdin (protocol 12, SW-8): where Sew's keyring
+/// mirror folder goes. The helper creates `<ship_path>/sew-keyring-<install_id>`
+/// (`sew:sew`, 0700) under an existing ship folder, never through a link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MirrorDirRequest {
+    /// The backup (ship) folder: [`mirror_path_ok`], and it must exist.
+    pub ship_path: String,
+    /// Sew's install id ([`install_id_ok`], never `none`).
+    pub install_id: String,
+}
+
+impl MirrorDirRequest {
+    /// `sew-keyring-<install id>`.
+    pub fn dir_name(&self) -> String {
+        format!("sew-keyring-{}", self.install_id)
+    }
+
+    /// The folder the helper creates (and the daemon then names as
+    /// `keys.mirror.path`).
+    pub fn mirror_path(&self) -> String {
+        format!("{}/{}", self.ship_path, self.dir_name())
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.install_id == "none" || !install_id_ok(&self.install_id) {
+            return Err("mirror-dir refused: installId");
+        }
+        if self.ship_path == "/" || !mirror_path_ok(&self.ship_path) || !mirror_path_ok(&self.mirror_path()) {
+            return Err("mirror-dir refused: shipPath");
+        }
+        Ok(())
     }
 }
 
@@ -2682,6 +2748,63 @@ mod tests {
         assert!(TurnCertRequest { cert_pem: "x".into(), key_pem: t.key_pem.clone() }.validate().is_err());
         assert!(serde_json::from_str::<TurnCertRequest>(r#"{"cert_pem":"a","key_pem":"b","cert":"/etc/x"}"#).is_err());
         assert!(probe_result_ok("ok") && probe_result_ok("fail") && !probe_result_ok("OK") && !probe_result_ok(""));
+    }
+
+    /// Protocol 12 (voice rooms §6.6 M5/M7/M9): the tunnel tier's request.
+    #[test]
+    fn tunnel_tier_keys_are_loopback_only_and_reach_sews_json() {
+        let r: MediaRequest = serde_json::from_str(
+            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"ice_relay_only":true}"#,
+        )
+        .unwrap();
+        r.validate_reconfigure().unwrap();
+        assert!(r.needs_tunnel_keys());
+        assert!(r.node_ip.is_none(), "the tunnel tier sends no node IP");
+        let inputs = r.sew_inputs(None, None);
+        assert_eq!(inputs["turn_trusted_cidrs"], serde_json::json!(["127.0.0.1/32", "::1/128"]));
+        assert_eq!(inputs["ice_relay_only"], true);
+        assert_eq!(inputs["turn_domain"], "turn.box.k2.dev");
+        let direct: MediaRequest = serde_json::from_str(r#"{"ice_relay_only":false}"#).unwrap();
+        direct.validate_reconfigure().unwrap();
+        assert!(direct.needs_tunnel_keys());
+        let old: MediaRequest = serde_json::from_str(r#"{"turn_tls":"direct"}"#).unwrap();
+        assert!(!old.needs_tunnel_keys(), "a pre-0.46.8 request stays protocol-11 clean");
+        assert!(old.sew_inputs(None, None).get("ice_relay_only").is_none());
+        for bad in [
+            r#"{"turn_trusted_cidrs":[]}"#,
+            r#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
+            r#"{"turn_trusted_cidrs":["0.0.0.0/0"]}"#,
+            r#"{"turn_trusted_cidrs":["127.0.0.1/32","127.0.0.1/32"]}"#,
+            r#"{"turn_trusted_cidrs":["10.0.0.1/32"]}"#,
+        ] {
+            let m: MediaRequest = serde_json::from_str(bad).unwrap();
+            assert!(m.validate_reconfigure().is_err(), "{bad}");
+        }
+        assert!(serde_json::from_str::<MediaRequest>(r#"{"ice_relay_only":"yes"}"#).is_err());
+    }
+
+    #[test]
+    fn mirror_dir_requests_stay_under_a_safe_ship_folder() {
+        let ok = MirrorDirRequest { ship_path: "/mnt/backup/k2".into(), install_id: "48831765147549701".into() };
+        ok.validate().unwrap();
+        assert_eq!(ok.mirror_path(), "/mnt/backup/k2/sew-keyring-48831765147549701");
+        for (ship, id) in [
+            ("/mnt/backup", "none"),
+            ("/mnt/backup", "0123"),
+            ("/mnt/backup", "../x"),
+            ("/", "48831765147549701"),
+            ("/var/lib/sew", "48831765147549701"),
+            ("/etc/x", "48831765147549701"),
+            ("/home/k2/.k2/ship", "48831765147549701"),
+            ("relative/path", "48831765147549701"),
+            ("/mnt/../etc", "48831765147549701"),
+            ("/mnt/backup/", "48831765147549701"),
+            ("/mnt/$(id)", "48831765147549701"),
+        ] {
+            let r = MirrorDirRequest { ship_path: ship.into(), install_id: id.into() };
+            assert!(r.validate().is_err(), "{ship} {id}");
+        }
+        assert!(serde_json::from_str::<MirrorDirRequest>(r#"{"shipPath":"/mnt/b","installId":"1","owner":"root"}"#).is_err());
     }
 
     #[test]

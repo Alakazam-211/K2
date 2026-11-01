@@ -1236,6 +1236,16 @@ pub fn sew_has(flag: &str) -> Result<bool, String> {
     crate::skin::with_skin_conn(|conn| features::has(conn, CHAT_KIND, flag))
 }
 
+/// Sew 0.7.0's voice flags ([`features::VoiceFeatures`]), from the one
+/// list the last status refresh recorded (one read; all false before any
+/// sweep, or on a box without Sew).
+pub fn sew_voice_features() -> Result<features::VoiceFeatures, String> {
+    if !skin_store_exists() {
+        return Ok(features::VoiceFeatures::default());
+    }
+    crate::skin::with_skin_conn(|conn| features::VoiceFeatures::read(conn, CHAT_KIND))
+}
+
 /// Every flag the box's Sew last reported (empty before any sweep).
 pub fn sew_features() -> Result<Vec<String>, String> {
     if !skin_store_exists() {

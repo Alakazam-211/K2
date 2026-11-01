@@ -20,6 +20,7 @@
 //! | [`ErrorBody`], [`ApiError`], [`codes`] | `error.rs` |
 //! | [`reasons`] | `mgmt.rs` `reasons` |
 //! | [`AddMembersOutcome`] | `api/spaces.rs` `AddSpaceMembersResponse` / `api/channels.rs` `AddChannelMembersResponse` (HC2 `skipped`) |
+//! | [`ServerSpaceCreateRequest`] … [`MediaPathResponse`] | Sew 0.7.0 (sew-56 v1.1d §2.2, K2 PRD v1.9 §6.6): SW-1, SW-3, SW-4, SW-11, not released yet |
 //!
 //! Differences on purpose (all of them additive-safe for K2 as a client):
 //! - Ids (`Id`) and timestamps (`Timestamp`) are kept as `String`: K2 never
@@ -116,6 +117,12 @@ pub enum ExternalId {
     /// `app:<app>:<user>` (App-native users, not in 0.6.0) stays
     /// [`ExternalId::Other`] when read, and is never sent.
     AppService(String),
+    /// Sew 0.7.0 SW-1 (flag `server_governed_space`): K2's **service
+    /// owner**, exactly `k2:server`. It owns the box's one K2 Admin Space
+    /// (governance `server`), never signs in (a pass for it answers 401),
+    /// is hidden as a person and is never provisioned. Sew makes it on the
+    /// first `spaces/create` that names it.
+    K2Server,
     /// Not in sew-proto: a form this mirror does not know yet (e.g. a
     /// Meet link guest `link:<channel>:<id>`, K-M6). Only produced by
     /// lenient deserialization, so a newer Sew's member list still parses;
@@ -128,9 +135,12 @@ impl ExternalId {
     pub fn parse(s: &str) -> Result<ExternalId, String> {
         let bad = || {
             format!(
-                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner, app:<app id> or local:<handle>"
+                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner, k2:server, app:<app id> or local:<handle>"
             )
         };
+        if s == K2_SERVER {
+            return Ok(ExternalId::K2Server);
+        }
         if let Some(u) = s.strip_prefix("k2:connect:") {
             return if is_lower_uuid(u) {
                 Ok(ExternalId::K2Connect(u.to_string()))
@@ -193,6 +203,19 @@ impl ExternalId {
     pub fn app_service(app_id: &str) -> Result<ExternalId, String> {
         ExternalId::parse(&format!("app:{app_id}"))
     }
+
+    /// A service owner (`app:<app_id>` or `k2:server`): owns Spaces, never
+    /// signs in, never provisioned or synced by K2 as a person.
+    pub fn is_service_owner(&self) -> bool {
+        matches!(self, ExternalId::AppService(_) | ExternalId::K2Server)
+    }
+
+    /// SW-1: an id Sew refuses in a `server` Space with `422 invalid_state`
+    /// `app_user_not_allowed` (`k2:principal:` App users and `app:` ids).
+    /// K2 never sends one there.
+    pub fn is_app_user_or_app(&self) -> bool {
+        matches!(self, ExternalId::K2Principal(_) | ExternalId::AppService(_))
+    }
 }
 
 impl fmt::Display for ExternalId {
@@ -202,6 +225,7 @@ impl fmt::Display for ExternalId {
             ExternalId::K2Workspace(u) => write!(f, "k2:workspace:{u}"),
             ExternalId::K2Connect(u) => write!(f, "k2:connect:{u}"),
             ExternalId::K2Owner => f.write_str("k2:owner"),
+            ExternalId::K2Server => f.write_str(K2_SERVER),
             ExternalId::Local(h) => write!(f, "local:{h}"),
             ExternalId::AppService(a) => write!(f, "app:{a}"),
             ExternalId::Other(raw) => f.write_str(raw),
@@ -502,6 +526,30 @@ pub struct Status {
     /// Sew: none.
     #[serde(default)]
     pub features: Vec<String>,
+    /// Sew 0.7.0: `status.voice` (K2 reads only `media_path`, SW-11).
+    /// Absent on an older Sew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<StatusVoice>,
+}
+
+/// `status.voice`, the part K2 reads. Unknown fields ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusVoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_path: Option<MediaPathStatus>,
+}
+
+/// SW-11 `status.voice.media_path {state, since, media_path_reason}`.
+/// Sew keeps it in memory and starts `up` (K2 re-asserts `down`, M11).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaPathStatus {
+    /// [`MEDIA_PATH_UP`] | [`MEDIA_PATH_DOWN`].
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_path_reason: Option<String>,
 }
 
 /// One row of `GET /mgmt/v1/principals` (S27-A5: no `guest` bool, no
@@ -1016,6 +1064,323 @@ pub struct ChannelsBulkResponse {
     pub results: Vec<ChannelOpResult>,
 }
 
+// ── K2 voice rooms: Sew 0.7.0 (sew-56 v1.1d §2.2, frozen 11-01) ───────
+//
+// The shared interface, word for word (K2 PRD v1.9 §6.6 2.2). Sew 0.7.0 is
+// not released; K2's fake Sew speaks exactly these. Feature flags:
+// [`super::features::SERVER_GOVERNED_SPACE`] (SW-1),
+// [`super::features::MGMT_VOICE_STATES`] (SW-3),
+// [`super::features::VOICE_CHANNEL_CLOSING`] (SW-4),
+// [`super::features::VOICE_MEDIA_PATH`] (SW-11).
+//
+// Sew's own types carry one `app_id: Option<String>` on the member-channels
+// sync and `channels/bulk`; this mirror keeps the App-Space types as they
+// are (`app_id` required) and adds `Server*` twins with no `app_id` field,
+// so a server-Space body can never carry one by mistake.
+
+/// SW-1: K2's service owner (`ExternalId::K2Server`).
+pub const K2_SERVER: &str = "k2:server";
+/// SW-1: the one server-governed Space's slug, reserved by Sew (any other
+/// create naming it answers `422 validation_failed` `slug_reserved`).
+pub const ADMIN_SPACE_SLUG: &str = "k2-admin";
+/// SW-1 governance (beside [`GOVERNANCE_APP`] / [`GOVERNANCE_SEW`]). Only
+/// `spaces/create` sets it; `spaces/{id}/settings` can't switch to or from
+/// it (`409 server_governance_fixed`).
+pub const GOVERNANCE_SERVER: &str = "server";
+
+/// `POST`: create a Space over mgmt (SW11; SW-1 adds `governance`).
+pub const MGMT_SPACES_CREATE: &str = "/mgmt/v1/spaces/create";
+
+/// SW-1 `MgmtSpaceCreateRequest` as K2 sends it for the Admin Space:
+/// `{"slug": "k2-admin", "name", "owner": "k2:server", "governance":
+/// "server"}`. No `app_id`, no managers, not hidden.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerSpaceCreateRequest {
+    pub slug: String,
+    /// 1–100 characters: the server's display name, else its label.
+    pub name: String,
+    pub owner: ExternalId,
+    pub governance: String,
+}
+
+impl ServerSpaceCreateRequest {
+    /// The K2 Admin Space named `name`.
+    pub fn admin(name: &str) -> ServerSpaceCreateRequest {
+        ServerSpaceCreateRequest {
+            slug: ADMIN_SPACE_SLUG.into(),
+            name: name.into(),
+            owner: ExternalId::K2Server,
+            governance: GOVERNANCE_SERVER.into(),
+        }
+    }
+
+    /// The rules Sew checks that K2 could break.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.slug != ADMIN_SPACE_SLUG {
+            return Err(format!("slug: a server Space's slug is {ADMIN_SPACE_SLUG}"));
+        }
+        if self.owner != ExternalId::K2Server {
+            return Err(format!("owner: a server Space's owner is {K2_SERVER}"));
+        }
+        if self.governance != GOVERNANCE_SERVER {
+            return Err("governance: only server is accepted on create".into());
+        }
+        let n = self.name.chars().count();
+        if !(1..=100).contains(&n) {
+            return Err("name: must be 1–100 characters".into());
+        }
+        Ok(())
+    }
+}
+
+/// `MgmtSpaceCreateResponse` as today plus SW-1's `governance`, read
+/// leniently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceCreateResponse {
+    pub space_id: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub owner_member_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default)]
+    pub created: bool,
+    /// SW-1: `server` for the Admin Space (absent on an older Sew).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<String>,
+}
+
+/// Levels in a `server` Space (SW-1 §5): `member` and `moderator` only
+/// (`admin` answers `422 invalid_state` `level_above_ceiling`).
+pub const LEVEL_MEMBER: &str = "member";
+pub const LEVEL_MODERATOR: &str = "moderator";
+pub const SERVER_LEVELS: [&str; 2] = [LEVEL_MEMBER, LEVEL_MODERATOR];
+
+/// SW-1 single level sync in a `server` Space: I4's body with `app_id`
+/// omitted (`POST /mgmt/v1/spaces/{id}/members/{ext}/channels`). The
+/// Admin Space has no private channels, so K2 sends `channel_ids: []`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerMemberChannelsRequest {
+    pub channel_ids: Vec<String>,
+    pub level: String,
+}
+
+/// SW-1 bulk level sync in a `server` Space (`POST /mgmt/v1/spaces/{id}/
+/// members/channels`, 1–500 items, `app_id` omitted). Answered as
+/// [`MemberChannelsBulkResponse`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerMemberChannelsBulkRequest {
+    pub items: Vec<MemberChannelsItem>,
+}
+
+/// SW-1 rooms: I6 `channels/bulk` in a `server` Space with `app_id`
+/// omitted. Answered as [`ChannelsBulkResponse`]; per-op errors as I6.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerChannelsBulkRequest {
+    pub space_id: String,
+    pub ops: Vec<ChannelOp>,
+}
+
+/// I6 op kinds K2 sends for rooms.
+pub mod channel_ops {
+    pub const ENSURE: &str = "ensure";
+    pub const RENAME: &str = "rename";
+    pub const ARCHIVE: &str = "archive";
+    pub const UNARCHIVE: &str = "unarchive";
+}
+
+/// A voice channel (`ChannelOp.kind`). K2 never asks for `voice:video`.
+pub const CHANNEL_TYPE_VOICE: &str = "voice";
+
+// SW-3: voice states for the daemon (flag `mgmt_voice_states`).
+
+/// `GET /mgmt/v1/spaces/{space_id}/voice/states`.
+pub fn voice_states_path(space_id: &str) -> String {
+    format!("/mgmt/v1/spaces/{space_id}/voice/states")
+}
+
+/// Longest `wait` the feed takes, seconds (`wait=0..30`).
+pub const VOICE_CHANGES_WAIT_MAX_S: u32 = 30;
+/// Most changes one feed read returns (`limit=1..500`).
+pub const VOICE_CHANGES_LIMIT_MAX: u32 = 500;
+
+/// `GET /mgmt/v1/spaces/{space_id}/voice/changes?after=<cursor>&wait=<s>&limit=<n>`.
+/// `wait` and `limit` are clamped to the contract's ranges. The cursor is
+/// opaque (`<epoch>.<seq>` today), percent-encoded. The caller's request
+/// timeout must be longer than `wait` (not the 10 s / 15 s mgmt default).
+pub fn voice_changes_path(space_id: &str, after: &str, wait_s: u32, limit: u32) -> String {
+    format!(
+        "/mgmt/v1/spaces/{space_id}/voice/changes?after={}&wait={}&limit={}",
+        pct_path(after),
+        wait_s.min(VOICE_CHANGES_WAIT_MAX_S),
+        limit.clamp(1, VOICE_CHANGES_LIMIT_MAX)
+    )
+}
+
+/// `MgmtVoiceState`: one person in a voice channel of the Space. Read
+/// leniently. `external_id` is Sew's (`k2:owner`, `k2:connect:<uuid>`);
+/// K2 maps the uuid to its login.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MgmtVoiceState {
+    pub channel_id: String,
+    pub member_id: String,
+    pub external_id: Option<ExternalId>,
+    /// `connecting` | `connected`.
+    #[serde(default)]
+    pub connection: String,
+    #[serde(default)]
+    pub self_mute: bool,
+    #[serde(default)]
+    pub self_deaf: bool,
+    #[serde(default)]
+    pub server_mute: bool,
+    #[serde(default)]
+    pub server_deaf: bool,
+    #[serde(default)]
+    pub joined_at: String,
+}
+
+/// `{"states": [MgmtVoiceState…], "cursor": "<opaque>"}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceStatesResponse {
+    #[serde(default)]
+    pub states: Vec<MgmtVoiceState>,
+    pub cursor: String,
+}
+
+/// `MgmtVoiceChange.kind` values (read as a string so a newer kind parses).
+pub mod voice_change {
+    pub const JOINED: &str = "joined";
+    pub const UPDATED: &str = "updated";
+    pub const LEFT: &str = "left";
+    pub const CHANNEL_CLOSING: &str = "channel_closing";
+    pub const CHANNEL_ARCHIVED: &str = "channel_archived";
+}
+
+/// `MgmtVoiceChange {seq, kind, channel_id, member_id?, external_id?,
+/// state?, reason?}`. `reason` is the leave reason (e.g.
+/// [`leave_reasons::MEDIA_PATH_DOWN`], [`leave_reasons::CHANNEL_ARCHIVED`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MgmtVoiceChange {
+    pub seq: u64,
+    pub kind: String,
+    pub channel_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<ExternalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<MgmtVoiceState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `{"changes": [MgmtVoiceChange…], "next": "<cursor>"}`. On `410 gone`
+/// `cursor_expired` (`details.head`), re-read `voice/states`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceChangesResponse {
+    #[serde(default)]
+    pub changes: Vec<MgmtVoiceChange>,
+    pub next: String,
+}
+
+/// Leave reasons K2 reads (Sew's `LeaveReason`, snake_case).
+pub mod leave_reasons {
+    /// Archiving a voice channel ends its calls.
+    pub const CHANNEL_ARCHIVED: &str = "channel_archived";
+    /// SW-11 (code 28): K2 reported the media path down.
+    pub const MEDIA_PATH_DOWN: &str = "media_path_down";
+    /// `spaces/members/remove` ends the person's voice in that Space.
+    pub const REMOVED_FROM_SPACE: &str = "removed_from_space";
+}
+
+// SW-4: closing a voice channel (flag `voice_channel_closing`).
+
+/// `POST /mgmt/v1/channels/{channel_id}/closing`.
+pub fn channel_closing_path(channel_id: &str) -> String {
+    format!("/mgmt/v1/channels/{channel_id}/closing")
+}
+
+/// `{"closing": true|false}` (no `disconnect` flag: archiving already ends
+/// calls, so "Close now" is notice → 10 s → archive).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelClosingRequest {
+    pub closing: bool,
+}
+
+/// `{"closing": bool, "archived": bool}`: an empty room is archived at
+/// once (`archived: true`); a live one stays until its last person leaves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelClosingResponse {
+    #[serde(default)]
+    pub closing: bool,
+    #[serde(default)]
+    pub archived: bool,
+}
+
+// SW-11: voice unavailable while the media path is down (flag
+// `voice_media_path`; idempotent; never through the S27 outbox).
+
+/// `POST /mgmt/v1/voice/media-path`.
+pub const MGMT_VOICE_MEDIA_PATH: &str = "/mgmt/v1/voice/media-path";
+pub const MEDIA_PATH_UP: &str = "up";
+pub const MEDIA_PATH_DOWN: &str = "down";
+/// The `reason` K2 sends with `down` (M11).
+pub const MEDIA_PATH_REASON_VOICE_LANE_DOWN: &str = "voice_lane_down";
+/// Longest `reason`, characters.
+pub const MEDIA_PATH_REASON_MAX_CHARS: usize = 64;
+
+/// `{"state": "up"|"down", "reason"?: string}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaPathRequest {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl MediaPathRequest {
+    pub fn up() -> MediaPathRequest {
+        MediaPathRequest { state: MEDIA_PATH_UP.into(), reason: None }
+    }
+    pub fn down(reason: &str) -> MediaPathRequest {
+        MediaPathRequest { state: MEDIA_PATH_DOWN.into(), reason: Some(reason.into()) }
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.state != MEDIA_PATH_UP && self.state != MEDIA_PATH_DOWN {
+            return Err("state: up or down".into());
+        }
+        if self.reason.as_ref().is_some_and(|r| r.chars().count() > MEDIA_PATH_REASON_MAX_CHARS) {
+            return Err("reason: at most 64 characters".into());
+        }
+        Ok(())
+    }
+}
+
+/// `{"state", "since", "ended_calls"}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaPathResponse {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub since: String,
+    #[serde(default)]
+    pub ended_calls: u64,
+}
+
+/// `details.engine` on a `503 voice_unavailable` while the path is down
+/// (beside `down|draining|syncing|error`); `details.media_path_reason`
+/// carries K2's text.
+pub const ENGINE_MEDIA_PATH_DOWN: &str = "media_path_down";
+
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
 /// `{"ok": false, "error": {code, hint, details}}`.
@@ -1051,6 +1416,12 @@ pub mod codes {
     pub const RATE_LIMITED: &str = "rate_limited";
     pub const INTERNAL: &str = "internal";
     pub const UNAVAILABLE: &str = "unavailable";
+    /// 403 (SW-1 `app_session_not_allowed`, `app_user_not_allowed` on client routes).
+    pub const FORBIDDEN: &str = "forbidden";
+    /// 410 (SW-3 `cursor_expired`).
+    pub const GONE: &str = "gone";
+    /// 503 on joins and moves (SW-11 `details.engine = media_path_down`).
+    pub const VOICE_UNAVAILABLE: &str = "voice_unavailable";
 }
 
 /// `details.reason` values K2 branches on (`sew_proto::mgmt::reasons`).
@@ -1103,6 +1474,40 @@ pub mod reasons {
     /// slug that holds a channel of the other type (`details.existing_type`);
     /// nothing written.
     pub const CHANNEL_TYPE_MISMATCH: &str = "channel_type_mismatch";
+    // K2 voice rooms (Sew 0.7.0, sew-56 v1.1d §2.2).
+    /// SW-1 409 `conflict`: the install already has its server Space;
+    /// `details.space_id` names it (K2 reads it back).
+    pub const SERVER_SPACE_EXISTS: &str = "server_space_exists";
+    /// SW-1 409 `conflict`: a non-server Space already holds slug
+    /// `k2-admin`. K2 reports it (blocked).
+    pub const SLUG_TAKEN: &str = "slug_taken";
+    /// SW-1 409 `conflict`: a standalone install (no K2 identity).
+    pub const IDENTITY_NOT_K2: &str = "identity_not_k2";
+    /// SW-1 422 `validation_failed`: `k2-admin` on any other Space's create.
+    pub const SLUG_RESERVED: &str = "slug_reserved";
+    /// SW-1 422 `invalid_state` (mgmt) / 403 `forbidden` (client routes):
+    /// a `k2:principal:` or `app:` id in a `server` Space.
+    pub const APP_USER_NOT_ALLOWED: &str = "app_user_not_allowed";
+    /// SW-1 403 `forbidden`: any session with an `app` claim (Hearth too).
+    pub const APP_SESSION_NOT_ALLOWED: &str = "app_session_not_allowed";
+    /// SW-1 422 `invalid_state`: a client structure edit in a `server` Space.
+    pub const GOVERNED_BY_SERVER: &str = "governed_by_server";
+    /// SW-1 409 `conflict`: `spaces/{id}/settings` to or from `server`.
+    pub const SERVER_GOVERNANCE_FIXED: &str = "server_governance_fixed";
+    /// SW-1 401 (logs only): a pass for `k2:server`.
+    pub const SERVICE_SUB_REFUSED: &str = "service_sub_refused";
+    /// SW-3 410 `gone`: the feed cursor is gone (`details.head`); re-read
+    /// `voice/states`.
+    pub const CURSOR_EXPIRED: &str = "cursor_expired";
+    /// SW-4 409 `conflict`: un-closing an archived room.
+    pub const CHANNEL_ARCHIVED: &str = "channel_archived";
+    /// SW-4 422 `invalid_state`: `closing` on a channel that isn't voice.
+    pub const NOT_VOICE_CHANNEL: &str = "not_voice_channel";
+    /// SW-4 409 `conflict`: a join or move into a closing room.
+    pub const CHANNEL_CLOSING: &str = "channel_closing";
+    /// SW-11: `details.engine` of a `503 voice_unavailable` (and the leave
+    /// reason) while the media path is down.
+    pub const MEDIA_PATH_DOWN: &str = "media_path_down";
 }
 
 #[cfg(test)]
@@ -1263,5 +1668,144 @@ mod tests {
         let back: MemberChannelsResponse = serde_json::from_str(&serde_json::to_string(two).unwrap()).unwrap();
         assert_eq!(&back, two);
         assert!(!serde_json::to_string(two).unwrap().contains("\"level\""));
+    }
+
+    /// SW-1 (sew-56 v1.1d §2.2): the create body word for word, `k2:server`
+    /// as an id, and the server-Space twins carry no `app_id`.
+    #[test]
+    fn sw1_server_space_wire_is_word_for_word() {
+        let req = ServerSpaceCreateRequest::admin("sewlab");
+        req.validate().expect("valid");
+        assert_eq!(
+            serde_json::to_value(&req).unwrap(),
+            serde_json::json!({"slug": "k2-admin", "name": "sewlab", "owner": "k2:server", "governance": "server"})
+        );
+        assert!(
+            serde_json::from_str::<ServerSpaceCreateRequest>(
+                r#"{"slug":"k2-admin","name":"x","owner":"k2:server","governance":"server","app_id":"a"}"#
+            )
+            .is_err(),
+            "an app_id never rides a server create"
+        );
+        let mut bad = req.clone();
+        bad.owner = ExternalId::K2Owner;
+        assert!(bad.validate().is_err());
+        let mut bad = req.clone();
+        bad.slug = "hearth".into();
+        assert!(bad.validate().is_err());
+        let mut bad = req;
+        bad.name = String::new();
+        assert!(bad.validate().is_err());
+
+        let id = ExternalId::parse("k2:server").unwrap();
+        assert_eq!(id, ExternalId::K2Server);
+        assert_eq!(id.to_string(), "k2:server");
+        assert!(id.is_service_owner() && !id.is_box_user() && !id.is_agent());
+        assert!(ExternalId::parse("k2:server:x").is_err());
+        assert!(ExternalId::K2Principal("0f8fad5b-d9cb-469f-a165-70867728950e".into()).is_app_user_or_app());
+        assert!(!ExternalId::K2Owner.is_app_user_or_app());
+
+        // The answer as today plus `governance`; older Sew: absent.
+        let r: SpaceCreateResponse = serde_json::from_str(
+            r#"{"space_id":"77","slug":"k2-admin","name":"sewlab","owner_member_id":"5","created":true,"governance":"server","manager_member_ids":[]}"#,
+        )
+        .unwrap();
+        assert_eq!((r.space_id.as_str(), r.governance.as_deref(), r.created), ("77", Some("server"), true));
+
+        let lv = ServerMemberChannelsRequest { channel_ids: vec![], level: LEVEL_MODERATOR.into() };
+        assert_eq!(serde_json::to_value(&lv).unwrap(), serde_json::json!({"channel_ids": [], "level": "moderator"}));
+        assert!(serde_json::from_str::<ServerMemberChannelsRequest>(r#"{"app_id":"a","channel_ids":[],"level":"member"}"#).is_err());
+        let bulk = ServerMemberChannelsBulkRequest {
+            items: vec![MemberChannelsItem { external_id: ExternalId::K2Owner, channel_ids: vec![], level: LEVEL_MODERATOR.into() }],
+        };
+        assert_eq!(
+            serde_json::to_value(&bulk).unwrap(),
+            serde_json::json!({"items": [{"external_id": "k2:owner", "channel_ids": [], "level": "moderator"}]})
+        );
+        let rooms = ServerChannelsBulkRequest {
+            space_id: "77".into(),
+            ops: vec![ChannelOp {
+                op: channel_ops::ENSURE.into(),
+                slug: Some("room-1".into()),
+                channel_id: None,
+                name: Some("Room 1".into()),
+                kind: Some(CHANNEL_TYPE_VOICE.into()),
+                private: Some(false),
+                user_limit: Some(25),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&rooms).unwrap(),
+            serde_json::json!({"space_id": "77", "ops": [{"op": "ensure", "slug": "room-1", "name": "Room 1", "type": "voice", "private": false, "user_limit": 25}]})
+        );
+        assert_eq!(SERVER_LEVELS, ["member", "moderator"]);
+    }
+
+    /// SW-3: the feed path, the snapshot and a change, as sew-56 names them.
+    #[test]
+    fn sw3_voice_states_and_changes_parse() {
+        assert_eq!(voice_states_path("77"), "/mgmt/v1/spaces/77/voice/states");
+        assert_eq!(
+            voice_changes_path("77", "3.41", 99, 0),
+            "/mgmt/v1/spaces/77/voice/changes?after=3.41&wait=30&limit=1",
+            "wait ≤ 30, limit ≥ 1"
+        );
+        assert_eq!(voice_changes_path("77", "", 20, 900), "/mgmt/v1/spaces/77/voice/changes?after=&wait=20&limit=500");
+        let u = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        let st: VoiceStatesResponse = serde_json::from_str(&format!(
+            r#"{{"states":[{{"channel_id":"901","member_id":"5","external_id":"k2:connect:{u}","connection":"connected",
+               "self_mute":true,"self_deaf":false,"server_mute":false,"server_deaf":false,"joined_at":"2026-11-01T00:00:00Z"}}],
+               "cursor":"1.0"}}"#
+        ))
+        .unwrap();
+        assert_eq!(st.cursor, "1.0");
+        assert_eq!(st.states[0].external_id, Some(ExternalId::K2Connect(u.into())));
+        assert!(st.states[0].self_mute && st.states[0].connection == "connected");
+        let ch: VoiceChangesResponse = serde_json::from_str(
+            r#"{"changes":[
+                {"seq":42,"kind":"left","channel_id":"901","member_id":"5","external_id":"k2:owner","reason":"media_path_down"},
+                {"seq":43,"kind":"channel_closing","channel_id":"902"}],
+               "next":"1.43"}"#,
+        )
+        .unwrap();
+        assert_eq!(ch.next, "1.43");
+        assert_eq!(
+            (ch.changes[0].kind.as_str(), ch.changes[0].reason.as_deref()),
+            (voice_change::LEFT, Some(leave_reasons::MEDIA_PATH_DOWN))
+        );
+        assert_eq!((ch.changes[1].kind.as_str(), ch.changes[1].member_id.as_deref()), (voice_change::CHANNEL_CLOSING, None));
+    }
+
+    /// SW-4 and SW-11 bodies and answers; the status's `voice.media_path`.
+    #[test]
+    fn sw4_closing_and_sw11_media_path_wire() {
+        assert_eq!(channel_closing_path("901"), "/mgmt/v1/channels/901/closing");
+        assert_eq!(serde_json::to_value(ChannelClosingRequest { closing: true }).unwrap(), serde_json::json!({"closing": true}));
+        assert!(
+            serde_json::from_str::<ChannelClosingRequest>(r#"{"closing":true,"disconnect":true}"#).is_err(),
+            "no disconnect flag"
+        );
+        let r: ChannelClosingResponse = serde_json::from_str(r#"{"closing":true,"archived":true}"#).unwrap();
+        assert!(r.closing && r.archived);
+
+        let down = MediaPathRequest::down(MEDIA_PATH_REASON_VOICE_LANE_DOWN);
+        down.validate().unwrap();
+        assert_eq!(serde_json::to_value(&down).unwrap(), serde_json::json!({"state": "down", "reason": "voice_lane_down"}));
+        assert_eq!(serde_json::to_value(MediaPathRequest::up()).unwrap(), serde_json::json!({"state": "up"}));
+        assert!(MediaPathRequest { state: "sideways".into(), reason: None }.validate().is_err());
+        assert!(MediaPathRequest::down(&"x".repeat(65)).validate().is_err());
+        let a: MediaPathResponse =
+            serde_json::from_str(r#"{"state":"down","since":"2026-11-01T00:00:00Z","ended_calls":2}"#).unwrap();
+        assert_eq!((a.state.as_str(), a.ended_calls), ("down", 2));
+
+        let st: Status = serde_json::from_str(
+            r#"{"version":"0.7.0","install_id":"1","provider":"k2","features":[],
+               "voice":{"media_path":{"state":"down","since":"2026-11-01T00:00:00Z","media_path_reason":"voice_lane_down"},"engine":"up"}}"#,
+        )
+        .unwrap();
+        let mp = st.voice.and_then(|v| v.media_path).expect("media_path");
+        assert_eq!((mp.state.as_str(), mp.media_path_reason.as_deref()), ("down", Some("voice_lane_down")));
+        let old: Status = serde_json::from_str(r#"{"install_id":"1","provider":"k2"}"#).unwrap();
+        assert!(old.voice.is_none(), "an older Sew has no voice block");
     }
 }

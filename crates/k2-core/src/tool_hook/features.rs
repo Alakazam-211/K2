@@ -13,6 +13,7 @@
 //! | [`SPACE_UNBIND`] | an App removed from the box has its Spaces unbound in Sew too (`POST /mgmt/v1/spaces/unbind`; [`super::app_space`]) |
 //! | [`HOME_CLIENT_OWNER_APPROVAL`] | every `POST /mgmt/v1/home-client` carries the install owner's approval (a fresh `k2:owner` chat pass); without the flag the body stays `{app_id}` (Sew 0.5.0 refuses an unknown field) |
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
+//! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //!
 //! The pin (Sew 0.6.0) reports twenty flags: 0.5.0's twelve, 0.5.1's
@@ -39,6 +40,69 @@ pub const SPACE_UNBIND: &str = "space_unbind";
 /// and nothing is sent.
 pub const APP_GOVERNED_SPACES: &str = "app_governed_spaces";
 pub const HOME_CLIENT_OWNER_APPROVAL: &str = "home_client_owner_approval";
+
+// ── Sew 0.7.0 (sew-56 v1.1d §5; K2 voice rooms, PRD v1.9 §6.6) ────────
+
+/// SW-1: the server-governed K2 Admin Space (`spaces/create` with `owner:
+/// "k2:server"`, `governance: "server"`; the level sync and `channels/bulk`
+/// with `app_id` omitted).
+pub const SERVER_GOVERNED_SPACE: &str = "server_governed_space";
+/// SW-3: `GET /mgmt/v1/spaces/{id}/voice/states` and `voice/changes`.
+pub const MGMT_VOICE_STATES: &str = "mgmt_voice_states";
+/// SW-4: `POST /mgmt/v1/channels/{id}/closing`.
+pub const VOICE_CHANNEL_CLOSING: &str = "voice_channel_closing";
+/// SW-9: relay-only through the edge (`voice.ops.ice_relay_only`).
+pub const TURN_RELAY_ONLY: &str = "turn_relay_only";
+/// SW-11: `POST /mgmt/v1/voice/media-path` (K2 calls it only with this).
+pub const VOICE_MEDIA_PATH: &str = "voice_media_path";
+/// SW-8: `sew import --to-standalone --identity-map` (move off K2).
+pub const IMPORT_IDENTITY_MAP: &str = "import_identity_map";
+
+/// Sew 0.7.0's six voice flags, read together from ONE feature list (the
+/// one the last status refresh recorded, [`note`]), so a caller never
+/// mixes two refreshes. Lanes gate on these fields, never on versions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct VoiceFeatures {
+    /// SW-1 [`SERVER_GOVERNED_SPACE`].
+    pub server_governed_space: bool,
+    /// SW-3 [`MGMT_VOICE_STATES`].
+    pub mgmt_voice_states: bool,
+    /// SW-4 [`VOICE_CHANNEL_CLOSING`].
+    pub voice_channel_closing: bool,
+    /// SW-9 [`TURN_RELAY_ONLY`].
+    pub turn_relay_only: bool,
+    /// SW-11 [`VOICE_MEDIA_PATH`].
+    pub voice_media_path: bool,
+    /// SW-8 [`IMPORT_IDENTITY_MAP`].
+    pub import_identity_map: bool,
+}
+
+impl VoiceFeatures {
+    /// From a feature list as Sew reported it (any order; unknown flags
+    /// ignored).
+    pub fn from_flags<S: AsRef<str>>(flags: &[S]) -> VoiceFeatures {
+        let has = |f: &str| flags.iter().any(|x| x.as_ref() == f);
+        VoiceFeatures {
+            server_governed_space: has(SERVER_GOVERNED_SPACE),
+            mgmt_voice_states: has(MGMT_VOICE_STATES),
+            voice_channel_closing: has(VOICE_CHANNEL_CLOSING),
+            turn_relay_only: has(TURN_RELAY_ONLY),
+            voice_media_path: has(VOICE_MEDIA_PATH),
+            import_identity_map: has(IMPORT_IDENTITY_MAP),
+        }
+    }
+
+    /// From the list the last status refresh recorded for `kind` (one read).
+    pub fn read(conn: &Connection, kind: &str) -> Result<VoiceFeatures, String> {
+        Ok(VoiceFeatures::from_flags(&list(conn, kind)?))
+    }
+
+    /// What the Admin Space and rooms need (SW-1, SW-4): the S1/S2 sweep
+    /// does nothing without both.
+    pub fn rooms_ready(&self) -> bool {
+        self.server_governed_space && self.voice_channel_closing
+    }
+}
 
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
@@ -140,5 +204,45 @@ mod tests {
         }
         assert!(!note(&conn, "chat", &reported, 2).unwrap(), "the same list again is no change");
         assert!(!has(&conn, "chat", "not_a_sew_flag").unwrap());
+    }
+
+    /// Sew 0.7.0's six voice flags (sew-56 v1.1d §5), read from one list.
+    #[test]
+    fn voice_features_read_from_one_status_refresh() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        // The 0.6.0 pin: none of them.
+        let old: Vec<String> = SEW_0_6_0.iter().map(|s| s.to_string()).collect();
+        note(&conn, "chat", &old, 1).unwrap();
+        let v = VoiceFeatures::read(&conn, "chat").unwrap();
+        assert_eq!(v, VoiceFeatures::default());
+        assert!(!v.rooms_ready());
+        // 0.7.0: all six, beside 0.6.0's twenty.
+        let mut new = old.clone();
+        for f in [SERVER_GOVERNED_SPACE, MGMT_VOICE_STATES, VOICE_CHANNEL_CLOSING, TURN_RELAY_ONLY, VOICE_MEDIA_PATH, IMPORT_IDENTITY_MAP] {
+            new.push(f.to_string());
+        }
+        assert!(note(&conn, "chat", &new, 2).unwrap());
+        let v = VoiceFeatures::read(&conn, "chat").unwrap();
+        assert_eq!(
+            v,
+            VoiceFeatures {
+                server_governed_space: true,
+                mgmt_voice_states: true,
+                voice_channel_closing: true,
+                turn_relay_only: true,
+                voice_media_path: true,
+                import_identity_map: true,
+            }
+        );
+        assert!(v.rooms_ready());
+        // The exact strings Sew lists (never renamed).
+        assert_eq!(
+            [SERVER_GOVERNED_SPACE, MGMT_VOICE_STATES, VOICE_CHANNEL_CLOSING, TURN_RELAY_ONLY, VOICE_MEDIA_PATH, IMPORT_IDENTITY_MAP],
+            ["server_governed_space", "mgmt_voice_states", "voice_channel_closing", "turn_relay_only", "voice_media_path", "import_identity_map"]
+        );
+        // One flag alone sets only its field.
+        let one = VoiceFeatures::from_flags(&["voice_media_path"]);
+        assert!(one.voice_media_path && !one.server_governed_space && !one.rooms_ready());
     }
 }

@@ -74,6 +74,13 @@
 //!   (`ensure` with `channel_type_mismatch`, `rename`, `archive`,
 //!   `unarchive`); `spaces/create` with `owner: "app:<app_id>"` (§3a; makes
 //!   the service owner member; another App's → 409 `app_mismatch`).
+//! - Sew 0.7.0 (K2 voice rooms, sew-56 v1.1d §2.2 word for word; see the
+//!   section at the end of this file): SW-1 server Space create / members
+//!   / levels / rooms with `app_id` omitted, SW-3 `voice/states` and the
+//!   `voice/changes` feed (410 `cursor_expired` after [`FakeSew::restart`]),
+//!   SW-4 `channels/{id}/closing`, SW-11 `voice/media-path` and
+//!   `status.voice.media_path`. Test hooks: [`FakeSew::voice_join`],
+//!   [`FakeSew::voice_leave`], [`FakeSew::voice_occupants`].
 //! - Unknown paths → 404 and recorded in `bad_paths`.
 //!
 //! S30 K15 (`k2 chat`'s real backend, Sew 0.3.0 act-as): a small `/api/v1`
@@ -121,6 +128,29 @@ pub struct Space {
     pub owner: Option<String>,
     /// Sew 0.6.0 I4: each person's level in an App-governed Space.
     pub levels: BTreeMap<String, String>,
+    /// The Space's slug (`k2-admin` for the server Space, SW-1).
+    pub slug: Option<String>,
+}
+
+/// SW-3: one person in a voice channel (the fake's live voice registry).
+#[derive(Debug, Clone)]
+pub struct VoiceSt {
+    pub space_id: String,
+    pub channel_id: u64,
+    pub external_id: String,
+    pub member_id: u64,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    pub server_mute: bool,
+    pub server_deaf: bool,
+}
+
+/// SW-11: the media path Sew holds in memory (`up` after any start).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaPath {
+    pub state: String,
+    pub since: String,
+    pub reason: Option<String>,
 }
 
 /// A9: a text channel made over mgmt.
@@ -135,6 +165,10 @@ pub struct Channel {
     /// made in Sew (A9b); K2's `channels/create` makes text only.
     pub kind: String,
     pub archived: bool,
+    /// SW-4: no new joins; archived when the last person leaves.
+    pub closing: bool,
+    /// I6 `user_limit` as last ensured (voice).
+    pub user_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +267,24 @@ struct State {
     bulk_calls: usize,
     /// Sew 0.6.0 A11: an App's `members_per_space_max` (absent: no limit).
     member_quota: BTreeMap<String, usize>,
+    /// SW-3: who is in which voice channel now.
+    voice_states: Vec<VoiceSt>,
+    /// SW-3: the change ring (`MgmtVoiceChange` JSON), oldest first; every
+    /// entry's `seq` is > `voice_floor`.
+    voice_changes: Vec<Value>,
+    /// SW-3 cursor `<epoch>.<seq>`: a Sew restart bumps the epoch (every
+    /// older cursor answers 410 `cursor_expired`).
+    voice_epoch: u64,
+    voice_seq: u64,
+    /// SW-3: changes at or below this seq were pruned from the ring.
+    voice_floor: u64,
+    /// SW-3: every `voice/changes` query string, in order.
+    voice_feed_queries: Vec<String>,
+    /// SW-3: how long an empty `voice/changes` answer is held (the
+    /// long-poll), capped by the request's `wait`. Default zero.
+    voice_hold: Duration,
+    /// SW-11.
+    media_path: Option<MediaPath>,
 }
 
 pub struct FakeSew {
@@ -550,6 +602,157 @@ impl FakeSew {
         self.with(|s| s.spaces.get(space_id).and_then(|sp| sp.channels.get(slug).cloned()))
     }
 
+    // ── Sew 0.7.0 (K2 voice rooms, sew-56 v1.1d §2.2) ─────────────────
+
+    /// SW-1: the server Space's id (`None` before K2 creates it).
+    pub fn server_space_id(&self) -> Option<String> {
+        self.with(|s| server_space(s).map(|(id, _)| id))
+    }
+
+    /// SW-1: a Space someone else already made with slug `slug` (a
+    /// non-server Space; K2's server create then answers `slug_taken`).
+    pub fn add_sew_space_with_slug(&self, space_id: &str, slug: &str) {
+        self.with(|s| {
+            s.spaces.insert(space_id.to_string(), Space { slug: Some(slug.into()), governance: Some("sew".into()), ..Default::default() });
+        });
+    }
+
+    /// SW-1: a server Space already exists (made by an earlier K2).
+    pub fn add_server_space(&self, space_id: &str) {
+        self.with(|s| {
+            ensure_server_member(s);
+            s.spaces.insert(
+                space_id.to_string(),
+                Space {
+                    slug: Some(sew_wire::ADMIN_SPACE_SLUG.into()),
+                    governance: Some(sew_wire::GOVERNANCE_SERVER.into()),
+                    owner: Some(sew_wire::K2_SERVER.into()),
+                    members: [sew_wire::K2_SERVER.to_string()].into_iter().collect(),
+                    ..Default::default()
+                },
+            );
+        });
+    }
+
+    /// The voice channels of a Space by slug (archived included).
+    pub fn channels(&self, space_id: &str) -> BTreeMap<String, Channel> {
+        self.with(|s| s.spaces.get(space_id).map(|sp| sp.channels.clone()).unwrap_or_default())
+    }
+
+    /// The level K2 last synced for `ext` in a Space.
+    pub fn level(&self, space_id: &str, ext: &str) -> Option<String> {
+        self.with(|s| s.spaces.get(space_id).and_then(|sp| sp.levels.get(ext).cloned()))
+    }
+
+    /// SW-3: a person joins the voice channel `slug` (as their own client
+    /// would). `Err(reason)` mirrors Sew's refusal: `channel_closing` (409),
+    /// `media_path_down` (503 `voice_unavailable`), `channel_archived`,
+    /// `not_space_member`, `not_found`.
+    pub fn voice_join(&self, space_id: &str, slug: &str, ext: &str) -> Result<(), String> {
+        self.with(|s| {
+            if s.media_path.as_ref().is_some_and(|m| m.state == sew_wire::MEDIA_PATH_DOWN) {
+                return Err(sew_wire::reasons::MEDIA_PATH_DOWN.into());
+            }
+            let member_id = s.members.get(ext).map(|m| m.member_id).ok_or("not_provisioned")?;
+            let sp = s.spaces.get(space_id).ok_or("not_found")?;
+            if !sp.members.contains(ext) {
+                return Err("not_space_member".into());
+            }
+            let c = sp.channels.get(slug).ok_or("not_found")?;
+            if c.archived {
+                return Err(sew_wire::reasons::CHANNEL_ARCHIVED.into());
+            }
+            if c.closing {
+                return Err(sew_wire::reasons::CHANNEL_CLOSING.into());
+            }
+            let channel_id = c.id;
+            // A join elsewhere is a move: leave first.
+            voice_drop(s, |v| v.external_id == ext, "moved");
+            let st = VoiceSt {
+                space_id: space_id.into(),
+                channel_id,
+                external_id: ext.into(),
+                member_id,
+                self_mute: false,
+                self_deaf: false,
+                server_mute: false,
+                server_deaf: false,
+            };
+            let state = voice_state_json(&st);
+            s.voice_states.push(st);
+            push_voice_change(s, space_id, json!({"kind": "joined", "channel_id": channel_id.to_string(), "member_id": member_id.to_string(), "external_id": ext, "state": state}));
+            Ok(())
+        })
+    }
+
+    /// SW-3: a person leaves their call (an empty closing room is then
+    /// archived, SW-4).
+    pub fn voice_leave(&self, ext: &str) {
+        self.with(|s| voice_drop(s, |v| v.external_id == ext, "left"))
+    }
+
+    /// SW-3: a person mutes themselves (an `updated` change).
+    pub fn voice_self_mute(&self, ext: &str, on: bool) {
+        self.with(|s| {
+            let Some(i) = s.voice_states.iter().position(|v| v.external_id == ext) else { return };
+            s.voice_states[i].self_mute = on;
+            let v = s.voice_states[i].clone();
+            push_voice_change(s, &v.space_id.clone(), json!({"kind": "updated", "channel_id": v.channel_id.to_string(),
+                "member_id": v.member_id.to_string(), "external_id": v.external_id, "state": voice_state_json(&v)}));
+        })
+    }
+
+    /// SW-3: who is in a call now (external ids, by channel slug).
+    pub fn voice_occupants(&self, space_id: &str) -> BTreeMap<String, Vec<String>> {
+        self.with(|s| {
+            let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let Some(sp) = s.spaces.get(space_id) else { return out };
+            for v in s.voice_states.iter().filter(|v| v.space_id == space_id) {
+                if let Some((slug, _)) = sp.channels.iter().find(|(_, c)| c.id == v.channel_id) {
+                    out.entry(slug.clone()).or_default().push(v.external_id.clone());
+                }
+            }
+            out
+        })
+    }
+
+    /// A Sew restart: the voice feed's epoch moves (old cursors answer 410
+    /// `cursor_expired`), the ring and live calls are gone, and the media
+    /// path starts `up` again (SW-11 keeps it in memory).
+    pub fn restart(&self) {
+        self.with(|s| {
+            s.voice_epoch += 1;
+            s.voice_changes.clear();
+            s.voice_floor = s.voice_seq;
+            s.voice_states.clear();
+            s.media_path = None;
+        })
+    }
+
+    /// SW-3: drop every change at or below `seq` from the ring (a cursor
+    /// older than that answers 410 `cursor_expired`).
+    pub fn prune_voice_ring(&self, seq: u64) {
+        self.with(|s| {
+            s.voice_changes.retain(|c| c["seq"].as_u64().unwrap_or(0) > seq);
+            s.voice_floor = s.voice_floor.max(seq);
+        })
+    }
+
+    /// SW-3: every `voice/changes` query K2 sent, in order.
+    pub fn voice_feed_queries(&self) -> Vec<String> {
+        self.with(|s| s.voice_feed_queries.clone())
+    }
+
+    /// SW-3: hold an empty `voice/changes` answer this long (≤ `wait`).
+    pub fn set_voice_hold(&self, d: Duration) {
+        self.with(|s| s.voice_hold = d)
+    }
+
+    /// SW-11: the media path as Sew holds it (`None` = never set: `up`).
+    pub fn media_path(&self) -> Option<MediaPath> {
+        self.with(|s| s.media_path.clone())
+    }
+
     /// A3: the picture Sew holds for `ext` (sha256 hex, length).
     pub fn avatar(&self, ext: &str) -> Option<(String, usize)> {
         self.with(|s| s.avatars.get(ext).cloned())
@@ -738,6 +941,15 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
     if drop_conn {
         return; // applied, but the response is lost
     }
+    // SW-3 long-poll: an empty feed answer is held up to the hold (≤ wait).
+    if path.ends_with("/voice/changes") && status == 200 && out.contains("\"changes\":[]") {
+        let hold = state.lock().unwrap().voice_hold;
+        let wait = query_param(&query, "wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0);
+        let d = hold.min(Duration::from_secs(wait));
+        if !d.is_zero() {
+            tokio::time::sleep(d).await;
+        }
+    }
     let resp = format!(
         "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nConnection: close\r\n{extra}Content-Length: {}\r\n\r\n{out}",
         out.len()
@@ -807,17 +1019,27 @@ fn handle(
             return (st, b, String::new(), false);
         }
         let (st, b) = match path {
-            sew_wire::MGMT_STATUS => (
-                200,
-                json!({
+            sew_wire::MGMT_STATUS => {
+                let mut v = json!({
                     "version": "0.0.0-fake", "features": s.features.clone(), "schema_version": 1, "install_id": s.install_id,
                     "provider": s.provider, "db": {}, "jobs": {}, "search": {}, "keys": {},
                     "sessions": 0, "sockets": 0
-                })
-                .to_string(),
-            ),
+                });
+                // SW-11: `status.voice.media_path` (Sew 0.7.0 only).
+                if has_flag(s, VOICE_MEDIA_PATH) {
+                    let mp = s.media_path.clone();
+                    v["voice"] = json!({"media_path": {
+                        "state": mp.as_ref().map_or(sew_wire::MEDIA_PATH_UP, |m| m.state.as_str()),
+                        "since": mp.as_ref().map_or(TS, |m| m.since.as_str()),
+                        "media_path_reason": mp.as_ref().and_then(|m| m.reason.clone()),
+                    }});
+                }
+                (200, v.to_string())
+            }
             sew_wire::MGMT_PRINCIPALS => list(s, query),
             "/mgmt/v1/policies" => policies_get(s),
+            p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/voice/states") => voice_states_get(s, p),
+            p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/voice/changes") => voice_changes_get(s, p, query),
             _ => {
                 s.bad_paths.push(format!("GET {path}"));
                 err(
@@ -902,6 +1124,9 @@ fn handle(
         p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/members/channels") => member_channels_bulk(s, p, body),
         p if p.starts_with("/mgmt/v1/spaces/") && p.contains("/members/") && p.ends_with("/channels") => member_channels_one(s, p, body),
         sew_wire::MGMT_CHANNELS_BULK => channels_bulk(s, body),
+        // Sew 0.7.0: SW-4 closing, SW-11 media path.
+        p if p.starts_with("/mgmt/v1/channels/") && p.ends_with("/closing") => channel_closing(s, p, body),
+        sew_wire::MGMT_VOICE_MEDIA_PATH => media_path_set(s, body),
         p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/settings") => app_settings(s, p, body),
         p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
         sew_client::proto::routes::MGMT_SPACES_CREATE => space_create(s, body),
@@ -1426,6 +1651,9 @@ fn member_channels_item(s: &mut State, space: &str, app: &str, ext: &str, ids: &
 
 /// I4 single: `POST /mgmt/v1/spaces/{space_id}/members/{external_id}/channels`.
 fn member_channels_one(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_app_id(body) {
+        return server_member_channels_one(s, path, body);
+    }
     if !s.features.iter().any(|f| f == GOVERNED) {
         return no_route(s, path);
     }
@@ -1453,6 +1681,9 @@ fn member_channels_one(s: &mut State, path: &str, body: &str) -> (u16, String) {
 
 /// I4 bulk: `POST /mgmt/v1/spaces/{space_id}/members/channels`.
 fn member_channels_bulk(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_app_id(body) {
+        return server_member_channels_bulk(s, path, body);
+    }
     if !s.features.iter().any(|f| f == GOVERNED) {
         return no_route(s, path);
     }
@@ -1482,6 +1713,9 @@ fn member_channels_bulk(s: &mut State, path: &str, body: &str) -> (u16, String) 
 
 /// I6: `POST /mgmt/v1/channels/bulk`.
 fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
+    if !has_app_id(body) {
+        return server_channels_bulk(s, body);
+    }
     if !s.features.iter().any(|f| f == GOVERNED) {
         return no_route(s, sew_wire::MGMT_CHANNELS_BULK);
     }
@@ -1501,11 +1735,19 @@ fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
     if sp.governance.as_deref() != Some("app") {
         return err(409, "conflict", "not App-governed", json!({"reason": "not_app_governed"}));
     }
+    apply_channel_ops(s, &req.space_id, &req.ops, body)
+}
+
+/// I6's ops on one Space (App-governed, or SW-1's server Space). Archive
+/// ends the room's calls (`channel_archived`) and clears `closing`;
+/// unarchive clears it too (SW-4).
+fn apply_channel_ops(s: &mut State, space_id: &str, ops: &[sew_wire::ChannelOp], body: &str) -> (u16, String) {
     let mut results = Vec::new();
-    for op in &req.ops {
+    let mut archived: Vec<u64> = Vec::new();
+    for op in ops {
         s.next_id += 1;
         let fresh = 800_000 + s.next_id;
-        let sp = s.spaces.get_mut(&req.space_id).expect("space");
+        let sp = s.spaces.get_mut(space_id).expect("space");
         let slug = op
             .slug
             .clone()
@@ -1523,7 +1765,7 @@ fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
                     }
                     Some(c) => json!({"op": "ensure", "slug": slug, "channel_id": c.id.to_string(), "name": c.name, "created": false}),
                     None => {
-                        let c = Channel { id: fresh, name: op.name.clone().unwrap_or_else(|| slug.clone()), private: op.private.unwrap_or(false), kind, ..Default::default() };
+                        let c = Channel { id: fresh, name: op.name.clone().unwrap_or_else(|| slug.clone()), private: op.private.unwrap_or(false), kind, user_limit: op.user_limit, ..Default::default() };
                         let v = json!({"op": "ensure", "slug": slug, "channel_id": c.id.to_string(), "name": c.name, "created": true});
                         sp.channels.insert(slug.clone(), c);
                         v
@@ -1534,8 +1776,17 @@ fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
                 Some(c) => {
                     match op.op.as_str() {
                         "rename" => c.name = op.name.clone().unwrap_or_default(),
-                        "archive" => c.archived = true,
-                        _ => c.archived = false,
+                        "archive" => {
+                            if !c.archived {
+                                archived.push(c.id);
+                            }
+                            c.archived = true;
+                            c.closing = false;
+                        }
+                        _ => {
+                            c.archived = false;
+                            c.closing = false;
+                        }
                     }
                     json!({"op": op.op, "slug": slug, "channel_id": c.id.to_string(), "name": c.name})
                 }
@@ -1545,6 +1796,10 @@ fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
         };
         results.push(r);
     }
+    for id in archived {
+        voice_drop(s, |v| v.channel_id == id, sew_wire::leave_reasons::CHANNEL_ARCHIVED);
+        push_voice_change(s, space_id, json!({"kind": "channel_archived", "channel_id": id.to_string()}));
+    }
     (200, json!({"results": results}).to_string())
 }
 
@@ -1553,6 +1808,13 @@ fn space_create(s: &mut State, body: &str) -> (u16, String) {
     // Sew 0.6.0 §3a: an App-owned Space names `owner: "app:<app_id>"`,
     // which the vendored sew-proto (0.3.x) can't parse.
     let raw: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    // Sew 0.7.0 SW-1: `governance` (only `server`) on the create.
+    if raw.get("governance").is_some() {
+        return server_space_create(s, body);
+    }
+    if has_flag(s, SERVER_GOVERNED) && raw.get("slug").and_then(Value::as_str) == Some(sew_wire::ADMIN_SPACE_SLUG) {
+        return err(422, "validation_failed", "k2-admin is reserved", json!({"reason": "slug_reserved", "field": "slug"}));
+    }
     if raw.get("owner").and_then(Value::as_str).is_some_and(|o| o.starts_with("app:")) {
         if !s.features.iter().any(|f| f == GOVERNED) {
             return bad_body(s, "spaces/create", "an app: owner without the flag", body);
@@ -1654,6 +1916,11 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
     }
     if !req.external_id.is_known() {
         return bad_body(s, "provision", "unknown external id form", body);
+    }
+    // SW-1: `k2:server` is a service owner, never provisioned.
+    if req.external_id == ExternalId::K2Server {
+        s.bad_bodies.push(format!("provision: k2:server is never provisioned: {body}"));
+        return err(422, "invalid_state", "a service member is never provisioned", json!({"reason": "service_member"}));
     }
     let ext = req.external_id.to_string();
     if let Some(person) = &req.assistant_of {
@@ -1834,6 +2101,12 @@ fn space_members_add(s: &mut State, body: &str) -> (u16, String) {
     if sp.app_id != req.app_id {
         return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }
+    // SW-1: a server Space takes box users and agents only.
+    if sp.governance.as_deref() == Some(sew_wire::GOVERNANCE_SERVER) {
+        if let Some(bad) = req.external_ids.iter().find(|e| e.is_app_user_or_app() || e.is_service_owner()) {
+            return err(422, "invalid_state", "App users never join a server Space", json!({"reason": "app_user_not_allowed", "field": "external_ids", "external_id": bad.to_string()}));
+        }
+    }
     let (mut added, mut already, mut skipped, mut not_added) = (vec![], vec![], vec![], vec![]);
     for ext in &req.external_ids {
         let e = ext.to_string();
@@ -1960,7 +2233,12 @@ fn space_member_remove(s: &mut State, body: &str) -> (u16, String) {
     if req.app_id.is_none() && sp.app_id.is_some() {
         return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }
-    let removed = sp.members.remove(&req.external_id.to_string());
+    let ext = req.external_id.to_string();
+    let removed = sp.members.remove(&ext);
+    sp.levels.remove(&ext);
+    // Removal ends the person's voice in that Space (`removed_from_space`).
+    let space = req.space_id.clone();
+    voice_drop(s, |v| v.space_id == space && v.external_id == ext, sew_wire::leave_reasons::REMOVED_FROM_SPACE);
     (200, json!({"removed": removed}).to_string())
 }
 
@@ -2116,4 +2394,438 @@ fn list(s: &State, query: &str) -> (u16, String) {
         200,
         json!({"items": items, "has_more": has_more}).to_string(),
     )
+}
+
+// ── Sew 0.7.0: K2 voice rooms (sew-56 v1.1d §2.2, frozen 11-01) ───────
+//
+// SW-1 (flag `server_governed_space`): `spaces/create` with `governance:
+// "server"` and `owner: "k2:server"`; one per install (`409 conflict`
+// `server_space_exists` + `details.space_id`); `slug_taken` when another
+// Space holds `k2-admin`; `identity_not_k2` on a standalone install; any
+// other create naming `k2-admin` → `422 slug_reserved`. Members: box users
+// and agents; `k2:principal:` / `app:` ids → `422 invalid_state`
+// `app_user_not_allowed`. Levels via the member-channels sync with
+// `app_id` omitted: `member | moderator` (`admin` → `422
+// level_above_ceiling`; agents `member` only → `422 agent_level`). Rooms
+// via `channels/bulk` with `app_id` omitted.
+// SW-3 (flag `mgmt_voice_states`): `voice/states` and the `voice/changes`
+// feed (`after`, `wait` 0–30, `limit` 1–500; cursor `<epoch>.<seq>`; a
+// restart or a pruned ring → `410 gone` `cursor_expired` + `details.head`).
+// SW-4 (flag `voice_channel_closing`): `channels/{id}/closing`.
+// SW-11 (flag `voice_media_path`): `voice/media-path` and
+// `status.voice.media_path`.
+// A Sew without a flag has none of its routes: 404 + `bad_paths` (or, for
+// the create field, a body Sew 0.6.0 refuses: 400 + `bad_bodies`), so
+// `assert_clean` catches K2 sending without the flag.
+
+const SERVER_GOVERNED: &str = "server_governed_space";
+const MGMT_VOICE_STATES: &str = "mgmt_voice_states";
+const VOICE_CHANNEL_CLOSING: &str = "voice_channel_closing";
+const VOICE_MEDIA_PATH: &str = "voice_media_path";
+
+fn has_flag(s: &State, flag: &str) -> bool {
+    s.features.iter().any(|f| f == flag)
+}
+
+/// Whether a JSON body names an `app_id` (App-Space shape) or omits it
+/// (SW-1's server-Space shape).
+fn has_app_id(body: &str) -> bool {
+    serde_json::from_str::<Value>(body).ok().is_some_and(|v| v.get("app_id").is_some())
+}
+
+/// The install's server Space, if any: `(space_id, slug)`.
+fn server_space(s: &State) -> Option<(String, String)> {
+    s.spaces
+        .iter()
+        .find(|(_, sp)| sp.governance.as_deref() == Some(sew_wire::GOVERNANCE_SERVER))
+        .map(|(id, sp)| (id.clone(), sp.slug.clone().unwrap_or_default()))
+}
+
+/// Sew makes `k2:server` on first need (never provisioned by K2).
+fn ensure_server_member(s: &mut State) {
+    if s.members.contains_key(sew_wire::K2_SERVER) {
+        return;
+    }
+    s.next_id += 1;
+    let id = s.next_id;
+    s.members.insert(
+        sew_wire::K2_SERVER.into(),
+        Member {
+            member_id: id,
+            external_id: sew_wire::K2_SERVER.into(),
+            kind: MemberKind::Person,
+            agent_kind: None,
+            assistant_of: None,
+            guest: false,
+            username: "k2-server".into(),
+            display_name: "K2".into(),
+            email: None,
+            title: None,
+            pronouns: None,
+            deactivated: false,
+        },
+    );
+}
+
+/// SW-1: `POST /mgmt/v1/spaces/create {slug: k2-admin, name, owner:
+/// k2:server, governance: server}`.
+fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
+    if !has_flag(s, SERVER_GOVERNED) {
+        // Sew 0.6.0's MgmtSpaceCreateRequest denies the unknown field.
+        return bad_body(s, "spaces/create", "governance on a Sew without server_governed_space", body);
+    }
+    let req: sew_wire::ServerSpaceCreateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/create (server)", e, body),
+    };
+    if req.governance != sew_wire::GOVERNANCE_SERVER {
+        return bad_body(s, "spaces/create (server)", "only governance server is accepted on create", body);
+    }
+    if req.owner != ExternalId::K2Server {
+        return err(422, "validation_failed", "a server Space's owner is k2:server", json!({"field": "owner"}));
+    }
+    if let Err(e) = req.validate() {
+        return bad_body(s, "spaces/create (server)", e, body);
+    }
+    if s.provider != "k2" {
+        return err(409, "conflict", "a standalone install has no K2 identity", json!({"reason": "identity_not_k2"}));
+    }
+    if let Some((id, _)) = server_space(s) {
+        return err(409, "conflict", "this install already has its server Space", json!({"reason": "server_space_exists", "space_id": id}));
+    }
+    if s.spaces.values().any(|sp| sp.slug.as_deref() == Some(sew_wire::ADMIN_SPACE_SLUG)) {
+        return err(409, "conflict", "another Space already has slug k2-admin", json!({"reason": "slug_taken", "field": "slug"}));
+    }
+    ensure_server_member(s);
+    let owner_id = s.members[sew_wire::K2_SERVER].member_id;
+    s.next_id += 1;
+    let space_id = format!("{}", 7000 + s.next_id);
+    s.spaces.insert(
+        space_id.clone(),
+        Space {
+            slug: Some(req.slug.clone()),
+            governance: Some(sew_wire::GOVERNANCE_SERVER.into()),
+            owner: Some(sew_wire::K2_SERVER.into()),
+            members: [sew_wire::K2_SERVER.to_string()].into_iter().collect(),
+            ..Default::default()
+        },
+    );
+    (
+        200,
+        json!({"space_id": space_id, "slug": req.slug, "name": req.name, "owner_member_id": owner_id.to_string(),
+               "created": true, "governance": "server"})
+        .to_string(),
+    )
+}
+
+/// The server Space named `space` (`Err` = Sew's refusal).
+fn require_server_space(s: &State, space: &str) -> Result<(), (u16, String)> {
+    let Some(sp) = s.spaces.get(space) else {
+        return Err(err(404, "not_found", "no such space", json!({})));
+    };
+    if sp.governance.as_deref() != Some(sew_wire::GOVERNANCE_SERVER) {
+        // `app_id` omitted names no App: an App Space refuses it.
+        return Err(err(409, "conflict", "app_id is required outside a server Space", json!({"reason": "app_mismatch", "field": "app_id"})));
+    }
+    Ok(())
+}
+
+/// One SW-1 level-sync item in the server Space, in Sew's order.
+fn server_member_item(s: &mut State, space: &str, ext: &str, ids: &[String], level: &str) -> Result<Value, ItemRefusal> {
+    let parsed = ExternalId::parse(ext).map_err(|_| (422, "invalid_state", "member_not_provisioned", "external_id"))?;
+    if parsed.is_app_user_or_app() {
+        return Err((422, "invalid_state", "app_user_not_allowed", "external_id"));
+    }
+    if sew_wire::level_rank(level).is_none() {
+        return Err((422, "validation_failed", "level", "level"));
+    }
+    if !sew_wire::SERVER_LEVELS.contains(&level) {
+        return Err((422, "invalid_state", "level_above_ceiling", "level"));
+    }
+    if parsed.is_agent() && level != sew_wire::LEVEL_MEMBER {
+        return Err((422, "invalid_state", "agent_level", "level"));
+    }
+    let Some(m) = s.members.get(ext).cloned() else {
+        return Err((422, "invalid_state", "member_not_provisioned", "external_id"));
+    };
+    let sp = s.spaces.get_mut(space).expect("server space");
+    if sp.owner.as_deref() == Some(ext) {
+        return Ok(skipped_answer(ext, m.member_id, "owner"));
+    }
+    if m.deactivated {
+        return Ok(skipped_answer(ext, m.member_id, "deprovisioned"));
+    }
+    if m.guest || m.agent_kind == Some(AgentKind::Assistant) {
+        return Err((422, "invalid_state", "target_not_eligible", "external_id"));
+    }
+    if sp.banned.contains(ext) {
+        return Ok(skipped_answer(ext, m.member_id, "banned"));
+    }
+    // The server Space has no private channels: every listed id is unknown.
+    let mut unknown: Vec<String> = ids.to_vec();
+    unknown.sort();
+    sp.members.insert(ext.to_string());
+    sp.levels.insert(ext.to_string(), level.to_string());
+    Ok(json!({"external_id": ext, "member_id": m.member_id.to_string(), "added": [], "removed": [], "unchanged": [],
+              "level": level, "unknown_channel_ids": unknown, "queued": false}))
+}
+
+/// SW-1 single: `POST /mgmt/v1/spaces/{id}/members/{ext}/channels`, no `app_id`.
+fn server_member_channels_one(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_flag(s, SERVER_GOVERNED) {
+        return bad_body(s, "member channels", "app_id omitted on a Sew without server_governed_space", body);
+    }
+    let rest = path.trim_start_matches("/mgmt/v1/spaces/");
+    let parts: Vec<&str> = rest.split('/').collect();
+    let [space, "members", ext_enc, "channels"] = parts.as_slice() else {
+        return bad_body(s, "member channels path", "shape", path);
+    };
+    let ext = pct_decode(ext_enc);
+    if ext.contains('%') || ExternalId::parse(&ext).is_err() {
+        return bad_body(s, "member channels path", "external id", path);
+    }
+    let req: sew_wire::ServerMemberChannelsRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "member channels (server)", e, body),
+    };
+    if req.channel_ids.len() > sew_wire::MEMBER_CHANNELS_MAX {
+        return bad_body(s, "member channels (server)", "channel_ids ≤ 5000", body);
+    }
+    if let Err(e) = require_server_space(s, space) {
+        return e;
+    }
+    match server_member_item(s, space, &ext, &req.channel_ids, &req.level) {
+        Ok(v) => (200, v.to_string()),
+        Err((st, code, reason, field)) => err(st, code, "refused", json!({"reason": reason, "field": field})),
+    }
+}
+
+/// SW-1 bulk: `POST /mgmt/v1/spaces/{id}/members/channels`, no `app_id`.
+fn server_member_channels_bulk(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_flag(s, SERVER_GOVERNED) {
+        return bad_body(s, "member channels bulk", "app_id omitted on a Sew without server_governed_space", body);
+    }
+    let space = path.trim_start_matches("/mgmt/v1/spaces/").trim_end_matches("/members/channels").to_string();
+    let req: sew_wire::ServerMemberChannelsBulkRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "member channels bulk (server)", e, body),
+    };
+    if req.items.is_empty() || req.items.len() > sew_wire::MEMBER_CHANNELS_BULK_MAX {
+        return bad_body(s, "member channels bulk (server)", "1–500 items", body);
+    }
+    if let Err(e) = require_server_space(s, &space) {
+        return e;
+    }
+    s.bulk_calls += 1;
+    let mut items = Vec::new();
+    for it in &req.items {
+        let ext = it.external_id.to_string();
+        match server_member_item(s, &space, &ext, &it.channel_ids, &it.level) {
+            Ok(v) => items.push(json!({"external_id": ext, "status": 200, "answer": v})),
+            Err((st, code, reason, field)) => items.push(json!({"external_id": ext, "status": st,
+                "error": {"code": code, "hint": "refused", "details": {"reason": reason, "field": field}}})),
+        }
+    }
+    (200, json!({"items": items}).to_string())
+}
+
+/// SW-1 rooms: `POST /mgmt/v1/channels/bulk` with `app_id` omitted.
+fn server_channels_bulk(s: &mut State, body: &str) -> (u16, String) {
+    if !has_flag(s, SERVER_GOVERNED) {
+        return bad_body(s, "channels/bulk", "app_id omitted on a Sew without server_governed_space", body);
+    }
+    let req: sew_wire::ServerChannelsBulkRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "channels/bulk (server)", e, body),
+    };
+    if req.ops.is_empty() || req.ops.len() > sew_wire::CHANNELS_BULK_MAX {
+        return bad_body(s, "channels/bulk (server)", "1–200 ops", body);
+    }
+    if let Err(e) = require_server_space(s, &req.space_id) {
+        return e;
+    }
+    // K2 makes voice rooms only, never video.
+    if let Some(op) = req.ops.iter().find(|o| o.kind.as_deref().is_some_and(|k| k != sew_wire::CHANNEL_TYPE_VOICE)) {
+        return bad_body(s, "channels/bulk (server)", format!("K2 makes voice rooms only, got {:?}", op.kind), body);
+    }
+    apply_channel_ops(s, &req.space_id, &req.ops, body)
+}
+
+fn voice_state_json(v: &VoiceSt) -> Value {
+    json!({
+        "channel_id": v.channel_id.to_string(), "member_id": v.member_id.to_string(), "external_id": v.external_id,
+        "connection": "connected", "self_mute": v.self_mute, "self_deaf": v.self_deaf,
+        "server_mute": v.server_mute, "server_deaf": v.server_deaf, "joined_at": TS,
+    })
+}
+
+fn voice_cursor(s: &State) -> String {
+    format!("{}.{}", s.voice_epoch, s.voice_seq)
+}
+
+/// Append one change to the ring (its `seq` is the next one).
+fn push_voice_change(s: &mut State, space_id: &str, mut change: Value) {
+    s.voice_seq += 1;
+    change["seq"] = json!(s.voice_seq);
+    change["space_id"] = json!(space_id);
+    s.voice_changes.push(change);
+}
+
+/// End the calls `pick` selects with leave `reason`; a closing room left
+/// empty is archived (SW-4) with a `channel_archived` change.
+fn voice_drop(s: &mut State, pick: impl Fn(&VoiceSt) -> bool, reason: &str) {
+    let (gone, keep): (Vec<VoiceSt>, Vec<VoiceSt>) = std::mem::take(&mut s.voice_states).into_iter().partition(|v| pick(v));
+    s.voice_states = keep;
+    for v in &gone {
+        push_voice_change(s, &v.space_id, json!({"kind": "left", "channel_id": v.channel_id.to_string(),
+            "member_id": v.member_id.to_string(), "external_id": v.external_id, "reason": reason}));
+    }
+    for v in &gone {
+        let empty = !s.voice_states.iter().any(|o| o.channel_id == v.channel_id);
+        let Some(sp) = s.spaces.get_mut(&v.space_id) else { continue };
+        let Some(c) = sp.channels.values_mut().find(|c| c.id == v.channel_id) else { continue };
+        if empty && c.closing && !c.archived {
+            c.closing = false;
+            c.archived = true;
+            let id = c.id;
+            push_voice_change(s, &v.space_id, json!({"kind": "channel_archived", "channel_id": id.to_string()}));
+        }
+    }
+}
+
+/// SW-3: `GET /mgmt/v1/spaces/{space_id}/voice/states`.
+fn voice_states_get(s: &mut State, path: &str) -> (u16, String) {
+    if !has_flag(s, MGMT_VOICE_STATES) {
+        s.bad_paths.push(format!("GET {path} (no {MGMT_VOICE_STATES} flag)"));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let space = path.trim_start_matches("/mgmt/v1/spaces/").trim_end_matches("/voice/states").to_string();
+    if !s.spaces.contains_key(&space) {
+        return err(404, "not_found", "no such space", json!({}));
+    }
+    let states: Vec<Value> = s.voice_states.iter().filter(|v| v.space_id == space).map(voice_state_json).collect();
+    (200, json!({"states": states, "cursor": voice_cursor(s)}).to_string())
+}
+
+/// SW-3: `GET /mgmt/v1/spaces/{space_id}/voice/changes?after&wait&limit`.
+fn voice_changes_get(s: &mut State, path: &str, query: &str) -> (u16, String) {
+    if !has_flag(s, MGMT_VOICE_STATES) {
+        s.bad_paths.push(format!("GET {path} (no {MGMT_VOICE_STATES} flag)"));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    s.voice_feed_queries.push(query.to_string());
+    let space = path.trim_start_matches("/mgmt/v1/spaces/").trim_end_matches("/voice/changes").to_string();
+    let wait = query_param(query, "wait").map(|w| w.parse::<u32>());
+    let limit = query_param(query, "limit").map(|l| l.parse::<u32>());
+    let after = query_param(query, "after").map(pct_decode);
+    let (Some(Ok(wait)), Some(Ok(limit)), Some(after)) = (wait, limit, after) else {
+        s.bad_bodies.push(format!("voice/changes: after, wait and limit are required: {query}"));
+        return err(400, "validation_failed", "after, wait, limit", json!({}));
+    };
+    if wait > sew_wire::VOICE_CHANGES_WAIT_MAX_S || !(1..=sew_wire::VOICE_CHANGES_LIMIT_MAX).contains(&limit) {
+        s.bad_bodies.push(format!("voice/changes: wait 0..30, limit 1..500: {query}"));
+        return err(400, "validation_failed", "wait 0..30, limit 1..500", json!({}));
+    }
+    if !s.spaces.contains_key(&space) {
+        return err(404, "not_found", "no such space", json!({}));
+    }
+    let head = voice_cursor(s);
+    let gone = || err(410, "gone", "the cursor is gone: read voice/states again", json!({"reason": "cursor_expired", "head": head.clone()}));
+    let Some((epoch, seq)) = after.split_once('.').and_then(|(e, q)| Some((e.parse::<u64>().ok()?, q.parse::<u64>().ok()?))) else {
+        return gone();
+    };
+    if epoch != s.voice_epoch || seq < s.voice_floor || seq > s.voice_seq {
+        return gone();
+    }
+    let changes: Vec<Value> = s
+        .voice_changes
+        .iter()
+        .filter(|c| c["seq"].as_u64().unwrap_or(0) > seq && c["space_id"] == space.as_str())
+        .take(limit as usize)
+        .map(|c| {
+            let mut c = c.clone();
+            c.as_object_mut().expect("change").remove("space_id");
+            c
+        })
+        .collect();
+    // Empty: everything up to the head was read (none of it this Space's).
+    let next_seq = changes.last().and_then(|c| c["seq"].as_u64()).unwrap_or(s.voice_seq);
+    (200, json!({"changes": changes, "next": format!("{}.{}", s.voice_epoch, next_seq)}).to_string())
+}
+
+/// SW-4: `POST /mgmt/v1/channels/{channel_id}/closing {closing}`.
+fn channel_closing(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_flag(s, VOICE_CHANNEL_CLOSING) {
+        s.bad_paths.push(format!("POST {path} (no {VOICE_CHANNEL_CLOSING} flag)"));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let id = path.trim_start_matches("/mgmt/v1/channels/").trim_end_matches("/closing").to_string();
+    let req: sew_wire::ChannelClosingRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "channels/closing", e, body),
+    };
+    let found = s
+        .spaces
+        .iter()
+        .find_map(|(sid, sp)| sp.channels.values().find(|c| c.id.to_string() == id).map(|c| (sid.clone(), c.id, c.kind.clone(), c.archived)));
+    let Some((space_id, cid, kind, archived)) = found else {
+        return err(404, "not_found", "no such channel", json!({}));
+    };
+    if kind != sew_wire::CHANNEL_TYPE_VOICE {
+        return err(422, "invalid_state", "not a voice channel", json!({"reason": "not_voice_channel"}));
+    }
+    if archived {
+        return err(409, "conflict", "the room is archived", json!({"reason": "channel_archived"}));
+    }
+    let occupied = s.voice_states.iter().any(|v| v.channel_id == cid);
+    let c = s.spaces.get_mut(&space_id).and_then(|sp| sp.channels.values_mut().find(|c| c.id == cid)).expect("channel");
+    if !req.closing {
+        c.closing = false;
+        return (200, json!({"closing": false, "archived": false}).to_string());
+    }
+    if !occupied {
+        c.closing = false;
+        c.archived = true;
+        push_voice_change(s, &space_id, json!({"kind": "channel_archived", "channel_id": cid.to_string()}));
+        return (200, json!({"closing": true, "archived": true}).to_string());
+    }
+    let was = c.closing;
+    c.closing = true;
+    if !was {
+        push_voice_change(s, &space_id, json!({"kind": "channel_closing", "channel_id": cid.to_string()}));
+    }
+    (200, json!({"closing": true, "archived": false}).to_string())
+}
+
+/// SW-11: `POST /mgmt/v1/voice/media-path {state, reason?}`.
+fn media_path_set(s: &mut State, body: &str) -> (u16, String) {
+    if !has_flag(s, VOICE_MEDIA_PATH) {
+        s.bad_paths.push(format!("POST {} (no {VOICE_MEDIA_PATH} flag)", sew_wire::MGMT_VOICE_MEDIA_PATH));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let req: sew_wire::MediaPathRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "voice/media-path", e, body),
+    };
+    if let Err(e) = req.validate() {
+        return bad_body(s, "voice/media-path", e, body);
+    }
+    let same = s.media_path.as_ref().map_or(req.state == sew_wire::MEDIA_PATH_UP, |m| m.state == req.state);
+    let mut ended = 0u64;
+    if !same {
+        if req.state == sew_wire::MEDIA_PATH_DOWN {
+            let mut calls: Vec<u64> = s.voice_states.iter().map(|v| v.channel_id).collect();
+            calls.sort_unstable();
+            calls.dedup();
+            ended = calls.len() as u64;
+            voice_drop(s, |_| true, sew_wire::leave_reasons::MEDIA_PATH_DOWN);
+        }
+        s.media_path = Some(MediaPath {
+            state: req.state.clone(),
+            since: format!("2026-11-01T00:00:{:02}Z", s.calls.len() % 60),
+            reason: if req.state == sew_wire::MEDIA_PATH_DOWN { req.reason.clone() } else { None },
+        });
+    }
+    let since = s.media_path.as_ref().map_or_else(|| TS.to_string(), |m| m.since.clone());
+    (200, json!({"state": req.state, "since": since, "ended_calls": ended}).to_string())
 }

@@ -188,6 +188,13 @@ impl MgmtClient {
         self.call("GET", path, None, None, None, JSON).await
     }
 
+    /// A GET with its own whole-call timeout: Sew 0.7.0's SW-3 long-poll
+    /// (`voice/changes?wait=<s>`) needs one longer than `wait`, never the
+    /// 10 s default (use [`long_poll_timeout`]).
+    pub async fn get_with_timeout(&self, path: &str, timeout: Duration) -> Result<MgmtResponse, TransportError> {
+        self.call_t("GET", path, None, None, None, JSON, timeout).await
+    }
+
     pub async fn post(
         &self,
         path: &str,
@@ -222,12 +229,26 @@ impl MgmtClient {
         actor: Option<&str>,
         content_type: &str,
     ) -> Result<MgmtResponse, TransportError> {
+        self.call_t(method, path, body, idem_key, actor, content_type, CALL_TIMEOUT).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn call_t(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        idem_key: Option<&str>,
+        actor: Option<&str>,
+        content_type: &str,
+        timeout: Duration,
+    ) -> Result<MgmtResponse, TransportError> {
         let token = self.token(false).await?;
-        let r = self.send(&token, method, path, body, idem_key, actor, content_type).await?;
+        let r = self.send(&token, method, path, body, idem_key, actor, content_type, timeout).await?;
         // A helper-cached token Sew refused (rotated): fetch it once more.
         if r.status == 401 && self.source == TokenSource::Helper {
             let token = self.token(true).await?;
-            return self.send(&token, method, path, body, idem_key, actor, content_type).await;
+            return self.send(&token, method, path, body, idem_key, actor, content_type, timeout).await;
         }
         Ok(r)
     }
@@ -242,6 +263,7 @@ impl MgmtClient {
         idem_key: Option<&str>,
         actor: Option<&str>,
         content_type: &str,
+        timeout: Duration,
     ) -> Result<MgmtResponse, TransportError> {
         let mut head = format!(
             "{method} {path} HTTP/1.1\r\nHost: sew\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\n"
@@ -296,10 +318,16 @@ impl MgmtClient {
             }
             parse_response(&raw)
         };
-        tokio::time::timeout(CALL_TIMEOUT, fut)
+        tokio::time::timeout(timeout, fut)
             .await
             .map_err(|_| TransportError("mgmt call timed out".into()))?
     }
+}
+
+/// The whole-call timeout for a long-poll that waits `wait` on Sew's side
+/// (SW-3): `wait + 10 s`, the sew_client pattern.
+pub fn long_poll_timeout(wait: Duration) -> Duration {
+    wait + Duration::from_secs(10)
 }
 
 /// Read and trim the token file. Never logs the token.

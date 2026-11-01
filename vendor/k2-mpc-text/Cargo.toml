@@ -6,6 +6,7 @@ members = ["crates/text"]
 edition = "2021"
 rust-version = "1.80"
 publish = false
+license = "MIT OR Apache-2.0"
 
 # The pack's own dev and test builds, as in k2-mpc-base (its tools/README.md, "Build
 # settings"). Cargo applies a workspace's profiles only when that workspace is the one being

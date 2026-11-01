@@ -486,6 +486,12 @@ pub struct OverlayDoc {
     /// renderers that don't draw the card. None on every other doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<ThreadChanges>,
+    /// post-idempotency-v1 (0.46.8): the id the sender's client gave this
+    /// post (1–64 of `[A-Za-z0-9_-]`), echoed so its outbox can settle.
+    /// Opaque, and only meaningful under the sender's own namespace, so it
+    /// goes to every reader. None on posts sent without one.
+    #[serde(default, rename = "clientMsgId", skip_serializing_if = "Option::is_none")]
+    pub client_msg_id: Option<String>,
 }
 
 /// One file in a [`ThreadChanges`] card: relative to the agent's worktree.
@@ -698,6 +704,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            client_msg_id: None,
             changes: None,
         }
     }
@@ -745,6 +752,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            client_msg_id: None,
             changes: None,
         }
     }
@@ -794,6 +802,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            client_msg_id: None,
             changes: None,
         }
     }
@@ -828,6 +837,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            client_msg_id: None,
             changes: None,
         }
     }
@@ -864,6 +874,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            client_msg_id: None,
             changes: None,
         }
     }

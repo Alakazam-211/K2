@@ -21,7 +21,7 @@ use rusqlite::Connection;
 pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
-pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
+pub use store::{ClientIdHit, ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
 pub use transfer::IMPORTED_READ_ONLY;
 
 static WRITE: Mutex<()> = Mutex::new(());
@@ -252,7 +252,75 @@ pub fn post_thread_with_attachments(
     attachments: Vec<ThreadAttachment>,
     context: Option<ThreadContext>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    match post_thread_keyed(
+        conn, conversation_id, project_id, from, to, body, via, widget, author, attachments, context, None,
+    )? {
+        ThreadPost::Posted(item, links) => Ok((item, links)),
+        ThreadPost::Duplicate(_) => Err("overlay post: a keyless post found a client key".to_string()),
+    }
+}
+
+/// post-idempotency-v1 (0.46.8): a Thread post's client key. `key` is
+/// `{ns}/{client_msg_id}` (the namespace from the sender's credential).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientMsgKey {
+    pub key: String,
+    pub client_msg_id: String,
+    /// What the sender sent (text + files), hashed: a repeat whose body
+    /// differs is answered `mismatch:true` (the first write still wins).
+    pub body_hash: String,
+    pub at_ms: i64,
+}
+
+/// What [`post_thread_keyed`] did.
+#[derive(Debug, Clone)]
+pub enum ThreadPost {
+    Posted(OverlayItem, Vec<OverlayLink>),
+    /// The client key was already kept: nothing was written. The caller
+    /// finds the stored post under ITS resolved conversation (the doc may
+    /// have moved since; a doc that isn't there is a key reused in another
+    /// chat).
+    Duplicate(store::ClientIdHit),
+}
+
+/// The client key's stored post, if the key is still kept (a read-only
+/// look before the caller does any work; [`post_thread_keyed`] checks
+/// again under the write lock, which is what makes the first write win).
+pub fn client_msg_lookup(key: &str) -> Result<Option<store::ClientIdHit>, String> {
+    store::client_id_get(key)
+}
+
+/// Drop the client keys written before `before_ms` (the daemon's sweep).
+pub fn sweep_client_msg_ids(before_ms: i64) -> Result<usize, String> {
     let _guard = WRITE.lock();
+    store::sweep_client_ids(before_ms)
+}
+
+/// [`post_thread_with_attachments`] with an optional client key
+/// (post-idempotency-v1): under the overlay write lock, a key already kept
+/// returns [`ThreadPost::Duplicate`] and writes nothing (no seq is taken);
+/// otherwise the key is written in the post's own redb transaction.
+#[allow(clippy::too_many_arguments)]
+pub fn post_thread_keyed(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    body: &str,
+    via: &str,
+    widget: Option<WidgetOrigin>,
+    author: Option<PostAuthor>,
+    attachments: Vec<ThreadAttachment>,
+    context: Option<ThreadContext>,
+    client: Option<&ClientMsgKey>,
+) -> Result<ThreadPost, String> {
+    let _guard = WRITE.lock();
+    if let Some(c) = client {
+        if let Some(hit) = store::client_id_get(&c.key)? {
+            return Ok(ThreadPost::Duplicate(hit));
+        }
+    }
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut doc = OverlayDoc::text(
@@ -269,7 +337,9 @@ pub fn post_thread_with_attachments(
         c.text = crate::redaction::redact(&c.text);
         c
     });
-    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    doc.client_msg_id = client.map(|c| c.client_msg_id.clone());
+    let write = client.map(|c| store::ClientIdWrite { key: &c.key, at_ms: c.at_ms, body_hash: &c.body_hash });
+    store::commit_write_keyed(&doc, Some((conversation_id, seq)), &[], None, write)?;
     let item = OverlayItem {
         collection: "thread".to_string(),
         seq,
@@ -283,7 +353,7 @@ pub fn post_thread_with_attachments(
         seq,
         id,
     }];
-    Ok((item, links))
+    Ok(ThreadPost::Posted(item, links))
 }
 
 /// A person's Design-notes post (prd-browser-design-mode-v1 D-A10): one
@@ -2078,5 +2148,127 @@ mod tests {
         let d = read_thread_delta(&moved_to, 0, 25).expect("delta");
         assert_eq!(seqs(&d.items), vec![1, 2]);
         assert!(d.removed.is_empty(), "{d:?}");
+    }
+
+    fn client_key(id: &str, at_ms: i64, hash: &str) -> ClientMsgKey {
+        ClientMsgKey { key: format!("p:core-test/{id}"), client_msg_id: id.to_string(), body_hash: hash.to_string(), at_ms }
+    }
+
+    fn post_keyed(c: &Connection, conv: &str, project_id: &str, body: &str, k: &ClientMsgKey) -> ThreadPost {
+        post_thread_keyed(c, conv, project_id, "owner", "ovl-idem", body, "compose", None, None, Vec::new(), None, Some(k))
+            .expect("keyed post")
+    }
+
+    /// post-idempotency-v1: the first keyed post is stored with its id
+    /// echoed; a repeat writes nothing (no seq taken) and names the first
+    /// doc, also after the conversation moved.
+    #[test]
+    fn keyed_post_stores_once_and_follows_a_move() {
+        let project_id = seed_project("ovl-idem");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let id = format!("cm-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let k = client_key(&id, chrono::Utc::now().timestamp_millis(), "h1");
+        let first = match post_keyed(&c, &conv, &project_id, "hello", &k) {
+            ThreadPost::Posted(item, _) => item,
+            ThreadPost::Duplicate(h) => panic!("first post must store, got duplicate {h:?}"),
+        };
+        assert_eq!(first.doc.client_msg_id.as_deref(), Some(id.as_str()), "the id is echoed on the doc");
+        let json = serde_json::to_value(&first.doc).expect("doc json");
+        assert_eq!(json["clientMsgId"], serde_json::json!(id), "wire name is clientMsgId: {json}");
+
+        let hit = match post_keyed(&c, &conv, &project_id, "hello again", &k) {
+            ThreadPost::Duplicate(h) => h,
+            ThreadPost::Posted(item, _) => panic!("repeat must not store, stored {item:?}"),
+        };
+        assert_eq!(hit.doc_id, first.id);
+        assert_eq!(hit.conversation_id, conv);
+        assert_eq!(hit.body_hash, "h1", "the FIRST body's hash is kept");
+        assert_eq!(read_thread(&conv, 0).expect("read").len(), 1, "one item only");
+        let (_, last_thread, _) = catalog::get(&c, &conv).expect("catalog").expect("row");
+        assert_eq!(last_thread, 1, "a duplicate takes no seq");
+
+        // Another sender's namespace with the same id is a new post.
+        let other = ClientMsgKey { key: format!("p:core-other/{id}"), ..k.clone() };
+        assert!(
+            matches!(post_keyed(&c, &conv, &project_id, "x", &other), ThreadPost::Posted(..)),
+            "another sender's same id posts"
+        );
+
+        // After a move the key still finds the doc, on the new key.
+        let to = uuid::Uuid::new_v4().to_string();
+        move_conversation(&c, &conv, &to).expect("move").expect("moved");
+        let hit = client_msg_lookup(&k.key).expect("lookup").expect("still kept");
+        assert_eq!(hit.doc_id, first.id);
+        assert!(store::thread_seq_of(&to, &hit.doc_id).expect("seq of").is_some(), "the doc is on the moved conversation");
+        assert!(store::thread_seq_of(&conv, &hit.doc_id).expect("seq of").is_none(), "and no longer on the old key");
+    }
+
+    /// Several threads posting the same key at once: exactly one item.
+    #[test]
+    fn keyed_post_first_write_wins_under_concurrency() {
+        let project_id = seed_project("ovl-idem-race");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let id = format!("race-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let k = client_key(&id, chrono::Utc::now().timestamp_millis(), "h");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let (conv, project_id, k, barrier) = (conv.clone(), project_id.clone(), k.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let dbh = conn();
+                    let c = dbh.lock();
+                    matches!(post_keyed(&c, &conv, &project_id, &format!("racer {i}"), &k), ThreadPost::Posted(..))
+                })
+            })
+            .collect();
+        let stored = handles.into_iter().map(|h| h.join().expect("racer")).filter(|p| *p).count();
+        assert_eq!(stored, 1, "exactly one racer stores");
+        assert_eq!(read_thread(&conv, 0).expect("read").len(), 1, "one item only");
+    }
+
+    /// The store refuses a second write of a kept key even without the
+    /// caller's check (the in-transaction backstop), writing nothing.
+    #[test]
+    fn commit_write_keyed_refuses_a_kept_key() {
+        let id = format!("bk-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let k = client_key(&id, chrono::Utc::now().timestamp_millis(), "h");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let doc = |n: &str| OverlayDoc::text(uuid::Uuid::new_v4().to_string(), "k2".into(), "x".into(), n.into(), "thread");
+        let w = || store::ClientIdWrite { key: &k.key, at_ms: k.at_ms, body_hash: "h" };
+        store::commit_write_keyed(&doc("one"), Some((conv.as_str(), 1)), &[], None, Some(w())).expect("first write");
+        let second = doc("two");
+        let err = store::commit_write_keyed(&second, Some((conv.as_str(), 2)), &[], None, Some(w())).expect_err("second write refused");
+        assert_eq!(err, store::CLIENT_ID_TAKEN);
+        assert!(store::get_doc(&second.id).expect("get").is_none(), "the refused doc was not written");
+        assert_eq!(read_thread(&conv, 0).expect("read").len(), 1);
+    }
+
+    /// The sweep drops keys older than its cutoff (and only those); a
+    /// swept key posts again. These keys are written at an injected time
+    /// in 1970, so the sweep never touches another test's keys.
+    #[test]
+    fn client_key_sweep_frees_old_keys_only() {
+        let project_id = seed_project("ovl-idem-sweep");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let hour = 3_600_000i64;
+        let base = 1_000_000 + (uuid::Uuid::new_v4().as_u128() % 1_000_000) as i64;
+        let old = client_key(&format!("old-{}", &uuid::Uuid::new_v4().to_string()[..8]), base, "h");
+        let young = client_key(&format!("young-{}", &uuid::Uuid::new_v4().to_string()[..8]), base + 2 * hour, "h");
+        assert!(matches!(post_keyed(&c, &conv, &project_id, "a", &old), ThreadPost::Posted(..)));
+        assert!(matches!(post_keyed(&c, &conv, &project_id, "b", &young), ThreadPost::Posted(..)));
+        // The daemon sweeps with `before = now - 24 h`.
+        sweep_client_msg_ids(base + 23 * hour - 24 * hour).expect("sweep at 23 h");
+        assert!(client_msg_lookup(&old.key).expect("lookup").is_some(), "kept at 23 h");
+        let n = sweep_client_msg_ids(base + 25 * hour - 24 * hour).expect("sweep at 25 h");
+        assert!(n >= 1, "the old key is swept, got {n}");
+        assert!(client_msg_lookup(&old.key).expect("lookup").is_none(), "swept after 25 h");
+        assert!(client_msg_lookup(&young.key).expect("lookup").is_some(), "the younger key stays");
+        assert!(matches!(post_keyed(&c, &conv, &project_id, "a", &old), ThreadPost::Posted(..)), "a swept key posts again");
+        assert_eq!(read_thread(&conv, 0).expect("read").len(), 3);
     }
 }

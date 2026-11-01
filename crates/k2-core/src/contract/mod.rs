@@ -694,6 +694,8 @@ mod tests {
                 "app_mismatch",
                 // Sew 0.6.0: chat.createChannel on a slug of another type.
                 "channel_type_mismatch",
+                // post-idempotency-v1 (0.46.8): thread.send, project.post.
+                "client_msg_id_reused",
                 "chat_unavailable",
                 // RS-A15 guest rooms (both transports).
                 "app_pass_required",

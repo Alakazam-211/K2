@@ -1410,6 +1410,9 @@ struct MsgBody {
     group: String,
     body: String,
     author: Option<String>,
+    /// post-idempotency-v1: the client's id for this post (1–64 of
+    /// `[A-Za-z0-9_-]`); a repeat answers the stored line.
+    client_msg_id: Option<String>,
 }
 
 /// The injected payload (§4.3): `[project:<name>] <body>`.
@@ -1459,6 +1462,11 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
     let b: MsgBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    // post-idempotency-v1: checked before anything is resolved or stored.
+    let client_msg_id = match crate::client_msg_id::parse(b.client_msg_id.as_deref()) {
+        Ok(id) => id,
+        Err(r) => return r,
     };
     if b.group.is_empty() {
         return usage_error("missing 'group' (a project name, id, or unique prefix)");
@@ -1571,7 +1579,23 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         }
     });
 
-    let posted = match store_and_deliver(
+    // post-idempotency-v1: the namespace is the caller's credential — the
+    // agent passport's workspace, else the session's person (the owner
+    // token and linked logins are one person) — never the body's `author`.
+    let client_ns = client_msg_id.as_ref().map(|_| match agent_workspace {
+        Some(ws) => crate::client_msg_id::agent_ns(ws),
+        None => crate::client_msg_id::person_ns(session_author),
+    });
+    let client = match (&client_ns, &client_msg_id) {
+        (Some(ns), Some(id)) => Some(project_groups::ClientKey {
+            ns,
+            client_msg_id: id,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        }),
+        _ => None,
+    };
+
+    let stored = match store_and_deliver(
         &group,
         &group_id,
         author,
@@ -1579,29 +1603,62 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         author_workspace_id.as_deref(),
         author_person.as_deref(),
         &b.body,
+        client,
     ) {
         Ok(p) => p,
         Err(r) => return r,
     };
-    let Posted { msg, delivered, delivery_reason, delivered_session } = posted;
+    let Posted { msg, delivered, delivery_reason, delivered_session } = match stored {
+        Stored::Posted(p) => p,
+        Stored::Duplicate { msg, mismatch } => {
+            return CliResponse::ok_json(duplicate_reply_json(&msg, &group.name, mismatch).to_string());
+        }
+    };
 
-    CliResponse::ok_json(
-        serde_json::json!({
-            "ok": true,
-            "id": msg.id,
-            "groupId": group_id,
-            "groupName": group.name,
-            "author": msg.author,
-            "authorKind": msg.author_kind,
-            "body": msg.body,
-            "createdAt": msg.created_at,
-            "seq": msg.seq,
-            "delivered": delivered,
-            "deliveryReason": delivery_reason,
-            "deliveredSessionId": delivered_session,
-        })
-        .to_string(),
-    )
+    let mut reply = msg_reply_json(&msg, &group.name);
+    reply["delivered"] = serde_json::json!(delivered);
+    reply["deliveryReason"] = serde_json::json!(delivery_reason);
+    reply["deliveredSessionId"] = serde_json::json!(delivered_session);
+    CliResponse::ok_json(reply.to_string())
+}
+
+/// The answer to a project chat post: the stored line. The first post and
+/// a post-idempotency-v1 repeat share it; only the first adds its delivery
+/// outcome (not stored), a repeat adds `duplicate` instead.
+pub(crate) fn msg_reply_json(msg: &project_groups::ProjectGroupMessage, group_name: &str) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "ok": true,
+        "id": msg.id,
+        "groupId": msg.group_id,
+        "groupName": group_name,
+        "author": msg.author,
+        "authorKind": msg.author_kind,
+        "body": msg.body,
+        "createdAt": msg.created_at,
+        "seq": msg.seq,
+    });
+    if let Some(id) = &msg.client_msg_id {
+        v["clientMsgId"] = serde_json::json!(id);
+    }
+    v
+}
+
+/// post-idempotency-v1: a repeat's answer (`mismatch` when its body
+/// differed from the stored line's).
+pub(crate) fn duplicate_reply_json(msg: &project_groups::ProjectGroupMessage, group_name: &str, mismatch: bool) -> serde_json::Value {
+    let mut v = msg_reply_json(msg, group_name);
+    v["duplicate"] = serde_json::json!(true);
+    if mismatch {
+        v["mismatch"] = serde_json::json!(true);
+    }
+    v
+}
+
+/// What [`store_and_deliver`] did: a new line (delivered), or a
+/// post-idempotency-v1 repeat (nothing stored or sent again).
+pub(crate) enum Stored {
+    Posted(Posted),
+    Duplicate { msg: project_groups::ProjectGroupMessage, mismatch: bool },
 }
 
 /// A stored project chat line and what its point-of-contact delivery did.
@@ -1621,6 +1678,11 @@ pub(crate) struct Posted {
 /// `author_person` is a person author's read-state key (`None` for agents
 /// and guests: a guest advances its own cursor itself, and a guest's line
 /// pushes to every person's phone).
+///
+/// `client` (post-idempotency-v1): a key already kept for this project
+/// returns [`Stored::Duplicate`] and runs none of the steps; one kept for
+/// another project is the 409 `client_msg_id_reused`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn store_and_deliver(
     group: &project_groups::ProjectGroup,
     group_id: &str,
@@ -1629,10 +1691,13 @@ pub(crate) fn store_and_deliver(
     author_workspace_id: Option<&str>,
     author_person: Option<&str>,
     body: &str,
-) -> Result<Posted, CliResponse> {
+    client: Option<project_groups::ClientKey<'_>>,
+) -> Result<Stored, CliResponse> {
     // Store.
-    let msg = match project_groups::post_message_as(group_id, author, author_kind, body) {
-        Ok(m) => m,
+    let msg = match project_groups::post_message_keyed(group_id, author, author_kind, body, client) {
+        Ok(project_groups::PostOutcome::Posted(m)) => m,
+        Ok(project_groups::PostOutcome::Duplicate { msg, mismatch }) => return Ok(Stored::Duplicate { msg, mismatch }),
+        Ok(project_groups::PostOutcome::ReusedElsewhere) => return Err(crate::client_msg_id::reused()),
         Err(e) => return Err(core_error(e)),
     };
     // A person's own line advances their own cursor (it never counts as
@@ -1709,7 +1774,7 @@ pub(crate) fn store_and_deliver(
         }
     };
 
-    Ok(Posted { msg, delivered, delivery_reason, delivered_session })
+    Ok(Stored::Posted(Posted { msg, delivered, delivery_reason, delivered_session }))
 }
 
 // ── Dashboards ────────────────────────────────────────────────────────

@@ -537,3 +537,151 @@ fn the_rows_are_app_only_on_both_doors_with_project_write_a_known_cap() {
     assert_eq!(k2_core::workspace::settings::app_core_of_cap(CAP_PROJECT_WRITE), None, "person-held, no core");
     assert!(crate::boot_status::features().contains(&pc::FEATURE));
 }
+
+// ── post-idempotency-v1 (0.46.8) ─────────────────────────────────────
+
+fn owner_post(b: J) -> CliResponse {
+    crate::project_group_routes::dispatch_post("/cli/project-group/msg", b.to_string().as_bytes(), "owner")
+}
+
+fn lines(gid: &str) -> Vec<project_groups::ProjectGroupMessage> {
+    project_groups::list_messages(gid, None, Some(500)).unwrap().messages
+}
+
+/// The owner's post (`POST /cli/project-group/msg`): the first post echoes
+/// its id (answer, row, frame); a repeat answers the stored line with
+/// `duplicate: true` and no delivery fields, sends no second frame;
+/// a differing body is `mismatch`; the id in another project is 409; a
+/// bad id is 400 before anything is stored; no id is unchanged.
+#[test]
+fn a_project_post_repeat_answers_the_stored_line_once() {
+    let _keys = crate::client_msg_id::test_lock();
+    let f = fx("cmid");
+    let mut rx = pc::subscribe();
+    let id = "phone-out-1";
+    let first = ok(owner_post(json!({ "group": f.both, "body": "ship friday?", "clientMsgId": id })));
+    assert_eq!(first["clientMsgId"], id, "{first}");
+    assert!(first.get("delivered").is_some() && first.get("duplicate").is_none(), "{first}");
+
+    let again = ok(owner_post(json!({ "group": f.both, "body": "ship friday?", "clientMsgId": id })));
+    assert_eq!(again["duplicate"], true, "{again}");
+    assert!(again.get("mismatch").is_none(), "{again}");
+    for k in ["id", "seq", "groupId", "groupName", "author", "authorKind", "body", "createdAt", "clientMsgId"] {
+        assert_eq!(again[k], first[k], "the repeat answers the stored line's {k}");
+    }
+    for k in ["delivered", "deliveryReason", "deliveredSessionId"] {
+        assert!(again.get(k).is_none(), "a repeat carries no delivery outcome ({k}): {again}");
+    }
+    let differs = ok(owner_post(json!({ "group": f.both, "body": "ship monday?", "clientMsgId": id })));
+    assert_eq!((differs["duplicate"].as_bool(), differs["mismatch"].as_bool()), (Some(true), Some(true)), "{differs}");
+    assert_eq!(differs["body"], "ship friday?", "the first write wins");
+
+    let stored = lines(&f.both);
+    assert_eq!(stored.len(), 1, "one line only: {stored:?}");
+    assert_eq!(stored[0].client_msg_id.as_deref(), Some(id));
+    let mut frames = Vec::new();
+    while let Ok(m) = rx.try_recv() {
+        if m.group_id == f.both {
+            frames.push(m);
+        }
+    }
+    assert_eq!(frames.len(), 1, "one frame only: {frames:?}");
+    let wire: J = serde_json::from_str(&pc::frame_wire(&frames[0])).unwrap();
+    assert_eq!(wire["doc"]["clientMsgId"], id, "echoed on the frame: {wire}");
+    assert_row_shape("project.events", &wire);
+
+    let elsewhere = owner_post(json!({ "group": f.solo, "body": "ship friday?", "clientMsgId": id }));
+    assert_eq!((status(&elsewhere), body(&elsewhere)["error"]["code"].as_str()), (409, Some("client_msg_id_reused")), "{}", elsewhere.body);
+    assert!(lines(&f.solo).is_empty(), "nothing stored in the other project");
+
+    for bad in [json!(""), json!("x".repeat(65)), json!("a b"), json!("a.b"), json!(7), json!(["a"])] {
+        let r = owner_post(json!({ "group": f.solo, "body": "x", "clientMsgId": bad }));
+        assert_eq!((status(&r), body(&r)["error"]["code"].as_str()), (400, Some("usage")), "{bad}: {}", r.body);
+    }
+    // Checked before the project resolves.
+    let r = owner_post(json!({ "group": "no-such-project-cmid", "body": "x", "clientMsgId": "a b" }));
+    assert_eq!(status(&r), 400, "{}", r.body);
+    assert!(lines(&f.solo).is_empty(), "nothing stored by a bad id");
+
+    let plain = ok(owner_post(json!({ "group": f.solo, "body": "old phone" })));
+    assert!(plain.get("clientMsgId").is_none() && plain.get("duplicate").is_none(), "{plain}");
+    ok(owner_post(json!({ "group": f.solo, "body": "old phone" })));
+    assert_eq!(lines(&f.solo).len(), 2, "without an id every post stores");
+    let _ = (&f.ops, &f.hr, &f.with_hr, &f.empty, &f.sales);
+}
+
+/// The key is the sender's: the owner, a Connect login, a member agent and
+/// an App guest each post with one id and each gets its own line. An App
+/// guest's repeat is a duplicate, both answers fit the catalog row, and the
+/// id reads back on project.read.
+#[test]
+fn each_senders_key_is_its_own_and_a_guest_repeat_is_a_duplicate() {
+    let _keys = crate::client_msg_id::test_lock();
+    let f = fx("cmidns");
+    let id = "same-id";
+    let b = |text: &str| json!({ "group": f.solo, "body": text, "clientMsgId": id }).to_string();
+    ok(crate::project_group_routes::dispatch_post("/cli/project-group/msg", b("owner").as_bytes(), "owner"));
+    ok(crate::project_group_routes::dispatch_post("/cli/project-group/msg", b("alice").as_bytes(), "cmid-alice"));
+    ok(crate::project_group_routes::handle_msg_as(b("agent").as_bytes(), "owner", Some(&f.sales)));
+    let writer = guest("pid-cmid", "gil", &[(&f.sales, &[CAP_THREAD_READ, CAP_PROJECT_WRITE])]);
+    let first = ok(post(POST_ROUTE, &writer, json!({ "group": f.solo, "body": "guest", "clientMsgId": id })));
+    assert_row_shape("project.post", &first);
+    assert_eq!(first["clientMsgId"], id);
+    assert_eq!(lines(&f.solo).len(), 4, "four senders, four lines");
+
+    let again = ok(post(POST_ROUTE, &writer, json!({ "group": f.solo, "body": "guest", "clientMsgId": id })));
+    assert_row_shape("project.post", &again);
+    assert_eq!((again["duplicate"].as_bool(), again["id"].clone()), (Some(true), first["id"].clone()), "{again}");
+    assert!(again.get("delivered").is_none(), "{again}");
+    assert_eq!(lines(&f.solo).len(), 4, "the guest's repeat stores nothing");
+    let bad = post(POST_ROUTE, &writer, json!({ "group": f.solo, "body": "guest", "clientMsgId": "no spaces" }));
+    assert_eq!((status(&bad), body(&bad)["error"]["code"].as_str()), (400, Some("usage")), "{}", bad.body);
+
+    let page = ok(get(MESSAGES_ROUTE, &writer, &[("group", &f.solo)]));
+    assert_row_shape("project.read", &page);
+    assert!(page["messages"].as_array().unwrap().iter().all(|m| m["clientMsgId"] == id), "{page}");
+    let _ = (&f.ops, &f.hr, &f.both, &f.with_hr, &f.empty);
+}
+
+/// Concurrent posts with one key: one line.
+#[test]
+fn concurrent_project_posts_with_one_key_store_one_line() {
+    let _keys = crate::client_msg_id::test_lock();
+    let f = fx("cmidrace");
+    let handle = f._db.handle();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let threads: Vec<_> = (0..4)
+        .map(|i| {
+            let (handle, barrier, gid) = (handle.clone(), barrier.clone(), f.both.clone());
+            std::thread::spawn(move || {
+                k2_core::db::with_scoped_handle(handle, || {
+                    barrier.wait();
+                    let r = owner_post(json!({ "group": gid, "body": format!("racer {i}"), "clientMsgId": "race" }));
+                    assert_eq!(status(&r), 200, "{}", r.body);
+                    body(&r).get("duplicate").is_none()
+                })
+            })
+        })
+        .collect();
+    let stored = threads.into_iter().map(|t| t.join().unwrap()).filter(|first| *first).count();
+    assert_eq!(stored, 1, "exactly one racer stores");
+    assert_eq!(lines(&f.both).len(), 1);
+    let _ = (&f.sales, &f.ops, &f.hr, &f.with_hr, &f.solo, &f.empty);
+}
+
+/// The daemon's sweep frees a project key after a day.
+#[test]
+fn the_sweep_frees_a_project_key_after_a_day() {
+    let _keys = crate::client_msg_id::test_lock();
+    let f = fx("cmidsweep");
+    let sent = chrono::Utc::now().timestamp_millis();
+    ok(owner_post(json!({ "group": f.solo, "body": "kept a day", "clientMsgId": "day" })));
+    let hour = 3_600_000i64;
+    crate::client_msg_id::sweep(sent + 23 * hour);
+    assert_eq!(ok(owner_post(json!({ "group": f.solo, "body": "kept a day", "clientMsgId": "day" })))["duplicate"], true, "kept at 23 h");
+    crate::client_msg_id::sweep(sent + 25 * hour);
+    let r = ok(owner_post(json!({ "group": f.solo, "body": "kept a day", "clientMsgId": "day" })));
+    assert!(r.get("duplicate").is_none(), "swept after 25 h: {r}");
+    assert_eq!(lines(&f.solo).len(), 2);
+    let _ = (&f.sales, &f.ops, &f.hr, &f.both, &f.with_hr, &f.empty);
+}

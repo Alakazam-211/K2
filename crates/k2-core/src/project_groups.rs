@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 /// The layout blob a fresh dashboard starts with (versioned; the
 /// structure inside is renderer-owned — core only guarantees valid
@@ -100,6 +100,11 @@ pub struct ProjectGroupMessage {
     /// [`AUTHOR_KIND_AGENT`] or [`AUTHOR_KIND_GUEST`] (an App guest, 0.46.3).
     /// Own posts never count as unread.
     pub author_kind: String,
+    /// post-idempotency-v1 (0.46.8, migration 0258): the id the sender's
+    /// client gave the post, echoed so its outbox can settle. None on lines
+    /// posted without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_msg_id: Option<String>,
 }
 
 /// `project_group_messages.author_kind` of a person's post.
@@ -234,6 +239,7 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroupMessage> 
         created_at: row.get(4)?,
         seq: row.get(5)?,
         author_kind: row.get(6)?,
+        client_msg_id: row.get(7)?,
     })
 }
 
@@ -907,6 +913,70 @@ pub fn post_message_as(
     author_kind: &str,
     body: &str,
 ) -> Result<ProjectGroupMessage, String> {
+    match post_message_keyed(group_id, author, author_kind, body, None)? {
+        PostOutcome::Posted(m) => Ok(m),
+        PostOutcome::Duplicate { .. } | PostOutcome::ReusedElsewhere => {
+            Err("message insert failed: a keyless post found a client key".to_string())
+        }
+    }
+}
+
+/// A project chat post's client key (post-idempotency-v1): the sender's
+/// namespace from its credential (`p:<person>`, `g:<App guest>`,
+/// `a:<workspace>`, never the body) and the client's id.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientKey<'a> {
+    pub ns: &'a str,
+    pub client_msg_id: &'a str,
+    /// Unix ms, the sweep's clock.
+    pub at_ms: i64,
+}
+
+/// What [`post_message_keyed`] did.
+#[derive(Debug, Clone)]
+pub enum PostOutcome {
+    Posted(ProjectGroupMessage),
+    /// The key was already kept for this project: nothing was written;
+    /// `msg` is the stored line, `mismatch` when this body differs (the
+    /// first write wins).
+    Duplicate { msg: ProjectGroupMessage, mismatch: bool },
+    /// The key names a line in ANOTHER project (409 `client_msg_id_reused`).
+    ReusedElsewhere,
+}
+
+/// How long a client key is kept at least (24 h; the daemon's hourly
+/// sweep drops it within the next hour). Thread keys use the same span.
+pub const CLIENT_KEY_TTL_MS: i64 = 24 * 3_600_000;
+
+/// Drop the project chat client keys written before `before_ms` (the
+/// daemon's sweep). Returns how many went.
+pub fn sweep_client_keys(before_ms: i64) -> Result<usize, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute("DELETE FROM project_group_client_ids WHERE created_ms < ?1", params![before_ms])
+        .map_err(|e| format!("client key sweep failed: {e}"))
+}
+
+/// True when migration 0258's key table exists.
+pub fn client_keys_ready(conn: &rusqlite::Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'project_group_client_ids'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// [`post_message_as`] with an optional client key. The check and the
+/// insert run under the one DB lock, the key row inside the post's own
+/// savepoint, and the key is the table's primary key: the first write wins.
+pub fn post_message_keyed(
+    group_id: &str,
+    author: &str,
+    author_kind: &str,
+    body: &str,
+    client: Option<ClientKey<'_>>,
+) -> Result<PostOutcome, String> {
     if author_kind != AUTHOR_KIND_PERSON && author_kind != AUTHOR_KIND_AGENT && author_kind != AUTHOR_KIND_GUEST {
         return Err(format!(
             "usage: author kind must be '{AUTHOR_KIND_PERSON}', '{AUTHOR_KIND_AGENT}' or '{AUTHOR_KIND_GUEST}'"
@@ -936,6 +1006,31 @@ pub fn post_message_as(
     if !group_exists {
         return Err(format!("no project group with id {group_id}"));
     }
+    if let Some(c) = client {
+        let hit: Option<(String, String)> = conn
+            .query_row(
+                "SELECT group_id, message_id FROM project_group_client_ids WHERE ns = ?1 AND client_msg_id = ?2",
+                params![c.ns, c.client_msg_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("client key read failed: {e}"))?;
+        if let Some((hit_group, message_id)) = hit {
+            if hit_group != group_id {
+                return Ok(PostOutcome::ReusedElsewhere);
+            }
+            let msg = conn
+                .query_row(
+                    "SELECT id, group_id, author, body, created_at, seq, author_kind, client_msg_id \
+                     FROM project_group_messages WHERE id = ?1",
+                    params![message_id],
+                    row_to_message,
+                )
+                .map_err(|e| format!("client key message read failed: {e}"))?;
+            let mismatch = msg.body != body_t;
+            return Ok(PostOutcome::Duplicate { msg, mismatch });
+        }
+    }
     conn.execute_batch("SAVEPOINT pg_post").map_err(|e| format!("message insert failed: {e}"))?;
     let inserted = (|| -> Result<i64, String> {
         conn.execute(
@@ -947,11 +1042,19 @@ pub fn post_message_as(
             .query_row("SELECT last_msg_seq FROM project_groups WHERE id = ?1", params![group_id], |r| r.get(0))
             .map_err(|e| format!("message seq failed: {e}"))?;
         conn.execute(
-            "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, group_id, author, body_t, now, seq, author_kind],
+            "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind, client_msg_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, group_id, author, body_t, now, seq, author_kind, client.map(|c| c.client_msg_id)],
         )
         .map_err(|e| format!("message insert failed: {e}"))?;
+        if let Some(c) = client {
+            conn.execute(
+                "INSERT INTO project_group_client_ids (ns, client_msg_id, group_id, message_id, created_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![c.ns, c.client_msg_id, group_id, id, c.at_ms],
+            )
+            .map_err(|e| format!("client key insert failed: {e}"))?;
+        }
         Ok(seq)
     })();
     let seq = match inserted {
@@ -964,7 +1067,7 @@ pub fn post_message_as(
             return Err(e);
         }
     };
-    Ok(ProjectGroupMessage {
+    Ok(PostOutcome::Posted(ProjectGroupMessage {
         id,
         group_id: group_id.to_string(),
         author: author.to_string(),
@@ -972,7 +1075,8 @@ pub fn post_message_as(
         created_at: now,
         seq,
         author_kind: author_kind.to_string(),
-    })
+        client_msg_id: client.map(|c| c.client_msg_id.to_string()),
+    }))
 }
 
 /// With `after`, reads are capped at 500 rows per page.
@@ -1003,7 +1107,7 @@ pub fn list_messages(
     }
     let db = crate::db::shared();
     let conn = db.lock();
-    const MSG_COLS: &str = "id, group_id, author, body, created_at, seq, author_kind";
+    const MSG_COLS: &str = "id, group_id, author, body, created_at, seq, author_kind, client_msg_id";
     match after {
         Some(ts) => {
             let eff = limit.unwrap_or(MESSAGES_AFTER_LIMIT).min(MESSAGES_AFTER_LIMIT);
@@ -1062,7 +1166,7 @@ pub fn list_messages_after_seq(group_id: &str, after_seq: i64, limit: Option<i64
     let conn = db.lock();
     let mut stmt = conn
         .prepare(
-            "SELECT id, group_id, author, body, created_at, seq, author_kind FROM project_group_messages \
+            "SELECT id, group_id, author, body, created_at, seq, author_kind, client_msg_id FROM project_group_messages \
              WHERE group_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
         )
         .map_err(|e| format!("prepare: {e}"))?;
@@ -1096,7 +1200,7 @@ pub fn list_messages_before_seq(group_id: &str, before_seq: i64, limit: Option<i
     let conn = db.lock();
     let mut stmt = conn
         .prepare(
-            "SELECT id, group_id, author, body, created_at, seq, author_kind FROM project_group_messages \
+            "SELECT id, group_id, author, body, created_at, seq, author_kind, client_msg_id FROM project_group_messages \
              WHERE group_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
         )
         .map_err(|e| format!("prepare: {e}"))?;
@@ -2216,5 +2320,126 @@ mod tests {
 
         // Unknown group fails loudly.
         assert!(set_group_color("nope", Some("#112233")).is_err());
+    }
+
+    fn key<'a>(ns: &'a str, id: &'a str, at_ms: i64) -> ClientKey<'a> {
+        ClientKey { ns, client_msg_id: id, at_ms }
+    }
+
+    fn lines(gid: &str) -> Vec<ProjectGroupMessage> {
+        list_messages(gid, None, Some(500)).expect("list").messages
+    }
+
+    /// post-idempotency-v1: one line per (namespace, id); a repeat returns
+    /// the stored line (`mismatch` when the body differs) and takes no seq;
+    /// the same key in another project is refused; another sender's same
+    /// id posts. The id is echoed on the row and its reads.
+    #[test]
+    fn keyed_project_post_stores_once() {
+        let _ = crate::db::shared();
+        let g = create_group(&gname("idem")).expect("create");
+        let other = create_group(&gname("idem-other")).expect("create other");
+        let ns = format!("p:{}", uuid::Uuid::new_v4());
+        let id = "cm-1_A";
+        let now = chrono::Utc::now().timestamp_millis();
+        let first = match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, " hi team ", Some(key(&ns, id, now))).expect("post") {
+            PostOutcome::Posted(m) => m,
+            o => panic!("first post must store: {o:?}"),
+        };
+        assert_eq!(first.client_msg_id.as_deref(), Some(id));
+        assert_eq!(serde_json::to_value(&first).expect("json")["clientMsgId"], id, "wire name is clientMsgId");
+
+        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "hi team", Some(key(&ns, id, now))).expect("repeat") {
+            PostOutcome::Duplicate { msg, mismatch } => {
+                assert_eq!(msg.id, first.id);
+                assert_eq!(msg.seq, first.seq);
+                assert!(!mismatch, "same (trimmed) body is no mismatch");
+            }
+            o => panic!("repeat must be a duplicate: {o:?}"),
+        }
+        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "something else", Some(key(&ns, id, now))).expect("differs") {
+            PostOutcome::Duplicate { msg, mismatch } => {
+                assert_eq!(msg.body, "hi team", "the first write wins");
+                assert!(mismatch);
+            }
+            o => panic!("differing body must be a duplicate: {o:?}"),
+        }
+        let stored = lines(&g.id);
+        assert_eq!(stored.len(), 1, "one line only: {stored:?}");
+        assert_eq!(stored[0].client_msg_id.as_deref(), Some(id), "echoed on reads");
+        assert_eq!(list_messages_after_seq(&g.id, 0, None).expect("delta").messages[0].client_msg_id.as_deref(), Some(id));
+
+        assert!(
+            matches!(
+                post_message_keyed(&other.id, "owner", AUTHOR_KIND_PERSON, "hi team", Some(key(&ns, id, now))).expect("elsewhere"),
+                PostOutcome::ReusedElsewhere
+            ),
+            "the key in another project is refused"
+        );
+        assert!(lines(&other.id).is_empty(), "nothing stored in the other project");
+
+        let ns2 = format!("p:{}", uuid::Uuid::new_v4());
+        assert!(matches!(
+            post_message_keyed(&g.id, "alice", AUTHOR_KIND_PERSON, "hi team", Some(key(&ns2, id, now))).expect("other sender"),
+            PostOutcome::Posted(_)
+        ));
+        // A keyless post is unchanged (no id on the row).
+        let plain = post_message_as(&g.id, "owner", AUTHOR_KIND_PERSON, "plain").expect("plain");
+        assert_eq!(plain.client_msg_id, None);
+        assert!(serde_json::to_value(&plain).expect("json").get("clientMsgId").is_none(), "no key, no field");
+        assert_eq!(lines(&g.id).len(), 3);
+    }
+
+    /// Concurrent posts with one key: one line.
+    #[test]
+    fn keyed_project_post_first_write_wins_under_concurrency() {
+        let _ = crate::db::shared();
+        let g = create_group(&gname("idem-race")).expect("create");
+        let ns = format!("a:{}", uuid::Uuid::new_v4());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let (gid, ns, barrier) = (g.id.clone(), ns.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let out = post_message_keyed(&gid, "scout", AUTHOR_KIND_AGENT, &format!("racer {i}"), Some(key(&ns, "race", now)))
+                        .expect("racer post");
+                    matches!(out, PostOutcome::Posted(_))
+                })
+            })
+            .collect();
+        let stored = handles.into_iter().map(|h| h.join().expect("racer")).filter(|p| *p).count();
+        assert_eq!(stored, 1, "exactly one racer stores");
+        assert_eq!(lines(&g.id).len(), 1);
+    }
+
+    /// The sweep frees keys older than its cutoff only (keys written at an
+    /// injected 1970 time so it never touches another test's).
+    #[test]
+    fn project_client_key_sweep_frees_old_keys_only() {
+        let _ = crate::db::shared();
+        let g = create_group(&gname("idem-sweep")).expect("create");
+        let ns = format!("g:{}", uuid::Uuid::new_v4());
+        let hour = 3_600_000i64;
+        let base = 1_000_000 + (uuid::Uuid::new_v4().as_u128() % 1_000_000) as i64;
+        post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("old");
+        post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "young", Some(key(&ns, "young", base + 2 * hour))).expect("young");
+        sweep_client_keys(base + 23 * hour - CLIENT_KEY_TTL_MS).expect("sweep at 23 h");
+        assert!(matches!(
+            post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("repeat"),
+            PostOutcome::Duplicate { .. }
+        ), "kept at 23 h");
+        let n = sweep_client_keys(base + 25 * hour - CLIENT_KEY_TTL_MS).expect("sweep at 25 h");
+        assert!(n >= 1, "the old key is swept, got {n}");
+        assert!(matches!(
+            post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("after sweep"),
+            PostOutcome::Posted(_)
+        ), "a swept key posts again");
+        assert!(matches!(
+            post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "young", Some(key(&ns, "young", base))).expect("young repeat"),
+            PostOutcome::Duplicate { .. }
+        ), "the younger key stays");
+        assert_eq!(lines(&g.id).len(), 3);
     }
 }

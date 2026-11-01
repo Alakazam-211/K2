@@ -76,4 +76,5 @@ features:
   llm-account-for-v1
   companion-pairing-v1
   files-download-v1
+  post-idempotency-v1
   boot-status-views-v1

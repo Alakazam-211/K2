@@ -880,6 +880,19 @@ pub const FEATURE_HOMES_SYNC: &str = k2_core::homes_sync::FEATURE;
 /// when migration 0257's tables (and 0193's device registry) exist.
 pub const FEATURE_STASH_SYNC: &str = k2_core::stash_sync::FEATURE;
 
+/// post-idempotency-v1 (0.46.8): an optional `clientMsgId` on `POST
+/// /cli/thread/post`, `POST /cli/project-group/msg` and an App guest's
+/// project post; a repeat answers the stored item with `duplicate: true`
+/// (`crate::client_msg_id`). Thread keys live in redb; on only when
+/// migration 0258's project chat key table exists.
+pub const FEATURE_POST_IDEMPOTENCY: &str = crate::client_msg_id::FEATURE;
+
+fn post_idempotency_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| k2_core::project_groups::client_keys_ready(&db.lock()))
+        .unwrap_or(false)
+}
+
 fn stash_sync_ready() -> bool {
     k2_core::db::try_shared()
         .map(|db| k2_core::stash_sync::tables_exist(&db.lock()))
@@ -1176,6 +1189,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_LLM_ACCOUNT_FOR);
     out.push(FEATURE_COMPANION_PAIRING);
     out.push(FEATURE_FILES_DOWNLOAD);
+    if post_idempotency_ready() {
+        out.push(FEATURE_POST_IDEMPOTENCY);
+    }
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -1322,6 +1338,7 @@ mod tests {
                 "llm-account-for-v1",
                 "companion-pairing-v1",
                 "files-download-v1",
+                "post-idempotency-v1",
                 "boot-status-views-v1"
             ]
         );

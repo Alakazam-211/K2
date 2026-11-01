@@ -10,6 +10,8 @@
 //! meta          key                 → value  (one-time index builds)
 //! import_ids    project/host/doc    → id     (imported lines, dedupe)
 //! thread_changes conv/mark:020/id   → seq | removed:seq  (thread-delta-v1)
+//! client_ids    ns/clientMsgId      → id\tconv\tms\tbodyHash  (post-idempotency-v1)
+//! client_ids_by_time ms:020/ns/clientMsgId → ""         (its sweep index)
 //! ```
 //!
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
@@ -66,6 +68,107 @@ const IMPORT_IDS: TableDefinition<&str, &str> = TableDefinition::new("import_ids
 /// once).
 const THREAD_CHANGES: TableDefinition<&str, &str> = TableDefinition::new("thread_changes");
 const CHANGE_REMOVED_PREFIX: &str = "removed:";
+
+/// post-idempotency-v1 (0.46.8): a Thread post's client key, `{ns}/{clientMsgId}`
+/// → `{doc id}\t{conversation}\t{ms}\t{body hash}`. `ns` is the sender's
+/// namespace from the credential (never the body). The key leaves the
+/// conversation out on purpose: a conversation's key can move (Codex/Hermes
+/// adoption, a split), and a retry after a move must still find its post.
+/// Written in the post's own transaction ([`commit_write_keyed`]), so the
+/// first write wins. Swept after a day ([`sweep_client_ids`]).
+const CLIENT_IDS: TableDefinition<&str, &str> = TableDefinition::new("client_ids");
+/// The sweep's index for [`CLIENT_IDS`]: `{ms:020}/{key}` → `""`.
+const CLIENT_IDS_BY_TIME: TableDefinition<&str, &str> = TableDefinition::new("client_ids_by_time");
+/// [`commit_write_keyed`]'s error when the client key is already taken
+/// (the caller checks under the overlay write lock first, so this is the
+/// backstop; nothing is written).
+pub const CLIENT_ID_TAKEN: &str = "client_msg_id_taken";
+
+/// A stored client key ([`CLIENT_IDS`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdHit {
+    pub doc_id: String,
+    /// The conversation the post was written to (it may have moved since:
+    /// look the doc up under the caller's resolved conversation).
+    pub conversation_id: String,
+    pub at_ms: i64,
+    pub body_hash: String,
+}
+
+/// The client key a post writes with its doc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdWrite<'a> {
+    /// `{ns}/{clientMsgId}`.
+    pub key: &'a str,
+    pub at_ms: i64,
+    pub body_hash: &'a str,
+}
+
+fn client_id_time_key(at_ms: i64, key: &str) -> String {
+    format!("{:020}/{key}", at_ms.max(0))
+}
+
+fn parse_client_id(v: &str) -> Option<ClientIdHit> {
+    let mut it = v.splitn(4, '\t');
+    let doc_id = it.next()?.to_string();
+    let conversation_id = it.next()?.to_string();
+    let at_ms = it.next()?.parse().ok()?;
+    let body_hash = it.next()?.to_string();
+    Some(ClientIdHit { doc_id, conversation_id, at_ms, body_hash })
+}
+
+/// The post a client key names, if it is still kept.
+pub fn client_id_get(key: &str) -> Result<Option<ClientIdHit>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(CLIENT_IDS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(format!("overlay open client_ids: {e}")),
+    };
+    match table.get(key).map_err(|e| format!("overlay get client_ids: {e}"))? {
+        Some(g) => parse_client_id(g.value())
+            .map(Some)
+            .ok_or_else(|| format!("overlay client_ids {key}: malformed value")),
+        None => Ok(None),
+    }
+}
+
+/// Drop every client key written before `before_ms` (the daemon's sweep;
+/// a key lives at least a day). Returns how many went.
+pub fn sweep_client_ids(before_ms: i64) -> Result<usize, String> {
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    let n;
+    {
+        let mut by_time = txn
+            .open_table(CLIENT_IDS_BY_TIME)
+            .map_err(|e| format!("overlay open client_ids_by_time: {e}"))?;
+        let mut ids = txn.open_table(CLIENT_IDS).map_err(|e| format!("overlay open client_ids: {e}"))?;
+        let end = format!("{:020}/", before_ms.max(0));
+        let mut due = Vec::new();
+        for entry in by_time.range(..end.as_str()).map_err(|e| format!("overlay client_ids_by_time range: {e}"))? {
+            let (k, _) = entry.map_err(|e| format!("overlay client_ids_by_time iter: {e}"))?;
+            due.push(k.value().to_string());
+        }
+        n = due.len();
+        for tk in &due {
+            by_time.remove(tk.as_str()).map_err(|e| format!("overlay client_ids_by_time remove: {e}"))?;
+            let Some((ms, key)) = tk.split_once('/') else { continue };
+            // Only the entry this index row was written for (a key is
+            // never rewritten while kept, so this is a guard, not a case).
+            let same = match ids.get(key).map_err(|e| format!("overlay get client_ids: {e}"))? {
+                Some(g) => parse_client_id(g.value()).is_some_and(|h| ms.parse::<i64>().ok() == Some(h.at_ms.max(0))),
+                None => false,
+            };
+            if same {
+                ids.remove(key).map_err(|e| format!("overlay client_ids remove: {e}"))?;
+            }
+        }
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok(n)
+}
 
 /// The process's one handle on the store. Opened on first use; a failed
 /// open is NOT kept (see [`StoreSlot`]).
@@ -693,11 +796,41 @@ pub fn commit_write(
     chatter: &[(String, i64)],
     chatterlog_seq: Option<i64>,
 ) -> Result<(), String> {
+    commit_write_keyed(doc, thread, chatter, chatterlog_seq, None)
+}
+
+/// [`commit_write`] plus the post's client key (post-idempotency-v1) in
+/// the SAME transaction: the key and the post commit together or not at
+/// all. A key already present fails the whole write with
+/// [`CLIENT_ID_TAKEN`] (first write wins).
+pub fn commit_write_keyed(
+    doc: &OverlayDoc,
+    thread: Option<(&str, i64)>,
+    chatter: &[(String, i64)],
+    chatterlog_seq: Option<i64>,
+    client: Option<ClientIdWrite<'_>>,
+) -> Result<(), String> {
     let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
     let db = db()?;
     let txn = db
         .begin_write()
         .map_err(|e| format!("overlay redb write: {e}"))?;
+    if let Some(c) = &client {
+        let conv = thread.map(|(conv, _)| conv).unwrap_or("");
+        let mut ids = txn.open_table(CLIENT_IDS).map_err(|e| format!("overlay open client_ids: {e}"))?;
+        if ids.get(c.key).map_err(|e| format!("overlay get client_ids: {e}"))?.is_some() {
+            // Dropping the transaction aborts it.
+            return Err(CLIENT_ID_TAKEN.to_string());
+        }
+        let value = format!("{}\t{conv}\t{}\t{}", doc.id, c.at_ms, c.body_hash);
+        ids.insert(c.key, value.as_str()).map_err(|e| format!("overlay insert client_ids: {e}"))?;
+        let mut by_time = txn
+            .open_table(CLIENT_IDS_BY_TIME)
+            .map_err(|e| format!("overlay open client_ids_by_time: {e}"))?;
+        by_time
+            .insert(client_id_time_key(c.at_ms, c.key).as_str(), "")
+            .map_err(|e| format!("overlay insert client_ids_by_time: {e}"))?;
+    }
     {
         let mut docs = txn
             .open_table(DOCS)

@@ -46313,7 +46313,7 @@ agent:handle (Change the agent's handle (its address))
 room:members (See who has access to the room)
   room.members             GET  /cli/skin/members                             Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
 project:write (Post in project chats (needs it in every member room))
-  project.post             POST /cli/skin/projects/post                       Post in a project chat as the guest (guest:<username>); needs project:write in every member room.
+  project.post             POST /cli/skin/projects/post                       Post in a project chat as the guest (guest:<username>); needs project:write in every member room. With clientMsgId a retry answers the stored line (duplicate: true, no delivered or deliveryReason) instead of posting twice; the id in another project is 409 client_msg_id_reused.
 files:download (Download Thread files (a save, not just a view; a person grants it))
   files.downloads          GET  /cli/fs/downloads                             The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).
   files.download           GET  /cli/fs/download                              Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).

@@ -3008,6 +3008,9 @@ export declare const APP_VERBS: {
                                         };
                                         readonly type: "object";
                                     };
+                                    readonly clientMsgId: {
+                                        readonly type: "string";
+                                    };
                                     readonly created_at: {
                                         readonly type: "number";
                                     };
@@ -3247,6 +3250,9 @@ export declare const APP_VERBS: {
                                             };
                                         };
                                         readonly type: "object";
+                                    };
+                                    readonly clientMsgId: {
+                                        readonly type: "string";
                                     };
                                     readonly created_at: {
                                         readonly type: "number";
@@ -3682,8 +3688,14 @@ export declare const APP_VERBS: {
                 readonly body: {
                     readonly type: readonly ["string", "null"];
                 };
+                readonly clientMsgId: {
+                    readonly type: "string";
+                };
                 readonly conversation: {
                     readonly type: "string";
+                };
+                readonly duplicate: {
+                    readonly type: "boolean";
                 };
                 readonly from: {
                     readonly type: "string";
@@ -3693,6 +3705,9 @@ export declare const APP_VERBS: {
                 };
                 readonly kind: {
                     readonly type: "string";
+                };
+                readonly mismatch: {
+                    readonly type: "boolean";
                 };
                 readonly ok: {
                     readonly type: "boolean";
@@ -3945,6 +3960,9 @@ export declare const APP_VERBS: {
                                 };
                             };
                             readonly type: "object";
+                        };
+                        readonly clientMsgId: {
+                            readonly type: "string";
                         };
                         readonly created_at: {
                             readonly type: "number";
@@ -4308,6 +4326,9 @@ export declare const APP_VERBS: {
                                 };
                             };
                             readonly type: "object";
+                        };
+                        readonly clientMsgId: {
+                            readonly type: "string";
                         };
                         readonly created_at: {
                             readonly type: "number";
@@ -4694,6 +4715,9 @@ export declare const APP_VERBS: {
                                                     };
                                                     readonly type: "object";
                                                 };
+                                                readonly clientMsgId: {
+                                                    readonly type: "string";
+                                                };
                                                 readonly created_at: {
                                                     readonly type: "number";
                                                 };
@@ -4945,6 +4969,9 @@ export declare const APP_VERBS: {
                                                         };
                                                     };
                                                     readonly type: "object";
+                                                };
+                                                readonly clientMsgId: {
+                                                    readonly type: "string";
                                                 };
                                                 readonly created_at: {
                                                     readonly type: "number";
@@ -8871,6 +8898,9 @@ export declare const APP_VERBS: {
                             readonly body: {
                                 readonly type: "string";
                             };
+                            readonly clientMsgId: {
+                                readonly type: "string";
+                            };
                             readonly createdAt: {
                                 readonly type: "integer";
                             };
@@ -8930,6 +8960,9 @@ export declare const APP_VERBS: {
                 readonly body: {
                     readonly type: "string";
                 };
+                readonly clientMsgId: {
+                    readonly type: "string";
+                };
                 readonly createdAt: {
                     readonly type: "integer";
                 };
@@ -8939,6 +8972,9 @@ export declare const APP_VERBS: {
                 readonly deliveryReason: {
                     readonly type: readonly ["string", "null"];
                 };
+                readonly duplicate: {
+                    readonly type: "boolean";
+                };
                 readonly groupId: {
                     readonly type: "string";
                 };
@@ -8947,6 +8983,9 @@ export declare const APP_VERBS: {
                 };
                 readonly id: {
                     readonly type: "string";
+                };
+                readonly mismatch: {
+                    readonly type: "boolean";
                 };
                 readonly ok: {
                     readonly type: "boolean";
@@ -9031,6 +9070,9 @@ export declare const APP_VERBS: {
                             readonly enum: readonly ["person", "agent", "guest"];
                         };
                         readonly body: {
+                            readonly type: "string";
+                        };
+                        readonly clientMsgId: {
                             readonly type: "string";
                         };
                         readonly createdAt: {
@@ -9836,6 +9878,8 @@ export interface AppThreadDoc {
     /** The text (redacted); a card's prompt. */
     readonly body?: string;
     readonly choice?: AppChoiceCard;
+    /** post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one. */
+    readonly clientMsgId?: string;
     /** Seconds since the epoch (not milliseconds). */
     readonly created_at: number;
     readonly from: string;
@@ -9979,10 +10023,16 @@ export interface AppThreadPosted {
     readonly addr: string;
     readonly author?: AppPostAuthor;
     readonly body?: string | null;
+    /** post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one. */
+    readonly clientMsgId?: string;
     readonly conversation: string;
+    /** post-idempotency-v1: true when this clientMsgId was already kept: the stored post, nothing sent again (no delivery fields). */
+    readonly duplicate?: boolean;
     readonly from: string;
     readonly id: string;
     readonly kind: string;
+    /** post-idempotency-v1: with duplicate, this body differed from the stored one (the first write wins). */
+    readonly mismatch?: boolean;
     readonly ok: boolean;
     readonly seq: number;
     readonly to?: string | null;
@@ -10962,6 +11012,8 @@ export interface AppProjectMessage {
     readonly author: string;
     readonly authorKind: 'person' | 'agent' | 'guest';
     readonly body: string;
+    /** post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one. */
+    readonly clientMsgId?: string;
     /** Seconds since the epoch. */
     readonly createdAt: number;
     readonly groupId: string;
@@ -10988,14 +11040,20 @@ export interface AppProjectPosted {
     readonly author: string;
     readonly authorKind: 'guest';
     readonly body: string;
+    /** post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one. */
+    readonly clientMsgId?: string;
     /** Seconds since the epoch. */
     readonly createdAt: number;
     /** The project's point of contact agent got the line. */
-    readonly delivered: boolean;
-    readonly deliveryReason: string | null;
+    readonly delivered?: boolean;
+    readonly deliveryReason?: string | null;
+    /** post-idempotency-v1: true when this clientMsgId was already kept: the stored post, nothing sent again (no delivery fields). */
+    readonly duplicate?: boolean;
     readonly groupId: string;
     readonly groupName: string;
     readonly id: string;
+    /** post-idempotency-v1: with duplicate, this body differed from the stored one (the first write wins). */
+    readonly mismatch?: boolean;
     readonly ok: boolean;
     readonly seq: number;
 }
@@ -11025,7 +11083,7 @@ export interface AppProjectFrame {
     readonly waiting?: number;
 }
 /** The shared error codes (catalog `errors`). */
-export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "chat_key_required", "sew_unreachable", "sew_refused", "space_unbound", "app_mismatch", "channel_type_mismatch", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path", "email_paused", "all_suppressed", "password_change_required", "password_unchanged", "not_a_repo"];
+export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "chat_key_required", "sew_unreachable", "sew_refused", "space_unbound", "app_mismatch", "channel_type_mismatch", "client_msg_id_reused", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path", "email_paused", "all_suppressed", "password_change_required", "password_unchanged", "not_a_repo"];
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];
 /** Every App verb: its arguments and its answer (or frame). */
 export interface AppVerbs {
@@ -11386,6 +11444,7 @@ export interface AppVerbs {
         args: {
             addr: string;
             attachments?: AppThreadAttach[];
+            clientMsgId?: string;
             text?: string;
             via?: string;
         };
@@ -11988,6 +12047,7 @@ export interface AppVerbs {
     'project.post': {
         args: {
             body: string;
+            clientMsgId?: string;
             group: string;
         };
         value: AppProjectPosted;
@@ -12265,6 +12325,7 @@ export interface AppSurfaces {
         send(args: {
             addr: string;
             attachments?: AppThreadAttach[];
+            clientMsgId?: string;
             text?: string;
             via?: string;
         }): Promise<AppThreadPosted>;
@@ -12712,9 +12773,10 @@ export interface AppSurfaces {
             group: string;
             limit?: number;
         }): Promise<AppProjectPage>;
-        /** Post in a project chat as the guest (guest:<username>); needs project:write in every member room. cap project:write · POST /cli/skin/projects/post. e.g. `await k2.project.post({group, body: 'Can we ship Friday?'})` */
+        /** Post in a project chat as the guest (guest:<username>); needs project:write in every member room. With clientMsgId a retry answers the stored line (duplicate: true, no delivered or deliveryReason) instead of posting twice; the id in another project is 409 client_msg_id_reused. cap project:write · POST /cli/skin/projects/post. e.g. `await k2.project.post({group, body: 'Can we ship Friday?'})` */
         post(args: {
             body: string;
+            clientMsgId?: string;
             group: string;
         }): Promise<AppProjectPosted>;
         /** Mark a project chat read for this guest (the person guest:<principalId> on every App surface; an App's own pass has none). cap thread:read · POST /cli/skin/projects/read. e.g. `await k2.project.markRead({group, seq: newest})` */

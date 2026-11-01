@@ -1448,6 +1448,12 @@ pub(crate) fn post_workspace_notice(addr: &str, from: &str, text: &str) -> Resul
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     // A23: a Thread turn's `startedAt` is the daemon's ms receipt time.
     let received_at = chrono::Utc::now().timestamp_millis();
+    // post-idempotency-v1: a malformed id is refused before anything is
+    // resolved, snapshotted or stored.
+    let client_msg_id = match crate::client_msg_id::parse(params.get(crate::client_msg_id::PARAM).map(String::as_str)) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
     let addr = str_param(params, "addr");
     let text = str_param(params, "text");
     if addr.is_empty() {
@@ -1562,6 +1568,23 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(Some(Err(r))) => (None, Some(r)),
         Err(e) => return e,
     };
+    // post-idempotency-v1: the key is (the sender's namespace from its
+    // credential, the client's id). A read-only look first, so a retry
+    // does no file work; the post checks again under the overlay write
+    // lock, which is what makes the first write win.
+    let client_key = client_msg_id.map(|id| overlay::ClientMsgKey {
+        key: format!("{}/{id}", thread_client_ns(principal.as_ref(), bound, &via, session_author)),
+        body_hash: crate::client_msg_id::body_hash(&text, params.get("attachments").map(String::as_str).unwrap_or("")),
+        client_msg_id: id,
+        at_ms: received_at,
+    });
+    if let Some(k) = &client_key {
+        match overlay::client_msg_lookup(&k.key) {
+            Ok(Some(hit)) => return thread_duplicate_reply(&resolved, &hit, &k.body_hash),
+            Ok(None) => {}
+            Err(e) => return error_json("500 Internal Server Error", "store", e),
+        }
+    }
     // Check and snapshot the files before anything is stored: inside the
     // Thread's own workspace (realpath), a regular file, not a secret. Any
     // refusal refuses the whole post.
@@ -1638,7 +1661,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     };
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::post_thread_with_attachments(
+    match overlay::post_thread_keyed(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
@@ -1650,8 +1673,14 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         author,
         attachments,
         context.clone(),
+        client_key.as_ref(),
     ) {
-        Ok((item, links)) => {
+        // A racer with the same key won: nothing was stored or sent.
+        Ok(overlay::ThreadPost::Duplicate(hit)) => {
+            drop(conn);
+            thread_duplicate_reply(&resolved, &hit, client_key.as_ref().map(|k| k.body_hash.as_str()).unwrap_or(""))
+        }
+        Ok(overlay::ThreadPost::Posted(item, links)) => {
             // thread-read-v1: a person's own post advances their own
             // cursor (they have read up to what they answered), before
             // the frames go out.
@@ -1690,44 +1719,8 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 // `from` (an owner-token shell post) never does (TP14).
                 push_agent_post(&resolved, &item, k2_core::push::ThreadMsgKind::Text, n_files);
             }
-            // thread-attachments-v1: the stored snapshots, so the sender
-            // sees what landed (state `ok` at post time), with `canDownload`
-            // for THIS poster (an App guest's comes from its own grant).
-            let poster_pass = request_skin();
-            let poster = match poster_pass.as_ref() {
-                Some(p) => crate::thread_attachments::Viewer::Guest { pass: p, project_id: &resolved.project_id },
-                None => crate::thread_attachments::person_or_agent(),
-            };
-            let attachments_json = crate::thread_attachments::view_list(
-                workspace_root.as_deref(),
-                &item.doc.attachments,
-                &poster,
-                false,
-            );
-            let mut body = serde_json::json!({
-                "ok": true,
-                "id": item.id,
-                "seq": item.seq,
-                "from": item.doc.from,
-                "to": item.doc.to,
-                "kind": item.doc.kind,
-                "body": item.doc.body,
-                "via": item.doc.via,
-                "widget": item.doc.widget,
-                "author": item.doc.author,
-                "attachments": attachments_json,
-                // The client stamps its own post with the server's time
-                // ("You · just now"), falling back to its send time.
-                "created_at": item.doc.created_at,
-                "conversation_id": resolved.conversation_id,
-                "addr": resolved.addr,
-            });
-            // thread-context-v1: only when a context was sent, so every
-            // other post's answer is byte for byte what it was.
+            let mut body = post_reply_json(&item, &resolved, workspace_root.as_deref());
             if let Some(map) = body.as_object_mut() {
-                if let Some(c) = &item.doc.context {
-                    map.insert("context".into(), serde_json::json!(c));
-                }
                 if let Some(r) = &context_refused {
                     map.insert("contextRefused".into(), serde_json::json!({"code": r.code, "message": r.message}));
                 }
@@ -1736,6 +1729,113 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         }
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
+}
+
+/// The answer to a Thread post: the stored item as THIS poster sees it.
+/// The first post and a post-idempotency-v1 repeat share it (a repeat adds
+/// `duplicate`; delivery outcomes such as `contextRefused` are not stored,
+/// so only the first answer carries them).
+fn post_reply_json(
+    item: &overlay::OverlayItem,
+    resolved: &ResolvedOverlay,
+    workspace_root: Option<&std::path::Path>,
+) -> serde_json::Value {
+    // thread-attachments-v1: the stored snapshots, so the sender
+    // sees what landed (state `ok` at post time), with `canDownload`
+    // for THIS poster (an App guest's comes from its own grant).
+    let poster_pass = request_skin();
+    let poster = match poster_pass.as_ref() {
+        Some(p) => crate::thread_attachments::Viewer::Guest { pass: p, project_id: &resolved.project_id },
+        None => crate::thread_attachments::person_or_agent(),
+    };
+    let attachments_json = crate::thread_attachments::view_list(workspace_root, &item.doc.attachments, &poster, false);
+    let mut body = serde_json::json!({
+        "ok": true,
+        "id": item.id,
+        "seq": item.seq,
+        "from": item.doc.from,
+        "to": item.doc.to,
+        "kind": item.doc.kind,
+        "body": item.doc.body,
+        "via": item.doc.via,
+        "widget": item.doc.widget,
+        "author": item.doc.author,
+        "attachments": attachments_json,
+        // The client stamps its own post with the server's time
+        // ("You · just now"), falling back to its send time.
+        "created_at": item.doc.created_at,
+        "conversation_id": resolved.conversation_id,
+        "addr": resolved.addr,
+    });
+    if let Some(map) = body.as_object_mut() {
+        // thread-context-v1: only when a context was sent, so every
+        // other post's answer is byte for byte what it was.
+        if let Some(c) = &item.doc.context {
+            map.insert("context".into(), serde_json::json!(c));
+        }
+        // post-idempotency-v1: the client's own id, so its outbox settles
+        // (only when it sent one).
+        if let Some(id) = &item.doc.client_msg_id {
+            map.insert("clientMsgId".into(), serde_json::json!(id));
+        }
+    }
+    body
+}
+
+/// post-idempotency-v1: the sender's namespace for a Thread post's key,
+/// from the credential (never the body): an App guest's principal, an
+/// agent passport's workspace, the person behind a compose post (the owner
+/// token and linked logins are one person), or the owner token's shell.
+fn thread_client_ns(principal: Option<&HookPrincipal>, bound: bool, via: &str, session_author: &str) -> String {
+    if let Some(pass) = request_skin() {
+        return crate::client_msg_id::guest_ns(&pass);
+    }
+    if let Some(p) = principal {
+        return crate::client_msg_id::agent_ns(&p.workspace_uuid);
+    }
+    let s = session_author.trim();
+    let owner_token = s.is_empty() || s.eq_ignore_ascii_case("owner");
+    if (!bound && via == "compose") || !owner_token {
+        crate::client_msg_id::person_ns(if owner_token { "owner" } else { s })
+    } else {
+        crate::client_msg_id::OWNER_SHELL_NS.to_string()
+    }
+}
+
+/// post-idempotency-v1: a repeat of a kept key. The stored post is looked
+/// up on the caller's resolved conversation (the key leaves the
+/// conversation out, so a post that moved with its conversation is still
+/// found); a post that isn't there is the key reused in another chat (409).
+/// Nothing runs again: no frame, inject, push, cursor advance or history.
+fn thread_duplicate_reply(resolved: &ResolvedOverlay, hit: &overlay::ClientIdHit, body_hash: &str) -> CliResponse {
+    let seq = match overlay::store::thread_seq_of(&resolved.conversation_id, &hit.doc_id) {
+        Ok(Some(seq)) => seq,
+        Ok(None) => return crate::client_msg_id::reused(),
+        Err(e) => return error_json("500 Internal Server Error", "store", e),
+    };
+    let doc = match overlay::store::get_doc(&hit.doc_id) {
+        Ok(Some(doc)) => doc,
+        Ok(None) => return crate::client_msg_id::reused(),
+        Err(e) => return error_json("500 Internal Server Error", "store", e),
+    };
+    let item = overlay::OverlayItem {
+        collection: "thread".to_string(),
+        seq,
+        id: hit.doc_id.clone(),
+        doc,
+        conversation_id: Some(resolved.conversation_id.clone()),
+    };
+    let root = if item.doc.attachments.is_empty() {
+        None
+    } else {
+        crate::thread_attachments::project_root(&resolved.project_id)
+    };
+    let mut body = post_reply_json(&item, resolved, root.as_deref());
+    body["duplicate"] = serde_json::json!(true);
+    if hit.body_hash != body_hash {
+        body["mismatch"] = serde_json::json!(true);
+    }
+    CliResponse::ok_json(with_moved_from(body, resolved))
 }
 
 /// Thread push trigger (prd-thread-push-notifications-v1 §6.1) for the
@@ -3423,6 +3523,9 @@ pub fn spawn_card_expiry() {
         // republish any that became "Already on" (a no-op while the server
         // switch is off).
         crate::permission::view::sweep_already_done(now);
+        // post-idempotency-v1: Thread and project chat client keys older
+        // than a day go, hourly (so a key lives 24–25 h).
+        crate::client_msg_id::sweep_if_due(chrono::Utc::now().timestamp_millis());
         drop(entered);
         std::thread::sleep(std::time::Duration::from_secs(60));
     });
@@ -4077,6 +4180,9 @@ fn thread_post_body_type_error(body: &[u8]) -> Option<CliResponse> {
                 "a JSON array of {path, line?, lineEnd?}"
             }
             "addr" | "text" | "from" | "via" | "command" if v.is_array() || v.is_object() => "a string",
+            // post-idempotency-v1: a number or boolean would merge as its
+            // text and pass the id check, so only a string is an id.
+            "clientMsgId" if !(v.is_string() || v.is_null()) => "a string of 1-64 A-Z, a-z, 0-9, '-' or '_'",
             _ => continue,
         };
         return Some(usage(format!("{k} must be {want}, not {}", json_type_name(v))));
@@ -8169,4 +8275,8 @@ mod tests {
     // Secret cards that say how a secret is sent (0.46.6).
     #[path = "secret_card_inject_tests.rs"]
     mod secret_card_inject;
+
+    // post-idempotency-v1: `clientMsgId` on Thread posts (0.46.8).
+    #[path = "client_msg_tests.rs"]
+    mod client_msg;
 }

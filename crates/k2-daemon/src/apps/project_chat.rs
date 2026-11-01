@@ -273,6 +273,9 @@ struct PostBody {
     group: String,
     #[serde(default)]
     body: String,
+    /// post-idempotency-v1: the client's id for this post.
+    #[serde(default, rename = "clientMsgId")]
+    client_msg_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -326,7 +329,12 @@ pub fn handle_pass(path: &str, pass: &SkinPass, params: &HashMap<String, String>
 fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
     let b: PostBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return usage(&format!("body is {{group, body}}: {e}")),
+        Err(e) => return usage(&format!("body is {{group, body, clientMsgId?}}: {e}")),
+    };
+    // post-idempotency-v1: checked before anything is resolved or stored.
+    let client_msg_id = match crate::client_msg_id::parse(b.client_msg_id.as_deref()) {
+        Ok(id) => id,
+        Err(r) => return r,
     };
     if b.group.trim().is_empty() {
         return usage("name the project: group");
@@ -347,7 +355,14 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
         return usage(&format!("body is over {MAX_BODY_BYTES} bytes"));
     }
     let author = project_groups::guest_author(&pass.username);
-    let posted = match crate::project_group_routes::store_and_deliver(
+    // The key's namespace is the guest's login (from the pass), never the body.
+    let client_ns = crate::client_msg_id::guest_ns(pass);
+    let client = client_msg_id.as_deref().map(|id| project_groups::ClientKey {
+        ns: &client_ns,
+        client_msg_id: id,
+        at_ms: chrono::Utc::now().timestamp_millis(),
+    });
+    let stored = match crate::project_group_routes::store_and_deliver(
         &g,
         &g.id,
         &author,
@@ -355,9 +370,18 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
         None,
         None,
         text,
+        client,
     ) {
         Ok(p) => p,
         Err(r) => return r,
+    };
+    let posted = match stored {
+        crate::project_group_routes::Stored::Posted(p) => p,
+        crate::project_group_routes::Stored::Duplicate { msg, mismatch } => {
+            return CliResponse::ok_json(
+                crate::project_group_routes::duplicate_reply_json(&msg, &g.name, mismatch).to_string(),
+            );
+        }
     };
     // The guest's own line is read for it (Sew: your own post advances
     // your own cursor). No badge push: guests have no K2 push yet.
@@ -372,24 +396,11 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
             }
         }
     }
-    let m = &posted.msg;
     // `deliveredSessionId` is left out: a guest never sees a session id.
-    CliResponse::ok_json(
-        json!({
-            "ok": true,
-            "id": m.id,
-            "groupId": g.id,
-            "groupName": g.name,
-            "author": m.author,
-            "authorKind": m.author_kind,
-            "body": m.body,
-            "createdAt": m.created_at,
-            "seq": m.seq,
-            "delivered": posted.delivered,
-            "deliveryReason": posted.delivery_reason,
-        })
-        .to_string(),
-    )
+    let mut reply = crate::project_group_routes::msg_reply_json(&posted.msg, &g.name);
+    reply["delivered"] = json!(posted.delivered);
+    reply["deliveryReason"] = json!(posted.delivery_reason);
+    CliResponse::ok_json(reply.to_string())
 }
 
 fn mark_read(pass: &SkinPass, body: &[u8]) -> CliResponse {

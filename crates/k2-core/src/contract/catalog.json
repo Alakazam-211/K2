@@ -284,6 +284,7 @@
     {"code": "space_unbound", "doc": "Chat: the Space isn't bound to this App (or the App has none yet); the owner binds it with k2 hostchat app-space bind <app> <space-id>."},
     {"code": "app_mismatch", "doc": "Chat: the Space belongs to another App; an App makes channels in its own Space only."},
     {"code": "channel_type_mismatch", "doc": "Chat: the slug is already a channel of another type (a voice channel) in the Space; nothing changed. Use another slug."},
+    {"code": "client_msg_id_reused", "doc": "post-idempotency-v1: this clientMsgId already names a post in another chat (Thread or project); nothing was stored. Send a new id for a new post."},
     {"code": "chat_unavailable", "doc": "Chat / Voice Hosting is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
     {"code": "app_pass_required", "doc": "Guest rooms: only this App's own pass (its link pass or remote pass) calls this; never a guest's pass, the owner token or a login."},
     {"code": "grant_required", "doc": "Guest rooms: the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)."},
@@ -12215,6 +12216,7 @@
                   "title": "AppThreadDoc",
                   "type": "object",
                   "properties": {
+                    "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
                     "id": {
                       "type": "string"
                     },
@@ -12549,6 +12551,7 @@
                   "title": "AppThreadDoc",
                   "type": "object",
                   "properties": {
+                    "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
                     "id": {
                       "type": "string"
                     },
@@ -13411,6 +13414,7 @@
           "title": "args",
           "type": "object",
           "properties": {
+            "clientMsgId": {"type": "string", "description": "post-idempotency-v1: your id for this post (1-64 of A-Z, a-z, 0-9, - and _). A retry with the same id answers the stored post with duplicate: true instead of posting twice; kept 24 h."},
             "addr": {
               "type": "string",
               "description": "The room's handle."
@@ -13461,6 +13465,9 @@
         "title": "AppThreadPosted",
         "type": "object",
         "properties": {
+          "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
+          "duplicate": {"type": "boolean", "description": "post-idempotency-v1: true when this clientMsgId was already kept: the stored post, nothing sent again (no delivery fields)."},
+          "mismatch": {"type": "boolean", "description": "post-idempotency-v1: with duplicate, this body differed from the stored one (the first write wins)."},
           "ok": {
             "type": "boolean"
           },
@@ -13542,6 +13549,7 @@
         "cap_not_granted",
         "usage",
         "not_found",
+        "client_msg_id_reused",
         "failed"
       ],
       "doc": "Post text (and room files) to a room's Thread as the guest (or the App); the agent gets it at once.",
@@ -13833,6 +13841,7 @@
             "title": "AppThreadDoc",
             "type": "object",
             "properties": {
+              "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
               "id": {
                 "type": "string"
               },
@@ -14400,6 +14409,7 @@
             "title": "AppThreadDoc",
             "type": "object",
             "properties": {
+              "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
               "id": {
                 "type": "string"
               },
@@ -15032,6 +15042,7 @@
                         "title": "AppThreadDoc",
                         "type": "object",
                         "properties": {
+                          "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
                           "id": {
                             "type": "string"
                           },
@@ -15354,6 +15365,7 @@
                         "title": "AppThreadDoc",
                         "type": "object",
                         "properties": {
+                          "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
                           "id": {
                             "type": "string"
                           },
@@ -24275,6 +24287,7 @@
               "title": "AppProjectMessage",
               "type": "object",
               "properties": {
+                "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
                 "id": {
                   "type": "string"
                 },
@@ -24359,6 +24372,7 @@
           "title": "args",
           "type": "object",
           "properties": {
+            "clientMsgId": {"type": "string", "description": "post-idempotency-v1: your id for this post (1-64 of A-Z, a-z, 0-9, - and _). A retry with the same id answers the stored post with duplicate: true instead of posting twice; kept 24 h."},
             "group": {
               "type": "string",
               "description": "The project: its groupId from project.list (or its exact name)."
@@ -24375,6 +24389,9 @@
         "title": "AppProjectPosted",
         "type": "object",
         "properties": {
+          "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
+          "duplicate": {"type": "boolean", "description": "post-idempotency-v1: true when this clientMsgId was already kept: the stored post, nothing sent again (no delivery fields)."},
+          "mismatch": {"type": "boolean", "description": "post-idempotency-v1: with duplicate, this body differed from the stored one (the first write wins)."},
           "ok": {
             "type": "boolean"
           },
@@ -24412,11 +24429,11 @@
             "type": ["string", "null"]
           }
         },
-        "required": ["ok", "id", "groupId", "groupName", "author", "authorKind", "body", "createdAt", "seq", "delivered", "deliveryReason"],
+        "required": ["ok", "id", "groupId", "groupName", "author", "authorKind", "body", "createdAt", "seq"],
         "additionalProperties": false
       },
-      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "failed"],
-      "doc": "Post in a project chat as the guest (guest:<username>); needs project:write in every member room.",
+      "errors": ["pass_required", "pass_invalid", "pass_wrong_link", "skin_room", "cap_not_granted", "usage", "client_msg_id_reused", "failed"],
+      "doc": "Post in a project chat as the guest (guest:<username>); needs project:write in every member room. With clientMsgId a retry answers the stored line (duplicate: true, no delivered or deliveryReason) instead of posting twice; the id in another project is 409 client_msg_id_reused.",
       "example": "await k2.project.post({group, body: 'Can we ship Friday?'})"
     },
     {
@@ -24538,6 +24555,7 @@
             "title": "AppProjectMessage",
             "type": "object",
             "properties": {
+              "clientMsgId": {"type": "string", "description": "post-idempotency-v1: the id the sender's client gave the post (1-64 of A-Z, a-z, 0-9, - and _), echoed so its outbox can settle; absent on posts sent without one."},
               "id": {
                 "type": "string"
               },

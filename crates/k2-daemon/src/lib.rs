@@ -182,6 +182,8 @@ pub mod notify_routes;
 pub mod homes_routes;
 /// stash-sync-v1 (0.46.7): `/cli/me/stash*`, a person's prompt stash between devices.
 pub mod stash_routes;
+/// post-idempotency-v1 (0.46.8): `clientMsgId` on Thread and project chat posts.
+pub mod client_msg_id;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
 // push-content-available-v1 (0.46.7): stale hints for Thread changes that never alert.

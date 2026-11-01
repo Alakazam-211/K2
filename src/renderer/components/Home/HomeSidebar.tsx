@@ -44,6 +44,7 @@ import { TicketCountBadge, UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from './MachineChip'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { openHomeRow } from '@/lib/home-open'
+import { homeRowHoverPrefetch } from '@/lib/home-row-prefetch'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
@@ -461,6 +462,9 @@ export default function HomeSidebar(): React.JSX.Element {
                 })
               }
               onClickCapture={rowDrag.onRowClickCapture}
+              // Read a remote row's Thread ahead (remote Thread load Fix 4).
+              onMouseEnter={() => homeRowHoverPrefetch.enter(row.address)}
+              onMouseLeave={() => homeRowHoverPrefetch.leave()}
             >
               {rowDrag.showsDropLineAt('home', idx) && <RowDropLine />}
               <HomeRowView home={home} row={row} index={idx} />

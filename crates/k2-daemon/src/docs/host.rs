@@ -398,6 +398,12 @@ impl Host for K2Host {
             AuditEvent::DiskReplicaRepaired { key, doc_len, replica_len } => {
                 log_disk_replica_repaired(key, *doc_len, *replica_len)
             }
+            // The write-back's sampled check (every
+            // `Config::writeback_check_every` write-backs) found the disk
+            // replica different from the live doc; repaired on the spot, the
+            // file was right either way. Should never fire: a kit bug to
+            // report (K2 Cores, 11-01). Metadata only.
+            AuditEvent::DiskReplicaMismatch { key, version } => log_disk_replica_mismatch(key, *version),
             // `AuditEvent` is `#[non_exhaustive]` (the kit adds events in
             // patch releases), so a catch-all is required; it logs the event
             // rather than dropping it.
@@ -417,14 +423,31 @@ pub fn disk_replica_repaired_line(key: &DocKey, doc_len: u64, replica_len: u64) 
     )
 }
 
+/// The warn line for [`AuditEvent::DiskReplicaMismatch`]. Stable prefix
+/// `[docs] WARN: disk replica mismatch` (grep for it). `key` as in
+/// [`disk_replica_repaired_line`]; `version` is the doc version checked.
+pub fn disk_replica_mismatch_line(key: &DocKey, version: u64) -> String {
+    format!(
+        "[docs] WARN: disk replica mismatch key={} version={version} (kit bug: report it to K2 Cores)",
+        key_label(key)
+    )
+}
+
 #[cfg(test)]
 thread_local! {
-    /// Tests: the disk-replica-repaired lines logged on this thread.
+    /// Tests: the disk-replica-repaired and -mismatch lines logged on this thread.
     static REPAIRED_LINES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn log_disk_replica_repaired(key: &DocKey, doc_len: u64, replica_len: u64) {
     let line = disk_replica_repaired_line(key, doc_len, replica_len);
+    log_debug!("{line}");
+    #[cfg(test)]
+    REPAIRED_LINES.with(|v| v.borrow_mut().push(line));
+}
+
+fn log_disk_replica_mismatch(key: &DocKey, version: u64) {
+    let line = disk_replica_mismatch_line(key, version);
     log_debug!("{line}");
     #[cfg(test)]
     REPAIRED_LINES.with(|v| v.borrow_mut().push(line));
@@ -562,6 +585,23 @@ mod tests {
             got,
             vec![
                 "[docs] WARN: disk replica repaired key=proj-123:notes/a.md doc_len=120 replica_len=87 (kit bug: report it to K2 Cores)"
+                    .to_string()
+            ],
+            "the event must reach its own arm (not the catch-all) and log exactly one line"
+        );
+    }
+
+    #[test]
+    fn a_disk_replica_mismatch_is_logged_as_a_warn_line_with_metadata_only() {
+        REPAIRED_LINES.with(|v| v.borrow_mut().clear());
+        let key = DocKey { space: "proj-123".into(), path: "notes/a.md".into() };
+        let ev = AuditEvent::DiskReplicaMismatch { key, version: 42 };
+        K2Host::default().on_event(&ev);
+        let got = REPAIRED_LINES.with(|v| v.borrow().clone());
+        assert_eq!(
+            got,
+            vec![
+                "[docs] WARN: disk replica mismatch key=proj-123:notes/a.md version=42 (kit bug: report it to K2 Cores)"
                     .to_string()
             ],
             "the event must reach its own arm (not the catch-all) and log exactly one line"

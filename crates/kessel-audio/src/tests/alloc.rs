@@ -129,6 +129,7 @@ fn resamplers_do_not_allocate_per_block() {
 
 #[test]
 fn report_dependency_allocations_per_second() {
+    let _cpu = crate::tests::shared_cpu();
     let mut rng = crate::testkit::Rng::new(77);
     let x = crate::testkit::talker_track(&crate::testkit::TALKERS[0], &mut rng, 48_000 * 5);
     let mut apm = Apm::new(&ProcessingConfig::default());

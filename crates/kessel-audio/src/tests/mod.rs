@@ -17,6 +17,18 @@ use std::time::{Duration, Instant};
 
 pub(crate) const FAR_ID: u64 = 1;
 
+/// CPU-heavy tests share this lock; the CPU measurement takes it
+/// exclusively so it times the pipeline, not the other tests.
+static HEAVY: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+pub(crate) fn shared_cpu() -> std::sync::RwLockReadGuard<'static, ()> {
+    HEAVY.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn exclusive_cpu() -> std::sync::RwLockWriteGuard<'static, ()> {
+    HEAVY.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub(crate) fn core_cfg(processing: ProcessingConfig) -> CoreConfig {
     CoreConfig {
         processing,
@@ -112,6 +124,16 @@ pub(crate) struct CallRun {
 /// `mic` (if any) is captured block by block, render first, as the engine
 /// does.
 pub(crate) fn run_core(
+    cfg: &CoreConfig,
+    sched: &[(u64, Packet)],
+    n_samples: usize,
+    mic: Option<&[f32]>,
+) -> CallRun {
+    run_core_inner(cfg, sched, n_samples, mic)
+}
+
+/// [`run_core`]'s body (the CPU test calls it while holding the lock).
+pub(crate) fn run_core_inner(
     cfg: &CoreConfig,
     sched: &[(u64, Packet)],
     n_samples: usize,

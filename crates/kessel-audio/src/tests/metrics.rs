@@ -75,6 +75,7 @@ fn report(name: &str, values: &[(String, f64)]) {
 /// steady ERLE 50.4 dB mean, 40.0 worst; first 2 s 33.5 dB.
 #[test]
 fn s1_far_end_only_erle() {
+    let _cpu = crate::tests::shared_cpu();
     let cfg = core_cfg(aec_only());
     let mut steady = Vec::new();
     for (ri, room) in ROOMS.iter().enumerate() {
@@ -168,6 +169,7 @@ fn double_talk(processing: ProcessingConfig, ri: usize, seed: u64) -> DoubleTalk
 /// (worst 30.2).
 #[test]
 fn s2_double_talk_keeps_the_near_end() {
+    let _cpu = crate::tests::shared_cpu();
     for (ri, seed) in [(0usize, 2000u64), (2, 2100)] {
         let r = double_talk(aec_only(), ri, seed);
         report(
@@ -188,6 +190,7 @@ fn s2_double_talk_keeps_the_near_end() {
 /// gaps 46.6 dB.
 #[test]
 fn s2_double_talk_full_chain() {
+    let _cpu = crate::tests::shared_cpu();
     let r = double_talk(ProcessingConfig::default(), 1, 2200);
     report(
         &format!("S2 full {}", ROOMS[1].name),
@@ -207,6 +210,7 @@ fn s2_double_talk_full_chain() {
 /// 40 ms. Baseline, sonora: time to 45 dB ERLE 0.01 s (a) and 0.32 s (b).
 #[test]
 fn s3_reconverges_after_an_echo_path_change() {
+    let _cpu = crate::tests::shared_cpu();
     let cfg = core_cfg(aec_only());
     let room = &ROOMS[1];
     let seed = 3000;
@@ -252,6 +256,7 @@ fn s3_reconverges_after_an_echo_path_change() {
 /// (so it includes the high-pass filter's share).
 #[test]
 fn s4_noise_suppression_cuts_noise_in_pauses() {
+    let _cpu = crate::tests::shared_cpu();
     let processing = ProcessingConfig {
         echo_cancellation: false,
         noise_suppression: Some(NoiseSuppressionStrength::Moderate),
@@ -310,6 +315,7 @@ const CPP_AGC2_LEVELS: [f64; 4] = [-27.3, -23.1, -23.1, -20.6];
 /// -27.3/-23.1/-23.1/-20.6 dBFS; spread 6.3 / 6.8 dB.
 #[test]
 fn s6_agc2_levels_speech() {
+    let _cpu = crate::tests::shared_cpu();
     let processing = ProcessingConfig {
         echo_cancellation: false,
         noise_suppression: None,
@@ -356,6 +362,7 @@ fn s6_agc2_levels_speech() {
 /// time (500 µs per 10 ms).
 #[test]
 fn cpu_full_duplex_under_five_percent_of_a_core() {
+    let inputs = super::shared_cpu();
     let cfg = core_cfg(ProcessingConfig::default());
     let case = far_case(&cfg, 5000, 20.0, (0.0, 20.0));
     let mut rng = Rng::new(5001);
@@ -364,7 +371,12 @@ fn cpu_full_duplex_under_five_percent_of_a_core() {
     let path = echo_path(room, &pose, &mut rng);
     let echo = make_echo(&case.rendered, &path, SYS_DELAY, ECHO_DB);
     let mic = mic_from(&[echo.as_slice()], &mut rng);
-    let run = duplex(&cfg, &case, &mic);
+    drop(inputs);
+    let run = {
+        let _alone = super::exclusive_cpu();
+        run_core_inner(&cfg, &case.sched, mic.len(), Some(&mic))
+    };
+    assert_eq!(run.rendered, case.rendered, "the pipeline must be deterministic");
     let mut ns: Vec<u64> = run.block_ns.clone();
     ns.sort_unstable();
     let p50 = ns[ns.len() / 2] as f64 / 1000.0;
@@ -388,6 +400,7 @@ fn cpu_full_duplex_under_five_percent_of_a_core() {
 /// the 1 dB the C++ comparison asked for.
 #[test]
 fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
+    let _cpu = crate::tests::shared_cpu();
     use crate::apm::{Apm, AGC2_HEADROOM_DB};
     let processing = ProcessingConfig {
         echo_cancellation: false,

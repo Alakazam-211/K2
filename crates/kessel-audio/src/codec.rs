@@ -264,6 +264,7 @@ mod tests {
 
     #[test]
     fn lbrr_flag_follows_the_fec_setting() {
+        let _cpu = crate::tests::shared_cpu();
         let x = real_speech(3, 10);
         for fec in [true, false] {
             let cfg = EncoderCfg {
@@ -309,6 +310,7 @@ mod tests {
 
     #[test]
     fn fec_recovers_lost_frames_better_than_plc() {
+        let _cpu = crate::tests::shared_cpu();
         let x = real_speech(4, 10);
         let cfg = EncoderCfg {
             dtx: false,

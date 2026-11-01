@@ -25,6 +25,7 @@ fn participant_stats(run: &CallRun) -> crate::ParticipantStats {
 
 #[test]
 fn clean_network_plays_everything() {
+    let _cpu = crate::tests::shared_cpu();
     let n = secs(10.0);
     let x = far(1, n);
     let sched = schedule(
@@ -51,6 +52,7 @@ fn clean_network_plays_everything() {
 
 #[test]
 fn loss_reordering_and_jitter_are_concealed() {
+    let _cpu = crate::tests::shared_cpu();
     let n = secs(20.0);
     let x = far(2, n);
     let packets = encode_remote(&x, EncoderCfg::default());
@@ -85,6 +87,7 @@ fn loss_reordering_and_jitter_are_concealed() {
 
 #[test]
 fn fec_off_conceals_every_loss() {
+    let _cpu = crate::tests::shared_cpu();
     let n = secs(10.0);
     let x = far(3, n);
     let cfg = EncoderCfg {
@@ -108,6 +111,7 @@ fn fec_off_conceals_every_loss() {
 
 #[test]
 fn fec_beats_plc_on_lost_frames() {
+    let _cpu = crate::tests::shared_cpu();
     // The same loss pattern with and without FEC in the stream: the frames
     // that were lost come out closer to the clean decode with FEC.
     let n = secs(10.0);
@@ -149,6 +153,7 @@ fn fec_beats_plc_on_lost_frames() {
 
 #[test]
 fn levels_follow_the_talker() {
+    let _cpu = crate::tests::shared_cpu();
     let cfg = core_cfg(ProcessingConfig::off());
     let n = secs(10.0);
     let mut x = far(5, n);
@@ -209,6 +214,7 @@ fn levels_follow_the_talker() {
 
 #[test]
 fn deafen_silences_playback_but_not_levels() {
+    let _cpu = crate::tests::shared_cpu();
     let cfg = core_cfg(ProcessingConfig::off());
     let n = secs(4.0);
     let x = far(6, n);

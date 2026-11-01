@@ -77853,8 +77853,9 @@ Write (needs a write grant on the board)
   k2 board add <type> [--<field> <value> …]   types: sticky text shape connector pen
                                               frame card table mind comment image
   k2 board update <id> --<field> <value> …    only the fields you name change
-  k2 board delete <id>                        and what hangs off it (listed)
-  k2 board connect <from-id> <to-id> [--label yes --route elbow|straight|curved --fromAnchor top --toAnchor left]
+  k2 board delete <id>                        and what hangs off it: no prompt; prints every id deleted
+  k2 board connect <from-id> <to-id> [--label "any text" --route elbow|straight|curved --fromAnchor top --toAnchor left]
+                                              an arrow from → to (endCap arrow by default; --endCap none for a plain line)
   k2 board template <name> [--x N --y N]      kickoff kanban retro flowchart storymap brainstorm mindmap
   k2 board react <id> <emoji>                 toggle your reaction (👍 ❤️ 😂 🎉 🤔 👀 🔥 ✅ ❌ ❓ ⭐)
   k2 board vote <id>                          +1 vote, while voting is on
@@ -77875,6 +77876,11 @@ Boards (the person's list; agents need a grant on boards/)
 Export
   k2 board export [--out board.json]     the board as one JSON file: images
                                          with their bytes, people as p1, p2 …
+
+add, update, connect and comment print the object as JSON; its "id" is the new
+id (--json prints the daemon's whole answer). Sticky colours: yellow orange pink
+red violet blue cyan green lime gray white; ink and fills: k2 board fields.
+--board goes anywhere on the line. A missing board or object is exit 4.
 
 Field values: numbers, true/false, colour names (k2 board fields), or JSON
 ('{"id":"h-…","anchor":"top"}', '[["a","b"],["c","d"]]'). Images: put the file

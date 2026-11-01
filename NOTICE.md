@@ -88,15 +88,15 @@ is K2's own (`ZenIcon`), not Lucide.
 > ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 > OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## Contributed: Board (Garden widget) — licence pending
+## Contributed: Board (Garden widget) — MIT
 
-The Board Garden's whiteboard widget is **Board by Baden Ballard (Alakazam Labs)**.
+The Board Garden's whiteboard widget is **Board by Baden Ballard (MIT)**.
 
 | | |
 |--|--|
 | **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget), ported from Board's own widget |
-| **Author** | Baden Ballard (Alakazam Labs) |
-| **License** | **Licence pending: the author's MIT grant is awaited; not to be released until it is.** |
+| **Author** | Baden Ballard |
+| **License** | **MIT** (granted to K2 in writing by the author, 2026-11-01) |
 
 ## Third-party: Public Suffix List (MPL-2.0) and BIP-39 word list (MIT)
 

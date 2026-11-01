@@ -423,6 +423,28 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("review.js", include_str!("review-1/review.js")),
         ],
     },
+    // The Board (plan-board-garden-v1, Rosson 2026-11-01): readable source
+    // in the widget's load order (no minifier); only host.js and store.js
+    // call `k2.*`. A Beta behind the Board core (`board-1.toml`).
+    BuiltinWidget {
+        name: "board",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("board-1/manifest.json")),
+            ("index.html", include_str!("board-1/index.html")),
+            ("board.css", include_str!("board-1/board.css")),
+            ("schema.js", include_str!("board-1/schema.js")),
+            ("host.js", include_str!("board-1/host.js")),
+            ("store.js", include_str!("board-1/store.js")),
+            ("model.js", include_str!("board-1/model.js")),
+            ("geom.js", include_str!("board-1/geom.js")),
+            ("icons.js", include_str!("board-1/icons.js")),
+            ("render.js", include_str!("board-1/render.js")),
+            ("app.js", include_str!("board-1/app.js")),
+            ("export.js", include_str!("board-1/export.js")),
+            ("ui.js", include_str!("board-1/ui.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
@@ -466,6 +488,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:box-disk@1", "544d39934b526377777dc1ec832bf77096df1b4dee123f7d25727ef7864c19ce"),
     ("k2:review@1", "dd1271c39589a392358e8e8a39ceadd025ceef55776e44015615d055609d6b34"),
     ("k2:work-inbox@1", "85deffe31c8a76db2410d7756e64193a2101d31c4518e7b1ebf57e8ab3a68143"),
+    ("k2:board@1", "4339ddacde0e1d052aaee125c1bcd279d52a6c3fc73af944d14255d8713ba182"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1325,6 +1348,109 @@ mod tests {
                 assert!(c.verb(call).is_some() || runtime.contains(&call), "{id} calls k2.{call}, which isn't a catalog verb");
             }
         }
+    }
+
+    /// The Board (plan-board-garden-v1 S6; Rosson 2026-11-01): a clean
+    /// custom widget in readable source, loaded in its build order; only the
+    /// two adapters (host.js, store.js) call `k2.*`, and only catalog verbs,
+    /// runtime members or SDK helpers; no Thread save path, keeper, access
+    /// panel or internal names; images as blobs.
+    #[test]
+    fn the_board_is_a_clean_readable_widget() {
+        let w = builtin_widget(&parse_widget_ref(BOARD_WIDGET).expect("parses")).expect("k2:board@1 ships");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:board").expect("parses")).map(|w| w.id()).as_deref(), Some(BOARD_WIDGET));
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+        let c = crate::zen::widgets::check_files("k2", "board-1", &files);
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.bundle.is_some(), "it bundles");
+        assert!(!c.warnings.iter().any(|d| d.message.starts_with("this widget is large")), "{:?}", c.warnings);
+        let m = c.manifest.as_ref().expect("a manifest");
+        assert_eq!(m.caps, ["store:read", "store:write", "thread:post", "agents:read", "links:open", "downloads:save", "uploads:pick"]);
+        assert!(!m.caps.iter().any(|c| c == "thread:read"), "no Thread save path: K2's Conversation reads the Thread");
+        for cap in &m.caps {
+            assert!(crate::zen::USER_WIDGET_CAPS.contains(&cap.as_str()), "{cap}");
+        }
+        let manifest: serde_json::Value = serde_json::from_str(file(w, "manifest.json")).expect("manifest is JSON");
+        assert_eq!(manifest["requires"]["libs"], serde_json::json!(["k2-png@1"]));
+        // Load order: the index loads every script, in the build order.
+        let order = ["schema.js", "host.js", "store.js", "model.js", "geom.js", "icons.js", "render.js", "app.js", "export.js", "ui.js"];
+        let scripts: Vec<&str> = w.files.iter().map(|(n, _)| *n).filter(|n| n.ends_with(".js")).collect();
+        assert_eq!(scripts, order);
+        let html = file(w, "index.html");
+        let mut at = 0;
+        for s in order {
+            let tag = format!("<script src=\"{s}\"></script>");
+            let i = html[at..].find(&tag).unwrap_or_else(|| panic!("index.html loads {s} after the one before it"));
+            at += i + tag.len();
+        }
+        assert!(!html.contains("board-data.js") && !html.contains("board.min.js"), "readable files only");
+        for bad in [" onclick=", " onload=", " onerror=", "<iframe", "<object", "<embed", "<base", "http-equiv", "src=\"http", "href=\"http", "//cdn"] {
+            assert!(!html.contains(bad), "index.html has {bad}");
+        }
+        let cat = crate::contract::catalog();
+        let verbs: Vec<String> = cat
+            .verbs_exposed_to(crate::contract::Exposure::Widget)
+            .iter()
+            .chain(cat.verbs_exposed_to(crate::contract::Exposure::GardenLocal).iter())
+            .map(|v| v.verb.clone())
+            .collect();
+        assert!(verbs.iter().any(|v| v == "store.grantees"), "the chat list's source (catalog v43)");
+        // Internal names never ship (plan §3): case-insensitive, and `appa`
+        // as a word (it is inside ordinary words like "apparent").
+        let word = |text: &str, needle: &str| -> bool {
+            let t = text.to_lowercase();
+            t.match_indices(needle).any(|(i, _)| {
+                let before = t[..i].chars().last().is_some_and(|c| c.is_alphanumeric());
+                let after = t[i + needle.len()..].chars().next().is_some_and(|c| c.is_alphanumeric());
+                !before && !after
+            })
+        };
+        for (name, body) in w.files {
+            let low = body.to_lowercase();
+            for bad in ["baden", "board-builder", "keeper", "rosson", "/users/", "switchback", ".k2.dev", "\u{29c9}board1"] {
+                assert!(!low.contains(bad), "{name} still has '{bad}'");
+            }
+            assert!(!word(body, "appa"), "{name} names appa");
+        }
+        for name in order {
+            let js = file(w, name);
+            for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "localStorage", "sessionStorage", "indexedDB", "eval(", "new Function", "import ", "thread.read", "thread.post(", "toDataURL('image/jpeg'"] {
+                assert!(!js.contains(bad), "{name} uses {bad}");
+            }
+            let calls: Vec<String> = js
+                .match_indices("k2.")
+                .filter(|(i, _)| !js[..*i].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .map(|(i, _)| js[i + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect::<String>())
+                .map(|c| c.trim_end_matches('.').to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if name != "host.js" && name != "store.js" {
+                assert!(calls.is_empty(), "{name} calls k2.{:?}: only host.js and store.js talk to K2", calls.first());
+                continue;
+            }
+            for call in calls {
+                let head = call.split('.').next().unwrap_or(&call).to_string();
+                let ok = verbs.iter().any(|v| *v == call)
+                    || crate::contract::gen::RUNTIME_MEMBERS.contains(&call.as_str())
+                    || (["widget", "config", "connected", "motion"].contains(&head.as_str())
+                        && crate::contract::gen::RUNTIME_MEMBERS.contains(&head.as_str()))
+                    || ["store", "store.subscribe", "store.tx", "save", "save.get", "save.set", "viewer", "blobs.url", "theme.changed", "thread", "agents", "canvas"]
+                        .contains(&call.as_str());
+                assert!(ok, "{name} calls k2.{call}, which isn't a widget helper");
+            }
+        }
+        // Store only: the fresh-box seed, ifRev writes, blobs for images; no
+        // Thread save path, keeper or main-board special case.
+        let store = file(w, "store.js");
+        for needle in ["ifRev: 0", "k2.store.batch(", "k2.blobs.put(", "k2.store.grantees", "core_off", "person:owner"] {
+            assert!(store.contains(needle), "store.js lost {needle}");
+        }
+        for gone in ["threadStore", "hasK2Data", "BOARD_DATA", "isMain", "notify(", "tell(", "acl/", "setAccess", "'Baden'"] {
+            assert!(!store.contains(gone), "store.js still has {gone}");
+        }
+        let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
+        assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {code} bytes of code");
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

@@ -510,6 +510,12 @@ fn policy_set(who: &Who, body: &[u8]) -> R<Value> {
         }
         None => None,
     };
+    // Voice rooms (§2.1): the K2 Admin Space is the fixed default Space.
+    if let Some(sp) = &space {
+        if let Some(why) = crate::voice_admin::default_space_fixed(sp.as_deref()).map_err(internal)? {
+            return Err(ChatErr::new("default_space_fixed", 409, why));
+        }
+    }
     // Check every part before changing any.
     let by_actor = match by {
         Some(by) => Some((

@@ -38,6 +38,7 @@
 //!   the main DB, so they cannot share the skin.db transaction: they call
 //!   [`kick_reconcile`] and the sweep fixes the drift.
 
+pub mod admin_space;
 pub mod app_space;
 pub mod avatar;
 pub mod chat;
@@ -125,6 +126,25 @@ pub enum Op {
     /// Sew 0.6.0 I3: a Space's `governance` (`POST
     /// /mgmt/v1/spaces/{space_id}/settings`), subject `space:<space id>`.
     SpaceSettings,
+    /// Voice rooms (Sew 0.7.0 SW-1, [`admin_space`]): create the K2 Admin
+    /// Space (`POST /mgmt/v1/spaces/create`, governance `server`), subject
+    /// `admin:space`.
+    AdminSpaceCreate,
+    /// Voice rooms: add one box user or agent to the Admin Space (`POST
+    /// /mgmt/v1/spaces/members/add`, `app_id` omitted), subject
+    /// `admin:m:<space>:<ext>`, after the person's own provisioning queue.
+    AdminMemberAdd,
+    /// Voice rooms: remove one from the Admin Space.
+    AdminMemberRemove,
+    /// Voice rooms: one member's level (`member` | `moderator`) through the
+    /// member-channels sync with `app_id` omitted.
+    AdminMemberLevel,
+    /// Voice rooms: the rooms (`POST /mgmt/v1/channels/bulk`, voice,
+    /// `app_id` omitted), subject `admin:rooms:<space>`.
+    AdminRooms,
+    /// Voice rooms (SW-4): close a room (`POST /mgmt/v1/channels/{id}/closing`),
+    /// subject `admin:room:<channel id>`, after the rooms queue.
+    AdminRoomClosing,
 }
 
 impl Op {
@@ -146,6 +166,12 @@ impl Op {
             Op::SpaceMemberChannels => "space_member_channels",
             Op::ChannelsBulk => "channels_bulk",
             Op::SpaceSettings => "space_settings",
+            Op::AdminSpaceCreate => "admin_space_create",
+            Op::AdminMemberAdd => "admin_member_add",
+            Op::AdminMemberRemove => "admin_member_remove",
+            Op::AdminMemberLevel => "admin_member_level",
+            Op::AdminRooms => "admin_rooms",
+            Op::AdminRoomClosing => "admin_room_closing",
         }
     }
 
@@ -167,6 +193,12 @@ impl Op {
             "space_member_channels" => Op::SpaceMemberChannels,
             "channels_bulk" => Op::ChannelsBulk,
             "space_settings" => Op::SpaceSettings,
+            "admin_space_create" => Op::AdminSpaceCreate,
+            "admin_member_add" => Op::AdminMemberAdd,
+            "admin_member_remove" => Op::AdminMemberRemove,
+            "admin_member_level" => Op::AdminMemberLevel,
+            "admin_rooms" => Op::AdminRooms,
+            "admin_room_closing" => Op::AdminRoomClosing,
             _ => return None,
         })
     }
@@ -174,7 +206,7 @@ impl Op {
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
     /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
     /// membership ops ride the same worker.
-    pub const DELIVERED: [Op; 16] = [
+    pub const DELIVERED: [Op; 22] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
@@ -191,6 +223,12 @@ impl Op {
         Op::SpaceMemberChannels,
         Op::ChannelsBulk,
         Op::SpaceSettings,
+        Op::AdminSpaceCreate,
+        Op::AdminMemberAdd,
+        Op::AdminMemberRemove,
+        Op::AdminMemberLevel,
+        Op::AdminRooms,
+        Op::AdminRoomClosing,
     ];
 
     /// K31's App Space membership ops.
@@ -238,6 +276,9 @@ pub enum Cause {
     /// App-governed Spaces: the App set people's channels itself
     /// (`chat.setChannels`) or made channels (`chat.channels`).
     AppCall,
+    /// Voice rooms: the K2 Admin Space sync (its Space, members, levels and
+    /// rooms).
+    VoiceRooms,
 }
 
 impl Cause {
@@ -262,6 +303,7 @@ impl Cause {
             Cause::SpaceUnbound => "space_unbound",
             Cause::GovernanceSwitch => "governance_switch",
             Cause::AppCall => "app_call",
+            Cause::VoiceRooms => "voice_rooms",
         }
     }
 }
@@ -1254,6 +1296,167 @@ pub fn sew_features() -> Result<Vec<String>, String> {
     crate::skin::with_skin_conn(|conn| features::list(conn, CHAT_KIND))
 }
 
+// ── Voice rooms: the K2 Admin Space ([`admin_space`]) ────────────────
+
+fn admin_summary_slot() -> &'static std::sync::Mutex<Option<admin_space::Summary>> {
+    static S: OnceLock<std::sync::Mutex<Option<admin_space::Summary>>> = OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// The sweep's Admin Space step (after [`apply_settings`], so Sew's flags
+/// are current): plan the Space, its members, levels and rooms from
+/// `facts` and enqueue them under [`admin_space::ACTOR`]. Does nothing
+/// with the preview off. Returns what it planned.
+pub fn apply_admin_space(facts: &admin_space::Facts) -> Result<admin_space::Summary, String> {
+    if !skin_store_exists() {
+        return Ok(admin_space::Summary { waiting: Some("chat_off".into()), ..Default::default() });
+    }
+    let now = outbox::now_secs();
+    let (n, summary) = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("admin space begin: {e}"))?;
+        let busy = outbox::busy_subjects(&tx, CHAT_KIND)?;
+        let (ops, summary) = admin_space::plan(&tx, facts, &busy, now)?;
+        let n = outbox::enqueue(&tx, &ops, admin_space::ACTOR, now)?.len();
+        tx.commit().map_err(|e| format!("admin space commit: {e}"))?;
+        Ok((n, summary))
+    })?;
+    if n > 0 {
+        crate::log_debug!("[grant-hook] admin space: {}", serde_json::to_value(&summary).unwrap_or_default());
+        kick();
+    }
+    if let Ok(mut g) = admin_summary_slot().lock() {
+        *g = Some(summary.clone());
+    }
+    Ok(summary)
+}
+
+/// What the last Admin Space plan saw (`None` before any sweep).
+pub fn admin_space_last_summary() -> Option<admin_space::Summary> {
+    admin_summary_slot().lock().ok().and_then(|g| g.clone())
+}
+
+/// Write a `connect` chat grant (scope `member`) for each Connect login
+/// the Admin Space should hold that has none yet (§2.6: written ahead, so
+/// a first join never waits on `chat_member_pending`). Never for an
+/// owner-linked or disabled login; a grant the owner switched off is left
+/// off. Only with the preview on, chat enabled and a Sew that takes the
+/// server Space. Call OUTSIDE any skin.db closure. Returns how many.
+pub fn ensure_admin_connect_grants(people: &[admin_space::ConnectPerson]) -> Result<usize, String> {
+    if !crate::voice_rooms::enabled() || !skin_store_exists() {
+        return Ok(0);
+    }
+    let missing: Vec<String> = crate::skin::with_skin_conn(|conn| {
+        if !outbox::target_enabled(conn, CHAT_KIND)? || !features::VoiceFeatures::read(conn, CHAT_KIND)?.server_governed_space {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for p in people {
+            if p.owner_linked || p.disabled || !sew_wire::is_lower_uuid(&p.id) {
+                continue;
+            }
+            if connect_chat_grant(conn, &p.id)?.is_none() {
+                out.push(p.id.clone());
+            }
+        }
+        Ok(out)
+    })?;
+    let mut n = 0;
+    for id in missing {
+        let w = SkinGrantWrite {
+            subject_kind: "connect".into(),
+            subject_id: id.clone(),
+            kind: CHAT_KIND.into(),
+            target_id: String::new(),
+            role: None,
+            scope: Some("member".into()),
+            created_by: Some(admin_space::ACTOR.into()),
+        };
+        match crate::skin::create_grant(&w) {
+            Ok(_) => n += 1,
+            // A concurrent first mint wrote it first.
+            Err(e) if e.starts_with("grant already exists") => {}
+            Err(e) => return Err(format!("chat grant for Connect login {id}: {e}")),
+        }
+    }
+    Ok(n)
+}
+
+/// The Admin Space, its members, rooms and holds (`k2 voice status`).
+pub fn admin_space_view() -> Result<admin_space::View, String> {
+    if !skin_store_exists() {
+        return Ok(admin_space::View::default());
+    }
+    crate::skin::with_skin_conn(admin_space::view)
+}
+
+/// The ready Admin Space's Sew id.
+pub fn admin_space_id() -> Result<Option<String>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(admin_space::ready_space_id)
+}
+
+/// Rename a room (`3` or `room-3`); the sweep sends it. Returns the slug.
+pub fn admin_room_rename(n_or_slug: &str, name: &str) -> Result<String, String> {
+    let slug = crate::skin::with_skin_conn(|conn| admin_space::set_room_name(conn, n_or_slug, name, outbox::now_secs()))?;
+    kick_reconcile();
+    Ok(slug)
+}
+
+/// Store the room count (0–10). `now`: the rooms above it are archived
+/// ("Close now", after the caller's 10 s notice) instead of closing when
+/// empty. Returns the slugs marked to close now.
+pub fn admin_rooms_set_count(count: u32, now: bool) -> Result<Vec<String>, String> {
+    if count > crate::voice_rooms::ROOMS_MAX {
+        return Err(format!("rooms must be 0-{} (got {count})", crate::voice_rooms::ROOMS_MAX));
+    }
+    crate::app_settings::update(serde_json::json!({ "voiceRoomsCount": count }))?;
+    let marked = if now && skin_store_exists() {
+        crate::skin::with_skin_conn(|conn| admin_space::mark_close_now(conn, count, outbox::now_secs()))?
+    } else {
+        Vec::new()
+    };
+    kick_reconcile();
+    Ok(marked)
+}
+
+/// The rooms a count of `count` would close (the "Close now" notice).
+pub fn admin_rooms_above(count: u32) -> Result<Vec<admin_space::RoomRow>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(|conn| admin_space::rooms_above(conn, count))
+}
+
+/// The SW-3 feed saw a room close or archive (`closing` | `archived`).
+pub fn admin_room_state(channel_id: &str, state: &str) -> Result<(), String> {
+    if ![admin_space::ROOM_CLOSING, admin_space::ROOM_ARCHIVED, admin_space::ROOM_ACTIVE].contains(&state) {
+        return Err(format!("room state is closing|archived|active (got {state})"));
+    }
+    crate::skin::with_skin_conn(|conn| admin_space::note_room_state(conn, channel_id, state, outbox::now_secs()))
+}
+
+/// V13: is `ext`'s Admin Space add or level sync still on its way?
+pub fn admin_level_pending(ext: &sew_wire::ExternalId) -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(|conn| admin_space::level_sync_pending(conn, &ext.to_string()))
+}
+
+/// Retry a blocked Admin Space create (after the owner fixed its cause).
+pub fn admin_space_retry() -> Result<bool, String> {
+    let n = crate::skin::with_skin_conn(|conn| admin_space::clear_blocked(conn, outbox::now_secs()))?;
+    kick_reconcile();
+    Ok(n)
+}
+
+/// Record the default-Space switch to `k2-admin` (§6.6 2.7 d).
+pub fn admin_space_note_default_switch(from: Option<&str>, carried: &[String]) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| admin_space::note_default_switch(conn, from, carried, outbox::now_secs()))
+}
+
 /// Tests: as if Sew's status had reported `flags`.
 #[cfg(any(test, feature = "test-util"))]
 pub fn note_features_for_tests(flags: &[&str]) -> Result<(), String> {
@@ -1757,6 +1960,11 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         // Sew 0.6.0: a channel sync or channel op Sew applied.
         governed::after_done(conn, id, result, now)?;
         governed::after_done_channels(conn, id, result, now)?;
+        // Voice rooms: the K2 Admin Space, its members and rooms. A Space
+        // that just became ready gets its members and rooms planned now.
+        if admin_space::after_done(conn, id, result, now)? {
+            kick_reconcile();
+        }
         // Sew 0.5.0: an unbind waiting for its Space's member removes can
         // go once they are delivered.
         let removed = conn
@@ -1822,6 +2030,7 @@ pub fn record_held(id: &str, status: u16, result: &str, why: &str) -> Result<(),
     crate::skin::with_skin_conn(|conn| {
         outbox::mark_held(conn, id, status as i64, Some(result), why, now)?;
         app_space::after_held(conn, id, why, now)?;
+        admin_space::after_held(conn, id, why, now)?;
         governed::after_held(conn, id, why, result, now)
     })
 }
@@ -1901,7 +2110,9 @@ pub fn record_blocked(id: &str, status: Option<u16>, error: &str) -> Result<(), 
     let now = outbox::now_secs();
     crate::log_debug!("[grant-hook] row {id} BLOCKED: {error}");
     crate::skin::with_skin_conn(|conn| {
-        outbox::mark_blocked(conn, id, status.map(i64::from), error, now)
+        outbox::mark_blocked(conn, id, status.map(i64::from), error, now)?;
+        // Voice rooms: a blocked Admin Space create blocks the Space.
+        admin_space::after_blocked(conn, id, error, now)
     })
 }
 

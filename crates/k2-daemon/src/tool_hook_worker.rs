@@ -192,7 +192,7 @@ pub enum Outcome {
 /// sent; every other outcome passes through.
 pub fn refine_space(cfg: &WorkerConfig, row: &OutboxRow, outcome: Outcome) -> Outcome {
     use k2_core::tool_hook::app_space::{add_verdict, AddVerdict};
-    if Op::parse(&row.op) != Some(Op::SpaceMemberAdd) {
+    if !matches!(Op::parse(&row.op), Some(Op::SpaceMemberAdd | Op::AdminMemberAdd)) {
         return outcome;
     }
     let Outcome::Done { status, body, .. } = &outcome else {
@@ -295,7 +295,35 @@ pub fn classify(
         },
         // K31: no such member or Space: nothing left to remove. Sew 0.5.0:
         // no such Space: nothing left to unbind.
-        404 if matches!(op, Op::SpaceMemberRemove | Op::SpaceUnbind) => Outcome::Done {
+        404 if matches!(op, Op::SpaceMemberRemove | Op::SpaceUnbind | Op::AdminMemberRemove) => Outcome::Done {
+            status,
+            body: resp.body_text(),
+            reconcile: false,
+        },
+        // Voice rooms SW-1: the install already has its server Space;
+        // `details.space_id` names it and K2 reads it back (the ledger
+        // takes it from the answer, `admin_space::after_done`).
+        409 if op == Op::AdminSpaceCreate && reason == reasons::SERVER_SPACE_EXISTS => Outcome::Done {
+            status,
+            body: resp.body_text(),
+            reconcile: false,
+        },
+        409 if op == Op::AdminSpaceCreate && reason == reasons::SLUG_TAKEN => Outcome::Blocked {
+            status: Some(status),
+            error: format!(
+                "{}: another Sew Space already has the slug k2-admin, so K2 can't make its Admin Space; rename that Space's slug in Sew, then retry (k2 voice status)",
+                resp.error_line()
+            ),
+        },
+        409 if op == Op::AdminSpaceCreate && reason == reasons::IDENTITY_NOT_K2 => Outcome::Blocked {
+            status: Some(status),
+            error: format!(
+                "{}: this Sew is a standalone install (not started with K2), so it has no K2 Admin Space",
+                resp.error_line()
+            ),
+        },
+        // SW-4: un-closing a room Sew already archived: it's archived.
+        409 if op == Op::AdminRoomClosing && reason == reasons::CHANNEL_ARCHIVED => Outcome::Done {
             status,
             body: resp.body_text(),
             reconcile: false,
@@ -430,6 +458,14 @@ fn path_for(op: Op) -> &'static str {
         Op::SpaceMemberChannels => "/mgmt/v1/spaces/{space_id}/members/{external_id}/channels",
         Op::SpaceSettings => "/mgmt/v1/spaces/{space_id}/settings",
         Op::ChannelsBulk => sew_wire::MGMT_CHANNELS_BULK,
+        // Voice rooms: the Space, member and channel are in the path where
+        // Sew wants them ([`hook::admin_space::path_for`]).
+        Op::AdminSpaceCreate => sew_wire::MGMT_SPACES_CREATE,
+        Op::AdminMemberAdd => sew_wire::MGMT_SPACE_MEMBERS_ADD,
+        Op::AdminMemberRemove => sew_wire::MGMT_SPACE_MEMBERS_REMOVE,
+        Op::AdminMemberLevel => "/mgmt/v1/spaces/{space_id}/members/{external_id}/channels",
+        Op::AdminRooms => sew_wire::MGMT_CHANNELS_BULK,
+        Op::AdminRoomClosing => "/mgmt/v1/channels/{channel_id}/closing",
     }
 }
 
@@ -899,7 +935,9 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                     }
                 }
             } else {
-                let path = hook::home::path_for(op, &row.subject_key).unwrap_or_else(|| path_for(op).to_string());
+                let path = hook::home::path_for(op, &row.subject_key)
+                    .or_else(|| hook::admin_space::path_for(op, &row.subject_key))
+                    .unwrap_or_else(|| path_for(op).to_string());
                 client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await
             };
             let now = k2_core::tool_hook::outbox::now_secs();
@@ -1133,7 +1171,16 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).
         crate::sew::home::refresh_origins();
-        hook::apply_settings(&k, &status.features, &policy_read).map(|_| ())
+        hook::apply_settings(&k, &status.features, &policy_read)?;
+        // Voice rooms (preview): the K2 Admin Space, its members and rooms,
+        // after the flags above are recorded. Its failure is logged, never
+        // the sweep's (the rest of chat keeps working).
+        if k == hook::CHAT_KIND {
+            if let Err(e) = crate::voice_admin::sweep() {
+                log_debug!("[voice-rooms] admin space sweep: {e}");
+            }
+        }
+        Ok(())
     })
     .await
 }

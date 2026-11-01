@@ -1675,6 +1675,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // Sew 0.6.0: App-governed Spaces (channels, the sync ledger, the App's
     // own lists, box users leaving, service owners to retire).
     crate::tool_hook::governed::ensure_schema(&conn)?;
+    // Voice rooms (Sew 0.7.0): the K2 Admin Space, its members and rooms.
+    crate::tool_hook::admin_space::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest

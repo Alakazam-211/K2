@@ -715,6 +715,18 @@ pub fn chat_member_facts() -> Result<Vec<(String, String, String)>, String> {
         .collect())
 }
 
+/// The K2 Admin Space's view of every Connect login with an id (voice
+/// rooms, prd-k2-voice-rooms-v1 §2.3): `(id, username, role, disabled)`.
+pub fn admin_space_facts() -> Result<Vec<(String, String, Role, bool)>, String> {
+    let store = load_store()?;
+    Ok(store
+        .users
+        .iter()
+        .filter(|u| !u.id.is_empty())
+        .map(|u| (u.id.clone(), u.username.clone(), u.role, u.disabled))
+        .collect())
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Account management (owner-only at the route layer)
 // ─────────────────────────────────────────────────────────────────────
@@ -964,6 +976,11 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
     if disabled {
         revoke_user_sessions(&username);
     }
+    // Voice rooms: a disabled login leaves the K2 Admin Space; enabled, it
+    // comes back.
+    if crate::voice_rooms::enabled() {
+        crate::tool_hook::kick_reconcile();
+    }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }
@@ -1084,6 +1101,11 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
         Ok(())
     })?;
     revoke_user_sessions(&username);
+    // Voice rooms (V13): a role change is a level sync in the K2 Admin
+    // Space (Owner/Admin → moderator, Member → member). The sweep plans it.
+    if crate::voice_rooms::enabled() {
+        crate::tool_hook::kick_reconcile();
+    }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }

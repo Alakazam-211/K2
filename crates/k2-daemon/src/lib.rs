@@ -59,6 +59,9 @@ pub mod federation_drain;
 // Sew S27 grant hook: thin mgmt UDS client + the outbox delivery worker.
 pub mod sew_mgmt;
 pub mod tool_hook_worker;
+// Voice rooms (preview): the K2 Admin Space's facts, grants and the fixed
+// default Space, before each grant-hook sweep plans it.
+pub mod voice_admin;
 pub mod feedback_routes;
 pub mod federation_rosters;
 pub mod federation_routes;

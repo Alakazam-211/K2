@@ -85,6 +85,9 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // Owner or Admin; agents never reach this route (`token_ok`), and no
     // `/cli/docs/*` route writes it.
     "multiplayerCores",
+    // Voice rooms §3.3: how many rooms this server hosts (0–10). Owner or
+    // Admin; read-only for Members.
+    "voiceRoomsCount",
 ];
 
 /// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may
@@ -107,6 +110,10 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.
     "computePreview",
+    // Voice rooms previews (prd-k2-voice-rooms-v1, vs-live §3): the K2
+    // Admin Space and rooms, and voice through the tunnel. Owner only.
+    "voiceRoomsPreview",
+    "voiceTunnelPreview",
     // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1
     // CP-A18): `k2 compute placement v1|v2`, the owner's switch.
     "computePlacement",
@@ -467,6 +474,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     // agent follow-up). Same hook as per-workspace `/cli/dns-manage`.
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
+    let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount"].iter().any(|k| partial.get(*k).is_some());
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -475,6 +483,13 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
+            // Voice rooms: the previews' mirrors; a preview or count change
+            // is planned by the next sweep (now, debounced).
+            k2_core::voice_rooms::set_enabled(merged.voice_rooms_preview);
+            k2_core::voice_rooms::set_tunnel_enabled(merged.voice_tunnel_preview);
+            if voice_touched {
+                k2_core::tool_hook::kick_reconcile();
+            }
             sync_permission_cards(merged.permission_cards, actor.audit_user());
             sync_garden_access(merged.garden_access, actor.audit_user());
             k2_core::deploy::set_enabled(merged.apps);
@@ -547,6 +562,8 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
+            k2_core::voice_rooms::set_enabled(defaults.voice_rooms_preview);
+            k2_core::voice_rooms::set_tunnel_enabled(defaults.voice_tunnel_preview);
             sync_permission_cards(defaults.permission_cards, actor.audit_user());
             sync_garden_access(defaults.garden_access, actor.audit_user());
             k2_core::deploy::set_enabled(defaults.apps);

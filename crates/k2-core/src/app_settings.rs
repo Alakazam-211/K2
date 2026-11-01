@@ -488,6 +488,25 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// Voice rooms preview (prd-k2-voice-rooms-v1, lane B; vs-live §3):
+    /// the K2 Admin Space, its rooms, the fixed default Space, the
+    /// `/cli/voice/*` routes, the `voice-rooms-v1` feature and S6's
+    /// auto-setup. Persisted mirror of `K2_VOICE_ROOMS`;
+    /// [`crate::voice_rooms::enabled`] is true when EITHER is set.
+    /// Owner-only to change. Default MUST stay OFF: with it off nothing is
+    /// created and nothing changes.
+    #[serde(default)]
+    pub voice_rooms_preview: bool,
+    /// Voice through the tunnel preview (lane A): the `tunnel` TURN tier,
+    /// `frpc-voice` and the cert `turn-tunnel` request. Persisted mirror of
+    /// `K2_VOICE_TUNNEL` ([`crate::voice_rooms::tunnel_enabled`]).
+    /// Owner-only. Default MUST stay OFF.
+    #[serde(default)]
+    pub voice_tunnel_preview: bool,
+    /// How many voice rooms this server hosts (PRD §3.1 `voice.rooms.count`):
+    /// 0–10, default 1. Owner or Admin. [`update`] refuses anything else.
+    #[serde(default = "default_voice_rooms_count")]
+    pub voice_rooms_count: u32,
     /// How compute auto-placement ranks the nodes that fit (no node named,
     /// prd-compute-auto-placement-v1 §8, CP-A18): `v2` (the default: load
     /// bands, a warm slot worth one band, bursts spread) or `v1` (the
@@ -936,6 +955,10 @@ fn default_compute_placement() -> String {
     crate::compute::PlacementPolicy::V2.as_wire().to_string()
 }
 
+fn default_voice_rooms_count() -> u32 {
+    crate::voice_rooms::ROOMS_DEFAULT
+}
+
 /// Heartbeat S6 — Keep awake: Off / While agents are working / Always.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeepAwakeMode {
@@ -1255,6 +1278,9 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            voice_rooms_preview: false,
+            voice_tunnel_preview: false,
+            voice_rooms_count: default_voice_rooms_count(),
             compute_placement: default_compute_placement(),
             permission_cards: false,
             garden_access: true,
@@ -1639,6 +1665,13 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
     }
     if crate::compute::PlacementPolicy::from_wire(&merged.compute_placement).is_none() {
         return Err(format!("computePlacement must be one of v1|v2 (got {:?})", merged.compute_placement));
+    }
+    if merged.voice_rooms_count > crate::voice_rooms::ROOMS_MAX {
+        return Err(format!(
+            "voiceRoomsCount must be 0-{} (got {})",
+            crate::voice_rooms::ROOMS_MAX,
+            merged.voice_rooms_count
+        ));
     }
     if KeepAwakeMode::from_wire(&merged.keep_awake.mode).is_none() {
         return Err(format!(
@@ -2687,5 +2720,33 @@ mod tests {
         // Cleanup so subsequent tests don't see a stale state.
         drop(guard);
         *crate::companion::STATE.lock() = None;
+    }
+
+    /// Voice rooms (prd-k2-voice-rooms-v1, lane B): both previews default
+    /// OFF, the room count defaults to 1 and only 0–10 is kept.
+    #[test]
+    fn voice_rooms_keys_default_off_and_the_count_is_0_to_10() {
+        use serde_json::json;
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let d = AppSettings::default();
+        assert!(!d.voice_rooms_preview && !d.voice_tunnel_preview, "both previews default OFF");
+        assert_eq!(d.voice_rooms_count, 1);
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!((v["voiceRoomsPreview"].clone(), v["voiceTunnelPreview"].clone(), v["voiceRoomsCount"].clone()), (json!(false), json!(false), json!(1)));
+        // A file written before the keys existed reads the same defaults.
+        ensure_dir();
+        fs::write(settings_file(), r#"{"apps": true}"#).unwrap();
+        let s = load();
+        assert!(!s.voice_rooms_preview && !s.voice_tunnel_preview);
+        assert_eq!(s.voice_rooms_count, 1);
+        let s = update(json!({"voiceRoomsCount": 10, "voiceRoomsPreview": true})).expect("10 is the most");
+        assert_eq!((s.voice_rooms_count, s.voice_rooms_preview), (10, true));
+        let s = update(json!({"voiceRoomsCount": 0})).expect("0 hosts nothing");
+        assert_eq!(s.voice_rooms_count, 0);
+        let e = update(json!({"voiceRoomsCount": 11})).expect_err("11 is refused");
+        assert!(e.contains("voiceRoomsCount must be 0-10"), "{e}");
+        assert!(update(json!({"voiceRoomsCount": -1})).is_err(), "negative is refused");
+        assert_eq!(load().voice_rooms_count, 0, "a refused write keeps the old value");
     }
 }

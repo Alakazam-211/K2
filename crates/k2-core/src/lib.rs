@@ -148,6 +148,9 @@ pub mod firewall;
 // Sew S27 generic grant hook: `chat` grant kind, durable `tool_outbox` in
 // skin.db, reconcile diff. Decisions here; Sew IO in the daemon worker.
 pub mod tool_hook;
+// K2 voice rooms (prd-k2-voice-rooms-v1): preview switches, room bounds
+// and names, the hosting state. The Admin Space is `tool_hook::admin_space`.
+pub mod voice_rooms;
 // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): HTTP JSON
 // checks the daemon polls, their state, card view and triggers. Pure half;
 // the poller and routes live in k2-daemon. See module docs.

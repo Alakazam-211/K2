@@ -479,6 +479,10 @@ async fn async_main() {
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
+    // Voice rooms previews (dark by default; K2_VOICE_ROOMS / K2_VOICE_TUNNEL
+    // force them on).
+    k2_core::voice_rooms::set_enabled(k2_core::app_settings::load().voice_rooms_preview);
+    k2_core::voice_rooms::set_tunnel_enabled(k2_core::app_settings::load().voice_tunnel_preview);
     k2_core::compute::set_placement_policy(crate::settings_routes::placement_policy_of(&k2_core::app_settings::load().compute_placement));
     // Permission cards (Beta): the persisted global switch, so a daemon that
     // boots with it on serves the family at once (K2_PERMISSION_CARDS=1

@@ -6,15 +6,15 @@
 //! shows to any number of viewers. This crate is the shape of what gets
 //! sent:
 //!
-//! - [`grid_snapshot`]: [`TermGridSnapshot`](grid_snapshot::TermGridSnapshot)
+//! - The [`grid_snapshot`] module: [`TermGridSnapshot`](grid_snapshot::TermGridSnapshot)
 //!   (grid + scrollback + cursor + mouse/alt-screen modes) and
 //!   [`TermGridDelta`](grid_snapshot::TermGridDelta) (damaged rows +
 //!   appended scrollback), built from a live `Term`, with rows encoded as
 //!   style-homogeneous runs. [`build_emit`](grid_snapshot::build_emit)
 //!   turns the Term's damage into the next frame (full, delta or nothing).
-//! - [`grid_types`]: the compact line model ([`GridUpdate`](grid_types::GridUpdate)):
+//! - The [`grid_types`] module: the compact line model ([`GridUpdate`](grid_types::GridUpdate)):
 //!   plain text per row plus sparse style spans and a soft-wrap flag.
-//! - [`reflow`]: re-wraps a [`GridUpdate`](grid_types::GridUpdate) at a
+//! - The [`reflow`] module re-wraps a [`GridUpdate`](grid_types::GridUpdate) at a
 //!   different width, so a narrow viewer (a phone) gets real line breaks
 //!   instead of a clipped or scaled screen.
 //!

@@ -1,4 +1,4 @@
-// BoardIcons: small 24×24 stroke icons. Board's own drawing, except crop, plus and minus, which match Lucide's (ISC, see NOTICE.md). icon(name) → <svg>.
+// BoardIcons: small 24×24 stroke icons. Board's own drawing (Copyright (c) 2026 Baden Ballard, MIT), except crop, which is Lucide's (ISC, see NOTICE.md). icon(name) → <svg>.
 (function (g) {
   'use strict'
   const NS = 'http://www.w3.org/2000/svg'

@@ -1,8 +1,9 @@
 [package]
 name = "k2-mpc-base"
-version = "0.10.0+1"
+version = "0.10.0+2"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "Multiplayer kit for file-type packs: docs on K2-defined primitives (engine hidden), text diff and three-way merge, file codecs; sessions, presence, persistence, history, text tools and the agent-parity framework."
 

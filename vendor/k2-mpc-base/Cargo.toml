@@ -10,6 +10,7 @@ exclude = ["spike", "vendor", "fuzz"]
 edition = "2021"
 rust-version = "1.80"
 publish = false
+license = "MIT OR Apache-2.0"
 
 # The kit's own dev and test builds (tools/README.md, "Build settings"). Cargo applies a
 # workspace's profiles only when that workspace is the one being built, so a host that vendors

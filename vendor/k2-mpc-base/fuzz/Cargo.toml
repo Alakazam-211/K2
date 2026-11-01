@@ -1,6 +1,7 @@
 [package]
 name = "k2-mpc-base-fuzz"
 version = "0.0.0"
+license = "MIT OR Apache-2.0"
 edition = "2021"
 publish = false
 description = "cargo-fuzz targets for k2-mpc-base: oracle-asserting (a property violation is a finding, like a panic)."

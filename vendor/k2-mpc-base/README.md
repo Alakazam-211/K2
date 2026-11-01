@@ -28,4 +28,13 @@ Layout:
   nothing depends on it.
 - `vendor/`: other repos copied in by git subtree, test-only (`vendor/README.md`).
 
-Status: early. `spike/` holds the D0 engine-choice spike (Yrs vs Loro). Licence: not yet chosen. See `docs/ARCHITECTURE.md` and `docs/PRIMITIVES.md`.
+Status: early. `spike/` holds the D0 engine-choice spike (Yrs vs Loro). Licence: MIT OR Apache-2.0 (below). See `docs/ARCHITECTURE.md` and `docs/PRIMITIVES.md`.
+
+## Licence
+
+Licensed under either of the Apache License, Version 2.0 (`LICENSE-APACHE`) or the MIT licence
+(`LICENSE-MIT`), at your option. This covers the kit's crates, the JS client in `client/` and the
+tools in this repository. Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work, as defined in the Apache-2.0 licence, is dual-licensed as
+above, without any additional terms or conditions. Code vendored in `vendor/` keeps its own
+licence (see `NOTICE.md` and `vendor/README.md`).

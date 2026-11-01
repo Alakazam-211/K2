@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.10.0.2 (2026-10-31)
+
+v0.10.0.1 plus the licence: MIT OR Apache-2.0. No change to the kit's Rust library, store,
+merge or wire, to the client's code, or to any dependency. The crate version is `0.10.0+2`
+(the git tag is v0.10.0.2); the client stays `0.11.0`, as it stayed `0.9.7` through kit tags
+that didn't change it: only its `package.json` gains the `license` field.
+
+- **Licence: MIT OR Apache-2.0**, as the engine: `LICENSE-MIT` and `LICENSE-APACHE` at the root,
+  `license` in every crate of ours (the workspace's three by `license.workspace`; `fuzz`, the D0
+  spike and the N−1 consumer in their own manifests) and in the client's `package.json` and its
+  lockfile's root entry (and the spike's). README and NOTICE.md say so; `vendor/` keeps its own
+  licences. No code change.
+
 ## v0.10.0.1 (2026-10-31)
 
 v0.10.0 plus the JS client 0.11.0: the live editor's M2 (below). Client only: no change to the

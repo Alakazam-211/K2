@@ -153,6 +153,55 @@ pub trait SewOps: Send + Sync {
     /// install): rebuild its table now.
     fn front_routes_changed(&self) {}
 
+    // ── voice through the tunnel (0.46.8, S9a/S9b) ───────────────────────
+    /// The `voice_tunnel_preview` switch (or `K2_VOICE_TUNNEL`).
+    fn tunnel_preview(&self) -> bool {
+        k2_core::tunnel::voice_lane::preview_enabled()
+    }
+    /// Run (`true`) or stop the voice lane, frpc-voice.
+    fn voice_lane(&self, on: bool) -> Result<(), String> {
+        if on {
+            k2_core::tunnel::voice_lane::arm()
+        } else {
+            k2_core::tunnel::voice_lane::disarm("voice left the tunnel tier");
+            Ok(())
+        }
+    }
+    /// frps holds the voice lane's turn proxy now.
+    fn voice_lane_up(&self) -> bool {
+        k2_core::tunnel::voice_lane::is_up()
+    }
+    /// The voice lane is armed (runs whenever the tunnel runs).
+    fn voice_lane_armed(&self) -> bool {
+        k2_core::tunnel::voice_lane::armed()
+    }
+    /// The voice lane for status (`voiceLane`).
+    fn voice_lane_status(&self) -> Value {
+        serde_json::to_value(k2_core::tunnel::voice_lane::status()).unwrap_or(Value::Null)
+    }
+    /// The label the control plane confirmed for the tunnel token (relay
+    /// name binding; `None` until it has, once).
+    fn confirmed_label(&self) -> Option<String> {
+        let cfg = k2_core::tunnel::config::load().ok()?;
+        k2_core::tunnel::confirmed_label::cached(&cfg.token)
+    }
+    /// The tunnel is end-to-end encrypted (the relay passes `turn.<label>`
+    /// only for E2E labels).
+    fn tunnel_e2e(&self) -> bool {
+        k2_core::tunnel::config::load().map(|c| k2_core::tunnel::config::e2e_enabled(&c)).unwrap_or(false)
+    }
+    /// An frpc binary resolves (the voice lane runs one).
+    fn frpc_installed(&self) -> bool {
+        k2_core::tunnel::connector::resolve_frpc(&k2_core::tunnel::connector::FrpcBinary::Auto).is_ok()
+    }
+    /// The K2 Connect plan of this box's label (`pro`, `single`, `free`),
+    /// read live from the control plane.
+    fn connect_tier(&self) -> Result<Option<String>, String> {
+        let cfg = k2_core::tunnel::config::load()?;
+        let label = self.confirmed_label().unwrap_or_else(|| cfg.subdomain.trim().to_string());
+        k2_core::tunnel::subdomains::fetch_account(&label, &cfg.token).map(|a| a.tier)
+    }
+
     /// This build pins a published Sew release
     /// (`k2_root_proto::sew::sew_release_pinned`). While false every
     /// install path refuses `sew_not_released`. Tests override it.
@@ -809,6 +858,21 @@ pub mod fake {
         pub front_rebuilds: Mutex<u32>,
         /// Owner notices sent: (title, body).
         pub notices: Mutex<Vec<(String, String)>>,
+        // voice through the tunnel (0.46.8)
+        /// [`SewOps::tunnel_preview`] (default off).
+        pub tunnel_preview: Mutex<bool>,
+        /// Every [`SewOps::voice_lane`] call, in order (`true` = arm).
+        pub lane_calls: Mutex<Vec<bool>>,
+        /// [`SewOps::voice_lane_up`] once armed (default true).
+        pub lane_comes_up: Mutex<bool>,
+        pub lane_armed: Mutex<bool>,
+        /// [`SewOps::confirmed_label`] (default `lztek`, the box label).
+        pub confirmed: Mutex<Option<String>>,
+        pub e2e: Mutex<bool>,
+        pub frpc: Mutex<bool>,
+        pub connect_tier: Mutex<Result<Option<String>, String>>,
+        /// The `connect` host of every served-leaf check, in order.
+        pub served_connects: Mutex<Vec<String>>,
         /// Queued `/api/v1/health` answers (default: 200 ready).
         pub api_health_q: Mutex<VecDeque<Result<(u16, Value), String>>>,
         pub api_health_n: Mutex<usize>,
@@ -863,6 +927,15 @@ pub mod fake {
                 helper_no_accept: Mutex::new(false),
                 mgmt_health_ok: Mutex::new(true),
                 notices: Mutex::new(Vec::new()),
+                tunnel_preview: Mutex::new(false),
+                lane_calls: Mutex::new(Vec::new()),
+                lane_comes_up: Mutex::new(true),
+                lane_armed: Mutex::new(false),
+                confirmed: Mutex::new(Some("lztek".into())),
+                e2e: Mutex::new(true),
+                frpc: Mutex::new(true),
+                connect_tier: Mutex::new(Ok(Some("pro".into()))),
+                served_connects: Mutex::new(Vec::new()),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
                 mgmt_status: Mutex::new(json!({
@@ -1477,6 +1550,14 @@ pub mod fake {
             }
             if method == "POST" && path == "/cert" {
                 let b = body.expect("cert body");
+                if b["mode"] == "turn-tunnel" {
+                    // K2 Web 11-01: the bare confirmed label, no token key.
+                    let confirmed = self.confirmed.lock().unwrap().clone().unwrap_or_default();
+                    assert_eq!(b["subdomain"], confirmed.as_str(), "the bare label, not the host");
+                    assert!(b.get("token").is_none(), "{b}");
+                    assert_eq!(b.as_object().unwrap().len(), 3, "exactly subdomain, mode, csr: {b}");
+                    return Ok(json!({"cert": self.sign_csr(b["csr"].as_str().unwrap())}));
+                }
                 assert_eq!(b["mode"], "turn");
                 assert_eq!(b["subdomain"], label.as_str());
                 return Ok(json!({"cert": self.sign_csr(b["csr"].as_str().unwrap())}));
@@ -1487,8 +1568,38 @@ pub mod fake {
             self.nested.lock().unwrap().push((label.to_string(), target.map(str::to_string)));
             Ok(())
         }
-        fn served_leaf(&self, _connect: &str, _sni: &str, port: u16) -> Option<String> {
+        fn tunnel_preview(&self) -> bool {
+            *self.tunnel_preview.lock().unwrap()
+        }
+        fn voice_lane(&self, on: bool) -> Result<(), String> {
+            self.lane_calls.lock().unwrap().push(on);
+            *self.lane_armed.lock().unwrap() = on;
+            Ok(())
+        }
+        fn voice_lane_up(&self) -> bool {
+            *self.lane_armed.lock().unwrap() && *self.lane_comes_up.lock().unwrap()
+        }
+        fn voice_lane_armed(&self) -> bool {
+            *self.lane_armed.lock().unwrap()
+        }
+        fn voice_lane_status(&self) -> Value {
+            json!({"armed": *self.lane_armed.lock().unwrap(), "up": self.voice_lane_up()})
+        }
+        fn confirmed_label(&self) -> Option<String> {
+            self.confirmed.lock().unwrap().clone()
+        }
+        fn tunnel_e2e(&self) -> bool {
+            *self.e2e.lock().unwrap()
+        }
+        fn frpc_installed(&self) -> bool {
+            *self.frpc.lock().unwrap()
+        }
+        fn connect_tier(&self) -> Result<Option<String>, String> {
+            self.connect_tier.lock().unwrap().clone()
+        }
+        fn served_leaf(&self, connect: &str, _sni: &str, port: u16) -> Option<String> {
             self.served_ports.lock().unwrap().push(port);
+            self.served_connects.lock().unwrap().push(connect.to_string());
             match *self.serves_ours.lock().unwrap() {
                 Some(true) => self.last_leaf.lock().unwrap().clone(),
                 Some(false) => Some("0".repeat(64)),

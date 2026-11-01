@@ -547,6 +547,15 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 // show a mismatch instead of a silent handshake failure.
                 // 0.45.2: the persisted re-launch-on-boot flag, so
                 // `k2 tunnel status` shows whether a reboot brings it back.
+                // 0.46.8 voice rooms (S9b): the voice lane (frpc-voice) and
+                // the media path, while the voice tunnel preview is on or
+                // the lane is armed. Absent otherwise (nothing changes).
+                if k2_core::tunnel::voice_lane::preview_enabled() || k2_core::tunnel::voice_lane::armed() {
+                    let mut lane = serde_json::to_value(k2_core::tunnel::voice_lane::status())
+                        .unwrap_or(serde_json::Value::Null);
+                    lane["mediaPath"] = crate::sew::media_path::snapshot().json();
+                    obj.insert("voiceLane".to_string(), lane);
+                }
                 obj.insert(
                     "autoStart".to_string(),
                     serde_json::Value::Bool(

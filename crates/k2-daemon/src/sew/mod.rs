@@ -62,8 +62,10 @@ pub mod service_user;
 pub mod sew_wire;
 pub mod store;
 pub mod supervisor;
+pub mod media_path;
 pub mod users;
 pub mod voice;
+pub mod voice_tunnel;
 
 #[cfg(test)]
 mod grant_hook_tests;

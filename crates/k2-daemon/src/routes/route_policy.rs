@@ -1578,6 +1578,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/media/preflight", Member),
     post("/cli/sew/media/probe", Admin),
     post("/cli/sew/media/renew", Admin),
+    post("/cli/sew/media/tier", Admin),
     post("/cli/sew/media/uninstall", Admin),
     post("/cli/sew/media/url", Admin),
     post("/cli/sew/meet/bind", Admin),

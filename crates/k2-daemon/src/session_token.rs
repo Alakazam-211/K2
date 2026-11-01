@@ -887,6 +887,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/media/install",
         "/cli/sew/media/url",
         "/cli/sew/media/renew",
+        "/cli/sew/media/tier",
         "/cli/sew/media/probe",
         "/cli/sew/media/uninstall",
         "/cli/sew/meet/bind",

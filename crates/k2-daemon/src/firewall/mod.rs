@@ -256,7 +256,8 @@ pub fn gather(daemon_port: u16) -> Result<Inputs, String> {
         skin_direct_listen,
         mail_on,
         mail_behind_front: front_cfg.mail_behind_front(),
-        voice_installed: voice.installed,
+        // 0.46.8: the tunnel tier opens no port (TURN rides the voice lane).
+        voice_installed: voice.installed && crate::sew::voice::tier(&voice) != crate::sew::voice::TIER_TUNNEL,
         voice_tier_direct: crate::sew::voice::tier(&voice) != crate::sew::voice::TIER_PASSTHROUGH,
         lan_port: k2_core::listen::lan_bound().then_some(daemon_port),
         label: box_label(),

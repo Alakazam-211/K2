@@ -215,6 +215,22 @@ pub const PING_GHOST: &str = "k2-daemon";
 /// Today's full body plus `view: "full"` and `protocolMin` (nothing
 /// removed). Loopback and authed callers only.
 fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value {
+    let mut body = full_body_base(settings);
+    // Voice rooms 0.46.8 (S9b): the voice lane and media path, only while
+    // the voice tunnel preview is on (the body is unchanged otherwise).
+    if k2_core::tunnel::voice_lane::preview_enabled() {
+        let lane = k2_core::tunnel::voice_lane::status();
+        body["voiceLane"] = serde_json::json!({
+            "state": lane.state,
+            "up": lane.up,
+            "since": lane.since,
+            "mediaPath": crate::sew::media_path::snapshot().json(),
+        });
+    }
+    body
+}
+
+fn full_body_base(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value {
     serde_json::json!({
         "view": View::Full.as_wire(),
         "version": env!("CARGO_PKG_VERSION"),

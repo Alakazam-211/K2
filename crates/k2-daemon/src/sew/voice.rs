@@ -115,6 +115,10 @@ pub struct VoiceState {
 /// The TURN tier behind the front.
 pub const TIER_PASSTHROUGH: &str = "passthrough";
 pub const TIER_DIRECT: &str = "direct";
+/// 0.46.8 (voice rooms S9a): TURN through K2 Connect's tunnel, on the
+/// voice lane ([`super::voice_tunnel`]). Sew runs its `passthrough` tier on
+/// loopback; K2 calls it `tunnel` because K2's `passthrough` is front443's.
+pub const TIER_TUNNEL: &str = "tunnel";
 /// The public port the front owns.
 pub const FRONT_PORT: u16 = 443;
 
@@ -123,13 +127,19 @@ pub fn tier(st: &VoiceState) -> &str {
     st.turn_tier.as_deref().unwrap_or(TIER_DIRECT)
 }
 
-/// The public TURN-TLS port of a tier.
+/// The public TURN-TLS port of a tier (`tunnel`: the relay's :443).
 pub fn tier_port(tier: &str) -> u16 {
-    if tier == TIER_PASSTHROUGH {
+    if tier == TIER_PASSTHROUGH || tier == TIER_TUNNEL {
         FRONT_PORT
     } else {
         SEW_TURN_TLS_PORT
     }
+}
+
+/// K2 made a `turn-<label>` A record for this TURN host (direct, front443
+/// passthrough); the tunnel's `turn.<label>` has none.
+pub fn has_turn_dns(st: &VoiceState) -> bool {
+    st.turn_host.as_deref().is_some_and(|h| h.starts_with("turn-"))
 }
 
 /// The host the front routes to sew-media's passthrough listener, when
@@ -143,7 +153,7 @@ pub fn load(env: &Env) -> VoiceState {
     env.ops.voice_load().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
 }
 
-fn save(env: &Env, st: &mut VoiceState) {
+pub(super) fn save(env: &Env, st: &mut VoiceState) {
     st.updated_at = env.ops.now();
     let v = serde_json::to_value(&*st).expect("plain struct");
     if let Err(e) = env.ops.voice_save(Some(&v)) {
@@ -151,7 +161,7 @@ fn save(env: &Env, st: &mut VoiceState) {
     }
 }
 
-fn update(env: &Env, f: impl FnOnce(&mut VoiceState)) -> VoiceState {
+pub(super) fn update(env: &Env, f: impl FnOnce(&mut VoiceState)) -> VoiceState {
     let mut st = load(env);
     f(&mut st);
     save(env, &mut st);
@@ -272,6 +282,11 @@ pub fn preflight(env: &Env) -> Vec<Value> {
         Some(l) => c.push(check("label", "ok", format!("{l}.k2.dev; TURN host {}", turn_host(&l)), "")),
         None => c.push(check("label", "fail", "no K2 Connect label", "voice needs K2 Connect for the TURN host and certificate")),
     }
+    // 0.46.8 (V5): voice through the tunnel needs no public port or node IP.
+    if env.ops.tunnel_preview() {
+        c.extend(super::voice_tunnel::preflight(env));
+        return c;
+    }
     let media_up = env.ops.unit(UNIT_MEDIA).is_active();
     let taken: Vec<String> = PORTS
         .iter()
@@ -324,7 +339,7 @@ pub struct TurnDns {
     pub ipv6: Option<String>,
 }
 
-fn cp_fail(step: &str, e: &CpError) -> Fail {
+pub(super) fn cp_fail(step: &str, e: &CpError) -> Fail {
     let (code, status): (&'static str, u16) = match e.code.as_str() {
         "ip_unverified" => ("turn_ip_unverified", 409),
         "rate_limited" => ("turn_rate_limited", 429),
@@ -332,6 +347,8 @@ fn cp_fail(step: &str, e: &CpError) -> Fail {
         "label_too_long" => ("turn_label_too_long", 409),
         "record_conflict" => ("turn_record_conflict", 409),
         "zone_inactive" => ("turn_zone_inactive", 409),
+        // K2 Web 11-01: broker mode `turn-tunnel` below Pro.
+        "tier_required" => ("not_pro", 403),
         _ if e.status == 0 => ("connect_unreachable", 503),
         _ => ("turn_failed", 502),
     };
@@ -341,6 +358,7 @@ fn cp_fail(step: &str, e: &CpError) -> Fail {
              or run the install again in a minute",
             e.detail
         ),
+        "not_pro" => format!("{step}: voice through the tunnel needs K2 Connect Pro ({e})"),
         _ => format!("{step}: {e}"),
     };
     let mut f = no(code, status, hint);
@@ -374,7 +392,7 @@ pub fn turn_dns(env: &Env, label: &str, manual: Option<&str>) -> R<TurnDns> {
 }
 
 /// The TURN key from the vault, or a new P-256 one stored there.
-fn turn_key(env: &Env, st: &VoiceState) -> R<(rcgen::KeyPair, Option<String>)> {
+pub(super) fn turn_key(env: &Env, st: &VoiceState) -> R<(rcgen::KeyPair, Option<String>)> {
     if let Some(r) = st.turn_key_ref.as_deref() {
         if let Some(pem_text) = env.secrets.resolve(r).map_err(|e| no("vault_closed", 503, e))? {
             let k = rcgen::KeyPair::from_pem(&pem_text).map_err(|e| no("turn_key_bad", 500, format!("the vault's TURN key does not parse: {e}")))?;
@@ -389,7 +407,13 @@ fn turn_key(env: &Env, st: &VoiceState) -> R<(rcgen::KeyPair, Option<String>)> {
 /// A CSR for exactly `turn-<label>.k2.dev` (the SAN, and the CN: rcgen's
 /// default CN is refused by the broker).
 pub fn turn_csr(label: &str, key: &rcgen::KeyPair) -> Result<String, String> {
-    let host = turn_host(label);
+    turn_csr_for(&turn_host(label), key)
+}
+
+/// A CSR for exactly `host` (SAN and CN): `turn-<label>` (direct) or
+/// `turn.<label>` (the tunnel tier).
+pub fn turn_csr_for(host: &str, key: &rcgen::KeyPair) -> Result<String, String> {
+    let host = host.to_string();
     let mut params = rcgen::CertificateParams::new(vec![host.clone()]).map_err(|e| e.to_string())?;
     let mut dn = rcgen::DistinguishedName::new();
     dn.push(rcgen::DnType::CommonName, host);
@@ -420,14 +444,25 @@ pub fn chain_matches(chain: &str, host: &str, key: &rcgen::KeyPair) -> Result<i6
 /// outside the renewal window (an install re-run must not spend K2
 /// Connect's turn budget: 5 issuances / 24 h / label).
 fn reusable(env: &Env, label: &str, st: &VoiceState) -> Option<(String, String)> {
+    reusable_for(env, &turn_host(label), st)
+}
+
+/// [`reusable`] for any TURN host (the tunnel tier's `turn.<label>`).
+pub(super) fn reusable_for(env: &Env, host: &str, st: &VoiceState) -> Option<(String, String)> {
     let chain = st.cert_pem.as_deref()?;
     if st.cert_not_after.is_none_or(|t| t - env.ops.now() < RENEW_WINDOW_SECS) {
         return None;
     }
     let key_pem = env.secrets.resolve(st.turn_key_ref.as_deref()?).ok()??;
     let key = rcgen::KeyPair::from_pem(&key_pem).ok()?;
-    chain_matches(chain, &turn_host(label), &key).ok()?;
+    chain_matches(chain, host, &key).ok()?;
     Some((chain.to_string(), key_pem))
+}
+
+/// The direct tier's DNS + cert (leaving the tunnel tier), reusing a held
+/// `turn-<label>` cert when it is still good.
+pub(super) fn issue_direct(env: &Env, label: &str, st: &mut VoiceState) -> R<(String, String, TurnDns)> {
+    issue_or_reuse(env, label, st, None)
 }
 
 /// DNS (always: it also tells K2 the box's IP), then the cert K2 holds or a
@@ -466,7 +501,7 @@ fn issue(env: &Env, label: &str, st: &mut VoiceState, manual_ip: Option<&str>) -
     Ok((chain.to_string(), key.serialize_pem(), dns))
 }
 
-fn node_ip_of(dns: &TurnDns) -> String {
+pub(super) fn node_ip_of(dns: &TurnDns) -> String {
     [dns.ipv4.clone(), dns.ipv6.clone()].into_iter().flatten().collect::<Vec<_>>().join(",")
 }
 
@@ -525,7 +560,7 @@ pub fn install_begin<'a>(env: &Env<'a>, req: &InstallRequest) -> R<sup::Latch<'a
     Ok(latch)
 }
 
-fn step(env: &Env, name: &str) {
+pub(super) fn step(env: &Env, name: &str) {
     update(env, |st| {
         if let Some(p) = st.progress.as_mut() {
             p["step"] = json!(name);
@@ -559,6 +594,22 @@ pub fn record_failure(env: &Env, f: &Fail) {
     sup::changed("voice-failed");
 }
 
+/// The nested `voice` label: pointed at sew-media's signalling port when
+/// the voice URL is the default `wss://voice.<label>.k2.dev`, removed when
+/// it was K2's and the URL moved. Returns whether K2 holds it now.
+pub(super) fn point_voice_label(env: &Env, label: &str, url: &str, had: bool, warnings: &mut Vec<String>) -> bool {
+    let mut label_ok = had;
+    if url == default_voice_url(label) {
+        match env.ops.nested_label(VOICE_LABEL, Some(&format!("127.0.0.1:{SEW_MEDIA_LOOPBACK_PORT}"))) {
+            Ok(()) => label_ok = true,
+            Err(e) => warnings.push(format!("the nested voice label could not be pointed at sew-media ({e}): K2 Connect Pro is needed for voice.{label}.k2.dev")),
+        }
+    } else if had && env.ops.nested_label(VOICE_LABEL, None).is_ok() {
+        label_ok = false;
+    }
+    label_ok
+}
+
 fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, "voice needs K2 Connect (the TURN host is turn-<label>.k2.dev)"))?;
     let mut st = load(env);
@@ -576,6 +627,17 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
         });
     };
     stage_media_bytes(env, req.tarball_path.as_deref(), "k2 hostchat media install --tarball", &note)?;
+
+    // 0.46.8 (S9a): with the voice tunnel preview on, voice goes through the
+    // tunnel (the preflight already refused a box that can't).
+    if env.ops.tunnel_preview() {
+        super::voice_tunnel::ready(env)?;
+        if req.node_ip.is_some() {
+            return Err(no("bad_request", 400, "voice through the tunnel publishes no node IP: leave out --node-ip"));
+        }
+        let tl = super::voice_tunnel::label(env)?;
+        return super::voice_tunnel::install_steps(env, &tl, &url, st);
+    }
 
     step(env, "turn-dns");
     step(env, "turn-cert");
@@ -627,16 +689,7 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     warnings.extend(warnings_tier);
 
     step(env, "label");
-    let want_label = url == default_voice_url(&label);
-    let mut label_ok = st.voice_label;
-    if want_label {
-        match env.ops.nested_label(VOICE_LABEL, Some(&format!("127.0.0.1:{SEW_MEDIA_LOOPBACK_PORT}"))) {
-            Ok(()) => label_ok = true,
-            Err(e) => warnings.push(format!("the nested voice label could not be pointed at sew-media ({e}): K2 Connect Pro is needed for voice.{label}.k2.dev")),
-        }
-    } else if st.voice_label && env.ops.nested_label(VOICE_LABEL, None).is_ok() {
-        label_ok = false;
-    }
+    let label_ok = point_voice_label(env, &label, &url, st.voice_label, &mut warnings);
 
     step(env, "start");
     sup::poll_units(env, &[UNIT_MEDIA], 60).map_err(|e| no("media_start_failed", 500, e))?;
@@ -808,6 +861,11 @@ pub fn set_tier(env: &Env, passthrough: bool) -> R<Value> {
     if tier(&st) == want {
         return Ok(json!({"ok": true, "installed": true, "turnTier": want, "changed": false}));
     }
+    if tier(&st) == TIER_TUNNEL {
+        // The tunnel tier doesn't follow the front (0.46.8): only the owner
+        // moves it (`k2 hostchat media tier`).
+        return Ok(json!({"ok": true, "installed": true, "turnTier": TIER_TUNNEL, "changed": false}));
+    }
     if passthrough && !env.ops.passthrough_supported() {
         return Err(no(
             pin::SEW_PASSTHROUGH_UNSUPPORTED,
@@ -840,6 +898,34 @@ pub fn set_tier(env: &Env, passthrough: bool) -> R<Value> {
         "restarted": [UNIT_MEDIA],
         "note": "sew-media restarted: calls in progress dropped",
     }))
+}
+
+/// `POST /cli/sew/media/tier {tier: tunnel|direct}` (`k2 hostchat media
+/// tier`, 0.46.8): the owner's move between voice through the tunnel and
+/// direct mode (§6.5). `direct` from front443's passthrough is the front's
+/// business (`k2 front`), so only tunnel ↔ (direct | passthrough) moves here.
+/// A move re-issues the TURN cert (the name differs) and restarts sew-media.
+pub fn set_tier_named(env: &Env, want: &str) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
+    }
+    if want != TIER_TUNNEL && want != TIER_DIRECT {
+        return Err(no("bad_request", 400, "tier is tunnel or direct"));
+    }
+    let st = load(env);
+    if !st.installed {
+        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+    }
+    let have = tier(&st).to_string();
+    match (have.as_str(), want) {
+        (h, w) if h == w => Ok(json!({"ok": true, "installed": true, "turnTier": h, "changed": false})),
+        (_, TIER_TUNNEL) => super::voice_tunnel::move_in(env, st),
+        (TIER_TUNNEL, _) => super::voice_tunnel::move_out(env, st),
+        _ => Ok(json!({
+            "ok": true, "installed": true, "turnTier": have, "changed": false,
+            "hint": "TURN rides the :443 front (passthrough); k2 front disable moves it back to direct",
+        })),
+    }
 }
 
 // ── renewal ──────────────────────────────────────────────────────────────
@@ -882,6 +968,10 @@ pub fn renew(env: &Env, force: bool) -> R<Value> {
     let mut st = load(env);
     let manual = (st.node_ip_source.as_deref() == Some("manual")).then(|| st.node_ip.clone()).flatten();
     let res = (|| -> R<Value> {
+        // The tunnel tier: no DNS, no node IP (0.46.8, V3/V19).
+        if tier(&st) == TIER_TUNNEL {
+            return super::voice_tunnel::renew(env, &mut st);
+        }
         let (chain, key_pem, dns) = issue(env, &label, &mut st, manual.as_deref())?;
         let mut moved = None;
         if manual.is_none() {
@@ -1071,11 +1161,18 @@ fn sew_needs_confirm(err: &str) -> bool {
 /// key, record). Best effort; returns what could not be undone.
 pub fn forget(env: &Env, st: &VoiceState) -> Vec<String> {
     let mut w = Vec::new();
+    // 0.46.8: the tunnel tier's `turn.<label>` has no A record (V19); only
+    // a `turn-<label>` host (direct, front443) made one.
     if let Some(l) = st.label.clone().or_else(|| env.ops.box_label()) {
-        if st.turn_host.is_some() {
+        if has_turn_dns(st) {
             if let Err(e) = env.ops.cp("DELETE", &format!("/turn/dns/{l}"), None) {
                 w.push(format!("TURN DNS record not removed: {e}"));
             }
+        }
+    }
+    if tier(st) == TIER_TUNNEL {
+        if let Err(e) = env.ops.voice_lane(false) {
+            w.push(format!("the voice lane did not stop: {e}"));
         }
     }
     if st.voice_label {
@@ -1145,7 +1242,17 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         _ => {}
     }
     let mut served = st.served.clone();
-    if live {
+    if live && tier(&st) == TIER_TUNNEL {
+        // Through the relay (V4): turn.<label>.k2.dev:443.
+        if let Some(host) = st.turn_host.as_deref() {
+            let s = super::voice_tunnel::served(env, host, st.cert_leaf_sha256.as_deref());
+            update(env, |v| {
+                v.served = Some(s.clone());
+                v.served_at = Some(now);
+            });
+            served = Some(s);
+        }
+    } else if live {
         if let (Some(ip), Some(host)) = (st.node_ip.as_deref().and_then(|n| n.split(',').next()), st.turn_host.as_deref()) {
             let s = served_check(env, ip, host, st.cert_leaf_sha256.as_deref(), tier_port(tier(&st)));
             update(env, |v| {
@@ -1167,13 +1274,17 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         Some("failed") => alarms.push(ALARM_PROBE_FAILED.into()),
         _ => {}
     }
+    let tunnel = tier(&st) == TIER_TUNNEL;
+    if tunnel && super::media_path::snapshot().state == super::media_path::PathState::Down {
+        alarms.push(ALARM_LANE_DOWN.into());
+    }
     if state == "running" && !alarms.is_empty() {
         state = "degraded".into();
     }
     if !env.ops.unit(UNIT_DB).is_active() || !env.ops.unit(UNIT_SEW).is_active() {
         state = "stopped".into();
     }
-    let v = json!({
+    let mut v = json!({
         "state": state,
         "publicUrl": st.public_url,
         "turnHost": st.turn_host,
@@ -1196,8 +1307,20 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
                     "waitingForTunnelLogin": st.logins_at_failure.is_some()},
         "warnings": st.warnings,
     });
+    if tunnel {
+        // 0.46.8 (S9a/S9b): relay-only TURN through the voice lane; no
+        // public ports, no node IP.
+        v["relayOnly"] = json!(true);
+        v["ports"] = json!({"public": []});
+        v["voiceLane"] = env.ops.voice_lane_status();
+        v["mediaPath"] = super::media_path::snapshot().json();
+    }
     (v, alarms, warnings)
 }
+
+/// The voice lane has been down 20 s or more in the tunnel tier (§6.6
+/// M11): voice is unavailable (degraded).
+pub const ALARM_LANE_DOWN: &str = "k2_voice_lane_down";
 
 /// `status.voice` while chat itself is not up: K2's record only (no engine
 /// call, no extra alarms; the chat state already says why).

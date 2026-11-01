@@ -164,6 +164,8 @@ fn argv(tail: &[&str]) -> Vec<String> {
 
 fn helper(env: &Env, tail: &[&str], stdin: Option<&[u8]>) -> Result<Value, String> {
     let v = env.ops.helper(&argv(tail), stdin)?;
+    // 0.46.8 voice rooms §6.6 M11: a (re)started Sew holds media-path `up`.
+    if matches!(tail, ["systemctl", "start" | "restart"]) { super::media_path::sew_started(); }
     let w = sew_warnings(&v);
     if !w.is_empty() {
         k2_core::log_debug!("[sew] sew {}: Sew warns {} ({})", tail.join(" "), w.join(","), v["stderrTail"].as_str().unwrap_or(""));

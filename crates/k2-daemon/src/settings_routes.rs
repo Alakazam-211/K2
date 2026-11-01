@@ -117,6 +117,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1
     // CP-A18): `k2 compute placement v1|v2`, the owner's switch.
     "computePlacement",
+    // Voice through the tunnel (voice rooms 0.46.8, S9a/S9b): a second frpc
+    // and the relay-only TURN tier on this box.
+    "voiceTunnelPreview",
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the global
     // switch that lets agents ask people for setting changes.
     "permissionCards",
@@ -482,6 +485,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
+            k2_core::tunnel::voice_lane::set_preview(merged.voice_tunnel_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
             // Voice rooms: the previews' mirrors; a preview or count change
             // is planned by the next sweep (now, debounced).
@@ -563,6 +567,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
+            k2_core::tunnel::voice_lane::set_preview(defaults.voice_tunnel_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);
             k2_core::voice_rooms::set_tunnel_enabled(defaults.voice_tunnel_preview);

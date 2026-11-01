@@ -49,6 +49,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/media/preflight",
     "/cli/sew/media/probe",
     "/cli/sew/media/renew",
+    "/cli/sew/media/tier",
     "/cli/sew/media/uninstall",
     "/cli/sew/media/url",
     "/cli/sew/preflight",
@@ -81,6 +82,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/meet/unbind",
     "/cli/sew/media/probe",
     "/cli/sew/media/renew",
+    "/cli/sew/media/tier",
     "/cli/sew/media/uninstall",
     "/cli/sew/media/url",
     "/cli/sew/server/backup",
@@ -551,6 +553,14 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/media/renew" => {
             need_manage(who)?;
             super::voice::renew(&env, true)
+        }
+        "/cli/sew/media/tier" => {
+            // 0.46.8 (voice rooms S9a): tunnel | direct. Moving restarts
+            // sew-media (calls in progress drop).
+            need_manage(who)?;
+            let v = json_body(body)?;
+            let t = s(&v, "tier").ok_or_else(|| no("bad_request", 400, "name the tier: tunnel or direct"))?;
+            super::voice::set_tier_named(&env, t)
         }
         "/cli/sew/media/probe" => {
             need_manage(who)?;

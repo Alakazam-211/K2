@@ -13,7 +13,7 @@ import {
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
-import { ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
+import { ZenNewGardenModal, zenNewGardenTurnsOn } from '@/components/Zen/widgets/ZenNewGardenModal'
 
 export const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -101,7 +101,7 @@ export function NewGarden({
           onClose={() => setOpen(false)}
           onCreate={async (pick) => {
             const clean = checkZenGardenName(pick.name, gardens)
-            await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate)
+            await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate, zenNewGardenTurnsOn(pick.entry) ?? undefined)
           }}
         />
       )}

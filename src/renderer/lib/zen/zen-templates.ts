@@ -41,6 +41,8 @@ export function parseZenTemplates(raw: unknown): ZenTemplateInfo[] {
       description: typeof t.description === 'string' ? t.description : '',
       section: t.section,
       newUsers: t.newUsers === true,
+      // The Board (Rosson 2026-11-01): a Garden that needs a Beta core.
+      ...(typeof t.core === 'string' && t.core ? { core: t.core, coreOn: t.coreOn === true } : {}),
     })
   }
   return out

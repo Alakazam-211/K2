@@ -34,6 +34,9 @@ export const MULTIPLAYER_INTRO =
 export const MULTIPLAYER_MEMBER_LINE = "Only the server's owner or an Admin can change these."
 
 export const MULTIPLAYER_BETA_LINE = 'Beta: keep your work in git while multiplayer is new.'
+/** A core that opens as a Garden (the Board): its own Beta line. */
+export const MULTIPLAYER_GARDEN_BETA_LINE = "Beta: export a board now and then (its ⋯ menu) to keep a copy while it's new."
+
 
 export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
   {
@@ -184,7 +187,11 @@ function CoreRow({
             ) : null}
           </div>
           <div className={`text-[10px] ${muted} mt-0.5 leading-relaxed`}>{core.description}</div>
-          {core.on ? <div className={`text-[10px] ${muted} mt-1`}>{MULTIPLAYER_BETA_LINE}</div> : null}
+          {core.on ? (
+            <div className={`text-[10px] ${muted} mt-1`}>
+              {core.view === 'garden' ? MULTIPLAYER_GARDEN_BETA_LINE : MULTIPLAYER_BETA_LINE}
+            </div>
+          ) : null}
           {core.on && core.open.files > 0 ? (
             <div className="text-[10px] text-[var(--color-text-secondary)] mt-1" data-testid={`multiplayer-open-${core.id}`}>
               {openNowLine(core.open)}

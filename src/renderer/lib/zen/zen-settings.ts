@@ -238,8 +238,10 @@ export type ZenNewGardenTemplate = 'texting' | 'blank' | (string & {})
  *  empty and ask my agent", or a ready-made Garden from the catalog (its
  *  widgets work at once: no permissions). Does not switch any Zen window
  *  to it. */
-export function createZenSettingsGarden(name: string, template: ZenNewGardenTemplate): Promise<void> {
-  return post('zen/garden/new', { name, template }, name)
+export function createZenSettingsGarden(name: string, template: ZenNewGardenTemplate, turnOnCore?: string): Promise<void> {
+  // turnOnCore: the person confirmed in New Garden that adding this Garden
+  // turns its Beta core on (the Board).
+  return post('zen/garden/new', turnOnCore ? { name, template, turnOnCore } : { name, template }, name)
 }
 
 export function renameZenSettingsGarden(id: string, name: string): Promise<void> {

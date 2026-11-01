@@ -233,7 +233,7 @@ export async function createZenGarden(
       await daemonCliPost<unknown>(
         zenLocalScope(),
         'zen/garden/new',
-        { name: clean, template },
+        opts.turnOnCore ? { name: clean, template, turnOnCore: opts.turnOnCore } : { name: clean, template },
       ),
     )
   } catch (err) {

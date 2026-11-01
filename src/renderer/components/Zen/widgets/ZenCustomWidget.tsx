@@ -54,6 +54,7 @@ import { zenSourcesReader } from '@/lib/zen/zen-sources-live'
 import { loadGardenAccessSwitch, useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { ZenGardenHistoryModal } from './ZenGardenHistoryModal'
 import { zenLargeWidgetText } from '@/lib/zen/zen-widget-size'
+import { turnOnZenCore, useZenCoreState, zenCoreOffText, zenWidgetCore } from '@/lib/zen/zen-widget-core'
 
 /** A source's link, when it's a plain https URL (PRD §12.8: opened in the
  *  system browser by K2, never by the sealed frame). */
@@ -315,6 +316,11 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   const reloadInMenu = useContext(ZenFillReloadContext)?.widgetId === decl.id
   // A new version of the widget may load fine: forget the last problem.
   useEffect(() => setProblem(null), [widget?.hash, generation])
+  // A built-in behind a Beta core (the Board): off, its place shows a card.
+  const core = zenWidgetCore(widget?.widget)
+  const coreState = useZenCoreState(core)
+  const [coreBusy, setCoreBusy] = useState(false)
+  const [coreError, setCoreError] = useState<string | null>(null)
 
   if (!widget) {
     return (
@@ -344,6 +350,35 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
     )
   }
   if (widget.state === 'broken' && !widget.hash) return brokenCard()
+
+  // 0. Its Beta core is off (the Board, Rosson 2026-11-01): one click turns
+  //    it on; the daemon refuses its data meanwhile (`core_off`).
+  if (core && coreState === 'checking') return wrap(<div data-zen-custom-waiting="" className="flex-1" />)
+  if (core && coreState === 'off') {
+    const turnOn = (): void => {
+      setCoreBusy(true)
+      setCoreError(null)
+      void turnOnZenCore(core)
+        .then(() => setCoreBusy(false))
+        .catch((err: unknown) => {
+          setCoreBusy(false)
+          setCoreError(err instanceof Error ? err.message : String(err))
+        })
+    }
+    return wrap(
+      <Card testId="core-off">
+        <span>{zenCoreOffText(core)}</span>
+        <CardButton testId="turn-on-core" primary onClick={turnOn}>
+          {coreBusy ? 'Turning on…' : 'Turn on Board'}
+        </CardButton>
+        {coreError && (
+          <span role="alert" style={{ fontSize: '0.85em', color: 'var(--zen-danger)' }}>
+            {coreError}
+          </span>
+        )}
+      </Card>,
+    )
+  }
 
   // 1. Not from your own Garden (v4 seam): never runs here.
   if (!zenWidgetMayRun(widget)) {

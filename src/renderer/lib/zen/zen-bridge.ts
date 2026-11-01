@@ -110,6 +110,10 @@ export type ZenGardenTemplate = 'texting' | 'blank' | (string & {})
  *  Garden once it shows. */
 export interface ZenGardenCreateOptions {
   ask?: boolean
+  /** The person confirmed in New Garden that adding this Garden turns its
+   *  Beta core on (the Board, Rosson 2026-11-01): `garden/new` turns it on
+   *  in the same step. Only K2's own New Garden sends it. */
+  turnOnCore?: string
 }
 
 /** What `gardens.useTemplate` did: `changed` is false when the Garden

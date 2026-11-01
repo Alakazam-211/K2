@@ -141,12 +141,27 @@ export function ZenGardenSketch({ entry }: { entry: ZenTemplateInfo }): React.JS
 
 // ── The modal ─────────────────────────────────────────────────────────────
 
+/** The core a pick turns on (the Board, Rosson 2026-11-01): a Garden that
+ *  needs a Beta core that's off. Adding it is the opt-in, so New Garden says
+ *  so beside Create and the create sends `turnOnCore`. */
+export function zenNewGardenTurnsOn(entry: ZenTemplateInfo | null): string | null {
+  return entry && entry.core && entry.coreOn !== true ? entry.core : null
+}
+
+/** The line New Garden shows for a pick that turns a Beta core on. */
+export function zenNewGardenCoreLine(entry: ZenTemplateInfo): string {
+  return `${entry.label} is a Beta. Creating it turns on the ${entry.label} core for this computer (Settings → Cores → Multiplayer). You can turn it off there; your ${entry.label.toLocaleLowerCase()}s are kept.`
+}
+
 export interface ZenNewGardenPick {
   /** The new Garden's name (checked). */
   name: string
   entry: ZenTemplateInfo
   /** Start empty: open Ask my agent once it shows. */
   ask: boolean
+  /** The Beta core the create turns on (the person saw the line and pressed
+   *  Create), or null. */
+  turnOnCore: string | null
 }
 
 export function ZenNewGardenModal({
@@ -207,7 +222,7 @@ export function ZenNewGardenModal({
     }
     setBusy(true)
     setError(null)
-    void onCreate({ name: shown.trim(), entry: selected, ask: selected.short === 'blank' })
+    void onCreate({ name: shown.trim(), entry: selected, ask: selected.short === 'blank', turnOnCore: zenNewGardenTurnsOn(selected) })
       .then(() => {
         setBusy(false)
         onClose()
@@ -320,6 +335,11 @@ export function ZenNewGardenModal({
           )
         })}
       </div>
+      {selected && zenNewGardenTurnsOn(selected) && (
+        <span data-zen-new-garden-core={selected.core} style={{ fontSize: '0.85em', color: 'var(--zen-text-muted)' }}>
+          {zenNewGardenCoreLine(selected)}
+        </span>
+      )}
       {error && (
         <span role="alert" data-zen-new-garden-error="" style={{ fontSize: '0.85em', color: 'var(--zen-danger)' }}>
           {error}
@@ -337,7 +357,7 @@ export function ZenNewGardenModal({
           className="cursor-pointer disabled:cursor-default"
           style={{ ...zenButtonStyle(true), opacity: busy || !selected ? 0.5 : 1 }}
         >
-          {busy ? 'Creating…' : 'Create'}
+          {busy ? 'Creating…' : selected && zenNewGardenTurnsOn(selected) ? `Turn on ${selected.label} and create` : 'Create'}
         </button>
       </div>
     </ZenOverlay>
@@ -371,7 +391,7 @@ export function ZenNewGardenHost({ bridge }: { bridge: ZenWidgetBridge }): React
       highlight={highlight}
       onClose={closeZenNewGarden}
       onCreate={async (pick) => {
-        await bridge.gardens.create(pick.name, pick.entry.short, { ask: pick.ask })
+        await bridge.gardens.create(pick.name, pick.entry.short, pick.turnOnCore ? { ask: pick.ask, turnOnCore: pick.turnOnCore } : { ask: pick.ask })
       }}
     />
   )

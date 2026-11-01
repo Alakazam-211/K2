@@ -146,6 +146,11 @@ export interface ZenTemplateInfo {
   /** start = the two New Garden starts; catalog = ready-made Gardens (R5). */
   section: 'start' | 'catalog'
   newUsers: boolean
+  /** The multiplayer core this Garden needs (a Beta, e.g. `board`). */
+  core?: string
+  /** Whether that core is on now. Off: New Garden says adding it turns the
+   *  core on, and sends `turnOnCore` with the create. */
+  coreOn?: boolean
 }
 
 /** `k2.agents.show` (catalog v20, 0.46.3 r10): at most this many addresses

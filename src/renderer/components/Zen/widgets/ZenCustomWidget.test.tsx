@@ -14,12 +14,18 @@ const h = vi.hoisted(() => ({
   gets: [] as string[],
   getParams: [] as unknown[],
   bundleError: null as string | null,
+  // The Board's Beta core (Rosson 2026-11-01): GET docs/cores.
+  boardOn: false,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_s: unknown, route: string, params?: { widget?: string }) => {
     h.gets.push(route)
     h.getParams.push(params)
+    if (route === 'docs/cores') {
+      const row = (id: string, on: boolean) => ({ id, name: id, status: 'beta', description: '', view: id === 'board' ? 'garden' : 'live', on, open: { files: 0, participants: 0, paths: [] }, lastChange: null })
+      return { ok: true, canChange: true, later: [], cores: [row('markdown', false), row('board', h.boardOn)] }
+    }
     if (route !== 'zen/widget/bundle') throw new Error(`unexpected GET ${route}`)
     if (h.bundleError) throw new Error(h.bundleError)
     return {
@@ -122,6 +128,7 @@ beforeEach(() => {
   h.gets = []
   h.getParams = []
   h.bundleError = null
+  h.boardOn = false
   __resetZenCustomRunForTests()
   // This window's boot decision (UW32, B3): nothing was running.
   resetZenPausedStartForTests()
@@ -290,5 +297,33 @@ describe('paused start and broken', () => {
     expect(q('[data-zen-custom-card="broken"]').textContent).toBe(
       'This widget has errors: onclick= won’t run. Ask your agent to fix it.',
     )
+  })
+})
+
+describe('The Board behind its Beta core (Rosson 2026-11-01)', () => {
+  const board = (): ZenCustomWidgetPayload =>
+    payload({ id: 'board', widget: 'k2:board@1', source: 'builtin' as never, name: 'Board', caps: ['store:read', 'store:write'] })
+
+  it('off: the place shows the card with one click to turn the core on, and no frame mounts', async () => {
+    mount(board())
+    await act(async () => undefined)
+    expect(q('[data-zen-custom-card="core-off"]').textContent).toContain("Board is a Beta that's off on this computer")
+    expect(document.querySelector('[data-zen-custom-frame-slot="board"]')).toBeNull()
+    expect(h.gets).not.toContain('zen/widget/bundle')
+    await act(async () => void fireEvent.click(q('[data-zen-custom-action="turn-on-core"]')))
+    expect(h.posts).toEqual([{ hostKey: 'local', route: 'settings/update', body: { multiplayerCores: { board: true } } }])
+  })
+
+  it('on: the Board mounts like any built-in; other widgets never ask for a core', async () => {
+    h.boardOn = true
+    mount(board())
+    await act(async () => undefined)
+    expect(document.querySelector('[data-zen-custom-card="core-off"]')).toBeNull()
+    expect(document.querySelector('[data-zen-custom-frame-slot="board"]')).not.toBeNull()
+    cleanup()
+    h.gets = []
+    mount(payload())
+    await act(async () => undefined)
+    expect(h.gets).not.toContain('docs/cores')
   })
 })

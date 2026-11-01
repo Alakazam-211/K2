@@ -48,6 +48,8 @@ const STARTS = [
   { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'Garden 1’s layout.', section: 'start', newUsers: true },
   { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'An empty page.', section: 'start', newUsers: true },
 ]
+// The Board (Rosson 2026-11-01): a catalog Garden behind a Beta core.
+const BOARD = { id: 'k2.board@1', short: 'board', label: 'Board', description: 'A whiteboard.', section: 'catalog', newUsers: false, core: 'board', coreOn: false }
 const STICKERS = { id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', description: 'Just a look.', section: 'catalog', newUsers: false }
 
 // A Home with an agent on this computer and one on a remote server.
@@ -187,6 +189,30 @@ describe('New Garden: one modal, the catalog as cards (Rosson 2026-10-08)', () =
     expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
     await act(async () => void fireEvent.click(q('[data-zen-new-garden-create]')))
     expect(creates).toEqual([{ name: 'Stickers', template: 'stickers', opts: { ask: false } }])
+  })
+
+  it('Board (a Beta core that is off): the line says adding it turns the core on, and the create sends turnOnCore', async () => {
+    h.templates = [...STARTS, DIARY, BOARD]
+    await openFromMenu()
+    // The Diary needs no core: no line, a plain Create.
+    expect(document.querySelector('[data-zen-new-garden-core]')).toBeNull()
+    expect(q('[data-zen-new-garden-create]').textContent).toBe('Create')
+    await act(async () => void fireEvent.click(q('[data-zen-new-garden-card="board"]')))
+    expect(q('[data-zen-new-garden-core="board"]').textContent).toMatch(/^Board is a Beta\. Creating it turns on the Board core/)
+    expect(q('[data-zen-new-garden-create]').textContent).toBe('Turn on Board and create')
+    expect(creates).toEqual([])
+    await act(async () => void fireEvent.click(q('[data-zen-new-garden-create]')))
+    expect(creates).toEqual([{ name: 'Board', template: 'board', opts: { ask: false, turnOnCore: 'board' } }])
+  })
+
+  it('Board with its core already on creates like any catalog Garden', async () => {
+    h.templates = [...STARTS, { ...BOARD, coreOn: true }]
+    await openFromMenu()
+    await act(async () => void fireEvent.click(q('[data-zen-new-garden-card="board"]')))
+    expect(document.querySelector('[data-zen-new-garden-core]')).toBeNull()
+    expect(q('[data-zen-new-garden-create]').textContent).toBe('Create')
+    await act(async () => void fireEvent.click(q('[data-zen-new-garden-create]')))
+    expect(creates).toEqual([{ name: 'Board', template: 'board', opts: { ask: false } }])
   })
 
   it('an older daemon (no templates route) offers the two starts only', async () => {

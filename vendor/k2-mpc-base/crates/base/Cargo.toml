@@ -30,6 +30,10 @@ test-support = []
 # same name), to prove the kit reports what the index's shadow check finds (v0.9.7). Never in
 # a build.
 planted-position-bugs = ["differential", "yrs/planted-position-bugs"]
+# Test-only: plant "first connection only" in a text doc's roster devices (every connection
+# shows the most active one's caret), to prove the per-connection caret tests bite (v0.10.1,
+# `tests/roster.rs`). Never in a build.
+planted-device-bugs = []
 # Test-only: the store's record decoders as entry points for the fuzz targets (`fuzz/`,
 # `k2_mpc_base::fuzzing`). Off by default; no host enables it.
 fuzzing = []

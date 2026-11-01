@@ -13,7 +13,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
         },
         {
           "handle": "p2",
@@ -23,7 +29,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 2,
+              "cursor": null
+            }
+          ]
         },
         {
           "handle": "p3",
@@ -33,7 +45,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 3,
+              "cursor": null
+            }
+          ]
         }
       ],
       "watching": 0
@@ -65,7 +83,8 @@
         "anchor_lc": "1:1",
         "head_lc": "1:8"
       },
-      "version": 4
+      "version": 4,
+      "client": 9007199254740991
     },
     {
       "kind": "role",
@@ -83,7 +102,8 @@
         "anchor_lc": "6:1",
         "head_lc": "6:1"
       },
-      "version": 4
+      "version": 4,
+      "client": 2
     },
     {
       "kind": "role",
@@ -101,7 +121,8 @@
         "anchor_lc": "5:18",
         "head_lc": "5:18"
       },
-      "version": 4
+      "version": 4,
+      "client": 4
     },
     {
       "kind": "role",
@@ -180,7 +201,20 @@
           "anchor_lc": "1:1",
           "head_lc": "1:8"
         },
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": {
+              "root": "source",
+              "anchor": 0,
+              "head": 7,
+              "version": 4,
+              "anchor_lc": "1:1",
+              "head_lc": "1:8"
+            }
+          }
+        ]
       },
       {
         "handle": "p2",
@@ -197,7 +231,20 @@
           "anchor_lc": "6:1",
           "head_lc": "6:1"
         },
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 2,
+            "cursor": {
+              "root": "source",
+              "anchor": 42,
+              "head": 42,
+              "version": 4,
+              "anchor_lc": "6:1",
+              "head_lc": "6:1"
+            }
+          }
+        ]
       },
       {
         "handle": "p3",
@@ -207,7 +254,13 @@
         "role": "viewer",
         "away": false,
         "cursor": null,
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 3,
+            "cursor": null
+          }
+        ]
       }
     ],
     "watching": 0

@@ -54,6 +54,11 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
      `via`, or opens one. Use it for one-shot verbs (`Stay::UntilIdle`), so an agent running many
      verbs keeps one connection and one client ID. Every client ID stays in the doc's state
      for good.
+   - `join_with(participant, Stay, &JoinOptions)` (v0.10.1) is either, with options:
+     `JoinOptions::label("another tab")` labels the connection on the roster (its `Device`;
+     host text, never doc text: control characters dropped, trimmed, at most
+     `DEVICE_LABEL_MAX` = 64 characters, never a refusal), and `.shared(true)` is
+     `join_shared`'s reuse (a label given relabels the reused connection).
 4. Every per-participant call takes the `ConnId`. It is `Copy`, doesn't borrow the session,
    and is unique in the process. A connection that left, expired or was kicked, or that
    belongs to another session or to before an unload, gets `NotJoined { conn }`: join again.
@@ -509,6 +514,16 @@ order is by first join. Each `RosterEntry` has:
   type at its edges stays out, and once its text is all deleted or replaced (an undo of it,
   someone's rewrite) it is gone; it never names a line past the doc's end. An agent's caret is at
   the end of its last edit, so agents have carets in `cursor` too.
+- `devices: Vec<Device>` (v0.10.1, text docs): one `Device { client, cursor, label }` per
+  connection, in join order, each with **its own** caret: the same person in two tabs or on
+  two devices shows each tab's caret to the other. Empty on a grid (its carets stay per
+  participant, `cell`) and for tier 0.
+
+The roster push's `RosterEvent::Cursor` carries `client` (v0.10.1): one event per connection
+whose caret changed in the interval (a connection that left with a caret: `None`), the one
+whose caret is the participant's `cursor` last. When the last of them isn't the participant's
+caret, one more `Cursor` with `client: None` gives it, so a consumer that keeps one caret a
+participant (the last event's) holds `cursor` after every flush, as before.
 
 Carets and views (per connection):
 - `set_cursor(conn, root, anchor: At, head: At)` needs edit. `At::Byte(n)` or

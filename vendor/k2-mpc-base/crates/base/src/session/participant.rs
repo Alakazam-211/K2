@@ -244,4 +244,40 @@ pub struct RosterEntry {
     /// The lines their latest change touched (anchored: where those lines are now), from
     /// the most active connection that has one. `None` for tier 0.
     pub last_edit: Option<LineRange>,
+    /// A text doc: one [`Device`] per connection this participant has open, in the order
+    /// they joined, each with its own caret (v0.10.1). [`RosterEntry::cursor`] is still the
+    /// most active connection's caret, for hosts and clients that show one caret a person.
+    /// Empty on a grid (its carets are [`RosterEntry::cell`], per participant) and for tier 0.
+    pub devices: Vec<Device>,
+}
+
+/// One connection of a participant, on a text doc's roster ([`RosterEntry::devices`]): the
+/// same person in two tabs or on two devices is one roster row with two of these (v0.10.1).
+/// A client draws every other connection's caret, its own person's other tabs included, and
+/// hides only the connection it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Device {
+    /// The connection's client ID ([`super::Joined::client`]): a client knows its own one.
+    pub client: crate::doc::ClientId,
+    /// This connection's caret, if it placed one.
+    pub cursor: Option<CursorAt>,
+    /// The host's label for this connection, given at join
+    /// ([`JoinOptions::label`](field@super::JoinOptions::label)):
+    /// "another tab", "Chrome on Mac". Never doc text; `None` when the host gave none.
+    pub label: Option<String>,
+}
+
+/// At most this many characters of a connection's label
+/// ([`JoinOptions::label`](field@super::JoinOptions::label)) are kept; the rest is cut.
+pub const DEVICE_LABEL_MAX: usize = 64;
+
+/// A host's connection label as the kit keeps it: control characters dropped, whitespace
+/// trimmed, at most [`DEVICE_LABEL_MAX`] characters; `None` when nothing is left. A label
+/// never fails a join.
+pub(crate) fn device_label(label: Option<&str>) -> Option<String> {
+    let clean: String = label?.chars().filter(|c| !c.is_control()).collect();
+    let cut: String = clean.trim().chars().take(DEVICE_LABEL_MAX).collect();
+    let cut = cut.trim_end();
+    (!cut.is_empty()).then(|| cut.to_owned())
 }

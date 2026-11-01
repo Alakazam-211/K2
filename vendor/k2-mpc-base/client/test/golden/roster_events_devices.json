@@ -1,0 +1,252 @@
+{
+  "self": "ada",
+  "client": 9007199254740991,
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 1,
+      "members": [
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
+        },
+        {
+          "handle": "bob",
+          "name": "Bob",
+          "colour": "#16a34a",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 4,
+              "cursor": null
+            }
+          ]
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "role",
+      "who": "ada",
+      "role": "editor"
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 0,
+        "head": 0,
+        "version": 1,
+        "anchor_lc": "1:1",
+        "head_lc": "1:1"
+      },
+      "version": 1,
+      "client": 9007199254740991
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 9,
+        "head": 9,
+        "version": 1,
+        "anchor_lc": "3:1",
+        "head_lc": "3:1"
+      },
+      "version": 1,
+      "client": 5
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 17,
+        "head": 20,
+        "version": 1,
+        "anchor_lc": "5:1",
+        "head_lc": "5:4"
+      },
+      "version": 1,
+      "client": 6
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 7,
+        "head": 7,
+        "version": 2,
+        "anchor_lc": "2:1",
+        "head_lc": "2:1"
+      },
+      "version": 2,
+      "client": 9007199254740991
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 16,
+        "head": 16,
+        "version": 2,
+        "anchor_lc": "4:1",
+        "head_lc": "4:1"
+      },
+      "version": 2,
+      "client": 5
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 24,
+        "head": 27,
+        "version": 2,
+        "anchor_lc": "6:1",
+        "head_lc": "6:4"
+      },
+      "version": 2,
+      "client": 6
+    },
+    {
+      "kind": "role",
+      "who": "bob",
+      "role": "editor"
+    },
+    {
+      "kind": "cursor",
+      "who": "bob",
+      "cursor": {
+        "root": "source",
+        "anchor": 7,
+        "head": 7,
+        "version": 2,
+        "anchor_lc": "2:1",
+        "head_lc": "2:1"
+      },
+      "version": 2,
+      "client": 4
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": null,
+      "version": 2,
+      "client": 6
+    },
+    {
+      "kind": "cursor",
+      "who": "ada",
+      "cursor": {
+        "root": "source",
+        "anchor": 16,
+        "head": 16,
+        "version": 2,
+        "anchor_lc": "4:1",
+        "head_lc": "4:1"
+      },
+      "version": 2
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 2,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": {
+          "root": "source",
+          "anchor": 16,
+          "head": 16,
+          "version": 2,
+          "anchor_lc": "4:1",
+          "head_lc": "4:1"
+        },
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": {
+              "root": "source",
+              "anchor": 7,
+              "head": 7,
+              "version": 2,
+              "anchor_lc": "2:1",
+              "head_lc": "2:1"
+            }
+          },
+          {
+            "client": 5,
+            "cursor": {
+              "root": "source",
+              "anchor": 16,
+              "head": 16,
+              "version": 2,
+              "anchor_lc": "4:1",
+              "head_lc": "4:1"
+            },
+            "label": "another tab"
+          }
+        ]
+      },
+      {
+        "handle": "bob",
+        "name": "Bob",
+        "colour": "#16a34a",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": {
+          "root": "source",
+          "anchor": 7,
+          "head": 7,
+          "version": 2,
+          "anchor_lc": "2:1",
+          "head_lc": "2:1"
+        },
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 4,
+            "cursor": {
+              "root": "source",
+              "anchor": 7,
+              "head": 7,
+              "version": 2,
+              "anchor_lc": "2:1",
+              "head_lc": "2:1"
+            }
+          }
+        ]
+      }
+    ],
+    "watching": 0
+  }
+}

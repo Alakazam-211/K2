@@ -190,6 +190,7 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
                 holds_lease: false,
                 claims: Vec::new(),
                 last_edit: None,
+                devices: Vec::new(),
             };
             (conns, entry, first_joined)
         })

@@ -81,6 +81,40 @@ pub struct Joined {
     pub version: Seq,
 }
 
+/// Options for [`Session::join_with`] (v0.10.1): [`Session::join`] and
+/// [`Session::join_shared`] are `join_with` with the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct JoinOptions {
+    /// The host's label for this connection, shown beside its caret on the roster
+    /// ([`super::Device::label`]): "another tab", "Chrome on Mac". **Never doc text.** The kit
+    /// cleans it (control characters dropped, trimmed, at most [`super::DEVICE_LABEL_MAX`]
+    /// characters; empty is none); a label never fails a join.
+    pub label: Option<String>,
+    /// Reuse the pid's shared connection with the same `via`, as [`Session::join_shared`].
+    pub shared: bool,
+}
+
+impl JoinOptions {
+    /// No label; a new connection.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Label this connection ([`JoinOptions::label`](field@JoinOptions::label)).
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Reuse the pid's shared connection, as [`Session::join_shared`] does (its label is
+    /// replaced when this one has a label).
+    pub fn shared(mut self, shared: bool) -> Self {
+        self.shared = shared;
+        self
+    }
+}
+
 /// A file's bytes at a version, for exports ([`Session::file_at`], [`Session::file_now`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -540,6 +574,9 @@ struct Member {
     edited: Option<(String, usize, usize)>,
     /// On a grid: its caret, view and last edit by key (A10).
     grid: grid_presence::GridPresence,
+    /// The host's label for this connection ([`JoinOptions::label`](field@JoinOptions::label)),
+    /// cleaned.
+    label: Option<String>,
 }
 
 impl std::ops::Deref for Member {
@@ -1514,7 +1551,7 @@ impl Session {
     /// command-line call while a `watch` runs. Use this for anything with its own lifetime
     /// (a socket, a `watch`); use [`Session::join_shared`] for one-shot verbs.
     pub fn join(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_impl(p, stay, false)
+        self.join_with(p, stay, &JoinOptions::new())
     }
 
     /// Like [`Session::join`], but reuses the pid's existing shared connection with the same
@@ -1523,10 +1560,16 @@ impl Session {
     /// one client ID instead of minting one per call (every client ID stays in the doc's
     /// state for good).
     pub fn join_shared(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_impl(p, stay, true)
+        self.join_with(p, stay, &JoinOptions::new().shared(true))
     }
 
-    fn join_impl(&self, p: Participant, stay: Stay, shared: bool) -> Result<Joined> {
+    /// [`Session::join`] with options (v0.10.1): a label for the connection
+    /// ([`JoinOptions::label`](field@JoinOptions::label), carried on its roster
+    /// [`super::Device`]), and [`JoinOptions::shared`](field@JoinOptions::shared) for
+    /// [`Session::join_shared`]'s reuse.
+    pub fn join_with(&self, p: Participant, stay: Stay, opts: &JoinOptions) -> Result<Joined> {
+        let shared = opts.shared;
+        let label = super::participant::device_label(opts.label.as_deref());
         presence::check_participant(&p)?;
         let now = self.now();
         let mut st = self.lock()?;
@@ -1551,6 +1594,9 @@ impl Session {
                 m.last_active_ms = now;
                 if stay == Stay::Held {
                     m.stay = Stay::Held;
+                }
+                if label.is_some() {
+                    m.label = label;
                 }
                 return Ok(Joined {
                     conn: m.pres.conn,
@@ -1617,6 +1663,7 @@ impl Session {
             view_ms: None,
             edited: None,
             grid: Default::default(),
+            label,
         });
         self.roster_flush(st, now, false);
         Ok(Joined {
@@ -1818,16 +1865,33 @@ impl Session {
                 .find(|(r, _)| *r == root)
                 .map(|(_, t)| t.as_str())
         };
+        let caret = |m: &Member| {
+            let cur = m.cursor.as_ref()?;
+            let t = text(&cur.root)?;
+            Some(CursorAt {
+                cursor: cur.clone(),
+                anchor: position::line_col(t, cur.anchor)?,
+                head: position::line_col(t, cur.head)?,
+            })
+        };
         for (conns, entry, _) in rows.iter_mut() {
-            entry.cursor = conns.iter().find_map(|m| {
-                let cur = m.cursor.as_ref()?;
-                let t = text(&cur.root)?;
-                Some(CursorAt {
-                    cursor: cur.clone(),
-                    anchor: position::line_col(t, cur.anchor)?,
-                    head: position::line_col(t, cur.head)?,
+            entry.cursor = conns.iter().find_map(|m| caret(m));
+            // every connection, in join order, each with its own caret (v0.10.1)
+            let mut devices: Vec<&Member> = conns.clone();
+            devices.sort_by_key(|m| m.joined);
+            entry.devices = devices
+                .into_iter()
+                .map(|m| super::participant::Device {
+                    client: m.client,
+                    cursor: caret(m),
+                    label: m.label.clone(),
                 })
-            });
+                .collect();
+            // the planted fault (test-only): every connection shows the most active one's caret
+            #[cfg(feature = "planted-device-bugs")]
+            for d in &mut entry.devices {
+                d.cursor = entry.cursor.clone();
+            }
             entry.view = conns.iter().find_map(|m| {
                 let (root, s, e) = m.view.as_ref()?;
                 let t = text(root)?;

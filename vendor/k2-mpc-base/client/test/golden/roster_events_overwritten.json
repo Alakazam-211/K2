@@ -13,7 +13,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
         },
         {
           "handle": "bob",
@@ -23,7 +29,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 4,
+              "cursor": null
+            }
+          ]
         },
         {
           "handle": "widget",
@@ -33,7 +45,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 3,
+              "cursor": null
+            }
+          ]
         }
       ],
       "watching": 0
@@ -54,7 +72,8 @@
         "anchor_lc": "4:1",
         "head_lc": "4:1"
       },
-      "version": 2
+      "version": 2,
+      "client": 9007199254740991
     },
     {
       "kind": "cursor",
@@ -67,7 +86,8 @@
         "anchor_lc": "7:1",
         "head_lc": "7:1"
       },
-      "version": 3
+      "version": 3,
+      "client": 9007199254740991
     },
     {
       "kind": "overwritten",
@@ -112,7 +132,8 @@
         "anchor_lc": "5:1",
         "head_lc": "5:1"
       },
-      "version": 5
+      "version": 5,
+      "client": 9007199254740991
     },
     {
       "kind": "role",
@@ -130,7 +151,8 @@
         "anchor_lc": "6:1",
         "head_lc": "6:1"
       },
-      "version": 5
+      "version": 5,
+      "client": 3
     },
     {
       "kind": "overwritten",
@@ -168,7 +190,8 @@
         "anchor_lc": "4:1",
         "head_lc": "4:1"
       },
-      "version": 7
+      "version": 7,
+      "client": 9007199254740991
     },
     {
       "kind": "cursor",
@@ -181,7 +204,8 @@
         "anchor_lc": "7:1",
         "head_lc": "7:1"
       },
-      "version": 7
+      "version": 7,
+      "client": 3
     },
     {
       "kind": "closed",
@@ -207,7 +231,20 @@
           "anchor_lc": "4:1",
           "head_lc": "4:1"
         },
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": {
+              "root": "source",
+              "anchor": 28,
+              "head": 28,
+              "version": 7,
+              "anchor_lc": "4:1",
+              "head_lc": "4:1"
+            }
+          }
+        ]
       },
       {
         "handle": "widget",
@@ -224,7 +261,20 @@
           "anchor_lc": "7:1",
           "head_lc": "7:1"
         },
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 3,
+            "cursor": {
+              "root": "source",
+              "anchor": 42,
+              "head": 42,
+              "version": 7,
+              "anchor_lc": "7:1",
+              "head_lc": "7:1"
+            }
+          }
+        ]
       },
       {
         "handle": "bob",
@@ -234,7 +284,13 @@
         "role": "viewer",
         "away": false,
         "cursor": null,
-        "rights": "edit"
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 4,
+            "cursor": null
+          }
+        ]
       }
     ],
     "watching": 0,

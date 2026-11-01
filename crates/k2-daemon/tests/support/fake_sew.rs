@@ -285,6 +285,9 @@ struct State {
     /// SW-3: how long an empty `voice/changes` answer is held (the
     /// long-poll), capped by the request's `wait`. Default zero.
     voice_hold: Duration,
+    /// SW-3 (sew-56 v1.3): re-send the change at the cursor (a change
+    /// already in `states` may repeat).
+    voice_feed_repeats: bool,
     /// SW-11.
     media_path: Option<MediaPath>,
 }
@@ -661,7 +664,9 @@ impl FakeSew {
     pub fn voice_join(&self, space_id: &str, slug: &str, ext: &str) -> Result<(), String> {
         self.with(|s| {
             if s.media_path.as_ref().is_some_and(|m| m.state == sew_wire::MEDIA_PATH_DOWN) {
-                return Err(sew_wire::reasons::MEDIA_PATH_DOWN.into());
+                // sew-56 v1.3: 503, details.reason voice_unavailable
+                // ([`FakeSew::join_refusal`] has the whole body).
+                return Err(sew_wire::reasons::VOICE_UNAVAILABLE.into());
             }
             let member_id = s.members.get(ext).map(|m| m.member_id).ok_or("not_provisioned")?;
             let sp = s.spaces.get(space_id).ok_or("not_found")?;
@@ -754,6 +759,26 @@ impl FakeSew {
     }
 
     /// SW-3: hold an empty `voice/changes` answer this long (≤ `wait`).
+    pub fn set_voice_feed_repeats(&self, on: bool) {
+        self.with(|s| s.voice_feed_repeats = on)
+    }
+
+    /// SW-11 (sew-56 v1.3): what a join or move (DM call joins too) answers
+    /// now: `Some((503, body))` while the media path is down, with
+    /// `details.reason = voice_unavailable`, `details.engine =
+    /// media_path_down` and K2's text in `details.media_path_reason`.
+    pub fn join_refusal(&self) -> Option<(u16, Value)> {
+        self.with(|s| {
+            let m = s.media_path.as_ref().filter(|m| m.state == sew_wire::MEDIA_PATH_DOWN)?;
+            Some((
+                503,
+                json!({"ok": false, "error": {"code": "unavailable", "hint": "voice is unavailable: the media path is down",
+                    "details": {"reason": sew_wire::reasons::VOICE_UNAVAILABLE, "engine": sew_wire::ENGINE_MEDIA_PATH_DOWN,
+                                "media_path_reason": m.reason.clone().unwrap_or_default()}}}),
+            ))
+        })
+    }
+
     pub fn set_voice_hold(&self, d: Duration) {
         self.with(|s| s.voice_hold = d)
     }
@@ -2770,16 +2795,29 @@ fn voice_changes_get(s: &mut State, path: &str, query: &str) -> (u16, String) {
     }
     let head = voice_cursor(s);
     let gone = || err(410, "gone", "the cursor is gone: read voice/states again", json!({"reason": "cursor_expired", "head": head.clone()}));
-    let Some((epoch, seq)) = after.split_once('.').and_then(|(e, q)| Some((e.parse::<u64>().ok()?, q.parse::<u64>().ok()?))) else {
-        return gone();
+    // sew-56 v1.3: a cursor Sew never handed out is 400 validation_failed
+    // (a K2 bug: recorded); one from before a restart or a pruned ring is 410.
+    let never = |s: &mut State| {
+        s.bad_bodies.push(format!("voice/changes: a cursor Sew never handed out: {after:?}"));
+        err(400, "validation_failed", "after is not a cursor this Sew handed out", json!({"field": "after"}))
     };
-    if epoch != s.voice_epoch || seq < s.voice_floor || seq > s.voice_seq {
+    let Some((epoch, seq)) = after.split_once('.').and_then(|(e, q)| Some((e.parse::<u64>().ok()?, q.parse::<u64>().ok()?))) else {
+        return never(s);
+    };
+    if epoch > s.voice_epoch || (epoch == s.voice_epoch && seq > s.voice_seq) {
+        return never(s);
+    }
+    if epoch < s.voice_epoch || seq < s.voice_floor {
         return gone();
     }
+    // sew-56 v1.3: a change already reflected in `states` may appear again
+    // (the follower applies idempotently); `set_voice_feed_repeats` makes
+    // the fake re-send the change at the cursor itself.
+    let from = if s.voice_feed_repeats { seq.saturating_sub(1) } else { seq };
     let changes: Vec<Value> = s
         .voice_changes
         .iter()
-        .filter(|c| c["seq"].as_u64().unwrap_or(0) > seq && c["space_id"] == space.as_str())
+        .filter(|c| c["seq"].as_u64().unwrap_or(0) > from && c["space_id"] == space.as_str())
         .take(limit as usize)
         .map(|c| {
             let mut c = c.clone();
@@ -2813,7 +2851,12 @@ fn channel_closing(s: &mut State, path: &str, body: &str) -> (u16, String) {
     if kind != sew_wire::CHANNEL_TYPE_VOICE {
         return err(422, "invalid_state", "not a voice channel", json!({"reason": "not_voice_channel"}));
     }
+    // sew-56 v1.3: closing an archived room is a safe retry; un-closing it
+    // is 409 channel_archived.
     if archived {
+        if req.closing {
+            return (200, json!({"closing": true, "archived": true}).to_string());
+        }
         return err(409, "conflict", "the room is archived", json!({"reason": "channel_archived"}));
     }
     let occupied = s.voice_states.iter().any(|v| v.channel_id == cid);

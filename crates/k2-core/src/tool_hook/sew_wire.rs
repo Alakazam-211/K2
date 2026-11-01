@@ -1239,6 +1239,9 @@ pub const VOICE_CHANGES_LIMIT_MAX: u32 = 500;
 /// `wait` and `limit` are clamped to the contract's ranges. The cursor is
 /// opaque (`<epoch>.<seq>` today), percent-encoded. The caller's request
 /// timeout must be longer than `wait` (not the 10 s / 15 s mgmt default).
+/// sew-56 v1.3: `after` is required (start from `voice/states`' `cursor`);
+/// a cursor Sew never handed out is `400 validation_failed`; a gone one is
+/// `410 gone` `cursor_expired` with `details.head`.
 pub fn voice_changes_path(space_id: &str, after: &str, wait_s: u32, limit: u32) -> String {
     format!(
         "/mgmt/v1/spaces/{space_id}/voice/changes?after={}&wait={}&limit={}",
@@ -1308,6 +1311,11 @@ pub struct MgmtVoiceChange {
 
 /// `{"changes": [MgmtVoiceChange…], "next": "<cursor>"}`. On `410 gone`
 /// `cursor_expired` (`details.head`), re-read `voice/states`.
+///
+/// sew-56 v1.3, for the follower: **apply changes idempotently** (a change
+/// already reflected in `states` may appear again in the feed), and a
+/// **move** arrives as `left {reason: moved}` then `joined` (the channel
+/// changes; never one `updated`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceChangesResponse {
     #[serde(default)]
@@ -1323,6 +1331,9 @@ pub mod leave_reasons {
     pub const MEDIA_PATH_DOWN: &str = "media_path_down";
     /// `spaces/members/remove` ends the person's voice in that Space.
     pub const REMOVED_FROM_SPACE: &str = "removed_from_space";
+    /// sew-56 v1.3: the `left` half of a move (`left {reason: moved}`, then
+    /// `joined` in the new channel).
+    pub const MOVED: &str = "moved";
 }
 
 // SW-4: closing a voice channel (flag `voice_channel_closing`).
@@ -1342,6 +1353,11 @@ pub struct ChannelClosingRequest {
 
 /// `{"closing": bool, "archived": bool}`: an empty room is archived at
 /// once (`archived: true`); a live one stays until its last person leaves.
+/// sew-56 v1.3: closing an already archived room answers `{closing: true,
+/// archived: true}` (a safe retry); a DM or unknown id is `404`; people
+/// already in a closing room may still swap devices; the auto-archive's
+/// audit actor is the mgmt service (on the call) or `system` (last leave or
+/// sweep), reason `closed_empty`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelClosingResponse {
     #[serde(default)]
@@ -1400,10 +1416,23 @@ pub struct MediaPathResponse {
     pub ended_calls: u64,
 }
 
-/// `details.engine` on a `503 voice_unavailable` while the path is down
-/// (beside `down|draining|syncing|error`); `details.media_path_reason`
-/// carries K2's text.
+/// `details.engine` while the path is down (beside
+/// `down|draining|syncing|error`). sew-56 v1.3: joins and moves (DM call
+/// joins too) are refused `503` with `details.reason = voice_unavailable`
+/// ([`reasons::VOICE_UNAVAILABLE`]), `details.engine = media_path_down` and
+/// K2's text in `details.media_path_reason`. Branch on `details.reason`,
+/// not the error code.
 pub const ENGINE_MEDIA_PATH_DOWN: &str = "media_path_down";
+
+/// sew-56 v1.3 SW-11: what a join or move answers while the media path is
+/// down: `Some(media_path_reason)` (K2's text, maybe empty) when `status`
+/// and `err` are that refusal.
+pub fn media_path_refusal(status: u16, err: &ApiError) -> Option<String> {
+    (status == 503
+        && err.detail_str("reason") == Some(reasons::VOICE_UNAVAILABLE)
+        && err.detail_str("engine") == Some(ENGINE_MEDIA_PATH_DOWN))
+    .then(|| err.detail_str("media_path_reason").unwrap_or_default().to_string())
+}
 
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
@@ -1446,8 +1475,6 @@ pub mod codes {
     pub const MISSING_PERMISSION: &str = "missing_permission";
     /// 410 (SW-3 `cursor_expired`).
     pub const GONE: &str = "gone";
-    /// 503 on joins and moves (SW-11 `details.engine = media_path_down`).
-    pub const VOICE_UNAVAILABLE: &str = "voice_unavailable";
 }
 
 /// `details.reason` values K2 branches on (`sew_proto::mgmt::reasons`).
@@ -1535,9 +1562,12 @@ pub mod reasons {
     pub const NOT_VOICE_CHANNEL: &str = "not_voice_channel";
     /// SW-4 409 `conflict`: a join or move into a closing room.
     pub const CHANNEL_CLOSING: &str = "channel_closing";
-    /// SW-11: `details.engine` of a `503 voice_unavailable` (and the leave
+    /// SW-11: `details.engine` of the `503` join refusal (and the leave
     /// reason) while the media path is down.
     pub const MEDIA_PATH_DOWN: &str = "media_path_down";
+    /// SW-11 (sew-56 v1.3): `details.reason` of the `503` join/move refusal
+    /// while voice is unavailable ([`super::media_path_refusal`]).
+    pub const VOICE_UNAVAILABLE: &str = "voice_unavailable";
 }
 
 #[cfg(test)]
@@ -1857,5 +1887,19 @@ mod tests {
         assert_eq!((mp.state.as_str(), mp.media_path_reason.as_deref()), ("down", Some("voice_lane_down")));
         let old: Status = serde_json::from_str(r#"{"install_id":"1","provider":"k2"}"#).unwrap();
         assert!(old.voice.is_none(), "an older Sew has no voice block");
+        // sew-56 v1.3: the join refusal while the path is down.
+        let e: ErrorBody = serde_json::from_str(
+            r#"{"ok":false,"error":{"code":"unavailable","hint":"voice is unavailable",
+               "details":{"reason":"voice_unavailable","engine":"media_path_down","media_path_reason":"voice_lane_down"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(media_path_refusal(503, &e.error).as_deref(), Some("voice_lane_down"));
+        assert_eq!(media_path_refusal(409, &e.error), None);
+        let other: ErrorBody = serde_json::from_str(
+            r#"{"ok":false,"error":{"code":"unavailable","hint":"x","details":{"reason":"voice_unavailable","engine":"draining"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(media_path_refusal(503, &other.error), None, "another engine state");
+        assert_eq!(leave_reasons::MOVED, "moved");
     }
 }

@@ -295,6 +295,11 @@ async fn sw1_rooms_sw3_feed_sw4_closing() {
     // Un-closing an archived room: 409 channel_archived.
     let r = env.post(&sew_wire::channel_closing_path(&room2), json!({"closing": false})).await;
     assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::CHANNEL_ARCHIVED.into()));
+    // sew-56 v1.3: closing it again is a safe retry.
+    let r = env.post(&sew_wire::channel_closing_path(&room2), json!({"closing": true})).await;
+    assert_eq!(json_of(&r), json!({"closing": true, "archived": true}));
+    // An unknown id is 404.
+    assert_eq!(env.post(&sew_wire::channel_closing_path("424242"), json!({"closing": true})).await.status, 404);
     // An empty room closes straight to archived.
     let room1 = env.sew.channels(&id)["room-1"].id.to_string();
     env.sew.voice_leave(MEMBER);
@@ -338,12 +343,44 @@ async fn sw3_cursor_expires_after_a_restart_and_the_long_poll_holds() {
     assert_eq!(r.status, 200);
     assert!(t0.elapsed() >= Duration::from_millis(1400), "held {:?}", t0.elapsed());
     assert_eq!(env.sew.voice_feed_queries().last().map(String::as_str), Some(format!("after={}&wait=2&limit=100", snap.cursor).as_str()));
+    // sew-56 v1.3: a move is left {reason: moved} then joined; a change
+    // already reflected in states may repeat (apply idempotently).
+    env.post(sew_wire::MGMT_SPACE_MEMBERS_ADD, json!({"space_id": id, "external_ids": [OWNER]})).await;
+    rooms(&env, &id, vec![ensure(1), ensure(2)]).await;
+    env.sew.voice_join(&id, "room-1", OWNER).expect("join");
+    let cur: sew_wire::VoiceStatesResponse = serde_json::from_str(&env.get(&sew_wire::voice_states_path(&id)).await.body_text()).unwrap();
+    env.sew.voice_join(&id, "room-2", OWNER).expect("move");
+    let f: sew_wire::VoiceChangesResponse =
+        serde_json::from_str(&env.get(&sew_wire::voice_changes_path(&id, &cur.cursor, 0, 100)).await.body_text()).unwrap();
+    let kinds: Vec<(&str, Option<&str>)> = f.changes.iter().map(|c| (c.kind.as_str(), c.reason.as_deref())).collect();
+    assert_eq!(kinds, [("left", Some(sew_wire::leave_reasons::MOVED)), ("joined", None)]);
+    env.sew.set_voice_feed_repeats(true);
+    let again: sew_wire::VoiceChangesResponse =
+        serde_json::from_str(&env.get(&sew_wire::voice_changes_path(&id, &cur.cursor, 0, 100)).await.body_text()).unwrap();
+    assert_eq!(again.changes.first().map(|c| c.kind.as_str()), Some("joined"), "the join already in states repeats");
+    assert_eq!(again.changes.len(), 3);
+    env.sew.set_voice_feed_repeats(false);
     // A Sew restart: the old cursor answers 410 gone cursor_expired + head.
     env.sew.restart();
     let r = env.get(&sew_wire::voice_changes_path(&id, &snap.cursor, 0, 100)).await;
     assert_eq!(refusal(&r), (410, sew_wire::codes::GONE.into(), sew_wire::reasons::CURSOR_EXPIRED.into()));
     assert!(r.error().unwrap().error.detail_str("head").is_some());
     env.sew.assert_clean();
+}
+
+/// sew-56 v1.3: a cursor Sew never handed out is 400 validation_failed
+/// (and the fake records it, so a follower that invents one fails loudly).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sw3_a_cursor_never_handed_out_is_400() {
+    let env = setup(&ALL_070).await;
+    let id = admin_space(&env).await;
+    for bad in ["0.99", "7.0", "nonsense", ""] {
+        let r = env.get(&sew_wire::voice_changes_path(&id, bad, 0, 10)).await;
+        assert_eq!(r.status, 400, "{bad:?}: {}", r.body_text());
+        assert_eq!(r.error().unwrap().error.code, sew_wire::codes::VALIDATION_FAILED);
+    }
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| env.sew.assert_clean()));
+    assert!(caught.is_err(), "an invented cursor is recorded");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -357,13 +394,19 @@ async fn sw11_media_path_down_ends_calls_and_refuses_joins_up_lifts() {
     let a: sew_wire::MediaPathResponse = serde_json::from_str(&r.body_text()).unwrap();
     assert_eq!((a.state.as_str(), a.ended_calls), ("down", 1));
     assert!(env.sew.voice_occupants(&id).is_empty(), "live calls end");
-    assert_eq!(env.sew.voice_join(&id, "room-1", ADMIN), Err(sew_wire::reasons::MEDIA_PATH_DOWN.into()));
+    // sew-56 v1.3: 503, details.reason voice_unavailable, engine
+    // media_path_down, K2's text in media_path_reason.
+    assert_eq!(env.sew.voice_join(&id, "room-1", ADMIN), Err(sew_wire::reasons::VOICE_UNAVAILABLE.into()));
+    let (st, body) = env.sew.join_refusal().expect("a refusal while down");
+    let e: sew_wire::ErrorBody = serde_json::from_value(body).unwrap();
+    assert_eq!(sew_wire::media_path_refusal(st, &e.error).as_deref(), Some("voice_lane_down"));
     let st: sew_wire::Status = serde_json::from_str(&env.get(sew_wire::MGMT_STATUS).await.body_text()).unwrap();
     let mp = st.voice.and_then(|v| v.media_path).expect("status.voice.media_path");
     assert_eq!((mp.state.as_str(), mp.media_path_reason.as_deref()), ("down", Some("voice_lane_down")));
     // Idempotent; then up lifts it at once.
     env.post(sew_wire::MGMT_VOICE_MEDIA_PATH, json!({"state": "down", "reason": "voice_lane_down"})).await;
     env.post(sew_wire::MGMT_VOICE_MEDIA_PATH, serde_json::to_value(sew_wire::MediaPathRequest::up()).unwrap()).await;
+    assert!(env.sew.join_refusal().is_none());
     env.sew.voice_join(&id, "room-1", ADMIN).expect("joins work again");
     // A restart starts `up` (K2 re-asserts down, M11).
     env.post(sew_wire::MGMT_VOICE_MEDIA_PATH, json!({"state": "down", "reason": "voice_lane_down"})).await;

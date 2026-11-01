@@ -815,6 +815,9 @@ struct Disk {
     /// Times the replica was brought forward by the catch-up list and passed the check (no
     /// reload), for the tests.
     caught_up: u64,
+    /// `catch_up` was claimed from the store at a reopen, not tracked in memory: the first
+    /// sync since compares the replica's texts with the doc's before trusting it (v0.10.0.3).
+    step_from_store: bool,
 }
 
 /// The disk replica, decoded on first need (v0.9.8). Opening a doc with a file decoded the
@@ -4944,6 +4947,22 @@ impl Session {
             }
         };
         let key = st.hash_key;
+        // in step only if the stored state is the live doc's: synced at its version, and the
+        // doc renders the synced bytes. Equal versions alone don't say so: an outside save
+        // merged while the doc held unwritten changes stores the replica (the file's text, a
+        // save the doc doesn't hold) at the merged change's version (`replica_to_file`).
+        // Claimed in step, the first write-back would bring that replica "forward" by no
+        // updates, and a save that only deletes leaves its state vector the doc's, so the
+        // check there passes: the merge base would keep the old file's text (v0.10.0.3)
+        #[cfg(any(test, feature = "differential"))]
+        let by_version = crate::differential::reopen_step_by_version();
+        #[cfg(not(any(test, feature = "differential")))]
+        let by_version = false;
+        let in_step = seq == st.version
+            && (by_version || {
+                let live = self.render(st)?;
+                hash == file_hash(&key, &live) || legacy_matches(&hash, &live)
+            });
         let mut d = Disk {
             path: path.to_owned(),
             root: root.to_owned(),
@@ -4959,10 +4978,10 @@ impl Session {
             last_change_ms: now,
             last_check_ms: now,
             external_client: None,
-            // in step only if the file's state is the live doc's
-            catch_up: (seq == st.version).then(Vec::new),
+            catch_up: in_step.then(Vec::new),
             writebacks: 0,
             caught_up: 0,
+            step_from_store: in_step,
         };
         let on_disk = match disk::probe(path, root) {
             Ok(Probe::File { real, .. }) => {
@@ -4992,7 +5011,9 @@ impl Session {
                 d.replica_bytes = p.state.len() as u64;
                 d.synced_hash = p.hash;
                 d.synced_seq = p.seq;
+                // a write-back's state: the doc's at `p.seq`, the file's bytes
                 d.catch_up = (p.seq == st.version).then(Vec::new);
+                d.step_from_store = d.catch_up.is_some();
             } else {
                 store.clear_pending_sync(self.doc_id)?;
             }
@@ -6062,6 +6083,38 @@ impl Session {
             _ => false,
         };
         let mut reload = !caught_up;
+        // the first catch-up after a reopen rests on the store's word that its synced state
+        // was the doc's (`attach_file`): the texts are compared before it is trusted, O(doc)
+        // once per load (v0.10.0.3). Other text there is a stale merge base, a bug in the
+        // kit: reported, and reloaded below before the doc is declared in sync. The checks
+        // below run as well (a replica can fail both)
+        let from_store = std::mem::take(&mut d.step_from_store);
+        if caught_up && from_store {
+            if let Some(r) = d.replica.loaded() {
+                let (mut doc_len, mut replica_len, mut same) = (0u64, 0u64, true);
+                for (root, kind) in self.schema.roots {
+                    if !matches!(kind, Kind::Text) {
+                        continue;
+                    }
+                    let (a, b) = (st.doc.text(root)?, r.text(root)?);
+                    doc_len += a.len() as u64;
+                    replica_len += b.len() as u64;
+                    same &= a == b;
+                }
+                if self.structured {
+                    let (a, b) = (st.doc.keyed_state()?, r.keyed_state()?);
+                    same &= a.roots.iter().zip(&b.roots).all(|((_, x), (_, y))| x == y);
+                }
+                if !same {
+                    reload = true;
+                    self.emit(AuditEvent::DiskReplicaRepaired {
+                        key: key.clone(),
+                        doc_len,
+                        replica_len,
+                    });
+                }
+            }
+        }
         // every time, O(clients): the replica holds exactly the doc's inserts (a lost or
         // foreign insert shows); one in `every`, O(doc): the same deletions and texts too (a
         // lost delete). Not the encodings: upstream may split equal content into blocks

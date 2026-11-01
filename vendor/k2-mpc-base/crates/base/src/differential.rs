@@ -309,6 +309,31 @@ pub(crate) fn full_writeback() -> bool {
     FULL_WB.with(|p| p.get())
 }
 
+thread_local! {
+    static REOPEN_BY_VERSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a reopen claims the stored disk replica in step with the doc from the sync point's
+/// version alone (the fault [`with_reopen_step_by_version`] plants).
+pub(crate) fn reopen_step_by_version() -> bool {
+    REOPEN_BY_VERSION.with(|p| p.get())
+}
+
+/// Run `f` with every reopen on this thread claiming the stored disk replica in step with the
+/// doc from the sync point's version alone, as before v0.10.0.3: the stale merge base the
+/// first sync after a reopen then reports as `AuditEvent::DiskReplicaRepaired` and reloads.
+/// Removed afterwards, even if `f` panics.
+pub fn with_reopen_step_by_version<R>(f: impl FnOnce() -> R) -> R {
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            REOPEN_BY_VERSION.with(|p| p.set(self.0));
+        }
+    }
+    let _back = Back(REOPEN_BY_VERSION.with(|p| p.replace(true)));
+    f()
+}
+
 /// Whether the installed side turns the engine's position index off.
 pub(crate) fn position_index_off() -> bool {
     NO_POSINDEX.with(|p| p.get())

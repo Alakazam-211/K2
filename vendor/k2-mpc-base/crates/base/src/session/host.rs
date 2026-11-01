@@ -421,6 +421,18 @@ pub enum AuditEvent {
     /// before v0.9.7); the file was right either way (it is rendered from the live text).
     /// Metadata only. A bug in the kit: report it.
     DiskReplicaMismatch { key: DocKey, version: Seq },
+    /// The first sync after a reopen (a write-back, or an outside save the doc then holds)
+    /// found the disk replica, which the store's sync point said was the doc's state, holding
+    /// other text (v0.10.0.3): the next outside save would have been merged onto a stale base.
+    /// It was reloaded from the doc before the doc was declared in sync; the file was right
+    /// either way (it is rendered from the live text). `doc_len` and `replica_len` are the
+    /// bytes of the two texts (every text root), never their content. A bug in the kit:
+    /// report it.
+    DiskReplicaRepaired {
+        key: DocKey,
+        doc_len: u64,
+        replica_len: u64,
+    },
     /// The engine's position index check (v0.9.7, [`crate::session::Config::position_check_every`])
     /// found that a lookup of `index` in text `root` (`None`: a nested text) from the marker
     /// at `marker` disagreed with a walk from the text's start, during change `change`. The

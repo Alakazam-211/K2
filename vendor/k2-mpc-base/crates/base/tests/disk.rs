@@ -1730,6 +1730,113 @@ proptest! {
     }
 }
 
+/// K-AUD-1 regression, pinned by hand from proptest's minimal failing input of
+/// [`an_outside_save_amid_any_mix_of_changes_is_merged`] (a node gate of the Wave 1a stack):
+/// an edit, an outside save with the session open, a restart, a tick, and another outside
+/// save. After the tick the doc is clean, and the disk replica must hold the doc's text.
+#[test]
+fn an_outside_save_then_a_restart_keeps_the_replica_the_docs_text() {
+    mix_case(
+        "line 3\na\nline 3\nline 3\na\na\n",
+        &[
+            Mix::Edit((14564, 19419), "\n".into()),
+            Mix::Outside((0, 2428), String::new(), false),
+            Mix::Restart,
+            Mix::Wait(1000),
+            Mix::Outside((0, 0), String::new(), false),
+        ],
+    );
+}
+
+/// The pinned case above, step by step, with the host's events (v0.10.0.3): an edit left
+/// unwritten, an outside save merged beside it (the replica takes the save, not the doc's
+/// text, stored at the merged change's version), a restart, and the timed write-back. Returns
+/// the events from the write-back on, K-AUD-1 after it, and the disk state. `by_version`
+/// plants the fault fixed in v0.10.0.3 (a reopen claims the stored replica in step from the
+/// version alone).
+fn write_back_after_restart(by_version: bool) -> (Vec<AuditEvent>, Vec<SyncDrift>, DiskState) {
+    let mut f = fx("aud1-repair");
+    let seed = "line 3\na\nline 3\nline 3\na\na\n";
+    f.write("a.md", seed.as_bytes());
+    let s = f.open("a.md");
+    let b = f.join(&s, "other");
+    // the steps of the pinned case: Edit((14564, 19419), "\n"), Outside((0, 2428), "", false)
+    let live = spliced(seed, span(seed, 14564, 19419), "\n");
+    set(&s, b, &live);
+    let saved = spliced(seed, span(seed, 0, 2428), "");
+    f.advance(10);
+    f.write("a.md", saved.as_bytes());
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { .. }
+    ));
+    let merged = text(&s, b);
+    assert_ne!(
+        merged, saved,
+        "the doc keeps a change the file doesn't have"
+    );
+    drop(s);
+    f.restart();
+    let reopen = || f.open("a.md");
+    let s = if by_version {
+        k2_mpc_base::differential::with_reopen_step_by_version(reopen)
+    } else {
+        reopen()
+    };
+    let _b = f.join(&s, "other");
+    let from = f.events().len();
+    f.advance(1000);
+    f.tick();
+    assert_eq!(f.bytes("a.md"), merged.as_bytes(), "written back");
+    let events = f.events().split_off(from);
+    (events, s.audit_disk_sync().unwrap(), disk(&s))
+}
+
+/// The write-back after a restart reports a stale disk replica and repairs it before the doc
+/// is declared in sync (v0.10.0.3). With the fault planted (the reopen claims the stored
+/// replica in step from its version, as before the fix) the check fires once: the replica
+/// held the outside save's text, not the doc's. With the fix the reopen doesn't claim it, the
+/// write-back reloads the replica, and nothing fires. K-AUD-1 is clean after both.
+#[test]
+fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
+    let repaired = |ev: &[AuditEvent]| {
+        ev.iter()
+            .filter(|e| matches!(e, AuditEvent::DiskReplicaRepaired { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mismatch = |ev: &[AuditEvent]| {
+        ev.iter()
+            .any(|e| matches!(e, AuditEvent::DiskReplicaMismatch { .. }))
+    };
+    // the fault planted: reported, with the lengths only, and repaired
+    let (ev, drift, state) = write_back_after_restart(true);
+    let got = repaired(&ev);
+    assert_eq!(got.len(), 1, "one report: {ev:?}");
+    let AuditEvent::DiskReplicaRepaired {
+        key: k,
+        doc_len,
+        replica_len,
+    } = &got[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(*k, key("a.md"));
+    assert_ne!(doc_len, replica_len, "the replica held other text: {got:?}");
+    assert!(
+        !mismatch(&ev),
+        "the sampled check's event is not raised for it: {ev:?}"
+    );
+    assert_eq!(state, DiskState::Clean);
+    assert_eq!(drift, vec![], "K-AUD-1 after the repair");
+    // the fix: nothing to report, and in sync
+    let (ev, drift, state) = write_back_after_restart(false);
+    assert_eq!(repaired(&ev), vec![], "no report with the fix: {ev:?}");
+    assert!(!mismatch(&ev), "{ev:?}");
+    assert_eq!(state, DiskState::Clean);
+    assert_eq!(drift, vec![], "K-AUD-1 with the fix");
+}
+
 /// The sync audit's cost on a realistic doc (5,000 lines, ~340 KB, 1,000 changes since the
 /// import), and a re-sync's (one full encode and load). Ignored; run it in release:
 /// `cargo test -p k2-mpc-base --release --test disk -- --ignored --nocapture audit_cost`.

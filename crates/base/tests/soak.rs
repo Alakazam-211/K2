@@ -120,6 +120,7 @@ impl Host for SoakHost {
                 | AuditEvent::TextCacheMismatch { .. }
                 | AuditEvent::PositionIndexMismatch { .. }
                 | AuditEvent::DiskReplicaMismatch { .. }
+                | AuditEvent::DiskReplicaRepaired { .. }
                 | AuditEvent::IdentityMismatch { .. }
         ) {
             self.mismatches.lock().unwrap().push(format!("{ev:?}"));

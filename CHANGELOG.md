@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.10.0.3 (2026-11-01)
+
+v0.10.0.2 plus one fix to the kit's disk sync, and one new audit event. No change to the
+store format, the merge, the wire, the client or any dependency. The crate version is
+`0.10.0+3` (the git tag is v0.10.0.3); the client stays `0.11.0`.
+
+- **The merge base is right after a restart (a lost-edit risk, K-AUD-1).** An outside save
+  merged while the doc held changes not yet written back leaves the disk replica (the base the
+  next outside save is merged onto) holding the file's text, recorded at the merged change's
+  version. A reopen took that equal version as "the replica is the doc's state", so the first
+  write-back after it kept the old replica: the file got the doc and the session reported
+  `Clean`, while the merge base still held the previous file's text. The next outside save was
+  then merged onto a stale base, and could undo what the write-back wrote or lose part of the
+  save. Affected: a file-backed doc (`SessionManager::open_file`, text or grid) that took an
+  outside save into unsaved changes, then was reopened from the store before its next
+  write-back (the process stopped inside the write delay, or the unload's write-back failed);
+  since v0.9.7, when the write-back began to keep the replica in step instead of reloading it.
+  Fixed where the reopen decides: the stored replica counts as the doc's state only if it was
+  synced at the doc's version **and** the doc renders the synced bytes; otherwise the first
+  write-back reloads it from the doc, as before v0.9.7.
+- **New audit event `AuditEvent::DiskReplicaRepaired { key, doc_len, replica_len }`**
+  (non-breaking: `AuditEvent` is `#[non_exhaustive]`). The first sync after a reopen (a
+  write-back, or an outside save the doc then holds) now compares the replica's texts with the
+  doc's, O(doc) once per load, and when they differ reports it and reloads the replica before
+  the doc is declared in sync. Byte lengths only, never content. It should never fire: if it
+  does, it is a bug in the kit (report it). `DiskReplicaMismatch` is unchanged.
+- **Tests** (`tests/disk.rs`): `an_outside_save_then_a_restart_keeps_the_replica_the_docs_text`
+  pins the property's minimal failing case (it failed on v0.10.0.1 and v0.10.0.2);
+  `a_stale_replica_after_a_restart_is_reported_and_repaired` plants the old reopen (test-only:
+  `differential::with_reopen_step_by_version`) and sees the event fire once with K-AUD-1 clean
+  after the repair, and with the fix sees no event.
+
 ## v0.10.0.2 (2026-10-31)
 
 v0.10.0.1 plus the licence: MIT OR Apache-2.0. No change to the kit's Rust library, store,

@@ -1964,6 +1964,8 @@ mod tests {
                 // The test pin's kit counts once its hash is dropped in.
                 assert_eq!(pinned().version, SEW_TEST_NEXT.version);
                 assert_eq!(app_kit(pinned().version).is_some(), hex64(SEW_TEST_NEXT_APP_KIT.sha256));
+            } else if cfg!(feature = "sew-test-pins") {
+                assert!(app_kit(pinned().version).is_none(), "Sew's 0.1.x test builds have no App kit");
             } else {
                 assert!(app_kit(pinned().version).is_some(), "the pin has its kit");
             }

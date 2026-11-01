@@ -51,6 +51,9 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/admin/withdraw",
     "/cli/compute/agents",
     "/cli/compute/agents/set",
+    // A workspace's node list (0.46.8, `compute_allow`).
+    crate::compute_allow::SHOW,
+    crate::compute_allow::SET,
     compute_ws::ATTACH_PATH,
     "/cli/compute/cache",
     "/cli/compute/cache/clear",
@@ -111,6 +114,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/admin/propose",
     "/cli/compute/admin/withdraw",
     "/cli/compute/agents/set",
+    crate::compute_allow::SET,
     "/cli/compute/cache/clear",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
@@ -264,19 +268,37 @@ pub(crate) struct Refusal {
     pub(crate) code: &'static str,
     pub(crate) status: u16,
     pub(crate) hint: String,
+    /// More fields of the `error` object (after `code` and `hint`), for a
+    /// refusal the permission-card walls read values from
+    /// (`node_not_allowed`'s `nodes`).
+    pub(crate) extra: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl Refusal {
+    /// Add one field to the `error` object.
+    pub(crate) fn with(mut self, key: &str, value: impl Into<serde_json::Value>) -> Self {
+        self.extra.get_or_insert_with(serde_json::Map::new).insert(key.to_string(), value.into());
+        self
+    }
 }
 
 pub(crate) type R<T> = Result<T, Refusal>;
 
 pub(crate) fn no(code: &'static str, status: u16, hint: impl Into<String>) -> Refusal {
-    Refusal { code, status, hint: hint.into() }
+    Refusal { code, status, hint: hint.into(), extra: None }
 }
 
 pub(crate) fn refusal_response(r: &Refusal) -> CliResponse {
+    let mut error = serde_json::json!({ "code": r.code, "hint": r.hint });
+    if let (Some(extra), Some(e)) = (r.extra.as_ref(), error.as_object_mut()) {
+        for (k, v) in extra {
+            e.insert(k.clone(), v.clone());
+        }
+    }
     CliResponse {
         status: status_line(r.status),
         content_type: "application/json",
-        body: serde_json::json!({ "error": { "code": r.code, "hint": r.hint } }).to_string(),
+        body: serde_json::json!({ "error": error }).to_string(),
     }
 }
 
@@ -433,7 +455,7 @@ pub(crate) fn no_workspace(req: &str) -> Refusal {
 
 /// The workspace a request acts for. A passport's comes from the passport
 /// (naming another is `forbidden`); others must name one.
-fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
+pub(crate) fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
     let requested = requested.map(str::trim).filter(|s| !s.is_empty());
     if let Some((own, _)) = who.passport() {
         let ws = ws_by_id(own).ok_or_else(|| no("workspace_not_found", 404, "your workspace is not registered"))?;
@@ -587,6 +609,10 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/grants/revoke" => grant_revoke(&who, body, mgr),
         "/cli/compute/agents" => agents_list(&who),
         "/cli/compute/agents/set" => agents_set(&who, body),
+        // A workspace's node list (0.46.8): read; set or clear (a person,
+        // or an agent narrowing its own).
+        crate::compute_allow::SHOW => crate::compute_allow::show(&who, params),
+        crate::compute_allow::SET => crate::compute_allow::set(&who, body),
         "/cli/compute/run" => run(&who, body),
         // `k2 compute prewarm` (CE-18): tools onto matching granted nodes.
         "/cli/compute/prewarm" => prewarm(&who, body),
@@ -1355,7 +1381,9 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             let mut ids = Vec::new();
             for x in a {
                 let t = x.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "nodes is a list of node names"))?;
-                ids.push(resolve_node_for(who, Some(t), Some(&ws.id))?.id);
+                let n = resolve_node_for(who, Some(t), Some(&ws.id))?;
+                crate::compute_allow::check_node(&ws, &n, "--node")?;
+                ids.push(n.id);
             }
             Some(ids)
         }
@@ -1630,6 +1658,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
+    // The node list again, whichever way the node was picked (auto never
+    // offers a node off it; a pinned one was checked in pick_node).
+    crate::compute_allow::check_node(ws, &node, "node")?;
     // What `.k2/compute.toml` and `--preset` set, and from where (CE-3;
     // `run` always writes it).
     let mut effective: Option<serde_json::Value> = v.get("effective").filter(|e| e.is_object()).cloned();
@@ -2733,6 +2764,9 @@ fn pick_node(
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }
+        // The workspace's node list (0.46.8): before --now, the grant and
+        // every other check, so nothing about the run is read or sent.
+        crate::compute_allow::check_node(ws, &n, "node")?;
         if let Some((other, job)) = same.as_ref().filter(|(o, _)| o.id != n.id) {
             return Err(no(
                 codes::BAD_REQUEST,
@@ -2747,6 +2781,7 @@ fn pick_node(
         return Ok((n, rec));
     }
     if let Some((n, job)) = same {
+        crate::compute_allow::check_node(ws, &n, &format!("--same-node-as {job}: node"))?;
         if b(v, "now") == Some(true) {
             pinned_now(who, ws, want, &n, now)?;
         }
@@ -2971,6 +3006,14 @@ fn no_fit_hint(ws: &Ws, want: &crate::compute_place::Want, report: &crate::compu
         hint.push_str(&format!("; ask for a shorter --timeout, or your owner: k2 compute grant <node> --workspace {} --max-time <D>", ws.handle));
     } else {
         hint.push_str("; k2 compute nodes says why");
+    }
+    if report.skipped.contains_key(crate::compute_allow::SKIP) {
+        let names = crate::compute_allow::names_of(&ws.id).unwrap_or_default();
+        hint.push_str(&format!(
+            ". Jobs from {} go only to its node list: {} (k2 compute allow-nodes)",
+            ws.handle,
+            if names.is_empty() { "nothing".to_string() } else { names.join(", ") }
+        ));
     }
     hint
 }
@@ -3731,6 +3774,14 @@ fn retry_one(who: &Who, j: &store::JobRow) -> R<store::JobRow> {
     }
     if let (Some(n), true) = (&live, who.passport().is_some()) {
         node_visible(who, n)?;
+    }
+    // The workspace's node list (0.46.8): a retry runs where the job ran,
+    // so a node that left the list since is refused (a new run is placed
+    // on the list).
+    if let Some(n) = &live {
+        let ws = ws_by_id(&j.workspace_id).ok_or_else(|| no("workspace_not_found", 404, "the job's workspace is gone"))?;
+        let short = compute::message::short(&j.id);
+        crate::compute_allow::check_node(&ws, n, &format!("retry {short}: it ran on node"))?;
     }
     let r = {
         let db = k2_core::db::shared();

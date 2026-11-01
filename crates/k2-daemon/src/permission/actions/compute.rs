@@ -273,11 +273,193 @@ fn apply_ci_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     apply_ci_to(ctx, who, false)
 }
 
+// ── compute.allow-nodes (0.46.8, `crate::compute_allow`) ────────────
+
+const ALLOW_SETTING: &str = "Compute node list";
+const ALLOW_SETTINGS: SettingsRef = SettingsRef { page: "compute", path: "k2 compute allow-nodes (a terminal outside K2)" };
+const ALLOW_PARAMS: &[ParamSpec] = &[ParamSpec { key: "nodes", kind: ParamKind::Node, required: true, list: true, choices: &[] }];
+
+/// `compute.allow-nodes nodes=`: add nodes to the asking workspace's
+/// compute node list. Every job from it sends its source to the node it
+/// runs on, so a person decides (the owner or an Admin). Narrowing the
+/// list is the agent's own (`k2 compute allow-nodes --remove`), so there
+/// is no twin.
+pub(crate) static ALLOW_NODES: ActionSpec = ActionSpec {
+    id: "compute.allow-nodes",
+    area: Area::Compute,
+    params: ALLOW_PARAMS,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: ALLOW_SETTING,
+        what_changes: "Add {nodes} to {ws}'s compute node list",
+        consequences: "{ws}'s jobs may then run on {nodes}, and each job sends its whole source tree there (its --with repos too). Add only machines that may hold that code.",
+        scope: "{ws}'s jobs on {nodes}",
+        duration: "until someone takes it off the list",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: ALLOW_SETTINGS,
+    walls: &[
+        // A job (run, retry, prewarm) aimed at a node off the list.
+        Wall {
+            matches: WallMatch::Code { status: 403, code: crate::compute_allow::NODE_NOT_ALLOWED },
+            route_prefix: "/cli/compute/",
+            method: WallMethod::Any,
+            params: &[("nodes", ParamFrom::Response("/error/nodes"))],
+        },
+        // The agent's own list change that adds a node.
+        Wall {
+            matches: WallMatch::Code { status: 403, code: crate::compute_allow::NEEDS_PERSON },
+            route_prefix: crate::compute_allow::SET,
+            method: WallMethod::Post,
+            params: &[("nodes", ParamFrom::Response("/error/nodes"))],
+        },
+    ],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// `compute.allow-nodes-clear`: remove the asking workspace's list (every
+/// granted node again).
+pub(crate) static ALLOW_NODES_CLEAR: ActionSpec = ActionSpec {
+    id: "compute.allow-nodes-clear",
+    area: Area::Compute,
+    params: &[],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: ALLOW_SETTING,
+        what_changes: "Remove {ws}'s compute node list",
+        consequences: "{ws}'s jobs may then run on any node granted to it again, and each job sends its whole source tree to the node it runs on.",
+        scope: "{ws}",
+        duration: "until someone sets a list again",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: ALLOW_SETTINGS,
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::compute_allow::NEEDS_PERSON },
+        route_prefix: crate::compute_allow::SET,
+        method: WallMethod::Post,
+        params: &[],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The `nodes=` names as stored (a list, or one string).
+fn node_names(ctx: &Ctx) -> Vec<String> {
+    match ctx.params.get("nodes") {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Each named node (its id), checked: it exists and this workspace holds
+/// a grant on it (a list entry alone never lets a job in).
+fn allow_ids(ctx: &Ctx) -> Result<Vec<String>, String> {
+    let names = node_names(ctx);
+    if names.is_empty() {
+        return Err("name the nodes: nodes=<node>[,<node>…] (k2 compute nodes)".into());
+    }
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let mut ids = Vec::new();
+    for name in &names {
+        let n = k2_core::compute::store::find_node(&conn, name)
+            .filter(|n| n.state != "revoked")
+            .ok_or_else(|| format!("no compute node '{name}' (k2 compute nodes)"))?;
+        if k2_core::compute::store::grant(&conn, &n.id, &ctx.workspace_id).is_none() {
+            return Err(format!("{} has no grant on '{}': it needs one first (compute.use)", ctx.workspace_handle, n.name));
+        }
+        ids.push(n.id);
+    }
+    Ok(ids)
+}
+
+fn check_allow_nodes(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let ids = match allow_ids(ctx) {
+        Ok(ids) => ids,
+        Err(m) => return Check::Moved(m),
+    };
+    let permit = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::compute::allow::permit(&conn, &ctx.workspace_id)
+    };
+    // No list: every granted node is allowed already.
+    if ids.iter().all(|id| permit.allows(id)) {
+        Check::AlreadyDone
+    } else {
+        Check::Needed
+    }
+}
+
+fn check_allow_nodes_clear(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let has = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        !k2_core::compute::allow::permit(&conn, &ctx.workspace_id).is_any()
+    };
+    if has {
+        Check::Needed
+    } else {
+        Check::AlreadyDone
+    }
+}
+
+/// Through the route's own entry (`POST /cli/compute/allow-nodes/set`), as
+/// the answerer: its floor check (a person: the owner or an Admin) runs
+/// again at the click.
+fn apply_allow_to(who: &Answerer, body: serde_json::Value, message: String) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let path = crate::compute_allow::SET;
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    super::switches::applied(&r, message)
+}
+
+fn apply_allow_nodes(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let names = match allow_ids(ctx) {
+        Ok(_) => node_names(ctx),
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let body = json!({ "workspace": ctx.workspace_id, "add": names });
+    let message = format!("{}'s jobs may run on {} now.", ctx.workspace_handle, names.join(", "));
+    apply_allow_to(who, body, message)
+}
+
+fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let body = json!({ "workspace": ctx.workspace_id, "clear": true });
+    let message = format!("{} has no node list now: its jobs may go to any node granted to it.", ctx.workspace_handle);
+    apply_allow_to(who, body, message)
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &ADMIN_APPROVE, check, apply },
         Registered { spec: &CI, check: check_ci, apply: apply_ci },
         Registered { spec: &CI_OFF, check: check_ci_off, apply: apply_ci_off },
+        Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
+        Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
     ]
 }
 

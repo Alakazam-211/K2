@@ -165,3 +165,74 @@ fn compute_admin_approve_is_off_while_compute_is_dark_and_follows_the_request() 
     let (s, v) = ask(&ws, "compute.admin-approve", json!({ "request": done }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
 }
+
+// ── compute.allow-nodes (0.46.8) ─────────────────────────────────────
+
+/// An active node, granted to `ws` or not, with a unique name.
+fn list_node(ws: &Ws, tag: &str, granted: bool) -> (String, String) {
+    let id = format!("node-al-{}", crypto::random_id().expect("id"));
+    let name = format!("{tag}-{}", &crypto::random_id().expect("id")[..6]);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let labels = BTreeMap::from([("os".to_string(), "linux".to_string())]);
+    k2_core::compute::store::insert_pending_node(&conn, &id, &name, &crypto::sha256_hex(id.as_bytes()), "pem", &labels, "owner", "123456", 5)
+        .expect("enroll");
+    k2_core::compute::store::confirm_node(&conn, &id, "owner", 6).expect("confirm");
+    if granted {
+        k2_core::compute::store::set_grant(&conn, &id, &ws.id, &Default::default(), "owner", 7).expect("grant");
+    }
+    (id, name)
+}
+
+fn set_list(ws: &Ws, ids: Option<&[String]>) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::allow::set(&conn, &ws.id, ids, "owner", 8).expect("list");
+}
+
+#[test]
+fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
+    use k2_core::permission::catalog::{Direction, Floor, Proof};
+    for id in ["compute.allow-nodes", "compute.allow-nodes-clear"] {
+        let r = super::super::find(id).unwrap_or_else(|| panic!("{id} registered"));
+        k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((r.spec.floor, r.spec.direction, r.spec.proof), (Floor::Admin, Direction::Loosen, Proof::Click), "{id}");
+    }
+    assert!(crate::routes::route_policy::lookup(crate::compute_allow::SET).and_then(|x| x.post).is_some(), "the route the cards call");
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("alnd");
+    let (a, a_name) = list_node(&ws, "al-a", true);
+    let (_b, b_name) = list_node(&ws, "al-b", true);
+    let (_c, c_name) = list_node(&ws, "al-c", false);
+
+    // No list: every granted node is allowed already; nothing to clear.
+    let (s, v) = ask(&ws, "compute.allow-nodes", json!({ "nodes": b_name }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+    let (s, v) = ask(&ws, "compute.allow-nodes-clear", json!({}));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+
+    // A list of one: adding another granted node is a card an Admin answers.
+    set_list(&ws, Some(std::slice::from_ref(&a)));
+    let (s, v) = ask(&ws, "compute.allow-nodes", json!({ "nodes": a_name }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "on the list already: {v}");
+    let hint = ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": c_name }));
+    assert!(hint.contains("has no grant on"), "{hint}");
+    assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": "no-such-node" })).contains("no compute node"));
+    let v = ask_ok(&ws, "compute.allow-nodes", json!({ "nodes": b_name }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Add {b_name} to {}'s compute node list.", ws.handle), "{vw}");
+    assert!(vw["consequences"].as_str().unwrap_or("").contains("whole source tree"), "{vw}");
+    // A Member login is below the card's floor.
+    let member = login("alm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
+    // The clear card, while a list is set.
+    let v = ask_ok(&ws, "compute.allow-nodes-clear", json!({}));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Remove {}'s compute node list.", ws.handle), "{vw}");
+
+    // Compute off: neither asks.
+    let _off = ComputeOn::set(false);
+    assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": b_name })).contains("compute nodes are off"));
+}

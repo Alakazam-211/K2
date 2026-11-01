@@ -970,3 +970,262 @@ async fn a_queue_timeout_without_a_session_reaches_the_inbox() {
     assert!(body.contains(&format!("[compute] job {short} on qt-node: failed (queue_timeout): not started within")), "{body}");
     assert!(body.contains(&format!("k2 compute retry {short}")) && body.contains("--queue-timeout"), "{body}");
 }
+
+// ── a workspace's node list (k2 compute allow-nodes, 0.46.8) ─────────
+
+const ALLOW: &str = "/cli/compute/allow-nodes";
+const ALLOW_SET: &str = "/cli/compute/allow-nodes/set";
+
+/// The node names a list view (`allow-nodes`, `allow-nodes/set`) shows.
+fn listed(v: &Value) -> Vec<String> {
+    v["nodes"].as_array().unwrap_or_else(|| panic!("no nodes: {v}")).iter().map(|n| n["name"].as_str().unwrap_or("?").to_string()).collect()
+}
+
+/// Set, show and clear; an agent narrows its own list (a first list
+/// counts) and is refused adding a node or clearing, with the card values
+/// in the refusal; the owner does both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_list_is_set_shown_and_cleared_and_an_agent_only_narrows_it() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "lst");
+    let other = seed_ws(&env, "lstother");
+    for n in ["la", "lb", "lc"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let agent = passport(&me);
+    let wq = format!("workspace={}", me.id);
+
+    // No list.
+    let r = get(d.port, ALLOW, OWNER, &wq).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["list"].as_bool(), listed(&j(&r)).len()), (Some(false), 0), "{}", r.body);
+    let r = get(d.port, ALLOW, &agent, "").await;
+    assert_eq!((r.status, j(&r)["list"].as_bool()), (200, Some(false)), "{}", r.body);
+
+    // The agent sets a first list: that narrows (no list = every node).
+    let r = post(d.port, ALLOW_SET, &agent, json!({"nodes": "la,lb"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["change"].as_str(), j(&r)["list"].as_bool()), (Some("narrow"), Some(true)), "{}", r.body);
+    assert_eq!(listed(&j(&r)), ["la", "lb"]);
+    let r = get(d.port, ALLOW, &agent, "").await;
+    assert_eq!(listed(&j(&r)), ["la", "lb"], "{}", r.body);
+    assert_eq!(j(&r)["nodes"][0]["granted"], true, "{}", r.body);
+
+    // Adding a node, a swap that adds one, or clearing: a person only.
+    for body in [json!({"add": "lc"}), json!({"nodes": ["la", "lc"]})] {
+        let r = post(d.port, ALLOW_SET, &agent, body.clone()).await;
+        assert_eq!((r.status, code(&r)), (403, "allow_nodes_needs_person".to_string()), "{body}: {}", r.body);
+        assert_eq!(j(&r)["error"]["nodes"], "lc", "the card value: {}", r.body);
+        assert!(j(&r)["error"].get("clear").is_none(), "{}", r.body);
+    }
+    let r = post(d.port, ALLOW_SET, &agent, json!({"clear": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "allow_nodes_needs_person".to_string()), "{}", r.body);
+    assert_eq!(j(&r)["error"]["clear"], true, "{}", r.body);
+    assert!(j(&r)["error"].get("nodes").is_none(), "{}", r.body);
+    let r = get(d.port, ALLOW, OWNER, &wq).await;
+    assert_eq!(listed(&j(&r)), ["la", "lb"], "nothing changed: {}", r.body);
+
+    // Narrowing further is the agent's own; never to nothing.
+    let r = post(d.port, ALLOW_SET, &agent, json!({"remove": ["lb"]})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str()), (200, Some("narrow")), "{}", r.body);
+    assert_eq!(listed(&j(&r)), ["la"]);
+    let r = post(d.port, ALLOW_SET, &agent, json!({"remove": "la"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, ALLOW_SET, &agent, json!({"nodes": "la"})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str()), (200, Some("same")), "{}", r.body);
+    // Never another workspace's list.
+    let r = post(d.port, ALLOW_SET, &agent, json!({"workspace": other.id, "nodes": "la"})).await;
+    assert_eq!((r.status, code(&r)), (403, "forbidden".to_string()), "{}", r.body);
+
+    // The owner widens (the card's own body) and clears.
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "add": ["lb"]})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str()), (200, Some("widen")), "{}", r.body);
+    assert_eq!(listed(&j(&r)), ["la", "lb"]);
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "clear": true})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str(), j(&r)["list"].as_bool()), (200, Some("widen"), Some(false)), "{}", r.body);
+    let r = get(d.port, ALLOW, OWNER, &wq).await;
+    assert_eq!(j(&r)["list"], false, "{}", r.body);
+    let events: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM compute_events WHERE kind = 'allow_nodes' AND workspace_id = ?1", params![me.id], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(events, 4, "every change is audited (agent set, agent remove, owner add, owner clear)");
+
+    // Bad requests: two asks at once, an unknown node, a GET on the setter.
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "nodes": "la", "clear": true})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "nodes": "nope"})).await;
+    assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "{}", r.body);
+    let r = get(d.port, ALLOW_SET, OWNER, &wq).await;
+    assert_eq!(r.status, 405, "a mutating route answers GET with 405: {}", r.body);
+}
+
+/// With a list, a named node off it is refused (the owner too, every way a
+/// job ships source), auto and `--any` only see the list, and the counts
+/// say so; without one, everything behaves as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_list_bounds_named_auto_sharded_and_prewarm_jobs() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "bnd");
+    for n in ["ba", "bb", "bc"] {
+        active_node(n);
+        grant(n, &me, None, 4);
+    }
+    let _a = compute_ws::test_attach("ba", offer(1, 30, 32, 0));
+    let _b = compute_ws::test_attach("bb", offer(1, 30, 32, 0));
+    // The biggest, idlest node: the one auto would like best.
+    let mut c = compute_ws::test_attach("bc", offer(1, 120, 128, 0));
+    let agent = passport(&me);
+
+    // No list: as today. A named bc runs there; the view has no list.
+    let r = run(d.port, OWNER, &me, json!({"node": "bc"})).await;
+    assert_eq!((r.status, node_of(&r).as_str()), (200, "bc"), "{}", r.body);
+    let earlier = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(assigns(&mut c).len(), 1);
+    let r = get(d.port, "/cli/compute/nodes", OWNER, &format!("workspace={}", me.id)).await;
+    assert!(j(&r)["allowNodes"].is_null(), "{}", r.body);
+    assert!(j(&r)["nodes"].as_array().unwrap().iter().all(|n| n.get("allowed").is_none()), "{}", r.body);
+
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "nodes": ["ba", "bb"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(d.port, "/cli/compute/nodes", OWNER, &format!("workspace={}", me.id)).await;
+    assert_eq!(j(&r)["allowNodes"], json!(["ba", "bb"]), "{}", r.body);
+    let bc_row = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "bc").cloned().expect("bc listed");
+    assert_eq!(bc_row["allowed"], false, "{bc_row}");
+
+    // Named bc: refused for the owner and the agent, whatever ships.
+    for (who, body) in [
+        (OWNER, json!({"node": "bc"})),
+        (agent.as_str(), json!({"node": "bc"})),
+        (OWNER, json!({"node": "bc", "plan": true})),
+        (OWNER, json!({"node": "bc", "now": true})),
+        (OWNER, json!({"node": "bc", "noSource": false, "dirty": true})),
+        (OWNER, json!({"node": "bc", "noSource": false, "sha": "HEAD"})),
+        (OWNER, json!({"node": "bc", "noSource": false, "with": [{"repo": "sibling"}]})),
+        (OWNER, json!({"sameNodeAs": earlier})),
+    ] {
+        let r = run(d.port, who, &me, body.clone()).await;
+        assert_eq!((r.status, code(&r)), (403, "node_not_allowed".to_string()), "{body}: {}", r.body);
+        let e = &j(&r)["error"];
+        assert_eq!((e["node"].as_str(), e["nodes"].as_str()), (Some("bc"), Some("bc")), "{body}: {e}");
+        assert_eq!(e["allowed"], json!(["ba", "bb"]), "{e}");
+        assert!(e["hint"].as_str().unwrap().contains("Its list: ba, bb."), "{e}");
+    }
+    assert!(assigns(&mut c).is_empty(), "bc got nothing after the list");
+
+    // Auto and --any: only ba and bb; bc is counted as off the list.
+    for body in [json!({}), json!({"any": true}), json!({"memBytes": 4 * GB}), json!({})] {
+        let r = run(d.port, &agent, &me, body.clone()).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(["ba", "bb"].contains(&node_of(&r).as_str()), "{body}: {}", r.body);
+        assert_eq!(j(&r)["placement"]["skipped"]["not_allowed"], 1, "{}", r.body);
+    }
+    // Too big for the list's nodes, though bc fits: no_node_fits, naming the list.
+    let r = run(d.port, OWNER, &me, json!({"memBytes": 100 * GB})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("1 off this workspace's node list") && hint.contains("go only to its node list: ba, bb"), "{hint}");
+
+    // Shards: each on a node of the list.
+    let r = post(
+        d.port,
+        "/cli/compute/run",
+        OWNER,
+        json!({"workspace": me.id, "argv": ["sh", "-c", "echo {shard}/{shards}"], "noSource": true, "memBytes": GB, "shards": 3, "clientJobId": "client-list-shards-0001"}),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    for s in j(&r)["shards"].as_array().unwrap() {
+        assert!(["ba", "bb"].contains(&s["node"].as_str().unwrap_or("?")), "{s}");
+    }
+    // Prewarm naming bc.
+    let r = post(d.port, "/cli/compute/prewarm", OWNER, json!({"workspace": me.id, "needs": ["rust@stable"], "nodes": ["bc"]})).await;
+    assert_eq!((r.status, code(&r)), (403, "node_not_allowed".to_string()), "{}", r.body);
+    assert!(assigns(&mut c).is_empty(), "bc still got nothing");
+    for n in ["ba", "bb", "bc"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// A queued job never moves to a node off the list; it moves to one on
+/// it. Narrowing fails the jobs still queued on a node that left it, a
+/// kick fails one the list left behind, and a retry there is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_list_holds_on_moves_retries_and_narrowing() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "mv");
+    for n in ["fa", "fb", "fc"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let _a = compute_ws::test_attach("fa", offer(1, 30, 32, 0));
+    let _b = compute_ws::test_attach("fb", offer(1, 30, 32, 0));
+    let mut c = compute_ws::test_attach("fc", offer(1, 120, 128, 0));
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "nodes": ["fa", "fb"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // fb offline, fa full: an auto job waits on fa.
+    compute_ws::test_detach("fb");
+    let mut full = offer(2, 30, 32, 1);
+    full.parallel_max = 1;
+    compute_ws::test_frame("fa", Frame::Offer(full));
+    let r = run(d.port, OWNER, &me, json!({"memBytes": GB})).await;
+    assert_eq!((r.status, node_of(&r).as_str()), (200, "fa"), "{}", r.body);
+    let auto = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(row(&auto).state, "queued");
+
+    // fa goes offline; only fc (off the list) has room: it stays put.
+    compute_ws::test_detach("fa");
+    compute_ws::test_frame("fc", Frame::Offer(offer(2, 120, 128, 0)));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&auto).node_id, "fa", "never moved off the list");
+    assert!(assigns(&mut c).is_empty(), "fc never got it");
+
+    // fb is back with room: the job moves there.
+    let mut b = compute_ws::test_attach("fb", offer(3, 30, 32, 0));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    let moved = row(&auto);
+    assert_eq!(moved.node_id, "fb", "{moved:?}");
+    assert!(assigns(&mut b).contains(&auto), "fb runs it");
+
+    // A pinned job waits on the offline fa; the owner narrows the list to
+    // fb: the job ends failed/node_not_allowed, and a retry is refused.
+    let r = run(d.port, OWNER, &me, json!({"node": "fa"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pinned = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "remove": ["fa"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["failedQueued"], json!([pinned]), "{}", r.body);
+    let ended = row(&pinned);
+    assert_eq!((ended.state.as_str(), ended.reason.as_deref()), ("failed", Some("node_not_allowed")), "{ended:?}");
+    let r = post(d.port, "/cli/compute/jobs/retry", OWNER, json!({"job": pinned})).await;
+    assert_eq!((r.status, code(&r)), (403, "node_not_allowed".to_string()), "{}", r.body);
+
+    // A job queued on a full fb; the list then changes in the store alone
+    // (no route sweep): the next kick fails it instead of sending it.
+    let mut fb_full = offer(4, 30, 32, 2);
+    fb_full.parallel_max = 2;
+    compute_ws::test_frame("fb", Frame::Offer(fb_full));
+    let r = run(d.port, OWNER, &me, json!({"node": "fb"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let left = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(row(&left).state, "queued");
+    let _ = assigns(&mut b);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::allow::set(&conn, &me.id, Some(&["fc".to_string()]), "owner", 1).expect("list");
+    }
+    compute_ws::test_frame("fb", Frame::Offer(offer(5, 30, 32, 0)));
+    let ended = row(&left);
+    assert_eq!((ended.state.as_str(), ended.reason.as_deref()), ("failed", Some("node_not_allowed")), "{ended:?}");
+    assert!(!assigns(&mut b).contains(&left), "never sent to fb");
+    for n in ["fb", "fc"] {
+        compute_ws::test_detach(n);
+    }
+}

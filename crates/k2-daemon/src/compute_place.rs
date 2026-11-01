@@ -692,6 +692,9 @@ pub mod skip {
     pub const EXCLUSIVE_NEEDS_GRANT: &str = "exclusive_needs_grant";
     /// Online but paused, draining, outside its window, disk low, locked.
     pub const UNAVAILABLE: &str = "unavailable";
+    /// Granted, but off the workspace's node list (0.46.8,
+    /// `crate::compute_allow`).
+    pub const NOT_ALLOWED: &str = crate::compute_allow::SKIP;
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -735,11 +738,14 @@ pub fn candidates(w: &Want, exclude: &[String], now: i64) -> Vec<Cand> {
 /// grant on is never listed or counted in auto mode (S2): an agent never
 /// learns it exists.
 pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
-    let (rows, cache_at, waits) = {
+    let (rows, cache_at, waits, permit) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let cache_at = w.cache.as_deref().and_then(|name| cache_node(&conn, &w.ws_id, name));
-        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now))
+        // The workspace's node list (0.46.8): for every caller, named node
+        // or auto, and every move.
+        let permit = k2_core::compute::allow::permit(&conn, &w.ws_id);
+        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now), permit)
     };
     let feats = required_features(w);
     let mut out = CandReport::default();
@@ -761,6 +767,10 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
             continue;
         }
         out.visible += 1;
+        if !permit.allows(&n.id) {
+            skipped(&mut out, skip::NOT_ALLOWED);
+            continue;
+        }
         if n.controller_pause.is_some() {
             skipped(&mut out, skip::PAUSED);
             continue;
@@ -1156,6 +1166,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::SHARE_LIMIT => "over this server's share limits".to_string(),
         skip::EXCLUSIVE_NEEDS_GRANT => "without CI (which --exclusive needs) for you".to_string(),
         skip::UNAVAILABLE => "unavailable now (paused, draining, window, disk or lock)".to_string(),
+        skip::NOT_ALLOWED => "off this workspace's node list".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")

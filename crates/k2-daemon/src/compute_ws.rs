@@ -2387,6 +2387,11 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Some(job) = store::job_by_id(&conn, &id) else { continue };
+        // Its workspace's node list changed since the sweep above: the next
+        // kick fails it; never send it.
+        if !k2_core::compute::allow::allows(&conn, &job.workspace_id, node_id) {
+            continue;
+        }
         let Some(plan) = job.plan() else { continue };
         // The tier only to a node offering `tiers` right now (T11).
         let Some((job, plan)) = fit_plan_to(&conn, job, plan, &offer.features) else { continue };
@@ -2424,6 +2429,9 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
 pub fn kick(node_id: &str) {
     let _k = KICK.lock().unwrap_or_else(|p| p.into_inner());
     let Some((tx, offer)) = with_engine(|e| e.conns.get(node_id).map(|c| (c.tx.clone(), c.offer.clone()))) else { return };
+    // A queued job on a node its workspace's list no longer names never
+    // starts here (0.46.8): failed/node_not_allowed, before any pick.
+    crate::compute_allow::sweep_off_list(Some(node_id), None);
     if let Some(o) = offer.clone().filter(share::is_shared) {
         return kick_shared(node_id, &tx, &o);
     }
@@ -2473,6 +2481,11 @@ pub fn kick(node_id: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Some(job) = store::job_by_id(&conn, &id) else { return };
+    // Its workspace's node list changed since the sweep above: the next
+    // kick fails it; never assign it here.
+    if !k2_core::compute::allow::allows(&conn, &job.workspace_id, node_id) {
+        return;
+    }
     let Some(plan) = job.plan() else { return };
     // Secret-env (SE6): never assign a secret plan to a node whose live
     // offer lacks `secret-env` (it would refuse it at assign anyway).

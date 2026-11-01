@@ -585,6 +585,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/admin/withdraw", Admin),
     get("/cli/compute/agents", Admin),
     post("/cli/compute/agents/set", Admin),
+    // A workspace's node list (0.46.8): anyone who may see its compute
+    // reads it; the handler lets a person (owner, Admin) change it and an
+    // agent passport only narrow its own (`compute_allow`).
+    get("/cli/compute/allow-nodes", Member),
+    post("/cli/compute/allow-nodes/set", Member),
     get("/cli/compute/attach", Public),
     // Job caches on the nodes (`--cache NAME`, 0.46.6): list and clear,
     // owner/Admin (or an agent under "Allow managing compute nodes").

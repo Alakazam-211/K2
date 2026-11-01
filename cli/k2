@@ -24025,6 +24025,17 @@ Agents:
                  long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
+  k2 compute allow-nodes [--workspace WS] [--json]
+                 this workspace's node list. With one, its jobs go ONLY to those
+                 nodes: a node named off it is refused (node_not_allowed, exit 3),
+                 --any and every move or retry stay on it, however the job ships
+                 (--sha, --dirty, --with, --shards). No list = any granted node
+  k2 compute allow-nodes <node>[,<node>…] | --add N | --remove N | --clear [--workspace WS]
+                 set it. An agent may only narrow its own (a first list, --remove);
+                 adding a node or --clear is a person's: the owner or an Admin,
+                 from a terminal outside K2 (an agent gets allow_nodes_needs_person,
+                 exit 3, and asks on a card). Nodes by name; a node removed and
+                 enrolled again is a new node, off the list until added
   k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), else the
@@ -24691,11 +24702,14 @@ if verb == "nodes":
     if not rows:
         print("(no compute nodes%s)" % ("" if v.get("waitingCodes") is None else "; add one with: k2 compute node add <name>"))
     for n in rows:
-        print(node_line(n))
+        # 0.46.8: a node off the node list of this workspace says so.
+        print(node_line(n) + ("  [off the node list]" if n.get("allowed") is False else ""))
         for l in share_lines(n):
             print(l)
     for c in v.get("waitingCodes") or []:
         print("code waiting for %s (expires %s)" % (c["name"], time.strftime("%H:%M", time.localtime(c["expiresAt"]))))
+    if isinstance(v.get("allowNodes"), list):
+        print("node list (%s): jobs go only to %s (k2 compute allow-nodes)" % (v.get("allowNodesWorkspace") or "this workspace", ", ".join(v["allowNodes"]) or "nothing"))
 elif verb == "info":
     print(node_line(v))
     for l in share_lines(v):
@@ -26964,6 +26978,67 @@ if v.get("resent"):
     print("re-sent %d queued job(s) of %s on %s with the new caps (they keep their order)" % (v["resent"], v["workspace"], v["node"]))'
 }
 
+# k2 compute allow-nodes (0.46.8): this workspace's compute node list. No
+# argument shows it; nodes (or --add/--remove/--clear) change it. The
+# daemon decides who may: the owner or an Admin any way; an agent only
+# narrows its own (adding or --clear: allow_nodes_needs_person, exit 3).
+cmd_compute_allow_nodes() {
+    local nodes="" add="" remove="" clear="" workspace="" as_json=0
+    local usage="usage: k2 compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear] [--workspace WS] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --add|--remove|--workspace)
+                [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage ($1 needs a value)" >&2; exit 2; }
+                case "$1" in
+                    --add) add="${add:+$add,}$2" ;;
+                    --remove) remove="${remove:+$remove,}$2" ;;
+                    --workspace) workspace="$2" ;;
+                esac
+                shift 2 ;;
+            --clear) clear=1; shift ;;
+            --json) as_json=1; shift ;;
+            -*) echo "$usage (unknown flag '$1')" >&2; exit 2 ;;
+            *) nodes="${nodes:+$nodes,}$1"; shift ;;
+        esac
+    done
+    local ws
+    ws="$(_compute_ws "$workspace")"
+    if [ -z "$nodes$add$remove$clear" ]; then
+        local q=""
+        [ -n "$ws" ] && q="workspace=$(urlencode "$ws")"
+        _compute_call GET /cli/compute/allow-nodes "$q"
+    else
+        _compute_call POST /cli/compute/allow-nodes/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_nodes="$nodes" \
+            K2_CJ_add="$add" K2_CJ_remove="$remove" K2_CJ_clear_b="$clear")"
+    fi
+    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("change") == "same":
+    print("no change")
+if v.get("list"):
+    names = []
+    for n in v.get("nodes") or []:
+        if not n.get("name"):
+            names.append("%s (removed)" % n.get("id"))
+            continue
+        name = n["name"]
+        if n.get("state") not in (None, "active"):
+            name += " (%s)" % n["state"]
+        if not n.get("granted"):
+            name += " (no grant)"
+        names.append(name)
+    print("%s: jobs go only to %s" % (v.get("workspace"), ", ".join(names)))
+    print("  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list")
+else:
+    print("%s: no node list (its jobs may go to any node granted to it)" % v.get("workspace"))
+if v.get("failedQueued"):
+    print("  ended %d queued job(s) on nodes that left the list (failed/node_not_allowed): %s" % (len(v["failedQueued"]), " ".join(j[:8] for j in v["failedQueued"])))
+if v.get("withdrawn"):
+    print("  asked %d job(s) back from a shared node'"'"'s queue (they never start there)" % v["withdrawn"])'
+}
+
 # k2 compute retier <job> --tier T [--why "…"] [--json] (0.46.6, prd
 # job tiers v2 L2): a queued job's tier. The job's own workspace, or the
 # owner / an Admin for any job.
@@ -27182,6 +27257,7 @@ cmd_compute() {
             ;;
         run) cmd_compute_run "$@" ;;
         retier|tier) cmd_compute_retier "$@" ;;
+        allow-nodes) cmd_compute_allow_nodes "$@" ;;
         cache) cmd_compute_cache "$@" ;;
         queue)
             [ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || { echo "usage: k2 compute queue <node> [--json]" >&2; exit 2; }
@@ -50453,6 +50529,19 @@ FIRST
   they switched on in Settings → Compute (and ones added later). You
   can't turn it on yourself.
 
+NODE LIST (0.46.8)
+  k2 compute allow-nodes   this workspace's node list, if it has one.
+  With a list, every job of the workspace runs ONLY on those nodes, and
+  its source (the whole tree, --dirty changes, --with repos) syncs only
+  there. A node named off it: node_not_allowed (exit 3, naming the
+  list). No node named or --any: K2 picks from the list. Moves, retries
+  and --same-node-as never leave it. Use it when your tree holds code
+  that must not reach other machines.
+  You may narrow your own list (k2 compute allow-nodes k2n9,k2-arch, or
+  --remove N). Adding a node or --clear is a person's (the owner or an
+  Admin): allow_nodes_needs_person, exit 3; ask on the card it names.
+  Queued jobs on a node that leaves the list end failed/node_not_allowed.
+
 RUN
   Attached (default): output streams; the exit code is the command's.
   --detach prints a job id and returns. When it ends you get one line:
@@ -51079,6 +51168,10 @@ COMMON ERRORS
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
                          (or ask for "Allow managing compute nodes")
+  node_not_allowed       that node is off this workspace's node list (the error
+                         names the list): name one on it, or no node; exit 3
+  allow_nodes_needs_person  adding a node to the list or --clear: a person's
+                         (the owner or an Admin); exit 3, ask on a card
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

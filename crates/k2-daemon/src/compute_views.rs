@@ -212,6 +212,13 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
     let show_sas = who.is_owner();
     // `k2 compute status`: per node what the controller already knows.
     let detail = params.get("detail").is_some_and(|d| d == "1" || d == "true");
+    // The workspace's node list (0.46.8): `allowed` on each node only
+    // when it has one.
+    let permit = ws.as_deref().map(|w| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::allow::permit(&conn, w)
+    });
     let nodes: Vec<_> = rows
         .iter()
         .map(|n| {
@@ -221,6 +228,9 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 v["grant"] = serde_json::to_value(store::grant(&conn, &n.id, ws)).unwrap_or_default();
+            }
+            if let Some(p) = permit.as_ref().filter(|p| !p.is_any()) {
+                v["allowed"] = p.allows(&n.id).into();
             }
             // This server's jobs waiting there, by tier (counts only).
             v["queueTiers"] = tier_counts(&{
@@ -253,6 +263,11 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
         // sees it before choosing. Empty when nobody uses Priority.
         "criticalPath": critical_path_json(),
     });
+    // The named workspace's node list: names, or null (no list).
+    if let Some(w) = &ws {
+        out["allowNodes"] = crate::compute_allow::names_of(w).map(serde_json::Value::from).unwrap_or_default();
+        out["allowNodesWorkspace"] = crate::compute_routes::ws_handle(w).into();
+    }
     if detail {
         out["controllerMachine"] = controller_machine();
         out["notYet"] = "hand-run lock files (sew-ci, k2-release, runner) with holder and age, build-cache size against its cap, \

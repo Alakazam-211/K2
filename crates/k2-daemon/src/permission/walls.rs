@@ -128,7 +128,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 48] = [
+pub(crate) const V1_ACTIONS: [&str; 50] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -205,6 +205,10 @@ pub(crate) const V1_ACTIONS: [&str; 48] = [
     // Markdown multiplayer v1 (MI25): share a file or folder with another
     // workspace as live docs.
     "docs.share",
+    // 0.46.8: add nodes to the agent's own compute node list, or remove
+    // the list (narrowing it is the agent's own; widening is a person's).
+    "compute.allow-nodes",
+    "compute.allow-nodes-clear",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -278,7 +282,24 @@ pub(crate) const ROWS: &[Row] = &[
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
     // `--exclusive` reuses the grant's CI right (0.46.7, CE-13, D3).
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "exclusive_needs_grant"), "/cli/compute/run", POST) },
-    // ── Sew (0.46.6) ───────────────────────────────────────────────────
+    // The workspace's compute node list (0.46.8): a job aimed at a node
+    // off it (run, retry, prewarm; the refusal names the node), and the
+    // agent's own list change that adds a node (`error.nodes`) or clears
+    // the list (`error.clear`). Each refusal carries exactly one of the two.
+    Row {
+        params: &[("nodes", &[ParamFrom::Response("/error/nodes")])],
+        ..row(ask("compute.allow-nodes", Floor::Admin), code(403, "node_not_allowed"), "/cli/compute/", ANY)
+    },
+    Row {
+        params: &[("nodes", &[ParamFrom::Response("/error/nodes")])],
+        needs: Some("/error/nodes"),
+        ..row(ask("compute.allow-nodes", Floor::Admin), code(403, "allow_nodes_needs_person"), "/cli/compute/allow-nodes/set", POST)
+    },
+    Row {
+        needs: Some("/error/clear"),
+        ..row(ask("compute.allow-nodes-clear", Floor::Admin), code(403, "allow_nodes_needs_person"), "/cli/compute/allow-nodes/set", POST)
+    },
+    // ── Sew (0.46.6)───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
     // install owner; the owner opens it for themselves on a card.
     row(ask("sew.owner-handoff", Floor::Owner), code(403, "owner_only"), "/cli/sew/owner-handoff", POST),
@@ -1263,6 +1284,32 @@ mod tests {
         }
     }
 
+    /// The compute node list (0.46.8): a job off the list and an agent's
+    /// widening change teach `compute.allow-nodes nodes=<the node>`; an
+    /// agent's clear teaches `compute.allow-nodes-clear`.
+    #[test]
+    fn the_node_list_walls_name_the_node_or_the_clear() {
+        let off = json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1","allowed":["k2n9"]}});
+        for (path, body) in [
+            ("/cli/compute/run", json!({"node":"k2n2"})),
+            ("/cli/compute/jobs/retry", json!({"job":"abcd1234"})),
+            ("/cli/compute/prewarm", json!({"nodes":["k2n2"]})),
+        ] {
+            let p = teach_of(403, "POST", path, &[], Some(body), off.clone()).unwrap();
+            assert_eq!(action_of(&p), "compute.allow-nodes", "{path}: {p}");
+            assert_eq!(p["approvers"], "owner or admin");
+            assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=k2n2-m1 --why \"<what you need it for>\"", "{path}");
+        }
+        let add = json!({"error":{"code":"allow_nodes_needs_person","hint":"x","workspace":"k2","nodes":"k2n2-m1,k2n3-m1"}});
+        let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"add":["k2n2-m1","k2n3-m1"]})), add).unwrap();
+        assert_eq!(action_of(&p), "compute.allow-nodes", "{p}");
+        assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=k2n2-m1,k2n3-m1 --why \"<what you need it for>\"");
+        let clear = json!({"error":{"code":"allow_nodes_needs_person","hint":"x","workspace":"k2","clear":true}});
+        let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"clear":true})), clear).unwrap();
+        assert_eq!(action_of(&p), "compute.allow-nodes-clear", "{p}");
+        assert_eq!(p["command"], "k2 permission request compute.allow-nodes-clear --why \"<what you need it for>\"");
+    }
+
     /// `sew.space-governance`: the App, the Space and the side come from the
     /// refused call's body; only `person_only` on that route teaches it.
     #[test]
@@ -1488,7 +1535,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 48);
+        assert_eq!(V1_ACTIONS.len(), 50);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

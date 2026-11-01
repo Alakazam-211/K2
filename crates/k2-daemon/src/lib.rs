@@ -266,6 +266,8 @@ pub mod session_events;
 pub mod session_events_ws;
 // inbox-stream-v1 (0.46.7): the phone inbox stream on /cli/sessions/events.
 pub mod inbox_stream;
+// hub-viewing-v1 (0.46.8): `viewing` on /cli/sessions/events.
+pub mod hub_viewing;
 pub mod session_author;
 pub mod session_lookup;
 pub mod sessions_bytes_ws;

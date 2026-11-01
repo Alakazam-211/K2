@@ -1008,6 +1008,7 @@ mod tests {
             removed: None,
             turn_ended: None,
             workspace: Some(serde_json::json!({"projectId": project, "workspacePath": path, "display": display})),
+            workspaces: None,
         }
     }
 
@@ -1019,6 +1020,7 @@ mod tests {
             removed: Some(sid.to_string()),
             turn_ended: None,
             workspace: None,
+            workspaces: None,
         }
     }
 

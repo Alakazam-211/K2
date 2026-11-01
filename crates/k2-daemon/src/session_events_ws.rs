@@ -34,6 +34,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
 
+use crate::hub_viewing;
 use crate::inbox_stream::{self, InboxSet};
 use crate::overlay_ws::OverlayFrame;
 use crate::session_events::{self, SessionEvent};
@@ -190,9 +191,14 @@ pub async fn serve_session_events_connection(
 
     // inbox-stream-v1: the subscribed set, its overlay receiver (taken
     // only once the client subscribes) and the debounced re-resolve.
+    // The overlay receiver serves the inbox set AND the viewed chat
+    // (hub-viewing-v1): taken when either starts, dropped when both end.
     let mut inbox: Option<InboxSet> = None;
     let mut inbox_rx: Option<broadcast::Receiver<OverlayFrame>> = None;
     let mut reresolve_at: Option<tokio::time::Instant> = None;
+    // hub-viewing-v1: this socket's registry slot (dropped on every exit
+    // path, which clears its view), its one view and the turn receiver.
+    let mut views = hub_viewing::ViewState::default();
 
     loop {
         tokio::select! {
@@ -201,12 +207,32 @@ pub async fn serve_session_events_connection(
                     Ok(f) => f,
                     Err(RecvError::Lagged(n)) => {
                         // Never a close (that would cost every other kind on
-                        // this socket): drop the backlog, keep the set, and
-                        // tell the phone to catch up.
-                        log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} inbox lagged {n}; inbox_reset");
+                        // this socket): drop the backlog, keep the set and
+                        // the view, and tell the phone to catch up.
+                        log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} overlay lagged {n}; reset");
                         inbox_rx = inbox_rx.map(|r| r.resubscribe());
-                        if write.send(Message::Text(inbox_stream::reset_json("lagged"))).await.is_err() {
+                        if inbox.is_some() && write.send(Message::Text(inbox_stream::reset_json("lagged"))).await.is_err() {
                             break;
+                        }
+                        if let Some(conv) = views.view.as_ref().map(|v| v.conversation.clone()) {
+                            // The view's frames may be lost too: a fresh
+                            // viewing_ok (`rev` read after the resubscribe);
+                            // the phone reads when `convRev` moved.
+                            let c = conv.clone();
+                            match tokio::task::spawn_blocking(move || hub_viewing::snapshot_blocking(&c)).await {
+                                Ok(again) => {
+                                    if let Some(v) = views.view.as_mut() {
+                                        v.since_rev = again.rev;
+                                    }
+                                    if write.send(Message::Text(hub_viewing::ok_json(&conv, &again, Some("lagged")))).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    log_debug!("[daemon/session_events_ws] view re-ack failed: {e}");
+                                    break;
+                                }
+                            }
                         }
                         continue;
                     }
@@ -215,8 +241,13 @@ pub async fn serve_session_events_connection(
                         continue;
                     }
                 };
-                let Some(set) = inbox.as_mut() else { continue };
-                let out = match inbox_stream::classify(&frame, set) {
+                // One classify, one send: the inbox set first, then the
+                // view (only frames its viewing_ok didn't cover).
+                let hit = match inbox.as_ref().and_then(|set| inbox_stream::classify(&frame, set)) {
+                    Some(h) => Some(h),
+                    None => views.view.as_ref().and_then(|v| v.hit(&frame)),
+                };
+                let out = match hit {
                     None => None,
                     Some(inbox_stream::Hit::Thread { conversation }) => {
                         let doc = if crate::overlay_ws::needs_blocking(&frame) {
@@ -239,12 +270,19 @@ pub async fn serve_session_events_connection(
                         Some(inbox_stream::thread_message(&conversation, frame.seq, &frame.id, frame.rev, doc))
                     }
                     Some(inbox_stream::Hit::Moved { from, to }) => {
-                        set.apply_move(&from, &to);
+                        if let Some(set) = inbox.as_mut() {
+                            set.apply_move(&from, &to);
+                        }
+                        // A move moves the view (and its registry entry).
+                        let followed = views.view.as_mut().and_then(|v| v.apply_move(&from, &to));
+                        if let Some((old, new)) = followed {
+                            hub_viewing::follow_move(&views, viewer_login.as_deref(), &old, &new).await;
+                        }
                         Some(inbox_stream::moved_message(&from, &to, frame.seq, frame.rev))
                     }
                     Some(inbox_stream::Hit::Address { conversation, address, previous }) => {
                         // A subscribed address may now name another chat.
-                        if !set.resolved.is_empty() {
+                        if inbox.as_ref().is_some_and(|set| !set.resolved.is_empty()) {
                             reresolve_at.get_or_insert_with(|| tokio::time::Instant::now() + RERESOLVE_DEBOUNCE);
                         }
                         Some(inbox_stream::address_message(&conversation, &address, &previous, frame.rev))
@@ -255,6 +293,45 @@ pub async fn serve_session_events_connection(
                         break;
                     }
                 }
+            }
+            // hub-viewing-v1: the viewed chat's turn frames.
+            frame = recv_inbox(&mut views.activity_rx) => {
+                match frame {
+                    Ok(f) => {
+                        let Some(v) = views.view.as_ref().filter(|v| v.owns_activity(&f)) else { continue };
+                        if write.send(Message::Text(hub_viewing::activity_json(&v.conversation, &f))).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        // Never a silent skip (a lost end would leave the
+                        // phone's bar stuck) and never a close: send the
+                        // turn as it is now.
+                        log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} view activity lagged {n}; reset");
+                        views.activity_rx = views.activity_rx.take().map(|r| r.resubscribe());
+                        let Some(conv) = views.view.as_ref().map(|v| v.conversation.clone()) else { continue };
+                        let c = conv.clone();
+                        match tokio::task::spawn_blocking(move || crate::thread_activity::current_turn(&c)).await {
+                            Ok(turn) => {
+                                if write.send(Message::Text(hub_viewing::activity_reset_json(&conv, turn.as_ref()))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log_debug!("[daemon/session_events_ws] activity reset failed: {e}");
+                                break;
+                            }
+                        }
+                    }
+                    Err(RecvError::Closed) => {
+                        views.activity_rx = None;
+                    }
+                }
+            }
+            // hub-viewing-v1: no repeat within the registry's TTL ends the
+            // view (its registry entry has lapsed with it).
+            _ = sleep_until_opt(views.view.as_ref().map(|v| v.until())) => {
+                hub_viewing::end(&mut views, &mut inbox_rx, inbox.is_some(), viewer_login.as_deref()).await;
             }
             _ = sleep_until_opt(reresolve_at) => {
                 reresolve_at = None;
@@ -399,10 +476,32 @@ pub async fn serve_session_events_connection(
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
-                        // inbox-stream-v1: the one client message this
-                        // socket reads. Anything else is ignored, as before.
+                        // inbox-stream-v1 + hub-viewing-v1: the two client
+                        // messages this socket reads. Anything else is
+                        // ignored, as before.
                         match inbox_stream::parse_subscribe(&text) {
-                            None => {}
+                            None => match hub_viewing::parse(&text) {
+                                None => {}
+                                Some(Err((code, hint))) => {
+                                    if write.send(Message::Text(hub_viewing::error_json(code, &hint, None))).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Some(Ok(view_frame)) => {
+                                    let sent = hub_viewing::on_frame(
+                                        &mut write,
+                                        &mut views,
+                                        &mut inbox_rx,
+                                        inbox.is_some(),
+                                        viewer_login.as_deref(),
+                                        view_frame,
+                                    )
+                                    .await;
+                                    if sent.is_err() {
+                                        break;
+                                    }
+                                }
+                            },
                             Some(Err((code, hint))) => {
                                 if write.send(Message::Text(inbox_stream::error_json(code, &hint))).await.is_err() {
                                     break;
@@ -422,7 +521,10 @@ pub async fn serve_session_events_connection(
                                 match built {
                                     Ok(set) => {
                                         if set.is_none() {
-                                            inbox_rx = None;
+                                            // The view keeps the receiver.
+                                            if views.view.is_none() {
+                                                inbox_rx = None;
+                                            }
                                             reresolve_at = None;
                                         }
                                         inbox = set;
@@ -1058,6 +1160,7 @@ mod tests {
                 removed: Some("s".into()),
                 turn_ended: None,
                 workspace: None,
+                workspaces: None,
             },
             SessionEvent::PresenceChanged { roster: vec![], colors: Default::default(), names: Default::default() },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
@@ -1286,7 +1389,7 @@ mod tests {
         );
         for (kind, class) in &registry {
             assert!(
-                matches!(class.as_str(), "app" | "workspace" | "handshake" | "inbox"),
+                matches!(class.as_str(), "app" | "workspace" | "handshake" | "inbox" | "viewing"),
                 "{kind}: unknown class {class:?}"
             );
             if kind != HELLO_KIND {
@@ -1303,6 +1406,16 @@ mod tests {
             crate::inbox_stream::INBOX_KINDS.iter().copied().collect(),
             "the registry's `inbox` kinds are inbox_stream::INBOX_KINDS"
         );
+        // hub-viewing-v1: the `viewing` class is exactly the frames a
+        // `{"t":"viewing",…}` message adds (the viewed chat's Thread frames
+        // are the inbox kinds above).
+        let viewing: std::collections::BTreeSet<&str> =
+            registry.iter().filter(|(_, c)| c.as_str() == "viewing").map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            viewing,
+            crate::hub_viewing::VIEWING_KINDS.iter().copied().collect(),
+            "the registry's `viewing` kinds are hub_viewing::VIEWING_KINDS"
+        );
 
         // 1. Every variant in the source is in the registry, and nothing
         //    else is. A new daemon kind fails here until the registry, and
@@ -1310,11 +1423,11 @@ mod tests {
         let declared = declared_variant_kinds();
         let registered: std::collections::BTreeSet<String> = registry
             .iter()
-            .filter(|(k, c)| k.as_str() != HELLO_KIND && c.as_str() != "inbox")
+            .filter(|(k, c)| k.as_str() != HELLO_KIND && c.as_str() != "inbox" && c.as_str() != "viewing")
             .map(|(k, _)| k.clone())
             .collect();
-        for k in &inbox {
-            assert!(!declared.contains(*k), "{k}: an inbox frame kind must not also be a SessionEvent");
+        for k in inbox.iter().chain(viewing.iter()) {
+            assert!(!declared.contains(*k), "{k}: a stream frame kind must not also be a SessionEvent");
         }
         assert_eq!(
             declared, registered,

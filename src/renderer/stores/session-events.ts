@@ -759,6 +759,13 @@ export interface InboxStreamFrame {
   kind: 'inbox_subscribed' | 'inbox_error' | 'thread_message' | 'thread_moved' | 'thread_address' | 'inbox_reset'
 }
 
+/** hub-viewing-v1 (0.46.8): the frames a `{"t":"viewing",…}` message adds
+ *  on the hub (K2 Companion). The desktop views on its overlay socket, so
+ *  it never gets one. */
+export interface HubViewingFrame {
+  kind: 'viewing_ok' | 'viewing_error' | 'thread_activity' | 'thread_activity_reset'
+}
+
 export interface AppDeployedEvent {
   kind: 'app_deployed'
   appId: string
@@ -877,6 +884,10 @@ export interface ActivityChangedEvent {
   removed: string | null
   turnEnded: { outcome: ActivityRow['lead']['outcome']; reason: string; at: number } | null
   workspace: ActivityWorkspace | null
+  /** hub-viewing-v1 (0.46.8): a removal with `workspace: null` carries
+   *  every workspace's rollup (the snapshot's `workspaces`). Absent on
+   *  every other frame and from older daemons. */
+  workspaces?: ActivityWorkspace[]
 }
 
 /** §7.4 — `GET /cli/activity/snapshot[?workspace=]`. */
@@ -952,6 +963,7 @@ export type SessionEventMessage =
   | RoomMembersChangedEvent
   | AppDeployedEvent
   | InboxStreamFrame
+  | HubViewingFrame
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void

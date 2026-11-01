@@ -27,7 +27,7 @@
 import registry from '@shared/session-event-kinds.json'
 import type { SessionEventMessage } from '@/stores/session-events'
 
-export type SessionEventClass = 'app' | 'workspace' | 'handshake' | 'inbox'
+export type SessionEventClass = 'app' | 'workspace' | 'handshake' | 'inbox' | 'viewing'
 
 /** Who consumes one kind on this client. */
 export interface SessionEventRoute {
@@ -49,6 +49,7 @@ export interface SessionEventRoute {
 }
 
 const INBOX_ONLY = 'The phone inbox stream (K2 Companion); the desktop never subscribes.'
+const VIEWING_ONLY = 'Viewing on the hub (K2 Companion); the desktop views on its overlay socket.'
 
 /** Every wire kind, and who handles it. Typed against the client union:
  *  a kind missing here, or one the union doesn't have, does not compile. */
@@ -212,6 +213,12 @@ export const SESSION_EVENT_ROUTES = {
   thread_moved: { class: 'inbox', ignored: INBOX_ONLY },
   thread_address: { class: 'inbox', ignored: INBOX_ONLY },
   inbox_reset: { class: 'inbox', ignored: INBOX_ONLY },
+  // hub-viewing-v1 (0.46.8): sent only to a socket that said
+  // {"t":"viewing",…}; this client never does.
+  viewing_ok: { class: 'viewing', ignored: VIEWING_ONLY },
+  viewing_error: { class: 'viewing', ignored: VIEWING_ONLY },
+  thread_activity: { class: 'viewing', ignored: VIEWING_ONLY },
+  thread_activity_reset: { class: 'viewing', ignored: VIEWING_ONLY },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

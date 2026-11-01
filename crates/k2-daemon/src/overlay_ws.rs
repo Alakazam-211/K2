@@ -103,6 +103,36 @@ static REV: AtomicU64 = AtomicU64::new(0);
 /// Stamp + send happen under this lock, so bus order is `rev` order.
 static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// hub-viewing-v1 (vs-live V3): per conversation, the last `rev` stamped
+/// for its `thread`, `moved` or `address` frames, or a [`bump_rev`].
+/// Written under [`PUBLISH_LOCK`]. Memory only: empty after a restart
+/// (the new `instanceId` tells a client to read). One entry per
+/// conversation written since boot.
+static CONV_REV: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The frame collections that move a conversation's [`conv_rev`].
+fn moves_conv_rev(collection: &str) -> bool {
+    matches!(collection, "thread" | MOVED_COLLECTION | ADDRESS_COLLECTION)
+}
+
+fn note_conv_rev(conversation_id: &str, rev: u64) {
+    CONV_REV.lock().unwrap_or_else(|p| p.into_inner()).insert(conversation_id.to_string(), rev);
+}
+
+/// hub-viewing-v1 `convRev`: the last `rev` published for this
+/// conversation's Thread (0 = none since this daemon started).
+pub fn conv_rev(conversation_id: &str) -> u64 {
+    CONV_REV.lock().unwrap_or_else(|p| p.into_inner()).get(conversation_id).copied().unwrap_or(0)
+}
+
+/// `(current_rev(), conv_rev(conversation_id))` read together under the
+/// publish lock, so `convRev <= rev` always holds.
+pub fn rev_snapshot(conversation_id: &str) -> (u64, u64) {
+    let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    (current_rev(), conv_rev(conversation_id))
+}
+
 /// inbox-catchup-v1: the overlay bus high-water mark. A Thread read takes
 /// it BEFORE its store read. Frames are published only after their write
 /// commits, so any frame with `rev <=` this value is already in the read,
@@ -132,6 +162,11 @@ pub fn publish(mut frame: OverlayFrame) {
     }
     let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     frame.rev = REV.fetch_add(1, Ordering::SeqCst) + 1;
+    if moves_conv_rev(&frame.collection) {
+        if let Some(conv) = frame.conversation_id.as_deref() {
+            note_conv_rev(conv, frame.rev);
+        }
+    }
     let _ = bus().send(frame);
 }
 
@@ -144,6 +179,7 @@ pub fn publish(mut frame: OverlayFrame) {
 pub fn bump_rev(reason: &str, conversation_id: &str) -> u64 {
     let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let rev = REV.fetch_add(1, Ordering::SeqCst) + 1;
+    note_conv_rev(conversation_id, rev);
     #[cfg(test)]
     test_bumps::record(reason, conversation_id, rev);
     #[cfg(not(test))]
@@ -922,7 +958,9 @@ mod tests {
 
     /// A tokio broadcast receiver that falls behind gets `Lagged` and the
     /// lost frames are gone (the end among them). Every activity bus's
-    /// lag arm, on both sockets, answers with a reset, never a bare skip.
+    /// lag arm, on all three sockets (the hub's since hub-viewing-v1),
+    /// answers with a reset, never a bare skip. An arm that closes the
+    /// socket for a resync (the hub's session bus, 4008) is not a skip.
     #[tokio::test]
     async fn every_activity_lag_sends_a_reset_never_a_silent_skip() {
         let (tx, mut rx) = broadcast::channel::<u32>(2);
@@ -933,13 +971,14 @@ mod tests {
         for (file, src, arms, reset) in [
             ("overlay_ws.rs", include_str!("overlay_ws.rs"), 2, "activity_reset_wire("),
             ("room_stream_ws.rs", include_str!("room_stream_ws.rs"), 2, "activity_reset_message("),
+            ("session_events_ws.rs", include_str!("session_events_ws.rs"), 1, "hub_viewing::activity_reset_json("),
         ] {
             let prod = src.split("\n#[cfg(test)]\nmod tests").next().expect("prod part");
             let lag_arms: Vec<&str> = prod
                 .split("RecvError::Lagged(n)) =>")
                 .skip(1)
                 .map(|rest| &rest[..rest.find("RecvError::Closed").expect("each lag arm ends before Closed")])
-                .filter(|arm| arm.contains("activity"))
+                .filter(|arm| arm.contains("activity") && !arm.contains("lagged_close_message()"))
                 .collect();
             assert_eq!(lag_arms.len(), arms, "{file}: the activity lag arms");
             for arm in lag_arms {

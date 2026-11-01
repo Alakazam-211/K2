@@ -434,6 +434,17 @@ struct Publisher {
 
 impl Publisher {
     fn send(&mut self, row: Option<Value>, removed: Option<String>, turn: Option<TurnEnded>, workspace: Option<Value>) {
+        self.send_with(row, removed, turn, workspace, None);
+    }
+
+    fn send_with(
+        &mut self,
+        row: Option<Value>,
+        removed: Option<String>,
+        turn: Option<TurnEnded>,
+        workspace: Option<Value>,
+        workspaces: Option<Vec<Value>>,
+    ) {
         self.seq += 1;
         let _ = session_events::emit(SessionEvent::ActivityChanged {
             seq: self.seq,
@@ -442,6 +453,7 @@ impl Publisher {
             removed,
             turn_ended: turn.map(turn_json),
             workspace,
+            workspaces,
         });
     }
 
@@ -490,8 +502,20 @@ impl Publisher {
             self.compat.remove(sid);
         }
         let key = known.and_then(|k| k.key).or_else(|| key_for_path(workspace_path));
-        let workspace = key.map(|k| rollup(&k, &all_views(), &self.shells).to_json());
-        self.send(None, Some(sid.to_string()), None, workspace);
+        let views = all_views();
+        match key {
+            Some(k) => {
+                let workspace = rollup(&k, &views, &self.shells).to_json();
+                self.send(None, Some(sid.to_string()), None, Some(workspace));
+            }
+            // hub-viewing-v1: no workspace to name, so every rollup (the
+            // snapshot's `workspaces`): the client replaces its rollups
+            // instead of re-reading the snapshot.
+            None => {
+                let all: Vec<Value> = rollups(&views, &self.shells).iter().map(Rollup::to_json).collect();
+                self.send_with(None, Some(sid.to_string()), None, None, Some(all));
+            }
+        }
     }
 
     /// One store event. True when a trailing frame was scheduled (wake the

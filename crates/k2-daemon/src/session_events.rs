@@ -584,6 +584,10 @@ pub enum SessionEvent {
     /// subagents running), and a frame may carry ONLY `workspace` (`row`
     /// and `removed` null) when a legacy shell came or went. Older clients
     /// ignore the extra keys and apply the rollup as usual.
+    /// hub-viewing-v1 (0.46.8): a removal whose row had no workspace
+    /// (`workspace: null`) also carries `workspaces`, every workspace's
+    /// rollup as the snapshot lists them, so a client replaces its rollups
+    /// instead of re-reading the snapshot. Absent on every other frame.
     ActivityChanged {
         seq: u64,
         #[serde(rename = "instanceId")]
@@ -593,6 +597,8 @@ pub enum SessionEvent {
         #[serde(rename = "turnEnded")]
         turn_ended: Option<serde_json::Value>,
         workspace: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspaces: Option<Vec<serde_json::Value>>,
     },
 
     /// Zen Mode v1 (prd-zen-mode-v1 Z12) — this computer's `~/.k2/zen/`
@@ -1804,6 +1810,7 @@ mod tests {
             removed: None,
             turn_ended: None,
             workspace: Some(serde_json::json!({ "projectId": "p1", "display": "working" })),
+            workspaces: None,
         });
         assert_eq!(json["kind"], "activity_changed");
         assert_eq!(json["seq"], 7);
@@ -1819,11 +1826,27 @@ mod tests {
             removed: Some("s1".into()),
             turn_ended: Some(serde_json::json!({ "outcome": "success", "reason": "turn_done", "at": 1 })),
             workspace: None,
+            workspaces: None,
         });
         assert!(gone["row"].is_null() && gone["workspace"].is_null());
         assert_eq!(gone["removed"], "s1");
         assert_eq!(gone["turnEnded"]["outcome"], "success");
         assert_keys(&gone, &["kind", "seq", "instanceId", "row", "removed", "turnEnded", "workspace"]);
+
+        // hub-viewing-v1: a removal with no workspace carries every rollup.
+        let rollup = serde_json::json!({ "projectId": "p1", "display": "idle" });
+        let keyless = as_json(&SessionEvent::ActivityChanged {
+            seq: 9,
+            instance_id: "0123456789abcdef".into(),
+            row: None,
+            removed: Some("s2".into()),
+            turn_ended: None,
+            workspace: None,
+            workspaces: Some(vec![rollup.clone()]),
+        });
+        assert!(keyless["workspace"].is_null());
+        assert_eq!(keyless["workspaces"], serde_json::json!([rollup]));
+        assert_keys(&keyless, &["kind", "seq", "instanceId", "row", "removed", "turnEnded", "workspace", "workspaces"]);
     }
 
     #[test]

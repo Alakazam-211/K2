@@ -65,5 +65,9 @@
   "thread_message": "inbox",
   "thread_moved": "inbox",
   "thread_address": "inbox",
-  "inbox_reset": "inbox"
+  "inbox_reset": "inbox",
+  "viewing_ok": "viewing",
+  "viewing_error": "viewing",
+  "thread_activity": "viewing",
+  "thread_activity_reset": "viewing"
 }

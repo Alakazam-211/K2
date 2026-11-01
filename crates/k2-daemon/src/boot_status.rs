@@ -912,6 +912,17 @@ pub const FEATURE_CATCHUP_UNCHANGED: &str = "catchup-unchanged-v1";
 /// `thread_address` and `inbox_reset` frames for that set. Logins only
 /// (App guests use `/cli/thread/stream`). No SQL migration.
 pub const FEATURE_INBOX_STREAM: &str = "inbox-stream-v1";
+/// Viewing on the hub (hub-viewing-v1, 0.46.8;
+/// `vslive-phone-speed-b1-b2-rev-v1.md` B1): on `/cli/sessions/events` a
+/// login sends `{"t":"viewing","conversationId","visible"}` and gets
+/// `viewing_ok` (`conversation_id`, `rev`, `convRev`, `instanceId`,
+/// `turn`), then that chat's `thread_message` / `thread_moved` /
+/// `thread_address` and its turn frames (`thread_activity`,
+/// `thread_activity_reset`) while the view lasts; the view quiets that
+/// person's Thread pushes like an open overlay socket. A removal
+/// `activity_changed` with no workspace carries `workspaces` (every
+/// rollup). Memory only, no SQL migration.
+pub const FEATURE_HUB_VIEWING: &str = "hub-viewing-v1";
 
 /// App mobile access (app-mobile-access-v1, 0.46.3): the agent access
 /// list on `GET /cli/skin/me` (`agents`, `serverId`, `publicHost`,
@@ -1147,6 +1158,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_INBOX_CATCHUP);
         out.push(FEATURE_CATCHUP_UNCHANGED);
         out.push(FEATURE_INBOX_STREAM);
+        out.push(FEATURE_HUB_VIEWING);
     }
     if thread_read_ready() {
         out.push(FEATURE_APP_THREAD_PARITY);
@@ -1295,6 +1307,7 @@ mod tests {
                 "inbox-catchup-v1",
                 "catchup-unchanged-v1",
                 "inbox-stream-v1",
+                "hub-viewing-v1",
                 "app-thread-parity-v1",
                 "app-read-state-v1",
                 "garden-person-rows-v1",

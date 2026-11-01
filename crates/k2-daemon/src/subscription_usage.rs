@@ -1191,9 +1191,17 @@ fn access_token_usable(expires_at: Option<i64>, now: SystemTime) -> bool {
 
 fn plan_label(tier: &str, subscription: &str) -> String {
     let lower = tier.to_ascii_lowercase();
+    // Anthropic renamed Max 20x to Ultra (10-31); older logins still report
+    // `max_20x`, newer ones may report `ultra` as the tier.
+    if lower == "ultra" || lower.ends_with("_ultra") {
+        return "Ultra".to_string();
+    }
     if let Some(rest) = lower.strip_prefix("max_") {
         if let Some(digits) = rest.strip_suffix('x') {
             if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                if digits == "20" {
+                    return "Ultra".to_string();
+                }
                 return format!("Max {rest}");
             }
         }
@@ -2728,7 +2736,10 @@ mod tests {
 
     #[test]
     fn plan_max_20x_label() {
-        assert_eq!(plan_label("max_20x", "pro"), "Max 20x");
+        assert_eq!(plan_label("max_20x", "pro"), "Ultra");
+        assert_eq!(plan_label("ultra", ""), "Ultra");
+        assert_eq!(plan_label("", "ultra"), "Ultra");
+        assert_eq!(plan_label("max_5x", "max"), "Max 5x");
         assert_eq!(plan_label("", "plus"), "Plus");
     }
 
@@ -2912,7 +2923,7 @@ mod tests {
     fn access_token_without_refresh_token_is_signed_in() {
         let raw = r#"{"claudeAiOauth":{"accessToken":"present","expiresAt":1999999999,"rateLimitTier":"max_20x"}}"#;
         match parse_claude_login(raw) {
-            ClaudeLogin::Token { plan, .. } => assert_eq!(plan, "Max 20x"),
+            ClaudeLogin::Token { plan, .. } => assert_eq!(plan, "Ultra"),
             ClaudeLogin::Missing => panic!("access token without refresh must still count"),
         }
     }
@@ -2925,7 +2936,7 @@ mod tests {
             ClaudeLogin::Token {
                 plan, expires_at, ..
             } => {
-                assert_eq!(plan, "Max 20x");
+                assert_eq!(plan, "Ultra");
                 assert_eq!(expires_at, Some(1_700_000_000_000));
             }
             ClaudeLogin::Missing => panic!("keychain fixture must count as signed in"),
@@ -2942,7 +2953,7 @@ mod tests {
                 access_token, plan, ..
             } => {
                 assert_eq!(access_token, "from-keychain");
-                assert_eq!(plan, "Max 20x");
+                assert_eq!(plan, "Ultra");
             }
             ClaudeLogin::Missing => panic!("keychain login missing"),
         }

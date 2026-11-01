@@ -1,12 +1,13 @@
-//! Launching ptyd (PRD §7.1, P5, P6, V29).
+//! Launching ptyd detached from its caller.
 //!
 //! `k2-ptyd --launch` forks; the child calls `setsid` and forks again into
 //! the real server; the middle process exits at once and the launcher
 //! reaps it. The launcher itself exits after the server reports
 //! listening (`R`) or that another instance owns the home (`B`). The caller
-//! (the daemon) reaps the launcher, so ptyd is never the daemon's child and
-//! no zombie is left behind. setsid puts ptyd outside launchd's group kill
-//! on `kickstart -k` / `unload` / `bootout` (S0: verified on macOS 27).
+//! (the owner) reaps the launcher, so ptyd is never the owner's child and
+//! no zombie is left behind. setsid puts ptyd outside a service manager's
+//! process-group kill when the owner's service is restarted or unloaded
+//! (verified with launchd on macOS).
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -71,7 +72,7 @@ pub fn launcher(cfg_without_ready: Config) -> i32 {
     // SAFETY: close our copy of the write end.
     unsafe { libc::close(w) };
     let mut st = 0;
-    // SAFETY: reap the middle process (P6: no zombie).
+    // SAFETY: reap the middle process (no zombie).
     unsafe { libc::waitpid(middle, &mut st, 0) };
     let mut b = [0u8; 1];
     loop {
@@ -94,7 +95,7 @@ pub fn launcher(cfg_without_ready: Config) -> i32 {
     }
 }
 
-/// Daemon side: run `<exe> --launch` with the §7.1 env allowlist and wait
+/// Owner side: run `<exe> --launch` with the env allowlist and wait
 /// for it (this reaps the launcher). `Ok(())` when a ptyd is listening for
 /// `home` afterwards (freshly started or already running).
 pub fn spawn_detached(exe: &Path, home: &Path, extra: &[(&str, &str)]) -> io::Result<()> {
@@ -113,7 +114,7 @@ pub fn spawn_detached(exe: &Path, home: &Path, extra: &[(&str, &str)]) -> io::Re
     }
 }
 
-/// The complete environment ptyd is launched with (P5): the allowlisted
+/// The complete environment ptyd is launched with: the allowlisted
 /// names from `parent`, `K2_HOME` = `home`, then allowlisted `extra`
 /// entries. Nothing else — whatever the parent carries.
 pub fn launch_env(

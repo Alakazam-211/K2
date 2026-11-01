@@ -1,4 +1,4 @@
-//! Wire protocol (PRD §7.2–§7.4): `u32` big-endian length + one UTF-8 JSON
+//! Wire protocol: `u32` big-endian length + one UTF-8 JSON
 //! object with a `t` tag, at most [`MAX_FRAME`] bytes. Requests carry `id`,
 //! responses echo it; events carry none.
 
@@ -11,16 +11,16 @@ use serde::{Deserialize, Serialize};
 pub const PROTO_MAX: u32 = 1;
 /// Lowest protocol this build still speaks.
 pub const PROTO_MIN: u32 = 1;
-/// P19: a frame over 1 MiB closes the connection (`frame_too_large`).
+/// A frame over 1 MiB closes the connection (`frame_too_large`).
 pub const MAX_FRAME: usize = 1 << 20;
-/// Max size of `meta` on `spawn` / `update_meta` (PRD §7.3).
+/// Max size of `meta` on `spawn` / `update_meta`.
 pub const MAX_META: usize = 64 * 1024;
 
-/// ptyd's own version (independent of the K2 release).
+/// ptyd's own version (independent of its owner's release).
 pub const PTYD_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Parse a ptyd version `MAJOR.MINOR.PATCH` (a `-suffix` or `+build` is
-/// ignored). `None` for anything else. Used for the P65 upgrade decision
+/// ignored). `None` for anything else. Used for the owner's upgrade decision
 /// and the self-upgrade downgrade guard.
 pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let core = v.trim().split(['-', '+']).next()?;
@@ -38,7 +38,7 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    /// The single control client (the daemon). Gets events.
+    /// The single control client (the owner process). Gets events.
     Owner,
     /// A per-session byte stream (after `attach`).
     Data,
@@ -70,7 +70,7 @@ impl Sig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SigTarget {
-    /// `killpg(pid)` only when `getpgid(pid) == pid`, else `kill(pid)` (P17).
+    /// `killpg(pid)` only when `getpgid(pid) == pid`, else `kill(pid)`.
     Group,
     /// `kill(pid)`.
     Leader,
@@ -149,7 +149,7 @@ pub enum Request {
     },
     Upgrade {
         exe: String,
-        /// Security review F6: the sha256 (hex) the exe must have; ptyd
+        /// The sha256 (hex) the exe must have; ptyd
         /// verifies the file it opens, then selftests and execs that file.
         /// Required: an upgrade without it is refused.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,12 +231,12 @@ pub enum Reply {
     Pong {
         sessions: usize,
         owner_since: Option<u64>,
-        /// ptyd's own `PR_GET_DUMPABLE` (Linux; `None` elsewhere). S-3/P71,
+        /// ptyd's own `PR_GET_DUMPABLE` (Linux; `None` elsewhere),
         /// reported by ptyd itself so a check never needs another process's
-        /// `/proc` (hidden under `ProtectProc=invisible`). Additive.
+        /// `/proc` (hidden under systemd's `ProtectProc=invisible`). Additive.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dumpable: Option<bool>,
-        /// The NAMES of ptyd's environment variables (never values; P5/S-4).
+        /// The NAMES of ptyd's environment variables (never values).
         /// Additive.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_keys: Vec<String>,

@@ -1,15 +1,17 @@
 //! `k2-ptyd` binary.
 //!
 //! - `k2-ptyd --launch`: double-fork + setsid, start the server detached,
-//!   exit 0 once it listens (3 if one already owns this K2 home).
+//!   exit 0 once it listens (3 if one already owns this state home).
 //! - `k2-ptyd --serve`: run the server in the foreground (tests, debugging).
 //! - `k2-ptyd --version`.
 //! - `k2-ptyd --selftest --state-format N`: print `ok <version> N` and exit
-//!   0 when this build can take over a running ptyd's state (PRD §7.10).
+//!   0 when this build can take over a running ptyd's state.
 //! - `k2-ptyd --resume-state-fd N --listen-fd M`: the new image after a
 //!   self-upgrade exec (never run by hand).
 //!
-//! The K2 home comes from `K2_HOME` (the daemon always sets it).
+//! The state home comes from `K2_HOME` (its owner, K2's daemon, always
+//! sets it). The env names are part of the launch contract with running
+//! ptyds and stay as they are until they become configuration.
 
 #[cfg(unix)]
 fn main() {
@@ -37,7 +39,7 @@ fn main() {
             }
         }
     }
-    // Security review F5: harden before anything else — before the env,
+    // Harden before anything else — before the env,
     // the config, the log and, for `--resume-state-fd` after an exec
     // self-upgrade, before the state fd (key, rings) and the inherited
     // master fds are touched. `execve` made this image dumpable again.

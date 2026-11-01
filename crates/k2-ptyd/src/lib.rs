@@ -1,14 +1,39 @@
-//! k2-ptyd: K2's PTY host (PRD `prd-k2-ptyd-v1`).
+//! A small per-user PTY host: it owns terminal sessions in its own process,
+//! so they survive restarts, updates and crashes of the program that drives
+//! them.
 //!
-//! A small, long-lived per-user process that owns agent PTYs, so agents
-//! survive daemon restarts, updates and crashes. The daemon is its single
-//! owner client over a Unix socket (peer-uid check + HMAC challenge). ptyd
-//! spawns and reaps agents, always reads every master into a per-session
-//! ring, and streams bytes to the daemon by offset.
+//! ptyd is a long-lived, single-threaded Unix process. One **owner** client
+//! (in K2, the daemon) connects over a private Unix socket, authenticated
+//! both ways: the server checks the peer uid and an HMAC challenge over a
+//! 0600 key file; the client checks the socket directory and the server's
+//! uid. The owner asks ptyd to spawn programs on fresh PTYs; ptyd reaps
+//! them, always reads every master into a per-session ring with monotonic
+//! byte offsets, and streams output to **data** connections from any offset.
+//! When the owner goes away, the sessions keep running; a new owner takes
+//! over, lists them and re-attaches where it left off. ptyd can also hold
+//! listening sockets and other fds by name across an owner restart, and can
+//! replace its own binary in place (`upgrade`) without dropping a session.
 //!
-//! The library half is shared with the daemon: the wire types ([`proto`]),
-//! auth ([`auth`]), paths ([`paths`]) and a small blocking client
-//! ([`client`]). No tokio, no alacritty (P1).
+//! The crate is both the server binary (`k2-ptyd`) and a library:
+//!
+//! - [`proto`]: the wire protocol (length-prefixed JSON frames, `Request` /
+//!   `Reply`);
+//! - [`auth`]: the key file and the HMAC challenge;
+//! - [`paths`]: the socket, key, lock and log layout under a state home;
+//! - [`ring`]: the per-session output ring;
+//! - [`client`]: a small blocking client (handshake, requests, fd passing,
+//!   data-stream attach);
+//! - [`launch`], [`server`], [`spawn`], [`sys`], [`fsutil`]: the server side
+//!   (Unix only).
+//!
+//! The dependency surface is deliberately tiny: no async runtime, no
+//! terminal emulator, no network or TLS crates. Windows is not supported
+//! yet.
+//!
+//! Its runtime contract still uses K2's names: the state home comes from
+//! `K2_HOME`, the orphan timeout from `K2_PTYD_ORPHAN_SECS`, and the
+//! environment is cut down to [`ENV_ALLOWLIST`]. They become configuration
+//! before this crate is published under its own name.
 
 pub mod auth;
 pub mod paths;
@@ -28,7 +53,7 @@ pub mod spawn;
 #[cfg(unix)]
 pub mod sys;
 
-/// Env allowlist ptyd is launched with (PRD §7.1, P5). Everything else is
+/// Env allowlist ptyd is launched with. Everything else is
 /// cleared; in particular never `NOTIFY_SOCKET`, `LISTEN_*`,
 /// `K2_HANDOFF_FD`, `K2_HOOK_*` or an owner token.
 pub const ENV_ALLOWLIST: &[&str] = &[

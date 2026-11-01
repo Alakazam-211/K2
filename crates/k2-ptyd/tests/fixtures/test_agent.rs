@@ -1,4 +1,4 @@
-//! Fake agent for k2-ptyd tests (PRD §12 harness). Modes:
+//! Fake child program for k2-ptyd tests. Modes:
 //! - `probe <out.json>`: record what the child sees (session, ctty, fds,
 //!   signal dispositions + mask, cwd, env, IUTF8), print PROBE_DONE, sleep.
 //! - `burst <mib>`: write <mib> MiB of `a..z` (byte i = b'a' + i % 26), exit 0.
@@ -14,7 +14,7 @@
 //! `#![no_main]`: Rust's normal startup ignores SIGPIPE and installs
 //! SIGSEGV/SIGBUS handlers before `main`, which would hide what ptyd handed
 //! the child. With a C `main` the probe sees the inherited dispositions.
-// k2-ptyd is Unix-only until its Windows port (0.47); this fake agent with it.
+// k2-ptyd is Unix-only until its Windows port; this fake child with it.
 #![cfg_attr(unix, no_main)]
 
 #[cfg(unix)]

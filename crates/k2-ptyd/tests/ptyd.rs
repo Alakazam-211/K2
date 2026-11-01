@@ -1,5 +1,5 @@
-//! k2-ptyd integration tests (PRD §12 "ptyd" 1–7). Each test runs the real
-//! binary against its own temp K2 home. Nothing here touches `~/.k2`.
+//! k2-ptyd integration tests. Each test runs the real binary against its
+//! own temporary state home; nothing here touches the user's real state.
 
 #![cfg(unix)]
 
@@ -19,7 +19,7 @@ const AGENT: &str = env!("CARGO_BIN_EXE_k2-ptyd-test-agent");
 
 static N: AtomicUsize = AtomicUsize::new(0);
 
-/// A temp K2 home. Short (`/tmp/...`) unless `long`.
+/// A temporary state home. Short (`/tmp/...`) unless `long`.
 struct Home {
     root: PathBuf,
     home: PathBuf,
@@ -34,7 +34,7 @@ impl Home {
             PathBuf::from(format!("/tmp/k2pt-{}-{}", std::process::id(), n))
         };
         let _ = std::fs::remove_dir_all(&root);
-        let home = root.join(".k2");
+        let home = root.join("state");
         std::fs::create_dir_all(&home).unwrap();
         Home { root, home }
     }
@@ -301,7 +301,7 @@ fn masters_are_always_read_and_attach_is_byte_exact_from_any_offset() {
     spawn_agent(&mut c, &home, "burst", &["burst", "50"], None);
     let (code, signal) = wait_exited(&mut c, "burst", Duration::from_secs(10));
     assert_eq!((code, signal), (Some(0), None));
-    assert!(t.elapsed() < Duration::from_secs(5), "50 MiB with no reader took {:?} (P21: < 5 s)", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(5), "50 MiB with no reader took {:?} (< 5 s)", t.elapsed());
 
     let Reply::Sessions { sessions } = c.request(Request::List).unwrap() else { panic!() };
     let info = sessions.iter().find(|s| s.sid == "burst").unwrap();
@@ -458,17 +458,17 @@ fn launcher_detaches_reaps_and_idle_exit_leaves_no_zombie() {
     wait_listening(&paths);
     let ptyd_pid: i32 = std::fs::read_to_string(&paths.lock).unwrap().trim().parse().unwrap();
     assert!(alive(ptyd_pid), "ptyd runs");
-    // P6: ptyd is never the caller's child. Observed through our OWN
+    // ptyd is never the caller's child. Observed through our OWN
     // process table: waitpid on a pid that is not our child is ECHILD.
-    // (No `ps`/`/proc` of a foreign process: K2 compute's job wall runs
-    // with ProtectProc=invisible, and ptyd is non-dumpable.)
+    // (No `ps`/`/proc` of a foreign process: sandboxed CI runners can run
+    // with systemd's ProtectProc=invisible, and ptyd is non-dumpable.)
     let mut status = 0;
     // SAFETY: WNOHANG probe on a pid; never reaps anything we didn't start.
     let r = unsafe { libc::waitpid(ptyd_pid, &mut status, libc::WNOHANG) };
     assert_eq!(
         (r, std::io::Error::last_os_error().raw_os_error()),
         (-1, Some(libc::ECHILD)),
-        "ptyd is never the caller's child (P6)"
+        "ptyd is never the caller's child"
     );
     // A second launch while one runs exits 3.
     let st = base_cmd(&home).arg("--launch").status().unwrap();
@@ -586,7 +586,7 @@ fn held_listeners_queue_connections_and_fds_round_trip() {
     assert!(!path.exists(), "release unlinks the path");
     assert_eq!(c.request(Request::TakeFd { name: "cell:a".into() }).unwrap(), Reply::Error { code: "unknown".into(), detail: String::new() });
 
-    // hold_fd / take_fd with a TCP listener (the main listener, P50).
+    // hold_fd / take_fd with a TCP listener (like an owner's main listener).
     let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = tcp.local_addr().unwrap();
     assert_eq!(c.request_with_fd(Request::HoldFd { name: "main".into() }, &tcp).unwrap(), Reply::Ok);
@@ -675,9 +675,9 @@ fn launch_env_is_exactly_the_allowlisted_subset() {
         ("K2_COMPUTE_JOB".into(), "node-noise".into()),
         ("XDG_CONFIG_HOME".into(), "/x".into()),
     ];
-    let env = k2_ptyd::launch::launch_env(parent, Path::new("/h/.k2"), &[("K2_PTYD_ORPHAN_SECS", "900"), ("K2_HOOK_SOCK", "nope")]);
+    let env = k2_ptyd::launch::launch_env(parent, Path::new("/h/state"), &[("K2_PTYD_ORPHAN_SECS", "900"), ("K2_HOOK_SOCK", "nope")]);
     let want: Vec<(OsString, OsString)> = vec![
-        ("K2_HOME".into(), "/h/.k2".into()),
+        ("K2_HOME".into(), "/h/state".into()),
         ("K2_PTYD_ORPHAN_SECS".into(), "900".into()),
         ("LC_ALL".into(), "C.UTF-8".into()),
         ("PATH".into(), "/usr/bin".into()),
@@ -690,18 +690,18 @@ fn launch_env_is_exactly_the_allowlisted_subset() {
 
 /// Live check of a launched ptyd's environment and dumpability, asked of
 /// ptyd itself over its control socket (`ping` → `env_keys`, `dumpable`):
-/// it works under K2 compute's `ProtectProc=invisible`, where another
+/// it works under systemd's `ProtectProc=invisible`, where another
 /// process's `/proc` is hidden. Plus, on macOS (debug builds have no
 /// PT_DENY_ATTACH), the values through `ps eww`.
 fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
     let Reply::Pong { env_keys, dumpable, .. } = c.request(Request::Ping).unwrap() else { panic!("ping") };
     assert!(!env_keys.is_empty(), "ptyd reports its env names");
     for k in &env_keys {
-        assert!(k2_ptyd::env_allowed(k), "{k} leaked into ptyd's env (P5)");
+        assert!(k2_ptyd::env_allowed(k), "{k} leaked into ptyd's env");
     }
     assert!(env_keys.iter().any(|k| k == "K2_HOME"), "K2_HOME present: {env_keys:?}");
     if cfg!(target_os = "linux") {
-        assert_eq!(dumpable, Some(false), "ptyd must be non-dumpable (S-3/P71)");
+        assert_eq!(dumpable, Some(false), "ptyd must be non-dumpable");
     } else {
         let out = Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().unwrap();
         let env = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -710,7 +710,7 @@ fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
     }
 }
 
-// ------------------------------------------------------------------ 6 (S7)
+// ------------------------------------------------------------------ 6 (self-upgrade)
 
 /// `seq=<n> ` tokens of a stream, in order.
 fn seq_numbers(bytes: &[u8]) -> Vec<u64> {
@@ -796,7 +796,7 @@ fn probe_fds_after(c: &mut Client, home: &Home, sid: &str) -> serde_json::Value 
     v["fds"].clone()
 }
 
-/// P63 (§7.10): `upgrade` execs the new image in place. Same ptyd pid, same
+/// `upgrade` execs the new image in place. Same ptyd pid, same
 /// children, same boot id and key; rings carry over byte-exact (a stream
 /// reattached at its offset continues with no gap and no duplicate); held
 /// fds are still held; an exited-unacked record keeps its code; a child
@@ -908,7 +908,7 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     }
     assert!(!alive(sh9) && !alive(sh42), "reaped, no zombies");
 
-    // The new image is hardened again and its env is the allowlist (P5).
+    // The new image is hardened again and its env is the allowlist.
     let Reply::Pong { dumpable, env_keys, .. } = c.request(Request::Ping).unwrap() else { panic!("ping") };
     if cfg!(target_os = "linux") {
         assert_eq!(dumpable, Some(false), "exec resets dumpability; the new image must clear it again");
@@ -916,7 +916,7 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
     for k in &env_keys {
         assert!(k2_ptyd::env_allowed(k), "{k} in the upgraded ptyd's env");
     }
-    // S-2: a child spawned by the new image sees no inherited ptyd fd.
+    // A child spawned by the new image sees no inherited ptyd fd.
     assert_eq!(probe_fds_after(&mut c, &home, "probe"), serde_json::json!([0, 1, 2]), "an fd the upgrade inherited leaked into a new child");
 
     let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
@@ -928,7 +928,7 @@ fn upgrade_execs_in_place_keeping_pid_children_rings_and_fds() {
 }
 
 /// A private (0700) copy of the built k2-ptyd, the way the daemon's
-/// versioned copy is: ptyd refuses a group/other-writable exe (F6), and
+/// versioned copy is: ptyd refuses a group/other-writable exe, and
 /// cargo's output can be 0775 under umask 002.
 fn private_ptyd(home: &Home) -> String {
     use std::os::unix::fs::PermissionsExt;
@@ -940,14 +940,14 @@ fn private_ptyd(home: &Home) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// An `upgrade` request carrying the file's sha256 (F6), or a hash that
+/// An `upgrade` request carrying the file's sha256, or a hash that
 /// can't match when the file can't be read.
 fn upgrade_req(exe: &str) -> Request {
     let sha256 = std::fs::read(exe).map(|b| k2_ptyd::auth::sha256_hex(&b)).unwrap_or_else(|_| "0".repeat(64));
     Request::Upgrade { exe: exe.to_string(), sha256: Some(sha256) }
 }
 
-/// Security review F6: the exe is checked as opened — with the expected
+/// The exe is checked as opened — with the expected
 /// sha256 (required), ours, not group/other-writable, not a symlink —
 /// before any selftest or exec; every refusal leaves the old image serving.
 #[test]
@@ -991,7 +991,7 @@ fn script(home: &Home, name: &str, body: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// P64: a selftest that fails, lies, hangs, asks for a downgrade or can't
+/// A selftest that fails, lies, hangs, asks for a downgrade or can't
 /// run (missing or relative path) is refused with `upgrade_failed`; the old
 /// image keeps serving on the same connection and the stream keeps flowing.
 #[test]
@@ -1034,7 +1034,7 @@ fn a_bad_upgrade_is_refused_and_the_old_image_keeps_serving() {
     assert_eq!(again.hello.ptyd_version, "0.0.1", "still the old image");
 }
 
-/// P64: an `execve` that fails after `ok` restores CLOEXEC and keeps the
+/// An `execve` that fails after `ok` restores CLOEXEC and keeps the
 /// old image serving: the daemon reconnects (same boot id, old version),
 /// reattaches at its offset and nothing is lost.
 #[test]
@@ -1058,13 +1058,13 @@ fn a_failed_exec_keeps_the_old_image_serving() {
     read_more(&mut s, &mut seen, 200, Duration::from_secs(10));
     assert_consecutive(&seq_numbers(&seen), "seq across a failed exec");
     assert!(alive(seq_pid));
-    // S-2: the fds whose CLOEXEC the failed attempt cleared are CLOEXEC again.
+    // The fds whose CLOEXEC the failed attempt cleared are CLOEXEC again.
     assert_eq!(probe_fds_after(&mut c, &home, "probe"), serde_json::json!([0, 1, 2]));
     let log = std::fs::read_to_string(home.home.join("logs/ptyd.log")).unwrap();
     assert!(log.contains("upgrade_failed: exec"), "{log}");
 }
 
-/// A private scratch dir for the F3 socket tests (short: sun_path).
+/// A private scratch dir for the server-authentication socket tests (short: sun_path).
 fn f3_dir(tag: &str) -> PathBuf {
     let d = PathBuf::from(format!("/tmp/k2f3-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -1077,7 +1077,7 @@ fn set_mode(p: &Path, mode: u32) {
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// Security review F3: the client refuses a server that runs as another
+/// The client refuses a server that runs as another
 /// uid (the real peer-credential path; an expected uid other than ours
 /// stands in for "the listener belongs to someone else").
 #[test]
@@ -1097,7 +1097,7 @@ fn f3_client_refuses_a_server_of_another_uid() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// Security review F3: the client refuses a socket whose directory isn't a
+/// The client refuses a socket whose directory isn't a
 /// private (0700, ours) real directory — the squatted `/tmp` fallback case.
 #[test]
 fn f3_client_refuses_a_socket_in_a_shared_or_symlinked_dir() {

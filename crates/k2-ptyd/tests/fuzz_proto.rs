@@ -1,6 +1,6 @@
-//! Protocol fuzzing (PRD prd-k2-ptyd-v1 R1: "fuzz the frame parser").
+//! Protocol fuzzing of the frame parser and the live server.
 //!
-//! Dependency-free (P1: ptyd's surface stays tiny, dev-deps included): a
+//! Dependency-free (ptyd's surface stays tiny, dev-deps included): a
 //! seeded SplitMix64 generator drives
 //! 1. the incremental `FrameDecoder` against a reference decoder, over
 //!    random streams cut at random points;
@@ -326,7 +326,7 @@ impl Live {
     fn start_with(extra: &[(&str, &str)]) -> Live {
         let root = PathBuf::from(format!("/tmp/k2pf-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_dir_all(&root);
-        let home = root.join(".k2");
+        let home = root.join("state");
         std::fs::create_dir_all(&home).unwrap();
         let mut cmd = Command::new(PTYD);
         cmd.arg("--serve")
@@ -434,9 +434,9 @@ fn fuzz_live_ptyd_survives_hostile_unauthenticated_and_data_connections() {
     let s = seed();
     let mut r = Rng(s);
     let mut live = Live::start();
-    // An owner stays connected for the whole run, as a running daemon
-    // does. Without one, ptyd's P7 idle exit (60 s, no owner + no
-    // sessions) ends it cleanly mid-run — what job 661802f5 hit; pinned by
+    // An owner stays connected for the whole run, as a running owner
+    // does. Without one, ptyd's idle exit (60 s, no owner + no
+    // sessions) ends it cleanly mid-run (seen once on a long CI run); pinned by
     // `unauthenticated_peers_cannot_keep_ptyd_alive_and_idle_exit_is_clean`.
     let mut keeper = live.owner();
     let mut b = Budget::new(300);
@@ -485,9 +485,9 @@ fn fuzz_live_ptyd_survives_hostile_unauthenticated_and_data_connections() {
     assert!(ping(&mut c), "seed {s}: ptyd answers a new owner after the run");
 }
 
-/// Pinned from the long fuzz run (job 661802f5, 2026-10-20): with no owner
+/// Pinned from a long fuzz run: with no owner
 /// and no sessions, a flood of unauthenticated and data-role peers must
-/// NOT keep ptyd alive (P7 idle exit still fires), and the exit is clean:
+/// NOT keep ptyd alive (the idle exit still fires), and the exit is clean:
 /// status 0, `idle exit` logged, socket and key removed. Minimal input: no
 /// owner for longer than the idle timeout; the garbage only proves peers
 /// don't reset the timer.
@@ -554,7 +554,7 @@ fn fuzz_live_ptyd_survives_a_hostile_owner() {
                     reconnect = true;
                 }
             }
-            // An oversize header closes the connection (P19).
+            // An oversize header closes the connection.
             1 if r.chance(10) => {
                 let _ = c.conn.stream.write_all(&((MAX_FRAME as u32) + 1).to_be_bytes());
                 reconnect = true;

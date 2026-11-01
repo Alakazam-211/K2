@@ -1,6 +1,6 @@
 //! A small blocking client: connect, handshake, request/response with event
-//! buffering, SCM_RIGHTS, and data-stream attach. Used by the daemon's
-//! `ptyd_client` and by the tests.
+//! buffering, SCM_RIGHTS, and data-stream attach. Used by the owner
+//! process and by the tests.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -22,7 +22,7 @@ pub struct Hello {
     pub boot_id: String,
     pub sessions: usize,
     /// The protocol range the running ptyd speaks (its challenge), for the
-    /// daemon's self-upgrade decision (P65).
+    /// owner's self-upgrade decision.
     pub proto_min: u32,
     pub proto_max: u32,
 }
@@ -60,18 +60,18 @@ pub struct Conn {
     fds: VecDeque<OwnedFd>,
 }
 
-/// Security review F3: the client authenticates the SERVER too. Before
+/// The client authenticates the SERVER too. Before
 /// connecting, the socket's directory must be a real directory (not a
 /// symlink) owned by us with no group/other access — ptyd creates it 0700,
 /// including the short `$TMPDIR/k2p-<hash>/` fallback, which another local
 /// user could otherwise pre-create. After connecting, the peer must run as
-/// our uid (`SO_PEERCRED` / `getpeereid`), mirroring the server's P10
-/// check. Either failure is `PermissionDenied`: the daemon treats it as
-/// "ptyd unavailable" and keeps sessions in-process.
+/// our uid (`SO_PEERCRED` / `getpeereid`), mirroring the server's peer
+/// check. Either failure is `PermissionDenied`: an owner should treat it as
+/// "ptyd unavailable" (K2's daemon keeps sessions in-process).
 ///
-/// No server key proof in `welcome`: it could only be optional (a 0.46.x
-/// ptyd the daemon must still adopt can't send it), and an optional proof
-/// stops nobody. Same-uid processes can read the key anyway (S-1).
+/// No server key proof in `welcome`: it could only be optional (an older
+/// ptyd an owner must still adopt can't send it), and an optional proof
+/// stops nobody. Same-uid processes can read the key anyway.
 pub fn check_socket_dir(sock: &Path) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let denied = |why: String| io::Error::new(io::ErrorKind::PermissionDenied, why);

@@ -31,7 +31,7 @@ pub fn set_cloexec(fd: RawFd, on: bool) -> io::Result<()> {
     Ok(())
 }
 
-/// The connecting peer's effective uid (P10).
+/// The connecting peer's effective uid.
 pub fn peer_uid(fd: RawFd) -> io::Result<u32> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {

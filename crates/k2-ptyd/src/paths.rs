@@ -1,5 +1,6 @@
-//! Paths (PRD §7.1, §7.2, P88). Everything resolves from the K2 home that
-//! the daemon passes in (`K2_HOME`), never a literal `~/.k2`.
+//! Paths. Everything resolves from the state home the owner passes in
+//! (the binary reads it from its environment; see `main.rs`), never from a
+//! literal path under the user's home directory.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +15,7 @@ pub struct Paths {
     pub dir: PathBuf,
     /// The control socket. `<dir>/ctl.sock`, or the short fallback.
     pub sock: PathBuf,
-    /// Written only when `sock` is the short fallback (V30).
+    /// Written only when `sock` is the short fallback.
     pub endpoint_file: PathBuf,
     pub key: PathBuf,
     pub lock: PathBuf,
@@ -27,7 +28,7 @@ fn hash12(home: &Path) -> String {
 }
 
 impl Paths {
-    /// Resolve every path for a K2 home. `tmpdir` is the short-path base
+    /// Resolve every path for a state home. `tmpdir` is the short-path base
     /// used when `<home>/run/ptyd/ctl.sock` would not fit in `sun_path`.
     pub fn resolve(home: &Path, tmpdir: &Path) -> Paths {
         let dir = home.join("run").join("ptyd");
@@ -78,16 +79,16 @@ mod tests {
 
     #[test]
     fn short_home_uses_run_ptyd() {
-        let p = Paths::resolve(Path::new("/Users/a/.k2"), Path::new("/tmp"));
-        assert_eq!(p.sock, Path::new("/Users/a/.k2/run/ptyd/ctl.sock"));
-        assert_eq!(p.key, Path::new("/Users/a/.k2/run/ptyd/key"));
-        assert_eq!(p.log, Path::new("/Users/a/.k2/logs/ptyd.log"));
+        let p = Paths::resolve(Path::new("/home/a/state"), Path::new("/tmp"));
+        assert_eq!(p.sock, Path::new("/home/a/state/run/ptyd/ctl.sock"));
+        assert_eq!(p.key, Path::new("/home/a/state/run/ptyd/key"));
+        assert_eq!(p.log, Path::new("/home/a/state/logs/ptyd.log"));
         assert!(!p.uses_fallback());
     }
 
     #[test]
     fn long_home_falls_back_to_a_short_hashed_path() {
-        let home = PathBuf::from(format!("/var/folders/{}/T/.tmpXYZ/home/.k2", "x".repeat(80)));
+        let home = PathBuf::from(format!("/var/folders/{}/T/.tmpXYZ/home/state", "x".repeat(80)));
         let p = Paths::resolve(&home, Path::new("/tmp"));
         assert!(p.uses_fallback());
         assert!(p.sock.as_os_str().len() <= SUN_PATH_MAX, "{:?}", p.sock);

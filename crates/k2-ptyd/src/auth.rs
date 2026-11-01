@@ -1,4 +1,4 @@
-//! Socket auth (PRD §8 S-1, P70): ptyd's uid (peer check) AND the key
+//! Socket auth: ptyd's uid (peer check) AND the key
 //! (HMAC challenge). The key is 32 CSPRNG bytes in `<run>/ptyd/key`, 0600,
 //! created `O_EXCL` by each fresh ptyd instance; never logged.
 
@@ -111,12 +111,12 @@ mod tests {
     fn mac_round_trips_and_rejects_tampering() {
         let key = [7u8; KEY_LEN];
         let nonce = [1u8; 32];
-        let m = mac(&key, &nonce, "0.46.2");
-        assert!(verify(&key, &nonce, "0.46.2", &m));
-        assert!(!verify(&key, &nonce, "0.46.3", &m), "version is bound into the mac");
-        assert!(!verify(&[8u8; KEY_LEN], &nonce, "0.46.2", &m), "wrong key");
-        assert!(!verify(&key, &nonce, "0.46.2", "zz"), "non-hex");
-        assert!(!verify(&key, &nonce, "0.46.2", ""), "empty");
+        let m = mac(&key, &nonce, "1.2.3");
+        assert!(verify(&key, &nonce, "1.2.3", &m));
+        assert!(!verify(&key, &nonce, "1.2.4", &m), "version is bound into the mac");
+        assert!(!verify(&[8u8; KEY_LEN], &nonce, "1.2.3", &m), "wrong key");
+        assert!(!verify(&key, &nonce, "1.2.3", "zz"), "non-hex");
+        assert!(!verify(&key, &nonce, "1.2.3", ""), "empty");
     }
 
     #[cfg(unix)]

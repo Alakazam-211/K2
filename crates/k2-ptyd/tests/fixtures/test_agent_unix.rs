@@ -96,13 +96,13 @@ extern "C" fn on_hup(_: libc::c_int) {
     SIGHUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Daemon survival harness agent (PRD §12, T1). In `<dir>`:
+/// K2 daemon survival harness agent (used by K2's daemon tests). In `<dir>`:
 /// - `pid`: this process's pid;
 /// - stdout: `seq=<n>` lines every `<ms>` ms, forever;
 /// - `hook.log`: one line per second, `<unix_ms> <http status|ERR:...>` for
 ///   `GET /cli/whoami` over `$K2_HOOK_SOCK` with `$K2_HOOK_TOKEN`;
 /// - `stdin`: every byte received on stdin (raw mode, no echo) — the agent
-///   never sends a terminal query, so any byte here is unsolicited (P75)
+///   never sends a terminal query, so any byte here is unsolicited
 ///   unless the test typed it;
 /// - `sighup`: the number of SIGHUPs received (written when non-zero).
 ///
@@ -162,7 +162,7 @@ fn survive(dir: &str, every_ms: u64, paste: bool) {
                 if hups > 0 {
                     std::fs::write(dir.join("sighup"), hups.to_string()).unwrap();
                 }
-                // `vault-probe` (P74): a child of this agent, its K2 env
+                // `vault-probe`: a child of this agent, its K2 env
                 // stripped (env cleared), asks vault.sock for a
                 // person-only step; its answer goes to `vault-probe.out`.
                 if std::fs::remove_file(dir.join("vault-probe")).is_ok() {
@@ -203,7 +203,7 @@ fn survive(dir: &str, every_ms: u64, paste: bool) {
     }
 }
 
-/// S4 test agent (a TUI-like screen): writes its pid to `<dir>/pid`, prints
+/// Screen-restore test agent (a TUI-like screen): writes its pid to `<dir>/pid`, prints
 /// `hist=0` … `hist=99` lines (scrollback), turns bracketed paste on, then
 /// repaints one status line in place (`\r ESC[2K frame=<n>`) until `<mib>`
 /// MiB were written — so the early lines fall out of ptyd's ring while the
@@ -324,7 +324,7 @@ fn cell_request(method: &str, path: &str, form: Option<&str>) -> String {
     status
 }
 
-/// P74 probe: POST a person-only vault step over `sock` claiming a tty, as
+/// K2 vault probe: POST a person-only vault step over `sock` claiming a tty, as
 /// a process with no K2 env; write the raw answer to `out`.
 fn vault_probe_child(sock: &str, out: &str) {
     use std::io::Read;

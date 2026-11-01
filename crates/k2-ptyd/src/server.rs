@@ -1,7 +1,7 @@
-//! The ptyd server (PRD §7.1–§7.4, §7.11): one thread, one `poll(2)` loop
+//! The ptyd server: one thread, one `poll(2)` loop
 //! over the control socket, client connections, every PTY master and a
-//! signal self-pipe. Masters are ALWAYS read (P21), so an agent never blocks
-//! on output while no daemon is attached.
+//! signal self-pipe. Masters are ALWAYS read, so a child never blocks
+//! on output while no owner is attached.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
@@ -22,15 +22,15 @@ use crate::sys::{self, cvt, now_secs, set_cloexec, set_nonblocking};
 mod upgrade;
 pub use upgrade::{resume, selftest_reply, STATE_FORMAT};
 
-/// Runtime knobs. Defaults are the PRD's; tests shorten `idle`.
+/// Runtime knobs. Tests shorten `idle`.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub paths: Paths,
-    /// §7.11: default 900 s, minimum 120 s.
+    /// Orphan timeout: default 900 s, minimum 120 s.
     pub orphan: Duration,
-    /// P7: idle exit after 60 s with nothing to do.
+    /// Idle exit after 60 s with nothing to do.
     pub idle: Duration,
-    /// P25: exited records live 1 h with no owner.
+    /// Exited records live 1 h with no owner.
     pub exited_ttl: Duration,
     /// Launcher pipe: one status byte once listening.
     pub ready_fd: Option<RawFd>,
@@ -59,7 +59,7 @@ pub fn orphan_from_env(v: Option<&str>) -> Duration {
 pub enum Exit {
     /// Normal exit (idle, shutdown, orphan, signal).
     Clean,
-    /// Another ptyd owns this K2 home (P4).
+    /// Another ptyd owns this state home.
     AlreadyRunning(Option<i32>),
 }
 
@@ -98,7 +98,7 @@ impl Log {
         (f, len)
     }
 
-    /// S-4/P8: callers pass only fixed text, sids, pids and error kinds.
+    /// Callers pass only fixed text, sids, pids and error kinds.
     /// Never PTY bytes, env values or meta.
     pub fn line(&mut self, msg: &str) {
         if self.written >= self.max {
@@ -359,10 +359,10 @@ pub fn listen_unix(path: &Path, mode: u32, backlog: i32) -> io::Result<OwnedFd> 
     Ok(sock)
 }
 
-/// S-3: not dumpable (Linux `PR_SET_DUMPABLE 0`: no `/proc/<pid>/fd`,
+/// Not dumpable (Linux `PR_SET_DUMPABLE 0`: no `/proc/<pid>/fd`,
 /// `mem` or core for other processes of the uid), no debugger attach
 /// (macOS `PT_DENY_ATTACH`, release builds). `main` calls it first thing
-/// (security review F5: `execve` resets dumpability, so a self-upgraded
+/// (`execve` resets dumpability, so a self-upgraded
 /// image must harden before it reads the state fd, key and rings); the
 /// server calls it again. Idempotent.
 pub fn harden_process() {
@@ -573,7 +573,7 @@ impl Server {
             if set_cloexec(fd, true).is_err() || set_nonblocking(fd, true).is_err() {
                 continue;
             }
-            // P10: uid check before a single byte is sent.
+            // uid check before a single byte is sent.
             match sys::peer_uid(fd) {
                 Ok(uid) if uid == sys::euid() => {}
                 Ok(uid) => {
@@ -1147,7 +1147,7 @@ impl Server {
 
     fn do_hold_listener(&mut self, id: u64, rid: Option<u64>, name: String, path: String, mode: u32, owner_uid: Option<u32>) {
         // Idempotent: an existing listener is handed out again, never rebound
-        // (adoption relies on the same socket surviving, P44).
+        // (adoption relies on the same socket surviving).
         if let Some(h) = self.held.get(&name) {
             match dup_fd(h.fd.as_raw_fd()) {
                 Ok(fd) => {
@@ -1308,7 +1308,7 @@ impl Server {
         }
     }
 
-    /// P23: a wrap past an attached stream's unsent cursor closes the stream.
+    /// A wrap past an attached stream's unsent cursor closes the stream.
     fn check_overrun(&mut self, sid: &str) {
         let Some(s) = self.sessions.get_mut(sid) else { return };
         let Some(stream) = s.stream else { return };
@@ -1417,7 +1417,7 @@ impl Server {
 
     fn timers(&mut self) {
         let now = Instant::now();
-        // Kill escalation (P18).
+        // Kill escalation.
         let due: Vec<String> = self
             .sessions
             .iter()
@@ -1455,7 +1455,7 @@ impl Server {
                 self.shutting_down = Some((cid, rid, now + Duration::from_millis(200)));
             }
         }
-        // Exited records with no owner for an hour (P25).
+        // Exited records with no owner for an hour.
         if self.owner.is_none() {
             let ttl = self.cfg.exited_ttl;
             self.sessions.retain(|_, s| match s.state {
@@ -1463,7 +1463,7 @@ impl Server {
                 SState::Running => true,
             });
         }
-        // Orphan timeout (§7.11).
+        // Orphan timeout.
         if self.owner.is_none() && self.shutting_down.is_none() {
             if let Some(since) = self.ownerless_since {
                 let running = self.sessions.values().any(|s| s.running());
@@ -1478,7 +1478,7 @@ impl Server {
                 }
             }
         }
-        // Idle exit (P7).
+        // Idle exit.
         // Held fds do not keep ptyd alive: with no sessions they are stale,
         // and cleanup() unlinks their paths.
         let idle = self.sessions.is_empty() && self.owner.is_none() && self.shutting_down.is_none();
@@ -1500,7 +1500,7 @@ const KNOWN_T: &[&str] = &[
 ];
 
 /// The version the challenge reports. Debug builds honour
-/// `K2_PTYD_TEST_VERSION` so tests can stand up an "older" ptyd (P65);
+/// `K2_PTYD_TEST_VERSION` so tests can stand up an "older" ptyd;
 /// the knob is not on the env allowlist, so a self-upgrade drops it.
 fn reported_version() -> String {
     if cfg!(debug_assertions) {
@@ -1526,7 +1526,7 @@ fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(n) })
 }
 
-/// P17: `killpg` only when the pid leads its own group, else `kill`.
+/// `killpg` only when the pid leads its own group, else `kill`.
 pub fn group_signal(pid: i32, sig: libc::c_int) {
     // SAFETY: signalling our own child / its group.
     unsafe {

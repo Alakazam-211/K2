@@ -1,4 +1,4 @@
-//! Per-session output ring (PRD §7.4, P20): monotonic `u64` offsets,
+//! Per-session output ring: monotonic `u64` offsets,
 //! allocated lazily in 64 KiB steps up to the session's cap.
 
 use std::collections::VecDeque;
@@ -48,7 +48,7 @@ impl Ring {
         self.cap
     }
 
-    /// Rebuild a ring at exact offsets (self-upgrade, PRD §7.10): `data`
+    /// Rebuild a ring at exact offsets (self-upgrade): `data`
     /// covers `[start, start + data.len())`. `data` longer than `cap` keeps
     /// its tail (never happens for a ring this build wrote).
     pub fn restore(cap: usize, start: u64, data: Vec<u8>) -> Ring {

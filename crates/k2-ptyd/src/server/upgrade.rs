@@ -1,4 +1,4 @@
-//! Exec self-upgrade, Unix (PRD §7.10, P63, P64).
+//! Exec self-upgrade, Unix.
 //!
 //! On `upgrade{exe}` ptyd:
 //! 1. runs `exe --selftest --state-format 1` (10 s bound; it must exit 0
@@ -7,23 +7,23 @@
 //!    serializes its full state — every session with its master fd, child
 //!    pid, state, ring at exact offsets and pending input, exited-unacked
 //!    records, held fds by name, the boot id and the key — to a memfd
-//!    (Linux) or an unlinked 0600 file in `<K2_HOME>/run/ptyd/` (macOS, or
+//!    (Linux) or an unlinked 0600 file in `<home>/run/ptyd/` (macOS, or
 //!    a Linux kernel without memfd);
 //! 3. answers `ok`, closes every client connection, and clears
 //!    `FD_CLOEXEC` on the masters, the held fds, the `ctl.sock` listener,
 //!    the lock file and the state fd;
 //! 4. `execve(exe, ["k2-ptyd","--resume-state-fd",N,"--listen-fd",M])`
-//!    with its own allowlisted environment (P5).
+//!    with its own allowlisted environment.
 //!
 //! The pid, the fds and the parent/child links are kept, so `waitpid`
 //! still works; the new image ([`resume`]) sets CLOEXEC back on everything
 //! it inherited, re-hardens itself (exec resets dumpability) and reaps any
 //! child that exited during the gap. The boot id and the key are the same,
-//! so the daemon reconnects (the listener never closed) to "the same ptyd".
+//! so the owner reconnects (the listener never closed) to "the same ptyd".
 //!
 //! A failure before `ok` answers `upgrade_failed` and changes nothing. An
 //! `execve` failure after `ok` restores CLOEXEC and keeps serving the old
-//! image: clients reconnect and see the old version (P64).
+//! image: clients reconnect and see the old version.
 
 use std::ffi::CString;
 use std::io::{BufReader, BufWriter, Read, Seek};
@@ -85,7 +85,7 @@ struct ExitRec {
     code: Option<i32>,
     signal: Option<i32>,
     at: u64,
-    /// How long ago it exited (the TTL clock, P25).
+    /// How long ago it exited (the TTL clock).
     age_ms: u64,
 }
 
@@ -107,7 +107,7 @@ struct Prepared {
     verified: Verified,
 }
 
-/// The upgrade candidate, opened once and checked (security review F6).
+/// The upgrade candidate, opened once and checked.
 struct Verified {
     fd: OwnedFd,
     dev: u64,
@@ -195,7 +195,7 @@ impl Server {
         if self.sessions.values().any(|s| s.kill_deadline.is_some()) {
             return fail(self, "busy: a kill is in progress".into());
         }
-        // Security review F6: open the candidate ONCE and check what was
+        // Open the candidate ONCE and check what was
         // opened (ours, not group/other-writable, the expected sha256);
         // the selftest and the exec then use that very file.
         let Some(want) = sha256.filter(|h| !h.is_empty()) else {
@@ -240,7 +240,7 @@ impl Server {
             let _ = set_cloexec(*fd, false);
         }
         let e = exec(&prep);
-        // Still here: the exec failed. Keep serving the old image (P64).
+        // Still here: the exec failed. Keep serving the old image.
         for fd in &inherit {
             let _ = set_cloexec(*fd, true);
         }
@@ -259,7 +259,7 @@ impl Server {
             c("--listen-fd")?,
             c(&self.listener.as_raw_fd().to_string())?,
         ];
-        // P5: the new image gets the allowlist only (also drops test knobs).
+        // The new image gets the allowlist only (also drops test knobs).
         let envp = std::env::vars_os()
             .filter(|(k, _)| k.to_str().is_some_and(crate::env_allowed))
             .filter_map(|(k, v)| {
@@ -384,7 +384,7 @@ fn state_file(dir: &Path) -> io::Result<OwnedFd> {
 }
 
 fn exec(p: &Prepared) -> io::Error {
-    // Test knob (debug builds only): exercise the exec-failure path (P64).
+    // Test knob (debug builds only): exercise the exec-failure path.
     if cfg!(debug_assertions) && std::env::var_os("K2_PTYD_TEST_FAIL_EXEC").is_some() {
         return io::Error::from_raw_os_error(libc::ENOEXEC);
     }
@@ -392,7 +392,7 @@ fn exec(p: &Prepared) -> io::Error {
     argv.push(std::ptr::null());
     let mut envp: Vec<*const libc::c_char> = p.envp.iter().map(|c| c.as_ptr()).collect();
     envp.push(std::ptr::null());
-    // Security review F6: exec the file that was verified, not whatever the
+    // Exec the file that was verified, not whatever the
     // path names now. Linux: `fexecve` on the opened fd (an ELF image; the
     // fd's CLOEXEC is fine for that). macOS has no fexecve: the path must
     // still be the same, unchanged file right before `execve`.
@@ -494,7 +494,7 @@ fn selftest(exe: &Path, fd: Option<RawFd>, within: Duration) -> Result<String, S
 // ---------------------------------------------------------------- resume
 
 /// Take ownership of an fd the previous image left open; CLOEXEC again
-/// (S-2: nothing ptyd holds may reach an agent).
+/// (nothing ptyd holds may reach a child).
 fn take_inherited(fd: RawFd) -> io::Result<OwnedFd> {
     if fd < 3 {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("inherited fd {fd} is a std fd")));
@@ -609,7 +609,7 @@ fn resume_server(cfg: Config, state_fd: RawFd, listen_fd: RawFd) -> io::Result<S
         held.insert(h.name, Held { fd: take_inherited(h.fd)?, unlink: h.unlink.map(PathBuf::from) });
     }
     let sig_r = install_signals()?;
-    // exec reset dumpability (S-3): harden the new image again.
+    // exec reset dumpability: harden the new image again.
     harden_process();
     let mut log = Log::open(&cfg.paths.log);
     log.line(&format!(

@@ -1,7 +1,7 @@
-//! Child spawn (PRD §7.3 `spawn`, P14). `openpty`, then in the child:
+//! Child spawn (the `spawn` request). `openpty`, then in the child:
 //! `setsid` → `chdir` → `TIOCSCTTY` → slave on 0/1/2 → close **all** other
 //! fds → reset **every** signal disposition and the mask → `execve`.
-//! Stricter than alacritty's `pre_exec` on purpose (V31). `IUTF8` is set on
+//! Stricter than alacritty's `pre_exec` on purpose. `IUTF8` is set on
 //! the master. Everything the child needs is prepared before `fork`, so the
 //! child only makes async-signal-safe calls.
 

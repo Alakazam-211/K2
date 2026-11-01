@@ -17,7 +17,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 import { scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
 import { invalidateDaemonWs } from '@/kessel/daemon-ws'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, isPriorityCliRoute, remoteCliInflightForTests, withHostCliSlot } from '@/lib/daemon-cli'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { __resetRemoteSessionForTests } from '@/lib/remote-session'
 import {
@@ -133,5 +133,84 @@ describe('Fix 0: per-request timing', () => {
       ['thread', 1],
     ])
     expect(routeOf(fetchMock.mock.calls[2])).toBe('thread')
+  })
+})
+
+describe('Fix 1: the Thread lane', () => {
+  function holdAll(): Array<{ url: string; resolve: (r: Response) => void }> {
+    const held: Array<{ url: string; resolve: (r: Response) => void }> = []
+    fetchMock.mockImplementation((url: string) => new Promise<Response>((resolve) => held.push({ url, resolve })))
+    return held
+  }
+
+  it('Thread reads and posts are the lane; room reads are not', () => {
+    for (const r of ['thread', 'thread/activity', 'thread/post', 'project-group/msg']) expect(isPriorityCliRoute(r)).toBe(true)
+    for (const r of ['thread/latest', 'projects/list', 'workspace-layouts/load', 'fs/read-dir', 'auth/whoami']) {
+      expect(isPriorityCliRoute(r)).toBe(false)
+    }
+  })
+
+  it('a Thread read goes out at once while 4 room reads are in flight and 6 more wait', async () => {
+    const held = holdAll()
+    const a = scopeForHost(A)
+    const room = Array.from({ length: 10 }, (_, i) => daemonCliGet(a, i % 2 ? 'fs/read-dir' : 'workspace-layouts/load'))
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+    const thread = daemonCliGet(a, 'thread', { addr: 'k2', limit: 25 })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5))
+    expect(routeOf(fetchMock.mock.calls[4])).toBe('thread')
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(5)
+    held[4].resolve(okRes({ items: [] }))
+    await expect(thread).resolves.toEqual({ items: [] })
+    expect(getCliTimings().find((t) => t.route === 'thread')).toMatchObject({ lane: 'priority' })
+    // Freeing the extra slot does not let a room read past the normal cap.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(4)
+    while (held.length > 0 || fetchMock.mock.calls.length < 11) {
+      const next = held.shift()
+      if (next) next.resolve(okRes({}))
+      else await new Promise((r) => setTimeout(r, 1))
+    }
+    await Promise.all(room)
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
+  })
+
+  it('the lane is capped: at most 4 + 2 in flight, and a waiting Thread call takes the next free slot before room reads', async () => {
+    const held = holdAll()
+    const a = scopeForHost(A)
+    const room = Array.from({ length: 4 }, () => daemonCliGet(a, 'fs/read-dir'))
+    const roomWaiting = daemonCliGet(a, 'projects/list')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+    const threads = Array.from({ length: 3 }, (_, i) => daemonCliPost(a, 'thread/post', { addr: 'k2', text: `m${i}` }))
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(6)
+    // A room read finishes: the third Thread post goes, not the room read
+    // that waited longer.
+    held[0].resolve(okRes({}))
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7))
+    expect(routeOf(fetchMock.mock.calls[6])).toBe('thread/post')
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(6)
+    for (let i = 1; i < held.length; i++) held[i].resolve(okRes({}))
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(8))
+    expect(routeOf(fetchMock.mock.calls[7])).toBe('projects/list')
+    held[7].resolve(okRes({}))
+    await Promise.all([...room, roomWaiting, ...threads])
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
+  })
+
+  it('pool checks (withHostCliSlot) stay on the normal slots', async () => {
+    const releases: Array<() => void> = []
+    const a = scopeForHost(A)
+    const checks = Array.from({ length: 5 }, () => withHostCliSlot(a, () => new Promise<void>((r) => releases.push(r))))
+    await vi.waitFor(() => expect(releases).toHaveLength(4))
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(4)
+    await daemonCliGet(a, 'thread', { addr: 'k2' })
+    releases.shift()!()
+    await vi.waitFor(() => expect(releases).toHaveLength(4))
+    while (releases.length > 0) releases.shift()!()
+    await Promise.all(checks)
+    expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
   })
 })

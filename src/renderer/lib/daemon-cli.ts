@@ -155,9 +155,30 @@ function recoveryGateAllows(
  *  A's slots. */
 const REMOTE_CLI_MAX_INFLIGHT = 4
 
+/** The Thread lane (research-remote-thread-load-v1 Fix 1): a Thread read or
+ *  a Thread / project chat post never waits behind a room's mount reads.
+ *  It takes a normal slot when one is free, else one of these extra slots,
+ *  so a server sees at most 4 + 2 requests from this window at once, and a
+ *  burst of Thread calls can't flood the tunnel either. When a slot frees,
+ *  a waiting Thread call goes first. */
+const REMOTE_CLI_PRIORITY_EXTRA = 2
+
+/** Routes on the Thread lane: what paints a Thread and what sends to one. */
+export const PRIORITY_CLI_ROUTES: ReadonlySet<string> = new Set([
+  'thread',
+  'thread/activity',
+  'thread/post',
+  'project-group/msg',
+])
+
+export function isPriorityCliRoute(route: string): boolean {
+  return PRIORITY_CLI_ROUTES.has(route)
+}
+
 interface CliSlotPool {
   inflight: number
   waiters: Array<() => void>
+  priorityWaiters: Array<() => void>
 }
 
 const remoteCliPools = new Map<string, CliSlotPool>()
@@ -165,32 +186,47 @@ const remoteCliPools = new Map<string, CliSlotPool>()
 function cliPoolFor(hostKey: string): CliSlotPool {
   let pool = remoteCliPools.get(hostKey)
   if (!pool) {
-    pool = { inflight: 0, waiters: [] }
+    pool = { inflight: 0, waiters: [], priorityWaiters: [] }
     remoteCliPools.set(hostKey, pool)
   }
   return pool
 }
 
 /** Returns the pool the slot was taken from (release it there), or null
- *  when the scope is local (uncapped). */
-async function acquireRemoteCliSlot(scope: ServerScope): Promise<CliSlotPool | null> {
+ *  when the scope is local (uncapped). A freed slot is handed straight to
+ *  the next waiter (Thread lane first), so nothing can cut in between. */
+async function acquireRemoteCliSlot(scope: ServerScope, priority = false): Promise<CliSlotPool | null> {
   if (!scope.isRemote) return null
   const pool = cliPoolFor(scope.hostKey)
-  for (;;) {
-    if (pool.inflight < REMOTE_CLI_MAX_INFLIGHT) {
-      pool.inflight += 1
-      return pool
-    }
-    await new Promise<void>((resolve) => {
-      pool.waiters.push(resolve)
-    })
+  const cap = priority ? REMOTE_CLI_MAX_INFLIGHT + REMOTE_CLI_PRIORITY_EXTRA : REMOTE_CLI_MAX_INFLIGHT
+  if (pool.inflight < cap) {
+    pool.inflight += 1
+    return pool
   }
+  await new Promise<void>((resolve) => {
+    if (priority) pool.priorityWaiters.push(resolve)
+    else pool.waiters.push(resolve)
+  })
+  return pool
 }
 
 function releaseRemoteCliSlot(pool: CliSlotPool): void {
+  // Hand the slot over without freeing it: a Thread call waiting may take
+  // it at any count; a normal call only while the count after this
+  // release leaves room under the normal cap.
+  const nextPriority = pool.priorityWaiters.shift()
+  if (nextPriority) {
+    nextPriority()
+    return
+  }
+  if (pool.inflight <= REMOTE_CLI_MAX_INFLIGHT) {
+    const next = pool.waiters.shift()
+    if (next) {
+      next()
+      return
+    }
+  }
   pool.inflight = Math.max(0, pool.inflight - 1)
-  const next = pool.waiters.shift()
-  if (next) next()
 }
 
 /** Run `fn` holding one of `scope`'s `/cli` slots (Home M2, MS25): the
@@ -240,8 +276,9 @@ async function cliFetch(
   // the network separately (lib/cli-timing, quiet unless asked).
   const t0 = performance.now()
   const at = Date.now()
-  const lane: CliLane = scope.isRemote ? 'normal' : 'local'
-  const heldRemoteSlot = await acquireRemoteCliSlot(scope)
+  const priority = isPriorityCliRoute(meta.route)
+  const lane: CliLane = !scope.isRemote ? 'local' : priority ? 'priority' : 'normal'
+  const heldRemoteSlot = await acquireRemoteCliSlot(scope, priority)
   const tSlot = performance.now()
   let status: number | null = null
   let lastUrl = ''

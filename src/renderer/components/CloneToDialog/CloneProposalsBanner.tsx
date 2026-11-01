@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui'
 import { useRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { loadWhoami } from '@/lib/shared-whoami'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { denyProposal, fetchOpenProposals, proposerName, type CloneProposal } from '@/lib/clone-proposals'
 
@@ -54,7 +55,8 @@ export function CloneProposalsBanner({ addr, refreshKey }: { addr: string; refre
   useEffect(() => {
     if (!workspace) return
     let cancelled = false
-    daemonCliGet<{ owner?: unknown; role?: unknown }>(room.scope, 'auth/whoami').then(
+    // Shared with the Thread's viewer lookup: one whoami per login.
+    loadWhoami(room.scope).then(
       (w) => {
         if (!cancelled) setCanApprove(whoCanApprove(w))
       },

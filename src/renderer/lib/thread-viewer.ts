@@ -15,7 +15,7 @@
 // `notify_prefs_changed` event drops the memo (owner logins can be linked).
 
 import { useEffect, useState } from 'react'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { loadWhoami, resetSharedWhoamiForTests } from '@/lib/shared-whoami'
 import type { ServerScope } from '@/kessel/server-scope'
 import { fetchNotifyPrefs } from '@/components/Settings/sections/notify-api'
 import { onNotifyPrefsChanged } from '@/stores/session-events'
@@ -136,7 +136,8 @@ async function fetchViewer(scope: ServerScope): Promise<ThreadViewer> {
       console.warn('[thread] notify/prefs failed; asking whoami', e)
     }
   }
-  const w = await daemonCliGet<{ owner?: unknown; username?: unknown }>(scope, 'auth/whoami')
+  // One whoami per login, shared with the clone-proposals banner.
+  const w = await loadWhoami(scope)
   if (w?.owner === true) return OWNER_VIEWER
   const username = typeof w?.username === 'string' ? w.username.trim() : ''
   if (!username) throw new Error('auth/whoami named no login')
@@ -200,6 +201,7 @@ export function onThreadViewerChange(fn: () => void): () => void {
 
 /** Tests: forget every answer and listener. */
 export function resetThreadViewersForTests(): void {
+  resetSharedWhoamiForTests()
   cache.clear()
   inflight.clear()
   failedAt.clear()

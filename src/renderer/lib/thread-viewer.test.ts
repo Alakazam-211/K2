@@ -45,6 +45,7 @@ import {
   resetThreadViewersForTests,
   threadViewerNow,
 } from './thread-viewer'
+import { loadWhoami } from './shared-whoami'
 
 function fakeScope(opts: { key: string; remote: boolean; username?: string; push?: boolean }): ServerScope {
   return {
@@ -147,6 +148,16 @@ describe('the viewer', () => {
     calls.whoami.push({ owner: false, username: 'bob' })
     expect(await loadThreadViewer(fakeScope({ key: 'w2', remote: true }))).toEqual({ principal: 'bob', aliases: [] })
     expect(calls.log).toEqual(['auth/whoami', 'auth/whoami'])
+  })
+
+  it('shares its whoami with the other Thread callers (the clone-proposals banner): one request', async () => {
+    calls.whoami.push({ owner: true, username: null, role: 'owner' })
+    const scope = fakeScope({ key: 's1', remote: true, username: 'rosson' })
+    const [viewer, who] = await Promise.all([loadThreadViewer(scope), loadWhoami(scope)])
+    expect(viewer).toEqual({ principal: 'owner', aliases: [] })
+    expect(who).toEqual({ owner: true, username: null, role: 'owner' })
+    expect(await loadWhoami(scope)).toBe(who)
+    expect(calls.log).toEqual(['auth/whoami'])
   })
 
   it('falls back to whoami when notify/prefs fails, and to the guess when both fail', async () => {

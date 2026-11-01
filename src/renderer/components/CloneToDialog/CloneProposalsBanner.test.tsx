@@ -52,6 +52,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), e
 
 import { CloneProposalsBanner, hostForTarget, proposalWorkspaceOf } from './CloneProposalsBanner'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { resetSharedWhoamiForTests } from '@/lib/shared-whoami'
 
 const LUZZ = { id: 'h1', label: 'Luzz', hostname: 'luzz.k2.dev', port: 443, secure: true } as ConnectHost
 
@@ -73,6 +74,7 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 beforeEach(() => {
+  resetSharedWhoamiForTests()
   h.whoami = { owner: true, role: 'owner' }
   h.proposals = [row()]
   h.gets.length = 0

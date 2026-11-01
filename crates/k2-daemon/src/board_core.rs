@@ -114,6 +114,13 @@ pub fn gate_template(owner_token: bool, caller: &Caller, body: &[u8]) -> Result<
 mod tests {
     use super::*;
 
+    fn passed(r: Result<Option<Vec<u8>>, CliResponse>) -> Option<Vec<u8>> {
+        match r {
+            Ok(v) => v,
+            Err(e) => panic!("refused: {} {}", e.status, e.body),
+        }
+    }
+
     fn code(r: &CliResponse) -> (String, String) {
         let v: Value = serde_json::from_str(&r.body).expect("json");
         (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
@@ -137,18 +144,17 @@ mod tests {
                 .expect_err("an agent never flips a core");
             assert_eq!(code(&r), ("403 Forbidden".into(), "core_off".into()));
             assert!(!on());
-            let out = gate_template(true, &Caller::Owner, br#"{"name":"Ideas","template":"board","turnOnCore":"board"}"#)
-                .expect("confirmed")
+            let out = passed(gate_template(true, &Caller::Owner, br#"{"name":"Ideas","template":"board","turnOnCore":"board"}"#))
                 .expect("a body without the key");
             let v: Value = serde_json::from_slice(&out).expect("json");
             assert_eq!(v, json!({"name": "Ideas", "template": "board"}));
             assert!(on(), "the core is on in the same step");
             assert!(k2_core::docs_cores::is_on(&k2_core::app_settings::load().multiplayer_cores, "board"), "and stored");
             // On: passes, no confirm needed.
-            assert!(gate_template(true, &Caller::Owner, body).expect("on").is_some());
-            assert!(gate_template(false, &agent, body).expect("on: an agent may add it").is_some());
+            assert!(passed(gate_template(true, &Caller::Owner, body)).is_some(), "on");
+            assert!(passed(gate_template(false, &agent, body)).is_some(), "on: an agent may add it");
             // No core needed.
-            assert_eq!(gate_template(true, &Caller::Owner, br#"{"name":"K","template":"kanban"}"#).expect("ok"), None);
+            assert_eq!(passed(gate_template(true, &Caller::Owner, br#"{"name":"K","template":"kanban"}"#)), None);
             let r = gate_template(true, &Caller::Owner, br#"{"name":"K","template":"kanban","turnOnCore":"board"}"#)
                 .expect_err("stray key");
             assert_eq!(code(&r).0, "400 Bad Request");

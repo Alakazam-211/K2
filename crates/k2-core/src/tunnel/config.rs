@@ -919,6 +919,7 @@ mod tests {
                 relay_default: Some("legacy".to_string()),
                 token_home: None,
                 token_read_error: None,
+                confirmed_label: None,
             };
             save(&cfg).expect("save");
             let back = load().expect("load");

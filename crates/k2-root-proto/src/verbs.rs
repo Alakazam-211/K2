@@ -2525,6 +2525,7 @@ mod tests {
                     SewVerb::Install
                     | SewVerb::InstallReconfigure
                     | SewVerb::Config
+                    | SewVerb::MirrorDir
                     | SewVerb::MediaInstall
                     | SewVerb::MediaReconfigure { .. }
                     | SewVerb::MediaTurnCert,

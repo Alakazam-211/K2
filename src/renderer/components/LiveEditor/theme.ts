@@ -61,6 +61,13 @@ export const editorTheme = EditorView.baseTheme({
     transition: "opacity 120ms",
   },
   ".cm-mpc-caret-name-below": { bottom: "auto", top: "100%" },
+  // this person's own caret in another tab or on another device: a dashed line, its name in
+  // italics ("You · other tab"), its selection fainter
+  ".cm-mpc-caret-same": { borderLeftStyle: "dashed" },
+  ".cm-mpc-caret-same .cm-mpc-caret-name": { fontStyle: "italic" },
+  ".cm-mpc-selection-same": {
+    backgroundColor: `color-mix(in srgb, var(--mpc-user) calc(${v("--mpc-selection-alpha")} * 50%), transparent)`,
+  },
   ".cm-mpc-caret-name-shown": { opacity: "1" },
   "&.mpc-labels-always .cm-mpc-caret-name": { opacity: "1" },
   "&.mpc-labels-hover .cm-mpc-caret:hover .cm-mpc-caret-name, &.mpc-labels-hover .cm-line:hover .cm-mpc-caret-name": {

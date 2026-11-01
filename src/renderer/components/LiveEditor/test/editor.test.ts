@@ -202,6 +202,76 @@ describe("mountLiveEditor", () => {
     expect(logs[0].roster.length).toBeGreaterThan(0);
   });
 
+  it("one person's other connections: each shown (dashed, \"You · other tab\" or the host's label), keyed by client, never this one's", async () => {
+    const { net, server, eds, ts } = setup("first line\nsecond line\nthird\n", 1, { labels: "always" });
+    await settle(net);
+    const v = server.version;
+    const own = ts[0].conn!;
+    const at = (n: number) => ({ root: "source", anchor: n, head: n, version: v });
+    const snapshot = (adaSecond: number): ServerFrame => ({
+      type: "roster_event",
+      event: {
+        kind: "snapshot",
+        version: v,
+        members: [
+          {
+            handle: "p1",
+            name: "Me",
+            colour: "#7c3aed",
+            kind: "person",
+            role: "editor",
+            away: false,
+            cursor: at(1),
+            devices: [
+              { client: own, cursor: at(1) },
+              { client: 901, cursor: at(13) },
+              { client: 902, cursor: at(25), label: "iPhone" },
+            ],
+          },
+          {
+            handle: "p2",
+            name: "Ada",
+            colour: "#ffeb3b",
+            kind: "person",
+            role: "editor",
+            away: false,
+            cursor: at(3),
+            devices: [
+              { client: 7, cursor: at(3) },
+              { client: 8, cursor: at(adaSecond) },
+            ],
+          },
+        ],
+      },
+    });
+    server.sendTo(ts[0].conn!, snapshot(3));
+    await settle(net);
+    await microtasks();
+    const dom = eds[0].view.dom;
+    const carets = () => [...dom.querySelectorAll(".cm-mpc-caret")] as HTMLElement[];
+    const byKey = () => new Map(carets().map((c) => [c.dataset.mpcCaret, c]))
+    // this connection's own caret is hidden; the other two of mine show, and both of Ada's,
+    // even at the same spot: one caret a connection, keyed by (handle, client)
+    expect([...byKey().keys()].sort()).toEqual(["p1#901", "p1#902", "p2#7", "p2#8"]);
+    expect(byKey().has(`p1#${own}`)).toBe(false);
+    const name = (k: string) => byKey().get(k)!.querySelector(".cm-mpc-caret-name")!.textContent;
+    expect(name("p1#901")).toBe("You · other tab");
+    expect(name("p1#902")).toBe("You · iPhone");
+    expect(name("p2#7")).toBe("Ada");
+    expect(name("p2#8")).toBe("Ada");
+    // mine elsewhere: my colour, dashed; Ada's: solid
+    expect(byKey().get("p1#901")!.classList.contains("cm-mpc-caret-same")).toBe(true);
+    expect(byKey().get("p1#901")!.style.getPropertyValue("--mpc-user")).toBe("#7c3aed");
+    expect(byKey().get("p2#7")!.classList.contains("cm-mpc-caret-same")).toBe(false);
+    // Ada's second tab moves: her first tab's caret is the same DOM node (no flicker)
+    const ada7 = byKey().get("p2#7")!
+    server.sendTo(ts[0].conn!, snapshot(16));
+    await settle(net);
+    await microtasks();
+    expect(byKey().get("p2#7")).toBe(ada7);
+    expect(byKey().size).toBe(4);
+  });
+
   it("labels `active`: a caret's name shows after it moves, then hides", async () => {
     const { net, server, eds, ts } = setup("abc\ndef\n", 1, { labels: "active" });
     await settle(net);

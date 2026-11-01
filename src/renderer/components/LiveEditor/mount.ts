@@ -26,7 +26,7 @@ import type {
   Transport,
   Welcome,
 } from "@k2/mpc-client";
-import { Binding, type CaretView } from "./binding";
+import { Binding, caretKey, type CaretView } from "./binding";
 import { readableOn } from "./colour";
 import type { ClaimEvent, RemovedTextNote } from "./notes";
 import { editorTheme, injectFrameStyles } from "./theme";
@@ -44,6 +44,10 @@ export interface EditorStrings {
   reapply: string;
   dismiss: string;
   you: string;
+  /** The name on this person's own caret in another tab or on another device. */
+  youElsewhere: string;
+  /** The same, when the host labelled that connection (`{label}`). */
+  youOn: string;
   roster: string;
   rejections: string;
   offline: string;
@@ -116,6 +120,8 @@ export const DEFAULT_STRINGS: EditorStrings = {
   reapply: "Re-apply",
   dismiss: "Dismiss",
   you: "(you)",
+  youElsewhere: "You · other tab",
+  youOn: "You · {label}",
   roster: "People in this document",
   rejections: "Changes that weren't applied",
   offline: "Not connected: nothing was sent.",
@@ -398,7 +404,8 @@ class LiveEditor implements LiveEditorHandle {
   private landedIds = new Set<number>();
   /** The rejection whose "Insert my text here" is being previewed. */
   private previewId: number | null = null;
-  private caretsSeen = new Map<Handle, { key: string; until: number }>();
+  /** When each caret last moved, by `caretKey` (a person's connections each have one). */
+  private caretsSeen = new Map<string, { key: string; until: number }>();
   private readonly ls = new Map<keyof LiveEditorEvents, Set<(v: never) => void>>();
   private readonly offs: Array<() => void> = [];
   private readonly frameListeners = new Set<(f: ServerFrame) => void>();
@@ -1057,10 +1064,15 @@ class LiveEditor implements LiveEditorHandle {
 
   private noteCarets(entries: readonly RosterEntry[]): void {
     const now = this.timers.now();
+    const note = (id: string, c: RosterEntry["cursor"]): void => {
+      const key = c ? `${c.root}:${c.anchor}:${c.head}:${c.version ?? ""}` : "";
+      const was = this.caretsSeen.get(id);
+      if (!was || was.key !== key) this.caretsSeen.set(id, { key, until: was ? now + ACTIVE_LABEL_MS : 0 });
+    };
     for (const e of entries) {
-      const key = e.cursor ? `${e.cursor.root}:${e.cursor.anchor}:${e.cursor.head}:${e.cursor.version ?? ""}` : "";
-      const was = this.caretsSeen.get(e.handle);
-      if (!was || was.key !== key) this.caretsSeen.set(e.handle, { key, until: was ? now + ACTIVE_LABEL_MS : 0 });
+      // one entry a person; per-connection carets (kit v0.10.1) each on their own key
+      if (e.devices) for (const d of e.devices) note(caretKey({ handle: e.handle, client: d.client }), d.cursor);
+      else note(e.handle, e.cursor);
     }
     if (this.labels === "active") this.scheduleLabelExpiry();
   }
@@ -1084,8 +1096,15 @@ class LiveEditor implements LiveEditorHandle {
     if (!live) return [];
     const now = this.timers.now();
     return live.carets().map((c) => ({
-      ...c,
-      label: this.labels === "always" || (this.labels === "active" && (this.caretsSeen.get(c.handle)?.until ?? 0) > now),
+      handle: c.handle,
+      // this person's own other tab or device: "You · other tab", or the host's label for it
+      name: c.sameUser ? (c.label ? this.strings.youOn.replace("{label}", c.label) : this.strings.youElsewhere) : c.name,
+      colour: c.colour,
+      anchor: c.anchor,
+      head: c.head,
+      ...(c.client !== undefined ? { client: c.client } : {}),
+      sameUser: c.sameUser === true,
+      label: this.labels === "always" || (this.labels === "active" && (this.caretsSeen.get(caretKey(c))?.until ?? 0) > now),
     }));
   }
 

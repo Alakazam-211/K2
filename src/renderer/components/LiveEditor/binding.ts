@@ -78,6 +78,17 @@ export interface CaretView {
   head: number;
   /** Show its name now (labels `active`: it moved lately; `always`: always). */
   label: boolean;
+  /** The connection it is on (one person can have several: tabs, devices); absent from an
+   * older host (one caret a person). Carets are keyed on (handle, client). */
+  client?: number;
+  /** Another connection of this person's own (the same person in another tab or on another
+   * device): drawn dashed, its name "You · other tab" (or the host's label). */
+  sameUser?: boolean;
+}
+
+/** A caret's key: one person's connections each get their own (K2, 2026-10-31). */
+export function caretKey(c: { handle: string; client?: number }): string {
+  return c.client === undefined ? c.handle : `${c.handle}#${c.client}`;
 }
 
 export interface BindingHooks {
@@ -120,16 +131,26 @@ class CaretWidget extends WidgetType {
     readonly colour: string,
     readonly label: boolean,
     readonly below: boolean,
+    readonly key: string = "",
+    readonly sameUser: boolean = false,
   ) {
     super();
   }
   eq(o: CaretWidget) {
-    return o.name === this.name && o.colour === this.colour && o.label === this.label && o.below === this.below;
+    return (
+      o.name === this.name &&
+      o.colour === this.colour &&
+      o.label === this.label &&
+      o.below === this.below &&
+      o.key === this.key &&
+      o.sameUser === this.sameUser
+    );
   }
   toDOM() {
     const el = document.createElement("span");
-    el.className = "cm-mpc-caret";
+    el.className = "cm-mpc-caret" + (this.sameUser ? " cm-mpc-caret-same" : "");
     el.setAttribute("aria-hidden", "true");
+    if (this.key) el.dataset.mpcCaret = this.key;
     el.style.setProperty("--mpc-user", this.colour);
     el.style.setProperty("--mpc-user-fg", readableOn(this.colour));
     const label = document.createElement("span");
@@ -479,7 +500,10 @@ export class Binding {
 /** Decorations for remote carets and selections. */
 export function caretDecorations(doc: Text, idx: ByteIndex, carets: readonly CaretView[]): DecorationSet {
   const ranges: Range<Decoration>[] = [];
-  for (const c of carets) {
+  // A stable order (by key) so two carets at one spot (one person's two tabs) keep theirs from
+  // update to update: the widgets are reused, not swapped (no flicker).
+  const ordered = [...carets].sort((x, y) => (caretKey(x) < caretKey(y) ? -1 : caretKey(x) > caretKey(y) ? 1 : 0));
+  for (const c of ordered) {
     const a = idx.posAt(doc, c.anchor);
     const h = idx.posAt(doc, c.head);
     if (a < 0 || h < 0) continue;
@@ -487,14 +511,14 @@ export function caretDecorations(doc: Text, idx: ByteIndex, carets: readonly Car
     if (from < to) {
       ranges.push(
         Decoration.mark({
-          class: "cm-mpc-selection",
-          attributes: { style: `--mpc-user: ${c.colour}` },
+          class: "cm-mpc-selection" + (c.sameUser ? " cm-mpc-selection-same" : ""),
+          attributes: { style: `--mpc-user: ${c.colour}`, "data-mpc-caret": caretKey(c) },
         }).range(from, to),
       );
     }
     // on the first line a label above the caret would be cut off: put it below
     const below = doc.lineAt(h).number === 1;
-    ranges.push(Decoration.widget({ widget: new CaretWidget(c.name, c.colour, c.label, below), side: 1 }).range(h));
+    ranges.push(Decoration.widget({ widget: new CaretWidget(c.name, c.colour, c.label, below, caretKey(c), c.sameUser === true), side: 1 }).range(h));
   }
   return Decoration.set(ranges, true);
 }

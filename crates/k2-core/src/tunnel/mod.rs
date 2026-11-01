@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 pub mod cert_broker;
 pub mod client_ip_labels;
 pub mod config;
+pub mod confirmed_label;
 pub mod connector;
 pub mod cp_proxy;
 pub mod custom_names;
@@ -63,6 +64,7 @@ pub mod render;
 pub mod subdomains;
 pub mod tls;
 pub mod unpair;
+pub mod voice_lane;
 pub mod watchdog;
 
 pub use config::{e2e_enabled, RelayEndpoint, TunnelConfig};
@@ -331,7 +333,10 @@ pub fn tunnel_status() -> TunnelStatus {
 /// current E2E flag ([`config::e2e_enabled`]) so the dry-run output matches
 /// what `start_tunnel` would actually write.
 pub fn render_config(local_port: u16) -> Result<String, String> {
-    let cfg = config::load()?;
+    let mut cfg = config::load()?;
+    // 0.46.8: the proxy is named from the confirmed label (cached; a
+    // dry-run makes no control-plane call).
+    cfg.confirmed_label = confirmed_label::cached(&cfg.token);
     let e2e = config::e2e_enabled(&cfg);
     // Dial the preferred relay (index 0) of the SAME list `start_tunnel`
     // dials (0.46.6: an old baked list is dialed as relay.k2.dev).
@@ -544,9 +549,14 @@ pub(crate) mod test_support {
         // Restores HOME and removes the dir on drop (after the teardown
         // below, which still needs the temp HOME), even on panic.
         let _home = crate::test_env::TempHome::new();
+        // 0.46.8: the fake control plane confirms the requested label.
+        *super::confirmed_label::TEST_SOURCE.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some(super::confirmed_label::confirms_requested);
 
         // Ensure a clean connector singleton for this test.
         let _ = super::connector::stop("test teardown");
+        super::voice_lane::disarm("test teardown");
+        super::voice_lane::set_preview(false);
         // 0.46.6: the relay-list refresh state (served list, default-name
         // lookups) is a process global that decides what the tunnel dials;
         // no test may inherit another's.
@@ -556,6 +566,8 @@ pub(crate) mod test_support {
 
         // Best-effort connector teardown.
         let _ = super::connector::stop("test teardown");
+        super::voice_lane::disarm("test teardown");
+        super::voice_lane::set_preview(false);
         super::relay_list::reset_state_for_test();
     }
 }

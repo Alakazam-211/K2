@@ -276,9 +276,11 @@ pub(crate) struct PidRecord {
     pub log_offset: u64,
 }
 
-/// `frpc.pid` beside the rendered config (the private runtime dir).
+/// The pid record beside the rendered config (the private runtime dir):
+/// `frpc.toml` → `frpc.pid`, the voice lane's `frpc-voice.toml` →
+/// `frpc-voice.pid` (0.46.8), so the two frpcs never share a record.
 pub(crate) fn pid_path(cfg: &Path) -> PathBuf {
-    cfg.with_file_name("frpc.pid")
+    cfg.with_extension("pid")
 }
 
 pub(crate) fn write_pid_record(rec: &PidRecord) {
@@ -410,9 +412,80 @@ pub(crate) fn log_len(log: &Path) -> u64 {
     std::fs::metadata(log).map(|m| m.len()).unwrap_or(0)
 }
 
+/// Spawn `<frpc> -c <cfg>` writing stdout+stderr straight into the
+/// append-mode `log` (no pipe: a pipe would kill frpc with `SIGPIPE` once
+/// this daemon exits, runtime stage H), in its own session, and record its
+/// pid file for the next daemon. Returns the child, its pid and the log
+/// offset its run starts at. Shared by the main tunnel and the voice lane.
+pub(crate) fn spawn_logged(frpc: &Path, cfg: &Path, log: &Path) -> Result<(Child, i32, u64), String> {
+    use std::process::Stdio;
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .map_err(|e| format!("open frpc log {}: {e}", log.display()))?;
+    let err = out.try_clone().map_err(|e| format!("clone log handle: {e}"))?;
+    let offset = log_len(log);
+    // frpc is a console program: bg_proc keeps it from opening a window.
+    let mut cmd = crate::bg_proc::command(frpc);
+    cmd.arg("-c").arg(cfg).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
+    // Its own session: never in the daemon's process group or session, so
+    // a signal to the daemon's group (or a terminal hangup) misses it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let child = cmd.spawn().map_err(|e| format!("spawn frpc ({}): {e}", frpc.display()))?;
+    let pid = child.id() as i32;
+    if let Some(identity) = proc_identity(pid) {
+        write_pid_record(&PidRecord { pid, identity, cfg: cfg.to_path_buf(), log_offset: offset });
+    }
+    Ok((child, pid, offset))
+}
+
+/// Hand `on_line` the lines an adopted frpc already wrote this run (`log`
+/// from `rec.log_offset` up to now); returns the offset to tail from.
+pub(crate) fn replay_run(log: &Path, rec: &PidRecord, mut on_line: impl FnMut(&str)) -> u64 {
+    let now = log_len(log);
+    if let Ok(bytes) = std::fs::read(log) {
+        let from = (rec.log_offset as usize).min(bytes.len());
+        let to = (now as usize).min(bytes.len()).max(from);
+        for line in String::from_utf8_lossy(&bytes[from..to]).lines() {
+            on_line(line);
+        }
+    }
+    now
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_voice_lane_has_its_own_pid_record_and_reap_pattern() {
+        assert_eq!(pid_path(Path::new("/run/k2/frpc.toml")), PathBuf::from("/run/k2/frpc.pid"));
+        assert_eq!(pid_path(Path::new("/run/k2/frpc-voice.toml")), PathBuf::from("/run/k2/frpc-voice.pid"));
+        // Neither config path matches the other's argv, so neither frpc's
+        // adopt or reap can take the other.
+        let main = Path::new("/run/k2/frpc.toml");
+        let voice = Path::new("/run/k2/frpc-voice.toml");
+        let argv = |c: &Path| vec!["/usr/bin/frpc".to_string(), "-c".to_string(), c.display().to_string()];
+        assert!(!argv_is_our_frpc(&argv(voice), main));
+        assert!(!argv_is_our_frpc(&argv(main), voice));
+        assert!(argv_is_our_frpc(&argv(voice), voice));
+    }
 
     #[test]
     fn argv_match_is_exact() {

@@ -201,7 +201,7 @@ pub(crate) fn frpc_config_path() -> PathBuf {
 
 /// The tunnel's own files in a runtime dir.
 #[cfg(all(unix, not(test)))]
-const RUNTIME_DIR_FILES: &[&str] = &["frpc.toml", "frpc.pid"];
+const RUNTIME_DIR_FILES: &[&str] = &["frpc.toml", "frpc.pid", "frpc-voice.toml", "frpc-voice.pid"];
 
 /// 0.46.4 move onto the daemon unit's `RuntimeDirectory=` (akzm,
 /// 2026-10-24): an frpc the previous daemon left running from an older
@@ -227,6 +227,11 @@ fn reap_superseded_runtime_dirs(current_cfg: &Path) {
             let was_running = stray_frpc_alive(&old_cfg);
             if was_running {
                 reap_stray_frpc(&old_cfg);
+            }
+            // 0.46.8: the voice lane's frpc from that dir holds `k2voice-<label>`.
+            let old_voice = dir.join(super::voice_lane::VOICE_CONFIG_NAME);
+            if stray_frpc_alive(&old_voice) {
+                reap_stray_frpc(&old_voice);
             }
             let removed = crate::runtime_dir::clean_superseded_dir(&dir, RUNTIME_DIR_FILES);
             if was_running || !removed.is_empty() {
@@ -305,18 +310,35 @@ const SESSION_LOST_MARKERS: &[&str] = &[
 ];
 
 pub(crate) struct ProxyRegistration {
-    proxy_name: String,
+    /// `None`: the config renders no proxy (no confirmed label), so nothing
+    /// ever registers.
+    proxy_name: Option<String>,
     /// The current child's run number (0 = never spawned).
     run: AtomicU64,
     /// The run whose log said `start proxy success` (0 = none).
     registered_run: AtomicU64,
+    /// Count `login to server success` in [`FRPC_LOGINS`]: the main frpc
+    /// only (the voice lane's login is not the box's, 0.46.8).
+    counts_logins: bool,
 }
 
 impl ProxyRegistration {
+    /// The main frpc's proxy: the name [`super::render::main_proxy_name`]
+    /// renders (the server-confirmed label, 0.46.8).
     pub(crate) fn new(cfg: &TunnelConfig) -> Self {
-        let sub = cfg.subdomain.trim();
-        let proxy_name = if sub.is_empty() { "k2so-daemon".to_string() } else { format!("k2so-{sub}") };
-        Self { proxy_name, run: AtomicU64::new(0), registered_run: AtomicU64::new(0) }
+        let proxy_name = super::render::main_proxy_name(cfg);
+        Self { proxy_name, run: AtomicU64::new(0), registered_run: AtomicU64::new(0), counts_logins: true }
+    }
+
+    /// A tracker for another frpc's one proxy, by its exact name (the voice
+    /// lane's `k2voice-<label>`, 0.46.8). Its logins are not counted.
+    pub(crate) fn named(proxy_name: String) -> Self {
+        Self { proxy_name: Some(proxy_name), run: AtomicU64::new(0), registered_run: AtomicU64::new(0), counts_logins: false }
+    }
+
+    /// The current run no longer holds its proxy (its frpc exited).
+    pub(crate) fn clear(&self) {
+        self.registered_run.store(0, Ordering::SeqCst);
     }
 
     /// A child is about to be spawned: a new run, not registered.
@@ -343,7 +365,7 @@ impl ProxyRegistration {
         if !self.is_current_run(run) {
             return; // a previous child's late output
         }
-        if line.contains("login to server success") {
+        if self.counts_logins && line.contains("login to server success") {
             FRPC_LOGINS.fetch_add(1, Ordering::SeqCst);
         }
         // The control session to frps went away (frp 0.61 lines, e.g.
@@ -358,7 +380,8 @@ impl ProxyRegistration {
                 .compare_exchange(run, 0, Ordering::SeqCst, Ordering::SeqCst);
             return;
         }
-        if !line.contains(&format!("[{}]", self.proxy_name)) {
+        let Some(name) = self.proxy_name.as_deref() else { return };
+        if !line.contains(&format!("[{name}]")) {
             return;
         }
         if line.contains("start proxy success") {
@@ -521,6 +544,8 @@ struct ConnectorState {
     proxy: Arc<ProxyRegistration>,
     /// Whether frpc is actually up (vs crash-looping).
     health: Arc<FrpcHealth>,
+    /// The frpc binary this tunnel runs (the voice lane runs the same one).
+    frpc: PathBuf,
 }
 
 static STATE: OnceLock<Mutex<Option<ConnectorState>>> = OnceLock::new();
@@ -543,8 +568,35 @@ pub fn detach_for_handoff() -> Option<i32> {
     pid.filter(|p| frpc_proc::pid_alive(*p))
 }
 
-fn detached() -> bool {
+pub(crate) fn detached() -> bool {
     DETACHED.load(Ordering::SeqCst)
+}
+
+/// Tests (the voice lane's): forget the connector as a fresh daemon has it
+/// after a hand-off, leaving frpc running.
+#[cfg(test)]
+pub(crate) fn forget_after_handoff_for_test() {
+    *state().lock().unwrap_or_else(|p| p.into_inner()) = None;
+    DETACHED.store(false, Ordering::SeqCst);
+}
+
+/// Tests (the voice lane's): as if the supervisor had moved to `relay`.
+#[cfg(test)]
+pub(crate) fn set_current_relay_for_test(relay: RelayEndpoint) {
+    let guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    let st = guard.as_ref().expect("a running tunnel");
+    *st.current_relay.lock().unwrap_or_else(|p| p.into_inner()) = relay;
+}
+
+/// What the voice lane follows (0.46.8): the running tunnel's config, the
+/// relay its frpc dials NOW (the same RelaySelector pick, republished on
+/// every failover / fail-back / list move), whether it is E2E, and the
+/// frpc binary it runs. `None` while the tunnel is stopped.
+pub(crate) fn voice_follow() -> Option<(TunnelConfig, RelayEndpoint, bool, PathBuf)> {
+    let guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    let st = guard.as_ref().filter(|st| st.running.load(Ordering::SeqCst))?;
+    let relay = st.current_relay.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    Some((st.cfg.clone(), relay, config::e2e_enabled(&st.cfg), st.frpc.clone()))
 }
 
 fn state() -> &'static Mutex<Option<ConnectorState>> {
@@ -1262,6 +1314,33 @@ pub fn start(
                 .to_string(),
         );
     }
+    // 0.46.8 relay name binding: the proxy is named from the label the
+    // control plane confirmed for this token (cached; one fetch when not),
+    // never from the requested `subdomain`. None → frpc logs in with no
+    // proxy and a retry loop asks again (never `k2so-daemon`).
+    let mut label_pending = false;
+    if !super::confirmed_label::config_naming() {
+        match super::confirmed_label::resolve(&cfg) {
+            Ok(l) => {
+                if !cfg.subdomain.trim().is_empty() && !cfg.subdomain.trim().eq_ignore_ascii_case(&l) {
+                    crate::log_debug!(
+                        "[tunnel] tunnel.json requests {:?} but the control plane confirms {l:?} for this \
+                         token: the proxy is named k2so-{l}",
+                        cfg.subdomain
+                    );
+                }
+                cfg.confirmed_label = Some(l);
+            }
+            Err(why) => {
+                crate::log_debug!(
+                    "[tunnel] WARN: no server-confirmed label for this tunnel token ({why}): frpc logs in \
+                     but serves NO proxy until the control plane confirms one (asking again in the background)"
+                );
+                cfg.confirmed_label = None;
+                label_pending = true;
+            }
+        }
+    }
     // The K2 Connect tunnel ALWAYS exposes the live daemon, whose HTTP port is
     // ephemeral and ROTATES on every daemon restart (app update, reboot).
     // So we MUST forward to the live `default_local_port` and must NEVER
@@ -1465,7 +1544,7 @@ pub fn start(
         new_selector(initial_relays.clone(), failover_mode).failover_status(),
     ));
     spawn_supervised(
-        frpc,
+        frpc.clone(),
         initial_relays,
         child.clone(),
         running.clone(),
@@ -1497,6 +1576,10 @@ pub fn start(
     // the config can't drive a fetch — see `spawn_subdomain_refresh`.
     spawn_subdomain_refresh(&cfg, running.clone());
 
+    if label_pending {
+        spawn_label_retry(&cfg, running.clone(), default_local_port, frpc.clone());
+    }
+
     let st = ConnectorState {
         cfg,
         resolved_local_port: resolved_port_slot,
@@ -1507,11 +1590,16 @@ pub fn start(
         failover,
         proxy,
         health,
+        frpc,
     };
     let mut status = status_from(&st);
     status.repaired = repaired;
     *guard = Some(st);
     SPAWN_GENERATION.fetch_add(1, Ordering::SeqCst);
+    drop(guard);
+    // 0.46.8: an armed voice lane follows the tunnel that just came up at
+    // once (its supervisor would see it on the next poll anyway).
+    super::voice_lane::kick();
     Ok(status)
 }
 
@@ -1588,7 +1676,57 @@ pub fn stop(reason: &str) -> Result<(), String> {
     }
     // 6) Clear connector state so status() reports stopped.
     *guard = None;
+    drop(guard);
+    // 7) 0.46.8: the voice lane rides this tunnel's login and relay, so it
+    //    stops with it (an armed lane comes back with the next start).
+    super::voice_lane::on_main_stop(reason);
     Ok(())
+}
+
+/// First wait of the confirmed-label retry; doubles to [`LABEL_RETRY_MAX`].
+#[cfg(not(test))]
+const LABEL_RETRY_FIRST: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const LABEL_RETRY_FIRST: Duration = Duration::from_millis(200);
+const LABEL_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// 0.46.8: a tunnel that started with no server-confirmed label (the control
+/// plane was unreachable and nothing was cached) asks again in the
+/// background; once it answers, the tunnel restarts with its proxy. Ends
+/// with the tunnel (`running`) or a hand-off.
+fn spawn_label_retry(cfg: &TunnelConfig, running: Arc<AtomicBool>, daemon_port: u16, frpc: PathBuf) {
+    let cfg = cfg.clone();
+    let _ = std::thread::Builder::new().name("k2-tunnel-label".into()).spawn(move || {
+        let mut wait = LABEL_RETRY_FIRST;
+        loop {
+            let until = Instant::now() + wait;
+            while Instant::now() < until {
+                if !running.load(Ordering::SeqCst) || detached() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100).min(wait));
+            }
+            match super::confirmed_label::resolve(&cfg) {
+                Ok(l) => {
+                    if !running.load(Ordering::SeqCst) || detached() {
+                        return;
+                    }
+                    crate::log_debug!("[tunnel] the control plane confirmed {l:?}: restarting the tunnel with its proxy k2so-{l}");
+                    if let Err(e) = stop("label confirmed: restart with the proxy") {
+                        crate::log_debug!("[tunnel] WARN: stop for the confirmed label: {e}");
+                    }
+                    if let Err(e) = start(None, daemon_port, &FrpcBinary::Explicit(frpc.clone())) {
+                        crate::log_debug!("[tunnel] WARN: restart with the confirmed label failed: {e}");
+                    }
+                    return;
+                }
+                Err(why) => {
+                    crate::log_debug!("[tunnel] still no confirmed label ({why}); asking again in {:?}", (wait * 2).min(LABEL_RETRY_MAX));
+                    wait = (wait * 2).min(LABEL_RETRY_MAX);
+                }
+            }
+        }
+    });
 }
 
 /// The `[tunnel] stop` log line: who/why, and what was running. Pure so
@@ -1748,7 +1886,7 @@ fn stray_frpc_pattern(cfg_path: &Path) -> String {
 /// another tunnel. Errors are swallowed: a missing `pkill` or no-match is
 /// the normal, healthy case.
 #[cfg(unix)]
-fn reap_stray_frpc(cfg_path: &Path) {
+pub(crate) fn reap_stray_frpc(cfg_path: &Path) {
     let _ = crate::bg_proc::command("pkill")
         .arg("-f")
         .arg(stray_frpc_pattern(cfg_path))
@@ -1758,18 +1896,18 @@ fn reap_stray_frpc(cfg_path: &Path) {
 }
 
 #[cfg(windows)]
-fn reap_stray_frpc(cfg_path: &Path) {
+pub(crate) fn reap_stray_frpc(cfg_path: &Path) {
     frpc_proc::reap_ours(cfg_path);
 }
 
 #[cfg(not(any(unix, windows)))]
-fn reap_stray_frpc(_cfg_path: &Path) {}
+pub(crate) fn reap_stray_frpc(_cfg_path: &Path) {}
 
 /// True when a process matching our frpc config pattern is still alive
 /// (`pgrep -f` exit 0). Used by the hardened stop path for a second-pass
 /// SIGKILL. Missing `pgrep` → false (don't escalate blindly).
 #[cfg(unix)]
-fn stray_frpc_alive(cfg_path: &Path) -> bool {
+pub(crate) fn stray_frpc_alive(cfg_path: &Path) -> bool {
     crate::bg_proc::command("pgrep")
         .arg("-f")
         .arg(stray_frpc_pattern(cfg_path))
@@ -1928,13 +2066,13 @@ fn write_config_file(toml: &str) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn restrict_mode(p: &Path) {
+pub(crate) fn restrict_mode(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
 }
 
 #[cfg(not(unix))]
-fn restrict_mode(_p: &Path) {}
+pub(crate) fn restrict_mode(_p: &Path) {}
 
 /// Render frpc.toml dialing `relay` and write it into place. The relays
 /// are peers (one shared frps token, one wildcard cert), so only
@@ -3075,45 +3213,7 @@ fn spawn_once(
     let cfg_path = frpc_config_path();
     // A new run: not registered until this child logs success.
     let run = proxy.begin_run();
-    let log = open_log()?;
-    let log_err = log
-        .try_clone()
-        .map_err(|e| format!("clone log handle: {e}"))?;
-    let offset = frpc_proc::log_len(&frpc_log_path());
-    // frpc is a console program: bg_proc keeps it from opening a window.
-    let mut cmd = crate::bg_proc::command(frpc);
-    cmd.arg("-c")
-        .arg(&cfg_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err));
-    // Its own session: never in the daemon's process group or session, so
-    // a signal to the daemon's group (or a terminal hangup) misses it.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setsid is async-signal-safe.
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn frpc ({}): {e}", frpc.display()))?;
-    let pid = child.id() as i32;
-    if let Some(identity) = frpc_proc::proc_identity(pid) {
-        frpc_proc::write_pid_record(&frpc_proc::PidRecord {
-            pid,
-            identity,
-            cfg: cfg_path.clone(),
-            log_offset: offset,
-        });
-    }
+    let (child, pid, offset) = frpc_proc::spawn_logged(frpc, &cfg_path, &frpc_log_path())?;
     let stop = Arc::new(AtomicBool::new(false));
     tail_run(offset, pid, stop.clone(), watch, (proxy.clone(), run), health.clone());
     Ok((FrpcProc::Spawned(child), stop))
@@ -3131,15 +3231,7 @@ fn adopt_once(
     health: &Arc<FrpcHealth>,
 ) -> (FrpcProc, Arc<AtomicBool>) {
     let run = proxy.begin_run();
-    let log = frpc_log_path();
-    let now = frpc_proc::log_len(&log);
-    if let Ok(bytes) = std::fs::read(&log) {
-        let from = (rec.log_offset as usize).min(bytes.len());
-        let to = (now as usize).min(bytes.len()).max(from);
-        for line in String::from_utf8_lossy(&bytes[from..to]).lines() {
-            proxy.observe_line(run, line);
-        }
-    }
+    let now = frpc_proc::replay_run(&frpc_log_path(), rec, |line| proxy.observe_line(run, line));
     let stop = Arc::new(AtomicBool::new(false));
     tail_run(now, rec.pid, stop.clone(), watch, (proxy.clone(), run), health.clone());
     (FrpcProc::Adopted { pid: rec.pid }, stop)
@@ -3183,18 +3275,6 @@ fn handle_line(
     if proxy.0.is_current_run(proxy.1) {
         health.observe_line(proxy.1, line);
     }
-}
-
-fn open_log() -> Result<std::fs::File, String> {
-    let path = frpc_log_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("open frpc log {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -4592,7 +4672,7 @@ mod tests {
     #[test]
     fn proxy_registration_tracks_only_the_current_run() {
         let reg = ProxyRegistration::new(&TunnelConfig {
-            subdomain: "rosson".to_string(),
+            subdomain: "rosson".to_string(), confirmed_label: Some("rosson".to_string()),
             ..Default::default()
         });
         assert!(!reg.is_registered(), "never spawned");
@@ -4624,7 +4704,7 @@ mod tests {
     #[test]
     fn a_dead_runs_late_error_line_does_not_mark_a_healthy_run() {
         let reg = Arc::new(ProxyRegistration::new(&TunnelConfig {
-            subdomain: "rosson".to_string(),
+            subdomain: "rosson".to_string(), confirmed_label: Some("rosson".to_string()),
             ..Default::default()
         }));
         let health = FrpcHealth::new();
@@ -4660,7 +4740,7 @@ mod tests {
         ];
         for line in lost {
             let reg = ProxyRegistration::new(&TunnelConfig {
-                subdomain: "rosson".to_string(),
+                subdomain: "rosson".to_string(), confirmed_label: Some("rosson".to_string()),
                 ..Default::default()
             });
             let run = reg.begin_run();
@@ -5377,7 +5457,7 @@ mod tests {
         let cfg = TunnelConfig {
             token: "REDACTED".to_string(),
             subdomain: "rosson".to_string(),
-            local_port: Some(57839),
+            local_port: Some(57839), confirmed_label: Some("rosson".to_string()),
             ..Default::default()
         };
         let toml = super::super::render::render_frpc_toml(&cfg, 57839, false);

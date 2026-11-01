@@ -345,6 +345,28 @@ fn tier_of_connected(rows: &[SubdomainRow], primary: &str) -> Option<String> {
     }
 }
 
+/// The label of the row the control plane marks as THIS token's
+/// (`connected` / `current` / `is_current`), lowercased. Nothing else is a
+/// confirmation (relay name binding, 0.46.8; [`super::confirmed_label`]).
+fn confirmed_of(rows: &[SubdomainRow]) -> Option<String> {
+    rows.iter()
+        .find(|r| r.connected || r.current || r.is_current)
+        .map(|r| r.label.trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty())
+}
+
+/// `GET /subdomains` → the token's confirmed label (`None` when no row is
+/// marked as the token's). Records it ([`super::confirmed_label::remember`]).
+pub fn fetch_confirmed_label(token: &str) -> Result<Option<String>, String> {
+    crate::airgap::refuse()?;
+    let parsed = get_subdomains(token)?;
+    let l = confirmed_of(&parsed.subdomains);
+    if let Some(l) = &l {
+        super::confirmed_label::remember(token, l);
+    }
+    Ok(l)
+}
+
 /// Routing map + the connected row's plan tier. Nested `k2 publish run`
 /// uses `tier == "pro"` as the Pro gate. [`fetch_map`] still returns only
 /// the routing table (drops `tier`) so existing callers stay unchanged.
@@ -376,6 +398,10 @@ pub fn fetch_account(primary: &str, token: &str) -> Result<AccountSubdomains, St
     // Every live answer refreshes the cached tier (the refresh rule above
     // [`TIER_FRESH`]).
     note_tier(primary, tier.clone());
+    // Every fetch renews the confirmed label (0.46.8 relay name binding).
+    if let Some(l) = confirmed_of(&parsed.subdomains) {
+        super::confirmed_label::remember(token, &l);
+    }
     Ok(AccountSubdomains {
         map: SubdomainMap::from_rows(primary, parsed.subdomains),
         tier,

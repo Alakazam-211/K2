@@ -234,6 +234,13 @@ pub struct TunnelConfig {
 
     #[serde(skip)]
     pub token_read_error: Option<String>,
+
+    /// The label the control plane confirmed for `token` (0.46.8 relay name
+    /// binding, [`super::confirmed_label`]). Never on disk in tunnel.json;
+    /// the connector fills it at start. It alone names the proxies
+    /// (`k2so-<label>`, `k2voice-<label>`); `subdomain` stays the request.
+    #[serde(skip)]
+    pub confirmed_label: Option<String>,
 }
 
 /// True when K2 Connect end-to-end encryption (Option A) is enabled for
@@ -339,6 +346,7 @@ impl Default for TunnelConfig {
             relay_default: None,
             token_home: None,
             token_read_error: None,
+            confirmed_label: None,
         }
     }
 }

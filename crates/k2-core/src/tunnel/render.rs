@@ -34,9 +34,12 @@ use super::config::{RelayEndpoint, TunnelConfig};
 ///     `localPort` (the daemon's rustls HTTPS listener port), which
 ///     terminates TLS itself. The relay never sees plaintext.
 ///
-/// The `proxy_name` is the frp proxy identifier — deterministic per
-/// subdomain so a restart reuses the same name. Defaults to
-/// `k2so-<subdomain>` (or `k2so-daemon` when no subdomain is set).
+/// The proxy is named `k2so-<label>` from the SERVER-CONFIRMED label
+/// (`cfg.confirmed_label`, 0.46.8 relay name binding), never from the
+/// requested `subdomain`: the relay will accept only that exact name. With
+/// no confirmed label NO proxy is rendered (never `k2so-daemon`); the
+/// connector logs why. `subdomain` still goes out as the requested label.
+/// `K2_TUNNEL_PROXY_NAME=config` restores the pre-0.46.8 naming.
 pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> String {
     render_frpc_toml_with(cfg, local_port, e2e, &custom_for_render())
 }
@@ -60,11 +63,7 @@ fn custom_for_render() -> Vec<String> {
 /// byte-identical to before 0.46.8.
 pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, custom: &[String]) -> String {
     let sub = cfg.subdomain.trim();
-    let proxy_name = if sub.is_empty() {
-        "k2so-daemon".to_string()
-    } else {
-        format!("k2so-{sub}")
-    };
+    let proxy_name = main_proxy_name(cfg);
 
     let mut out = String::new();
     out.push_str("# K2SO tunnel connector — auto-generated frpc config.\n");
@@ -96,6 +95,10 @@ pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, cus
     // vhostHTTPSPort and forward ciphertext to the daemon's rustls
     // listener (TLS terminates on the daemon); `http` is the legacy path
     // where the relay's Caddy terminates TLS. Same subdomain either way.
+    let Some(proxy_name) = proxy_name else {
+        out.push_str("# No proxy: the control plane has confirmed no label for this token yet.\n");
+        return out;
+    };
     out.push_str("[[proxies]]\n");
     out.push_str(&format!("name = {}\n", toml_str(&proxy_name)));
     if e2e {
@@ -169,6 +172,90 @@ pub fn render_frpc_toml_for_relay_with(
     render_frpc_toml_with(&c, local_port, e2e, custom)
 }
 
+/// The label that names the proxies: the server-confirmed one (a valid
+/// k2.dev label), or under `K2_TUNNEL_PROXY_NAME=config` the requested
+/// `subdomain` as before 0.46.8. `None` = no proxy.
+pub fn proxy_label(cfg: &TunnelConfig) -> Option<String> {
+    proxy_label_in(cfg, super::confirmed_label::config_naming())
+}
+
+fn proxy_label_in(cfg: &TunnelConfig, config_naming: bool) -> Option<String> {
+    if config_naming {
+        let sub = cfg.subdomain.trim();
+        return (!sub.is_empty()).then(|| sub.to_string());
+    }
+    cfg.confirmed_label.as_deref().map(str::trim).filter(|l| super::confirmed_label::label_ok(l)).map(str::to_string)
+}
+
+/// The main frpc's proxy name: `k2so-<confirmed label>`; `None` = no
+/// proxy. (`K2_TUNNEL_PROXY_NAME=config`: the pre-0.46.8 `k2so-<subdomain>`
+/// or `k2so-daemon`.)
+pub fn main_proxy_name(cfg: &TunnelConfig) -> Option<String> {
+    main_proxy_name_in(cfg, super::confirmed_label::config_naming())
+}
+
+fn main_proxy_name_in(cfg: &TunnelConfig, config_naming: bool) -> Option<String> {
+    match proxy_label_in(cfg, config_naming) {
+        Some(l) => Some(format!("k2so-{l}")),
+        None if config_naming => Some("k2so-daemon".to_string()),
+        None => None,
+    }
+}
+
+/// The voice lane's frp proxy name for `label` (§6.6 M4, exact).
+pub fn voice_proxy_name(label: &str) -> String {
+    format!("k2voice-{label}")
+}
+
+/// The TURN host the voice lane carries for `label` (§6.6 M1/M4): a nested
+/// name under the box's label, so the relay serves it for Pro labels only.
+pub fn voice_turn_host(label: &str) -> String {
+    format!("turn.{label}.k2.dev")
+}
+
+/// The local TURN-TLS listener frpc-voice dials: sew-media's `passthrough`
+/// listener on loopback (§6.6 M4/M5).
+pub const VOICE_LOCAL_PORT: u16 = 5349;
+
+/// Render `frpc-voice.toml` (voice rooms PRD §6.6 M4, S9b): a second frpc
+/// that dials the SAME relay as the main frpc (`relay`, the selector's
+/// current pick) with the SAME token and device id, logs in with
+/// `metadatas.role = "voice"` (the relay never takes its login or close as
+/// the box's liveness) and carries exactly one `https` proxy, named
+/// `k2voice-<label>`, for `turn.<label>.k2.dev` → `127.0.0.1:5349` with a
+/// PROXY v2 header. No `transport.tcpMux` line: frp's default (on) is what
+/// frps requires; isolation comes from the separate process and TCP
+/// connection. `<label>` is the server-confirmed label ([`proxy_label`]),
+/// never the requested `subdomain`. `None` without one (no proxy, so no
+/// lane).
+pub fn render_voice_frpc_toml(cfg: &TunnelConfig, relay: &RelayEndpoint) -> Option<String> {
+    let label = proxy_label(cfg)?;
+    let label = label.as_str();
+    let mut out = String::new();
+    out.push_str("# K2 voice lane (frpc-voice): auto-generated frpc config.\n");
+    out.push_str("# Carries only turn.<label>.k2.dev to sew-media's TURN-TLS on\n");
+    out.push_str("# 127.0.0.1:5349. DO NOT EDIT BY HAND: regenerated by the daemon.\n");
+    out.push_str("# Contains a bearer token; treat as a secret (file is written 0600).\n\n");
+    out.push_str(&format!("serverAddr = {}\n", toml_str(&relay.host)));
+    out.push_str(&format!("serverPort = {}\n", relay.port));
+    out.push('\n');
+    out.push_str("[metadatas]\n");
+    out.push_str(&format!("token = {}\n", toml_str(&cfg.token)));
+    if let Some(dev) = cfg.device_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str(&format!("device_id = {}\n", toml_str(dev)));
+    }
+    out.push_str("role = \"voice\"\n");
+    out.push('\n');
+    out.push_str("[[proxies]]\n");
+    out.push_str(&format!("name = {}\n", toml_str(&voice_proxy_name(label))));
+    out.push_str("type = \"https\"\n");
+    out.push_str(&format!("customDomains = [{}]\n", toml_str(&voice_turn_host(label))));
+    out.push_str("localIP = \"127.0.0.1\"\n");
+    out.push_str(&format!("localPort = {VOICE_LOCAL_PORT}\n"));
+    out.push_str("transport.proxyProtocolVersion = \"v2\"\n");
+    Some(out)
+}
+
 /// Minimal TOML basic-string escaping. frp config values (host, token,
 /// subdomain) are ASCII in practice, but we escape backslash, double
 /// quote, and control chars so a pathological token can't break the
@@ -202,6 +289,7 @@ mod tests {
             token: "tok_secret".to_string(),
             subdomain: "rosson".to_string(),
             local_port: Some(57839),
+            confirmed_label: Some("rosson".to_string()),
             ..Default::default()
         }
     }
@@ -316,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_subdomain_omits_subdomain_key_and_names_daemon() {
+    fn empty_subdomain_omits_subdomain_key_and_keeps_the_confirmed_name() {
         let mut cfg = sample();
         cfg.subdomain = String::new();
         let toml = render_frpc_toml(&cfg, 57839, false);
@@ -324,7 +412,58 @@ mod tests {
             !toml.contains("subdomain ="),
             "blank subdomain must not emit a subdomain key (server derives it)\n{toml}"
         );
-        assert!(toml.contains("name = \"k2so-daemon\""), "{toml}");
+        assert!(toml.contains("name = \"k2so-rosson\""), "{toml}");
+        assert!(!toml.contains("k2so-daemon"), "{toml}");
+    }
+
+    /// Relay name binding (0.46.8): the proxy names come from the label the
+    /// control plane confirmed, whatever the requested `subdomain` says.
+    #[test]
+    fn stale_or_odd_subdomains_still_name_the_confirmed_label() {
+        let relay = RelayEndpoint { host: "relay.k2.dev".into(), port: 7000 };
+        for requested in ["old-box", "rosson.k2.dev", "staging.rosson", "Rosson", "", "  rosson  "] {
+            let mut cfg = sample();
+            cfg.subdomain = requested.to_string();
+            let main = render_frpc_toml(&cfg, 57839, true);
+            assert!(main.contains("name = \"k2so-rosson\""), "{requested:?}\n{main}");
+            assert_eq!(main.matches("name = ").count(), 1, "{main}");
+            let voice = render_voice_frpc_toml(&cfg, &relay).expect("a confirmed label");
+            assert!(voice.contains("name = \"k2voice-rosson\""), "{requested:?}\n{voice}");
+            assert!(voice.contains("customDomains = [\"turn.rosson.k2.dev\"]"), "{voice}");
+            assert!(!voice.contains(requested.trim()) || requested.trim() == "rosson", "never the request\n{voice}");
+        }
+    }
+
+    /// No confirmed label: no tunnel proxy at all (never `k2so-daemon`),
+    /// and no voice lane. An invalid confirmation counts as none.
+    #[test]
+    fn no_confirmed_label_renders_no_proxy() {
+        let relay = RelayEndpoint { host: "relay.k2.dev".into(), port: 7000 };
+        for confirmed in [None, Some(""), Some("Rosson"), Some("rosson.k2.dev")] {
+            let mut cfg = sample();
+            cfg.confirmed_label = confirmed.map(str::to_string);
+            for e2e in [false, true] {
+                let toml = render_frpc_toml(&cfg, 57839, e2e);
+                assert!(!toml.contains("[[proxies]]"), "{confirmed:?}\n{toml}");
+                assert!(!toml.contains("k2so-"), "{toml}");
+                assert!(toml.contains("[metadatas]\ntoken = \"tok_secret\""), "frpc still logs in\n{toml}");
+            }
+            assert_eq!(render_voice_frpc_toml(&cfg, &relay), None);
+        }
+    }
+
+    /// The off switch (`K2_TUNNEL_PROXY_NAME=config`): the pre-0.46.8 names.
+    #[test]
+    fn the_config_switch_restores_the_old_naming() {
+        let mut cfg = sample();
+        cfg.confirmed_label = Some("rosson".into());
+        cfg.subdomain = "old-box".into();
+        assert_eq!(main_proxy_name_in(&cfg, true).as_deref(), Some("k2so-old-box"));
+        assert_eq!(main_proxy_name_in(&cfg, false).as_deref(), Some("k2so-rosson"));
+        cfg.subdomain = String::new();
+        assert_eq!(main_proxy_name_in(&cfg, true).as_deref(), Some("k2so-daemon"));
+        cfg.confirmed_label = None;
+        assert_eq!(main_proxy_name_in(&cfg, false), None);
     }
 
     #[test]
@@ -409,6 +548,68 @@ mod tests {
             render_frpc_toml_for_relay(&cfg, &primary, 57839, true),
             render_frpc_toml(&cfg, 57839, true),
         );
+    }
+
+    /// §6.6 M4: the voice lane's whole config, pinned line for line.
+    #[test]
+    fn voice_lane_renders_exactly_the_m4_shape() {
+        let mut cfg = sample();
+        cfg.device_id = Some("dev-abc-123".to_string());
+        let relay = RelayEndpoint { host: "relay.k2.dev".to_string(), port: 7000 };
+        let toml = render_voice_frpc_toml(&cfg, &relay).expect("a label renders");
+        let body: Vec<&str> = toml.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect();
+        assert_eq!(
+            body,
+            vec![
+                "serverAddr = \"relay.k2.dev\"",
+                "serverPort = 7000",
+                "[metadatas]",
+                "token = \"tok_secret\"",
+                "device_id = \"dev-abc-123\"",
+                "role = \"voice\"",
+                "[[proxies]]",
+                "name = \"k2voice-rosson\"",
+                "type = \"https\"",
+                "customDomains = [\"turn.rosson.k2.dev\"]",
+                "localIP = \"127.0.0.1\"",
+                "localPort = 5349",
+                "transport.proxyProtocolVersion = \"v2\"",
+            ],
+            "{toml}"
+        );
+        assert!(!toml.contains("tcpMux"), "tcpMux stays frp's default (on): no line\n{toml}");
+        assert!(!toml.contains("subdomain"), "only the exact TURN host, never the label's wildcard\n{toml}");
+        // No device id: the key is left out, as in the main config.
+        cfg.device_id = None;
+        assert!(!render_voice_frpc_toml(&cfg, &relay).unwrap().contains("device_id"));
+        // No confirmed label: nothing to carry.
+        cfg.confirmed_label = None;
+        assert_eq!(render_voice_frpc_toml(&cfg, &relay), None);
+    }
+
+    /// The voice lane changes nothing in the main frpc's config: same bytes
+    /// as before 0.46.8 (no turn proxy, no role meta).
+    #[test]
+    fn the_main_config_carries_no_turn_proxy() {
+        for e2e in [false, true] {
+            let main = render_frpc_toml(&sample(), 57839, e2e);
+            assert!(!main.contains("turn."), "{main}");
+            assert!(!main.contains("k2voice"), "{main}");
+            assert!(!main.contains("role"), "{main}");
+            assert_eq!(main.matches("[[proxies]]").count(), 1, "{main}");
+        }
+    }
+
+    /// The voice lane follows the main frpc's relay: rendered for the relay
+    /// the main frpc dials, only serverAddr/serverPort differ.
+    #[test]
+    fn voice_lane_render_swaps_only_the_relay() {
+        let cfg = sample();
+        let a = render_voice_frpc_toml(&cfg, &RelayEndpoint { host: "1.2.3.4".into(), port: 7000 }).unwrap();
+        let b = render_voice_frpc_toml(&cfg, &RelayEndpoint { host: "5.6.7.8".into(), port: 7001 }).unwrap();
+        let strip = |s: &str| s.lines().filter(|l| !l.starts_with("server")).collect::<Vec<_>>().join("\n");
+        assert_eq!(strip(&a), strip(&b));
+        assert!(b.contains("serverAddr = \"5.6.7.8\"") && b.contains("serverPort = 7001"));
     }
 
     #[test]

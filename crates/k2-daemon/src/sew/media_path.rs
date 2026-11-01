@@ -260,12 +260,35 @@ pub fn snapshot() -> Snapshot {
 fn publish(m: &Machine, sew_has_route: bool, now: Instant) -> Snapshot {
     let since = unix_now() - now.saturating_duration_since(m.since()).as_secs() as i64;
     let new = Snapshot { state: m.state(), since, sew: m.acked(), sew_has_route };
-    let mut s = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
-    if s.state != new.state {
-        k2_core::log_debug!("[sew] voice media path: {} -> {}", s.state.as_str(), new.state.as_str());
+    let changed = {
+        let mut s = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
+        let changed = s.state != new.state;
+        if changed {
+            k2_core::log_debug!("[sew] voice media path: {} -> {}", s.state.as_str(), new.state.as_str());
+        }
+        *s = new;
+        changed
+    };
+    if changed {
+        on_transition(new.state);
     }
-    *s = new;
     new
+}
+
+/// Every transition, once, outside the snapshot lock: lane C's BFF state.
+///
+/// INTEGRATION (lane C, `crate::voice::lane`, not on this branch): this
+/// body becomes
+/// `crate::voice::lane::publish(match state {
+///     PathState::Off => LaneState::not_applicable(),
+///     PathState::Up => LaneState::up(),
+///     PathState::Reconnecting => LaneState::reconnecting(REASON_LANE_DOWN),
+///     PathState::Down => LaneState::down(REASON_LANE_DOWN),
+/// })`.
+/// Until then lane C's default (not_applicable) holds and the BFF can read
+/// [`snapshot`] / [`await_join`] here instead.
+fn on_transition(state: PathState) {
+    let _ = state;
 }
 
 fn unix_now() -> i64 {

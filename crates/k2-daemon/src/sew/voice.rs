@@ -136,6 +136,14 @@ pub fn tier_port(tier: &str) -> u16 {
     }
 }
 
+/// The TURN tier voice runs on this box now (`direct`, `passthrough` =
+/// front443, `tunnel` = the voice lane), `None` when voice isn't installed.
+/// For lane C's `/cli/voice/status` `media.tier`.
+pub fn current_tier(env: &Env) -> Option<String> {
+    let st = load(env);
+    st.installed.then(|| tier(&st).to_string())
+}
+
 /// K2 made a `turn-<label>` A record for this TURN host (direct, front443
 /// passthrough); the tunnel's `turn.<label>` has none.
 pub fn has_turn_dns(st: &VoiceState) -> bool {

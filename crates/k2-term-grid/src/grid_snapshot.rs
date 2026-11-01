@@ -1,21 +1,18 @@
 //! Grid snapshot + delta types and serializers.
 //!
-//! Shared wire format for daemon → client terminal rendering. The
-//! daemon (A3 WS endpoint) serializes a `Term<L>`'s state into
-//! these types; the Tauri thin client (A5) consumes them and
-//! renders DOM. Both sides reference the same types here, so
-//! evolutions happen in one place.
+//! The server-side projection of an `alacritty_terminal::Term` for remote
+//! rendering: a host serializes the Term's grid, scrollback, cursor and
+//! modes into [`TermGridSnapshot`] (full) or [`TermGridDelta`] (damaged
+//! rows + appended scrollback), and clients render those. Both sides use
+//! the same types, so the format evolves in one place. Rows are lists of
+//! style-homogeneous [`CellRun`]s.
 //!
-//! At rest the types match the old Tauri-side shapes in
-//! `src-tauri/src/commands/kessel_term.rs` — they were moved here
-//! unchanged so no wire-format migration is required when the
-//! v2 renderer flips on.
+//! [`build_emit`] decides, from the Term's damage, whether the next frame
+//! is a full snapshot, a delta or nothing; [`drain_damage`] keeps that
+//! state coherent while nobody is watching.
 //!
-//! This module is generic over `alacritty_terminal`'s `EventListener`
-//! so it works uniformly with `NoopListener` (Kessel-T0) and
-//! `DaemonEventListener` (Kessel).
-//!
-//! See `.k2so/prds/alacritty-v2.md` phase A2.
+//! Everything is generic over `alacritty_terminal`'s `EventListener`, so
+//! it works with any Term.
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Grid};
@@ -47,7 +44,7 @@ pub struct TermGridSnapshot {
     /// this hasn't changed since the last observed snapshot.
     pub version: u64,
     /// How far into scrollback the Term is currently displaying.
-    /// Usually 0 for daemon sessions (only mutated via byte feed,
+    /// Usually 0 for host-side sessions (only mutated via byte feed,
     /// not user scroll — clients do their own scrolling).
     pub display_offset: usize,
     /// True when the child app has any mouse-reporting mode active
@@ -55,7 +52,7 @@ pub struct TermGridSnapshot {
     /// set, the client must forward wheel/click as encoded mouse
     /// events to the PTY instead of (or before) doing local-viewport
     /// scroll — the app paints its own scrollable surface (e.g.
-    /// Claude `/tui fullscreen`) and has no alacritty scrollback.
+    /// a full-screen TUI) and has no alacritty scrollback.
     pub mouse_report: bool,
     /// True when the child requested SGR extended mouse encoding
     /// (`?1006h`). Clients should emit `\e[<…M` sequences rather than
@@ -103,7 +100,7 @@ pub struct CellRun {
     /// cell). Lets the client's copy handler rejoin wrapped lines
     /// without hard newlines. Optional + absent-when-false so the
     /// wire stays byte-identical for non-wrapped rows and both sides
-    /// tolerate a peer that predates the field (older daemon → the
+    /// tolerate a peer that predates the field (older server → the
     /// client treats every row as unwrapped; older client → ignores
     /// the extra key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -405,7 +402,7 @@ pub fn snapshot_term<L: EventListener>(
         row: (cursor_point.line.0.max(0)) as usize,
         col: cursor_point.column.0,
         // Honor the child's `\e[?25h` / `\e[?25l` (DECTCEM). TUIs
-        // like Cursor Agent / claude / vim hide the alacritty
+        // like vim and many coding-agent CLIs hide the alacritty
         // cursor while they paint their own visual cursor inside
         // their input box. Without this, a stale cursor block
         // sits at the alacritty cursor position (typically the
@@ -480,7 +477,7 @@ pub enum EmitDecision {
 ///   - full damage → Full snapshot (cheaper than listing every row)
 ///   - nothing changed → Skip
 ///   - otherwise → Delta of damaged rows + appended scrollback
-/// 0.39.46 — consume the Term's accumulated damage WITHOUT encoding a
+/// Consume the Term's accumulated damage WITHOUT encoding a
 /// frame, keeping `state` coherent (`last_history_size` especially).
 /// Used by the shared grid emitter when a session has zero viewers:
 /// damage must still be drained on each Wakeup, or the stale
@@ -812,8 +809,7 @@ mod tests {
 
     // ── build_emit decision table (frame-shape pins) ─────────────
     //
-    // pi-mono study learning B2: K2 has the delta-vs-snapshot
-    // mechanism but nothing pinning it — a regression that turned
+    // The delta-vs-snapshot mechanism needs pinning — a regression that turned
     // steady-state deltas into per-wakeup full snapshots would ship
     // silently. These tests pin the decision table against a real
     // Term so an alacritty upgrade or a build_emit refactor that

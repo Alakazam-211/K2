@@ -7,8 +7,8 @@ import { decodeGridFrame, peekK1Kind } from './gridWire'
 // (unicode incl. emoji + CJK, explicit colors, every style flag,
 // wrapped runs, empty rows, mode bits). Regenerate with:
 //
-//   cargo test -p k2-core --lib \
-//     grid_wire::tests::fixture_hex_and_json_dump -- --nocapture
+//   cargo test -p k2-term-wire --lib \
+//     k1::tests::fixture_hex_and_json_dump -- --nocapture
 //
 // The JSON constant is serde's own serialization of the same value,
 // so this test pins the parity contract end to end: Rust encode →

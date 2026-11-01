@@ -1,0 +1,22 @@
+[package]
+name = "k2-term-wire"
+version = "0.1.0"
+edition = "2021"
+# Follows k2-term-grid (alacritty_terminal 0.26 needs Rust 1.85).
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Compact binary wire format (\"k1\") for terminal grid snapshots and deltas sent over a websocket."
+readme = "README.md"
+keywords = ["terminal", "websocket", "wire", "protocol", "binary"]
+categories = ["encoding", "command-line-interface"]
+# repository = TODO: set when this crate is published as kessel-wire.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+k2-term-grid = { path = "../k2-term-grid" }
+
+[dev-dependencies]
+serde_json = "1"

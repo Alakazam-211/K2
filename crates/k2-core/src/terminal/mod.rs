@@ -2,7 +2,10 @@
 
 mod alacritty_backend;
 pub mod event_sink;
-pub mod grid_types;
+// The grid model moved to k2-term-grid (to be published as kessel-grid);
+// re-exported so `k2_core::terminal::grid_types` keeps working.
+pub use k2_term_grid::grid_types;
+// Thin wrapper over k2_term_grid::reflow that adds K2's perf histogram.
 pub mod reflow;
 mod font_renderer;
 // 0.34.0 Session Stream PTY reader (Phase 2) was retired in 0.39.0
@@ -55,14 +58,16 @@ pub mod locale_env;
 // Kessel grid snapshot + delta wire types + serializers
 // (Phase A2). Shared between the daemon's WS endpoint (A3) and
 // the Tauri thin client (A5). Generic over `EventListener` so
-// it's usable with any Term variant.
-pub mod grid_snapshot;
+// it's usable with any Term variant. Lives in k2-term-grid (to be
+// published as kessel-grid); re-exported at the old path.
+pub use k2_term_grid::grid_snapshot;
 // "k1" — Kessel wire format v1: compact fixed-layout binary encoding
 // of the grid_snapshot types, opt-in per grid-WS connection (`&proto=k1`).
-// JSON stays the default. The byte layout is documented ONCE in this
-// module's doc comment and mirrored by the TS decoder
-// (`src/renderer/kessel-term/gridWire.ts`).
-pub mod grid_wire;
+// JSON stays the default. The byte layout is documented ONCE in
+// k2_term_wire::k1's doc comment (to be published as kessel-wire) and
+// mirrored by the TS decoder (`src/renderer/kessel-term/gridWire.ts`).
+// Re-exported at the old path.
+pub use k2_term_wire::k1 as grid_wire;
 // Grow-then-shrink settle watcher (2026-04-22). Every Session Stream
 // spawn opens the PTY at an artificially large rows value; this
 // module owns the "has the initial paint settled?" decision that

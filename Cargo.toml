@@ -25,6 +25,10 @@ members = [
     # (k2_core::test_env::write_executable). Never shipped.
     "tests/fakes/sh-shim",
     "crates/k2-ptyd",
+    # The terminal grid model and its wire codec (to be kessel-grid and
+    # kessel-wire); k2-core re-exports them.
+    "crates/k2-term-grid",
+    "crates/k2-term-wire",
     "crates/k2-export",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep

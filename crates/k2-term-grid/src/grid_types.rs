@@ -1,11 +1,10 @@
-//! Types exchanged between the Rust terminal backend and the JS
-//! frontend over Tauri events.
+//! The compact line model: a terminal screen as rows of plain text plus
+//! sparse style spans ([`GridUpdate`], [`CompactLine`], [`StyleSpan`]).
 //!
-//! Scope: the DOM grid emission path only. The retired bitmap-render
-//! path's types (`BitmapUpdate`, `BitmapPerfInfo`, `RowStripUpdate`)
-//! were removed in 0.32.11; restore from git history at that tag when
-//! bitmap+DOM-overlay rendering is revived for smooth scrolling with
-//! text selection.
+//! This is the shape a host sends to simple renderers (a DOM grid, a
+//! phone) and the input to [`crate::reflow`]. Each row carries a `wrapped`
+//! flag so soft-wrapped lines can be re-joined and re-wrapped at another
+//! width.
 
 use serde::Serialize;
 
@@ -50,14 +49,14 @@ pub struct CompactLine {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<StyleSpan>,
     /// True if this line is a soft-wrap continuation of the previous line.
-    /// Used by the reflow engine to reconstruct logical lines for mobile rendering.
+    /// Used by the reflow engine to reconstruct logical lines at another width.
     #[serde(skip_serializing_if = "is_false")]
     pub wrapped: bool,
 }
 
 fn is_false(v: &bool) -> bool { !v }
 
-/// A grid update sent from Rust → frontend via Tauri event.
+/// A grid update sent from the terminal host to a renderer.
 #[derive(Serialize, Clone, Debug)]
 pub struct GridUpdate {
     pub cols: u16,

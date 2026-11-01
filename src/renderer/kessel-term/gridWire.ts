@@ -1,7 +1,7 @@
 // "k1" — Kessel wire format v1: client decoder.
 //
 // Mirrors the layout documented in
-// `crates/k2-core/src/terminal/grid_wire.rs` (the single source of
+// `crates/k2-term-wire/src/k1.rs` (the single source of
 // truth). A connection opts in with `&proto=k1` on the grid-WS URL;
 // the daemon then sends `snapshot`/`delta` frames as WS BINARY
 // messages in this format while every other event (title, bell,

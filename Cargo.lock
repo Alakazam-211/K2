@@ -4165,6 +4165,8 @@ dependencies = [
  "k2-ptyd",
  "k2-root-proto",
  "k2-simvideo",
+ "k2-term-grid",
+ "k2-term-wire",
  "k2-winsec",
  "libc",
  "llama-cpp-2",
@@ -4446,6 +4448,23 @@ name = "k2-simvideo"
 version = "0.1.0"
 dependencies = [
  "image",
+]
+
+[[package]]
+name = "k2-term-grid"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "serde",
+ "vte",
+]
+
+[[package]]
+name = "k2-term-wire"
+version = "0.1.0"
+dependencies = [
+ "k2-term-grid",
+ "serde_json",
 ]
 
 [[package]]

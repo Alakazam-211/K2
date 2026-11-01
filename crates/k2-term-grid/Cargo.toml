@@ -1,0 +1,24 @@
+[package]
+name = "k2-term-grid"
+version = "0.1.0"
+edition = "2021"
+# alacritty_terminal 0.26 needs Rust 1.85.
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Terminal grid model for remote rendering: snapshots and deltas of an alacritty_terminal Term, a compact line model, and reflow to another width."
+readme = "README.md"
+keywords = ["terminal", "grid", "alacritty", "snapshot", "reflow"]
+categories = ["command-line-interface"]
+# repository = TODO: set when this crate is published as kessel-grid.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Same version requirements as k2-core, so the lockfile keeps one copy of
+# each. Inside the K2 workspace, vte resolves to the patched copy in
+# third_party/vte (see the workspace Cargo.toml).
+[dependencies]
+alacritty_terminal = "0.26.0-rc1"
+vte = { version = "0.15", features = ["std", "ansi"] }
+serde = { version = "1", features = ["derive"] }

@@ -216,6 +216,12 @@ quick-xml = "0.38"
 # blocking client, shared with the daemon's ptyd backend. The lib is tiny
 # (libc/serde/hmac/sha2/getrandom), no tokio or alacritty.
 k2-ptyd = { path = "../k2-ptyd" }
+# The terminal grid model (snapshots, deltas, compact lines, reflow) and
+# its "k1" binary wire codec, split out for open source (kessel-grid,
+# kessel-wire). terminal::{grid_types, grid_snapshot, grid_wire} re-export
+# them at their old paths.
+k2-term-grid = { path = "../k2-term-grid" }
+k2-term-wire = { path = "../k2-term-wire" }
 
 # Low-level primitives used by the alacritty PTY event loop.
 libc = "0.2"

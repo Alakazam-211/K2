@@ -354,6 +354,24 @@ async fn an_existing_server_space_is_read_back() {
     env.sew.assert_clean();
 }
 
+/// SW-1 (sew-56 v1.2): the same create body replays `200 created: false`;
+/// K2 takes it as success and uses that Space.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replayed_create_with_created_false_is_success() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    // An earlier K2 made it under the name this box sends ("K2").
+    env.sew.add_server_space_named("7778", Some("K2"));
+    settle(&env).await;
+    assert_eq!(hook::admin_space_id().unwrap().as_deref(), Some("7778"));
+    assert_eq!(env.sew.server_space_id().as_deref(), Some("7778"), "no second Space");
+    let create = rows().into_iter().find(|r| r.subject_key == admin_space::SUBJECT_SPACE).expect("create row");
+    assert_eq!((create.state.as_str(), create.last_status), ("done", Some(200)));
+    assert_eq!(create.result.as_ref().and_then(|r| r["created"].as_bool()), Some(false), "a replay");
+    assert!(env.sew.channels("7778").contains_key("room-1"), "rooms follow");
+    assert_eq!(default_space().as_deref(), Some("k2-admin"));
+    env.sew.assert_clean();
+}
+
 /// SW-1: `409 slug_taken` blocks the Space, loudly; nothing else is sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slug_taken_blocks_and_is_reported() {

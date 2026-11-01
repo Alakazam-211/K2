@@ -670,7 +670,9 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
     let Some(row) = outbox::get(conn, id)? else { return Ok(false) };
     match Op::parse(&row.op) {
         Some(Op::AdminSpaceCreate) => {
-            // 2xx: the create answer; 409 server_space_exists: read it back.
+            // 2xx: the create answer, `created: true`, or (sew-56 v1.2) a
+            // replay of the same body, `created: false`: both are success.
+            // 409 server_space_exists: read `details.space_id` back.
             let created: Option<sew_wire::SpaceCreateResponse> = serde_json::from_str(result).ok();
             let space_id = created.map(|c| c.space_id).or_else(|| error_detail(result, "space_id"));
             let Some(space_id) = space_id.filter(|s| sew_wire::is_sew_id(s)) else {

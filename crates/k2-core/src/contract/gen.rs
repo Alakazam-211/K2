@@ -69,8 +69,8 @@ pub const FRAME_MAX_BYTES: usize = 48 * 1024;
 /// store.patch and links.open rows and the links:open cap group, 0.46.4;
 /// 172 since Garden files and history (0.46.5, prd-garden-board-needs-v1
 /// §9): eleven rows, the downloads:save and uploads:pick groups and the
-/// restore echo note).
-pub const GUIDE_MAX_LINES: usize = 172;
+/// restore echo note; 173 since catalog v43's store.grantees row).
+pub const GUIDE_MAX_LINES: usize = 173;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -861,8 +861,8 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            98,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7)"
+            99,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden)"
         );
         assert_eq!(
             catalog().verbs_exposed_to(Exposure::Widget).len(),

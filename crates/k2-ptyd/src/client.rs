@@ -67,7 +67,8 @@ pub struct Conn {
 /// user could otherwise pre-create. After connecting, the peer must run as
 /// our uid (`SO_PEERCRED` / `getpeereid`), mirroring the server's peer
 /// check. Either failure is `PermissionDenied`: an owner should treat it as
-/// "ptyd unavailable" (K2's daemon keeps sessions in-process).
+/// "ptyd unavailable" (and, for example, fall back to hosting its
+/// sessions in-process).
 ///
 /// No server key proof in `welcome`: it could only be optional (an older
 /// ptyd an owner must still adopt can't send it), and an optional proof

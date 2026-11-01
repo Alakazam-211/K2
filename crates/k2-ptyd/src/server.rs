@@ -67,8 +67,8 @@ pub enum Exit {
 
 /// Size at which `ptyd.log` rotates to `ptyd.log.1` (one generation kept).
 /// Any peer can make ptyd log a line (e.g. `frame_too_large` per bad
-/// frame) and ptyd lives as long as the agents, so the log is bounded
-/// (fuzz finding, 2026-10-20).
+/// frame) and ptyd lives as long as the agents, so the log must stay
+/// bounded however many bad frames arrive.
 pub const LOG_MAX_BYTES: u64 = 8 << 20;
 
 pub struct Log {
@@ -720,7 +720,7 @@ impl Server {
                 }
             }
         }
-        // Exited and fully drained: EOF tells the daemon's backend.
+        // Exited and fully drained: EOF tells the reader the session is over.
         if !s.running() && s.sent >= s.ring.end() {
             c.closing = true;
         }
@@ -1571,9 +1571,9 @@ fn signal_session(s: &Session, sig: Sig, target: SigTarget) -> Reply {
 mod tests {
     use super::*;
 
-    /// Fuzz finding (2026-10-20): any peer can make ptyd log a line per
-    /// bad frame, so the log rotates at its cap and never grows past
-    /// cap + one line, keeping exactly one older generation.
+    /// Invariant: any peer can make ptyd log a line per bad frame, so
+    /// the log rotates at its cap and never grows past cap + one line,
+    /// keeping exactly one older generation.
     #[test]
     fn log_rotates_at_its_cap_and_keeps_one_generation() {
         let dir = std::env::temp_dir().join(format!("k2-ptyd-log-{}", std::process::id()));

@@ -9,9 +9,10 @@
 //! - `k2-ptyd --resume-state-fd N --listen-fd M`: the new image after a
 //!   self-upgrade exec (never run by hand).
 //!
-//! The state home comes from `K2_HOME` (its owner, K2's daemon, always
-//! sets it). The env names are part of the launch contract with running
-//! ptyds and stay as they are until they become configuration.
+//! The state home comes from `K2_HOME` (the owner always sets it, see
+//! `launch::spawn_detached`). The env names are part of the launch
+//! contract with running ptyds and stay as they are until they become
+//! configuration.
 
 #[cfg(unix)]
 fn main() {

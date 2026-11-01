@@ -3,7 +3,8 @@
 //! them.
 //!
 //! ptyd is a long-lived, single-threaded Unix process. One **owner** client
-//! (in K2, the daemon) connects over a private Unix socket, authenticated
+//! (the program that drives the sessions, such as a terminal server)
+//! connects over a private Unix socket, authenticated
 //! both ways: the server checks the peer uid and an HMAC challenge over a
 //! 0600 key file; the client checks the socket directory and the server's
 //! uid. The owner asks ptyd to spawn programs on fresh PTYs; ptyd reaps
@@ -30,10 +31,14 @@
 //! terminal emulator, no network or TLS crates. Windows is not supported
 //! yet.
 //!
-//! Its runtime contract still uses K2's names: the state home comes from
-//! `K2_HOME`, the orphan timeout from `K2_PTYD_ORPHAN_SECS`, and the
-//! environment is cut down to [`ENV_ALLOWLIST`]. They become configuration
-//! before this crate is published under its own name.
+//! Its runtime contract still uses the names of K2, the product it was
+//! built for: the state home comes from `K2_HOME`, the orphan timeout from
+//! `K2_PTYD_ORPHAN_SECS`, and the environment is cut down to
+//! [`ENV_ALLOWLIST`]. They become configuration before this crate is
+//! published under its own name.
+//!
+//! A runnable owner (launch, connect, spawn bash, attach from offset 0,
+//! read) is in `examples/spawn_bash.rs`.
 
 pub mod auth;
 pub mod paths;

@@ -218,7 +218,7 @@ impl Server {
             (Some(_), Some(_)) => {}
             _ => return fail(self, format!("unparsable version {to_version:?}")),
         }
-        // Input the daemon already wrote to a data stream is part of the
+        // Input the owner already wrote to a data stream is part of the
         // state (it would otherwise die with the socket).
         let data: Vec<u64> = self.conns.iter().filter(|(_, c)| matches!(c.kind, Kind::Data { sid: Some(_) })).map(|(i, _)| *i).collect();
         for c in data {

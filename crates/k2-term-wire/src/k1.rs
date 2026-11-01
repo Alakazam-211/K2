@@ -1,18 +1,30 @@
 //! Wire format v1 ("k1") — compact fixed-layout binary encoding of
 //! [`TermGridSnapshot`] / [`TermGridDelta`].
 //!
-//! Opt-in per connection (`&proto=k1` on the grid-WS URL); the JSON
-//! text frames stay the default so a mixed-version fleet keeps
-//! working. Only `snapshot` and `delta` frames go binary — every
-//! other event (title, bell, labels, child_exit, error) stays a JSON
-//! text frame. A k1 frame carries exactly the information of the JSON
-//! frame it replaces: decoding it MUST reproduce the same object the
+//! Meant as an opt-in per connection, with the JSON text frames as the
+//! default, so servers and clients of different ages keep working.
+//! Only `snapshot` and `delta` frames go binary; every other event a
+//! server sends (title, bell, child exit, errors) stays a JSON text
+//! frame. A k1 frame carries exactly the information of the JSON
+//! frame it replaces: decoding it MUST reproduce the same object a
 //! client's `JSON.parse` would have produced (the round-trip parity
 //! test below pins this).
 //!
-//! A TypeScript decoder for browsers mirrors this layout verbatim (in
-//! K2 it ships with the desktop client's terminal renderer). This module
-//! doc is the single source of truth for the layout.
+//! A decoder in another language (for example TypeScript, for
+//! browsers) mirrors this layout verbatim; none is published with this
+//! crate yet. This module doc is the single source of truth for the
+//! layout.
+//!
+//! ## Versioning
+//!
+//! The first two bytes of every frame are the magic byte
+//! ([`WIRE_MAGIC`], `0x6B`, ASCII `k`) and the format version
+//! ([`WIRE_VERSION`], `1`; "k1" is short for "k, version 1").
+//! [`decode_frame`] returns an error for any other magic byte or
+//! version; it never guesses. One caveat: the `has-cols` style bit
+//! (bit7) was added within version 1, so a decoder older than that bit
+//! misreads a run that sets it. Version 1 assumes the encoder and the
+//! decoder ship together; the next incompatible change gets version 2.
 //!
 //! ## Layout (all integers little-endian)
 //!
@@ -268,9 +280,8 @@ pub fn encode_delta(d: &TermGridDelta) -> Vec<u8> {
 
 // ── Decoding ────────────────────────────────────────────────────────
 //
-// The production decoder is the TS client; this one exists so the
-// round-trip parity tests (and any future Rust wire consumer) can
-// verify encode/decode symmetry without crossing languages.
+// A browser client usually decodes in its own language; this Rust
+// decoder backs the round-trip parity tests and any Rust consumer.
 
 /// A decoded k1 frame.
 #[derive(Debug)]
@@ -481,8 +492,8 @@ mod tests {
     /// The canonical nontrivial fixture: unicode (emoji + CJK +
     /// combining accents), explicit colors, every style flag, wrapped
     /// runs, empty rows, non-default cursor + mode bits. The SAME
-    /// snapshot/delta pair backs the TypeScript decoder's fixture
-    /// (in K2, `gridWire.test.ts`) — regenerate its
+    /// snapshot/delta pair backs the fixture of any decoder in another
+    /// language (such as a TypeScript one) — regenerate its
     /// hex + JSON constants via `fixture_hex_and_json_dump` below if
     /// this changes.
     fn fixture_snapshot() -> TermGridSnapshot {
@@ -736,8 +747,8 @@ mod tests {
         }
     }
 
-    /// Regenerates the constants embedded in the TypeScript decoder's
-    /// test (in K2, `gridWire.test.ts`). Run with
+    /// Regenerates the constants embedded in another-language
+    /// decoder's test (such as a TypeScript one). Run with
     /// `cargo test -p k2-term-wire --lib k1::tests::fixture_hex_and_json_dump -- --nocapture`
     /// and paste the output when the fixture changes. Asserts the
     /// encodings are non-empty so it fails loudly rather than

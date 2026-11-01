@@ -968,6 +968,14 @@ impl DaemonPtySession {
         child_env
             .entry("TERM_PROGRAM".to_string())
             .or_insert_with(|| "K2".to_string());
+        // Claude Code turns synchronized output (DEC mode 2026) on only for
+        // terminals it recognises by XTVERSION or TERM_PROGRAM, and K2 is
+        // neither, so its redraws went out unbracketed and a frame could
+        // catch one half-parsed ("jelly" scrolling, worst on remote boxes).
+        // K2 honours 2026 (grid_emitter), so say so. A caller's value wins.
+        child_env
+            .entry("CLAUDE_CODE_FORCE_SYNC_OUTPUT".to_string())
+            .or_insert_with(|| "1".to_string());
 
         // Locale: launchd/systemd hand the daemon NO LANG/LC_*, so
         // children land in the C locale — under which `pbcopy`

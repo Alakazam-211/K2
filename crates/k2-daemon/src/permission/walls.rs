@@ -1060,6 +1060,9 @@ mod tests {
             (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.nsi","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
             (403, "POST", "/cli/skin/users/password", vec![], Some(json!({"username":"adam","password":"hunter2-not-real"})), json!({"ok":false,"error":{"code":"owner_only","hint":"'adam' has a box login"}}), "apps.user-password-reset"),
             (403, "GET", "/cli/docs/read", vec![("workspace", "alpha"), ("path", "/abs/alpha/notes/plan.md")], None, json!({"ok":false,"error":{"code":"doc_not_shared","hint":"x","workspace":"alpha","path":"notes/plan.md"}}), "docs.share"),
+            // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
+            (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {

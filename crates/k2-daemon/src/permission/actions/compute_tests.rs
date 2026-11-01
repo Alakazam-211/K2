@@ -227,10 +227,14 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
     // A Member login is below the card's floor.
     let member = login("alm", Role::Member);
     below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
-    // The clear card, while a list is set.
-    let v = ask_ok(&ws, "compute.allow-nodes-clear", json!({}));
-    let vw = view(&ws, &card_of(&v));
-    assert_eq!(vw["whatChanges"], format!("Remove {}'s compute node list.", ws.handle), "{vw}");
+    // The clear card, while a list is set (another workspace, so the card
+    // is its own and not batched with the one above).
+    let ws2 = seed("alnc");
+    let (a2, _) = list_node(&ws2, "al-d", true);
+    set_list(&ws2, Some(std::slice::from_ref(&a2)));
+    let v = ask_ok(&ws2, "compute.allow-nodes-clear", json!({}));
+    let vw = view(&ws2, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Remove {}'s compute node list.", ws2.handle), "{vw}");
 
     // Compute off: neither asks.
     let _off = ComputeOn::set(false);

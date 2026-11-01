@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 42,
+  "catalogVersion": 43,
   "caps": [
     {
       "name": "agents:read",
@@ -5679,6 +5679,81 @@
       ],
       "doc": "This widget's files, a page at a time, with the bytes they count for and the quota.",
       "example": "const {items, bytes, quota} = await k2.blobs.list()"
+    },
+    {
+      "verb": "store.grantees",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "StoreGrantees",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "StoreGrantee",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": "string",
+                  "description": "The agent's handle on this computer."
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "write"
+                  ]
+                },
+                "prefixes": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The key prefixes its grants cover; null for all of this widget's data."
+                }
+              },
+              "required": [
+                "handle",
+                "level",
+                "prefixes"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "The agents on this computer that may read this widget's data, and the key prefixes they reach (the Board lists who can work on a board).",
+      "example": "const {items} = await k2.store.grantees()"
     },
     {
       "verb": "downloads.begin",

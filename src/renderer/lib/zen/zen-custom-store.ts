@@ -77,6 +77,9 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'store.history',
   'store.restore',
   'store.snapshot',
+  // Catalog v43 (the Board Garden): the agents with a grant on this
+  // widget's data, for the Board's chat list.
+  'store.grantees',
 ])
 
 /** How long the person's name is reused before `viewer.get` again. */

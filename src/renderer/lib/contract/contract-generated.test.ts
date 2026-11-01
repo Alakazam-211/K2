@@ -189,6 +189,8 @@ describe('TUWA5: the generated tables', () => {
       'store.history': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.restore': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.snapshot': { cap: 'store:write', reach: 'local', kind: 'call' },
+      // Catalog v43 (the Board Garden): who has a grant on this widget's data.
+      'store.grantees': { cap: 'store:read', reach: 'local', kind: 'call' },
       // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
       // daemon answers them through /cli/zen/call.
       'save.get': { cap: null, reach: 'local', kind: 'call' },

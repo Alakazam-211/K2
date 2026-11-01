@@ -246,3 +246,22 @@ fn the_board_route_is_post_only_and_agents_reach_it_on_the_cell_socket() {
     let row = crate::routes::route_policy::lookup(crate::board_routes::ROUTE).expect("a policy row");
     assert!(row.post.is_some() && row.get.is_none(), "POST only: a GET is 405 before the handler");
 }
+
+/// `store.grantees` (catalog v43): the agents with a grant on the Board's
+/// data and what each reaches, for the Board's chat list.
+#[test]
+fn grantees_lists_each_agent_once_with_its_reach() {
+    let _e = env();
+    grant("w-pat", "write", "board/b1a2b3c/");
+    grant("w-pat", "read", "board/b9f9f9f/");
+    grant("w-sam", "read", "");
+    let space = k2_core::garden_data::Space::data("k2:board").expect("space");
+    let v = crate::garden_data::call::grantees(&space, "g-none").expect("grantees");
+    assert_eq!(
+        v,
+        json!({ "items": [
+            { "handle": "pat", "level": "write", "prefixes": ["board/b1a2b3c/", "board/b9f9f9f/"] },
+            { "handle": "sam", "level": "read", "prefixes": null },
+        ] })
+    );
+}

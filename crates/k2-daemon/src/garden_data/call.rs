@@ -737,6 +737,18 @@ fn store_verb(
                 _ => crate::garden_data::history_routes::snapshot(space, &caller, o, verb),
             }
         }
+        // Catalog v43 (the Board Garden, Rosson 2026-11-01): the agents with
+        // a grant on this widget's data and the prefixes they reach, so the
+        // Board lists who can work on a board (it can't read grants).
+        "store.grantees" => {
+            budget::spend(key, Spend::Read)?;
+            if !args.is_empty() {
+                return Err(DataError::BadRequest(format!("{verb} takes no arguments")));
+            }
+            let out = grantees(space, &w.garden)?;
+            audit::count(space.as_str(), &label, Some(made), Counted::Read);
+            Ok(out)
+        }
         // prd-garden-board-needs-v1 GB13 (garden-blobs-v1).
         "blobs.info" => {
             budget::spend(key, Spend::Read)?;
@@ -761,6 +773,73 @@ fn store_verb(
         }
         _ => Err(refused("unknown_verb", 400, format!("no verb {verb}"))),
     }
+}
+
+/// `store.grantees`: every agent with an effective grant on `space` (its
+/// own, or through a K2 project), one row each: the higher level, and the
+/// prefixes (null when one grant covers the whole space). With Garden
+/// access on, an editor of this Garden reaches its widgets' data in full.
+pub(crate) fn grantees(space: &Space, garden: &str) -> Result<J, DataError> {
+    use k2_core::garden_data::grants::{self, SubjectKind};
+    use std::collections::{BTreeMap, BTreeSet};
+    // project id → (write?, prefixes, whole space?), read under one lock;
+    // handles are looked up after it is let go (they take the lock too).
+    let mut rows: BTreeMap<String, (bool, BTreeSet<String>, bool)> = BTreeMap::new();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut ids: BTreeSet<String> = BTreeSet::new();
+        for g in grants::list_space(&conn, space)? {
+            match g.subject_kind {
+                SubjectKind::Workspace => {
+                    ids.insert(g.subject_id);
+                }
+                SubjectKind::Project => {
+                    let mut st = conn
+                        .prepare("SELECT workspace_id FROM project_group_members WHERE group_id = ?1")
+                        .map_err(|e| DataError::Unavailable(format!("project members: {e}")))?;
+                    let members = st
+                        .query_map([&g.subject_id], |r| r.get::<_, String>(0))
+                        .map_err(|e| DataError::Unavailable(format!("project members: {e}")))?;
+                    for m in members {
+                        ids.insert(m.map_err(|e| DataError::Unavailable(format!("project members: {e}")))?);
+                    }
+                }
+            }
+        }
+        for pid in ids {
+            let eff = grants::effective_grants(&conn, space, &pid)?;
+            if eff.is_empty() {
+                continue;
+            }
+            let e = rows.entry(pid).or_default();
+            for g in eff {
+                e.0 |= g.level == k2_core::garden_data::Level::Write;
+                e.2 |= g.prefix.is_empty();
+                e.1.insert(g.prefix);
+            }
+        }
+        if k2_core::zen::garden_access::enabled() {
+            let editors = k2_core::zen::garden_access::list(&conn, garden)
+                .map_err(|e| DataError::Unavailable(format!("garden access list: {e:?}")))?;
+            for r in editors {
+                let e = rows.entry(r.project_id).or_default();
+                e.0 = true;
+                e.2 = true;
+            }
+        }
+    }
+    let items: Vec<J> = rows
+        .into_iter()
+        .map(|(pid, (write, prefixes, whole))| {
+            json!({
+                "handle": crate::compute_routes::ws_handle(&pid),
+                "level": if write { "write" } else { "read" },
+                "prefixes": if whole { J::Null } else { json!(prefixes.into_iter().collect::<Vec<_>>()) },
+            })
+        })
+        .collect();
+    Ok(json!({ "items": items }))
 }
 
 fn tx_owner(w: &Placed) -> TxOwner {

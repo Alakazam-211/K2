@@ -52,6 +52,11 @@
 //      (`useAutoMarkRead`, `stores/unread.ts`). A Home remote room's
 //      Thread is marked read on the room's server, for this window's login
 //      there (`markReadOnServer`; not on a view-only room).
+//   9. A remote Thread paints its last messages at once from the view
+//      cache (`threadViewCache.ts`, research-remote-thread-load-v1 Fix 4),
+//      then the snapshot replaces them. While only the cache is shown
+//      (`fromCache`), nothing is marked read. The first page read is shared
+//      with a read already on its way (`threadRead.ts`).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -83,6 +88,8 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { createViewingSender, windowIsLookedAt, type ViewingSender } from './threadViewing'
 import { useAutoMarkRead } from '@/stores/unread'
+import { peekThreadView, readThreadView, saveThreadView } from './threadViewCache'
+import { readThreadFirstPage } from './threadRead'
 import {
   isThreadAddressMiss,
   publishThreadAddress,
@@ -162,8 +169,11 @@ export function useOverlayThread(opts: {
   hasMore: boolean
   loadOlder: () => Promise<void>
   loadingOlder: boolean
-  /** True once the first snapshot for this addr has landed (or failed). */
+  /** True once the first snapshot for this addr has landed (or failed), or
+   *  the view cache had messages to show. */
   loaded: boolean
+  /** The messages shown are the view cache's, not yet the server's. */
+  fromCache: boolean
   /** The agent's Thread turn, live or just ended (TW11); null when none. */
   turn: ThreadTurn | null
   /** The server reports Thread turns (`daemon-activity`). False: `turn` is
@@ -184,6 +194,9 @@ export function useOverlayThread(opts: {
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [fromCache, setFromCache] = useState(false)
+  /** The server's snapshot landed for the running view (what the cache saves). */
+  const serverReadRef = useRef(false)
   const [turn, setTurn] = useState<ThreadTurn | null>(null)
   /** Bumped when the address moved to another conversation: start over. */
   const [epoch, setEpoch] = useState(0)
@@ -239,12 +252,18 @@ export function useOverlayThread(opts: {
       setHasMore(false)
       setLoadingOlder(false)
       setLoaded(false)
+      setFromCache(false)
+      serverReadRef.current = false
       setTurn(null)
       return
     }
     setLoaded(false)
+    setFromCache(false)
+    serverReadRef.current = false
     setTurn(null)
     let cancelled = false
+    /** The snapshot landed: the cache no longer paints. */
+    let snapshotIn = false
     let ws: WebSocket | null = null
     let connecting = false
     let conv = ''
@@ -476,11 +495,35 @@ export function useOverlayThread(opts: {
     }
     const onBlur = (): void => viewingSender.update()
 
+    /** §9: a remote Thread's last messages, before the server answers. */
+    function paintFromCache(): void {
+      if (!scope.isRemote) return
+      const host = scope.hostKey
+      const sent = addrRef.current
+      const show = (items: OverlayThreadItem[]): void => {
+        if (cancelled || snapshotIn || items.length === 0) return
+        setItems(items)
+        setFromCache(true)
+        setLoaded(true)
+      }
+      const hit = peekThreadView(host, sent)
+      if (hit) {
+        show(hit.items)
+        return
+      }
+      void readThreadView(host, sent).then((v) => {
+        if (v) show(v.items)
+      })
+    }
+
     async function boot(): Promise<void> {
       const sent = addrRef.current
       try {
-        const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: sent, limit: OVERLAY_PAGE_SIZE, ...threadCardsParams(scope) })
+        const raw = await readThreadFirstPage(scope, sent)
         if (cancelled) return
+        snapshotIn = true
+        serverReadRef.current = true
+        setFromCache(false)
         const snap = threadItemsFromSnapshot(raw)
         conv = snap.conversation_id || conversationId || ''
         bootedConvRef.current = conv
@@ -498,6 +541,9 @@ export function useOverlayThread(opts: {
         await connect(() => snapNewest)
       } catch (e) {
         if (!cancelled) {
+          // A cached view stays up under the error (it is still marked as
+          // the cache's: nothing is marked read from it).
+          snapshotIn = true
           if (isThreadAddressMiss(e)) requestThreadAddressRelookup(sent)
           setError(e instanceof Error ? e.message : String(e))
           setLoaded(true)
@@ -512,6 +558,7 @@ export function useOverlayThread(opts: {
       void catchUpTurn()
     }
 
+    paintFromCache()
     void boot()
     if (typeof window !== 'undefined') {
       window.addEventListener('focus', onFocus)
@@ -707,12 +754,20 @@ export function useOverlayThread(opts: {
     [scope, addr],
   )
 
+  // §9: what this view holds after the server's read goes to the view
+  // cache (remote only; coalesced there). Never the cache's own paint.
+  useEffect(() => {
+    if (!enabled || !scope.isRemote || fromCache || !serverReadRef.current) return
+    saveThreadView(scope.hostKey, addrRef.current, resolvedConv, items)
+  }, [items, resolvedConv, fromCache, enabled, scope])
+
   // §8: read while looking (thread-read-v1). An effect, never render.
+  // §9: never from the cache's paint (nothing stale counts as read).
   useAutoMarkRead({
     kind: 'thread',
     id: resolvedConv || conversationId,
-    newestSeq: newestSeq(items),
-    visible: viewing && enabled,
+    newestSeq: fromCache ? 0 : newestSeq(items),
+    visible: viewing && enabled && !fromCache,
     scope,
   })
 
@@ -728,6 +783,7 @@ export function useOverlayThread(opts: {
     loadOlder,
     loadingOlder,
     loaded,
+    fromCache,
     turn,
     turnsReported: scope.serverSupports('daemon-activity'),
     currentAddr: addressInfo.currentAddr,

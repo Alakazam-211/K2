@@ -446,6 +446,14 @@ fn sew_refusals_map_to_the_clients_codes() {
     let other = r(403, json!({"error": {"code": "missing_permission", "hint": "no", "details": {"reason": "x"}}}));
     assert_eq!((other.status, other.code.as_str()), (403, "missing_permission"));
     assert_eq!(other.details.unwrap()["sew"]["code"], "missing_permission");
+    assert!(other.hint.contains("(x)"), "the reason is named: {}", other.hint);
+    // sew-56 v1.2 SW-1: client routes on the Admin Space.
+    for reason in ["app_session_not_allowed", "app_user_not_allowed"] {
+        let x = r(403, json!({"ok": false, "error": {"code": "missing_permission", "hint": "", "details": {"reason": reason}}}));
+        assert_eq!((x.status, x.code.as_str()), (403, reason));
+        assert!(!x.hint.is_empty());
+        assert_eq!(x.details.unwrap()["sew"]["details"]["reason"], reason);
+    }
     assert_eq!(r(200, Value::Null).status, 502, "a non-error status never passes as a refusal status");
 }
 

@@ -130,6 +130,35 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
     if is("agents_not_in_voice") {
         return Refusal::new(403, "agents_not_in_voice", "agents don't join voice rooms");
     }
+    // Sew sew-56 v1.2 SW-1: client routes on the K2 Admin Space answer
+    // `403 missing_permission` with these reasons. K2's own passes carry
+    // no `app` claim and never name an App user, so either one means the
+    // session is not a box login's: say so plainly.
+    if code == "missing_permission" && reason == "app_session_not_allowed" {
+        return Refusal::new(
+            403,
+            "app_session_not_allowed",
+            "voice rooms take this server's own logins: an App's session can't join or moderate them",
+        )
+        .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
+    }
+    if code == "missing_permission" && reason == "app_user_not_allowed" {
+        return Refusal::new(
+            403,
+            "app_user_not_allowed",
+            "App users are never in the K2 Admin Space: voice rooms are for this server's owner, Admins and Members",
+        )
+        .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
+    }
+    if code == "missing_permission" {
+        let why = if reason.is_empty() { "no reason given".to_string() } else { reason.to_string() };
+        return Refusal::new(
+            403,
+            "missing_permission",
+            format!("Sew refused: this login's level in the K2 Admin Space doesn't allow that ({why})"),
+        )
+        .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
+    }
     let status = if a.status >= 400 { a.status } else { 502 };
     let code = if code.is_empty() { "sew_error" } else { code };
     let mut r = Refusal::new(status, code, if hint.is_empty() { format!("Sew answered {}", a.status) } else { hint });

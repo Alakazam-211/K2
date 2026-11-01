@@ -737,6 +737,14 @@ pub fn read_shape(v: &Value) -> Value {
                     }
                 }
             }
+            // In the reaction list's order, so every reader (this one and
+            // the widget's) turns the same old value into the same lists.
+            let rank = |e: &Value| REACTIONS.iter().position(|r| Some(*r) == e.as_str()).unwrap_or(usize::MAX);
+            for list in per.values_mut() {
+                if let Some(a) = list.as_array_mut() {
+                    a.sort_by_key(rank);
+                }
+            }
             o.insert("reactions".into(), Value::Object(per));
         }
     }

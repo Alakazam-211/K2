@@ -5,6 +5,48 @@ with the kit's tags.
 
 ## Unreleased
 
+**Presence and marks as data** (`PRESENCE.md`). What a host draws its own editor UI from:
+other people's carets and the person's rejected changes, with every offset in UTF-16 code units
+of the current text. Library only (`live.ts`, `presence.ts` (new), `index.ts`, `core.ts`): no
+DOM, and `src/editor/*` is unchanged. Additive: every existing name and signature is as before
+(`presence(id)` still answers whether a lost change landed).
+
+- **`participants()` / `onParticipants(cb)`:** one entry a connection (`Participant`: `handle`,
+  `client?`, `name`, `colour` as the roster sent it, `kind` (`person` / `agent` / `app`; the
+  kit's `external`, `restore`, `import` and unknown kinds are `app`), `rawKind`, `isSelf`,
+  `sameUser`, `label?`, `caret`, `selections` (one element today), `lastActiveAt`, `away`).
+  This connection is listed once with `caret: null`; the person's other connections are
+  `sameUser`; a participant with no caret to show has one caret-less entry; an older host gives
+  one entry a participant. Built on `carets()`, converted through the rope's index.
+- **`marks()` / `onMarks(cb)`:** each open rejection as `Mark` (`id`, UTF-16 `range`, `text`,
+  `reason {code, message}`, `error`, `mayHaveApplied`, `presence`, `placement`, `canReapply`,
+  `canInsertHere`, `removed`).
+- **"Insert my text here" in the library:** `insertHerePreview(id)` (where, in UTF-16, and
+  what; changes nothing) and `insertHere(id, {group?})` (a local edit in its own undo group,
+  the rejection dismissed). The frozen editor's semantics: one hunk only, presence checked for
+  a lost reply, the typed text at the tracked place, never a deletion. The editor keeps its own
+  copy.
+- **Batching:** at most one callback a listener a delivery, with the latest snapshot, none when
+  nothing changed. This connection's own activity (its entry's `lastActiveAt`) never calls back
+  by itself: the person typing re-renders no participant list. **New option** `LiveOptions.schedule` (`FrameScheduler`): default
+  `requestAnimationFrame` when present, else a 16 ms (`FRAME_MS`) timer on `LiveOptions.timers`;
+  `(deliver) => deliver()` for immediate delivery (an agent, a Node tool).
+- **New exports:** `participantKind`, `defaultScheduler`, `FRAME_MS`, and the types
+  `Participant`, `ParticipantKind`, `Range16`, `Mark`, `MarkPlacement`, `InsertPreview`,
+  `InsertHereResult`, `InsertRefusal`, `FrameScheduler` (from both entry points); `Presence`
+  is now exported from `core` too.
+- **Tests:** `test/presence.test.ts`: offsets across remote inserts before, after and inside
+  carets, with CJK and emoji; this connection never given a caret, its other tab `sameUser`;
+  50 caret moves in a frame give one callback with the latest; no callback when nothing
+  changed; `lastActiveAt` on moves and typing, not on an unmoved re-send; typing alone gives no
+  callback, going away and back one each; an older host; kinds
+  and colour; an immediate scheduler, the timer default and the frame default; a mark's UTF-16
+  range and reason; dismiss; Re-apply by the rule; a lost reply (`cant-tell`, landed); insert
+  here where the preview said, once, in its own undo group; multi-hunk refused. Planted faults,
+  each failing its check: byte offsets, no batching, a callback every delivery, a caret on this
+  connection, activity by the raw caret, the own activity compared again, insert here without the one-hunk check, local edits
+  without their group (`PRESENCE_PLANT=<name>` plants one in every test).
+
 **Per-connection carets.** The same person on two devices or in two tabs sees their other
 connection's caret, as Google Docs shows one login's other tabs. Library only (`live.ts`,
 `wire.ts`, `index.ts`, `core.ts`): `src/editor/*` is unchanged, and the library marks carets and

@@ -10,6 +10,18 @@
 
 import { coalesce, composeLen, utf8Len, type Hunk } from "./hunk";
 import { Bias, transform } from "./position";
+import {
+  defaultScheduler,
+  participantKind,
+  type FrameScheduler,
+  type InsertHereResult,
+  type InsertPreview,
+  type InsertRefusal,
+  type Mark,
+  type MarkPlacement,
+  type Participant,
+  type Range16,
+} from "./presence";
 import { Carried, rebaseOurs } from "./rebase";
 import { Rope } from "./rope";
 import {
@@ -177,6 +189,14 @@ export interface LiveOptions {
   timers?: LiveTimers;
   /** The throttle's window (default `CARET_RESEND_MS`). */
   caretResendMs?: number;
+  /**
+   * When `onParticipants` and `onMarks` deliver: each change asks for one delivery, and
+   * changes until it runs share it (at most one callback a listener per delivery, with the
+   * latest snapshot). Default: `requestAnimationFrame` when the global has one, else a
+   * `FRAME_MS` (16 ms) timer on `timers`. A host with no frames (an agent, a Node tool) can pass
+   * `(deliver) => deliver()` for immediate delivery.
+   */
+  schedule?: FrameScheduler;
 }
 
 /** A local change not yet acknowledged: `hunks` on `before`. */
@@ -202,6 +222,9 @@ interface Entry {
 }
 
 type Listener<T> = (v: T) => void;
+
+/** A snapshot listener (`onParticipants`, `onMarks`) and the snapshot it last had (JSON). */
+type Watcher<T> = { cb: Listener<T>; last: string };
 
 interface Events {
   change: ChangeInfo;
@@ -293,6 +316,24 @@ export class LiveText {
   private undoOps = new Map<number, "undo" | "redo">();
   private dead = false;
   private readonly unsub: () => void;
+  private readonly schedule: FrameScheduler;
+  /** A delivery of `onParticipants` / `onMarks` is scheduled. */
+  private frameDue = false;
+  /** A delivery is running (a change during it schedules another, after it). */
+  private delivering = false;
+  private readonly participantWatchers = new Set<Watcher<Participant[]>>();
+  private readonly markWatchers = new Set<Watcher<Mark[]>>();
+  /**
+   * Per connection (`handle:client`), and per participant (`handle:`: an older host's caret,
+   * and a caret-less entry): the raw caret last seen and when it last moved or changed text.
+   */
+  private activity = new Map<string, { caret: CaretAt | null; at: number }>();
+  /** When this connection's caret last moved or it last edited (its own `Participant`). */
+  private selfActiveAt: number;
+  /** Rejections made by a reload (`rejectAll`) with no error: their reason is `MPC-E000`. */
+  private reloadMade = new Set<number>();
+  /** "Insert my text here" edits made so far (each its own undo group). */
+  private insertGroups = 0;
   private readonly ls: { [K in keyof Events]: Set<Listener<Events[K]>> } = {
     change: new Set(),
     roster: new Set(),
@@ -321,7 +362,12 @@ export class LiveText {
     this._text = this.serverText;
     this._version = snapshot.version;
     this.historyFrom = snapshot.version;
-    this.unsub = t.onFrame((f) => this.onFrame(f));
+    this.schedule = opts.schedule ?? defaultScheduler((f, ms) => this.timers.set(f, ms));
+    this.selfActiveAt = this.timers.now();
+    this.unsub = t.onFrame((f) => {
+      this.onFrame(f);
+      this.dirty();
+    });
   }
 
   /** The client's text: the server's at `version`, with its own pending changes. */
@@ -380,7 +426,9 @@ export class LiveText {
         made: { hunks: hs, base: this._version },
       });
     }
+    this.selfActiveAt = this.timers.now();
     this.flush();
+    this.dirty();
     return id;
   }
 
@@ -392,6 +440,8 @@ export class LiveText {
   setCursor(anchor: number, head: number): void {
     const c = this.cursor;
     if (c && c.anchor === anchor && c.head === head && this.resendTimer !== null) return;
+    // this connection's own activity: read by `participants()`, no callback of its own
+    if (!c || c.anchor !== anchor || c.head !== head) this.selfActiveAt = this.timers.now();
     this.cursor = { anchor, head };
     this.sendCursor();
   }
@@ -463,6 +513,7 @@ export class LiveText {
     // edits made while disconnected go now, after the `since` (they were never sent)
     this.flush();
     this.sendCursor();
+    this.dirty();
   }
 
   /**
@@ -552,6 +603,7 @@ export class LiveText {
     for (const l of this.lost.values()) if (l.rejection.id === id && l.state === "open") l.state = "dismissed";
     this._rejected = this._rejected.filter((r) => r.id !== id);
     this.forget(id);
+    this.dirty();
   }
 
   /**
@@ -615,6 +667,279 @@ export class LiveText {
     return this.applyLocal(p.hunks, opts);
   }
 
+  // ---- presence and marks as data (PRESENCE.md)
+
+  /**
+   * Everyone in the doc, one entry a connection, in roster order (a participant's connections
+   * most active first, as `carets()`), every offset in UTF-16 code units of the current text:
+   *
+   * - this connection: once, `isSelf: true`, `caret: null`, no selections (the host draws its
+   *   own caret), where its participant is in the roster (absent until the roster lists it);
+   * - this participant's other connections: `sameUser: true`, with their carets (from a host
+   *   that sends per-connection carets, and when this connection knows its client ID);
+   * - everyone else: one entry a connection with a caret (`carets()`), or one caret-less entry
+   *   (no `client`) for a participant with none to show; from an older host, one entry a
+   *   participant.
+   *
+   * A snapshot: the host reads it, or listens with `onParticipants`.
+   */
+  participants(): Participant[] {
+    const byHandle = new Map<Handle, RemoteCaret[]>();
+    for (const c of this.carets()) {
+      const l = byHandle.get(c.handle);
+      if (l) l.push(c);
+      else byHandle.set(c.handle, [c]);
+    }
+    const out: Participant[] = [];
+    for (const r of this._roster) {
+      const own = r.self === true || r.handle === this.selfHandle;
+      const who = { handle: r.handle, name: r.name, colour: r.colour, kind: participantKind(r.kind), rawKind: r.kind };
+      const person = this.activity.get(`${r.handle}:`)?.at ?? 0;
+      if (own) {
+        out.push({
+          ...who,
+          ...(this.clientId !== undefined ? { client: this.clientId } : {}),
+          isSelf: true,
+          sameUser: false,
+          caret: null,
+          selections: [],
+          lastActiveAt: this.selfActiveAt,
+          away: r.away,
+        });
+      }
+      const cs = byHandle.get(r.handle) ?? [];
+      for (const c of cs) {
+        const caret: Range16 = { anchor: this.to16(c.anchor), head: this.to16(c.head) };
+        const key = c.client !== undefined ? `${r.handle}:${c.client}` : `${r.handle}:`;
+        out.push({
+          ...who,
+          ...(c.client !== undefined ? { client: c.client } : {}),
+          isSelf: false,
+          sameUser: c.sameUser,
+          ...(c.label !== undefined ? { label: c.label } : {}),
+          caret,
+          selections: [{ ...caret }],
+          lastActiveAt: this.activity.get(key)?.at ?? person,
+          away: r.away,
+        });
+      }
+      if (!own && cs.length === 0) {
+        out.push({ ...who, isSelf: false, sameUser: false, caret: null, selections: [], lastActiveAt: person, away: r.away });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * `participants()` when it changes: at most one callback a delivery (`LiveOptions.schedule`;
+   * by default one an animation frame), with the snapshot as it is then, and none when it is
+   * the same as the last this listener had (the first comparison is with the snapshot when it
+   * subscribed: read `participants()` for the start). This connection's own activity (its
+   * entry's `lastActiveAt`: the person typing or moving the caret) is no change by itself: it
+   * rides along with a callback made for another reason. Returns an unsubscribe.
+   */
+  onParticipants(cb: Listener<Participant[]>): () => void {
+    return this.watch(this.participantWatchers, cb, () => this.participants(), (ps) => this.participantsKey(ps));
+  }
+
+  /**
+   * The open rejected changes as data, oldest first, offsets in UTF-16 code units of the current
+   * text: each with its reason, its Re-apply state (`presence`, `placement`) and what can be
+   * done with it now (`canReapply`, `canInsertHere`). The actions: `reapply(id)`, `dismiss(id)`,
+   * `insertHere(id)`. A snapshot; `onMarks` listens.
+   */
+  marks(): Mark[] {
+    return this._rejected.map((r) => {
+      const may = mayHaveApplied(r);
+      const presence: Presence = may ? this.presence(r.id) : "absent";
+      const p = this.placeRejection(r.id);
+      const placement: MarkPlacement = !p ? "cant-place" : "refused" in p ? p.refused : p.hunks.length === 0 ? "in-text" : "ok";
+      const from = this.to16(r.region.start);
+      const reason = r.error
+        ? { code: r.error.id, message: r.error.message }
+        : this.reloadMade.has(r.id)
+          ? { code: ERR.NOT_APPLIED, message: "the change wasn't applied (the replica started again from the server's text)" }
+          : { code: ERR.WRITE_CONFLICT, message: "write conflict: the change met competing text" };
+      return {
+        id: r.id,
+        range: { from, to: Math.max(from, this.to16(r.region.end)) },
+        text: r.text,
+        reason,
+        error: r.error,
+        mayHaveApplied: may,
+        presence,
+        placement,
+        canReapply: presence === "absent" && placement === "ok",
+        canInsertHere: "byte" in this.insertPlan(r.id),
+        removed: r.hunks.some((h) => h.start < h.end),
+      };
+    });
+  }
+
+  /** `marks()` when it changes, batched as `onParticipants`. Returns an unsubscribe. */
+  onMarks(cb: Listener<Mark[]>): () => void {
+    return this.watch(this.markWatchers, cb, () => this.marks(), (m) => JSON.stringify(m));
+  }
+
+  /**
+   * Where "Insert my text here" would put rejection `id`'s typed text: at the change's place as
+   * the replica tracked it (`Rejection.region.start`), in UTF-16 code units of the current
+   * text. Unlike Re-apply it doesn't follow the server's rule, and never deletes (`removed`:
+   * the change also removed text, which isn't put back). Refused for a change of more than one
+   * hunk (no one place), with no typed text, or whose reply was lost unless the record shows it
+   * never landed (`presence`, checked first). Changes nothing.
+   */
+  insertHerePreview(id: number): InsertPreview {
+    const plan = this.insertPlan(id);
+    if (!("byte" in plan)) return plan;
+    return { at: this.to16(plan.byte), text: plan.r.text, removed: plan.r.hunks.some((h) => h.start < h.end) };
+  }
+
+  /**
+   * Insert rejection `id`'s typed text where `insertHerePreview` says, as a new local edit in
+   * its own undo group (`opts.group`, default a fresh one: never composed with the edits
+   * around it), and dismiss the rejection. Refused as the preview is; a change whose reply was
+   * lost and that landed (`already-present`) is dismissed, nothing inserted. The host checks
+   * its own conditions first (edit rights, no composition in progress).
+   */
+  insertHere(id: number, opts: { group?: string } = {}): InsertHereResult {
+    const plan = this.insertPlan(id);
+    if (!("byte" in plan)) {
+      if (plan.refused === "already-present") this.dismiss(id);
+      return plan;
+    }
+    const { r, byte } = plan;
+    const at = this.to16(byte);
+    const group = opts.group ?? `insert-here-${++this.insertGroups}`;
+    const op = this.applyLocal([{ start: byte, end: byte, insert: r.text }], { group });
+    if (mayHaveApplied(r)) this.noteReapplied(id);
+    this.dismiss(id);
+    return { op, at, text: r.text };
+  }
+
+  /** "Insert my text here"'s checks, in the editor's order: the rejection and its text, one
+   * hunk, then (a lost reply) the record; `byte`: where it goes, in bytes of the text. */
+  private insertPlan(id: number): { r: Rejection; byte: number } | { refused: InsertRefusal } {
+    const r = this._rejected.find((x) => x.id === id);
+    if (!r || !r.text) return { refused: "unavailable" };
+    if (r.hunks.length > 1) return { refused: "multi-hunk" };
+    if (mayHaveApplied(r)) {
+      const p = this.presence(id);
+      if (p === "present") return { refused: "already-present" };
+      if (p !== "absent") return { refused: "cant-tell" };
+    }
+    const byte = r.region.start;
+    if (!this._text.isBoundary(byte)) return { refused: "unavailable" };
+    return { r, byte };
+  }
+
+  /** UTF-8 offset `byte` of the current text in UTF-16 code units, through the rope's index
+   * (no scan of the text); clamped to the text, and to the character it falls inside. */
+  private to16(byte: number): number {
+    const t = this._text;
+    let b = Math.max(0, Math.min(byte, t.length8));
+    for (;;) {
+      const i = t.byteToIndex(b);
+      if (i >= 0) return i;
+      b--;
+    }
+  }
+
+  /** What `onParticipants` compares: the snapshot without this connection's own
+   * `lastActiveAt`, so the person's own typing and caret moves never call back by themselves
+   * (the value rides along with a callback made for another reason). */
+  private participantsKey(ps: Participant[]): string {
+    return JSON.stringify(ps.map((p) => (p.isSelf ? { ...p, lastActiveAt: 0 } : p)));
+  }
+
+  private watch<T>(set: Set<Watcher<T>>, cb: Listener<T>, now: () => T, key: (v: T) => string): () => void {
+    const w: Watcher<T> = { cb, last: key(now()) };
+    set.add(w);
+    return () => {
+      set.delete(w);
+    };
+  }
+
+  /** Something the snapshots read may have changed: ask for a delivery (one at a time). */
+  private dirty(): void {
+    if (this.dead || this.participantWatchers.size + this.markWatchers.size === 0) return;
+    if (this.delivering) {
+      this.frameDue = true; // after this delivery
+      return;
+    }
+    if (this.frameDue) return;
+    this.frameDue = true;
+    this.schedule(() => this.deliver());
+  }
+
+  /** One delivery: each listener whose snapshot changed gets the latest, once. */
+  private deliver(): void {
+    if (!this.frameDue || this.delivering) return;
+    this.frameDue = false;
+    if (this.dead) return;
+    this.delivering = true;
+    try {
+      this.deliverTo(this.participantWatchers, () => this.participants(), (ps) => this.participantsKey(ps));
+      this.deliverTo(this.markWatchers, () => this.marks(), (m) => JSON.stringify(m));
+    } finally {
+      this.delivering = false;
+    }
+    if (this.frameDue) {
+      // changed during a callback: one more delivery, scheduled as usual
+      this.frameDue = false;
+      this.dirty();
+    }
+  }
+
+  private deliverTo<T>(set: Set<Watcher<T>>, now: () => T, keyOf: (v: T) => string): void {
+    if (set.size === 0) return;
+    const v = now();
+    const key = keyOf(v);
+    for (const w of [...set]) {
+      if (w.last === key || !set.has(w)) continue;
+      w.last = key;
+      w.cb(v);
+    }
+  }
+
+  /** After a roster change: each connection's caret, and when it last moved (a caret re-sent
+   * at a later version without moving doesn't count). */
+  private trackActivity(): void {
+    const now = this.timers.now();
+    const keep = new Set<string>();
+    const note = (key: string, c: CaretAt | null | undefined) => {
+      keep.add(key);
+      const caret = c ?? null;
+      const was = this.activity.get(key);
+      if (!was || this.caretKey(was.caret) !== this.caretKey(caret)) this.activity.set(key, { caret, at: now });
+      else was.caret = caret;
+    };
+    for (const r of this._roster) {
+      note(`${r.handle}:`, r.devices ? null : r.cursor);
+      for (const d of r.devices ?? []) note(`${r.handle}:${d.client}`, d.cursor);
+    }
+    for (const k of [...this.activity.keys()]) if (!keep.has(k)) this.activity.delete(k);
+  }
+
+  /** A caret as compared for activity: where it is in the current text. */
+  private caretKey(c: CaretAt | null): string {
+    if (!c) return "-";
+    if (c.root !== this.root) return `${c.root}`;
+    const v = c.version ?? this._version;
+    const a = this.mapFromVersion(c.anchor, v);
+    const h = this.mapFromVersion(c.head, v);
+    return a === null || h === null ? `@${v}:${c.anchor}:${c.head}` : `${a}:${h}`;
+  }
+
+  /** A participant's connection changed the text: it is active now. */
+  private touch(pid: Handle, client: number): void {
+    const now = this.timers.now();
+    for (const k of [`${pid}:${client}`, `${pid}:`]) {
+      const a = this.activity.get(k);
+      if (a) a.at = now;
+    }
+  }
+
   /**
    * Start again from a fresh snapshot (after `onReload`). Pending changes were already
    * handed to `onRejected`.
@@ -640,6 +965,7 @@ export class LiveText {
       this.moveCursor(d);
       this.emit("change", { hunks: d, by: null, local: false });
     }
+    this.dirty();
   }
 
   close(): void {
@@ -712,6 +1038,7 @@ export class LiveText {
         return this.onEvents(f.op, f.events);
       case "roster":
         this._roster = f.entries.map((e) => this.stamp(e));
+        this.trackActivity();
         this.emit("roster", this._roster);
         return;
       case "roster_event":
@@ -902,6 +1229,7 @@ export class LiveText {
     const old = this.serverText;
     this.serverText = old.apply(hs);
     this.recarry(hs, this.serverText, [], ev.pid);
+    if (hs.length > 0) this.touch(ev.pid, ev.client);
     this.checkLanded(ev);
     this.resendCursor();
   }
@@ -1003,6 +1331,7 @@ export class LiveText {
         return; // rights, claims and notes: onRosterEvent only
     }
     this._roster = list;
+    this.trackActivity();
     this.emit("roster", list);
   }
 
@@ -1205,6 +1534,7 @@ export class LiveText {
       const rej = this.rejection(e, error);
       rej.region = { start: 0, end: 0 }; // no place: Re-apply refuses it (`reloaded`)
       this.reloaded.add(rej.id);
+      if (!error) this.reloadMade.add(rej.id);
       this._rejected.push(rej);
       this.emit("rejected", rej);
     }
@@ -1267,6 +1597,7 @@ export class LiveText {
   private forget(id: number): void {
     this.reloaded.delete(id);
     this.sentOf.delete(id);
+    this.reloadMade.delete(id);
   }
 
   private pushHistory(version: number, hunks: Hunk[], client: number | undefined): void {
@@ -1371,3 +1702,7 @@ const isHigh = (c: number) => c >= 0xd800 && c < 0xdc00;
 const isLow = (c: number) => c >= 0xdc00 && c < 0xe000;
 
 const sameHunk = (a: Hunk, b: Hunk) => a.start === b.start && a.end === b.end && a.insert === b.insert;
+
+/** A rejected change whose reply was lost, with a record to check (as the editor's
+ * `mayHaveApplied`). */
+const mayHaveApplied = (r: Rejection) => r.error?.id === ERR.NOT_APPLIED && r.asOf !== undefined;

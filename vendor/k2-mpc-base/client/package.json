@@ -16,6 +16,7 @@
     "src",
     "WIRE.md",
     "EDITOR.md",
+    "PRESENCE.md",
     "CHANGELOG.md"
   ],
   "sideEffects": false,

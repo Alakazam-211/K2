@@ -10,15 +10,16 @@ readme = "README.md"
 keywords = ["terminal", "grid", "alacritty", "snapshot", "reflow"]
 categories = ["command-line-interface"]
 # repository = TODO: set when this crate is published as kessel-grid.
+# documentation = TODO: set with `repository` (docs.rs by default).
 publish = false
 
 [lib]
 path = "src/lib.rs"
 
-# Same version requirements as k2-core, so the lockfile keeps one copy of
-# each. Inside the K2 workspace, vte resolves to the patched copy in
-# third_party/vte (see the workspace Cargo.toml).
 [dependencies]
-alacritty_terminal = "0.26.0-rc1"
+alacritty_terminal = "0.26"
 vte = { version = "0.15", features = ["std", "ansi"] }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -4599,6 +4599,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "serde",
+ "serde_json",
  "vte",
 ]
 

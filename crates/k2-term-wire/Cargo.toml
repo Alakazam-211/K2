@@ -10,13 +10,14 @@ readme = "README.md"
 keywords = ["terminal", "websocket", "wire", "protocol", "binary"]
 categories = ["encoding", "command-line-interface"]
 # repository = TODO: set when this crate is published as kessel-wire.
+# documentation = TODO: set with `repository` (docs.rs by default).
 publish = false
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-k2-term-grid = { path = "../k2-term-grid" }
+k2-term-grid = { path = "../k2-term-grid", version = "0.1.0" }
 
 [dev-dependencies]
 serde_json = "1"

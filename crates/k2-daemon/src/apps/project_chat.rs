@@ -371,6 +371,8 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
         None,
         text,
         client,
+        // Send-delay fix 2: the guest's answer never waits for the inject.
+        crate::project_group_routes::PocDelivery::Later,
     ) {
         Ok(p) => p,
         Err(r) => return r,

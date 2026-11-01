@@ -60002,7 +60002,9 @@ elif verb == "msg":
     name = d.get("groupName") or show.get("name") or "?"
     delivered = bool(d.get("delivered"))
     reason = d.get("deliveryReason")
-    if not delivered and reason is not None and reason not in ("author-is-poc", "no_poc"):
+    # "queued" (0.46.8): the daemon answered before the PoC inject finished
+    # (it only does that for an agent's post when the inject runs very long).
+    if not delivered and reason is not None and reason not in ("author-is-poc", "no_poc", "queued"):
         reason = "delivery-failed"  # the mockup's stable failure value
     if as_json:
         out = {"ok": True, "id": d.get("id"), "project": name,
@@ -60020,6 +60022,8 @@ elif verb == "msg":
     elif reason == "delivery-failed":
         print("Posted to %s — stored, but the PoC's session could not be reached" % name)
         print("(it will catch up with `k2 project read`).")
+    elif reason == "queued":
+        print("Posted to %s — on its way to PoC %s (still being delivered)." % (name, poc_name(show) or "?"))
     else:
         print("Posted to %s." % name)
 

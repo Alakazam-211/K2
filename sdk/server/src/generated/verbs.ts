@@ -3598,8 +3598,9 @@ export interface AppProjectPosted {
   readonly clientMsgId?: string
   /** Seconds since the epoch. */
   readonly createdAt: number
-  /** The project's point of contact agent got the line. */
+  /** The project's point of contact agent got the line. The post answers before that delivery runs, so this is false with deliveryReason queued while the line is on its way. */
   readonly delivered?: boolean
+  /** Why delivered is false: queued (on its way to the point of contact), no_poc (the project has none yet), or why the delivery failed. */
   readonly deliveryReason?: string | null
   /** post-idempotency-v1: true when this clientMsgId was already kept: the stored post, nothing sent again (no delivery fields). */
   readonly duplicate?: boolean

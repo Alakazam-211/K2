@@ -24423,10 +24423,11 @@
           },
           "delivered": {
             "type": "boolean",
-            "description": "The project's point of contact agent got the line."
+            "description": "The project's point of contact agent got the line. The post answers before that delivery runs, so this is false with deliveryReason queued while the line is on its way."
           },
           "deliveryReason": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Why delivered is false: queued (on its way to the point of contact), no_poc (the project has none yet), or why the delivery failed."
           }
         },
         "required": ["ok", "id", "groupId", "groupName", "author", "authorKind", "body", "createdAt", "seq"],

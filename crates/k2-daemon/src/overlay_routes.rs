@@ -2543,7 +2543,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     };
     let from = card_actor_from(params, resolved, session_author);
     note_card_reader(params, session_author, &cb);
-    fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
+    fire_card_callbacks(resolved, &from, vec![cb.clone()], true);
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -2672,7 +2672,7 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
             // agent's own answer does not).
             let from = card_actor_from(params, &resolved, session_author);
             note_card_reader(params, session_author, &cb);
-            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
+            fire_card_callbacks(&resolved, &from, vec![cb.clone()], !principal_is_bound(params));
             let mut body = serde_json::json!({
                 "ok": true,
                 "id": cb.doc_id,
@@ -3185,7 +3185,7 @@ fn answer_action_card(
             }
             let from = card_actor_from(params, resolved, session_author);
             note_card_reader(params, session_author, &cb);
-            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
+            fire_card_callbacks(resolved, &from, vec![cb.clone()], true);
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
@@ -3298,7 +3298,7 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
             }
             let from = card_actor_from(params, &resolved, session_author);
             note_card_reader(params, session_author, &cb);
-            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
+            fire_card_callbacks(&resolved, &from, vec![cb.clone()], !principal_is_bound(params));
             let status = cb
                 .doc
                 .choice
@@ -3393,7 +3393,8 @@ fn inject_thread_compose(
     record_test_inject(&line);
     // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
     // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
-    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", &command, Some(turn));
+    // Send-delay fix 2: on the agent's lane, after the answer.
+    deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, from, "compose", &command, Some(turn)));
 }
 
 /// Skin Thread post (default `via=thread`): same `[from user] [thread:addr]`
@@ -3402,14 +3403,14 @@ fn inject_thread_compose(
 fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: ThreadTurn<'_>) {
     let line = format_thread_compose_pty_line(from, &resolved.addr, text);
     record_test_inject(&line);
-    deliver_thread_to_pty(
-        &resolved.addr,
-        &format!("[thread:{}] {text}", resolved.addr),
+    deliver_thread_later(ThreadDeliveryJob::new(
+        resolved,
+        format!("[thread:{}] {text}", resolved.addr),
         from,
         "thread",
         "",
         Some(turn),
-    );
+    ));
 }
 
 /// A card's new status, to every open view of its Thread. Its `waiting`
@@ -3536,8 +3537,11 @@ pub fn spawn_card_expiry() {
 
 /// `from`: who answered or dismissed the card ([`card_actor_from`]), so
 /// the agent sees `[from <guest>]` for an app guest, never the owner.
-/// `start_turns`: a person answered or dismissed the card (TW1).
-fn fire_card_callbacks(addr: &str, from: &str, cbs: Vec<CardCallback>, start_turns: bool) {
+/// `start_turns`: a person answered or dismissed the card (TW1). The
+/// answer goes on the agent's delivery lane like a post, so a quick post
+/// then a tap reach the agent in that order.
+fn fire_card_callbacks(resolved: &ResolvedOverlay, from: &str, cbs: Vec<CardCallback>, start_turns: bool) {
+    let addr = resolved.addr.as_str();
     let started_at = chrono::Utc::now().timestamp_millis();
     for cb in cbs {
         publish_card_frame(&cb);
@@ -3548,17 +3552,150 @@ fn fire_card_callbacks(addr: &str, from: &str, cbs: Vec<CardCallback>, start_tur
             turn_id: &cb.doc_id,
             started_at,
         });
-        deliver_thread_to_pty(addr, &payload, from, "thread", "", turn);
+        deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, from, "thread", "", turn));
     }
 }
 
+/// Where a Thread delivery goes: the agent's PTY, or (the lib's unit
+/// tests, which have no Tokio reactor) the test sink. Read on the
+/// request's thread, before the job moves to a lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeliverySink {
+    Live,
+    Test,
+}
+
+fn delivery_sink() -> DeliverySink {
+    if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
+        DeliverySink::Test
+    } else {
+        DeliverySink::Live
+    }
+}
+
+/// The delivery lane of a workspace's pinned Chat. Project chat
+/// (`project_group_routes`) uses it for its point of contact too, so a
+/// person's Thread post and a project chat line reach that one PTY in the
+/// order they were sent.
+pub(crate) fn workspace_delivery_lane(project_id: &str) -> String {
+    format!("ws:{project_id}")
+}
+
+/// The delivery lane for a resolved Thread: the pinned Chat's, or the
+/// sidecar's own.
+fn thread_delivery_lane(resolved: &ResolvedOverlay) -> String {
+    if resolved.canonical_alias {
+        workspace_delivery_lane(&resolved.project_id)
+    } else {
+        format!("ws:{}|{}", resolved.project_id, resolved.addr)
+    }
+}
+
+/// An owned [`ThreadTurn`], for a delivery that runs after the answer.
+#[derive(Debug, Clone)]
+struct QueuedTurn {
+    conversation_id: String,
+    turn_id: String,
+    started_at: i64,
+}
+
+/// One Thread delivery, owned, so it can run on the agent's lane
+/// ([`crate::delivery_queue`]) after the post has answered.
+#[derive(Debug, Clone)]
+struct ThreadDeliveryJob {
+    lane: String,
+    addr: String,
+    payload: String,
+    from: String,
+    via: String,
+    command: String,
+    turn: Option<QueuedTurn>,
+    sink: DeliverySink,
+}
+
+impl ThreadDeliveryJob {
+    fn new(
+        resolved: &ResolvedOverlay,
+        payload: String,
+        from: &str,
+        via: &str,
+        command: &str,
+        turn: Option<ThreadTurn<'_>>,
+    ) -> Self {
+        Self {
+            lane: thread_delivery_lane(resolved),
+            addr: resolved.addr.clone(),
+            payload,
+            from: from.to_string(),
+            via: via.to_string(),
+            command: command.to_string(),
+            turn: turn.map(|t| QueuedTurn {
+                conversation_id: t.conversation_id.to_string(),
+                turn_id: t.turn_id.to_string(),
+                started_at: t.started_at,
+            }),
+            sink: delivery_sink(),
+        }
+    }
+
+    fn run(self) -> ThreadDelivery {
+        let turn = self.turn.as_ref().map(|t| ThreadTurn {
+            conversation_id: &t.conversation_id,
+            turn_id: &t.turn_id,
+            started_at: t.started_at,
+        });
+        deliver_thread_to_pty(self.sink, &self.addr, &self.payload, &self.from, &self.via, &self.command, turn)
+    }
+
+    /// The lib's unit tests deliver inline (deterministic), except to an
+    /// address armed slow ([`arm_test_delivery_delay`]), which takes the
+    /// real lane like production.
+    fn inline_in_tests(&self) -> bool {
+        self.sink == DeliverySink::Test && test_delivery_delay(&self.addr).is_none()
+    }
+}
+
+/// Send-delay fix 2 (0.46.8): the post (or card answer) has answered; the
+/// wake + inject runs on the agent's lane, in order, on a daemon thread
+/// that no client connection owns (headless-safe). The outcome goes where
+/// it always went: the Thread turn (`delivering`, then following the
+/// session or `delivery_failed`) and the log.
+fn deliver_thread_later(job: ThreadDeliveryJob) {
+    if job.inline_in_tests() {
+        job.run();
+        return;
+    }
+    let lane = job.lane.clone();
+    crate::delivery_queue::run_later(&lane, move || {
+        job.run();
+    });
+}
+
+/// [`deliver_thread_later`] for a caller whose answer carries the outcome
+/// (Design notes): it takes its place on the lane and waits for it.
+fn deliver_thread_in_order(job: ThreadDeliveryJob) -> ThreadDelivery {
+    if job.inline_in_tests() {
+        return job.run();
+    }
+    let lane = job.lane.clone();
+    let addr = job.addr.clone();
+    crate::delivery_queue::run_in_order(&lane, crate::delivery_queue::WAIT_FOR_OWN_DELIVERY, move || job.run())
+        .unwrap_or_else(|| {
+            k2_core::log_debug!("[overlay] delivery to {addr} still queued; answering not delivered");
+            ThreadDelivery::default()
+        })
+}
+
 /// Feedback / Projects Chat / `k2 talk`: `deliver_live(..., wake=true)`.
-/// Overlay unit tests have no Tokio reactor; skip the live wake there.
+/// Overlay unit tests have no Tokio reactor; skip the live wake there
+/// ([`DeliverySink::Test`]). Runs on the agent's delivery lane
+/// ([`deliver_thread_later`]), not on the request.
 ///
 /// With `turn`, the inject starts a Thread turn (TW1): `delivering` until
 /// delivery returns, then it follows the v2 session that took the inject
 /// (`target_session_id`), or ends `delivery_failed`.
 fn deliver_thread_to_pty(
+    sink: DeliverySink,
     addr: &str,
     payload: &str,
     from: &str,
@@ -3566,7 +3703,7 @@ fn deliver_thread_to_pty(
     command: &str,
     turn: Option<ThreadTurn<'_>>,
 ) -> ThreadDelivery {
-    if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
+    if sink == DeliverySink::Test {
         return test_delivery(addr, payload);
     }
     if let Some(t) = turn {
@@ -3615,6 +3752,36 @@ pub(crate) struct ThreadDelivery {
 static TEST_DELIVERIES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
 static TEST_DELIVERY_OK: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Addrs whose test deliveries take this long (a slow agent: a wake, a
+/// busy inject lock). They run on the real delivery lane.
+#[cfg(test)]
+static TEST_DELIVERY_DELAY: std::sync::Mutex<Vec<(String, std::time::Duration)>> = std::sync::Mutex::new(Vec::new());
+
+/// Send-delay fix 2 tests: later test deliveries to `addr` take `delay`
+/// and run on the agent's lane (like production), not inline.
+#[cfg(test)]
+pub(crate) fn arm_test_delivery_delay(addr: &str, delay: std::time::Duration) {
+    let mut g = TEST_DELIVERY_DELAY.lock().expect("delivery delay lock");
+    g.retain(|(a, _)| a != addr);
+    g.push((addr.to_string(), delay));
+}
+
+fn test_delivery_delay(addr: &str) -> Option<std::time::Duration> {
+    #[cfg(test)]
+    {
+        TEST_DELIVERY_DELAY
+            .lock()
+            .expect("delivery delay lock")
+            .iter()
+            .find(|(a, _)| a == addr)
+            .map(|(_, d)| *d)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = addr;
+        None
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn recorded_deliveries(addr: &str) -> Vec<String> {
@@ -3640,6 +3807,9 @@ pub(crate) fn arm_test_delivery(addr: &str, ok: bool) {
 fn test_delivery(addr: &str, payload: &str) -> ThreadDelivery {
     #[cfg(test)]
     {
+        if let Some(delay) = test_delivery_delay(addr) {
+            std::thread::sleep(delay);
+        }
         TEST_DELIVERIES
             .lock()
             .expect("deliveries lock")
@@ -3939,14 +4109,16 @@ fn deliver_design(
     started_at: i64,
 ) -> ThreadDelivery {
     record_test_inject(&format_thread_compose_pty_line(from, &resolved.addr, text));
-    deliver_thread_to_pty(
-        &resolved.addr,
-        &format!("[thread:{}] {text}", resolved.addr),
+    // The answer carries `delivered`, so this one waits, in its place on
+    // the agent's lane (never ahead of a person's queued post).
+    deliver_thread_in_order(ThreadDeliveryJob::new(
+        resolved,
+        format!("[thread:{}] {text}", resolved.addr),
         from,
         via,
         "",
         Some(ThreadTurn::new(resolved, item_id, started_at)),
-    )
+    ))
 }
 
 /// `POST /cli/browser/notes/redeliver` core (D-A10 Retry): deliver an
@@ -8279,4 +8451,8 @@ mod tests {
     // post-idempotency-v1: `clientMsgId` on Thread posts (0.46.8).
     #[path = "client_msg_tests.rs"]
     mod client_msg;
+
+    // Send-delay fix 2: posts answer before the agent inject (0.46.8).
+    #[path = "delivery_lane_tests.rs"]
+    mod delivery_lane;
 }

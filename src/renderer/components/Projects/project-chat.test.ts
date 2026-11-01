@@ -207,6 +207,11 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
     )
   })
 
+  it('queued (the daemon answers before the inject) is on its way, not a failure', () => {
+    expect(deliveredLine(false, 'queued', 'Scout')).toBe('sending to Scout')
+    expect(deliveredLine(false, 'queued', null)).toBe('sending to the PoC')
+  })
+
   it('every other failure reason → "PoC session unreachable"', () => {
     expect(deliveredLine(false, 'wake_timeout', 'Scout')).toBe('PoC session unreachable')
     expect(deliveredLine(false, 'no_agent_mode', 'Scout')).toBe('PoC session unreachable')

@@ -73,7 +73,10 @@
 //! message; the outcome rides the response as `delivered` /
 //! `deliveryReason` / `deliveredSessionId`. The PoC's own posts never
 //! self-inject (`deliveryReason: "author-is-poc"` — a NORMAL success);
-//! a memberless group has no PoC yet (`"no_poc"`). Membership is
+//! a memberless group has no PoC yet (`"no_poc"`). Since 0.46.8 a
+//! person's or App guest's post answers before the inject, which runs on
+//! the PoC's delivery lane (`deliveryReason: "queued"`); a member agent's
+//! post still waits for the outcome (send-delay fix 2). Membership is
 //! enforced HERE (core's `post_message` stores what it is told): the
 //! human `owner` is always allowed; any other author must resolve to a
 //! MEMBER workspace or the post is refused (`not_a_member`) without
@@ -1445,6 +1448,13 @@ fn project_payload(group_name: &str, body: &str) -> String {
 /// failure never fails the store; the outcome rides the response
 /// (`delivered` / `deliveryReason` / `deliveredSessionId`).
 ///
+/// Send-delay fix 2 (0.46.8): a person's post (and an App guest's)
+/// answers once the line is stored and out on the bus; the PoC inject
+/// runs after, on the PoC's delivery lane ([`crate::delivery_queue`]), and
+/// the answer says `delivered: false, deliveryReason: "queued"`. A member
+/// agent's post (`k2 project msg`) still waits for its outcome, in its
+/// place on that lane.
+///
 /// Every login may post (the Viewer role it once refused was removed);
 /// the dispatcher's `token_ok` gate runs before this handler.
 pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
@@ -1595,6 +1605,9 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         _ => None,
     };
 
+    // An agent's `k2 project msg` prints the outcome, so it waits for it;
+    // a person's post answers at once (send-delay fix 2).
+    let delivery = if author_workspace_id.is_some() { PocDelivery::Wait } else { PocDelivery::Later };
     let stored = match store_and_deliver(
         &group,
         &group_id,
@@ -1604,6 +1617,7 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         author_person.as_deref(),
         &b.body,
         client,
+        delivery,
     ) {
         Ok(p) => p,
         Err(r) => return r,
@@ -1661,12 +1675,94 @@ pub(crate) enum Stored {
     Duplicate { msg: project_groups::ProjectGroupMessage, mismatch: bool },
 }
 
-/// A stored project chat line and what its point-of-contact delivery did.
+/// A stored project chat line and what its point-of-contact delivery did
+/// (`delivery_reason` [`DELIVERY_QUEUED`] when it runs after the answer).
 pub(crate) struct Posted {
     pub msg: project_groups::ProjectGroupMessage,
     pub delivered: bool,
     pub delivery_reason: Option<String>,
     pub delivered_session: Option<String>,
+}
+
+/// `deliveryReason` when the PoC inject runs after the answer (send-delay
+/// fix 2): stored and on its way, outcome not known yet. `delivered` is
+/// `false` with it.
+pub(crate) const DELIVERY_QUEUED: &str = "queued";
+
+/// Whether [`store_and_deliver`] waits for the PoC inject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PocDelivery {
+    /// Answer now; deliver on the PoC's lane after ([`DELIVERY_QUEUED`]).
+    Later,
+    /// Take a place on the PoC's lane and wait for the outcome.
+    Wait,
+}
+
+/// One project chat line on its way to the PoC, owned for the lane.
+struct PocJob {
+    message_id: String,
+    path: String,
+    payload: String,
+    from: String,
+}
+
+impl PocJob {
+    /// The inject (wake on), then the outcome in the log (and, in the
+    /// lib's tests, a sink keyed by message id).
+    fn run(self) -> (bool, Option<String>, Option<String>) {
+        let resp = crate::workspace_msg::deliver_live(
+            &self.path,
+            &self.payload,
+            &self.from,
+            "",
+            true,
+            crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        );
+        let outcome = (resp.success, resp.reason, resp.target_session_id);
+        if !outcome.0 {
+            k2_core::log_debug!(
+                "[project-group] message {} not delivered to the PoC: {:?}",
+                self.message_id,
+                outcome.1
+            );
+        }
+        #[cfg(test)]
+        record_test_poc_outcome(&self.message_id, &outcome);
+        outcome
+    }
+}
+
+#[cfg(test)]
+type PocOutcome = (bool, Option<String>, Option<String>);
+
+#[cfg(test)]
+static TEST_POC_OUTCOMES: std::sync::Mutex<Vec<(String, PocOutcome)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn record_test_poc_outcome(message_id: &str, outcome: &PocOutcome) {
+    TEST_POC_OUTCOMES
+        .lock()
+        .expect("poc outcomes lock")
+        .push((message_id.to_string(), outcome.clone()));
+}
+
+/// The lib's tests: wait (bounded) for a queued line's PoC delivery
+/// outcome. Panics when it never comes.
+#[cfg(test)]
+pub(crate) fn wait_test_poc_outcome(message_id: &str) -> PocOutcome {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some((_, o)) = TEST_POC_OUTCOMES
+            .lock()
+            .expect("poc outcomes lock")
+            .iter()
+            .find(|(id, _)| id == message_id)
+        {
+            return o.clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "no PoC delivery outcome for message {message_id}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Store -> read state -> live frames -> emit -> push -> best-effort PoC
@@ -1680,8 +1776,14 @@ pub(crate) struct Posted {
 /// pushes to every person's phone).
 ///
 /// `client` (post-idempotency-v1): a key already kept for this project
-/// returns [`Stored::Duplicate`] and runs none of the steps; one kept for
-/// another project is the 409 `client_msg_id_reused`.
+/// returns [`Stored::Duplicate`] and runs none of the steps (so a repeat
+/// never queues a second delivery); one kept for another project is the
+/// 409 `client_msg_id_reused`.
+///
+/// `delivery` ([`PocDelivery`]): the PoC inject runs on the PoC's delivery
+/// lane, after the answer (`Later`) or waited for (`Wait`). The quick
+/// outcomes (`no_poc`, `author-is-poc`, `workspace_not_found`) are always
+/// answered at once.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn store_and_deliver(
     group: &project_groups::ProjectGroup,
@@ -1692,6 +1794,7 @@ pub(crate) fn store_and_deliver(
     author_person: Option<&str>,
     body: &str,
     client: Option<project_groups::ClientKey<'_>>,
+    delivery: PocDelivery,
 ) -> Result<Stored, CliResponse> {
     // Store.
     let msg = match project_groups::post_message_keyed(group_id, author, author_kind, body, client) {
@@ -1760,15 +1863,25 @@ pub(crate) fn store_and_deliver(
                     } else {
                         author.to_string()
                     };
-                    let resp = crate::workspace_msg::deliver_live(
-                        &path,
-                        &payload,
-                        &from,
-                        "",
-                        true,
-                        crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
-                    );
-                    (resp.success, resp.reason, resp.target_session_id)
+                    let job = PocJob { message_id: msg.id.clone(), path, payload, from };
+                    // The PoC's pinned Chat lane, shared with its Thread
+                    // posts: lines reach that PTY in the order they came.
+                    let lane = crate::overlay_routes::workspace_delivery_lane(poc_id);
+                    let queued = || (false, Some(DELIVERY_QUEUED.to_string()), None);
+                    match delivery {
+                        PocDelivery::Later => {
+                            crate::delivery_queue::run_later(&lane, move || {
+                                job.run();
+                            });
+                            queued()
+                        }
+                        PocDelivery::Wait => crate::delivery_queue::run_in_order(
+                            &lane,
+                            crate::delivery_queue::WAIT_FOR_OWN_DELIVERY,
+                            move || job.run(),
+                        )
+                        .unwrap_or_else(queued),
+                    }
                 }
             }
         }
@@ -2622,14 +2735,23 @@ mod tests {
 
         // Human (author-less → owner): stored + emitted + ATTEMPTED
         // (delivery fails against the dead PoC workspace, but the
-        // attempt is reported and the store survives).
+        // attempt is made and the store survives). Send-delay fix 2: the
+        // answer comes first (`queued`); the attempt runs after it.
         let mark = event_mark();
         let posted = ok_json(msg_as(&gid, None, "kickoff note"));
         assert_eq!(posted["author"], "owner");
         assert_eq!(posted["delivered"], false);
         assert_eq!(
-            posted["deliveryReason"], "no_agent_mode",
-            "owner post must ATTEMPT injection into the PoC: {posted}"
+            posted["deliveryReason"], DELIVERY_QUEUED,
+            "a person's post answers before the PoC inject: {posted}"
+        );
+        assert!(posted["deliveredSessionId"].is_null(), "{posted}");
+        let (delivered, reason, _) = wait_test_poc_outcome(posted["id"].as_str().expect("id"));
+        assert!(!delivered);
+        assert_eq!(
+            reason.as_deref(),
+            Some("no_agent_mode"),
+            "owner post must ATTEMPT injection into the PoC"
         );
         let events = events_for_group(mark, &gid);
         assert_eq!(
@@ -2641,7 +2763,8 @@ mod tests {
         assert_eq!(events[0].1["messageId"], posted["id"]);
         assert_eq!(events[0].1["author"], "owner");
 
-        // Member agent (NOT the PoC): attempted too.
+        // Member agent (NOT the PoC): attempted too, and its answer
+        // waits for the outcome (`k2 project msg` prints it).
         let posted = ok_json(msg_as(&gid, Some(&member_name), "progress: half done"));
         assert_eq!(posted["author"], member_name.as_str());
         assert_eq!(posted["delivered"], false);

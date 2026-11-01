@@ -2,7 +2,7 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 42,
-  "catalogSha256": "0c1ff8e8c64a59a8f1a416a10d1fe6d0443f1f52dfda9af67b3916ac5d26ec5a",
+  "catalogSha256": "b1fe6eebc7d00e229cf9dfd508f04beabf6f26f70abfedac507099dd5282cfe6",
   "runtimeSha256": "32004c2ec0a00b065688911582e95f49bcdb67a353b328cd3e0e9c608eaa870a",
   "files": {
     "cli/k2": "4d91d3ab5631e035f4ab1d9fca912399ff5033d2c1a018c0e78529bc889faab2",
@@ -14,7 +14,7 @@
     "sdk/generated/k2-frame.js": "4bd7913ae8c2905c7bb6d5cf1e0704a90e7df1c8b4f059657dc4ff922fda52ac",
     "sdk/generated/k2.d.ts": "48d85b2a5f560afae3577d79d14f9a4d702acee702f38ae506cfd72b1e261e51",
     "sdk/generated/phone-verbs.json": "c321ec705b51548cb50747513580ef9c54084e5a9c11af98bc9fee1a941bea7f",
-    "sdk/server/src/generated/verbs.ts": "e4c012d8eb9c5656e1af9a5918dbb0d0e42adf6057f0527ee4aeb8f8164729a3",
+    "sdk/server/src/generated/verbs.ts": "ac7cb17bb8e711efe8bfbf0dc277c5353e49a5dbc4c5b8cba3be3ebbe0758a1c",
     "src/renderer/lib/k2-caps.generated.ts": "70e2bb2b19c3614b7f58c6d4c4cb2abc1e1b402582953745172f50a021fa6df1",
     "src/renderer/lib/zen/zen-verbs.generated.ts": "d3c32180ade87735246ddf00a8773415b9d4462483d313dabff6ed966c596146"
   }

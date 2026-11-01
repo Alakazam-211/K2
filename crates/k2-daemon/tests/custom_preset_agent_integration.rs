@@ -311,3 +311,55 @@ async fn claude_to_custom_switch_does_not_reuse_the_stale_claude_id() {
         .expect("ensure pinned chat");
     assert_eq!(out.claude_session_id, conv);
 }
+
+fn live_session_in(dir: &Path) -> bool {
+    k2_daemon::v2_session_map::snapshot()
+        .iter()
+        .any(|(_, s)| s.cwd.as_ref().is_some_and(|p| p.starts_with(dir)))
+}
+
+/// Send-delay fix 2 (0.46.8), headless (no client, no socket open): a
+/// person's Thread posts to a SLEEPING agent answer before the wake and
+/// the inject; the daemon wakes the agent in the background and both
+/// lines reach it, in the order sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posts_to_a_sleeping_agent_answer_first_and_wake_it_in_the_background() {
+    let env = setup();
+    #[cfg(windows)]
+    let _tcp = k2_daemon::test_harness::start("owner-token-custom-preset-lane-win").await;
+    let ws = seed_custom_ws(&env.home, "lazy-keeper");
+    let pin = get_thread("lazy-keeper")["conversation_id"].as_str().expect("conversation id").to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agent_enabled = 1 WHERE id = ?1", [&ws.id]).expect("agent on");
+    }
+    assert!(!live_session_in(&ws.path), "the agent starts asleep");
+
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let (one, two) = (format!("first-{tag}"), format!("second-{tag}"));
+    let t0 = Instant::now();
+    for text in [&one, &two] {
+        let mut p = HashMap::new();
+        p.insert("addr".to_string(), "lazy-keeper".to_string());
+        p.insert("text".to_string(), text.clone());
+        p.insert("via".to_string(), "compose".to_string());
+        let resp = tokio::task::block_in_place(|| k2_daemon::overlay_routes::dispatch_post("/cli/thread/post", &p, b""));
+        assert!(resp.status.starts_with("200"), "thread post: {} {}", resp.status, resp.body);
+    }
+    let took = t0.elapsed();
+    // Waking a custom agent alone takes over a second (spawn, the settle
+    // floor, the quiet-screen wait, then the inject's own pauses).
+    assert!(took < Duration::from_millis(1000), "two posts answered in {took:?}: they waited for the wake + inject");
+
+    let log = wait_file_contains(&env.home.join("keeper.log"), &two, 60);
+    let at_one = log
+        .find(&format!("[thread:lazy-keeper] {one}"))
+        .unwrap_or_else(|| panic!("first line missing: {log:?}"));
+    let at_two = log
+        .find(&format!("[thread:lazy-keeper] {two}"))
+        .unwrap_or_else(|| panic!("second line missing: {log:?}"));
+    assert!(at_one < at_two, "in the order sent: {log:?}");
+    assert!(live_session_in(&ws.path), "the background delivery woke the agent");
+    assert_eq!(get_thread("lazy-keeper")["conversation_id"], pin.as_str(), "the wake kept the Thread");
+}

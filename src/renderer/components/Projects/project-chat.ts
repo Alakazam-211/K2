@@ -135,6 +135,9 @@ export function deliveredLine(
   poc: string | null,
 ): string | null {
   if (delivered) return `delivered to ${poc ?? 'the PoC'}`
+  // 0.46.8: the daemon answers before the inject, which runs after on the
+  // PoC's delivery lane; the outcome is not known yet.
+  if (deliveryReason === 'queued') return `sending to ${poc ?? 'the PoC'}`
   if (deliveryReason === 'author-is-poc') return null
   if (deliveryReason === 'no_poc') return 'stored — this project has no Point of Contact yet'
   return 'PoC session unreachable'

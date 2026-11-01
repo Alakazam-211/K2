@@ -31,6 +31,10 @@
 //! on a duplicate would need a per-post delivery record (none exists today)
 //! and would double-inject on every ordinary retry, so it is not done.
 //! Before this feature the same crash meant a double post instead.
+//! Since send-delay fix 2 (0.46.8) the inject runs after the answer, on the
+//! agent's delivery lane (`delivery_queue`, in memory), so the window is
+//! "until the lane reaches it". A repeat never queues a second delivery:
+//! it answers before anything is queued.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 

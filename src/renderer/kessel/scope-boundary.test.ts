@@ -56,6 +56,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'components/ConnectionGate.tsx': 'boot-status / session probes for the window host',
   'lib/host-ops.ts': 'per-saved-host ops with that host\'s own creds',
   'lib/host-pool-instance.ts': 'the connection pool\'s status checks and sign-out, each server\'s own creds',
+  'lib/remote-warm-ping.ts': 'unauthenticated /boot-status keep-warm ping to a shown remote room\'s own server (scope.httpBase())',
   'lib/remote-session.ts': 'whoami + login for one host id',
   'stores/connect-host.ts': 'login for one saved host',
   'lib/connect-validate.ts': 'add-server validation probe',

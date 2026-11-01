@@ -171,6 +171,11 @@ fn the_tunnel_tier_needs_the_preview_helper_12_and_a_relay_only_sew() {
     t3.features(&[media_path::FEATURE_VOICE_MEDIA_PATH]);
     refused(&t3, "sew_too_old");
     assert!(t3.ops.cp_log().is_empty(), "nothing issued");
+    // PRD §7.3: a 2–4 GiB box runs chat only (lane E's floor).
+    let t4 = self::t();
+    *t4.ops.voice_floor.lock().unwrap() = false;
+    refused(&t4, "voice_floor");
+    assert_eq!(set_tier_named(&t4.env(), "tunnel").unwrap_err().code, "voice_not_installed");
 }
 
 #[test]

@@ -100,6 +100,13 @@ pub fn ready(env: &Env) -> R<()> {
             "voice through the tunnel is a preview: turn on voice_tunnel_preview (Settings) or set K2_VOICE_TUNNEL=1 in the daemon's environment",
         ));
     }
+    if !env.ops.voice_floor_ok() {
+        return Err(no(
+            "voice_floor",
+            409,
+            "this box is below the voice floor (PRD §7.3: boxes with 2–4 GiB of RAM run chat only, no voice)",
+        ));
+    }
     if !helper_ok(env) {
         let st = env.ops.helper_state();
         return Err(no(

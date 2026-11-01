@@ -171,6 +171,13 @@ pub trait SewOps: Send + Sync {
     fn voice_lane_up(&self) -> bool {
         k2_core::tunnel::voice_lane::is_up()
     }
+    /// The small-box floor lets this box host voice (PRD §7.3: 2–4 GiB
+    /// boxes run chat only). INTEGRATION (lane E): this default becomes
+    /// `super::autosetup::floor_now().voice` when lane E lands; until then
+    /// every box passes, as before 0.46.8.
+    fn voice_floor_ok(&self) -> bool {
+        true
+    }
     /// The voice lane is armed (runs whenever the tunnel runs).
     fn voice_lane_armed(&self) -> bool {
         k2_core::tunnel::voice_lane::armed()
@@ -871,6 +878,8 @@ pub mod fake {
         pub e2e: Mutex<bool>,
         pub frpc: Mutex<bool>,
         pub connect_tier: Mutex<Result<Option<String>, String>>,
+        /// [`SewOps::voice_floor_ok`] (default true: a big box).
+        pub voice_floor: Mutex<bool>,
         /// The `connect` host of every served-leaf check, in order.
         pub served_connects: Mutex<Vec<String>>,
         /// Queued `/api/v1/health` answers (default: 200 ready).
@@ -936,6 +945,7 @@ pub mod fake {
                 frpc: Mutex::new(true),
                 connect_tier: Mutex::new(Ok(Some("pro".into()))),
                 served_connects: Mutex::new(Vec::new()),
+                voice_floor: Mutex::new(true),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
                 mgmt_status: Mutex::new(json!({
@@ -1581,6 +1591,9 @@ pub mod fake {
         }
         fn voice_lane_armed(&self) -> bool {
             *self.lane_armed.lock().unwrap()
+        }
+        fn voice_floor_ok(&self) -> bool {
+            *self.voice_floor.lock().unwrap()
         }
         fn voice_lane_status(&self) -> Value {
             json!({"armed": *self.lane_armed.lock().unwrap(), "up": self.voice_lane_up()})

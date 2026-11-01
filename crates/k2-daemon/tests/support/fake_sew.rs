@@ -130,6 +130,8 @@ pub struct Space {
     pub levels: BTreeMap<String, String>,
     /// The Space's slug (`k2-admin` for the server Space, SW-1).
     pub slug: Option<String>,
+    /// The Space's name (SW-1: the same create body replays).
+    pub name: Option<String>,
 }
 
 /// SW-3: one person in a voice channel (the fake's live voice registry).
@@ -617,14 +619,22 @@ impl FakeSew {
         });
     }
 
-    /// SW-1: a server Space already exists (made by an earlier K2).
+    /// SW-1: a server Space already exists (made by an earlier K2, under a
+    /// name K2 doesn't send now: a create answers `409 server_space_exists`).
     pub fn add_server_space(&self, space_id: &str) {
+        self.add_server_space_named(space_id, None)
+    }
+
+    /// SW-1: a server Space named `name` (the same create body replays
+    /// `created: false`, sew-56 v1.2).
+    pub fn add_server_space_named(&self, space_id: &str, name: Option<&str>) {
         self.with(|s| {
             ensure_server_member(s);
             s.spaces.insert(
                 space_id.to_string(),
                 Space {
                     slug: Some(sew_wire::ADMIN_SPACE_SLUG.into()),
+                    name: name.map(str::to_string),
                     governance: Some(sew_wire::GOVERNANCE_SERVER.into()),
                     owner: Some(sew_wire::K2_SERVER.into()),
                     members: [sew_wire::K2_SERVER.to_string()].into_iter().collect(),
@@ -1533,6 +1543,11 @@ fn space_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
         Ok(r) => r,
         Err(e) => return bad_body(s, "spaces/settings", e, body),
     };
+    // sew-56 v1.2 (SW-1): no switch to or from `server`.
+    let from_server = s.spaces.get(&space).is_some_and(|sp| sp.governance.as_deref() == Some(sew_wire::GOVERNANCE_SERVER));
+    if has_flag(s, SERVER_GOVERNED) && (req.governance == sew_wire::GOVERNANCE_SERVER || from_server) {
+        return err(409, "conflict", "governance server is fixed", json!({"reason": "server_governance_fixed", "field": "governance"}));
+    }
     if req.governance != "app" && req.governance != "sew" {
         return bad_body(s, "spaces/settings", "governance app|sew", body);
     }
@@ -1813,7 +1828,7 @@ fn space_create(s: &mut State, body: &str) -> (u16, String) {
         return server_space_create(s, body);
     }
     if has_flag(s, SERVER_GOVERNED) && raw.get("slug").and_then(Value::as_str) == Some(sew_wire::ADMIN_SPACE_SLUG) {
-        return err(422, "validation_failed", "k2-admin is reserved", json!({"reason": "slug_reserved", "field": "slug"}));
+        return err(400, "validation_failed", "k2-admin is reserved", json!({"reason": "slug_reserved", "field": "slug"}));
     }
     if raw.get("owner").and_then(Value::as_str).is_some_and(|o| o.starts_with("app:")) {
         if !s.features.iter().any(|f| f == GOVERNED) {
@@ -2131,6 +2146,9 @@ fn space_members_add(s: &mut State, body: &str) -> (u16, String) {
 }
 
 fn channel_create(s: &mut State, body: &str) -> (u16, String) {
+    if !has_app_id(body) {
+        return server_channel_create(s, body);
+    }
     let req: ChannelCreateRequest = match serde_json::from_str(body) {
         Ok(r) => r,
         Err(e) => return bad_body(s, "channels/create", e, body),
@@ -2399,10 +2417,14 @@ fn list(s: &State, query: &str) -> (u16, String) {
 // ── Sew 0.7.0: K2 voice rooms (sew-56 v1.1d §2.2, frozen 11-01) ───────
 //
 // SW-1 (flag `server_governed_space`): `spaces/create` with `governance:
-// "server"` and `owner: "k2:server"`; one per install (`409 conflict`
-// `server_space_exists` + `details.space_id`); `slug_taken` when another
-// Space holds `k2-admin`; `identity_not_k2` on a standalone install; any
-// other create naming `k2-admin` → `422 slug_reserved`. Members: box users
+// "server"` and `owner: "k2:server"`; one per install (sew-56 v1.2: the
+// same body replays `200 created: false`; a different one is `409
+// conflict` `server_space_exists` + `details.space_id`); an `app_id` on it
+// → `409 app_mismatch`; `slug_taken` when another Space holds `k2-admin`;
+// `identity_not_k2` on a standalone install; any other create naming
+// `k2-admin` → `400 validation_failed` `slug_reserved`; a settings switch
+// to or from `server` → `409 server_governance_fixed`; `channels/create`
+// with `app_id` omitted in the server Space. Members: box users
 // and agents; `k2:principal:` / `app:` ids → `422 invalid_state`
 // `app_user_not_allowed`. Levels via the member-channels sync with
 // `app_id` omitted: `member | moderator` (`admin` → `422
@@ -2474,6 +2496,10 @@ fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
         // Sew 0.6.0's MgmtSpaceCreateRequest denies the unknown field.
         return bad_body(s, "spaces/create", "governance on a Sew without server_governed_space", body);
     }
+    // sew-56 v1.2: an app_id on a server create is 409 app_mismatch.
+    if has_app_id(body) {
+        return err(409, "conflict", "a server Space belongs to no App", json!({"reason": "app_mismatch", "field": "app_id"}));
+    }
     let req: sew_wire::ServerSpaceCreateRequest = match serde_json::from_str(body) {
         Ok(r) => r,
         Err(e) => return bad_body(s, "spaces/create (server)", e, body),
@@ -2490,7 +2516,19 @@ fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
     if s.provider != "k2" {
         return err(409, "conflict", "a standalone install has no K2 identity", json!({"reason": "identity_not_k2"}));
     }
-    if let Some((id, _)) = server_space(s) {
+    if let Some((id, slug)) = server_space(s) {
+        // sew-56 v1.2: the same create body replays (created: false); a
+        // create that differs is 409 server_space_exists.
+        let name = s.spaces[&id].name.clone();
+        if slug == req.slug && name.as_deref() == Some(req.name.as_str()) {
+            let owner_id = s.members.get(sew_wire::K2_SERVER).map_or(0, |m| m.member_id);
+            return (
+                200,
+                json!({"space_id": id, "slug": req.slug, "name": req.name, "owner_member_id": owner_id.to_string(),
+                       "created": false, "governance": "server"})
+                .to_string(),
+            );
+        }
         return err(409, "conflict", "this install already has its server Space", json!({"reason": "server_space_exists", "space_id": id}));
     }
     if s.spaces.values().any(|sp| sp.slug.as_deref() == Some(sew_wire::ADMIN_SPACE_SLUG)) {
@@ -2504,6 +2542,7 @@ fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
         space_id.clone(),
         Space {
             slug: Some(req.slug.clone()),
+            name: Some(req.name.clone()),
             governance: Some(sew_wire::GOVERNANCE_SERVER.into()),
             owner: Some(sew_wire::K2_SERVER.into()),
             members: [sew_wire::K2_SERVER.to_string()].into_iter().collect(),
@@ -2828,4 +2867,52 @@ fn media_path_set(s: &mut State, body: &str) -> (u16, String) {
     }
     let since = s.media_path.as_ref().map_or_else(|| TS.to_string(), |m| m.since.clone());
     (200, json!({"state": req.state, "since": since, "ended_calls": ended}).to_string())
+}
+
+/// SW-1 (sew-56 v1.2): `POST /mgmt/v1/channels/create` with `app_id`
+/// omitted, in the server Space only. Idempotent on (space, slug) like A9:
+/// a repeat answers `created: false` with the CURRENT name. A slug holding
+/// the other type → 409 `channel_type_mismatch`.
+fn server_channel_create(s: &mut State, body: &str) -> (u16, String) {
+    if !has_flag(s, SERVER_GOVERNED) {
+        return bad_body(s, "channels/create", "app_id omitted on a Sew without server_governed_space", body);
+    }
+    let req: sew_wire::ServerChannelCreateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "channels/create (server)", e, body),
+    };
+    if !sew_wire::is_channel_slug(&req.slug) || req.name.is_empty() || !req.members.is_empty() {
+        return bad_body(s, "channels/create (server)", "slug, name; K2 lists no members in the Admin Space", body);
+    }
+    let kind = req.kind.clone().unwrap_or_else(|| "text".into());
+    if kind != "text" && kind != sew_wire::CHANNEL_TYPE_VOICE {
+        return bad_body(s, "channels/create (server)", "type text|voice (never video)", body);
+    }
+    if let Err(e) = require_server_space(s, &req.space_id) {
+        return e;
+    }
+    s.next_id += 1;
+    let fresh = 900_000 + s.next_id;
+    let sp = s.spaces.get_mut(&req.space_id).expect("server space");
+    if let Some(c) = sp.channels.get(&req.slug) {
+        let existing = if c.kind.is_empty() { "text" } else { c.kind.as_str() };
+        if existing != kind {
+            return err(409, "conflict", "a channel of another type already has this slug",
+                json!({"reason": "channel_type_mismatch", "field": "type", "existing_type": existing}));
+        }
+    }
+    let created = !sp.channels.contains_key(&req.slug);
+    let c = sp.channels.entry(req.slug.clone()).or_insert_with(|| Channel {
+        id: fresh,
+        name: req.name.clone(),
+        private: req.private,
+        kind: kind.clone(),
+        ..Default::default()
+    });
+    (
+        200,
+        json!({"channel_id": c.id.to_string(), "space_id": req.space_id, "slug": req.slug, "name": c.name,
+               "private": c.private, "created": created, "added": [], "already": [], "skipped": [], "not_added": []})
+        .to_string(),
+    )
 }

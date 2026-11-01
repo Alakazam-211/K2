@@ -1093,7 +1093,12 @@ pub const MGMT_SPACES_CREATE: &str = "/mgmt/v1/spaces/create";
 
 /// SW-1 `MgmtSpaceCreateRequest` as K2 sends it for the Admin Space:
 /// `{"slug": "k2-admin", "name", "owner": "k2:server", "governance":
-/// "server"}`. No `app_id`, no managers, not hidden.
+/// "server"}`. No `app_id` (sending one answers `409 app_mismatch`), no
+/// managers, not hidden. sew-56 v1.2: the same body again (any
+/// Idempotency-Key) replays `200` with `created: false` and the Space's id;
+/// `409 server_space_exists` (`details.space_id`) is for a create that
+/// differs from the Space the install has. K2 takes both as "the Space is
+/// there".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerSpaceCreateRequest {
@@ -1186,6 +1191,25 @@ pub struct ServerMemberChannelsBulkRequest {
 pub struct ServerChannelsBulkRequest {
     pub space_id: String,
     pub ops: Vec<ChannelOp>,
+}
+
+/// SW-1 (sew-56 v1.2): `POST /mgmt/v1/channels/create` in a `server` Space
+/// with `app_id` omitted (the App-Space twin is [`ChannelCreateRequest`]).
+/// K2 makes its rooms with `channels/bulk`; this is here so the fake Sew
+/// and any caller speak the same body. `type` is the channel type as in
+/// I6 (`voice` for a room; absent = text) [unverified against Sew's A9b
+/// field name until 0.7.0's sew-proto is diffed].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerChannelCreateRequest {
+    pub space_id: String,
+    pub slug: String,
+    pub name: String,
+    pub private: bool,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
 }
 
 /// I6 op kinds K2 sends for rooms.
@@ -1416,8 +1440,10 @@ pub mod codes {
     pub const RATE_LIMITED: &str = "rate_limited";
     pub const INTERNAL: &str = "internal";
     pub const UNAVAILABLE: &str = "unavailable";
-    /// 403 (SW-1 `app_session_not_allowed`, `app_user_not_allowed` on client routes).
-    pub const FORBIDDEN: &str = "forbidden";
+    /// 403 (sew-56 v1.2: SW-1's client-route refusals carry
+    /// `details.reason` `app_session_not_allowed` / `app_user_not_allowed`;
+    /// Sew has no `forbidden` code).
+    pub const MISSING_PERMISSION: &str = "missing_permission";
     /// 410 (SW-3 `cursor_expired`).
     pub const GONE: &str = "gone";
     /// 503 on joins and moves (SW-11 `details.engine = media_path_down`).
@@ -1459,7 +1485,8 @@ pub mod reasons {
     pub const MEMBER_NOT_PROVISIONED: &str = "member_not_provisioned";
     /// 422: a structure edit in an App-governed Space.
     pub const GOVERNED_BY_APP: &str = "governed_by_app";
-    /// 409: an owner naming another App's service owner.
+    /// 409: an owner naming another App's service owner. Sew 0.7.0 SW-1
+    /// (sew-56 v1.2): also an `app_id` sent on a server create.
     pub const APP_MISMATCH: &str = "app_mismatch";
     /// 422: a DM to an App's service owner.
     pub const SERVICE_MEMBER: &str = "service_member";
@@ -1483,12 +1510,15 @@ pub mod reasons {
     pub const SLUG_TAKEN: &str = "slug_taken";
     /// SW-1 409 `conflict`: a standalone install (no K2 identity).
     pub const IDENTITY_NOT_K2: &str = "identity_not_k2";
-    /// SW-1 422 `validation_failed`: `k2-admin` on any other Space's create.
+    /// SW-1 400 `validation_failed` (sew-56 v1.2; Sew's validation_failed
+    /// is always 400): `k2-admin` on any other Space's create.
     pub const SLUG_RESERVED: &str = "slug_reserved";
-    /// SW-1 422 `invalid_state` (mgmt) / 403 `forbidden` (client routes):
-    /// a `k2:principal:` or `app:` id in a `server` Space.
+    /// SW-1 422 `invalid_state` (mgmt) / 403 `missing_permission` (client
+    /// routes, sew-56 v1.2): a `k2:principal:` or `app:` id in a `server`
+    /// Space. (`app_id` sent on a server create is 409 [`APP_MISMATCH`].)
     pub const APP_USER_NOT_ALLOWED: &str = "app_user_not_allowed";
-    /// SW-1 403 `forbidden`: any session with an `app` claim (Hearth too).
+    /// SW-1 403 `missing_permission` (sew-56 v1.2): any session with an
+    /// `app` claim (Hearth too).
     pub const APP_SESSION_NOT_ALLOWED: &str = "app_session_not_allowed";
     /// SW-1 422 `invalid_state`: a client structure edit in a `server` Space.
     pub const GOVERNED_BY_SERVER: &str = "governed_by_server";
@@ -1711,6 +1741,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!((r.space_id.as_str(), r.governance.as_deref(), r.created), ("77", Some("server"), true));
+        // sew-56 v1.2: the same body replays with created: false.
+        let replay: SpaceCreateResponse = serde_json::from_str(
+            r#"{"space_id":"77","slug":"k2-admin","name":"sewlab","owner_member_id":"5","created":false,"governance":"server"}"#,
+        )
+        .unwrap();
+        assert_eq!((replay.space_id.as_str(), replay.created), ("77", false));
+        // sew-56 v1.2 codes: no `forbidden` (403 is missing_permission).
+        assert_eq!(codes::MISSING_PERMISSION, "missing_permission");
+        let create = ServerChannelCreateRequest {
+            space_id: "77".into(),
+            slug: "room-1".into(),
+            name: "Room 1".into(),
+            private: false,
+            kind: Some(CHANNEL_TYPE_VOICE.into()),
+            members: vec![],
+        };
+        assert_eq!(
+            serde_json::to_value(&create).unwrap(),
+            serde_json::json!({"space_id": "77", "slug": "room-1", "name": "Room 1", "private": false, "type": "voice"})
+        );
 
         let lv = ServerMemberChannelsRequest { channel_ids: vec![], level: LEVEL_MODERATOR.into() };
         assert_eq!(serde_json::to_value(&lv).unwrap(), serde_json::json!({"channel_ids": [], "level": "moderator"}));

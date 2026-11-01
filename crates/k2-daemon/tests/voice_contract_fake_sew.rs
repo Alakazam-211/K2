@@ -28,7 +28,10 @@ const MEMBER: &str = "k2:connect:3c4d5e6f-0000-4000-8000-000000000002";
 const AGENT: &str = "k2:workspace:3c4d5e6f-0000-4000-8000-000000000003";
 const APP_USER: &str = "k2:principal:3c4d5e6f-0000-4000-8000-000000000004";
 
-const ALL_070: [&str; 6] = [
+/// Sew 0.7.0's six voice flags, beside 0.6.0's `app_governed_spaces`
+/// (0.7.0 keeps every 0.6.0 flag).
+const ALL_070: [&str; 7] = [
+    features::APP_GOVERNED_SPACES,
     features::SERVER_GOVERNED_SPACE,
     features::MGMT_VOICE_STATES,
     features::VOICE_CHANNEL_CLOSING,
@@ -99,15 +102,41 @@ async fn sw1_create_once_then_server_space_exists_names_it() {
     let env = setup(&ALL_070).await;
     let id = admin_space(&env).await;
     assert_eq!(env.sew.server_space_id().as_deref(), Some(id.as_str()));
-    // A second create with a new key: 409 server_space_exists + details.space_id.
+    // sew-56 v1.2: the same body with a new key replays: 200 created: false.
     let r = env.post(sew_wire::MGMT_SPACES_CREATE, serde_json::to_value(sew_wire::ServerSpaceCreateRequest::admin("sewlab")).unwrap()).await;
+    assert_eq!(r.status, 200, "{}", r.body_text());
+    let replay: sew_wire::SpaceCreateResponse = serde_json::from_str(&r.body_text()).unwrap();
+    assert_eq!((replay.space_id.as_str(), replay.created), (id.as_str(), false));
+    // A create that differs: 409 server_space_exists + details.space_id.
+    let r = env.post(sew_wire::MGMT_SPACES_CREATE, serde_json::to_value(sew_wire::ServerSpaceCreateRequest::admin("other")).unwrap()).await;
     assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::SERVER_SPACE_EXISTS.into()));
     assert_eq!(r.error().unwrap().error.detail_str("space_id"), Some(id.as_str()));
+    // An app_id on a server create: 409 app_mismatch.
+    let r = env
+        .post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k2-admin", "name": "sewlab", "owner": "k2:server", "governance": "server", "app_id": "a1"}))
+        .await;
+    assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::APP_MISMATCH.into()));
     // `k2:server` exists in Sew now and is never provisioned by K2.
     assert!(env.sew.member(sew_wire::K2_SERVER).is_some());
-    // Any other create naming k2-admin: 422 slug_reserved.
+    // Any other create naming k2-admin: 400 slug_reserved (v1.2).
     let r = env.post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k2-admin", "name": "x", "owner": "k2:owner"})).await;
-    assert_eq!(refusal(&r), (422, "validation_failed".into(), sew_wire::reasons::SLUG_RESERVED.into()));
+    assert_eq!(refusal(&r), (400, "validation_failed".into(), sew_wire::reasons::SLUG_RESERVED.into()));
+    // No settings switch to or from server: 409 server_governance_fixed.
+    let r = env.post(&sew_wire::space_settings_path(&id), json!({"governance": "sew"})).await;
+    assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::SERVER_GOVERNANCE_FIXED.into()));
+    // channels/create with app_id omitted in the server Space (v1.2).
+    let body = sew_wire::ServerChannelCreateRequest {
+        space_id: id.clone(),
+        slug: "room-9".into(),
+        name: "Room 9".into(),
+        private: false,
+        kind: Some(sew_wire::CHANNEL_TYPE_VOICE.into()),
+        members: vec![],
+    };
+    let r = env.post(sew_wire::MGMT_CHANNELS_CREATE, serde_json::to_value(&body).unwrap()).await;
+    let c: sew_wire::ChannelCreateResponse = serde_json::from_str(&r.body_text()).unwrap_or_else(|e| panic!("{e}: {}", r.body_text()));
+    assert!(c.created);
+    assert_eq!(env.sew.channels(&id)["room-9"].kind, "voice");
     env.sew.assert_clean();
 }
 

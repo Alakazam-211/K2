@@ -88,8 +88,9 @@ pub fn spawn(spec: &SpawnSpec) -> io::Result<Spawned> {
 
     let mut ws = libc::winsize { ws_row: spec.rows.max(1), ws_col: spec.cols.max(1), ws_xpixel: 0, ws_ypixel: 0 };
     let (mut m, mut s): (RawFd, RawFd) = (-1, -1);
-    // SAFETY: openpty fills two fds.
-    cvt(unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &mut ws) })?;
+    // SAFETY: openpty fills two fds. `winp` is `*mut winsize` on macOS and
+    // `*const winsize` on Linux; a raw `*mut` pointer fits both.
+    cvt(unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::addr_of_mut!(ws)) })?;
     // SAFETY: both fds were just returned by openpty and are owned here.
     let master = unsafe { OwnedFd::from_raw_fd(m) };
     let slave = unsafe { OwnedFd::from_raw_fd(s) };

@@ -280,12 +280,11 @@ pub fn encode_row_runs(grid: &Grid<Cell>, line: Line, cols: usize) -> Vec<CellRu
         let cell = &grid[Point::new(line, Column(c))];
         // WIDE_CHAR_SPACER is the placeholder cell alacritty stores
         // after a double-width char. It carries no glyph of its own —
-        // emitting it (as legacy pre-fix code did) wired "日本" as
-        // "日 本 ", pushing every later column right by one in the DOM
-        // and inserting phantom columns into text-offset math. The
-        // legacy renderer's `alacritty_backend.rs` skipped it the same
-        // way. (LEADING_WIDE_CHAR_SPACER — the pad cell before a wide
-        // char that wrapped — holds a real blank column and stays.)
+        // emitting it would wire "日本" as "日 本 ", pushing every later
+        // column right by one in a DOM renderer and inserting phantom
+        // columns into text-offset math. (LEADING_WIDE_CHAR_SPACER —
+        // the pad cell before a wide char that wrapped — holds a real
+        // blank column and stays.)
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
@@ -731,7 +730,7 @@ mod tests {
         // "1234567 x" in an 8-col grid: the typed space lands exactly
         // on the last column of the wrapped row. It is content, not
         // padding — trimming it made the client's wrapped-line join
-        // copy "1234567x" (owner-reported as "has a" → "hasa").
+        // copy "1234567x" (in real text, "has a" copied as "hasa").
         let term = term_with(8, 4, b"1234567 x");
         let wrapped_row = encode_row_runs(term.grid(), Line(0), 8);
         let continuation = encode_row_runs(term.grid(), Line(1), 8);

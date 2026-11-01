@@ -550,7 +550,7 @@ fn num(v: &Value) -> Option<f64> {
 }
 
 fn check_name(name: &str) -> Result<(), Fail> {
-    if name.encode_utf16().count() > 200 {
+    if name.chars().count() > 200 {
         return Err(Fail::Board(BoardError::too_long("name", 200)));
     }
     Ok(())

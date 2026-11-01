@@ -34,7 +34,7 @@ pub const REACTIONS: &[&str] = &["👍", "❤️", "😂", "🎉", "🤔", "👀
 pub enum Kind {
     Num,
     Bool,
-    /// A string of at most this many UTF-16 units (as the widget counts).
+    /// A string of at most this many code points (as the widget counts).
     Str(usize),
     Enum(&'static [&'static str]),
     Sticky,
@@ -243,8 +243,10 @@ pub fn valid_person(s: &str) -> bool {
     !s.is_empty() && s.chars().count() <= 80 && !s.chars().any(char::is_control)
 }
 
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
+/// A text's length as the widget counts it: Unicode code points
+/// (`Array.from(s).length`).
+fn text_len(s: &str) -> usize {
+    s.chars().count()
 }
 
 fn is_hex_colour(s: &str) -> bool {
@@ -290,7 +292,7 @@ fn text_of(v: &Value) -> String {
 
 fn check_str(field: &str, v: &Value, max: usize) -> Result<Value, BoardError> {
     let s = text_of(v);
-    if utf16_len(&s) > max {
+    if text_len(&s) > max {
         return Err(BoardError::too_long(field, max));
     }
     Ok(Value::String(s))
@@ -410,21 +412,29 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
             let v = maybe_json(v, field)?;
             match &v {
                 Value::String(id) => {
-                    if utf16_len(id) > 40 {
+                    if text_len(id) > 40 {
                         return Err(BoardError::too_long(field, 40));
                     }
                     json!({ "id": id, "anchor": "auto" })
                 }
                 Value::Object(o) if o.get("id").is_some_and(|i| !i.is_null()) => {
                     let id = text_of(&o["id"]);
-                    if utf16_len(&id) > 40 {
+                    if text_len(&id) > 40 {
                         return Err(BoardError::too_long(field, 40));
                     }
                     let anchor = o.get("anchor").and_then(Value::as_str).unwrap_or("auto");
                     if !ANCHORS.contains(&anchor) {
                         return Err(bad(&format!("an anchor: {}", ANCHORS.join(", "))));
                     }
-                    json!({ "id": id, "anchor": anchor })
+                    let mut e = json!({ "id": id, "anchor": anchor });
+                    // The last point it was drawn at: where the end shows
+                    // (faded) if its object goes.
+                    for q in ["x", "y"] {
+                        if let Some(n) = o.get(q).filter(|v| !v.is_null()) {
+                            e[q] = round1(num_of(n).ok_or_else(|| bad(&format!("{q}: a number")))?);
+                        }
+                    }
+                    e
                 }
                 Value::Object(o) => {
                     let x = o.get("x").and_then(num_of).ok_or_else(|| bad("an object id, {\"id\":..,\"anchor\":..} or {\"x\":..,\"y\":..}"))?;
@@ -454,7 +464,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                     ),
                     other => (None, text_of(other), false),
                 };
-                if utf16_len(&text) > 500 {
+                if text_len(&text) > 500 {
                     return Err(BoardError::too_long("checks.text", 500));
                 }
                 let id = match id {
@@ -493,7 +503,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
             if s.is_empty() {
                 return Ok(None);
             }
-            if utf16_len(s) > 2000 {
+            if text_len(s) > 2000 {
                 return Err(BoardError::too_long(field, 2000));
             }
             let lower = s.to_ascii_lowercase();
@@ -559,7 +569,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
             for r in a {
                 let o = r.as_object().ok_or_else(|| bad("a list of {\"by\":..,\"at\":..,\"text\":..}"))?;
                 let text = o.get("text").map(text_of).unwrap_or_default();
-                if utf16_len(&text) > 5000 {
+                if text_len(&text) > 5000 {
                     return Err(BoardError::too_long("replies.text", 5000));
                 }
                 let by = o.get("by").map(text_of).unwrap_or_default();

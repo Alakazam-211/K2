@@ -74,6 +74,40 @@ fn data_url(src: &str) -> Option<(String, Vec<u8>)> {
     (!bytes.is_empty()).then(|| (mime.to_string(), bytes))
 }
 
+/// Turn every exact `k2blob:` string under `v` into `{"blob": …}`, adding
+/// its bytes to `blobs` once.
+fn blobify(
+    v: &mut Value,
+    blobs: &mut Map<String, Value>,
+    blob: &mut dyn FnMut(&str) -> Result<BlobBytes, BoardError>,
+    fail: &mut Option<BoardError>,
+) {
+    match v {
+        Value::String(s) if schema::is_blob_ref(s) => {
+            let hex = s[crate::garden_data::blobs::REF_PREFIX.len()..].to_string();
+            let name = format!("sha256-{hex}");
+            if !blobs.contains_key(&name) {
+                match blob(&hex) {
+                    Ok(b) => {
+                        blobs.insert(
+                            name.clone(),
+                            json!({ "mime": b.mime, "name": b.name, "data": base64::engine::general_purpose::STANDARD.encode(&b.bytes) }),
+                        );
+                    }
+                    Err(e) => {
+                        fail.get_or_insert(e);
+                        return;
+                    }
+                }
+            }
+            *v = json!({ "blob": name });
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| blobify(x, blobs, blob, fail)),
+        Value::Object(m) => m.iter_mut().for_each(|(_, x)| blobify(x, blobs, blob, fail)),
+        _ => {}
+    }
+}
+
 /// Build the envelope. `name_of(person key)` → (display name, kind);
 /// `blob(hash hex)` → the bytes of `k2blob:sha256-<hex>`.
 pub fn envelope(
@@ -111,21 +145,24 @@ pub fn envelope(
                 }
             }
         }
+        // Any exact `k2blob:` string anywhere in the object becomes
+        // `{"blob": "sha256-…"}` (the widget's rule); a legacy `data:` image
+        // source too. The first object in order names a shared blob.
+        let mut fail = None;
+        for (_, val) in o.iter_mut() {
+            blobify(val, &mut blobs, blob, &mut fail);
+        }
+        if let Some(e) = fail {
+            return Err(e);
+        }
         if o.get("type").and_then(Value::as_str) == Some("image") {
             let src = o.get("src").and_then(Value::as_str).unwrap_or("").to_string();
-            if schema::is_blob_ref(&src) {
-                let hex = &src[crate::garden_data::blobs::REF_PREFIX.len()..];
-                let b = blob(hex)?;
-                let name = format!("sha256-{hex}");
-                blobs.insert(
-                    name.clone(),
-                    json!({ "mime": b.mime, "name": b.name, "data": base64::engine::general_purpose::STANDARD.encode(&b.bytes) }),
-                );
-                o.insert("src".into(), json!({ "blob": name }));
-            } else if let Some((mime, bytes)) = data_url(&src) {
+            if let Some((mime, bytes)) = data_url(&src) {
                 let hex: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
                 let name = format!("sha256-{hex}");
-                blobs.insert(name.clone(), json!({ "mime": mime, "name": Value::Null, "data": base64::engine::general_purpose::STANDARD.encode(&bytes) }));
+                if !blobs.contains_key(&name) {
+                    blobs.insert(name.clone(), json!({ "mime": mime, "name": Value::Null, "data": base64::engine::general_purpose::STANDARD.encode(&bytes) }));
+                }
                 o.insert("src".into(), json!({ "blob": name }));
             }
         }

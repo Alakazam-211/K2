@@ -141,9 +141,13 @@ fn refusals_are_typed_and_nothing_is_cut() {
     let e = err(add(json!({"type": "sticky", "text": long})));
     assert_eq!((e.code, e.field.as_deref(), e.max), ("too_long", Some("text"), Some(5000)));
     add(json!({"type": "sticky", "text": "x".repeat(5000)})).expect("at the limit");
-    // UTF-16 units, as the widget counts: 2500 emoji are 5000 units.
-    add(json!({"type": "sticky", "text": "😀".repeat(2500)})).expect("2500 emoji fit");
-    assert_eq!(err(add(json!({"type": "sticky", "text": "😀".repeat(2501)}))).code, "too_long");
+    // Code points, as the widget counts (Array.from): 5000 emoji fit.
+    add(json!({"type": "sticky", "text": "😀".repeat(5000)})).expect("5000 emoji fit");
+    assert_eq!(err(add(json!({"type": "sticky", "text": "😀".repeat(5001)}))).code, "too_long");
+    // A connector end keeps its last point beside the id; a bad anchor is refused.
+    let ws = add(json!({"type": "connector", "from": {"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10.04, "y": 20}, "to": {"x": 1, "y": 2}})).expect("ends");
+    assert_eq!(ws[0].value.as_ref().expect("value")["from"], json!({"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10, "y": 20}));
+    assert_eq!(err(add(json!({"type": "connector", "from": {"id": "h-aaaaaaaaaa", "anchor": "middle"}}))).code, "bad_field");
     let tags: Vec<String> = (0..201).map(|i| format!("t{i}")).collect();
     let e = err(add(json!({"type": "sticky", "tags": tags})));
     assert_eq!((e.code, e.max), ("too_many", Some(200)));

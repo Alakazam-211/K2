@@ -234,7 +234,7 @@ printf 'png bytes\n' >"$A/notes/off.png"
 before_md="$(python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(open(sys.argv[1],"rb").read().hex(), s.st_mtime_ns)' "$A/notes/plan.md")"
 owner GET /cli/docs/cores
 want 200 "cores list"
-jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: three rows, all off; the owner may change them"
+jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: four rows, all off; the owner may change them"
 agent GET /cli/docs/cores
 want 200 "agent cores list"
 jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 3' "an agent may read the cores, never change them"

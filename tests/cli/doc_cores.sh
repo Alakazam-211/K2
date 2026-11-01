@@ -206,7 +206,7 @@ MEM="$(printf '%s' "$login" | python3 -c 'import json,sys; v=json.load(sys.stdin
 cli -- doc cores off markdown --host "http://127.0.0.1:$DPORT" --token "$MEM"
 want_rc 3 "member off"
 has "$ERR" 'updating "multiplayerCores" requires the Owner or Admin role' "member refusal"
-jok "$(cores_json)" '[c["on"] for c in j["cores"]] == [True, True, False]' "a Member's off changed nothing"
+jok "$(cores_json)" '[c["on"] for c in j["cores"]] == [True, True, False, False]' "a Member's off changed nothing"
 cli -- doc cores --host "http://127.0.0.1:$DPORT" --token "$MEM" --json
 want_rc 0 "member list"
 jok "$OUT" 'j["canChange"] is False' "a Member may list the cores, never change them"
@@ -254,7 +254,7 @@ has "$OUT" "its changes are kept in K2's history and are written when the core i
 chmod 755 "$WS/ro"
 ok "a failed write-back: the flip completes, the line names it, exit 1"
 cli -- doc cores --json
-jok "$OUT" '[c["on"] for c in j["cores"]] == [False, False, False] and [f["path"] for f in j["cores"][1]["lastChange"]["failed"]] == ["ro/x.txt"]' "every core off; the text row keeps the failed path"
+jok "$OUT" '[c["on"] for c in j["cores"]] == [False, False, False, False] and [f["path"] for f in j["cores"][1]["lastChange"]["failed"]] == ["ro/x.txt"]' "every core off; the text row keeps the failed path"
 cli -- doc cores on text
 want_rc 0 "text on again"
 cli -- doc cat "$WS/ro/x.txt"

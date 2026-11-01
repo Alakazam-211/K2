@@ -76348,7 +76348,7 @@ except Exception:
         person_only|owner_only)
             echo "This needs a person. Run it outside K2, or use Settings → Gardens → the Garden → Local Data." >&2
             exit 3 ;;
-        not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
+        not_granted|self_grant|level_too_high|not_own|author_unknown|core_off) exit 3 ;;
         space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot|blob_missing) exit 4 ;;
         conflict) exit 5 ;;
         *) exit 1 ;;

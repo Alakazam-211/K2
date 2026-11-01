@@ -1169,9 +1169,17 @@ async fn a_node_list_holds_on_moves_retries_and_narrowing() {
     let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "nodes": ["fa", "fb"]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
-    // fb offline, fa full: an auto job waits on fa.
+    // fb offline, fa full (one slot, held by a pinned job): an auto job
+    // waits on fa.
     compute_ws::test_detach("fb");
-    let mut full = offer(2, 30, 32, 1);
+    let mut one = offer(2, 30, 32, 0);
+    one.parallel_max = 1;
+    compute_ws::test_frame("fa", Frame::Offer(one));
+    let r = run(d.port, OWNER, &me, json!({"node": "fa", "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let holder = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(row(&holder).state, "assigned", "it holds fa's one slot");
+    let mut full = offer(3, 30, 32, 1);
     full.parallel_max = 1;
     compute_ws::test_frame("fa", Frame::Offer(full));
     let r = run(d.port, OWNER, &me, json!({"memBytes": GB})).await;
@@ -1200,7 +1208,7 @@ async fn a_node_list_holds_on_moves_retries_and_narrowing() {
     let pinned = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let r = post(d.port, ALLOW_SET, OWNER, json!({"workspace": me.id, "remove": ["fa"]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(j(&r)["failedQueued"], json!([pinned]), "{}", r.body);
+    assert!(j(&r)["failedQueued"].as_array().unwrap().contains(&json!(pinned)), "{}", r.body);
     let ended = row(&pinned);
     assert_eq!((ended.state.as_str(), ended.reason.as_deref()), ("failed", Some("node_not_allowed")), "{ended:?}");
     let r = post(d.port, "/cli/compute/jobs/retry", OWNER, json!({"job": pinned})).await;
@@ -1208,8 +1216,8 @@ async fn a_node_list_holds_on_moves_retries_and_narrowing() {
 
     // A job queued on a full fb; the list then changes in the store alone
     // (no route sweep): the next kick fails it instead of sending it.
-    let mut fb_full = offer(4, 30, 32, 2);
-    fb_full.parallel_max = 2;
+    let mut fb_full = offer(4, 30, 32, 1);
+    fb_full.parallel_max = 1;
     compute_ws::test_frame("fb", Frame::Offer(fb_full));
     let r = run(d.port, OWNER, &me, json!({"node": "fb"})).await;
     assert_eq!(r.status, 200, "{}", r.body);

@@ -264,7 +264,11 @@ fn set_status(f: impl FnOnce(&mut FeedStatus)) {
 }
 
 /// Tell clients the rooms view moved: `voice_rooms_changed {rev}`.
+/// Nothing goes out while the preview is off.
 pub fn emit_rooms_changed() {
+    if !k2_core::voice_rooms::enabled() {
+        return;
+    }
     let rev = REV.fetch_add(1, Ordering::Relaxed) + 1;
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::VoiceRoomsChanged { rev });
 }

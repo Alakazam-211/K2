@@ -50,8 +50,9 @@ out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" voice --help 2>&1)"; rc=$?
 set -e
 assert_eq "voice --help exit 0" "$rc" "0"
 assert_contains "help: set rooms" "$out" "k2 voice set rooms <0-10> [--now]"
-assert_contains "help: owner token can't join" "$out" "bare owner token can't join"
+assert_contains "help: owner token never joins" "$out" "never joins or moderates"
 assert_contains "help: study page" "$out" "k2 study voice-rooms"
+assert_contains "help: agents are read only" "$out" "Agents: read only"
 out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" study voice-rooms 2>&1)"
 assert_contains "study page title" "$out" "k2 study voice-rooms — Voice rooms on this server (preview)"
 assert_contains "study page points App voice elsewhere" "$out" "k2 study chat-voice-rooms"

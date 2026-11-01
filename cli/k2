@@ -65449,23 +65449,34 @@ server can't host, and lets the owner or an Admin change them. Read
                                       when the last one leaves. --now: people get a
                                       10 s notice, then the room closes and calls end.
   k2 voice rename <room> <name>       rename a room (owner/Admin). <room> is 1, room-1
-                                      or its name; the slug never changes
-  k2 voice close <room> [--now]       close the top room (same as lowering the count
-                                      by one; owner/Admin)
+                                      or its name. Numbers and slugs never change
+  k2 voice close <room> [--now]       close the top room: <room> must be the highest
+                                      one (a check), else close_from_top. Same as
+                                      lowering the count by one (owner/Admin)
   k2 voice join <room>                join as your own login (for voice clients and
-                                      tests: the CLI has no audio). Agents and the
-                                      bare owner token can't join
+                                      tests: the CLI has no audio)
   k2 voice leave [--call <callId>]    leave your call
   k2 voice kick|mute|unmute|deafen|undeafen <room> <person>
-                                      moderate, from the owner's or an Admin's own
-                                      login on this server (Sew records who did it).
-                                      <person> is a login name, owner, or a member id
+                                      moderate (owner/Admin, from their own login on
+                                      this server; Sew records who did it). kick ends
+                                      their call; mute stops them speaking and deafen
+                                      stops them hearing, until unmute/undeafen.
+                                      <person> is a login name or owner as
+                                      k2 voice rooms shows it (--json: memberId)
+
+Agents: read only (rooms, status). Every change, join and moderation
+refuses an agent's passport (owner_or_admin_only, agents_not_in_voice,
+agents_cannot_moderate): ask your human in your Thread. The bare owner
+token reads and changes rooms but never joins or moderates
+(owner_token_cannot_join, owner_token_cannot_moderate).
 
 Talks to this server (or the one --host names), like every k2 verb.
-Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable (the JSON on
-stderr names why: voice_rooms_off, owner_or_admin_only,
-owner_token_cannot_join, agents_not_in_voice, room_closing, room_full,
-voice_unavailable, close_from_top …).
+Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable. stderr carries
+{"error": <code>, "hint": …}: voice_rooms_off (preview off: the owner
+turns it on), owner_or_admin_only, moderator_only, agents_not_in_voice,
+room_closing / room_full / room_not_found, not_in_room, close_from_top,
+voice_unavailable or voice_member_pending (retry in a few seconds).
+Full list and fixes: k2 study voice-rooms.
 EOF
 }
 

@@ -164,10 +164,10 @@ fn the_tunnel_tier_needs_the_preview_helper_12_and_a_relay_only_sew() {
         let tt = report.as_array().unwrap().iter().find(|c| c["id"] == "tunnel_tier").cloned().unwrap();
         assert_eq!((tt["status"].as_str(), tt["detail"].as_str()), (Some("fail"), Some(code)), "{report}");
     };
-    let t2 = t();
+    let t2 = self::t();
     t2.helper(11, false);
     refused(&t2, "helper_outdated");
-    let t3 = t();
+    let t3 = self::t();
     t3.features(&[media_path::FEATURE_VOICE_MEDIA_PATH]);
     refused(&t3, "sew_too_old");
     assert!(t3.ops.cp_log().is_empty(), "nothing issued");

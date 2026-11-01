@@ -5,7 +5,7 @@
 # their own version and artifacts). K2-PIN.txt is hand-made and not
 # authoritative (Sew, 2026-10-16).
 #
-#   bash scripts/sew-pins-from-release.sh <release-dir> [--const NAME]
+#   bash scripts/sew-pins-from-release.sh <release-dir> [--const NAME | --next]
 #
 # <release-dir> holds sew-<v>-release.json and SHA256SUMS (and, when
 # present, the tarballs themselves). Before printing anything it checks:
@@ -36,24 +36,46 @@
 # Default output is a `SewRelease { … }` expression for SEW_RELEASES;
 # `--const NAME` wraps it as `const NAME: SewRelease = …;` (the test tables).
 # With an `app_kit`, a `SewAppKit { … },` row for SEW_APP_KITS follows.
+#
+# `--next` prints the drop-in for the `sew-test-pin-next` feature (V22:
+# the real pins plus Sew's next TEST build, so a box on the real pin can
+# `k2 hostchat upgrade --tarball` to it): `pub const SEW_TEST_NEXT:
+# SewRelease = …;` and `pub const SEW_TEST_NEXT_APP_KIT: SewAppKit = …;`
+# (a placeholder kit when release.json has none). It also requires both
+# x86_64 and aarch64 core artifacts (the SYS-LE-1 test boxes are x86_64).
+# To drop a test build in:
+#   1. put its sew-<v>-release.json and SHA256SUMS (and, better, the
+#      tarballs) in an empty directory: `gh release download <tag>
+#      -R Alakazam-211/sew-releases -p 'sew-*-release.json' -p SHA256SUMS
+#      -p 'sew-*.tar.gz' -D <dir>`, or copy Sew's test-build directory;
+#   2. `bash scripts/sew-pins-from-release.sh <dir> --next`;
+#   3. in crates/k2-root-proto/src/sew.rs, replace the SEW_TEST_NEXT and
+#      SEW_TEST_NEXT_APP_KIT consts with the output (put the provenance
+#      line in their doc comment) and compare each hash with Sew's note;
+#   4. `cargo test -p k2-root-proto --lib --features sew-test-pin-next`,
+#      then build the daemon AND the helper with `--features
+#      sew-test-pin-next` (never signed: sign-root-helper.sh refuses it).
 set -euo pipefail
 
-usage() { echo "usage: $0 <release-dir> [--const NAME]" >&2; exit 2; }
+usage() { echo "usage: $0 <release-dir> [--const NAME | --next]" >&2; exit 2; }
 [ $# -ge 1 ] || usage
 DIR="$1"; shift
 CONST=""
+NEXT=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--const) CONST="${2:-}"; [ -n "$CONST" ] || usage; shift 2 ;;
+		--next) NEXT=1; shift ;;
 		*) usage ;;
 	esac
 done
+[ -n "$CONST" ] && [ -n "$NEXT" ] && usage
 [ -d "$DIR" ] || { echo "no such directory: $DIR" >&2; exit 2; }
 
-exec python3 -I - "$DIR" "$CONST" <<'PY'
+exec python3 -I - "$DIR" "$CONST" "$NEXT" <<'PY'
 import glob, hashlib, io, json, os, re, sys, tarfile
 
-d, const = sys.argv[1], sys.argv[2]
+d, const, nxt = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 rel_files = glob.glob(os.path.join(d, "sew-*-release.json"))
 if len(rel_files) != 1:
     sys.exit(f"expected exactly one sew-<v>-release.json in {d}, found {len(rel_files)}")
@@ -204,6 +226,12 @@ if kit is not None:
         else:
             print(f"sew-pins-from-release: note: {kit['file']} is not in {d}; its sha256 is checked against SHA256SUMS only", file=sys.stderr)
 
+# `--next`: the test boxes are x86_64, and K2 pins both linux-gnu arches.
+if nxt:
+    have = sorted(a.get("arch") for a in core)
+    if have != ["aarch64", "x86_64"]:
+        errors.append(f"--next: core artifacts for {have}, want aarch64 and x86_64")
+
 # A pre-release (Sew's canary) pins like any release (Rosson 2026-10-28:
 # K2 0.46.6 ships with Sew 0.5.0 once Sew's cut passes its smoke run).
 prerelease = rel.get("prerelease") is True or rel.get("channel") not in (None, "stable")
@@ -259,6 +287,11 @@ for name in SIDECARS:
         lines.append(f"    {name}: None,")
 lines.append("}")
 expr = "\n".join(lines)
+if nxt:
+    print(f"pub const SEW_TEST_NEXT: SewRelease = {expr};")
+    ksha = kit["sha256"] if kit is not None else f"PLACEHOLDER-sew-{version}-has-no-app-kit"
+    print(f"pub const SEW_TEST_NEXT_APP_KIT: SewAppKit =\n    SewAppKit {{ version: \"{version}\", sha256: \"{ksha}\" }};")
+    sys.exit(0)
 if const:
     print(f"const {const}: SewRelease = {expr};")
 else:

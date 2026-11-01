@@ -125,7 +125,7 @@ for ARCH in x86_64 aarch64; do
 		die "$A is a TEST-KEYS build — refusing to sign"
 	fi
 	if LC_ALL=C grep -a -q K2_SEW_TEST_PINS_ENABLED "$TMP/$A"; then
-		die "$A pins Sew's TEST builds (sew-test-pins) — refusing to sign"
+		die "$A pins Sew's TEST builds (sew-test-pins or sew-test-pin-next) — refusing to sign"
 	fi
 	markers="$(LC_ALL=C grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "$TMP/$A" || true)"
 	[ "$(printf '%s\n' "$markers" | grep -c .)" = 1 ] || die "$A: expected exactly one build marker, found: $markers"

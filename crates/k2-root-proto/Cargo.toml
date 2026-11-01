@@ -21,6 +21,11 @@ test-signer = ["dep:ring", "dep:blake2", "dep:base64"]
 sew-test-pins = []
 # ...plus 0.1.1 as the pin (0.1.0 stays known): the upgrade half of the cycle.
 sew-test-pins-upgrade = ["sew-test-pins"]
+# TEST ONLY (V22): the REAL pin table plus Sew's next test build
+# (`sew::SEW_TEST_NEXT`) as the pin, so a box on the real pin can
+# `k2 hostchat upgrade --tarball` to it. Same flag and signing refusal as
+# sew-test-pins; not with sew-test-pins-upgrade.
+sew-test-pin-next = ["sew-test-pins"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -65,6 +65,16 @@ fn a_default_build_carries_no_sew_test_pins() {
     for h in TEST_PIN_HASHES {
         assert!(!text.contains(h), "Sew test pin {h} is in a default build");
     }
+    // Sew's next test build (`sew-test-pin-next`, V22): its hashes, once
+    // dropped in, are compiled into that feature's table only.
+    let next = &k2_root_proto::sew::SEW_TEST_NEXT;
+    let side = [&next.media, &next.transcriber, &next.recorder];
+    let next_arts = next.artifacts.iter().chain(side.into_iter().flatten().flat_map(|s| s.artifacts));
+    let mut next_hashes: Vec<&str> = next_arts.flat_map(|a| [a.tarball_sha256, a.binary_sha256]).collect();
+    next_hashes.push(k2_root_proto::sew::SEW_TEST_NEXT_APP_KIT.sha256);
+    for h in next_hashes.into_iter().filter(|h| k2_root_proto::sew::hex64(h)) {
+        assert!(!text.contains(h), "Sew's next test build {h} is in a default build");
+    }
     assert!(k2_root_proto::sew::test_pins_flag().is_none());
     for r in k2_root_proto::sew::SEW_RELEASES {
         for a in r.artifacts {

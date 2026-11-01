@@ -18,7 +18,10 @@
 //! refuses at preflight (`sew_not_released`). Builds with the `test-signer`
 //! feature (tests and the test-keys example only; release signing refuses
 //! those builds) use [`TEST_RELEASES`] instead: K2's own fixture tarballs
-//! under `testdata/sew/`, which hold a shell stub, never Sew.
+//! under `testdata/sew/`, which hold a shell stub, never Sew. Test-only
+//! features swap in Sew's TEST builds: `sew-test-pins` (its own table) and
+//! `sew-test-pin-next` (the real table plus Sew's next test build, so a box
+//! on the real pin can upgrade to it); release signing refuses both.
 //!
 //! **Argv.** Nothing here is ever a helper argv token except the enum
 //! names, an install id ([`install_id_ok`]) and a bundle id
@@ -231,7 +234,7 @@ pub const SEW_MEDIA_DOC_DIR: &str = "/usr/share/doc/sew-media";
 // ── Pin table ───────────────────────────────────────────────────────────
 
 /// One per-arch artifact: tarball sha256 + the sha256 of the binary member.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SewArtifact {
     pub arch: &'static str,
     pub triple: &'static str,
@@ -242,14 +245,15 @@ pub struct SewArtifact {
 /// A sidecar of one release (`sew-media`, `sew-transcriber`,
 /// `sew-recorder`): its own version and artifacts (`release.json`
 /// `sidecars[]`).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SewSidecar {
     pub version: &'static str,
     pub artifacts: &'static [SewArtifact],
 }
 
-/// One pinned Sew release.
-#[derive(Debug)]
+/// One pinned Sew release. `Copy` (all `'static` borrows) so the
+/// `sew-test-pin-next` table can copy [`SEW_RELEASES`] in a const.
+#[derive(Debug, Clone, Copy)]
 pub struct SewRelease {
     pub version: &'static str,
     pub artifacts: &'static [SewArtifact],
@@ -928,8 +932,9 @@ pub const TEST_RELEASES: &[SewRelease] = &[
 ///
 /// Two tables, like two K2 releases: `sew-test-pins` pins 0.1.0 (enable),
 /// `sew-test-pins-upgrade` appends 0.1.1 as the pin (the upgrade source
-/// 0.1.0 stays known, as a real pin bump keeps it).
-#[cfg(feature = "sew-test-pins")]
+/// 0.1.0 stays known, as a real pin bump keeps it). `sew-test-pin-next`
+/// (below) is a third table and leaves both out.
+#[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pin-next")))]
 const SEW_TEST_0_1_0: SewRelease = SewRelease {
     version: "0.1.0",
     artifacts: &[SewArtifact {
@@ -1005,13 +1010,102 @@ const SEW_TEST_0_1_1: SewRelease = SewRelease {
     }),
 };
 
+#[cfg(all(feature = "sew-test-pins-upgrade", feature = "sew-test-pin-next"))]
+compile_error!("sew-test-pins-upgrade and sew-test-pin-next are two different Sew test tables: enable one");
+
+/// Sew's NEXT test build (V22 in `prd-k2-voice-rooms-v1-vs-live.md`): a
+/// pre-release Sew (0.7.0 for voice rooms) that a box on the REAL pin
+/// upgrades to. `sew-test-pins` can't do that, because its table replaces
+/// [`SEW_RELEASES`], so the real pin on the box is no known upgrade
+/// source there. The `sew-test-pin-next` feature (implies `sew-test-pins`:
+/// same flag, same signing refusal) uses [`SEW_RELEASES`] plus this entry
+/// as the pin: upgrade from the real pin, and rollback to it, work as in a
+/// real pin bump. A default build never selects it
+/// (`k2-root-helper/tests/binary.rs` checks the built helper carries none
+/// of its hashes).
+///
+/// **Placeholder until Sew's 0.7.0 test build exists** (about 11-03/04):
+/// while it is, a `sew-test-pin-next` build pins nothing it can install
+/// (`sew_not_released`). To drop the hashes in:
+/// 1. `gh release download <tag> -R Alakazam-211/sew-releases -p
+///    'sew-*-release.json' -p SHA256SUMS -D <empty dir>` (add the tarballs
+///    with `-p 'sew-*.tar.gz'` to have them checked too), or copy Sew's
+///    test-build directory;
+/// 2. `bash scripts/sew-pins-from-release.sh <dir> --next`, which checks
+///    every hash against SHA256SUMS (and the tarballs that are there) and
+///    prints `pub const SEW_TEST_NEXT` and `pub const
+///    SEW_TEST_NEXT_APP_KIT`;
+/// 3. replace both consts below with that output (keep this comment; put
+///    its `// provenance:` line in it), and compare every hash with Sew's
+///    own snippet;
+/// 4. the version must be plain `x.y.z` (`Semver::parse`), above the real
+///    pin; both arches (the SYS-LE-1 test boxes are x86_64);
+/// 5. build the daemon AND the helper with `--features sew-test-pin-next`
+///    (the daemon refuses a helper with another table), run `cargo test
+///    -p k2-root-proto --lib --features sew-test-pin-next`, then
+///    `install-root-helper.sh --file` and `k2 hostchat upgrade --tarball
+///    <test tarball>` on the test box. Never `k2 update` that box. Before
+///    the final release, clear `~/.k2/cache/sew/<version>/` there (the
+///    final has new hashes).
+pub const SEW_TEST_NEXT: SewRelease = SewRelease {
+    version: "0.7.0",
+    artifacts: &[
+        SewArtifact {
+            arch: "aarch64",
+            triple: "aarch64-unknown-linux-gnu",
+            tarball_sha256: "PLACEHOLDER-sew-0.7.0-test-build-not-yet",
+            binary_sha256: "PLACEHOLDER-sew-0.7.0-test-build-not-yet",
+        },
+        SewArtifact {
+            arch: "x86_64",
+            triple: "x86_64-unknown-linux-gnu",
+            tarball_sha256: "PLACEHOLDER-sew-0.7.0-test-build-not-yet",
+            binary_sha256: "PLACEHOLDER-sew-0.7.0-test-build-not-yet",
+        },
+    ],
+    media: None,
+    transcriber: None,
+    recorder: None,
+};
+/// [`SEW_TEST_NEXT`]'s App kit (a placeholder is never a kit:
+/// [`app_kit`] wants 64 hex).
+pub const SEW_TEST_NEXT_APP_KIT: SewAppKit =
+    SewAppKit { version: "0.7.0", sha256: "PLACEHOLDER-sew-0.7.0-test-build-not-yet" };
+
+/// [`SEW_RELEASES`] with [`SEW_TEST_NEXT`] appended (the pin).
+#[cfg(feature = "sew-test-pin-next")]
+const SEW_TEST_PIN_NEXT_TABLE: [SewRelease; SEW_RELEASES.len() + 1] = {
+    let mut t = [SEW_TEST_NEXT; SEW_RELEASES.len() + 1];
+    let mut i = 0;
+    while i < SEW_RELEASES.len() {
+        t[i] = SEW_RELEASES[i];
+        i += 1;
+    }
+    t
+};
+
+/// [`SEW_APP_KITS`] with [`SEW_TEST_NEXT_APP_KIT`] appended.
+#[cfg(feature = "sew-test-pin-next")]
+const SEW_TEST_PIN_NEXT_KITS: [SewAppKit; SEW_APP_KITS.len() + 1] = {
+    let mut t = [SEW_TEST_NEXT_APP_KIT; SEW_APP_KITS.len() + 1];
+    let mut i = 0;
+    while i < SEW_APP_KITS.len() {
+        t[i] = SEW_APP_KITS[i];
+        i += 1;
+    }
+    t
+};
+
 /// The test pin table this build uses (the last entry is the pin).
-#[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pins-upgrade")))]
+#[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pins-upgrade"), not(feature = "sew-test-pin-next")))]
 pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0];
 #[cfg(feature = "sew-test-pins-upgrade")]
 pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0, SEW_TEST_0_1_1];
+#[cfg(feature = "sew-test-pin-next")]
+pub const SEW_TEST_PINS: &[SewRelease] = &SEW_TEST_PIN_NEXT_TABLE;
 
-/// Present only in a `sew-test-pins` build; release signing refuses it.
+/// Present only in a `sew-test-pins` build (`sew-test-pin-next`
+/// included); release signing refuses it.
 #[cfg(feature = "sew-test-pins")]
 #[used]
 pub static SEW_TEST_PINS_FLAG: &str = "K2_SEW_TEST_PINS_ENABLED";
@@ -1030,7 +1124,8 @@ pub fn test_pins_flag() -> Option<&'static str> {
 }
 
 /// The table this build uses: the fixtures in a `test-signer` build, Sew's
-/// test builds in a `sew-test-pins` build, else the real pins.
+/// test builds in a `sew-test-pins` build (with `sew-test-pin-next`: the
+/// real pins plus [`SEW_TEST_NEXT`]), else the real pins.
 pub fn releases() -> &'static [SewRelease] {
     if cfg!(feature = "test-signer") {
         return TEST_RELEASES;
@@ -1125,7 +1220,7 @@ pub fn pinned() -> &'static SewRelease {
 /// NOTICES and kit.json), pinned by its sha256 like the release tarballs.
 /// Not root's business: the daemon verifies it and keeps a read-only copy
 /// for `k2 app sdk add --sew` (`k2_core::app_sdk`).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SewAppKit {
     pub version: &'static str,
     pub sha256: &'static str,
@@ -1148,11 +1243,18 @@ pub const SEW_APP_KITS: &[SewAppKit] = &[
 pub const TEST_APP_KITS: &[SewAppKit] =
     &[SewAppKit { version: "0.0.2", sha256: "ebbd6b86f6cad5deef69eaaecc298c76e9a7f448953ba485b9623bebb6734975" }];
 
-/// The kit table this build uses.
+/// The kit table this build uses (with `sew-test-pin-next`, the real kits
+/// plus [`SEW_TEST_NEXT_APP_KIT`]).
 pub fn app_kits() -> &'static [SewAppKit] {
     if cfg!(feature = "test-signer") {
-        TEST_APP_KITS
-    } else {
+        return TEST_APP_KITS;
+    }
+    #[cfg(feature = "sew-test-pin-next")]
+    {
+        &SEW_TEST_PIN_NEXT_KITS
+    }
+    #[cfg(not(feature = "sew-test-pin-next"))]
+    {
         SEW_APP_KITS
     }
 }
@@ -1858,7 +1960,13 @@ mod tests {
             assert_eq!(app_kit("0.5.0").map(|k| k.sha256), Some("64efdf1d822be2a4c49ccab437be8bddd5068c6e906b968b94beb44d8b1a0418"));
             assert_eq!(app_kit("0.6.0").map(|k| k.sha256), Some("9f8602281a3029684fd9d12665242b2555d8a86c2e1975621e8282933076bc43"));
             assert_eq!(app_kit("0.6.1").map(|k| k.sha256), Some("955357393d869b950fa6401462c3d42453cca4f32e84be7b16ca341b4ba20b35"));
-            assert!(app_kit(pinned().version).is_some(), "the pin has its kit");
+            if cfg!(feature = "sew-test-pin-next") {
+                // The test pin's kit counts once its hash is dropped in.
+                assert_eq!(pinned().version, SEW_TEST_NEXT.version);
+                assert_eq!(app_kit(pinned().version).is_some(), hex64(SEW_TEST_NEXT_APP_KIT.sha256));
+            } else {
+                assert!(app_kit(pinned().version).is_some(), "the pin has its kit");
+            }
         }
     }
 
@@ -2080,11 +2188,16 @@ mod tests {
     fn release_pinned_follows_the_last_entry() {
         assert!(release_is_pinned(SEW_RELEASES.last().unwrap()), "0.6.1 is pinned (published 2026-11-01)");
         assert!(release_is_pinned(TEST_RELEASES.last().unwrap()));
-        assert!(sew_release_pinned(), "every build pins a release now");
+        if cfg!(feature = "sew-test-pin-next") && !cfg!(feature = "test-signer") {
+            // The test pin until its hashes are dropped in pins nothing.
+            assert_eq!(sew_release_pinned(), release_is_pinned(&SEW_TEST_NEXT));
+        } else {
+            assert!(sew_release_pinned(), "every build pins a release now");
+        }
         assert_eq!(SEW_NOT_RELEASED, "sew_not_released");
     }
 
-    #[cfg(all(feature = "sew-test-pins", not(feature = "test-signer")))]
+    #[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pin-next"), not(feature = "test-signer")))]
     #[test]
     fn sew_test_pins_are_a_pinned_release() {
         assert!(release_is_pinned(SEW_TEST_PINS.last().unwrap()));
@@ -2150,6 +2263,8 @@ mod tests {
             t.iter().map(|r| (r.version, r.artifacts.iter().map(|a| a.tarball_sha256).collect())).collect()
         };
         assert_eq!(key(releases()), key(want));
+        assert!(releases().iter().all(|r| r.version != SEW_TEST_NEXT.version), "no test entry in a default build");
+        assert!(app_kits().iter().all(|k| k.version != SEW_TEST_NEXT_APP_KIT.version));
         for r in releases() {
             for a in r.artifacts {
                 assert_ne!(a.binary_sha256, "4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837");
@@ -2158,7 +2273,96 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "sew-test-pins", not(feature = "test-signer")))]
+    /// The next test build is no real release: a newer, plain `x.y.z`
+    /// version above the real pin, both linux-gnu arches, and not in the
+    /// real table (a default build has no test entry: see
+    /// `default_build_has_no_sew_test_pins` and `binary.rs`).
+    #[test]
+    fn the_next_test_build_sits_above_the_real_pin_and_outside_the_real_table() {
+        let real_pin = SEW_RELEASES.last().unwrap();
+        assert!(crate::version::Semver::parse(SEW_TEST_NEXT.version).is_some(), "plain x.y.z: {}", SEW_TEST_NEXT.version);
+        assert_eq!(version_cmp(real_pin.version, SEW_TEST_NEXT.version), Some(std::cmp::Ordering::Less));
+        assert!(SEW_RELEASES.iter().all(|r| r.version != SEW_TEST_NEXT.version), "the test build is not a real release");
+        assert!(SEW_APP_KITS.iter().all(|k| k.version != SEW_TEST_NEXT.version));
+        assert_eq!(SEW_TEST_NEXT_APP_KIT.version, SEW_TEST_NEXT.version);
+        let mut arches: Vec<&str> = SEW_TEST_NEXT.artifacts.iter().map(|a| a.arch).collect();
+        arches.sort();
+        assert_eq!(arches, ["aarch64", "x86_64"], "the SYS-LE-1 test boxes are x86_64");
+        for a in SEW_TEST_NEXT.artifacts {
+            assert_eq!(a.triple, format!("{}-unknown-linux-gnu", a.arch));
+        }
+        // Either all placeholders (not yet) or all real: never half a pin.
+        let all = all_artifacts(&SEW_TEST_NEXT);
+        let real = all.iter().filter(|a| !checksum_is_placeholder(a)).count();
+        assert!(real == 0 || real == all.len(), "{all:?}");
+        for a in &all {
+            for h in [a.tarball_sha256, a.binary_sha256] {
+                if hex64(h) {
+                    for r in SEW_RELEASES {
+                        for b in all_artifacts(r) {
+                            assert!(b.tarball_sha256 != h && b.binary_sha256 != h, "{h} is a real release's hash");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `sew-test-pin-next` (V22): the table is the real table, entry for
+    /// entry, plus [`SEW_TEST_NEXT`] as the pin, so a box on the real pin
+    /// upgrades to the test build: the real pin's binary is still a known
+    /// release (the upgrade source, and the rollback target), and it is
+    /// older than the pin (the helper's and the daemon's upgrade check).
+    #[cfg(all(feature = "sew-test-pin-next", not(feature = "test-signer")))]
+    #[test]
+    fn sew_test_pin_next_is_the_real_table_plus_the_test_build() {
+        assert_eq!(test_pins_flag(), Some("K2_SEW_TEST_PINS_ENABLED"), "signing refuses this build");
+        let t = releases();
+        assert_eq!(t.len(), SEW_RELEASES.len() + 1);
+        for (got, want) in t.iter().zip(SEW_RELEASES) {
+            assert_eq!(got.version, want.version);
+            let (g, w) = (all_artifacts(got), all_artifacts(want));
+            assert_eq!(g.len(), w.len(), "{}", want.version);
+            for (a, b) in g.iter().zip(&w) {
+                assert_eq!((a.arch, a.tarball_sha256, a.binary_sha256), (b.arch, b.tarball_sha256, b.binary_sha256));
+            }
+        }
+        assert_eq!(pinned().version, SEW_TEST_NEXT.version, "the test build is the pin");
+        let real_pin = SEW_RELEASES.last().unwrap();
+        assert_eq!(release(real_pin.version).map(|r| r.version), Some(real_pin.version));
+        // The upgrade: from the real pin on a box to the test pin.
+        assert_eq!(version_cmp(real_pin.version, pinned().version), Some(std::cmp::Ordering::Less), "an upgrade, not a downgrade");
+        for a in real_pin.artifacts {
+            assert_eq!(known_binary(a.binary_sha256, a.arch), Some(real_pin.version), "the real pin is a known upgrade source");
+        }
+        // The rollback target keeps its voice engine.
+        assert_eq!(media_artifact_of(real_pin.version, "x86_64").unwrap().0, real_pin.media.as_ref().unwrap().version);
+        // Every real release is still known on a box.
+        for r in &SEW_RELEASES[1..] {
+            for a in r.artifacts {
+                assert_eq!(known_binary(a.binary_sha256, a.arch), Some(r.version));
+            }
+        }
+        // The kits: every real one plus the test build's.
+        assert_eq!(app_kits().len(), SEW_APP_KITS.len() + 1);
+        assert_eq!(app_kit(real_pin.version).map(|k| k.sha256), SEW_APP_KITS.last().map(|k| k.sha256));
+        if release_is_pinned(&SEW_TEST_NEXT) {
+            assert!(sew_release_pinned());
+            for arch in ["x86_64", "aarch64"] {
+                let a = pinned_artifact(arch).expect("the test build is pinned");
+                assert_eq!(known_binary(a.binary_sha256, arch), Some(SEW_TEST_NEXT.version));
+            }
+        } else {
+            // Placeholder (Sew's test build not out yet): nothing installs.
+            assert!(!sew_release_pinned());
+            for arch in ["x86_64", "aarch64"] {
+                assert!(pinned_artifact(arch).unwrap_err().contains("no Sew pin"), "{arch}");
+            }
+            assert!(app_kit(SEW_TEST_NEXT.version).is_none());
+        }
+    }
+
+    #[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pin-next"), not(feature = "test-signer")))]
     #[test]
     fn sew_test_pins_are_aarch64_only_and_the_upgrade_table_keeps_0_1_0() {
         assert_eq!(test_pins_flag(), Some("K2_SEW_TEST_PINS_ENABLED"));

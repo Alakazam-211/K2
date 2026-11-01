@@ -66,6 +66,9 @@ sew-test-pins = ["k2-root-proto/sew-test-pins"]
 # builds never enable it, so nothing that can set env can redirect tokens.
 provider-fakes = []
 sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
+# TEST ONLY (V22): the real pins plus Sew's next test build as the pin,
+# so a box on the real pin upgrades to it. Build the helper with it too.
+sew-test-pin-next = ["sew-test-pins", "k2-root-proto/sew-test-pin-next"]
 
 [dependencies]
 # Sew chat (S30 K15): the real `SewChat` backend talks to Sew's mgmt

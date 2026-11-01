@@ -35,6 +35,7 @@ import {
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 import { getPinnedAuthRecovery } from '@/lib/pool-hooks'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
+import { recordCliTiming, type CliLane } from '@/lib/cli-timing'
 
 /** A response plus its (already-consumed) body text. The body is read
  *  exactly once, up front, because BOTH the auth-failure classifier and the
@@ -210,8 +211,16 @@ export function remoteCliInflightForTests(hostKey: string): number {
   return pool ? pool.inflight : 0
 }
 
+/** What a `cliFetch` call is, for its timing line (and its lane). */
+interface CliCallMeta {
+  /** The part after `/cli/`, e.g. `thread`. */
+  route: string
+  method: string
+}
+
 async function cliFetch(
   scope: ServerScope,
+  meta: CliCallMeta,
   build: (creds: DaemonWsAvailable) => { url: string; init?: RequestInit },
 ): Promise<CliHttpResult> {
   assertServerScope(scope, 'daemonCli')
@@ -227,7 +236,14 @@ async function cliFetch(
   // construction (revival just proved the host reachable + re-authed).
   const gate = recoveryGateAllows(scope)
   if (!gate.ok) throw new RecoveringError(gate.label, gate.kind)
+  // Fix 0 (research-remote-thread-load-v1): time the wait for a slot and
+  // the network separately (lib/cli-timing, quiet unless asked).
+  const t0 = performance.now()
+  const at = Date.now()
+  const lane: CliLane = scope.isRemote ? 'normal' : 'local'
   const heldRemoteSlot = await acquireRemoteCliSlot(scope)
+  const tSlot = performance.now()
+  let status: number | null = null
   let lastUrl = ''
   try {
     throwIfHostSwitched(scope, startedKey)
@@ -283,6 +299,7 @@ async function cliFetch(
       return result
     })
     throwIfHostSwitched(scope, startedKey)
+    status = out.res.status
     return out
   } catch (err) {
     if (isHostSwitchedError(err)) throw err
@@ -302,6 +319,28 @@ async function cliFetch(
     throw err
   } finally {
     if (heldRemoteSlot) releaseRemoteCliSlot(heldRemoteSlot)
+    const tEnd = performance.now()
+    recordCliTiming({
+      at,
+      host: safeHostKey(scope),
+      route: meta.route,
+      method: meta.method,
+      lane,
+      queuedMs: tSlot - t0,
+      networkMs: tEnd - tSlot,
+      totalMs: tEnd - t0,
+      status,
+    })
+  }
+}
+
+/** The scope's host key for a timing line; never throws (a primary scope
+ *  reads the store, a test double may not have one). */
+function safeHostKey(scope: ServerScope): string {
+  try {
+    return scope.hostKey || 'unknown'
+  } catch {
+    return 'unknown'
   }
 }
 
@@ -329,7 +368,7 @@ export async function daemonCliGet<T = unknown>(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<T> {
-  const { res, text } = await cliFetch(scope, (creds) => ({
+  const { res, text } = await cliFetch(scope, { route, method: 'GET' }, (creds) => ({
     url: getUrl(creds, route, params),
     init: { method: 'GET' },
   }))
@@ -366,7 +405,7 @@ export async function daemonCliGetText(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<string> {
-  const { res, text } = await cliFetch(scope, (creds) => ({
+  const { res, text } = await cliFetch(scope, { route, method: 'GET' }, (creds) => ({
     url: getUrl(creds, route, params),
     init: { method: 'GET' },
   }))
@@ -391,7 +430,7 @@ export async function daemonCliPost<T = unknown>(
   assertServerScope(scope, 'daemonCliPost')
   // Home M4: a view-only room never writes to its server.
   assertScopeMayPost(scope, route)
-  const { res, text } = await cliFetch(scope, (creds) => ({
+  const { res, text } = await cliFetch(scope, { route, method: 'POST' }, (creds) => ({
     url: getUrl(creds, route),
     init: {
       method: 'POST',
@@ -451,12 +490,12 @@ async function postQueryWithOldServerFallback(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<CliHttpResult> {
-  const posted = await cliFetch(scope, (creds) => ({
+  const posted = await cliFetch(scope, { route, method: 'POST' }, (creds) => ({
     url: getUrl(creds, route, params),
     init: { method: 'POST' },
   }))
   if (!isPreFourFourFourMethod405(posted.res.status, posted.text)) return posted
-  return cliFetch(scope, (creds) => ({
+  return cliFetch(scope, { route, method: 'GET' }, (creds) => ({
     url: getUrl(creds, route, params),
     init: { method: 'GET' },
   }))

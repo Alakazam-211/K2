@@ -1838,25 +1838,39 @@ fn media_reconfigure_carries_the_tunnel_keys() {
     sew_answers(&t, 0, r#"{"changed":["/etc/sew/sew.toml [voice.ops]"],"restart_required":[]}"#);
     let seen = capture_turn_files(&t);
     for bad in [
-        &br#"{"turn_trusted_cidrs":["0.0.0.0/0"],"ice_relay_only":true}"#[..],
-        br#"{"turn_trusted_cidrs":[],"ice_relay_only":true}"#,
+        &br#"{"turn_trusted_cidrs":["0.0.0.0/0"],"relay_only":true}"#[..],
+        br#"{"turn_trusted_cidrs":[],"relay_only":true}"#,
         br#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
-        br#"{"ice_relay_only":"true"}"#,
+        br#"{"relay_only":"true"}"#,
+        // Sew refuses relay-only with tier plain/off (exit 78): never sent.
+        br#"{"relay_only":true}"#,
+        br#"{"relay_only":true,"turn_tls":"plain"}"#,
+        br#"{"turn_tls":"direct","bind_v4":""}"#,
+        br#"{"turn_tls":"direct","bind_v4":"203.0.113.7"}"#,
     ] {
         assert_eq!(t.call_in(&["engine", "sew", "media", "reconfigure"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
     }
+    // Relay-only rides the passthrough tier, which this fixture Sew (0.0.2)
+    // doesn't know: refused before anything runs.
+    let o = t.call_in(
+        &["engine", "sew", "media", "reconfigure", "restart-now"],
+        br#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":true,"bind_v4":"127.0.0.1"}"#,
+    );
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
     assert!(sew_calls(&t).is_empty());
+    // The way back to direct carries the keys as sent.
     ok(&t.call_in(
         &["engine", "sew", "media", "reconfigure", "restart-now"],
-        br#"{"turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"ice_relay_only":true}"#,
+        br#"{"turn_domain":"turn-box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":false,"bind_v4":"0.0.0.0"}"#,
     ));
     let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
     assert_eq!(
         j,
         serde_json::json!({
-            "turn_domain": "turn.box.k2.dev",
+            "turn_domain": "turn-box.k2.dev",
             "turn_trusted_cidrs": ["127.0.0.1/32", "::1/128"],
-            "ice_relay_only": true,
+            "relay_only": false,
+            "bind_v4": "0.0.0.0",
             "profile": "shared",
         })
     );

@@ -77,8 +77,8 @@
 //!   (`front http install|remove|status`: the canned `k2-front-80.socket`
 //!   handed to the daemon like :443's), under `namespaces.front80`,
 //!   [`FRONT80_MIN_PROTOCOL`]; the voice tunnel's new `MediaRequest` keys
-//!   `turn_trusted_cidrs` and `ice_relay_only` (voice rooms PRD §6.6 M7/M9; an
-//!   11 helper refuses any unknown key) under `namespaces.sewtunnel`,
+//!   `turn_trusted_cidrs`, `relay_only` and `bind_v4` (voice rooms PRD §6.6
+//!   M7/M9, Sew SW-9; an 11 helper refuses any unknown key) under `namespaces.sewtunnel`,
 //!   [`SEW_TUNNEL_MIN_PROTOCOL`]; and `engine sew mirror-dir` (the keyring
 //!   mirror folder `<ship>/sew-keyring-<install id>/`, created `sew:sew 0700`,
 //!   SW-8) under `namespaces.sewmirror`, [`SEW_MIRROR_DIR_MIN_PROTOCOL`].
@@ -122,7 +122,7 @@ pub const SEW_MIN_PROTOCOL: u32 = 7;
 /// `engine sew install reconfigure` (0.46.6). Gated on this AND
 /// `namespaces.sewreconf == true` in `helper version`.
 pub const SEW_RECONFIGURE_MIN_PROTOCOL: u32 = 11;
-/// The voice tunnel's media keys (`turn_trusted_cidrs`, `ice_relay_only`;
+/// The voice tunnel's media keys (`turn_trusted_cidrs`, `relay_only`, `bind_v4`;
 /// 0.46.8, voice rooms §6.6 M7/M9). Gated on this AND
 /// `namespaces.sewtunnel == true`: an older helper refuses the request.
 pub const SEW_TUNNEL_MIN_PROTOCOL: u32 = 12;

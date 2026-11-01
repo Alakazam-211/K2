@@ -1812,11 +1812,27 @@ pub struct MediaRequest {
     /// loopback). An 11 helper refuses the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_trusted_cidrs: Option<Vec<String>>,
-    /// Protocol 12 (§6.6 M9): `voice.ops.ice_relay_only`: `true` with the
-    /// tunnel tier (no host or srflx candidates), `false` in direct mode.
+    /// Protocol 12 (§6.6 M9): Sew's `--relay-only` (`voice.ops.
+    /// ice_relay_only`): `true` with the tunnel tier, `false` in direct mode.
+    /// Sew refuses relay-only with TURN tier `plain` or `off` (exit 78), so
+    /// `true` is accepted only with `turn_tls: passthrough` in the same
+    /// request. With it Sew writes `node_ip = 127.0.0.1` itself (K2 sends no
+    /// `node_ip`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ice_relay_only: Option<bool>,
+    pub relay_only: Option<bool>,
+    /// Protocol 12: Sew's `--bind-v4`: [`MEDIA_BIND_LOOPBACK`] in the tunnel
+    /// tier (UDP 7882 / TCP 7881 stay off the network), [`MEDIA_BIND_ANY`]
+    /// back in direct mode. Never empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_v4: Option<String>,
 }
+
+/// sew-media's media sockets on loopback only (the tunnel tier).
+pub const MEDIA_BIND_LOOPBACK: &str = "127.0.0.1";
+/// sew-media's media sockets on every interface (Sew's default; direct).
+pub const MEDIA_BIND_ANY: &str = "0.0.0.0";
+/// Sew's exit code when relay-only meets TURN tier `plain` or `off`.
+pub const SEW_EXIT_RELAY_ONLY_REFUSED: i64 = 78;
 
 /// The only PROXY v2 sources K2 lets sew-media trust (§6.6 M7): loopback,
 /// where frpc-voice dials from. Sew's own default (`127.0.0.0/8`) is wider,
@@ -1888,12 +1904,20 @@ impl MediaRequest {
         if self.turn_trusted_cidrs.as_deref().is_some_and(|c| !turn_trusted_cidrs_ok(c)) {
             return Err("media refused: turn_trusted_cidrs");
         }
+        // Sew refuses relay-only with tier plain/off (exit 78): K2 sends it
+        // only together with the passthrough tier it rides.
+        if self.relay_only == Some(true) && self.turn_tls.as_deref() != Some("passthrough") {
+            return Err("media refused: relay_only needs turn_tls passthrough");
+        }
+        if self.bind_v4.as_deref().is_some_and(|b| b != MEDIA_BIND_LOOPBACK && b != MEDIA_BIND_ANY) {
+            return Err("media refused: bind_v4");
+        }
         Ok(())
     }
 
     /// The request carries a protocol-12 key (the voice tunnel's).
     pub fn needs_tunnel_keys(&self) -> bool {
-        self.turn_trusted_cidrs.is_some() || self.ice_relay_only.is_some()
+        self.turn_trusted_cidrs.is_some() || self.relay_only.is_some() || self.bind_v4.is_some()
     }
 
     /// True when this request carries TURN TLS material.
@@ -2754,7 +2778,7 @@ mod tests {
     #[test]
     fn tunnel_tier_keys_are_loopback_only_and_reach_sews_json() {
         let r: MediaRequest = serde_json::from_str(
-            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"ice_relay_only":true}"#,
+            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":true,"bind_v4":"127.0.0.1"}"#,
         )
         .unwrap();
         r.validate_reconfigure().unwrap();
@@ -2762,14 +2786,30 @@ mod tests {
         assert!(r.node_ip.is_none(), "the tunnel tier sends no node IP");
         let inputs = r.sew_inputs(None, None);
         assert_eq!(inputs["turn_trusted_cidrs"], serde_json::json!(["127.0.0.1/32", "::1/128"]));
-        assert_eq!(inputs["ice_relay_only"], true);
+        assert_eq!(inputs["relay_only"], true);
+        assert_eq!(inputs["bind_v4"], "127.0.0.1");
         assert_eq!(inputs["turn_domain"], "turn.box.k2.dev");
-        let direct: MediaRequest = serde_json::from_str(r#"{"ice_relay_only":false}"#).unwrap();
+        // Sew refuses relay-only with tier plain/off (exit 78): K2 never
+        // sends relay-only without the passthrough tier.
+        for bad in [
+            r#"{"relay_only":true}"#,
+            r#"{"relay_only":true,"turn_tls":"plain"}"#,
+            r#"{"relay_only":true,"turn_tls":"off"}"#,
+            r#"{"relay_only":true,"turn_tls":"direct"}"#,
+            r#"{"turn_tls":"passthrough","bind_v4":""}"#,
+            r#"{"turn_tls":"passthrough","bind_v4":"10.0.0.5"}"#,
+        ] {
+            let m: MediaRequest = serde_json::from_str(bad).unwrap();
+            assert!(m.validate_reconfigure().is_err(), "{bad}");
+        }
+        let back: MediaRequest = serde_json::from_str(r#"{"turn_tls":"direct","relay_only":false,"bind_v4":"0.0.0.0"}"#).unwrap();
+        back.validate_reconfigure().unwrap();
+        let direct: MediaRequest = serde_json::from_str(r#"{"relay_only":false}"#).unwrap();
         direct.validate_reconfigure().unwrap();
         assert!(direct.needs_tunnel_keys());
         let old: MediaRequest = serde_json::from_str(r#"{"turn_tls":"direct"}"#).unwrap();
         assert!(!old.needs_tunnel_keys(), "a pre-0.46.8 request stays protocol-11 clean");
-        assert!(old.sew_inputs(None, None).get("ice_relay_only").is_none());
+        assert!(old.sew_inputs(None, None).get("relay_only").is_none());
         for bad in [
             r#"{"turn_trusted_cidrs":[]}"#,
             r#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
@@ -2780,7 +2820,7 @@ mod tests {
             let m: MediaRequest = serde_json::from_str(bad).unwrap();
             assert!(m.validate_reconfigure().is_err(), "{bad}");
         }
-        assert!(serde_json::from_str::<MediaRequest>(r#"{"ice_relay_only":"yes"}"#).is_err());
+        assert!(serde_json::from_str::<MediaRequest>(r#"{"relay_only":"yes"}"#).is_err());
     }
 
     #[test]

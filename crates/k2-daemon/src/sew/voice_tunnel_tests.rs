@@ -133,8 +133,9 @@ fn a_tunnel_install_publishes_no_ip_and_hands_sew_relay_only_passthrough() {
     assert_eq!(m["turn_tls"], "passthrough");
     assert_eq!(m["turn_domain"], "turn.lztek.k2.dev");
     assert_eq!(m["turn_trusted_cidrs"], json!(["127.0.0.1/32", "::1/128"]));
-    assert_eq!(m["ice_relay_only"], true);
-    assert!(m.get("node_ip").is_none(), "no node IP: {m}");
+    assert_eq!(m["relay_only"], true);
+    assert_eq!(m["bind_v4"], "127.0.0.1", "media sockets off the network");
+    assert!(m.get("node_ip").is_none(), "no node IP: Sew writes 127.0.0.1 itself: {m}");
     assert!(m.get("turn_advertise_port").is_none(), "Sew's passthrough default (443): {m}");
     let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(m).expect("the helper's MediaRequest parses it");
     req.validate().expect("valid for protocol 12");
@@ -154,7 +155,7 @@ fn the_tunnel_tier_needs_the_preview_helper_12_and_a_relay_only_sew() {
     let out = t.install().expect("direct install");
     assert_eq!(out["turnHost"], "turn-lztek.k2.dev");
     assert!(t.ops.lane_calls.lock().unwrap().is_empty(), "no voice lane without the preview");
-    assert!(t.stdin_of(TUNNEL_INSTALL).get("ice_relay_only").is_none(), "protocol-11 clean");
+    assert!(t.stdin_of(TUNNEL_INSTALL).get("relay_only").is_none(), "protocol-11 clean");
 
     let refused = |t: &T, code: &str| {
         let e = t.install().expect_err("refused");
@@ -179,6 +180,16 @@ fn below_pro_the_broker_says_tier_required_and_k2_says_not_pro() {
     let e = t.install().expect_err("not Pro");
     assert_eq!(e.code, "not_pro", "{}", e.hint);
     assert_eq!(e.status, 403);
+}
+
+/// Sew's exit 78 (relay-only with tier plain/off) comes back named.
+#[test]
+fn sews_relay_only_refusal_is_named() {
+    let t = t();
+    t.ops.queue(TUNNEL_INSTALL, Ok(json!({"sewExit": 78, "reason": "relay_only requires turn tier direct, external or passthrough"})));
+    let e = t.install().expect_err("Sew refused");
+    assert_eq!(e.code, "sew_relay_only_refused", "{}", e.hint);
+    assert!(e.hint.contains("exit 78"), "{}", e.hint);
 }
 
 #[test]
@@ -211,7 +222,7 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     let v = set_tier_named(&t.env(), "tunnel").expect("to tunnel");
     assert_eq!((v["turnTier"].as_str(), v["changed"].as_bool()), (Some("tunnel"), Some(true)), "{v}");
     let r = t.stdin_of(RECONF);
-    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["ice_relay_only"].as_bool()), (Some("passthrough"), Some("turn.lztek.k2.dev"), Some(true)));
+    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("passthrough"), Some("turn.lztek.k2.dev"), Some(true)));
     assert!(r.get("node_ip").is_none());
     assert!(t.ops.cp_log().contains(&"DELETE /turn/dns/lztek".to_string()), "the box IP leaves DNS: {:?}", t.ops.cp_log());
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true]);
@@ -226,8 +237,9 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     let v = set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
     assert_eq!(v["turnTier"], "direct");
     let r = t.stdin_of(RECONF);
-    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["ice_relay_only"].as_bool()), (Some("direct"), Some("turn-lztek.k2.dev"), Some(false)));
+    assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("direct"), Some("turn-lztek.k2.dev"), Some(false)));
     assert_eq!(r["node_ip"], "203.0.113.7");
+    assert_eq!(r["bind_v4"], "0.0.0.0", "media sockets back on the network");
     assert!(t.ops.cp_log().contains(&"PUT /turn/dns/lztek".to_string()));
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true, false], "the lane stops");
     assert_eq!(set_tier_named(&t.env(), "front").unwrap_err().code, "bad_request");

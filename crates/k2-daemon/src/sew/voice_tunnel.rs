@@ -20,15 +20,21 @@
 //!   direct). `403 tier_required` → `not_pro`. Installed through `sew media
 //!   install --reconfigure` (a tier move: the domain changes with it) or `sew
 //!   media turn-cert --when-idle` (renewal, same key).
-//! - **Sew settings** ([`media_keys`]): `turn_tls = passthrough`,
+//! - **Sew settings** ([`media_keys`], Sew SW-9 11-01): `sew media install
+//!   --relay-only --turn-tls passthrough` (`relay_only = true`, `turn_tls`),
 //!   `turn_domain`, `turn_trusted_cidrs = [127.0.0.1/32, ::1/128]`,
-//!   `ice_relay_only = true` (and `false` again in direct mode).
+//!   `bind_v4 = 127.0.0.1` (UDP 7882 / TCP 7881 off the network) and NO
+//!   `node_ip` (Sew writes 127.0.0.1 itself; the engine's only host
+//!   candidate is loopback, reachable by its own TURN). Back in direct mode:
+//!   `relay_only = false`, `bind_v4 = 0.0.0.0`, the node IP. Sew refuses
+//!   relay-only with tier plain/off (exit 78, [`sew_media`] names it); K2
+//!   never sends it.
 //! - **Served check** ([`served`]): through the relay, `turn.<label>.k2.dev:443`
 //!   with that SNI, compared with the leaf K2 issued.
 
 use serde_json::{json, Value};
 
-use k2_root_proto::sew::{TURN_TRUSTED_LOOPBACK, UNIT_MEDIA};
+use k2_root_proto::sew::{MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, TURN_TRUSTED_LOOPBACK, UNIT_MEDIA};
 
 use super::supervisor::{self as sup, no, Env, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
@@ -48,9 +54,9 @@ pub fn host(label: &str) -> String {
     k2_core::tunnel::render::voice_turn_host(label)
 }
 
-/// The node IP the tunnel tier sends Sew: none (Sew 11-01: 0.7.0 accepts
-/// no `node_ip` exactly when `ice_relay_only` is on with the passthrough
-/// tier). The one place to change if Sew ever needs one again.
+/// The node IP the tunnel tier sends Sew: none (Sew 11-01: with
+/// `--relay-only --turn-tls passthrough` Sew writes `node_ip = 127.0.0.1`
+/// into media.toml itself). The one place to change if that ever moves.
 pub fn node_ip() -> Option<String> {
     None
 }
@@ -119,7 +125,9 @@ pub fn media_keys(host: &str, chain: &str, key_pem: &str) -> Value {
         "turn_tls": voice::TIER_PASSTHROUGH,
         "turn_domain": host,
         "turn_trusted_cidrs": TURN_TRUSTED_LOOPBACK,
-        "ice_relay_only": true,
+        "relay_only": true,
+        // UDP 7882 / TCP 7881 stay off the network (Sew 11-01; never empty).
+        "bind_v4": MEDIA_BIND_LOOPBACK,
         "turn_cert_pem": chain,
         "turn_key_pem": key_pem,
     });
@@ -127,6 +135,27 @@ pub fn media_keys(host: &str, chain: &str, key_pem: &str) -> Value {
         v["node_ip"] = json!(ip);
     }
     v
+}
+
+/// `sew media install [--reconfigure …]` through the helper, with Sew's
+/// relay-only refusal (exit 78: relay-only with TURN tier plain or off)
+/// named. K2 never sends that combination (the helper's MediaRequest
+/// refuses it first), so seeing it means Sew and K2 disagree about the tier.
+pub fn sew_media(env: &Env, tail: &[&str], body: &Value, code: &'static str) -> R<Value> {
+    sup::sew_run(env, tail, Some(body.to_string().as_bytes())).map_err(|e| {
+        if e.contains(&format!(": exit {SEW_EXIT_RELAY_ONLY_REFUSED}:")) {
+            no(
+                "sew_relay_only_refused",
+                409,
+                format!(
+                    "Sew refused relay-only TURN for this TURN tier (exit {SEW_EXIT_RELAY_ONLY_REFUSED}: relay-only needs the \
+                     passthrough tier, never plain or off); nothing changed: {e}"
+                ),
+            )
+        } else {
+            no(code, 500, e)
+        }
+    })
 }
 
 /// A cert for `turn.<label>.k2.dev` from broker mode `turn-tunnel`, for the
@@ -256,7 +285,7 @@ pub fn install_steps(env: &Env, label: &str, url: &str, mut st: VoiceState) -> R
     body["udp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_UDP_PORT);
     body["tcp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_TCP_PORT);
     body["sysctl"] = json!("apply");
-    let out = sup::sew_run(env, &["media", "install"], Some(body.to_string().as_bytes())).map_err(|e| no("media_install_failed", 500, e))?;
+    let out = sew_media(env, &["media", "install"], &body, "media_install_failed")?;
     let mut warnings: Vec<String> = out
         .pointer("/sew/warnings")
         .and_then(Value::as_array)
@@ -332,8 +361,7 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
     let (chain, key_pem) = issue_or_reuse(env, &label, &mut st)?;
     voice::save(env, &mut st);
     let body = media_keys(&h, &chain, &key_pem);
-    sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes()))
-        .map_err(|e| no("media_reconfigure_failed", 500, e))?;
+    sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed")?;
     voice::update(env, |s| {
         s.turn_tier = Some(TIER_TUNNEL.to_string());
         s.node_ip = node_ip();
@@ -363,7 +391,7 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
 
 /// Leave the tunnel tier for `direct` (§6.5: public-IP boxes, the owner's
 /// choice): the `turn-<label>` A record and cert, the node IP K2 Connect
-/// sees, `ice_relay_only = false`; then the voice lane stops.
+/// sees, `relay_only = false`; then the voice lane stops.
 pub fn move_out(env: &Env, st: VoiceState) -> R<Value> {
     sup::helper_check(env)?;
     if !helper_ok(env) {
@@ -381,12 +409,12 @@ pub fn move_out(env: &Env, st: VoiceState) -> R<Value> {
         "turn_domain": voice::turn_host(&label),
         "turn_advertise_port": k2_root_proto::sew::SEW_TURN_TLS_PORT,
         "node_ip": node_ip,
-        "ice_relay_only": false,
+        "relay_only": false,
+        "bind_v4": MEDIA_BIND_ANY,
         "turn_cert_pem": chain,
         "turn_key_pem": key_pem,
     });
-    sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes()))
-        .map_err(|e| no("media_reconfigure_failed", 500, e))?;
+    sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed")?;
     voice::update(env, |s| {
         s.turn_tier = Some(voice::TIER_DIRECT.to_string());
         s.node_ip = Some(node_ip.clone());

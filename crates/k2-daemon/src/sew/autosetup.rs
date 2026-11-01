@@ -360,17 +360,13 @@ pub fn tick(env: Env<'static>) {
     }
 }
 
-/// `autoSetup` in `/cli/sew/status`: shown while the preview is on (or
-/// once K2 recorded something). `None` otherwise (dark).
+/// `autoSetup` in `/cli/sew/status`: shown while the preview is on.
+/// `None` otherwise (dark).
 pub fn status(env: &Env) -> Option<Value> {
-    if !env.ops.linux() {
+    if !env.ops.linux() || !env.ops.voice_preview() {
         return None;
     }
-    let rec = env.ops.record_load(RECORD);
-    if !env.ops.voice_preview() && rec.is_none() {
-        return None;
-    }
-    let rec = rec.unwrap_or_else(|| json!({}));
+    let rec = env.ops.record_load(RECORD).unwrap_or_else(|| json!({}));
     let fl = floor_now(env);
     let tier = env.ops.plan_tier();
     let row = store::load();

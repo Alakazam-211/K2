@@ -1,9 +1,8 @@
 [package]
 name = "k2-ptyd"
-# ptyd has its own version line, independent of the K2 release: the owner
-# compares it against its minimum ptyd version, and it is bound into the
-# handshake MAC. release.sh does not bump it; it changes only when ptyd
-# itself changes. 0.2.0 added exec self-upgrade (`upgrade`, `--selftest`,
+# ptyd has its own version line, independent of its owner's releases: the
+# owner compares it against its minimum ptyd version, and it is bound into
+# the handshake MAC. It changes only when ptyd itself changes. 0.2.0 added exec self-upgrade (`upgrade`, `--selftest`,
 # `--resume-state-fd`); a 0.1.x ptyd answers `upgrade` with `unsupported`.
 version = "0.2.0"
 edition = "2021"
@@ -14,7 +13,21 @@ readme = "README.md"
 keywords = ["pty", "terminal", "session", "daemon", "unix"]
 categories = ["command-line-interface", "os::unix-apis"]
 # repository = TODO: set when this crate is published as kessel-pty.
+# documentation = TODO: set with `repository` (docs.rs by default).
 publish = false
+# What goes into the published .crate: the library, the server binary, the
+# example and the licence files. `tests/` stays out, and with it the test
+# agent: cargo drops a target whose source isn't packaged, so the published
+# manifest has no `k2-ptyd-test-agent` binary and `cargo install` of the
+# published crate installs `k2-ptyd` only.
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 # Deliberately tiny. No tokio, alacritty_terminal, rusqlite, network or TLS
 # crates: ptyd is a single point of failure for every session it hosts, so
@@ -34,8 +47,12 @@ path = "src/lib.rs"
 name = "k2-ptyd"
 path = "src/main.rs"
 
-# Fake child program used by the integration tests. A plain bin so
-# `CARGO_BIN_EXE_k2-ptyd-test-agent` resolves; it is never shipped.
+# Fake child program used by the integration tests (here and in the
+# workspace's own tests and scripts, which find it next to `k2-ptyd` in the
+# target dir). A plain bin so `CARGO_BIN_EXE_k2-ptyd-test-agent` resolves.
+# Its source lives under `tests/`, which `include` above keeps out of the
+# package, so it is a workspace-only binary: the published crate doesn't
+# have it.
 [[bin]]
 name = "k2-ptyd-test-agent"
 path = "tests/fixtures/test_agent.rs"

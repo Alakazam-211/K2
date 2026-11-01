@@ -83,7 +83,7 @@ pub use apm::{NoiseSuppressionStrength, ProcessingConfig, AGC2_HEADROOM_DB};
 /// version.
 pub use bytes;
 pub use config::{Backend, EngineConfig};
-pub use device::NullDevice;
+pub use device::{CaptureSource, NullDevice, PlaybackSink};
 pub use engine::AudioEngine;
 pub use error::{AudioError, ErrorCode};
 pub use events::{

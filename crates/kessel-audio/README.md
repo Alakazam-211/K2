@@ -81,17 +81,48 @@ processing thread. The device callbacks are insulated from that by the rings
 ### The null device
 
 `Backend::Null(NullDevice { input, output, sample_rate, block_period })`
+(`input` is a `CaptureSource`, `output` a `PlaybackSink`)
 replaces the sound card with a clock thread that pulls 10 ms of capture from
 your `input` closure and hands 10 ms of the mix to your `output` closure. It
 runs the full pipeline headless: tests, servers, bots.
 
 ## Measured quality
 
-The test suite runs synthetic laptop echo paths (image-method rooms, a small
-speaker driven into soft clipping, a chassis path, 60 ms system delay) and
-asserts metric bars, never sample values. sonora's output is not
-sample-identical to the C++ library (its high-pass filter differs), so
-waveform comparisons would be meaningless.
+The test suite plays real speech (12 LibriSpeech utterances, in
+`tests/data`) through synthetic laptop echo paths (image-method rooms, a
+small speaker driven into soft clipping, a chassis path, 60 ms system
+delay), through the whole chain: Opus encode, jitter buffer, decode, mix,
+playback, echo path, microphone, AEC/NS/AGC, Opus encode, and a remote
+decoder. It asserts metric bars, never sample values: sonora's output is
+not sample-identical to the C++ WebRTC library (its high-pass filter
+differs), so waveform comparisons would be meaningless.
+
+Figures from the test run (x86-64 Linux; Apple Silicon agrees within about
+1 dB). "Baseline" is sonora against the C++ library in an earlier
+measurement on the same echo model, without the codec in the path.
+
+| Test | Measured | Bar | Baseline (sonora / C++) |
+|---|---|---|---|
+| Far-end only, ERLE 5-30 s, 3 rooms | 47.5 / 45.5 / 46.9 dB (mean 46.7) | each >= 38, mean >= 42 | 50.4 / 48.2 dB mean |
+| Echo canceller's delay estimate (true 60 ms) | 56 ms | 45-75 ms | 56 ms |
+| Double talk, near-end level vs near-end alone | -5.3 / -4.1 dB | >= -7 dB | -4.0 / -4.1 dB |
+| Double talk, ERLE in far-only gaps | 41.5 / 40.1 dB | >= 32 dB | 42.1 / 41.7 dB |
+| Full chain (AEC + NS + AGC2), gaps ERLE / near-end level | 45.6 dB / -3.9 dB | >= 35 / >= -7 | 46.6 / 44.1 dB |
+| Echo path moved (+3 dB) / delay +40 ms: time back to 30 dB | 0.0 / 0.0 s | <= 0.5 s | |
+| Noise suppression, pink 5 dB SNR: cut in pauses | 15.5 dB (NS alone 10.3) | >= 12 (>= 8) | 11.9 / 11.9 dB |
+| AGC2 output at -50/-40/-30/-20 dBFS input | -27.1 / -23.5 / -23.6 / -20.9 | within 1.5 dB of C++ | C++: -27.3 / -23.1 / -23.1 / -20.6 |
+| CPU, whole duplex path per 10 ms (debug build) | p50 406 µs, mean 3.3% of a core | p50 <= 500 µs | APM alone: 1.55% / 1.13% |
+| 10% loss, 5% reordering, 30 ms jitter | loss 9.4%, concealed 3.9%, FEC 51 frames | concealed < 15% | |
+| Lost frames: FEC vs concealment (SNR vs clean) | 13.4 vs -0.1 dB | FEC >= PLC + 6 dB | |
+
+### AGC2 tuning
+
+sonora 0.2.0's AGC2 settles 0.7 to 1.6 dB quieter than the C++ library
+with WebRTC's default 5 dB headroom. A sweep against the C++ library on
+LibriSpeech (5.0, 4.0, 3.4, 3.0 dB) put 4 dB closest on every level
+metric: within 0.6 dB of the C++ library everywhere, against up to 1.6 dB.
+`AGC2_HEADROOM_DB` carries it, and a test checks it still lifts mid-level
+speech by about 1 dB.
 
 ## Building
 

@@ -3,7 +3,7 @@
 
 use kessel_audio::bytes::Bytes;
 use kessel_audio::{
-    AudioEngine, DeviceChoice, DeviceSelection, EncodedFrame, EngineConfig, ErrorCode, Event,
+    AudioEngine, CaptureSource, DeviceChoice, DeviceSelection, EncodedFrame, EngineConfig, ErrorCode, Event,
     FrameRx, NullDevice, ProcessingConfig, RecvFrame, FRAME_SAMPLES,
 };
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,7 @@ fn talker(rate: u32, on: f64, period: f64) -> impl FnMut(&mut [f32]) + Send {
     }
 }
 
-fn fast_null(input: Option<Box<dyn FnMut(&mut [f32]) + Send>>) -> NullDevice {
+fn fast_null(input: Option<CaptureSource>) -> NullDevice {
     NullDevice {
         // 4x real time.
         block_period: Duration::from_micros(2_500),
@@ -43,7 +43,7 @@ fn fast_null(input: Option<Box<dyn FnMut(&mut [f32]) + Send>>) -> NullDevice {
     }
 }
 
-fn realtime_null(input: Option<Box<dyn FnMut(&mut [f32]) + Send>>) -> NullDevice {
+fn realtime_null(input: Option<CaptureSource>) -> NullDevice {
     NullDevice {
         input,
         ..NullDevice::default()

@@ -53,7 +53,7 @@ pub(crate) fn encode_remote(x: &[f32], cfg: EncoderCfg) -> Vec<Packet> {
     let mut enc = OpusEnc::new(cfg).expect("encoder");
     let mut seq = 0u16;
     let mut out = Vec::new();
-    for (i, f) in x.chunks_exact(FRAME_SAMPLES).enumerate() {
+    for (i, f) in x.as_chunks::<FRAME_SAMPLES>().0.iter().enumerate() {
         let e = enc.encode(f).expect("encode");
         if cfg.dtx && e.is_empty_dtx() {
             continue;

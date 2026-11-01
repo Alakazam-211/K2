@@ -103,14 +103,14 @@ fn s1_far_end_only_erle() {
         // The echo path's delay is 60 ms (the render reference is fed in the
         // same 10 ms block it is played).
         assert!((45..=75).contains(&aec_delay), "{}: AEC delay {aec_delay} ms", room.name);
-        assert!(e_steady >= 30.0, "{}: steady ERLE {e_steady:.1} dB < 30", room.name);
+        assert!(e_steady >= 38.0, "{}: steady ERLE {e_steady:.1} dB < 38", room.name);
         let t20 = t20.unwrap_or_else(|| panic!("{}: never reached 20 dB ERLE", room.name));
-        assert!(t20 <= 1.0, "{}: {t20:.2} s to 20 dB ERLE", room.name);
+        assert!(t20 <= 0.5, "{}: {t20:.2} s to 20 dB ERLE", room.name);
         steady.push(e_steady);
     }
     let m = mean(&steady);
     report("S1 mean", &[("erle_5_30s_db".into(), m)]);
-    assert!(m >= 35.0, "mean steady ERLE {m:.1} dB < 35");
+    assert!(m >= 42.0, "mean steady ERLE {m:.1} dB < 42");
 }
 
 struct DoubleTalk {
@@ -178,9 +178,9 @@ fn s2_double_talk_keeps_the_near_end() {
                 ("near_after_far_db".into(), r.after_far_db),
             ],
         );
-        assert!(r.near_gain_db >= -9.0, "near end ducked {:.1} dB in double talk", r.near_gain_db);
-        assert!(r.gap_erle_db >= 25.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
-        assert!(r.after_far_db.abs() <= 2.0, "near end after far stops off by {:.1} dB", r.after_far_db);
+        assert!(r.near_gain_db >= -7.0, "near end ducked {:.1} dB in double talk", r.near_gain_db);
+        assert!(r.gap_erle_db >= 32.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
+        assert!(r.after_far_db.abs() <= 1.0, "near end after far stops off by {:.1} dB", r.after_far_db);
     }
 }
 
@@ -197,9 +197,9 @@ fn s2_double_talk_full_chain() {
             ("near_after_far_db".into(), r.after_far_db),
         ],
     );
-    assert!(r.gap_erle_db >= 25.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
-    assert!(r.near_gain_db >= -10.0, "near end ducked {:.1} dB", r.near_gain_db);
-    assert!(r.after_far_db.abs() <= 3.0, "near end after far stops off by {:.1} dB", r.after_far_db);
+    assert!(r.gap_erle_db >= 35.0, "ERLE in far-only gaps {:.1} dB", r.gap_erle_db);
+    assert!(r.near_gain_db >= -7.0, "near end ducked {:.1} dB", r.near_gain_db);
+    assert!(r.after_far_db.abs() <= 1.5, "near end after far stops off by {:.1} dB", r.after_far_db);
 }
 
 /// S3 (baseline criterion 3): the echo path changes at 20 s. (a) the laptop
@@ -241,9 +241,9 @@ fn s3_reconverges_after_an_echo_path_change() {
             ],
         );
         let t30 = t30.unwrap_or_else(|| panic!("{label}: never got back to 30 dB ERLE"));
-        assert!(t30 <= 2.0, "{label}: {t30:.2} s to get back to 30 dB ERLE");
-        assert!(settled >= 30.0, "{label}: settled ERLE {settled:.1} dB");
-        assert!(after_2s >= 15.0, "{label}: ERLE in the first 2 s after {after_2s:.1} dB");
+        assert!(t30 <= 0.5, "{label}: {t30:.2} s to get back to 30 dB ERLE");
+        assert!(settled >= 40.0, "{label}: settled ERLE {settled:.1} dB");
+        assert!(after_2s >= 30.0, "{label}: ERLE in the first 2 s after {after_2s:.1} dB");
     }
 }
 
@@ -296,10 +296,14 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
             ("speech_change_db".into(), speech_change),
         ],
     );
-    assert!(vs_input >= 9.0, "noise cut in pauses {vs_input:.1} dB < 9");
-    assert!(ns_alone >= 6.0, "noise suppression alone cut {ns_alone:.1} dB < 6");
-    assert!(speech_change >= -3.5, "speech level changed {speech_change:.1} dB");
+    assert!(vs_input >= 12.0, "noise cut in pauses {vs_input:.1} dB < 12");
+    assert!(ns_alone >= 8.0, "noise suppression alone cut {ns_alone:.1} dB < 8");
+    assert!(speech_change >= -2.5, "speech level changed {speech_change:.1} dB");
 }
+
+/// The C++ WebRTC library's AGC2 output levels in the baseline (input -50,
+/// -40, -30, -20 dBFS).
+const CPP_AGC2_LEVELS: [f64; 4] = [-27.3, -23.1, -23.1, -20.6];
 
 /// S6: AGC2 levelling, near-end only at -50 to -20 dBFS, through the tuned
 /// AGC2. Baseline (sonora untuned / C++): -27.0/-23.8/-24.0/-20.7 and
@@ -334,10 +338,15 @@ fn s6_agc2_levels_speech() {
     }
     let spread = max(&levels) - min(&levels);
     report("S6", &[("spread_db".into(), spread)]);
-    for (i, l) in levels.iter().enumerate() {
-        assert!((-31.0..=-17.0).contains(l), "input {} dBFS came out at {l:.1} dBFS", -50 + 10 * i as i32);
+    // Within 1.5 dB of the C++ library's levels on the same kind of input.
+    for (i, (l, c)) in levels.iter().zip(CPP_AGC2_LEVELS).enumerate() {
+        assert!(
+            (l - c).abs() <= 1.5,
+            "input {} dBFS came out at {l:.1} dBFS (C++ library: {c:.1})",
+            -50 + 10 * i as i32
+        );
     }
-    assert!(spread <= 8.0, "spread {spread:.1} dB over a 30 dB input range");
+    assert!(spread <= 7.5, "spread {spread:.1} dB over a 30 dB input range");
 }
 
 /// Baseline criterion 5: CPU per 10 ms block, here for the whole duplex path
@@ -399,7 +408,7 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
             let mut apm = Apm::with_agc_headroom(&processing, headroom);
             let zeros = [0.0f32; BLOCK_SAMPLES];
             let mut out = vec![0.0f32; mic.len()];
-            for (i, b) in mic.chunks_exact(BLOCK_SAMPLES).enumerate() {
+            for (i, b) in mic.as_chunks::<BLOCK_SAMPLES>().0.iter().enumerate() {
                 apm.render(&zeros);
                 apm.capture(b, &mut out[i * BLOCK_SAMPLES..(i + 1) * BLOCK_SAMPLES]);
             }
@@ -412,6 +421,6 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
             &[("default_dbfs".into(), default), ("tuned_dbfs".into(), tuned)],
         );
         let lift = tuned - default;
-        assert!((0.4..=1.6).contains(&lift), "input {lvl}: tuning lifted the level {lift:.2} dB");
+        assert!((0.6..=1.4).contains(&lift), "input {lvl}: tuning lifted the level {lift:.2} dB");
     }
 }

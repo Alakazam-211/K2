@@ -316,7 +316,7 @@ mod tests {
         };
         let frames: Vec<Vec<u8>> = {
             let mut enc = OpusEnc::new(cfg).unwrap();
-            x.chunks_exact(FRAME_SAMPLES)
+            x.as_chunks::<FRAME_SAMPLES>().0.iter()
                 .map(|f| enc.encode(f).unwrap().packet.to_vec())
                 .collect()
         };
@@ -365,7 +365,7 @@ mod tests {
         let snr_plc = snr(&decode_all(2));
         eprintln!("[codec] lost-frame SNR: FEC {snr_fec:.1} dB, PLC {snr_plc:.1} dB");
         assert!(
-            snr_fec > snr_plc + 3.0,
+            snr_fec > snr_plc + 6.0,
             "FEC frames ({snr_fec:.1} dB) are not clearly better than PLC ({snr_plc:.1} dB)"
         );
     }

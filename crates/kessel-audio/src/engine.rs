@@ -538,6 +538,7 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
         std::thread::sleep(Duration::from_millis(10));
     }
     // Close devices before the rings go away.
+    #[allow(clippy::drop_non_drop)]
     drop(system);
     while shared.garbage.pop().is_some() {}
 }

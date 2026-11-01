@@ -137,18 +137,18 @@ fn report_dependency_allocations_per_second() {
     let mut out = [0.0f32; BLOCK_SAMPLES];
     let mut pcm = [0.0f32; FRAME_SAMPLES];
     let packets: Vec<Vec<u8>> = x
-        .chunks_exact(FRAME_SAMPLES)
+        .as_chunks::<FRAME_SAMPLES>().0.iter()
         .map(|f| enc.encode(f).unwrap().packet.to_vec())
         .collect();
     // Warm-up done above for the encoder; measure 5 s of each.
     let ((), apm_n) = allocations(|| {
-        for b in x.chunks_exact(BLOCK_SAMPLES) {
+        for b in x.as_chunks::<BLOCK_SAMPLES>().0.iter() {
             apm.render(b);
             apm.capture(b, &mut out);
         }
     });
     let ((), enc_n) = allocations(|| {
-        for f in x.chunks_exact(FRAME_SAMPLES) {
+        for f in x.as_chunks::<FRAME_SAMPLES>().0.iter() {
             let _ = enc.encode(f).unwrap();
         }
     });

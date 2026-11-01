@@ -150,7 +150,7 @@ mod tests {
 
         let mut from = FromPipeline::new(44_100).unwrap();
         let mut back = Vec::new();
-        for b in at48.chunks_exact(BLOCK_SAMPLES) {
+        for b in at48.as_chunks::<BLOCK_SAMPLES>().0.iter() {
             back.extend_from_slice(from.process(b).unwrap());
         }
         let ratio = back.len() as f32 / at48.len() as f32;

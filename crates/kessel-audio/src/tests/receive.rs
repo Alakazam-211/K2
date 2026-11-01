@@ -142,7 +142,7 @@ fn fec_beats_plc_on_lost_frames() {
     let without = err_db(false);
     eprintln!("[receive] SNR vs clean decode at 8% loss: FEC {with_fec:.1} dB, PLC only {without:.1} dB");
     assert!(
-        with_fec > without + 1.0,
+        with_fec > without + 5.0,
         "FEC ({with_fec:.1} dB) is not better than PLC alone ({without:.1} dB)"
     );
 }

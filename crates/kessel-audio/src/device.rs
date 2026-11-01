@@ -127,6 +127,11 @@ pub(crate) fn ring_capacity(rate: u32, playout_buffer_ms: u32) -> usize {
     rate as usize * ms / 1000
 }
 
+/// The null device's capture source: fills 10 ms of mono samples.
+pub type CaptureSource = Box<dyn FnMut(&mut [f32]) + Send>;
+/// The null device's playback sink: receives 10 ms of the mono mix.
+pub type PlaybackSink = Box<dyn FnMut(&[f32]) + Send>;
+
 /// The null device: no hardware. A thread of its own plays the device:
 /// every `block_period` it takes 10 ms of capture from `input` (silence if
 /// `None`) and hands 10 ms of playback to `output` (dropped if `None`).
@@ -142,9 +147,9 @@ pub struct NullDevice {
     /// Wall-clock time between 10 ms blocks.
     pub block_period: Duration,
     /// Capture source: fill the slice (10 ms at `sample_rate`, mono).
-    pub input: Option<Box<dyn FnMut(&mut [f32]) + Send>>,
+    pub input: Option<CaptureSource>,
     /// Playback sink: 10 ms of the mix at `sample_rate`, mono.
-    pub output: Option<Box<dyn FnMut(&[f32]) + Send>>,
+    pub output: Option<PlaybackSink>,
 }
 
 impl Default for NullDevice {

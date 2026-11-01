@@ -128,7 +128,7 @@ impl EngineConfig {
         if self.max_participants == 0 {
             return bad("max_participants must be at least 1");
         }
-        if self.levels_interval_ms < 10 || self.levels_interval_ms % 10 != 0 {
+        if self.levels_interval_ms < 10 || !self.levels_interval_ms.is_multiple_of(10) {
             return bad("levels_interval_ms must be a multiple of 10");
         }
         if self.jitter.min_delay_ms > self.jitter.max_delay_ms {
@@ -138,7 +138,7 @@ impl EngineConfig {
             return bad("processing_poll must be between 0 and 10 ms");
         }
         if let Some(d) = self.backend.null_device() {
-            if d.sample_rate < 8_000 || d.sample_rate > 384_000 || d.sample_rate % 100 != 0 {
+            if d.sample_rate < 8_000 || d.sample_rate > 384_000 || !d.sample_rate.is_multiple_of(100) {
                 return bad("null device sample_rate must be 8000..=384000 and a multiple of 100");
             }
             if d.block_period.is_zero() {

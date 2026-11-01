@@ -85843,10 +85843,13 @@ failed = r.get("failed") or []
 if as_json:
     print(json.dumps({"multiplayerCores": v.get("multiplayerCores") or {}, "multiplayerCoresReport": r}))
     sys.exit(1 if failed else 0)
-name = {"markdown": "The Markdown core", "text": "The text and code core", "any-file": "The any-file core"}[core]
+name = {"markdown": "The Markdown core", "text": "The text and code core", "any-file": "The any-file core", "board": "The Board core"}[core]
 changed = any(c.get("core") == core for c in r.get("changed") or [])
 if not changed:
     print("%s is already %s." % (name, action))
+elif core == "board":
+    print("The Board core is on. Board Gardens show their boards and k2 board works." if action == "on" else
+          "The Board core is off. Board Gardens show a placeholder and k2 board answers core_off; the boards are kept.")
 elif action == "on":
     print("%s is on. Its files are live docs on this server from now on." % name)
 else:

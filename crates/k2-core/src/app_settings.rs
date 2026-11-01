@@ -492,7 +492,7 @@ pub struct AppSettings {
     /// the K2 Admin Space, its rooms, the fixed default Space, the
     /// `/cli/voice/*` routes, the `voice-rooms-v1` feature and S6's
     /// auto-setup. Persisted mirror of `K2_VOICE_ROOMS`;
-    /// [`crate::voice_rooms::enabled`] is true when EITHER is set.
+    /// [`crate::voice_preview::enabled`] is true when EITHER is set.
     /// Owner-only to change. Default MUST stay OFF: with it off nothing is
     /// created and nothing changes.
     #[serde(default)]

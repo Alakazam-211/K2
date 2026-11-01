@@ -51,8 +51,8 @@ struct Env {
 
 impl Drop for Env {
     fn drop(&mut self) {
-        voice_rooms::set_enabled(false);
-        voice_rooms::set_hosting(Hosting::Unknown);
+        k2_core::voice_preview::set_enabled(false);
+        voice_rooms::set_hosting_for_tests(None);
     }
 }
 
@@ -63,8 +63,8 @@ async fn setup(flags: &[&str], preview: bool, hosting: Hosting) -> Env {
     hook::allow_target_off_linux_for_tests(true);
     let sew = FakeSew::start(&home.path().join("s")).await;
     sew.set_features(flags);
-    voice_rooms::set_enabled(preview);
-    voice_rooms::set_hosting(hosting);
+    k2_core::voice_preview::set_enabled(preview);
+    voice_rooms::set_hosting_for_tests(Some(hosting));
     hook::set_target(CHAT_KIND, true, Some(sew.socket.to_str().unwrap()), Some(sew.token_file.to_str().unwrap()), "owner-token")
         .expect("enable chat target");
     Env { _home: home, sew }
@@ -220,6 +220,8 @@ async fn admin_space_box_users_levels_room_one_and_the_default_space() {
     assert_eq!(default_space().as_deref(), Some("k2-admin"));
     let v = hook::admin_space_view().unwrap();
     assert_eq!(v.space.as_ref().map(|s| (s.state.as_str(), s.space_id.clone())), Some(("ready", Some(sp.clone()))));
+    assert!(v.space.as_ref().is_some_and(|s| s.count_stored), "voiceRoomsCount = 1 written at set-up");
+    assert_eq!(k2_core::app_settings::load().voice_rooms_count, 1);
     assert!(v.holds.is_empty(), "nothing holds the sync: {:?}", v.holds);
     assert_eq!(v.rooms.iter().map(|r| (r.slug.as_str(), r.state.as_str())).collect::<Vec<_>>(), [("room-1", "active")]);
     assert!(v.members.iter().all(|m| m.state == "added" && m.level == m.want_level), "{:?}", v.members);
@@ -317,7 +319,7 @@ async fn rooms_follow_the_count_rename_close_and_close_now() {
 }
 
 /// §8: below Pro, rooms are dormant: none made, live ones go closing, the
-/// count is kept. Unknown hosts nothing too. The Space is made anyway.
+/// count is kept. The Space is made anyway.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn below_pro_rooms_are_dormant_and_losing_pro_closes_them() {
     let env = setup(&SEW_070, true, Hosting::NotPro).await;
@@ -326,12 +328,12 @@ async fn below_pro_rooms_are_dormant_and_losing_pro_closes_them() {
     assert!(env.sew.channels(&sp).is_empty(), "no rooms below Pro");
     assert_eq!(hook::admin_space_last_summary().and_then(|s| s.rooms_dormant).as_deref(), Some("not_pro"));
     assert_eq!(default_space().as_deref(), Some("k2-admin"), "the Space and default exist whatever the tier");
-    voice_rooms::set_hosting(Hosting::Ok);
+    voice_rooms::set_hosting_for_tests(Some(Hosting::Ok));
     hook::kick_reconcile();
     settle(&env).await;
     assert!(env.sew.channels(&sp).contains_key("room-1"));
     env.sew.voice_join(&sp, "room-1", "k2:owner").expect("join");
-    voice_rooms::set_hosting(Hosting::NotPro);
+    voice_rooms::set_hosting_for_tests(Some(Hosting::NotPro));
     settle(&env).await;
     let r1 = &env.sew.channels(&sp)["room-1"];
     assert!(r1.closing && !r1.archived, "losing Pro: live rooms go closing, the call stays");

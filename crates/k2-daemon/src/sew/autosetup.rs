@@ -331,6 +331,11 @@ pub fn run(env: &Env, action: Action) -> Value {
     save(env, json!({"state": state, "line": line}), now);
     sup::changed("autosetup");
     k2_core::log_debug!("[sew] autosetup: {state}");
+    // Voice rooms (lane B): a Pro start is followed by the K2 Admin Space
+    // and Room 1, which the grant-hook sweep ensures; ask for it now.
+    if action == Action::Start {
+        k2_core::tool_hook::kick_reconcile();
+    }
     json!({"state": state})
 }
 

@@ -1,16 +1,18 @@
-//! K2 voice rooms (prd-k2-voice-rooms-v1 v1.9): the preview switches, the
-//! room count's bounds and names, and the hosting state the Admin Space's
-//! rooms follow. The Space and rooms themselves are
+//! K2 voice rooms (prd-k2-voice-rooms-v1 v1.9): the tunnel preview switch,
+//! the room count's bounds and names, and the hosting states the Admin
+//! Space's rooms follow. The Space and rooms themselves are
 //! [`crate::tool_hook::admin_space`].
 //!
-//! **Dark by default.** `voice_rooms_preview` / `K2_VOICE_ROOMS` gates the
-//! Admin Space, its rooms and the fixed default Space; with it off nothing
-//! is created and nothing changes. `voice_tunnel_preview` /
-//! `K2_VOICE_TUNNEL` gates voice through the tunnel (lane A). Both follow
-//! the `compute_preview` pattern: a persisted owner-only setting mirrored
-//! into the process, or the env var forcing it on.
+//! **Dark by default.** The voice rooms preview is
+//! [`crate::voice_preview`] (`voice_rooms_preview` / `K2_VOICE_ROOMS`):
+//! with it off nothing is created and nothing changes.
+//! `voice_tunnel_preview` / `K2_VOICE_TUNNEL` gates voice through the
+//! tunnel (lane A), the same `compute_preview` pattern: a persisted
+//! owner-only setting mirrored into the process, or the env var forcing it
+//! on. Whether this box can host (Pro) is the daemon's Pro gate
+//! (`sew::pro_gate::hosting`), handed to the plan as [`Hosting`].
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The most rooms a server hosts (§3.1).
 pub const ROOMS_MAX: u32 = 10;
@@ -21,23 +23,12 @@ pub const ROOM_USER_LIMIT: u32 = 25;
 /// Longest room name, characters (Sew's channel name limit).
 pub const ROOM_NAME_MAX_CHARS: usize = 100;
 
-static ROOMS_SETTING: AtomicBool = AtomicBool::new(false);
 static TUNNEL_SETTING: AtomicBool = AtomicBool::new(false);
 
 fn env_on(name: &str) -> bool {
     std::env::var(name)
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
-}
-
-/// Mirror the persisted `voice_rooms_preview` into the process.
-pub fn set_enabled(on: bool) {
-    ROOMS_SETTING.store(on, Ordering::Relaxed);
-}
-
-/// The voice rooms preview is on: `K2_VOICE_ROOMS` or the setting.
-pub fn enabled() -> bool {
-    env_on("K2_VOICE_ROOMS") || ROOMS_SETTING.load(Ordering::Relaxed)
 }
 
 /// Mirror the persisted `voice_tunnel_preview` into the process.
@@ -81,43 +72,37 @@ pub fn valid_room_name(name: &str) -> Result<String, String> {
     Ok(t.to_string())
 }
 
-/// Can this box host rooms (PRD §4.5 `hosting.state`, §8)? Lane B reads
-/// it; the Pro tier watch (lane E, V21) keeps it current. Until anything
-/// sets it the state is [`Hosting::Unknown`], which hosts nothing (rooms
-/// stay dormant; the Admin Space and its members are made anyway: the
-/// default Space governs agents' DMs whatever the tier).
+/// Can this box host rooms (PRD §4.5 `hosting.state`, §8)? The daemon reads
+/// it from its Pro gate (`sew::pro_gate::hosting`) before each plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hosting {
-    /// Not known yet (no tier read).
-    Unknown,
-    /// The label isn't Pro: rooms are dormant (count kept; live rooms go
-    /// `closing`, §3.4 "Losing Pro").
+    /// Not Pro (or the tier isn't known): rooms are dormant (count kept;
+    /// live rooms go `closing`, §3.4 "Losing Pro").
     NotPro,
     /// Pro: the stored count of rooms is hosted.
     Ok,
 }
 
-static HOSTING: AtomicU8 = AtomicU8::new(0);
+/// Tests: a hosting state that stands in for the Pro gate (`None`: the
+/// gate decides). Never compiled into a release build.
+#[cfg(any(test, feature = "test-util"))]
+static HOSTING_OVERRIDE: std::sync::Mutex<Option<Hosting>> = std::sync::Mutex::new(None);
 
-/// Record what the tier watch saw.
-pub fn set_hosting(h: Hosting) {
-    HOSTING.store(
-        match h {
-            Hosting::Unknown => 0,
-            Hosting::NotPro => 1,
-            Hosting::Ok => 2,
-        },
-        Ordering::Relaxed,
-    );
+#[cfg(any(test, feature = "test-util"))]
+pub fn set_hosting_for_tests(h: Option<Hosting>) {
+    *HOSTING_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = h;
 }
 
-/// The last hosting state recorded ([`set_hosting`]).
-pub fn hosting() -> Hosting {
-    match HOSTING.load(Ordering::Relaxed) {
-        1 => Hosting::NotPro,
-        2 => Hosting::Ok,
-        _ => Hosting::Unknown,
+/// The test stand-in, if a test set one.
+pub fn hosting_override() -> Option<Hosting> {
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        *HOSTING_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    #[cfg(not(any(test, feature = "test-util")))]
+    {
+        None
     }
 }
 
@@ -141,19 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn previews_default_off_and_follow_env_or_setting() {
+    fn tunnel_preview_defaults_off_and_follows_env_or_setting() {
         let _env = crate::test_env::lock();
-        let _a = crate::test_env::EnvVar::remove("K2_VOICE_ROOMS");
         let _b = crate::test_env::EnvVar::remove("K2_VOICE_TUNNEL");
-        set_enabled(false);
         set_tunnel_enabled(false);
-        assert!(!enabled() && !tunnel_enabled(), "both default OFF");
-        set_enabled(true);
-        assert!(enabled() && !tunnel_enabled(), "independent switches");
-        set_enabled(false);
+        assert!(!tunnel_enabled(), "default OFF");
+        set_tunnel_enabled(true);
+        assert!(tunnel_enabled());
+        set_tunnel_enabled(false);
         {
             let _on = crate::test_env::EnvVar::set("K2_VOICE_TUNNEL", "1");
-            assert!(tunnel_enabled() && !enabled());
+            assert!(tunnel_enabled());
         }
         assert!(!tunnel_enabled());
     }

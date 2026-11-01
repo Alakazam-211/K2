@@ -34,7 +34,7 @@
 //! closing (`admin:room:<channel id>`, after the rooms queue).
 //!
 //! **Dark by default.** [`plan`] does nothing unless the voice rooms
-//! preview is on ([`crate::voice_rooms::enabled`]), the chat target is
+//! preview is on ([`crate::voice_preview::enabled`]), the chat target is
 //! enabled, and Sew reports `server_governed_space` (and, for rooms,
 //! `voice_channel_closing`).
 //!
@@ -132,6 +132,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             default_from  TEXT,
             default_at    INTEGER,
             carried       TEXT,
+            count_stored  INTEGER NOT NULL DEFAULT 0,
             updated_at    INTEGER NOT NULL
          );
          CREATE TABLE IF NOT EXISTS tool_admin_members (
@@ -173,7 +174,7 @@ pub struct ConnectPerson {
 /// What the sweep knows from outside skin.db (read before the skin lock).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
-    /// [`crate::voice_rooms::enabled`].
+    /// [`crate::voice_preview::enabled`].
     pub enabled: bool,
     /// The Space's name: the server's display name, else its label.
     pub name: String,
@@ -217,11 +218,14 @@ pub struct SpaceRow {
     pub default_at: Option<i64>,
     /// Workspace ids whose access was carried over to `k2-admin`.
     pub carried: Vec<String>,
+    /// `voiceRoomsCount` was written to the settings at set-up (§3.1:
+    /// "written as 1 at setup").
+    pub count_stored: bool,
 }
 
 pub fn space_row(conn: &Connection) -> Result<Option<SpaceRow>, String> {
     conn.query_row(
-        "SELECT space_id, name, state, why, default_from, default_at, carried FROM tool_admin_space WHERE id = 1",
+        "SELECT space_id, name, state, why, default_from, default_at, carried, count_stored FROM tool_admin_space WHERE id = 1",
         [],
         |r| {
             let carried: Option<String> = r.get(6)?;
@@ -233,11 +237,19 @@ pub fn space_row(conn: &Connection) -> Result<Option<SpaceRow>, String> {
                 default_from: r.get(4)?,
                 default_at: r.get(5)?,
                 carried: carried.and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default(),
+                count_stored: r.get::<_, i64>(7)? != 0,
             })
         },
     )
     .optional()
     .map_err(|e| format!("admin space read: {e}"))
+}
+
+/// The room count was written to the settings at set-up.
+pub fn note_count_stored(conn: &Connection, now: i64) -> Result<(), String> {
+    conn.execute("UPDATE tool_admin_space SET count_stored = 1, updated_at = ?1 WHERE id = 1", params![now])
+        .map(|_| ())
+        .map_err(|e| format!("admin space count stored: {e}"))
 }
 
 /// The ready Admin Space's id.
@@ -373,7 +385,7 @@ pub struct Summary {
     pub levels: usize,
     pub room_ops: usize,
     pub closings: usize,
-    /// Rooms aren't hosted: `not_pro`, `unknown` or `sew_too_old` (no
+    /// Rooms aren't hosted: `not_pro` (the Pro gate) or `sew_too_old` (no
     /// `voice_channel_closing`).
     pub rooms_dormant: Option<String>,
 }
@@ -586,10 +598,6 @@ fn plan_rooms(
         Hosting::Ok => facts.count.min(voice_rooms::ROOMS_MAX),
         Hosting::NotPro => {
             s.rooms_dormant = Some("not_pro".into());
-            0
-        }
-        Hosting::Unknown => {
-            s.rooms_dormant = Some("unknown".into());
             0
         }
     };

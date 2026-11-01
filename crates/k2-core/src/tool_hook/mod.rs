@@ -1349,7 +1349,7 @@ pub fn admin_space_note_preview_off() {
 /// off. Only with the preview on, chat enabled and a Sew that takes the
 /// server Space. Call OUTSIDE any skin.db closure. Returns how many.
 pub fn ensure_admin_connect_grants(people: &[admin_space::ConnectPerson]) -> Result<usize, String> {
-    if !crate::voice_rooms::enabled() || !skin_store_exists() {
+    if !crate::voice_preview::enabled() || !skin_store_exists() {
         return Ok(0);
     }
     let missing: Vec<String> = crate::skin::with_skin_conn(|conn| {
@@ -1457,6 +1457,25 @@ pub fn admin_space_retry() -> Result<bool, String> {
     let n = crate::skin::with_skin_conn(|conn| admin_space::clear_blocked(conn, outbox::now_secs()))?;
     kick_reconcile();
     Ok(n)
+}
+
+/// §3.1 "written as 1 at setup": once the Admin Space is ready, write
+/// `voiceRoomsCount` into the settings file (1 unless the owner already
+/// set another), once. Returns whether it wrote now.
+pub fn admin_space_store_count() -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    let due = crate::skin::with_skin_conn(|conn| {
+        Ok(admin_space::space_row(conn)?.is_some_and(|s| s.state == admin_space::SPACE_READY && !s.count_stored))
+    })?;
+    if !due {
+        return Ok(false);
+    }
+    let count = crate::app_settings::load().voice_rooms_count;
+    crate::app_settings::update(serde_json::json!({ "voiceRoomsCount": count }))?;
+    crate::skin::with_skin_conn(|conn| admin_space::note_count_stored(conn, outbox::now_secs()))?;
+    Ok(true)
 }
 
 /// Record the default-Space switch to `k2-admin` (§6.6 2.7 d).

@@ -17,9 +17,6 @@
 //! Called from the grant-hook sweep (`tool_hook_worker::sweep_target`),
 //! inside its blocking section. Does nothing with the preview off.
 
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
 use k2_core::log_debug;
 use k2_core::sew_chat::store;
 use k2_core::tool_hook::admin_space::{self, Facts};
@@ -27,47 +24,18 @@ use k2_core::tool_hook::{self as hook, sew_wire};
 use k2_core::voice_rooms::{self, Hosting};
 use serde_json::json;
 
-/// How long a tier read stands before the sweep reads it again (lane E's
-/// tier watch keeps it current in between).
-const TIER_READ_EVERY: Duration = Duration::from_secs(3600);
-
-fn tier_read_at() -> &'static Mutex<Option<Instant>> {
-    static AT: Mutex<Option<Instant>> = Mutex::new(None);
-    &AT
-}
-
-/// This box's hosting state: what the tier watch recorded, else a tier
-/// read now (at most hourly). No Connect login (no label or token) → not
-/// Pro; a failed read stays unknown (rooms stay dormant, read again next
-/// sweep).
+/// This box's hosting state, from the daemon's Pro gate (lane E's
+/// `sew::pro_gate::hosting`: the cached plan tier, fresh 5 min, a stale
+/// reading counts up to 1 h, then not Pro). Never reaches the network.
 fn hosting_now() -> Hosting {
-    // A state someone else recorded (the tier watch) stands; one this
-    // module read is read again after an hour.
-    let ours = tier_read_at().lock().ok().and_then(|g| *g);
-    let h = voice_rooms::hosting();
-    if h != Hosting::Unknown && ours.is_none_or(|t| t.elapsed() < TIER_READ_EVERY) {
+    if let Some(h) = voice_rooms::hosting_override() {
         return h;
     }
-    let read = (|| -> Result<Hosting, String> {
-        let cfg = k2_core::tunnel::config::load()?;
-        if cfg.subdomain.trim().is_empty() || cfg.token.trim().is_empty() {
-            return Ok(Hosting::NotPro);
-        }
-        let acct = k2_core::tunnel::subdomains::fetch_account(&cfg.subdomain, &cfg.token)?;
-        Ok(if acct.tier.as_deref() == Some("pro") { Hosting::Ok } else { Hosting::NotPro })
-    })();
-    match read {
-        Ok(h) => {
-            voice_rooms::set_hosting(h);
-            if let Ok(mut g) = tier_read_at().lock() {
-                *g = Some(Instant::now());
-            }
-            h
-        }
-        Err(e) => {
-            log_debug!("[voice-rooms] tier read failed (rooms stay dormant): {e}");
-            voice_rooms::hosting()
-        }
+    let env = crate::sew::supervisor::live();
+    if crate::sew::pro_gate::require_pro(&env).is_ok() {
+        Hosting::Ok
+    } else {
+        Hosting::NotPro
     }
 }
 
@@ -84,7 +52,7 @@ fn space_name() -> String {
 /// the default-Space switch. `None` with the preview off (nothing is
 /// created and nothing changes).
 pub fn prepare() -> Result<Option<Facts>, String> {
-    if !voice_rooms::enabled() {
+    if !k2_core::voice_preview::enabled() {
         return Ok(None);
     }
     let connect = Facts::load_connect()?;
@@ -97,6 +65,9 @@ pub fn prepare() -> Result<Option<Facts>, String> {
     let agents = match space.as_deref() {
         Some(id) => {
             sync_default_space(id)?;
+            if hook::admin_space_store_count()? {
+                log_debug!("[voice-rooms] voiceRoomsCount stored at set-up");
+            }
             agents_with_access(id)?
         }
         None => Vec::new(),
@@ -183,7 +154,7 @@ pub fn sync_default_space(space_id: &str) -> Result<bool, String> {
 /// `set default_space` while the Admin Space holds it: refused (§2.1,
 /// `409 default_space_fixed`). `Some(message)` when refused.
 pub fn default_space_fixed(requested: Option<&str>) -> Result<Option<String>, String> {
-    if !voice_rooms::enabled() || hook::admin_space_id()?.is_none() {
+    if !k2_core::voice_preview::enabled() || hook::admin_space_id()?.is_none() {
         return Ok(None);
     }
     if requested == Some(sew_wire::ADMIN_SPACE_SLUG) {

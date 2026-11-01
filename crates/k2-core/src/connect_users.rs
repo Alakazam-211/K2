@@ -978,7 +978,7 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
     }
     // Voice rooms: a disabled login leaves the K2 Admin Space; enabled, it
     // comes back.
-    if crate::voice_rooms::enabled() {
+    if crate::voice_preview::enabled() {
         crate::tool_hook::kick_reconcile();
     }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
@@ -1103,7 +1103,7 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
     revoke_user_sessions(&username);
     // Voice rooms (V13): a role change is a level sync in the K2 Admin
     // Space (Owner/Admin → moderator, Member → member). The sweep plans it.
-    if crate::voice_rooms::enabled() {
+    if crate::voice_preview::enabled() {
         crate::tool_hook::kick_reconcile();
     }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();

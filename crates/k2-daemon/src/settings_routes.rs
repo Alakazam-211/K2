@@ -485,7 +485,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
             // Voice rooms: the previews' mirrors; a preview or count change
             // is planned by the next sweep (now, debounced).
-            k2_core::voice_rooms::set_enabled(merged.voice_rooms_preview);
+            k2_core::voice_preview::set_enabled(merged.voice_rooms_preview);
             k2_core::voice_rooms::set_tunnel_enabled(merged.voice_tunnel_preview);
             if voice_touched {
                 k2_core::tool_hook::kick_reconcile();
@@ -562,7 +562,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
-            k2_core::voice_rooms::set_enabled(defaults.voice_rooms_preview);
+            k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);
             k2_core::voice_rooms::set_tunnel_enabled(defaults.voice_tunnel_preview);
             sync_permission_cards(defaults.permission_cards, actor.audit_user());
             sync_garden_access(defaults.garden_access, actor.audit_user());

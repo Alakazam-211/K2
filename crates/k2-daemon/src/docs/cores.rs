@@ -717,7 +717,7 @@ pub(crate) mod tests {
             assert_eq!(events.len(), 1, "one event per flip: {events:?}");
             assert_eq!(
                 events[0],
-                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "markdown": false, "text": true},
+                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "board": false, "markdown": false, "text": true},
                        "core": "markdown", "on": false, "by": "anna"})
             );
             let last = last_changes().lock().expect("last").get("markdown").cloned().expect("last change");
@@ -803,7 +803,7 @@ pub(crate) mod tests {
             set("markdown", true);
             let file = |p: &str| -> Value {
                 let v: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some(p)).body).expect("json");
-                assert_eq!(v["cores"].as_array().map(Vec::len), Some(3), "the rows are still there");
+                assert_eq!(v["cores"].as_array().map(Vec::len), Some(4), "the rows are still there");
                 v["file"].clone()
             };
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));

@@ -16,8 +16,8 @@
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //!
-//! The pin (Sew 0.6.0) reports twenty flags: 0.5.0's twelve, 0.5.1's
-//! `app_session_member_role`, `app_voice_channel_create`,
+//! The pin (Sew 0.6.1; the same twenty flags as 0.6.0) reports 0.5.0's
+//! twelve, 0.5.1's `app_session_member_role`, `app_voice_channel_create`,
 //! `home_client_owner_approval` and `k2_managed_guard`, and 0.6.0's
 //! `app_controls`, `app_governed_spaces`, `app_member_channels` and
 //! `app_mode_gate`. A flag K2 doesn't gate on is kept in the list and
@@ -180,9 +180,9 @@ mod tests {
         "voice_video_cap",
     ];
 
-    /// The pinned Sew (0.6.0) reports every flag K2 gates on: what it
-    /// reports is kept as reported (sorted, nothing dropped, unknown flags
-    /// included), and each gate answers yes.
+    /// The pinned Sew (0.6.1, whose flags are 0.6.0's) reports every flag
+    /// K2 gates on: what it reports is kept as reported (sorted, nothing
+    /// dropped, unknown flags included), and each gate answers yes.
     #[test]
     fn sew_0_6_0_flags_pass_every_k2_gate() {
         let conn = Connection::open_in_memory().unwrap();

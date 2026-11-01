@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.8
+
+### When you update
+- **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
+
+### Chat and voice (Sew)
+- **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

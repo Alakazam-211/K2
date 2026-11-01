@@ -891,6 +891,41 @@ fn reconfigure_step_needs_protocol_11_and_sends_installs_inputs_without_a_key() 
     assert_eq!(eff[i + 1], "engine sew systemctl restart", "{eff:?}");
 }
 
+/// Sew 0.6.1 (additive wire): the install report gains `warnings`, and a
+/// reconfigure whose install names another pg_major exits 0 with
+/// `["pg_major_ignored"]`. That is a success: the step restarts `sew` as
+/// usual, K2 reads the warning, and the hand-run reconfigure hands Sew's
+/// report (warning included) back to the person.
+#[test]
+fn a_pg_major_ignored_warning_never_fails_a_reconfigure() {
+    let t = t();
+    t.enabled();
+    t.ops.clear();
+    let mut st = helper_ok(11, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewreconf"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+    let env = t.env();
+    let report = || {
+        Ok(json!({
+            "sewExit": 0,
+            "sew": {"ok": true, "changed": [], "versions": {"sew": pinned().version}, "warnings": ["pg_major_ignored"]},
+            "stderrTail": "sew: warning: pg_major 17 ignored: this install's sew-db runs Postgres 16 (pg_major_ignored)"
+        }))
+    };
+    t.ops.queue("engine sew install reconfigure", report());
+    let out = reconfigure_step(&env).expect("a warning is not a failure");
+    assert_eq!(out["sewExit"], 0);
+    assert_eq!(sew_warnings(&out), ["pg_major_ignored"]);
+    let eff = t.ops.effects();
+    let i = eff.iter().position(|e| e == "engine sew install reconfigure").unwrap();
+    assert_eq!(eff[i + 1], "engine sew systemctl restart", "{eff:?}");
+
+    t.ops.queue("engine sew install reconfigure", report());
+    let v = reconfigure(&env).expect("hand-run reconfigure");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["sew"]["warnings"], json!(["pg_major_ignored"]), "{v}");
+}
+
 /// `k2 hostchat restart` (S32 Q2): sew-db, then sew, then readiness;
 /// reset-failed only on a protocol-11 helper; refused mid-step.
 #[test]

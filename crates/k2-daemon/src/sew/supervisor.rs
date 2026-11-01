@@ -1457,6 +1457,41 @@ pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>
     w
 }
 
+/// "Ready to move off K2" (voice rooms PRD v1.9 §6.6 2.3, SW-8; vs-live
+/// V18): Sew's export from a backup bundle into a fresh standalone install
+/// needs an off-box backup (ship) folder, the keyring mirror (off the box)
+/// and the owner's `sew-launch-key` in the vault, revealable by the owner.
+/// `launch_key` = the vault's `sew-launch-key` holds the current master
+/// key. Answers `{ready, missing: [ship_folder|keyring_mirror|launch_key],
+/// line}`; without a ship folder (the default) only the "the box still
+/// runs" path works, and the line says what to set.
+pub fn move_off_k2(row: &Row, launch_key: bool) -> Value {
+    let mut missing: Vec<&str> = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    if row.ship_kind != "dir" {
+        missing.push("ship_folder");
+        words.push("an off-box backup folder (k2 hostchat ship dir <folder on another disk>)");
+    }
+    if row.mirror_kind != "dir" {
+        missing.push("keyring_mirror");
+        words.push(if row.ship_kind == "dir" {
+            "the keyring mirror (K2 sets it in the backup folder on its own; k2 hostchat status shows why it waits)"
+        } else {
+            "the keyring mirror (it follows the backup folder)"
+        });
+    }
+    if !launch_key {
+        missing.push("launch_key");
+        words.push("the launch key in the K2 vault (sew-launch-key; K2 copies it on its own once the vault is open)");
+    }
+    let line = if missing.is_empty() {
+        "Ready to move off K2: a backup bundle, the keyring mirror and the owner's sew-launch-key are enough".to_string()
+    } else {
+        format!("Not ready to move off K2: missing {}", words.join("; "))
+    };
+    json!({"ready": missing.is_empty(), "missing": missing, "line": line})
+}
+
 /// The subset of Sew's alarms named in `which`.
 fn sew_alarms(sew_status: Option<&Value>, which: &[&str]) -> Vec<String> {
     debug_assert!(which.iter().all(|w| wire::BACKUP_ALARMS.contains(w)));
@@ -1594,6 +1629,8 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "recoveryKeySaved": in_vault,
         "recoveryKeyInVault": in_vault,
         "recoveryKeyVaultName": super::secrets::LAUNCH_NAME,
+        // 0.46.8 (SW-8): what moving off K2 still needs.
+        "moveOffK2": move_off_k2(&row, in_vault),
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),
         "backup": backup_status(&row, sew_status.as_ref()),

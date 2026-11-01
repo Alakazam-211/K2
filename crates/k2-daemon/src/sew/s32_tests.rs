@@ -160,7 +160,7 @@ fn installed_status_carries_owner_target_mirror_and_ship() {
     // No hook read in this test: the fields still exist.
     assert_eq!(v["owner"], "none");
     assert_eq!(v["target"]["enabled"], false);
-    assert_eq!(v["mirror"], json!({"kind": "none", "path": null}));
+    assert_eq!(v["mirror"], json!({"kind": "none", "path": null, "tied": false, "tie": null}));
     assert_eq!(v["backup"]["ship"]["kind"], "none");
     assert!(v["backup"]["ship"].get("lastShippedId").is_some());
     assert!(v["backup"].get("lastOkAt").is_some(), "S29's backup fields stay");
@@ -255,7 +255,9 @@ fn ship_sets_dir_or_none_and_refuses_the_vault_system_paths_and_k2() {
     assert!(take_emitted().is_empty());
     let (st, v) = t.call(&agent("w-it"), SHIP, json!({"kind": "dir", "path": OFFBOX}));
     assert_eq!(st, "200 OK", "{v}");
-    assert_eq!(take_emitted(), vec!["ship"]);
+    // 0.46.8: the keyring mirror tie waits (this helper has no protocol-12
+    // mirror verb), which is a mirror change for clients.
+    assert_eq!(take_emitted(), vec!["ship", "mirror"]);
     let row = crate::sew::store::load().unwrap();
     assert_eq!((row.ship_kind.as_str(), row.ship_path.as_deref()), ("dir", Some(OFFBOX)));
     let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
@@ -296,10 +298,167 @@ fn mirror_goes_through_engine_sew_config_then_restarts() {
     assert!(t.ops.effects().iter().any(|e| e == "engine sew systemctl restart"));
     let row = crate::sew::store::load().unwrap();
     assert_eq!((row.mirror_kind.as_str(), row.mirror_path.as_deref()), ("dir", Some("/mnt/keys")));
-    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["mirror"], json!({"kind": "dir", "path": "/mnt/keys"}));
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["mirror"], json!({"kind": "dir", "path": "/mnt/keys", "tied": false, "tie": null}));
     let (st, _) = t.call(&Who::Owner, MIRROR, json!({"kind": "none"}));
     assert_eq!(st, "200 OK");
     assert_eq!(crate::sew::store::load().unwrap().mirror_kind, "none");
+}
+
+// ── the keyring mirror tied to the ship folder (0.46.8, SW-8) ───────────
+
+fn tied_path() -> String {
+    format!("{OFFBOX}/sew-keyring-{}", crate::sew::ops::fake::INSTALL_ID)
+}
+
+/// Voice rooms PRD v1.9 §6.6 2.3 (SW-8) / vs-live V18: picking a ship
+/// folder also points Sew's keyring mirror at
+/// `<ship>/sew-keyring-<install id>` (the helper makes it `sew`'s, then
+/// `engine sew config`, then a restart the answer names); status says the
+/// mirror follows the folder and the box is ready to move off K2;
+/// clearing the ship folder clears the tie.
+#[test]
+fn picking_a_ship_folder_ties_the_keyring_mirror_and_clearing_it_unties() {
+    let t = t();
+    let _fs = memfs();
+    t.enable();
+    *t.ops.mirror_dir_fail.lock().unwrap() = None;
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["moveOffK2"]["ready"], false, "{s}");
+    assert_eq!(s["moveOffK2"]["missing"], json!(["ship_folder", "keyring_mirror"]), "{s}");
+    assert!(s["moveOffK2"]["line"].as_str().unwrap().starts_with("Not ready to move off K2: missing an off-box backup folder"), "{s}");
+    let _ = take_emitted();
+
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["mirror"]["state"], "tied", "{v}");
+    assert_eq!(v["mirror"]["path"], tied_path());
+    assert_eq!(v["restarted"], true, "Sew restarts to read its new mirror: {v}");
+    assert!(v["note"].as_str().unwrap().contains("restarted"), "{v}");
+    assert_eq!(*t.ops.mirror_dirs.lock().unwrap(), vec![tied_path()], "the helper made the folder");
+    let calls = t.ops.calls.lock().unwrap().clone();
+    let cfg = calls.iter().find(|c| c.argv == "engine sew config").expect("config call");
+    let stdin: Value = serde_json::from_slice(cfg.stdin.as_deref().expect("stdin")).unwrap();
+    assert_eq!(stdin, json!({"keys.mirror.path": tied_path(), "keys.mirror.kind": "dir"}));
+    serde_json::from_value::<k2_root_proto::sew::ConfigRequest>(stdin).expect("the helper's own type").validate().expect("valid");
+    assert!(t.ops.effects().iter().any(|e| e == "engine sew systemctl restart"));
+    assert_eq!(take_emitted(), vec!["ship", "mirror"]);
+    let row = crate::sew::store::load().unwrap();
+    assert_eq!((row.mirror_kind.as_str(), row.mirror_path.as_deref()), ("dir", Some(tied_path().as_str())));
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"], json!({"kind": "dir", "path": tied_path(), "tied": true, "tie": null}), "{s}");
+    assert_eq!(s["moveOffK2"], json!({
+        "ready": true,
+        "missing": [],
+        "line": "Ready to move off K2: a backup bundle, the keyring mirror and the owner's sew-launch-key are enough",
+    }));
+    // The same folder again: nothing to make, no restart.
+    t.ops.clear();
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!((v["mirror"]["state"].as_str(), v["restarted"].as_bool()), (Some("tied"), Some(false)), "{v}");
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+
+    // Clearing the ship folder clears the tie.
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["mirror"]["state"], "cleared", "{v}");
+    let calls = t.ops.calls.lock().unwrap().clone();
+    let cfg = calls.iter().find(|c| c.argv == "engine sew config").expect("config call");
+    assert_eq!(serde_json::from_slice::<Value>(cfg.stdin.as_deref().unwrap()).unwrap(), json!({"keys.mirror.kind": "none"}));
+    assert_eq!(crate::sew::store::load().unwrap().mirror_kind, "none");
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"]["tied"], false);
+    assert_eq!(s["moveOffK2"]["missing"], json!(["ship_folder", "keyring_mirror"]));
+    use_fs_for_tests(None);
+}
+
+/// Until the root helper can make the folder (protocol 12, lane A), the
+/// tie waits with why; the health loop retries it once the wait is over,
+/// and status names what moving off K2 still misses.
+#[test]
+fn a_tie_waits_for_the_helper_and_the_health_loop_retries_it() {
+    let t = t();
+    let fs = memfs();
+    t.enable();
+    let (st, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(st, "200 OK", "the ship folder is set even while the mirror waits: {v}");
+    assert_eq!(v["mirror"]["state"], "pending", "{v}");
+    assert!(v["mirror"]["error"].as_str().unwrap().contains("protocol 12"), "{v}");
+    assert_eq!(v["restarted"], false);
+    assert!(t.ops.effects().is_empty(), "nothing reached Sew: {:?}", t.ops.effects());
+    assert_eq!(crate::sew::store::load().unwrap().mirror_kind, "none");
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"]["tie"]["state"], "pending", "{s}");
+    assert_eq!(s["mirror"]["tie"]["path"], tied_path());
+    assert_eq!(s["moveOffK2"]["missing"], json!(["keyring_mirror"]), "{s}");
+    assert!(s["moveOffK2"]["line"].as_str().unwrap().contains("the keyring mirror (K2 sets it in the backup folder on its own"), "{s}");
+    // Not due yet: the tick leaves it.
+    *t.ops.mirror_dir_fail.lock().unwrap() = None;
+    assert_eq!(retry_mirror_tie(&t.env), None);
+    let _ = ship_tick_with(&t.env, fs);
+    assert!(t.ops.mirror_dirs.lock().unwrap().is_empty());
+    // An hour later the health loop ties it.
+    *t.ops.clock.lock().unwrap() += MIRROR_TIE_RETRY_SECS;
+    let _ = take_emitted();
+    let _ = ship_tick_with(&t.env, fs);
+    assert_eq!(*t.ops.mirror_dirs.lock().unwrap(), vec![tied_path()]);
+    assert!(take_emitted().contains(&"mirror".to_string()));
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"]["tied"], true, "{s}");
+    assert_eq!(s["moveOffK2"]["ready"], true, "{s}");
+    assert_eq!(retry_mirror_tie(&t.env), None, "nothing left to retry");
+    use_fs_for_tests(None);
+}
+
+/// A keyring mirror the owner set by hand to another folder is theirs: a
+/// ship folder never ties over it, and clearing the ship folder keeps it.
+/// Setting a mirror by hand also ends an earlier tie.
+#[test]
+fn an_owner_mirror_elsewhere_is_kept_and_a_hand_set_mirror_ends_the_tie() {
+    let t = t();
+    let _fs = memfs();
+    t.enable();
+    *t.ops.mirror_dir_fail.lock().unwrap() = None;
+    t.ops.exists.lock().unwrap().push("/mnt/keys".into());
+    let (st, _) = t.call(&Who::Owner, MIRROR, json!({"kind": "dir", "path": "/mnt/keys"}));
+    assert_eq!(st, "200 OK");
+    t.ops.clear();
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(v["mirror"]["state"], "kept", "{v}");
+    assert!(t.ops.mirror_dirs.lock().unwrap().is_empty());
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"], json!({"kind": "dir", "path": "/mnt/keys", "tied": false, "tie": null}));
+    assert_eq!(s["moveOffK2"]["ready"], true, "any off-box mirror counts: {s}");
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
+    assert_eq!(v["mirror"]["state"], "kept", "{v}");
+    assert_eq!(crate::sew::store::load().unwrap().mirror_path.as_deref(), Some("/mnt/keys"));
+    // Tied first, then the owner points it elsewhere: no longer tied, and
+    // clearing the ship folder keeps the owner's choice.
+    let (_, _) = t.call(&Who::Owner, MIRROR, json!({"kind": "none"}));
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "dir", "path": OFFBOX}));
+    assert_eq!(v["mirror"]["state"], "tied", "{v}");
+    let (_, _) = t.call(&Who::Owner, MIRROR, json!({"kind": "dir", "path": "/mnt/keys"}));
+    let (_, s) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(s["mirror"]["tied"], false, "{s}");
+    let (_, v) = t.call(&Who::Owner, SHIP, json!({"kind": "none"}));
+    assert_eq!(v["mirror"]["state"], "kept", "{v}");
+    assert_eq!(crate::sew::store::load().unwrap().mirror_path.as_deref(), Some("/mnt/keys"));
+    use_fs_for_tests(None);
+}
+
+/// "missing X" names the launch key too (the vault copy missing or
+/// stale), and each missing piece in order.
+#[test]
+fn move_off_k2_names_each_missing_piece() {
+    let mut row = crate::sew::store::Row::new("0.6.0", 1);
+    let v = crate::sew::supervisor::move_off_k2(&row, false);
+    assert_eq!(v["missing"], json!(["ship_folder", "keyring_mirror", "launch_key"]));
+    assert!(v["line"].as_str().unwrap().contains("the launch key in the K2 vault (sew-launch-key"), "{v}");
+    row.ship_kind = "dir".into();
+    row.mirror_kind = "dir".into();
+    let v = crate::sew::supervisor::move_off_k2(&row, false);
+    assert_eq!((v["ready"].as_bool(), v["missing"].clone()), (Some(false), json!(["launch_key"])));
+    assert_eq!(crate::sew::supervisor::move_off_k2(&row, true)["ready"], true);
 }
 
 #[test]

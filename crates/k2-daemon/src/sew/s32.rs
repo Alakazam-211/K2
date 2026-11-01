@@ -196,8 +196,15 @@ pub fn decorate_status(env: &Env, body: &mut Value, who: &Who) {
     let (owner, enabled) = hook_view();
     body["owner"] = json!(owner);
     body["target"] = json!({"enabled": enabled});
-    body["mirror"] = json!({"kind": row.mirror_kind, "path": row.mirror_path});
     let rec = env.ops.record_load(SHIP_RECORD).unwrap_or(Value::Null);
+    // 0.46.8 (SW-8): `tied` = the mirror follows the ship folder; `tie` =
+    // a tie still waiting (`state: pending`, with why).
+    body["mirror"] = json!({
+        "kind": row.mirror_kind,
+        "path": row.mirror_path,
+        "tied": mirror_is_tied(env, &row),
+        "tie": rec.get(MIRROR_TIE).filter(|t| t["state"] == "pending").cloned(),
+    });
     let ship = json!({
         "kind": row.ship_kind,
         "path": row.ship_path,
@@ -602,7 +609,14 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
         crate::vault::auth_audit("sew-ship-none", &who.label(), "backups stay on this box", "cli");
     }
     emit("ship");
-    Ok(json!({"ok": true, "ship": {"kind": kind, "path": path}}))
+    // 0.46.8 (SW-8): the keyring mirror follows the ship folder.
+    let mirror = tie_mirror(env);
+    let restarted = mirror.get("restarted").and_then(Value::as_bool).unwrap_or(false);
+    let mut out = json!({"ok": true, "ship": {"kind": kind, "path": path}, "mirror": mirror, "restarted": restarted});
+    if restarted {
+        out["note"] = json!("Sew restarted to use its new keyring mirror (calls and chat reconnect on their own)");
+    }
+    Ok(out)
 }
 
 fn set_mirror(env: &Env, v: &Value) -> R<Value> {
@@ -629,10 +643,26 @@ fn set_mirror(env: &Env, v: &Value) -> R<Value> {
         "k2" => return Err(no("not_available", 400, "an Alakazam-hosted key copy is not built yet: use a folder on another disk (kind dir)")),
         _ => return Err(no("bad_request", 400, "kind is none or dir")),
     };
+    let restarted = apply_mirror(env, kind, path.as_deref())?;
+    // A mirror the owner sets by hand is theirs: it no longer follows the
+    // ship folder.
+    let mut rec = env.ops.record_load(SHIP_RECORD).unwrap_or_else(|| json!({}));
+    if rec.get(MIRROR_TIE).is_some_and(|t| !t.is_null()) {
+        rec[MIRROR_TIE] = Value::Null;
+        env.ops.record_save(SHIP_RECORD, Some(&rec)).map_err(|e| no("io_error", 500, e))?;
+    }
+    emit("mirror");
+    Ok(json!({"ok": true, "mirror": {"kind": kind, "path": path}, "restarted": restarted}))
+}
+
+/// Point Sew's keyring mirror at `path` (`kind` `dir`) or turn it off
+/// (`none`): the root helper's `engine sew config`, a restart when Sew
+/// runs, then the row. Returns whether Sew restarted.
+fn apply_mirror(env: &Env, kind: &str, path: Option<&str>) -> R<bool> {
     sup::helper_check(env)?;
     let _latch = sup::begin(env)?;
     let mut cfg = serde_json::Map::new();
-    if let Some(p) = &path {
+    if let Some(p) = path {
         cfg.insert("keys.mirror.path".into(), json!(p));
     }
     cfg.insert("keys.mirror.kind".into(), json!(kind));
@@ -646,11 +676,142 @@ fn set_mirror(env: &Env, v: &Value) -> R<Value> {
     };
     store::update(env.ops.now(), |r| {
         r.mirror_kind = kind.to_string();
-        r.mirror_path = path.clone();
+        r.mirror_path = path.map(str::to_string);
     })
     .map_err(|e| no("db_error", 500, e))?;
-    emit("mirror");
-    Ok(json!({"ok": true, "mirror": {"kind": kind, "path": path}, "restarted": restarted}))
+    Ok(restarted)
+}
+
+// ── the keyring mirror tied to the ship folder (0.46.8, SW-8) ────────────
+//
+// Voice rooms PRD v1.9 §6.6 2.3 (SW-8, Rosson 11-01) and vs-live V18:
+// picking a backup (ship) folder also points Sew's keyring mirror at
+// `<ship_path>/sew-keyring-<install_id>`, so a backup bundle plus that
+// folder plus the owner's `sew-launch-key` is everything moving off K2
+// (Sew's export/import into a fresh standalone install) needs. Clearing
+// the ship folder clears the tie. A mirror the owner set by hand to some
+// other folder is theirs: K2 keeps it and never ties over it.
+//
+// The folder must exist and be `sew`'s (Sew's own user writes the mirror;
+// the helper's `config` refuses a mirror path that doesn't exist), so the
+// root helper makes it ([`super::ops::SewOps::mirror_dir`], protocol 12).
+// When that can't happen yet (an older helper, Sew without an install id,
+// Sew busy) the tie waits: `mirror.tie.state = pending` with why, retried
+// by the health loop at most every [`MIRROR_TIE_RETRY_SECS`].
+
+/// The tie's state in the ship record (`~/.k2/sew/ship.json`).
+pub const MIRROR_TIE: &str = "mirrorTie";
+/// A pending tie is retried at most this often.
+pub const MIRROR_TIE_RETRY_SECS: i64 = 3600;
+
+/// `<ship_path>/sew-keyring-<install_id>`.
+pub fn tied_mirror_path(ship_path: &str, install_id: &str) -> String {
+    format!("{}/sew-keyring-{install_id}", ship_path.trim_end_matches('/'))
+}
+
+/// Does the row's mirror follow the ship folder (K2 tied it)?
+pub fn mirror_is_tied(env: &Env, row: &store::Row) -> bool {
+    let rec = env.ops.record_load(SHIP_RECORD).unwrap_or(Value::Null);
+    let tied = rec.pointer("/mirrorTie/path").and_then(Value::as_str);
+    row.mirror_kind == "dir"
+        && tied.is_some()
+        && row.mirror_path.as_deref() == tied
+        && rec.pointer("/mirrorTie/state").and_then(Value::as_str) == Some("tied")
+}
+
+/// Make the mirror follow the row's ship folder now: tie it to
+/// `<ship>/sew-keyring-<install>` (ship `dir`), or clear a tie K2 made
+/// (ship `none`). Records and returns `{state, path, error?, restarted}`;
+/// `state` is `tied`, `pending` (with why; retried), `kept` (the owner's
+/// own mirror), `cleared` or `none`.
+pub fn tie_mirror(env: &Env) -> Value {
+    let Some(row) = store::load() else { return json!({"state": "none"}) };
+    let mut rec = env.ops.record_load(SHIP_RECORD).unwrap_or_else(|| json!({}));
+    let prev = rec.get(MIRROR_TIE).cloned().unwrap_or(Value::Null);
+    let prev_path = prev.get("path").and_then(Value::as_str).map(str::to_string);
+    // A mirror at the path K2 tied (or was tying) is K2's to move or clear.
+    let ours = |p: Option<&str>| p.is_some() && p == prev_path.as_deref();
+    let now = env.ops.now();
+    let mut restarted = false;
+    let tie = match (row.ship_kind.as_str(), row.ship_path.as_deref()) {
+        ("dir", Some(ship)) => match row.install_id.as_deref() {
+            None => json!({
+                "state": "pending",
+                "error": "Sew has no install id yet (it gets one when it first starts); K2 ties the keyring mirror then",
+                "at": now, "nextTryAt": now + 300,
+            }),
+            Some(install) => {
+                let want = tied_mirror_path(ship, install);
+                let own = row.mirror_kind == "dir" && row.mirror_path.as_deref() != Some(want.as_str()) && !ours(row.mirror_path.as_deref());
+                if own {
+                    json!({"state": "kept", "path": row.mirror_path, "at": now})
+                } else if row.mirror_kind == "dir" && row.mirror_path.as_deref() == Some(want.as_str()) {
+                    json!({"state": "tied", "path": want, "at": now})
+                } else {
+                    let made = env.ops.mirror_dir(&want).and_then(|()| match apply_mirror(env, "dir", Some(&want)) {
+                        Ok(r) => {
+                            restarted = r;
+                            Ok(())
+                        }
+                        Err(f) => Err(format!("{}: {}", f.code, f.hint)),
+                    });
+                    match made {
+                        Ok(()) => json!({"state": "tied", "path": want, "at": now}),
+                        Err(e) => json!({
+                            "state": "pending", "path": want, "error": e,
+                            "at": now, "nextTryAt": now + MIRROR_TIE_RETRY_SECS,
+                        }),
+                    }
+                }
+            }
+        },
+        // Ship `none`: a mirror K2 tied goes with it; the owner's own stays.
+        _ => {
+            if ours(row.mirror_path.as_deref()) && row.mirror_kind == "dir" {
+                match apply_mirror(env, "none", None) {
+                    Ok(r) => {
+                        restarted = r;
+                        json!({"state": "cleared", "at": now})
+                    }
+                    Err(f) => json!({
+                        "state": "pending", "path": prev_path, "clear": true,
+                        "error": format!("{}: {}", f.code, f.hint), "at": now, "nextTryAt": now + MIRROR_TIE_RETRY_SECS,
+                    }),
+                }
+            } else if row.mirror_kind == "dir" {
+                json!({"state": "kept", "path": row.mirror_path, "at": now})
+            } else {
+                json!({"state": "none", "at": now})
+            }
+        }
+    };
+    rec[MIRROR_TIE] = match tie["state"].as_str() {
+        Some("cleared" | "none" | "kept") => Value::Null,
+        _ => tie.clone(),
+    };
+    if let Err(e) = env.ops.record_save(SHIP_RECORD, Some(&rec)) {
+        k2_core::log_debug!("[sew] ship record (mirror tie): {e}");
+    }
+    // A refetch signal only when what a client shows changed (not `at`).
+    let shown = |t: &Value| (t.get("state").cloned(), t.get("path").cloned(), t.get("error").cloned());
+    if shown(&prev) != shown(&rec[MIRROR_TIE]) {
+        emit("mirror");
+    }
+    let mut out = tie;
+    out["restarted"] = json!(restarted);
+    out
+}
+
+/// Health loop: retry a pending tie once its wait is over. Returns the
+/// new state when it ran.
+pub fn retry_mirror_tie(env: &Env) -> Option<String> {
+    let rec = env.ops.record_load(SHIP_RECORD)?;
+    let t = rec.get(MIRROR_TIE)?;
+    if t["state"] != "pending" || t["nextTryAt"].as_i64().is_some_and(|n| env.ops.now() < n) {
+        return None;
+    }
+    let out = tie_mirror(env);
+    out["state"].as_str().map(str::to_string)
 }
 
 /// One health-loop step: note Sew's newest bundle / backup error (K26
@@ -667,6 +828,11 @@ pub fn ship_tick_with(env: &Env, fs: &dyn ShipFs) -> Option<String> {
     let row = store::load()?;
     if !matches!(row.status.as_str(), "running" | "degraded") {
         return None;
+    }
+    // 0.46.8 (SW-8): a keyring mirror tie that had to wait (it emits its
+    // own `mirror` signal when what it shows changed).
+    if let Some(s) = retry_mirror_tie(env) {
+        k2_core::log_debug!("[sew] keyring mirror tie: {s}");
     }
     let st = sup::mgmt(env, "GET", "/mgmt/v1/status", None).ok()?;
     let last_id = st.pointer("/backup/last_id").and_then(Value::as_str).map(str::to_string);

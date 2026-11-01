@@ -179,7 +179,23 @@ pub trait SewOps: Send + Sync {
     fn hook_drop(&self) -> Result<Value, String> {
         k2_core::tool_hook::drop_target_grants(k2_core::tool_hook::CHAT_KIND).map(|r| json!(r))
     }
+
+    // ── the keyring mirror tied to the ship folder (0.46.8, SW-8) ────────
+    /// Make Sew's keyring mirror folder `path` (absolute, under the owner's
+    /// off-box ship folder) owned by `sew:sew`, mode 0700, no links, so
+    /// Sew's `sew` user can write it (the daemon user can't make it with
+    /// that owner). Root helper protocol 12 (lane A of the voice rooms
+    /// work, vs-live V18); see [`MIRROR_DIR_PENDING`] until it lands.
+    fn mirror_dir(&self, path: &str) -> Result<(), String> {
+        let _ = path;
+        Err(MIRROR_DIR_PENDING.to_string())
+    }
 }
+
+/// What [`SewOps::mirror_dir`] answers while no root helper verb makes the
+/// mirror folder (protocol 12). K2 retries the tie on its own.
+pub const MIRROR_DIR_PENDING: &str =
+    "this K2's root helper can't make Sew's keyring mirror folder yet (it needs root helper protocol 12)";
 
 /// A control-plane answer that was not 2xx (`status` 0 = unreachable).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -783,6 +799,13 @@ pub mod fake {
         /// points it at a loopback server and a scratch cache; files under
         /// that cache are read from disk by `read_file`.
         pub release_source: Mutex<crate::sew::fetch::Source>,
+        /// [`SewOps::mirror_dir`] calls that succeeded (each folder is then
+        /// in `exists`).
+        pub mirror_dirs: Mutex<Vec<String>>,
+        /// [`SewOps::mirror_dir`]'s answer: `None` = it makes the folder;
+        /// `Some(e)` = it fails with `e` (default: a helper without the
+        /// protocol-12 verb, [`super::MIRROR_DIR_PENDING`]).
+        pub mirror_dir_fail: Mutex<Option<String>>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -878,6 +901,8 @@ pub mod fake {
                 served_ports: Mutex::new(vec![]),
                 front_rebuilds: Mutex::new(0),
                 release_source: Mutex::new(crate::sew::fetch::Source::offline()),
+                mirror_dirs: Mutex::new(vec![]),
+                mirror_dir_fail: Mutex::new(Some(super::MIRROR_DIR_PENDING.to_string())),
             }
         }
 
@@ -1442,6 +1467,14 @@ pub mod fake {
         }
         fn passthrough_supported(&self) -> bool {
             *self.passthrough.lock().unwrap()
+        }
+        fn mirror_dir(&self, path: &str) -> Result<(), String> {
+            if let Some(e) = self.mirror_dir_fail.lock().unwrap().clone() {
+                return Err(e);
+            }
+            self.mirror_dirs.lock().unwrap().push(path.to_string());
+            self.exists.lock().unwrap().push(path.to_string());
+            Ok(())
         }
         fn frpc_logins(&self) -> u64 {
             *self.logins.lock().unwrap()

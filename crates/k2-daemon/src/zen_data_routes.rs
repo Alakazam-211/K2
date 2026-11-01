@@ -49,6 +49,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/zen/data/blob/get",
     "/cli/zen/data/blob/list",
     "/cli/zen/data/blob/put",
+    "/cli/zen/data/board",
     "/cli/zen/data/changes",
     "/cli/zen/data/delete",
     "/cli/zen/data/export",
@@ -82,6 +83,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/data/admin/revoke",
     "/cli/zen/data/batch",
     "/cli/zen/data/blob/put",
+    "/cli/zen/data/board",
     "/cli/zen/data/delete",
     "/cli/zen/data/grant",
     "/cli/zen/data/import",
@@ -279,6 +281,8 @@ pub fn handle(path: &str, who: DataWho, body: &[u8], params: &HashMap<String, St
         p if gd::history_routes::is_agent_route(p) => gd::history_routes::agent(p, &who, body, params),
         // B3: export and import.
         "/cli/zen/data/export" | "/cli/zen/data/import" => gd::export_routes::handle(path, &who, body, params),
+        // `k2 board` (Rosson 2026-11-01): the Board Garden's rules.
+        crate::board_routes::ROUTE => crate::board_routes::handle(&who, body),
         _ => Err(DataError::NotFound("route_not_found")),
     };
     match r {

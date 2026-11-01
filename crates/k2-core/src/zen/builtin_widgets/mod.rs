@@ -72,6 +72,12 @@ pub const BOX_DISK_WIDGET: &str = "k2:box-disk@1";
 pub const WORK_INBOX_WIDGET: &str = "k2:work-inbox@1";
 pub const REVIEW_WIDGET: &str = "k2:review@1";
 
+/// The Board (plan-board-garden-v1; Rosson 2026-11-01): a whiteboard for
+/// the person and their agents, its boards in its Garden data
+/// (`data:k2:board`), which agents change through `k2 board`. A Beta behind
+/// the Board core: `board-1.toml` places it beside K2's Conversation.
+pub const BOARD_WIDGET: &str = "k2:board@1";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 

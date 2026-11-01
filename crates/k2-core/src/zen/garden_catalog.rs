@@ -23,6 +23,7 @@
 //! order = 10                      # place in New Garden's catalog list
 //! new_users = false               # true = setup also seeds it on a new computer
 //! theme = "haunted"               # optional: a built-in theme it shows by default
+//! core = "board"                  # optional: the multiplayer core it needs (Beta)
 //!
 //! [layout]
 //! kind = "columns"
@@ -66,6 +67,12 @@ pub const DIARY_TEMPLATE_ID: &str = "k2.diary@2";
 /// "Thread" column, 0.46.4).
 pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@5";
 
+/// The Board Garden (plan-board-garden-v1, Rosson 2026-11-01): the
+/// `k2:board@1` whiteboard beside K2's Conversation in a folded "Chat"
+/// column. It needs the Board core (`core = "board"`, a Beta, off by
+/// default); adding it turns that core on in the same step.
+pub const BOARD_TEMPLATE_ID: &str = "k2.board@1";
+
 include!(concat!(env!("OUT_DIR"), "/zen_garden_catalog.rs"));
 
 /// The `[catalog]` table of one entry file.
@@ -83,6 +90,27 @@ pub struct CatalogMeta {
     /// study). Metadata: not part of the page or its hash.
     #[serde(default)]
     pub theme: Option<String>,
+    /// The multiplayer core this Garden needs ("needs this core", Rosson
+    /// 2026-11-01): a `docs_cores` id whose view is `garden`. New Garden
+    /// shows the core's Beta label; adding the Garden turns the core on in
+    /// the same step (one confirm). Metadata: not part of the page.
+    #[serde(default)]
+    pub core: Option<String>,
+}
+
+/// The core a template needs (a catalog entry's `core`), if any.
+pub fn template_core(template_id: &str) -> Option<&'static str> {
+    garden_catalog().iter().find(|e| e.template_id == template_id).and_then(|e| e.meta.core.as_deref())
+}
+
+/// The core a Garden template needs, by any name `garden/new {template}`
+/// takes (`k2.board@1`, or the short `board`).
+pub fn core_for_template(template: &str) -> Option<&'static str> {
+    let t = template.trim();
+    garden_catalog()
+        .iter()
+        .find(|e| e.template_id == t || e.meta.short == t)
+        .and_then(|e| e.meta.core.as_deref())
 }
 
 /// The default theme of a template (a catalog entry's `theme`), if any.
@@ -128,6 +156,13 @@ pub fn parse_entry(file: &'static str, src: &'static str) -> Result<GardenCatalo
     if let Some(t) = &meta.theme {
         if super::builtin_theme(t).is_none() {
             return Err(format!("{file}: [catalog] theme '{t}' isn't a built-in theme"));
+        }
+    }
+    if let Some(c) = &meta.core {
+        match crate::docs_cores::by_id(c) {
+            Some(core) if core.view == crate::docs_cores::CoreView::Garden => {}
+            Some(_) => return Err(format!("{file}: [catalog] core '{c}' opens files, not a Garden")),
+            None => return Err(format!("{file}: [catalog] core '{c}' isn't a core ({})", crate::docs_cores::ids_list())),
         }
     }
     Ok(GardenCatalogEntry { file, template_id: want, version, meta, toml: src })
@@ -197,12 +232,25 @@ pub struct TemplateInfo {
     pub section: TemplateSection,
     /// Seeded by setup on a new computer.
     pub new_users: bool,
+    /// The multiplayer core it needs (a Beta), or absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core: Option<String>,
+    /// Whether that core is on now (absent with no core). Off: New Garden
+    /// shows the Beta label and one confirm, and adding it turns it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_on: Option<bool>,
 }
 
 /// The list `GET /cli/zen/templates` answers: the two starts, then the
 /// catalog. An older daemon has no route; the renderer falls back to the
 /// two starts (UWB23).
 pub fn template_list() -> Vec<TemplateInfo> {
+    template_list_with(|_| false)
+}
+
+/// [`template_list`] with each needed core's state (`core_on`), from the
+/// daemon's mirror.
+pub fn template_list_with(core_on: impl Fn(&str) -> bool) -> Vec<TemplateInfo> {
     let mut out = vec![
         TemplateInfo {
             id: super::schema::TEMPLATE_ID.into(),
@@ -214,6 +262,8 @@ pub fn template_list() -> Vec<TemplateInfo> {
             description: GARDEN_ONE_DESCRIPTION.into(),
             section: TemplateSection::Start,
             new_users: true,
+            core: None,
+            core_on: None,
         },
         TemplateInfo {
             id: super::schema::BLANK_TEMPLATE_ID.into(),
@@ -222,6 +272,8 @@ pub fn template_list() -> Vec<TemplateInfo> {
             description: "An empty page. Your agent builds it with you.".into(),
             section: TemplateSection::Start,
             new_users: true,
+            core: None,
+            core_on: None,
         },
     ];
     out.extend(current_entries().into_iter().map(|e| TemplateInfo {
@@ -231,6 +283,8 @@ pub fn template_list() -> Vec<TemplateInfo> {
         description: e.meta.description.clone(),
         section: TemplateSection::Catalog,
         new_users: e.meta.new_users,
+        core: e.meta.core.clone(),
+        core_on: e.meta.core.as_deref().map(&core_on),
     }));
     out
 }
@@ -373,7 +427,9 @@ kind = "columns"
                 ("diary", TemplateSection::Catalog),
                 ("kanban", TemplateSection::Catalog),
                 // 0.46.7: the Workbench (offered, not preinstalled).
-                ("workbench", TemplateSection::Catalog)
+                ("workbench", TemplateSection::Catalog),
+                // 0.46.8: the Board (a Beta that needs the Board core).
+                ("board", TemplateSection::Catalog)
             ]
         );
         let row = list.iter().find(|t| t.short == "kanban").expect("listed");
@@ -431,6 +487,81 @@ kind = "columns"
         };
         assert_eq!(chrome(&v), chrome(&base), "the same ⋯ menu and its controls");
         assert_eq!(v["control"], base["control"], "the same template controls");
+    }
+
+    /// Rosson 2026-11-01: a catalog entry may say which multiplayer core it
+    /// needs; only a core that opens as a Garden, never a file core or an
+    /// unknown one.
+    #[test]
+    fn a_catalog_core_is_a_garden_core() {
+        let with = |c: &str| -> &'static str {
+            Box::leak(DIARY_FIXTURE.replace("order = 10", &format!("order = 10\ncore = \"{c}\"")).into_boxed_str())
+        };
+        assert_eq!(parse_entry("diary-1.toml", with("board")).expect("parses").meta.core.as_deref(), Some("board"));
+        assert!(parse_entry("diary-1.toml", with("markdown")).expect_err("a file core").contains("opens files"));
+        assert!(parse_entry("diary-1.toml", with("miro")).expect_err("unknown").contains("isn't a core"));
+        assert_eq!(parse_entry("diary-1.toml", DIARY_FIXTURE).expect("parses").meta.core, None);
+    }
+
+    /// The Board Garden (plan-board-garden-v1 S2, Rosson 2026-11-01):
+    /// `board-1.toml` places `k2:board@1` beside K2's Conversation in a
+    /// folded "Chat" column, needs the Board core, is offered (never
+    /// seeded) and lists the core's state for New Garden's Beta label.
+    #[test]
+    fn the_board_garden_needs_the_board_core() {
+        let e = garden_catalog().iter().find(|e| e.template_id == BOARD_TEMPLATE_ID).expect("board-1.toml ships");
+        assert_eq!((e.file, e.version), ("board-1.toml", 1));
+        assert_eq!(e.meta.label, "Board");
+        assert_eq!(e.meta.core.as_deref(), Some(crate::docs_cores::BOARD));
+        assert!(!e.meta.new_users, "offered, not preinstalled");
+        assert_eq!(template_core(BOARD_TEMPLATE_ID), Some("board"));
+        assert_eq!(core_for_template("board"), Some("board"));
+        assert_eq!(core_for_template(KANBAN_TEMPLATE_ID), None);
+        assert!(super::super::schema::is_template_id(BOARD_TEMPLATE_ID));
+        let off = template_list_with(|_| false);
+        let row = off.iter().find(|t| t.short == "board").expect("listed while off: adding it is the opt-in");
+        let wire = serde_json::to_value(row).expect("serializes");
+        assert_eq!(wire["core"], "board");
+        assert_eq!(wire["coreOn"], false);
+        let on = template_list_with(|c| c == "board");
+        assert_eq!(serde_json::to_value(on.iter().find(|t| t.short == "board").expect("listed")).expect("json")["coreOn"], true);
+        let kanban = serde_json::to_value(off.iter().find(|t| t.short == "kanban").expect("listed")).expect("json");
+        assert!(kanban.get("core").is_none() && kanban.get("coreOn").is_none(), "{kanban}");
+
+        let v: toml::Value = toml::from_str(e.toml).expect("parses");
+        assert_eq!(v["layout"]["canvas"].as_str(), Some("full"));
+        let cols = v["layout"]["column"].as_array().expect("columns");
+        assert_eq!(cols.len(), 2, "board + Chat");
+        assert_eq!(cols[1]["collapsible"].as_bool(), Some(true));
+        assert_eq!(cols[1]["collapsed"].as_bool(), Some(true));
+        assert_eq!(cols[1]["label"].as_str(), Some("Chat"), "the label the board's Chat button looks for");
+        let widgets = v["widget"].as_array().expect("widgets");
+        let content: Vec<(&str, &str, i64)> = widgets
+            .iter()
+            .filter(|w| w.get("column").is_some())
+            .map(|w| (w["id"].as_str().expect("id"), w["kind"].as_str().expect("kind"), w["column"].as_integer().expect("column")))
+            .collect();
+        assert_eq!(content, [("board", "custom", 0), ("chat", "conversation", 1)]);
+        let board = widgets.iter().find(|w| w["id"].as_str() == Some("board")).expect("board");
+        assert_eq!(board["widget"].as_str(), Some(crate::zen::builtin_widgets::BOARD_WIDGET));
+        let chat = widgets.iter().find(|w| w["id"].as_str() == Some("chat")).expect("chat");
+        let props = chat["props"].as_table().expect("props");
+        assert_eq!(props.get("agents").and_then(toml::Value::as_str), Some("board"));
+        assert_eq!(props.get("pick").and_then(toml::Value::as_str), Some("all"));
+        // The Kanban's chrome and controls.
+        let kanban: toml::Value = toml::from_str(catalog_template(KANBAN_TEMPLATE_ID).expect("kanban")).expect("parses");
+        let chrome = |v: &toml::Value| -> Vec<toml::Value> {
+            let mut out: Vec<toml::Value> =
+                v["widget"].as_array().expect("widgets").iter().filter(|w| w.get("column").is_none()).cloned().collect();
+            for w in &mut out {
+                if let Some(p) = w.get_mut("props").and_then(toml::Value::as_table_mut) {
+                    p.remove("label");
+                }
+            }
+            out
+        };
+        assert_eq!(chrome(&v), chrome(&kanban), "the same ⋯ menu");
+        assert_eq!(v["control"], kanban["control"], "the same template controls");
     }
 
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped

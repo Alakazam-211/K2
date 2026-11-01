@@ -69,9 +69,11 @@ pub fn is_on(id: &str) -> bool {
     index(id).is_some_and(|i| flags()[i].load(Ordering::SeqCst))
 }
 
-/// Whether any core is on (the docs runtime runs only then).
+/// Whether any core that opens files is on (the docs runtime runs only
+/// then). The Board core (`CoreView::Garden`) opens no live doc, so it never
+/// starts the docs runtime.
 pub fn any_on() -> bool {
-    flags().iter().any(|f| f.load(Ordering::SeqCst))
+    CORES.iter().any(|c| docs_cores::opens_files(c.id) && is_on(c.id))
 }
 
 /// Every core's state, by id.
@@ -111,6 +113,7 @@ fn sentence_name(id: &str) -> &'static str {
     match id {
         docs_cores::MARKDOWN => "the Markdown core",
         docs_cores::TEXT => "the text and code core",
+        docs_cores::BOARD => "the Board core",
         _ => "the any-file core",
     }
 }
@@ -333,7 +336,10 @@ pub(crate) fn sync_with(
         //    refused (core_off), or allowed.
         set(core.id, on);
         let (mut closed, mut written, mut failed) = (0usize, 0usize, Vec::new());
-        if on {
+        if !docs_cores::opens_files(core.id) {
+            // The Board core opens no live doc: nothing to start or close.
+            // Its widget and Garden data follow the mirror (`board_core`).
+        } else if on {
             if super::runtime().is_err() {
                 start();
             }
@@ -411,6 +417,25 @@ pub fn boot() {
     } else {
         log_debug!("[docs] every multiplayer core is off: the docs store stays closed");
     }
+}
+
+/// Turn one core on as part of another step the person took (adding a
+/// Board Garden turns the Board core on: Rosson 2026-11-01). The same path
+/// as `POST /cli/settings/update {"multiplayerCores": {id: true}}`: the
+/// stored switch, then the mirror, audit and announcement. `by` is the
+/// actor's label (`owner-token`).
+pub fn turn_on(id: &str, by: &str) -> Result<Report, String> {
+    if docs_cores::by_id(id).is_none() {
+        return Err(format!("no such core: {id} ({})", docs_cores::ids_list()));
+    }
+    let mut cores = serde_json::Map::new();
+    cores.insert(id.to_string(), Value::Bool(true));
+    let mut partial = serde_json::Map::new();
+    partial.insert(docs_cores::SETTING_KEY.to_string(), Value::Object(cores));
+    let merged = k2_core::app_settings::update(Value::Object(partial))?;
+    let report = sync_multiplayer_cores(&merged.multiplayer_cores, by);
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, Value::Null);
+    Ok(report)
 }
 
 // ── GET /cli/docs/cores ─────────────────────────────────────────────────
@@ -735,6 +760,38 @@ pub(crate) mod tests {
         });
     }
 
+    /// The Board core (a Garden, not a file kind): flipping it neither
+    /// starts the docs runtime nor closes any session, still audits and
+    /// announces, and `any_on` (the docs runtime's switch) ignores it.
+    #[test]
+    fn the_board_core_flips_without_the_docs_runtime() {
+        let _m = mirror_lock();
+        crate::test_support::with_temp_home(|| {
+            all_off();
+            let fake = Fake {
+                loaded: vec![key("p1", "notes.md")],
+                dirty: vec![],
+                failing: vec![],
+                calls: AtomicUsize::new(0),
+                closed: Mutex::new(Vec::new()),
+            };
+            let before = STARTS.load(Ordering::SeqCst);
+            let r = sync_with(&map(&[("board", true)]), "owner-token", Some(&fake), count_start);
+            assert!(is_on("board"));
+            assert!(!any_on(), "the Board core is not a docs core");
+            assert_eq!(STARTS.load(Ordering::SeqCst), before, "no docs runtime start");
+            assert_eq!(r.changed, vec![("board".to_string(), true)]);
+            let off = sync_with(&map(&[("board", false)]), "owner-token", Some(&fake), count_start);
+            assert!(!is_on("board"));
+            assert_eq!(fake.calls.load(Ordering::SeqCst), 0, "turning Board off closes no doc session");
+            assert_eq!(off.changed, vec![("board".to_string(), false)]);
+            let lines = audit_lines(AUDIT_SWITCH);
+            assert_eq!(lines.len(), 2, "one audit line per flip");
+            assert_eq!(lines[1]["outcome"], "core=board on=false closed=0 written=0 failed=0");
+            all_off();
+        });
+    }
+
     /// `?path=`: a file's core and whether it's on, by its name alone (no
     /// file needed), and whether that core has a live editor; no `file`
     /// without a path.
@@ -758,11 +815,12 @@ pub(crate) mod tests {
         });
     }
 
-    /// The read route: three rows from the registry, every core off by
-    /// default, all-zero `open` without a runtime, and `canChange` only for
-    /// the owner token and Owner/Admin logins.
+    /// The read route: four rows from the registry (the Board's view is
+    /// `garden`), every core off by default, all-zero `open` without a
+    /// runtime, and `canChange` only for the owner token and Owner/Admin
+    /// logins.
     #[test]
-    fn the_read_route_lists_three_cores_and_says_who_can_change_them() {
+    fn the_read_route_lists_four_cores_and_says_who_can_change_them() {
         let _m = mirror_lock();
         crate::test_support::with_temp_home(|| {
             all_off();
@@ -774,7 +832,8 @@ pub(crate) mod tests {
             assert_eq!(owner["ok"], true);
             assert_eq!(owner["canChange"], true);
             let ids: Vec<&str> = owner["cores"].as_array().expect("rows").iter().map(|r| r["id"].as_str().expect("id")).collect();
-            assert_eq!(ids, ["markdown", "text", "any-file"]);
+            assert_eq!(ids, ["markdown", "text", "any-file", "board"]);
+            assert_eq!(owner["cores"][3]["view"], "garden");
             for row in owner["cores"].as_array().expect("rows") {
                 assert_eq!(row["on"], false, "{row}");
                 assert_eq!(row["status"], "beta");

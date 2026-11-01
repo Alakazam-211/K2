@@ -1,0 +1,109 @@
+# Garden catalog entry `k2.board@1` (Rosson 2026-11-01, plan-board-garden-v1
+# S2: "ship the Board Garden quickly").
+#
+# A whiteboard: stickies, shapes, connectors, frames, cards, tables, mind
+# maps, comments, images and pen, on boards you can group into projects.
+# Boards live in this Garden's data (`data:k2:board`), so agents you allow
+# work on them too, through `k2 board` (`k2 study board`). The board's
+# "For agents" panel shows the grant line for each board.
+#
+# Beta, and off by default: the Board core (`core = "board"`, Settings →
+# Cores → Multiplayer, `k2 doc cores on board`). Adding this Garden in New
+# Garden turns the core on in the same step, after one confirm. While the
+# core is off a Board Garden shows a placeholder, agents' `k2 board` and
+# `k2 store --widget k2:board` calls answer `core_off`, and the boards are
+# kept.
+#
+# The page is the Kanban's (kanban-5.toml): the board fills the window, and
+# K2's own Conversation sits in a second column, "Chat", that starts folded
+# to a tab on the right edge. The board's Chat button folds and unfolds it;
+# the Conversation follows the board (`agents = "board"`) with `pick =
+# "all"`, and the board steers it (the board's name as context, "Ask an
+# agent about this"). K2's own controls (the Garden switcher, the theme
+# picker and the Zen toggle) sit in one small ⋯ menu at the top left.
+#
+# Released files never change (a better page is board-2.toml). The
+# [catalog] table is metadata, not part of the page.
+id = "k2.board@1"
+schema = 1
+
+[catalog]
+short = "board"
+label = "Board"
+description = "A whiteboard for you and your agents: stickies, shapes, arrows, frames, cards, tables, mind maps and images. Agents you allow draw on it with k2 board. Beta: adding it turns on the Board core."
+order = 25
+# Offered in New Garden, never seeded.
+new_users = false
+theme = "glass"
+core = "board"
+
+[layout]
+kind = "columns"
+canvas = "full"
+
+[[layout.column]]
+widget = "board"
+size = 72
+min-width = 420
+
+[[layout.column]]
+widget = "chat"
+size = 28
+min-width = 320
+collapsible = true
+collapsed = true
+label = "Chat"
+
+[[widget]]
+id = "board"
+kind = "custom"
+widget = "k2:board@1"
+column = 0
+
+# K2's Conversation: any agent from its header; the board steers it.
+[[widget]]
+id = "chat"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "board"
+pick = "all"
+activity-drawer = true
+mute = true
+
+# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top left.
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "start"
+[widget.props]
+icon = "dots"
+label = "Board"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+
+[[control]]
+kind = "garden-switcher"
+placement = "menu:more"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "menu:more"

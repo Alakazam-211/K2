@@ -1531,6 +1531,25 @@ pub fn handle(
     if path == WIDGET_CHECK_ROUTE {
         return handle_widget_check(body, caller, ingress);
     }
+    // A Garden template that needs a multiplayer core (the Board, Rosson
+    // 2026-11-01): adding it turns the core on for the person who confirmed
+    // (`turnOnCore`), else `core_off` (`board_core::gate_template`).
+    let gated_body;
+    let body: &[u8] = if path == "/cli/zen/garden/new" || path == "/cli/zen/garden/template" {
+        match crate::board_core::gate_template(owner_token, caller, body) {
+            Err(r) => {
+                audit("zen.garden.core_off", caller, format!("{path}: the template's core is off"), ingress);
+                return r;
+            }
+            Ok(Some(b)) => {
+                gated_body = b;
+                &gated_body
+            }
+            Ok(None) => body,
+        }
+    } else {
+        body
+    };
     let r = match path {
         "/cli/zen/get" => handle_get(params),
         "/cli/zen/gardens" => {
@@ -1582,7 +1601,10 @@ pub fn handle(
             Some(p) => k2_core::jscheck::inspect::inspect(std::path::Path::new(p)).map_err(ZenError::BadRequest),
         },
         "/cli/zen/templates" => {
-            Ok(json!({ "ok": true, "templates": k2_core::zen::garden_catalog::template_list() }))
+            Ok(json!({
+                "ok": true,
+                "templates": k2_core::zen::garden_catalog::template_list_with(crate::docs::cores::is_on),
+            }))
         }
         "/cli/zen/widgets" => {
             let f = files();

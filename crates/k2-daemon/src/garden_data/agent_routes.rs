@@ -32,8 +32,17 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, Data
 }
 
 /// A widget's data space. A built-in's `@version` is dropped (versions
-/// share data).
+/// share data). The Board's space answers `core_off` while the Board core
+/// is off (`board_core`); grants use [`data_space_any`].
 pub(crate) fn data_space(widget: &str) -> Result<Space, DataError> {
+    let space = data_space_any(widget)?;
+    crate::board_core::check_space(space.as_str())?;
+    Ok(space)
+}
+
+/// [`data_space`] with no core gate: grants, and the person's own export
+/// and import, still reach a space whose core is off.
+pub(crate) fn data_space_any(widget: &str) -> Result<Space, DataError> {
     let w = widget.trim();
     if w.is_empty() {
         return Err(DataError::BadRequest("widget is required".into()));

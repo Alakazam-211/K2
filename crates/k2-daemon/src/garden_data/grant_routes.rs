@@ -23,7 +23,7 @@ use k2_core::garden_data::grants::{self, GrantRow, NewGrant, SubjectKind};
 use k2_core::garden_data::snapshots::PreOp;
 use k2_core::garden_data::{keys, DataError, Level, Space, StoreBackend, PROJECT_GRANT_WARNING};
 
-use super::agent_routes::{data_space, param, parse};
+use super::agent_routes::{data_space_any, param, parse};
 use super::audit;
 use super::budget::{self, BudgetKey, Spend};
 use super::{notify_changed, refused, store};
@@ -196,7 +196,7 @@ fn refusal(who: &DataWho, space: &Space, e: DataError) -> DataError {
 
 fn grant(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: GrantBody = parse(body)?;
-    let space = data_space(&b.widget)?;
+    let space = data_space_any(&b.widget)?;
     let lvl = level(&b.level)?;
     keys::validate_prefix(&b.prefix)?;
     let (kind, sid) = subject(b.agent.as_deref(), b.project.as_deref())?;
@@ -264,7 +264,7 @@ fn grant(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
 
 fn revoke(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: RevokeBody = parse(body)?;
-    let space = data_space(&b.widget)?;
+    let space = data_space_any(&b.widget)?;
     keys::validate_prefix(&b.prefix)?;
     let (kind, sid) = subject(b.agent.as_deref(), b.project.as_deref())?;
     let db = k2_core::db::shared();
@@ -293,7 +293,7 @@ fn revoke(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
 
 fn admin(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: AdminBody = parse(body)?;
-    let space = data_space(&b.widget)?;
+    let space = data_space_any(&b.widget)?;
     let lvl = level(&b.level)?;
     keys::validate_prefix(&b.prefix)?;
     let ws = resolve_agent(&b.agent)?;
@@ -316,7 +316,7 @@ fn admin(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
 
 fn admin_revoke(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: AdminRevokeBody = parse(body)?;
-    let space = data_space(&b.widget)?;
+    let space = data_space_any(&b.widget)?;
     keys::validate_prefix(&b.prefix)?;
     let ws = resolve_agent(&b.agent)?;
     let db = k2_core::db::shared();
@@ -405,7 +405,7 @@ fn spaces() -> Result<Value, DataError> {
 }
 
 fn show(params: &HashMap<String, String>) -> Result<Value, DataError> {
-    let space = data_space(param(params, "widget").unwrap_or(""))?;
+    let space = data_space_any(param(params, "widget").unwrap_or(""))?;
     let info = store().info(&space)?.ok_or(DataError::NotFound("space_not_found"))?;
     let (rows, delegations) = {
         let db = k2_core::db::shared();
@@ -443,7 +443,7 @@ fn pre_op(op: PreOp) -> Result<Value, DataError> {
 
 fn space_delete(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: SpaceDeleteBody = parse(body)?;
-    let space = data_space(&b.widget)?;
+    let space = data_space_any(&b.widget)?;
     if b.confirm.trim() != space.widget() {
         return Err(refused("confirm_required", 400, format!("confirm with the widget's name: \"{}\"", space.widget())));
     }
@@ -467,8 +467,8 @@ fn space_delete(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
 
 fn space_move(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let b: SpaceMoveBody = parse(body)?;
-    let from = data_space(&b.from)?;
-    let to = data_space(&b.to)?;
+    let from = data_space_any(&b.from)?;
+    let to = data_space_any(&b.to)?;
     if from == to {
         return Err(DataError::BadRequest("from and to are the same widget".into()));
     }

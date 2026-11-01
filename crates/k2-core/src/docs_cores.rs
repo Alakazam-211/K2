@@ -17,6 +17,10 @@ pub enum CoreView {
     /// No multiplayer view for people yet: they open the file the usual way;
     /// agents use `k2 doc`.
     None,
+    /// Opens as a Garden, not a file kind (the Board, 2026-11-01): the core
+    /// switch shows or hides its built-in widget and gates its Garden data
+    /// (`core_off`). It opens no live doc and never starts the docs runtime.
+    Garden,
 }
 
 impl CoreView {
@@ -24,6 +28,7 @@ impl CoreView {
         match self {
             CoreView::Live => "live",
             CoreView::None => "none",
+            CoreView::Garden => "garden",
         }
     }
 }
@@ -45,6 +50,9 @@ pub struct Core {
 pub const MARKDOWN: &str = "markdown";
 pub const TEXT: &str = "text";
 pub const ANY_FILE: &str = "any-file";
+/// The Board Garden (plan-board-garden-v1 §1.4, Rosson 2026-11-01): a Beta,
+/// off by default. Adding a Board Garden turns it on in the same step.
+pub const BOARD: &str = "board";
 
 /// Every core, in the order Settings and the CLI list them.
 pub const CORES: &[Core] = &[
@@ -72,7 +80,21 @@ pub const CORES: &[Core] = &[
         short: "presence, a lease, versions and restore (agents only for now)",
         view: CoreView::None,
     },
+    Core {
+        id: BOARD,
+        name: "Board",
+        status: "beta",
+        description: "A whiteboard Garden for you and your agents. Single-person for now. Off: Board Gardens show a placeholder and agents' k2 board calls are refused; your boards are kept.",
+        short: "the Board Garden (a whiteboard for you and your agents)",
+        view: CoreView::Garden,
+    },
 ];
+
+/// Whether a core opens files (and so needs the docs runtime): every view
+/// but [`CoreView::Garden`].
+pub fn opens_files(id: &str) -> bool {
+    by_id(id).is_some_and(|c| c.view != CoreView::Garden)
+}
 
 /// Cores that are planned, shown as plain text ("Coming later").
 pub const LATER: &[&str] = &["CSV grid", "Word"];
@@ -82,7 +104,7 @@ pub fn by_id(id: &str) -> Option<&'static Core> {
     CORES.iter().find(|c| c.id == id)
 }
 
-/// `markdown, text, any-file`, for refusals.
+/// `markdown, text, any-file, board`, for refusals.
 pub fn ids_list() -> String {
     CORES.iter().map(|c| c.id).collect::<Vec<_>>().join(", ")
 }
@@ -119,13 +141,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn three_cores_in_order() {
+    fn four_cores_in_order() {
         let ids: Vec<&str> = CORES.iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["markdown", "text", "any-file"]);
+        assert_eq!(ids, ["markdown", "text", "any-file", "board"]);
+        assert_eq!(by_id("board").expect("board").view, CoreView::Garden);
+        assert_eq!(by_id("board").expect("board").status, "beta");
+        assert!(opens_files("markdown") && opens_files("any-file") && !opens_files("board") && !opens_files("nope"));
+        assert_eq!(CoreView::Garden.wire(), "garden");
         assert_eq!(by_id("any-file").expect("any-file").view, CoreView::None);
         assert_eq!(by_id("markdown").expect("markdown").view, CoreView::Live);
         assert!(by_id("word").is_none());
-        assert_eq!(ids_list(), "markdown, text, any-file");
+        assert_eq!(ids_list(), "markdown, text, any-file, board");
     }
 
     #[test]
@@ -134,7 +160,7 @@ mod tests {
         validate_partial(&json!({})).expect("empty is fine");
         assert_eq!(
             validate_partial(&json!({"word": true})).expect_err("unknown"),
-            "multiplayerCores.word: no such core (markdown, text, any-file)"
+            "multiplayerCores.word: no such core (markdown, text, any-file, board)"
         );
         assert_eq!(
             validate_partial(&json!({"markdown": "yes"})).expect_err("not a bool"),

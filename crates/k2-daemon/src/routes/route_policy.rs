@@ -2110,6 +2110,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/data/blob/get", NoLogin),
     get("/cli/zen/data/blob/list", NoLogin),
     post("/cli/zen/data/blob/put", NoLogin),
+    post("/cli/zen/data/board", NoLogin),
     get("/cli/zen/data/changes", NoLogin),
     post("/cli/zen/data/delete", NoLogin),
     get("/cli/zen/data/export", NoLogin),

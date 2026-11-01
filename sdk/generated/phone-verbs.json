@@ -1,6 +1,6 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 42,
+  "catalogVersion": 43,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
@@ -62,6 +62,7 @@
     {"cap":"store:read","feature":"garden-data-v1","phone":"door","verb":"store.changes"},
     {"cap":"store:write","feature":"garden-data-v1","phone":"door","verb":"store.delete"},
     {"cap":"store:read","feature":"garden-data-v1","phone":"door","verb":"store.get"},
+    {"cap":"store:read","feature":"garden-data-v1","phone":"door","verb":"store.grantees"},
     {"cap":"store:read","feature":"garden-history-v1","phone":"door","verb":"store.history"},
     {"cap":"store:read","feature":"garden-data-v1","phone":"door","verb":"store.list"},
     {"cap":"store:write","feature":"garden-data-v1","phone":"door","verb":"store.patch"},

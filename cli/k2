@@ -46320,7 +46320,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 42.
+From K2's verb catalog, version 43.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -79112,7 +79112,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 42.
+for at once (no review). From K2's verb catalog, version 43.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -79212,6 +79212,7 @@ store:read (Read the workspace store)
   k2.blobs.get(ref, {from, px})                                                                                    local    garden-blobs-v1        img.src = await k2.blobs.url(obj.src, {px: 256})  [not_granted author_unknown stale_widget rate_limited bad_args not_bound blob_missing]
   k2.blobs.info(ref)                                                                                               local    garden-blobs-v1        const {size, refs} = await k2.blobs.info(ref)  [not_granted author_unknown stale_widget rate_limited blob_missing]
   k2.blobs.list({after, limit})                                                                                    local    garden-blobs-v1        const {items, bytes, quota} = await k2.blobs.list()  [not_granted author_unknown stale_widget rate_limited]
+  k2.store.grantees()                                                                                              local    garden-data-v1         const {items} = await k2.store.grantees()  [not_granted author_unknown stale_widget rate_limited]
 store:write (Change dump-table rows)
   k2.store.put(key, value, {ifRev})                                                                                local    garden-data-v1         const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
   k2.store.patch(key, partial, {ifRev})                                                                            local    garden-data-v1         const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]

@@ -1198,6 +1198,18 @@ export interface BlobList {
   readonly quota: number
 }
 
+export interface StoreGrantee {
+  /** The agent's handle on this computer. */
+  readonly handle: string
+  readonly level: 'read' | 'write'
+  /** The key prefixes its grants cover; null for all of this widget's data. */
+  readonly prefixes: string[] | null
+}
+
+export interface StoreGrantees {
+  readonly items: StoreGrantee[]
+}
+
 export interface StoreRev {
   readonly rev: number
 }
@@ -1770,6 +1782,7 @@ export interface K2Verbs {
   'blobs.get': { args: [ref: string, opts?: { from?: string; px?: number }]; value: BlobData }
   'blobs.info': { args: [ref: string]; value: BlobDetail }
   'blobs.list': { args: [opts?: { after?: string; limit?: number }]; value: BlobList }
+  'store.grantees': { args: []; value: StoreGrantees }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
   'store.patch': { args: [key: string, partial: unknown, opts?: { ifRev?: number }]; value: StorePatched }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
@@ -1800,7 +1813,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'thread.onActivity'
 
 export interface K2 {
@@ -2013,6 +2026,8 @@ export interface K2 {
     changes(opts: { after?: string; from?: string; prefix?: string; since: number }): Promise<StoreChanges>
     /** Every change in the last 7 days, newest first, each with its value before and after (store.changes keeps only the latest per key). This computer only. cap store:read · local · garden-history-v1. e.g. `const {items, next} = await k2.store.history({prefix: 'board/b1/', limit: 200})` */
     history(opts?: { after?: string; before?: number; from?: string; key?: string; limit?: number; prefix?: string }): Promise<StoreHistory>
+    /** The agents on this computer that may read this widget's data, and the key prefixes they reach (the Board lists who can work on a board). This computer only. cap store:read · local · garden-data-v1. e.g. `const {items} = await k2.store.grantees()` */
+    grantees(): Promise<StoreGrantees>
     /** Save one key; with ifRev, only if nobody changed it since. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})` */
     put(key: string, value: unknown, opts?: { ifRev?: number }): Promise<StoreRev>
     /** Change some fields of one key and keep the rest (null removes a field); with ifRev, only if nobody changed it since. A missing key starts from {}. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})` */

@@ -153,7 +153,11 @@ async fn preview_off_nothing_is_created_and_nothing_changes() {
     assert_eq!(default_space().as_deref(), Some("hearth"), "the default Space is untouched");
     let v = hook::admin_space_view().unwrap();
     assert!(v.space.is_none() && v.members.is_empty() && v.rooms.is_empty());
-    assert_eq!(hook::admin_space_last_summary(), None, "the Admin Space step never ran");
+    assert_eq!(
+        hook::admin_space_last_summary().and_then(|s| s.waiting).as_deref(),
+        Some("preview_off"),
+        "the Admin Space step stopped at the switch"
+    );
     env.sew.assert_clean();
 }
 

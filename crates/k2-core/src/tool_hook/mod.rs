@@ -1335,6 +1335,13 @@ pub fn admin_space_last_summary() -> Option<admin_space::Summary> {
     admin_summary_slot().lock().ok().and_then(|g| g.clone())
 }
 
+/// The sweep ran with the preview off: nothing planned, nothing read.
+pub fn admin_space_note_preview_off() {
+    if let Ok(mut g) = admin_summary_slot().lock() {
+        *g = Some(admin_space::Summary { waiting: Some("preview_off".into()), ..Default::default() });
+    }
+}
+
 /// Write a `connect` chat grant (scope `member`) for each Connect login
 /// the Admin Space should hold that has none yet (§2.6: written ahead, so
 /// a first join never waits on `chat_member_pending`). Never for an

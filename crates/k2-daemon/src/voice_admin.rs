@@ -196,7 +196,10 @@ pub fn default_space_fixed(requested: Option<&str>) -> Result<Option<String>, St
 
 /// The sweep's step: facts, then the plan. Errors are the sweep's to log.
 pub fn sweep() -> Result<(), String> {
-    let Some(facts) = prepare()? else { return Ok(()) };
+    let Some(facts) = prepare()? else {
+        hook::admin_space_note_preview_off();
+        return Ok(());
+    };
     let s = hook::apply_admin_space(&facts)?;
     if s.create || s.adds + s.removes + s.levels + s.room_ops + s.closings > 0 {
         log_debug!("[voice-rooms] {}", serde_json::to_value(&s).unwrap_or_default());

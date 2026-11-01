@@ -147,6 +147,13 @@ export interface AppSettingsResponse {
   // While off every /cli/compute/* route 404s `compute_disabled`. Optional:
   // older snapshots omit it → readers treat absent as false.
   computePreview?: boolean
+  // Voice rooms previews (prd-k2-voice-rooms-v1), Owner-only, default off:
+  // the K2 Admin Space + rooms, and voice through the tunnel. Optional:
+  // an older daemon omits them → readers treat absent as false.
+  voiceRoomsPreview?: boolean
+  voiceTunnelPreview?: boolean
+  // How many voice rooms this server hosts (0–10, default 1). Owner/Admin.
+  voiceRoomsCount?: number
   // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1):
   // `v2` (default) or `v1`. Owner-only; `k2 compute placement v1|v2`.
   computePlacement?: 'v1' | 'v2'

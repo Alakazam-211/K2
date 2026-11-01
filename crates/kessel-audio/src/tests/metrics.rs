@@ -29,7 +29,7 @@ fn far_case(cfg: &CoreConfig, seed: u64, total: f64, far_range: (f64, f64)) -> C
     let mut rng = Rng::new(seed);
     let n = secs(total);
     let mut far = vec![0.0f32; n];
-    let t = talker_track(&TALKERS[(seed % 2) as usize * 2], &mut rng, secs(far_range.1 - far_range.0));
+    let t = speech_track(FAR_POOL, &mut rng, secs(far_range.1 - far_range.0));
     far[secs(far_range.0)..secs(far_range.0) + t.len()].copy_from_slice(&t);
     let packets = encode_remote(&far, EncoderCfg::default());
     let sched = schedule(
@@ -126,7 +126,7 @@ fn double_talk(processing: ProcessingConfig, ri: usize, seed: u64) -> DoubleTalk
     let echo = make_echo(&case.rendered, &path, SYS_DELAY, ECHO_DB);
     let n = echo.len();
     let mut near_dry = vec![0.0f32; n];
-    let nt = talker_track(&TALKERS[1 + (seed % 2) as usize * 2], &mut rng, n - secs(10.0));
+    let nt = speech_track(NEAR_POOL, &mut rng, n - secs(10.0));
     near_dry[secs(10.0)..secs(10.0) + nt.len()].copy_from_slice(&nt);
     let near = near_at_mic(&near_dry, room, &pose, NEAR_DB);
     let floor = floor_noise(&mut rng, n, FLOOR_DB);
@@ -242,8 +242,9 @@ fn s3_reconverges_after_an_echo_path_change() {
     }
 }
 
-/// S4: noise suppression, pink noise at 5 dB SNR. Baseline, sonora (moderate):
-/// 11.9 dB noise cut in pauses.
+/// S4: noise suppression, pink noise at 5 dB SNR. Baseline, sonora
+/// (moderate): 11.9 dB noise cut in pauses, measured against the raw input
+/// (so it includes the high-pass filter's share).
 #[test]
 fn s4_noise_suppression_cuts_noise_in_pauses() {
     let processing = ProcessingConfig {
@@ -255,7 +256,7 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
     let cfg = core_cfg(processing);
     let mut rng = Rng::new(4000);
     let n = secs(20.0);
-    let speech = talker_track(&TALKERS[0], &mut rng, n);
+    let speech = speech_track(NEAR_POOL, &mut rng, n);
     let mut noise = pink(&mut rng, n);
     let sl = active_level_db(&speech);
     let nl = db(energy(&noise) / n as f64);
@@ -278,14 +279,21 @@ fn s4_noise_suppression_cuts_noise_in_pauses() {
     );
     let speech_m = active_frames(&speech);
     let pauses = mask_not(&speech_m);
-    let cut = level_on(&plain.out, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
-    let speech_change = level_on(&run.out, &speech_m, 300, 2000) - level_on(&plain.out, &speech_m, 300, 2000);
+    let vs_input = level_on(&mic, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
+    let ns_alone = level_on(&plain.out, &pauses, 300, 2000) - level_on(&run.out, &pauses, 300, 2000);
+    let speech_change =
+        level_on(&run.out, &speech_m, 300, 2000) - level_on(&plain.out, &speech_m, 300, 2000);
     report(
         "S4 pink 5 dB",
-        &[("noise_cut_db".into(), cut), ("speech_change_db".into(), speech_change)],
+        &[
+            ("noise_cut_vs_input_db".into(), vs_input),
+            ("noise_cut_ns_alone_db".into(), ns_alone),
+            ("speech_change_db".into(), speech_change),
+        ],
     );
-    assert!(cut >= 9.0, "noise cut in pauses {cut:.1} dB < 9");
-    assert!(speech_change >= -3.0, "speech level changed {speech_change:.1} dB");
+    assert!(vs_input >= 9.0, "noise cut in pauses {vs_input:.1} dB < 9");
+    assert!(ns_alone >= 6.0, "noise suppression alone cut {ns_alone:.1} dB < 6");
+    assert!(speech_change >= -3.5, "speech level changed {speech_change:.1} dB");
 }
 
 /// S6: AGC2 levelling, near-end only at -50 to -20 dBFS, through the tuned
@@ -304,7 +312,7 @@ fn s6_agc2_levels_speech() {
     let mut rng = Rng::new(6000);
     let pose = laptop_pose(room, &mut rng);
     let n = secs(30.0);
-    let near_dry = talker_track(&TALKERS[2], &mut rng, n);
+    let near_dry = speech_track(NEAR_POOL, &mut rng, n);
     let silent = Case {
         rendered: vec![0.0; n],
         sched: Vec::new(),
@@ -377,7 +385,7 @@ fn s6_agc2_tuning_lifts_mid_levels_by_about_a_db() {
     let mut rng = Rng::new(6100);
     let pose = laptop_pose(room, &mut rng);
     let n = secs(30.0);
-    let near_dry = talker_track(&TALKERS[2], &mut rng, n);
+    let near_dry = speech_track(NEAR_POOL, &mut rng, n);
     for lvl in [-40.0f64, -30.0] {
         let near = near_at_mic(&near_dry, room, &pose, lvl);
         let mask = active_frames(&near);

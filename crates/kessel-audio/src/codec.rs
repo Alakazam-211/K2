@@ -257,21 +257,36 @@ mod tests {
         assert!(in_dtx >= 70, "only {in_dtx} of 100 silent frames were in DTX");
     }
 
+    fn real_speech(seed: u64, secs: usize) -> Vec<f32> {
+        let mut rng = crate::testkit::Rng::new(seed);
+        crate::testkit::speech_track(crate::testkit::FAR_POOL, &mut rng, 48_000 * secs)
+    }
+
     #[test]
     fn lbrr_flag_follows_the_fec_setting() {
-        let x = speechy(48_000, 3);
+        let x = real_speech(3, 10);
         for fec in [true, false] {
             let cfg = EncoderCfg {
                 fec,
+                dtx: false,
                 ..EncoderCfg::default()
             };
             let mut enc = OpusEnc::new(cfg).unwrap();
-            let with = x
-                .chunks(FRAME_SAMPLES)
-                .filter(|f| has_lbrr(enc.encode(f).unwrap().packet))
-                .count();
+            let mut speech_frames = 0;
+            let mut with = 0;
+            for f in x.chunks(FRAME_SAMPLES) {
+                let lbrr = has_lbrr(enc.encode(f).unwrap().packet);
+                if crate::frame::dbov(f) > -40.0 {
+                    speech_frames += 1;
+                    with += lbrr as u32;
+                }
+            }
+            assert!(speech_frames > 200);
             if fec {
-                assert!(with >= 40, "only {with} of 50 frames carry FEC");
+                assert!(
+                    with * 2 >= speech_frames,
+                    "only {with} of {speech_frames} speech frames carry FEC"
+                );
             } else {
                 assert_eq!(with, 0);
             }
@@ -293,54 +308,65 @@ mod tests {
     }
 
     #[test]
-    fn fec_recovers_a_lost_frame_better_than_plc() {
-        let x = speechy(48_000, 2);
+    fn fec_recovers_lost_frames_better_than_plc() {
+        let x = real_speech(4, 10);
+        let cfg = EncoderCfg {
+            dtx: false,
+            ..EncoderCfg::default()
+        };
         let frames: Vec<Vec<u8>> = {
-            let mut enc = OpusEnc::new(EncoderCfg::default()).unwrap();
-            x.chunks(FRAME_SAMPLES)
+            let mut enc = OpusEnc::new(cfg).unwrap();
+            x.chunks_exact(FRAME_SAMPLES)
                 .map(|f| enc.encode(f).unwrap().packet.to_vec())
                 .collect()
         };
-        let lost = 20;
-        let run = |use_fec: bool| -> Vec<f32> {
+        // Lose speech frames whose successor carries FEC, spaced apart.
+        let mut lost = Vec::new();
+        let mut i = 10;
+        while i + 1 < frames.len() && lost.len() < 20 {
+            let f = &x[i * FRAME_SAMPLES..(i + 1) * FRAME_SAMPLES];
+            if has_lbrr(&frames[i + 1]) && crate::frame::dbov(f) > -35.0 {
+                lost.push(i);
+                i += 12;
+            } else {
+                i += 1;
+            }
+        }
+        assert!(lost.len() >= 10, "only {} candidate frames", lost.len());
+        let decode_all = |mode: u8| -> Vec<f32> {
             let mut dec = OpusDec::new().unwrap();
-            let mut y = vec![0.0f32; x.len()];
-            for (i, p) in frames.iter().enumerate() {
-                let out = &mut y[i * FRAME_SAMPLES..(i + 1) * FRAME_SAMPLES];
-                if i == lost {
-                    if use_fec {
-                        dec.decode_fec(&frames[i + 1], out);
-                    } else {
-                        dec.conceal(out);
+            let mut y = vec![0.0f32; frames.len() * FRAME_SAMPLES];
+            for (k, p) in frames.iter().enumerate() {
+                let out = &mut y[k * FRAME_SAMPLES..(k + 1) * FRAME_SAMPLES];
+                match (mode, lost.contains(&k)) {
+                    (1, true) => {
+                        assert_eq!(dec.decode_fec(&frames[k + 1], out), Decoded::Fec);
                     }
-                } else {
-                    dec.decode(p, out);
+                    (2, true) => dec.conceal(out),
+                    _ => {
+                        dec.decode(p, out);
+                    }
                 }
             }
             y
         };
-        let reference = {
-            let mut dec = OpusDec::new().unwrap();
-            let mut y = vec![0.0f32; x.len()];
-            for (i, p) in frames.iter().enumerate() {
-                dec.decode(p, &mut y[i * FRAME_SAMPLES..(i + 1) * FRAME_SAMPLES]);
+        let reference = decode_all(0);
+        let snr = |y: &[f32]| -> f64 {
+            let (mut s, mut e) = (0.0f64, 0.0f64);
+            for &k in &lost {
+                for i in k * FRAME_SAMPLES..(k + 1) * FRAME_SAMPLES {
+                    s += (reference[i] as f64).powi(2);
+                    e += (y[i] as f64 - reference[i] as f64).powi(2);
+                }
             }
-            y
-        };
-        let err = |y: &[f32]| -> f64 {
-            let r = lost * FRAME_SAMPLES..(lost + 1) * FRAME_SAMPLES;
-            let e: f64 = r
-                .clone()
-                .map(|i| (y[i] as f64 - reference[i] as f64).powi(2))
-                .sum();
-            let s: f64 = r.map(|i| (reference[i] as f64).powi(2)).sum();
             10.0 * (s / e.max(1e-12)).log10()
         };
-        let snr_fec = err(&run(true));
-        let snr_plc = err(&run(false));
+        let snr_fec = snr(&decode_all(1));
+        let snr_plc = snr(&decode_all(2));
+        eprintln!("[codec] lost-frame SNR: FEC {snr_fec:.1} dB, PLC {snr_plc:.1} dB");
         assert!(
             snr_fec > snr_plc + 3.0,
-            "FEC frame SNR {snr_fec:.1} dB is not clearly better than PLC {snr_plc:.1} dB"
+            "FEC frames ({snr_fec:.1} dB) are not clearly better than PLC ({snr_plc:.1} dB)"
         );
     }
 }

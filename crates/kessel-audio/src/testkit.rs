@@ -1,8 +1,8 @@
 //! Test material and metrics, ported from the baseline measurement of
 //! sonora against the C++ WebRTC library: synthetic rooms (image method), a laptop speaker
 //! and chassis model, a fixed system delay, levels, and the ERLE /
-//! convergence / level metrics. Speech is synthetic (a formant
-//! synthesiser), so the tests need no recordings or downloads.
+//! convergence / level metrics. Speech is real (12 LibriSpeech utterances
+//! shipped as Opus in tests/data) or synthetic (a formant synthesiser).
 
 #![allow(dead_code)]
 
@@ -195,6 +195,81 @@ pub(crate) fn active_level_db(x: &[f32]) -> f64 {
 pub(crate) fn set_active_level(x: &mut [f32], target_db: f64) {
     let l = active_level_db(x);
     scale(x, 10f64.powf((target_db - l) / 20.0));
+}
+
+// ---------------------------------------------------------------------------
+// Real speech: LibriSpeech test-clean (CC BY 4.0), see tests/data/README.md
+// ---------------------------------------------------------------------------
+
+pub(crate) const FAR_POOL: u8 = 0;
+pub(crate) const NEAR_POOL: u8 = 1;
+
+pub(crate) struct Utterance {
+    pub(crate) pool: u8,
+    pub(crate) speaker: u32,
+    pub(crate) pcm: Vec<f32>,
+}
+
+static CORPUS: std::sync::OnceLock<Vec<Utterance>> = std::sync::OnceLock::new();
+
+fn rd_u16(b: &[u8], p: &mut usize) -> u16 {
+    let v = u16::from_le_bytes([b[*p], b[*p + 1]]);
+    *p += 2;
+    v
+}
+
+fn rd_u32(b: &[u8], p: &mut usize) -> u32 {
+    let v = u32::from_le_bytes([b[*p], b[*p + 1], b[*p + 2], b[*p + 3]]);
+    *p += 4;
+    v
+}
+
+/// The test corpus, decoded once (48 kHz, active level about -26 dBFS).
+pub(crate) fn corpus() -> &'static [Utterance] {
+    CORPUS.get_or_init(|| {
+        let b: &[u8] = include_bytes!("../tests/data/librispeech-test-clean.kaop");
+        assert_eq!(&b[..4], b"KAOP", "corpus magic");
+        assert_eq!(b[4], 1, "corpus version");
+        let mut p = 5;
+        let n = rd_u16(b, &mut p);
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let pool = b[p];
+            p += 1;
+            let speaker = rd_u32(b, &mut p);
+            let len = rd_u32(b, &mut p) as usize;
+            let packets = rd_u32(b, &mut p);
+            let mut dec = crate::codec::OpusDec::new().expect("decoder");
+            let mut pcm = vec![0.0f32; packets as usize * crate::frame::FRAME_SAMPLES];
+            for k in 0..packets as usize {
+                let l = rd_u16(b, &mut p) as usize;
+                let r = k * crate::frame::FRAME_SAMPLES..(k + 1) * crate::frame::FRAME_SAMPLES;
+                let how = dec.decode(&b[p..p + l], &mut pcm[r]);
+                assert_eq!(how, crate::codec::Decoded::Packet, "corpus packet {k} of speaker {speaker}");
+                p += l;
+            }
+            pcm.truncate(len);
+            out.push(Utterance { pool, speaker, pcm });
+        }
+        assert_eq!(p, b.len(), "trailing corpus bytes");
+        out
+    })
+}
+
+/// A talker track from one pool: random utterances with 0.25 to 0.9 s
+/// pauses, as the baseline built its far-end and near-end tracks.
+pub(crate) fn speech_track(pool: u8, rng: &mut Rng, len: usize) -> Vec<f32> {
+    let utts: Vec<&Utterance> = corpus().iter().filter(|u| u.pool == pool).collect();
+    assert!(utts.len() >= 4, "pool {pool} has {} utterances", utts.len());
+    let mut out = vec![0.0f32; len];
+    let mut pos = secs(rng.range(0.05, 0.3));
+    while pos < len {
+        let u = utts[rng.below(utts.len())];
+        let n = u.pcm.len().min(len - pos);
+        out[pos..pos + n].copy_from_slice(&u.pcm[..n]);
+        pos += n + secs(rng.range(0.25, 0.9));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

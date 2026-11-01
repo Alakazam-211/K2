@@ -6,7 +6,7 @@ use crate::testkit::*;
 
 fn far(seed: u64, n: usize) -> Vec<f32> {
     let mut rng = Rng::new(seed);
-    talker_track(&TALKERS[0], &mut rng, n)
+    speech_track(FAR_POOL, &mut rng, n)
 }
 
 fn active_level(x: &[f32], mask_src: &[f32]) -> f64 {

@@ -297,6 +297,16 @@ export interface SewChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — the voice rooms view on this box moved (prd-k2-voice-rooms
+ *  S3, lane C): occupancy, a room added or closed. Refetch signal for GET
+ *  /cli/voice/rooms; `rev` only ever grows. Not sent while the voice
+ *  preview is off. No desktop consumer until the voice client (lane D)
+ *  lands. */
+export interface VoiceRoomsChangedEvent {
+  kind: 'voice_rooms_changed'
+  rev: number
+}
+
 export interface DomainsChangedEvent {
   kind: 'domains_changed'
   reason: string
@@ -960,6 +970,7 @@ export type SessionEventMessage =
   | PairCodeChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
+  | VoiceRoomsChangedEvent
   | RoomMembersChangedEvent
   | AppDeployedEvent
   | InboxStreamFrame

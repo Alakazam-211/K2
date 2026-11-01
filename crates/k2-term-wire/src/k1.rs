@@ -714,7 +714,13 @@ mod tests {
         assert!(runs.iter().all(|r| r.style_fields_match(&runs[0])));
     }
 
-    impl CellRun {
+    /// Test-only extension (`CellRun` lives in k2-term-grid, so this can't
+    /// be an inherent impl here).
+    trait StyleFieldsMatch {
+        fn style_fields_match(&self, other: &CellRun) -> bool;
+    }
+
+    impl StyleFieldsMatch for CellRun {
         /// Test-only: all non-text fields equal.
         fn style_fields_match(&self, other: &CellRun) -> bool {
             self.fg == other.fg

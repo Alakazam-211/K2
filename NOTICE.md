@@ -1,5 +1,9 @@
 # Third-party notices
 
+This repository is licensed under MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`; see the
+README). The notices below are for the third-party code it uses or vendors, which keeps its own
+licence.
+
 | Dependency | Licence | Used for |
 |---|---|---|
 | [yrs](https://github.com/y-crdt/y-crdt) | MIT | The CRDT engine (Yjs-compatible), private to this crate; **vendored and modified** in `vendor/yrs` (v0.9.3) |

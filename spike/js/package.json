@@ -1,6 +1,7 @@
 {
   "name": "d0-spike-js",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "dependencies": {
     "yjs": "13.6.33",

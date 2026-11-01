@@ -3,6 +3,12 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.11.0, with its licence (kit tag v0.10.0.2)
+
+The same code as 0.11.0: `package.json` (and the lockfile's root entry) now say
+`"license": "MIT OR Apache-2.0"`, the kit's licence (the kit's `LICENSE-MIT` and
+`LICENSE-APACHE`). The version is unchanged.
+
 ## 0.11.0 (kit tag v0.10.0.1)
 
 The live editor's M2, on kit v0.10.0. No wire change: hosts built for 0.10.0 carry 0.11.0 as

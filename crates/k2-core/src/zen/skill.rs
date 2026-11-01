@@ -647,6 +647,19 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   `look = \"garden\"` under `[widget.props.config]`.\n\
   A Kanban Garden that syncs with K2's default moves to `@5` and keeps its theme; an own\n\
   copy keeps its board (`@1` to `@4`, which draw a Thread panel of their own).\n\
+- **The Board Garden** (`k2:board@1`, New Garden → Board, a Beta behind the Board core:\n\
+  off by default, adding the Garden turns it on): a whiteboard whose boards live in\n\
+  `data:k2:board` (`boards/<b>`, `board/<b>/meta`, `board/<b>/obj/<id>`). **Work on it\n\
+  with `k2 board`, never raw `k2 store` writes**: it checks every field (a value over\n\
+  its limit is refused, never cut), keeps locked objects, and deleting an object takes\n\
+  its connectors, mind-map children and pinned comments with it. Access is per board:\n\
+  `k2 zen data grant k2:board --agent <h> --level write --prefix board/<b>/` (the\n\
+  board's **For agents** panel shows the line). Start with `k2 board boards`,\n\
+  `k2 board list --board <b>`, `k2 board add sticky --text \"…\"`, `k2 board apply\n\
+  ops.json`; `k2 study board` is the page. People are stable keys (`agent:<handle>`,\n\
+  `person:owner`), never display names. While the core is off every call answers\n\
+  `core_off`; the boards are kept. A widget reads who may reach its data with\n\
+  `k2.store.grantees()` (store:read).\n\
 - **The box disk card** (`k2:box-disk@1`, 0.46.4): this computer's disks against the\n\
   disk guard's lines, the biggest users and their agents, and what K2 clears on its own.\n\
   Read only (no caps, no buttons); it reads `k2.app.resources()` once a minute. Place it\n\
@@ -1100,7 +1113,8 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 - `board-lite`: sticky notes kept in the widget's data, live for you and your agents.\n\
 - `source-trend`: one data source with the resilient handler-object subscription and a\n\
   uPlot sparkline (`config.source`, `config.series`).\n\
-- `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.\n\n",
+- `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.\n\
+- `k2:board` (the Board, Beta): a whiteboard in the widget's data; agents use `k2 board`.\n\n",
         m.cdn_hosts.join(", "),
         kb(m.max_bytes_per_widget),
     ));
@@ -1416,6 +1430,26 @@ mod tests {
             "k2 store put --widget k2:kanban <p>card/<new-id>",
             "never write `<p>meta`",
             "- `k2:kanban` (the Kanban): columns and cards",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v46: the Board Garden (Rosson 2026-11-01): where its boards live, the
+    /// grant line, and `k2 board` (never raw `k2 store` writes).
+    #[test]
+    fn skill_documents_the_board_garden() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 46, "the Board needs a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in [
+            "**The Board Garden** (`k2:board@1`, New Garden → Board",
+            "`data:k2:board`",
+            "with `k2 board`, never raw `k2 store` writes",
+            "k2 zen data grant k2:board --agent <h> --level write --prefix board/<b>/",
+            "`k2 study board`",
+            "`core_off`",
+            "`k2.store.grantees()`",
+            "- `k2:board` (the Board, Beta)",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }

@@ -221,7 +221,13 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// snapshot`, the restore echo rule, `restoreSkips`, and the agent's
 /// `k2 store history|snapshot|restore --widget` (always a prefix).
 /// (Integrator: renumber if another held branch took 45.)
-pub const SKILL_VERSION_ZEN: u32 = 45;
+/// v46 = the Board Garden (Rosson 2026-11-01): `k2:board@1` behind the Board
+/// core (Beta, off by default; adding the Garden turns it on), its boards in
+/// `data:k2:board`, and agents work on them with `k2 board` (never raw
+/// `k2 store` writes): the grant line, the cascade, typed refusals, people
+/// by stable key. `k2.store.grantees()` (catalog v43).
+/// (Integrator: renumber if another held branch took 46.)
+pub const SKILL_VERSION_ZEN: u32 = 46;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

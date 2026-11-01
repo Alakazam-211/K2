@@ -5,8 +5,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
-use serde_json::json;
-
 use super::*;
 use crate::sew::ops::fake::{FakeOps, GIB};
 use crate::sew::ops::SewOps;

@@ -124,7 +124,7 @@ fn the_sew_launch_key_is_owner_revealable_and_agent_proof() {
     assert!(v.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "no grant was written");
     let m = v.meta(&sel, &Actor::Owner).expect("owner sees metadata");
     assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::None, Delivery::None));
-    assert_eq!(m.description, "Sew recovery key (chat/voice server)");
+    assert_eq!(m.description, "Sew launch key (chat/voice server)");
 }
 
 fn item(name: &str, value: &str) -> CarryItem {

@@ -1,0 +1,57 @@
+$ k2 study voice-rooms
+exit: 0
+--- stdout
+k2 study voice-rooms — Voice rooms on this server (preview)
+
+NOT App voice. This page is the box's own rooms: one K2 Admin Space per
+Linux server, rooms Room 1..N for its owner, Admins and Members. An App's
+own rooms and channels are k2 study chat-voice-rooms.
+
+WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
+rooms (default 1, 25 people each), named "Room N" until renamed; slugs
+room-1..room-10 never change. People see and join rooms only on servers
+their K2 app is signed in to, with their own login there. Nothing is
+shared between servers. Preview: until the owner turns voiceRoomsPreview
+on, every k2 voice command answers voice_rooms_off.
+
+READ (anyone, agents too)
+  k2 voice rooms       who's in each room; closing / unavailable rooms
+  k2 voice status      owner/Admin; agents read it: why the server can or
+                       can't host (hosting.state), the K2 Admin Space and
+                       its members, sync holds, the voice lane, the feed
+Never poll: the app refreshes on the server's voice_rooms_changed event.
+
+HOSTING STATES (k2 voice status, first one that applies)
+  preview_off · sew_off (Chat / Voice Hosting not on: k2 hostchat status)
+  · voice_off + detail (Sew older than 0.7.0, or the Admin Space blocked)
+  · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
+  joins wait) · voice_lane_down (joins refused, live calls end) · ok.
+
+CHANGE (owner or an Admin login; an agent is refused owner_or_admin_only:
+ask your human in your Thread)
+  k2 voice set rooms <n> [--now]   lower = close from the top. An empty
+                                   room closes at once; a room with people
+                                   is "closing" (no one new joins) until
+                                   the last leaves. --now: a 10 s notice,
+                                   then the room closes and its calls end.
+  k2 voice rename <room> <name>    the slug stays
+  k2 voice close <room> [--now]    only the top room (close_from_top)
+
+JOIN. People join from the K2 app with their own login. Agents never join
+(agents_not_in_voice). The bare owner token never joins or moderates
+(owner_token_cannot_join; agents can read it on shared boxes). k2 voice
+join exists for voice clients and tests; the CLI has no audio.
+
+MODERATE. k2 voice kick|mute|unmute|deafen|undeafen <room> <person>,
+from the owner's or an Admin's own login: K2 uses that person's own Sew
+session, so Sew records who did it. <person> is a login, owner or a
+member id from k2 voice rooms --json.
+
+REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
+voice_unavailable (details.engine media_path_down = the voice lane is
+down) · voice_member_pending / chat_member_pending (retry in 2 s) ·
+owner_or_admin_only · moderator_only · not_in_room.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

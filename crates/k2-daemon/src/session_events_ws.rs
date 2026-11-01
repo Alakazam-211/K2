@@ -798,6 +798,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // 0.46.6 pair success: person-scoped to the code's minter like the
         // Homes frames.
         SessionEvent::PairCodeChanged { .. } => None,
+        // Voice rooms (preview): one box-wide rooms list, APP-LEVEL.
+        SessionEvent::VoiceRoomsChanged { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -1215,6 +1217,7 @@ mod tests {
             SessionEvent::HomesDeviceRemoved { person: "owner".into(), device_id: "d-1".into() },
             SessionEvent::StashChanged { person: "owner".into(), cursor: 4 },
             pair_code_paired("owner"),
+            SessionEvent::VoiceRoomsChanged { rev: 1 },
         ]
     }
 

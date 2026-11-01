@@ -1206,6 +1206,10 @@ pub fn features() -> Vec<&'static str> {
     if let Some(k) = crate::sim_routes::boot_status_key() {
         out.push(k);
     }
+    // Voice rooms (preview): only while this daemon hosts rooms.
+    if crate::voice::occupancy::hosts_rooms() {
+        out.push(FEATURE_VOICE_ROOMS);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
@@ -1217,6 +1221,11 @@ pub fn features() -> Vec<&'static str> {
 /// token and sees this key with `view != "full"` knows its token was not
 /// accepted (stale session), not that the daemon is old.
 pub const FEATURE_BOOT_STATUS_VIEWS: &str = "boot-status-views-v1";
+/// Voice rooms (prd-k2-voice-rooms-v1 §9.1, preview): listed only while
+/// this Linux daemon hosts rooms (the preview on, the K2 Admin Space
+/// ready, Pro, at least one room; `voice::occupancy::hosts_rooms`). The
+/// client shows its headset button only for servers that list it.
+pub const FEATURE_VOICE_ROOMS: &str = "voice-rooms-v1";
 /// `k2 publish run --dev` (prd-publish-visibility-and-dev-mode-v1).
 pub const FEATURE_PUBLISH_DEV: &str = "publish-dev-v1";
 /// Who may open a published site: private, PIN or public, with

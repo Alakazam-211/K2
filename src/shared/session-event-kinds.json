@@ -60,6 +60,7 @@
   "homes_device_removed": "app",
   "stash_changed": "app",
   "pair_code_changed": "app",
+  "voice_rooms_changed": "app",
   "inbox_subscribed": "inbox",
   "inbox_error": "inbox",
   "thread_message": "inbox",

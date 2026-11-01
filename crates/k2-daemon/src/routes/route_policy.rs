@@ -2009,6 +2009,23 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/systemd-cred", Admin),
     post("/cli/vault/systemd-cred/remove", Admin),
     post("/cli/vault/unsend", Member),
+    // Voice rooms (prd-k2-voice-rooms-v1 §9.1, §9.4; preview, dark while
+    // off): join and the call's own routes are any login's (the handler
+    // refuses the bare owner token and passports); moderation, the count,
+    // renames and closing are Owner/Admin; status is Owner/Admin (agents
+    // read it with a passport, which this table never gates).
+    post("/cli/voice/join", Member),
+    post("/cli/voice/moderate", Admin),
+    get("/cli/voice/rooms", Member),
+    post("/cli/voice/rooms/close", Admin),
+    post("/cli/voice/rooms/rename", Admin),
+    post("/cli/voice/session/keys/join", Member),
+    post("/cli/voice/session/keys/key_packages", Member),
+    post("/cli/voice/session/leave", Member),
+    post("/cli/voice/session/state", Member),
+    post("/cli/voice/session/stats", Member),
+    post("/cli/voice/settings", Admin),
+    get("/cli/voice/status", Admin),
     get("/cli/whats_new", Member),
     post("/cli/whats_new/mark_seen", Member),
     post("/cli/whats_new/reset", Member),

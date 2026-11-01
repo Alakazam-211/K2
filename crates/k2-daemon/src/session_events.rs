@@ -1044,6 +1044,17 @@ pub enum SessionEvent {
         #[serde(rename = "sessionId")]
         session_id: Option<String>,
     },
+
+    /// Voice rooms (prd-k2-voice-rooms-v1 §9.1, preview): this server's
+    /// rooms, who's in them or its hosting state changed. APP-LEVEL
+    /// refetch signal: clients re-read `GET /cli/voice/rooms` (which
+    /// carries `hosting` too, so there is no separate hosting event).
+    /// Published by the daemon's SW-3 follower and the room routes, only
+    /// while the preview is on.
+    ///
+    /// Wire: `{ "kind": "voice_rooms_changed", "rev": number }` (`rev` is
+    /// the rooms list's own `rev`).
+    VoiceRoomsChanged { rev: u64 },
 }
 
 /// The body of a `thread_read` / `project_read` frame (thread-read-v1).
@@ -1178,6 +1189,7 @@ impl SessionEvent {
             SessionEvent::HomesDeviceRemoved { .. } => "homes_device_removed",
             SessionEvent::StashChanged { .. } => "stash_changed",
             SessionEvent::PairCodeChanged { .. } => "pair_code_changed",
+            SessionEvent::VoiceRoomsChanged { .. } => "voice_rooms_changed",
         }
     }
 }

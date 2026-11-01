@@ -1,0 +1,661 @@
+//! `/cli/voice/*` (prd-k2-voice-rooms-v1 v1.9 §9.1, §9.4; lane C).
+//!
+//! ```text
+//! GET  /cli/voice/rooms                    rooms, who's in them, hosting (any login, owner token, passports)
+//! GET  /cli/voice/status                   hosting, the Admin Space, members, holds, lane, feed (owner/Admin; agents read)
+//! POST /cli/voice/settings {count, now?}   the room count; now = "Close now" (10 s notice, then archive)
+//! POST /cli/voice/rooms/rename {room, name}
+//! POST /cli/voice/rooms/close {room, now?} close the top room (the count drops by one)
+//! POST /cli/voice/join {room, join?}       a person's own login only → callId + Sew's join answer
+//! POST /cli/voice/session/leave {callId?}
+//! POST /cli/voice/session/state|stats|keys/key_packages|keys/join {callId, body}
+//! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
+//! ```
+//!
+//! Every route answers 404 `voice_rooms_off` while the preview is off (the
+//! family is dark, like compute's). Every POST route is POST-only (`if
+//! !is_post { 405 }` here, and the dispatcher's `require_post`). Floors for
+//! logins live in `route_policy`; this handler classifies every caller:
+//!
+//! | caller | rooms | status | settings/rename/close | join, session | moderate |
+//! |---|---|---|---|---|---|
+//! | owner token | ✓ | ✓ | ✓ | `owner_token_cannot_join` | `owner_token_cannot_moderate` |
+//! | Owner/Admin login | ✓ | ✓ | ✓ | ✓ | ✓ (own Sew session) |
+//! | Member login | ✓ | route floor | route floor | ✓ | `moderator_only` |
+//! | agent or K2 terminal passport | ✓ | ✓ (read) | `owner_or_admin_only` | `agents_not_in_voice` | `agents_cannot_moderate` |
+//! | App pass, API key | `app_pass_not_allowed` | … | … | … | … |
+//!
+//! Refusals: `{"ok": false, "error": {"code", "hint", "details"?}}` (K2's
+//! house shape, which `k2 voice` reads) with `code`, `hint` and `details`
+//! mirrored at the top level for the desktop client's parser
+//! (`voice-wire.ts`). A "retry shortly" refusal carries
+//! `details.retry_after_ms`.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+use k2_core::connect_users::Role;
+use k2_core::tool_hook::admin_space::{self, RoomRow};
+use k2_core::voice_rooms;
+
+use super::bff::{self, Forward, Person, Refusal};
+use super::occupancy::{self, Occupant};
+use crate::cli_response::CliResponse;
+use crate::compute_routes::Who;
+
+pub const ROOMS: &str = "/cli/voice/rooms";
+pub const STATUS: &str = "/cli/voice/status";
+pub const SETTINGS: &str = "/cli/voice/settings";
+pub const ROOM_RENAME: &str = "/cli/voice/rooms/rename";
+pub const ROOM_CLOSE: &str = "/cli/voice/rooms/close";
+pub const JOIN: &str = "/cli/voice/join";
+pub const LEAVE: &str = "/cli/voice/session/leave";
+pub const SESSION_STATE: &str = "/cli/voice/session/state";
+pub const SESSION_STATS: &str = "/cli/voice/session/stats";
+pub const SESSION_KEY_PACKAGES: &str = "/cli/voice/session/keys/key_packages";
+pub const SESSION_KEYS_JOIN: &str = "/cli/voice/session/keys/join";
+pub const MODERATE: &str = "/cli/voice/moderate";
+
+pub const GET_ROUTES: &[&str] = &[ROOMS, STATUS];
+pub const POST_ROUTES: &[&str] = &[
+    SETTINGS,
+    ROOM_RENAME,
+    ROOM_CLOSE,
+    JOIN,
+    LEAVE,
+    SESSION_STATE,
+    SESSION_STATS,
+    SESSION_KEY_PACKAGES,
+    SESSION_KEYS_JOIN,
+    MODERATE,
+];
+
+/// Largest body (KeyPackages ride `session/keys/key_packages`).
+pub const MAX_BODY: usize = 256 * 1024;
+/// "Close now": people get this long before the room is archived (§3.4).
+pub const CLOSE_NOTICE: Duration = Duration::from_secs(10);
+
+pub fn is_route(p: &str) -> bool {
+    GET_ROUTES.contains(&p) || POST_ROUTES.contains(&p)
+}
+
+pub fn is_post_route(p: &str) -> bool {
+    POST_ROUTES.contains(&p)
+}
+
+// ── answers ──────────────────────────────────────────────────────────
+
+fn status_line(code: u16) -> &'static str {
+    match code {
+        200 => "200 OK",
+        400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
+        410 => "410 Gone",
+        413 => "413 Payload Too Large",
+        422 => "422 Unprocessable Entity",
+        429 => "429 Too Many Requests",
+        500 => "500 Internal Server Error",
+        503 => "503 Service Unavailable",
+        _ => "502 Bad Gateway",
+    }
+}
+
+fn ok(v: Value) -> CliResponse {
+    CliResponse::ok_json(v.to_string())
+}
+
+/// A refusal in K2's shape, mirrored at the top level (module doc).
+pub fn refuse(r: &Refusal) -> CliResponse {
+    let mut details = r.details.clone();
+    if let Some(s) = r.retry_after_secs {
+        let mut d = details.take().unwrap_or_else(|| json!({}));
+        if let Some(o) = d.as_object_mut() {
+            o.insert("retry_after_ms".into(), json!(s * 1000));
+        }
+        details = Some(d);
+    }
+    let mut err = json!({ "code": r.code, "hint": r.hint });
+    let mut body = json!({ "ok": false, "code": r.code, "hint": r.hint });
+    if let Some(d) = details {
+        err["details"] = d.clone();
+        body["details"] = d;
+    }
+    body["error"] = err;
+    CliResponse { status: status_line(r.status), content_type: "application/json", body: body.to_string() }
+}
+
+fn no(status: u16, code: &str, hint: &str) -> CliResponse {
+    refuse(&Refusal::new(status, code, hint))
+}
+
+/// The family is dark while the preview is off.
+pub fn dark() -> CliResponse {
+    no(
+        404,
+        "voice_rooms_off",
+        "voice rooms are a preview: the owner turns them on with K2_VOICE_ROOMS=1 or Settings voiceRoomsPreview",
+    )
+}
+
+pub fn too_large() -> CliResponse {
+    no(413, "too_large", "the body is too large")
+}
+
+// ── who's calling ────────────────────────────────────────────────────
+
+/// The caller as these routes see them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Caller {
+    /// The owner daemon token (agents can read it on shared-user boxes).
+    OwnerToken,
+    /// A Connect login session (the token, to classify the person).
+    Login { username: String, role: Role, token: String },
+    /// An agent's or a K2 terminal's passport.
+    Passport,
+    /// An App pass or API key.
+    App,
+    Invalid,
+}
+
+impl Caller {
+    pub fn from_tcp(query: &str, bearer: Option<&str>, owner_token: &str) -> Caller {
+        let presented = crate::routes::http::extract_token(query)
+            .filter(|s| !s.is_empty())
+            .or_else(|| bearer.map(str::trim).filter(|s| !s.is_empty()))
+            .unwrap_or("")
+            .to_string();
+        match crate::compute_routes::who_from_tcp(query, bearer, owner_token) {
+            Who::Owner => Caller::OwnerToken,
+            Who::Login { username, role } => Caller::Login { username, role, token: presented },
+            Who::Agent { .. } | Who::Shell { .. } => Caller::Passport,
+            Who::Wrong => Caller::App,
+            Who::Invalid => Caller::Invalid,
+        }
+    }
+
+    fn manages(&self) -> bool {
+        match self {
+            Caller::OwnerToken => true,
+            Caller::Login { role, .. } => *role >= Role::Admin,
+            _ => false,
+        }
+    }
+}
+
+fn not_a_caller(c: &Caller) -> Option<CliResponse> {
+    match c {
+        Caller::App => Some(no(403, "app_pass_not_allowed", "voice rooms are for this server's own logins, never App passes or API keys")),
+        Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
+        _ => None,
+    }
+}
+
+fn need_manager(c: &Caller) -> Result<(), CliResponse> {
+    if let Some(r) = not_a_caller(c) {
+        return Err(r);
+    }
+    match c {
+        _ if c.manages() => Ok(()),
+        Caller::Passport => Err(no(
+            403,
+            "owner_or_admin_only",
+            "agents read voice rooms (k2 voice rooms, k2 voice status); the owner or an Admin changes them. Ask your human in your Thread.",
+        )),
+        _ => Err(no(403, "owner_or_admin_only", "only the owner or an Admin changes voice rooms")),
+    }
+}
+
+/// The person behind the caller, for join and the call's routes.
+fn need_person(c: &Caller, owner_token: &str) -> Result<Person, CliResponse> {
+    if let Some(r) = not_a_caller(c) {
+        return Err(r);
+    }
+    match c {
+        Caller::OwnerToken => Err(no(
+            403,
+            "owner_token_cannot_join",
+            "the bare owner token can't join a voice room (agents can read it): join from your own login on this server",
+        )),
+        Caller::Passport => Err(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
+        Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token).map_err(|r| refuse(&r)),
+        Caller::App | Caller::Invalid => Err(no(401, "unauthenticated", "invalid or missing token")),
+    }
+}
+
+fn body_json(body: &[u8]) -> Result<Value, CliResponse> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(json!({}));
+    }
+    match serde_json::from_slice::<Value>(body) {
+        Ok(v @ Value::Object(_)) => Ok(v),
+        _ => Err(no(400, "usage", "the body is a JSON object")),
+    }
+}
+
+/// A string or number field as a string (`room` may be `1`).
+fn field(v: &Value, k: &str) -> Option<String> {
+    match v.get(k) {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+// ── the rooms view ───────────────────────────────────────────────────
+
+fn label() -> Option<String> {
+    k2_core::tunnel::config::load()
+        .ok()
+        .map(|c| c.subdomain.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn close_now_slot() -> &'static Mutex<HashMap<String, i64>> {
+    static S: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Pending "Close now" times (unix ms) by room slug.
+fn close_now_pending() -> HashMap<String, i64> {
+    close_now_slot().lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+fn role_name(person: &str, external_id: Option<&str>) -> Option<&'static str> {
+    if external_id == Some("k2:owner") {
+        return Some("owner");
+    }
+    match k2_core::connect_users::role_for_user(person)? {
+        Role::Owner => Some("owner"),
+        Role::Admin => Some("admin"),
+        _ => Some("member"),
+    }
+}
+
+/// One occupant as the client reads it (`voice-wire.ts` `VoiceOccupant`)
+/// plus Sew's own fields.
+fn occupant_json(o: &Occupant) -> Value {
+    json!({
+        "user": o.person,
+        "name": Value::Null,
+        "role": role_name(&o.person, o.external_id.as_deref()),
+        "color": Value::Null,
+        "muted": o.self_mute || o.server_mute,
+        "deafened": o.self_deaf || o.server_deaf,
+        "speaking": false,
+        "memberId": o.member_id,
+        "externalId": o.external_id,
+        "connection": o.connection,
+        "selfMute": o.self_mute,
+        "selfDeaf": o.self_deaf,
+        "serverMute": o.server_mute,
+        "serverDeaf": o.server_deaf,
+        "joinedAt": o.joined_at,
+    })
+}
+
+/// One room in the list (`voice-wire.ts` `VoiceRoom` plus K2's fields).
+pub fn room_json(r: &RoomRow, people: &[Occupant], hosting: &super::Hosting, closes_at: Option<i64>) -> Value {
+    let closing = r.state == admin_space::ROOM_CLOSING;
+    let limit = voice_rooms::ROOM_USER_LIMIT;
+    let unavailable: Option<String> = if closing {
+        None
+    } else if hosting.state == "voice_lane_down" {
+        Some(k2_core::tool_hook::sew_wire::ENGINE_MEDIA_PATH_DOWN.to_string())
+    } else if hosting.state != super::HOSTING_OK && hosting.state != "voice_lane_reconnecting" {
+        Some(hosting.state.clone())
+    } else if people.len() as u32 >= limit {
+        Some("room_full".into())
+    } else {
+        None
+    };
+    json!({
+        "id": r.slug,
+        "n": r.n,
+        "slug": r.slug,
+        "name": r.name.clone().unwrap_or_else(|| r.desired_name()),
+        "channelId": r.channel_id,
+        "limit": limit,
+        "count": people.len(),
+        "occupants": people.iter().map(occupant_json).collect::<Vec<_>>(),
+        "closing": closing,
+        "closesAt": closes_at,
+        "unavailable": unavailable,
+    })
+}
+
+/// The rooms that show: open or closing, with a channel.
+fn shown(r: &RoomRow) -> bool {
+    r.channel_id.is_some() && (r.state == admin_space::ROOM_ACTIVE || r.state == admin_space::ROOM_CLOSING)
+}
+
+fn rooms_view(c: &Caller) -> CliResponse {
+    let hosting = super::hosting_state();
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    let (rev, occ) = occupancy::snapshot();
+    let closes = close_now_pending();
+    let empty: Vec<Occupant> = Vec::new();
+    let rooms: Vec<Value> = view
+        .rooms
+        .iter()
+        .filter(|r| shown(r))
+        .map(|r| {
+            let people = r.channel_id.as_deref().and_then(|ch| occ.get(ch)).unwrap_or(&empty);
+            room_json(r, people, &hosting, closes.get(&r.slug).copied())
+        })
+        .collect();
+    ok(json!({
+        "ok": true,
+        "server": label(),
+        "hosting": hosting,
+        "rooms": rooms,
+        "rev": rev,
+        "canManage": c.manages(),
+        "lane": super::lane::state(),
+        "feed": occupancy::feed_status().state,
+    }))
+}
+
+fn status_view() -> CliResponse {
+    let hosting = super::hosting_state();
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K2 Admin Space: {e}")),
+    };
+    let flags = k2_core::tool_hook::sew_voice_features().unwrap_or_default();
+    let (sessions, calls) = bff::counts();
+    let carried = view.space.as_ref().map(|s| s.carried.clone()).unwrap_or_default();
+    let count = k2_core::app_settings::load().voice_rooms_count;
+    ok(json!({
+        "ok": true,
+        "server": label(),
+        "preview": voice_rooms::enabled(),
+        "tunnelPreview": voice_rooms::tunnel_enabled(),
+        "hosting": hosting,
+        "tier": voice_rooms::hosting(),
+        "count": count,
+        // Lane A owns the real media tier; until it lands this reads the
+        // tunnel preview switch.
+        "media": { "tier": if voice_rooms::tunnel_enabled() { "tunnel" } else { "direct" } },
+        "features": flags,
+        "space": view.space,
+        "members": view.members,
+        "rooms": view.rooms,
+        "holds": view.holds,
+        "lastPlan": k2_core::tool_hook::admin_space_last_summary(),
+        "carriedAgents": carried,
+        "lane": super::lane::state(),
+        "feed": occupancy::feed_status(),
+        "bff": { "sessions": sessions, "calls": calls },
+        "closeNow": close_now_pending(),
+    }))
+}
+
+// ── owner actions ────────────────────────────────────────────────────
+
+/// Store the count; with `now`, live rooms above it get the 10 s notice
+/// (they go `closing` at once: no one new joins), then are archived.
+fn set_count(count: u32, now: bool) -> Result<Value, CliResponse> {
+    if count > voice_rooms::ROOMS_MAX {
+        return Err(no(400, "usage", &format!("rooms is 0-{}", voice_rooms::ROOMS_MAX)));
+    }
+    let live: Vec<String> = k2_core::tool_hook::admin_rooms_above(count)
+        .map_err(|e| no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")))?
+        .into_iter()
+        .map(|r| r.slug)
+        .collect();
+    k2_core::tool_hook::admin_rooms_set_count(count, false).map_err(|e| no(400, "usage", &e))?;
+    let mut close_at: Option<i64> = None;
+    if now && !live.is_empty() {
+        let at = chrono::Utc::now().timestamp_millis() + CLOSE_NOTICE.as_millis() as i64;
+        close_at = Some(at);
+        {
+            let mut g = close_now_slot().lock().unwrap_or_else(|p| p.into_inner());
+            for s in &live {
+                g.insert(s.clone(), at);
+            }
+        }
+        let slugs = live.clone();
+        let spawned = std::thread::Builder::new().name("voice-close-now".into()).spawn(move || {
+            std::thread::sleep(CLOSE_NOTICE);
+            // A count raised (or changed again) during the notice wins.
+            if k2_core::app_settings::load().voice_rooms_count == count {
+                if let Err(e) = k2_core::tool_hook::admin_rooms_set_count(count, true) {
+                    k2_core::log_debug!("[voice-rooms] close now: {e}");
+                }
+            }
+            let mut g = close_now_slot().lock().unwrap_or_else(|p| p.into_inner());
+            for s in &slugs {
+                if g.get(s) == Some(&at) {
+                    g.remove(s);
+                }
+            }
+            drop(g);
+            occupancy::emit_rooms_changed();
+            occupancy::kick();
+        });
+        if let Err(e) = spawned {
+            return Err(no(500, "internal", &format!("close now: {e}")));
+        }
+    }
+    occupancy::emit_rooms_changed();
+    occupancy::kick();
+    Ok(json!({ "ok": true, "count": count, "closing": live, "closeNowAt": close_at }))
+}
+
+fn settings(c: &Caller, b: &Value) -> CliResponse {
+    if let Err(r) = need_manager(c) {
+        return r;
+    }
+    let Some(count) = b.get("count").and_then(Value::as_u64) else {
+        return no(400, "usage", "send {\"count\": 0-10, \"now\"?: true}");
+    };
+    let now = b.get("now").and_then(Value::as_bool).unwrap_or(false);
+    match set_count(u32::try_from(count).unwrap_or(u32::MAX), now) {
+        Ok(v) => ok(v),
+        Err(r) => r,
+    }
+}
+
+fn rename(c: &Caller, b: &Value) -> CliResponse {
+    if let Err(r) = need_manager(c) {
+        return r;
+    }
+    let (Some(room), Some(name)) = (field(b, "room"), b.get("name").and_then(Value::as_str)) else {
+        return no(400, "usage", "send {\"room\": \"room-1\", \"name\": \"Standup\"}");
+    };
+    match k2_core::tool_hook::admin_room_rename(&room, name) {
+        Ok(slug) => {
+            occupancy::emit_rooms_changed();
+            ok(json!({ "ok": true, "room": slug, "name": name.trim() }))
+        }
+        Err(e) => no(400, "usage", &e),
+    }
+}
+
+fn close(c: &Caller, b: &Value) -> CliResponse {
+    if let Err(r) = need_manager(c) {
+        return r;
+    }
+    let Some(key) = field(b, "room") else {
+        return no(400, "usage", "send {\"room\": \"room-2\", \"now\"?: true}");
+    };
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    let room = match bff::find_room(&view.rooms, &key) {
+        Ok(r) => r,
+        Err(r) => return refuse(&r),
+    };
+    let count = k2_core::app_settings::load().voice_rooms_count;
+    if room.n != count || count == 0 {
+        return refuse(
+            &Refusal::new(
+                409,
+                "close_from_top",
+                format!(
+                    "rooms close from the top: room-{count} closes first. To close {}, lower the count: k2 voice set rooms {}",
+                    room.slug,
+                    room.n.saturating_sub(1)
+                ),
+            )
+            .details(json!({ "count": count, "room": room.slug })),
+        );
+    }
+    let now = b.get("now").and_then(Value::as_bool).unwrap_or(false);
+    match set_count(count - 1, now) {
+        Ok(v) => ok(v),
+        Err(r) => r,
+    }
+}
+
+// ── the person's routes ──────────────────────────────────────────────
+
+fn join(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let Some(room) = field(b, "room") else {
+        return no(400, "usage", "send {\"room\": \"room-1\", \"join\"?: {Sew's join body}}");
+    };
+    let hosting = super::hosting_state();
+    match hosting.state.as_str() {
+        super::HOSTING_OK | "voice_lane_reconnecting" | "voice_lane_down" => {}
+        "not_pro" => return no(403, "host_not_pro", "this server's voice rooms are paused (they need the Pro plan)"),
+        _ => {
+            return refuse(
+                &Refusal::new(503, "voice_unavailable", hosting.line.clone())
+                    .details(json!({ "hosting": hosting }))
+                    .retry(bff::RETRY_SECS),
+            )
+        }
+    }
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    let join_body = b.get("join").cloned().unwrap_or_else(|| json!({}));
+    match bff::join(&p, &room, &join_body, &view.rooms, &bff::deps()) {
+        Ok(mut v) => {
+            v["server"] = json!(label());
+            ok(v)
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
+fn leave(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let call = b.get("callId").and_then(Value::as_str);
+    match bff::leave(&p, call, &bff::deps()) {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
+}
+
+fn session(c: &Caller, owner_token: &str, which: Forward, b: &Value) -> CliResponse {
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let Some(call) = b.get("callId").and_then(Value::as_str) else {
+        return no(400, "usage", "send {\"callId\": \"vc_…\", \"body\": {Sew's body}}");
+    };
+    let body = b.get("body").cloned().unwrap_or_else(|| json!({}));
+    match bff::forward(&p, which, call, &body, &bff::deps()) {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
+}
+
+fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
+    match c {
+        Caller::OwnerToken => {
+            return no(
+                403,
+                "owner_token_cannot_moderate",
+                "the bare owner token doesn't moderate (Sew's audit names a person): moderate from your own owner or Admin login",
+            )
+        }
+        Caller::Passport => return no(403, "agents_cannot_moderate", "agents don't moderate voice rooms"),
+        _ => {}
+    }
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let (Some(room), Some(who), Some(action)) = (field(b, "room"), field(b, "person"), field(b, "action")) else {
+        return no(400, "usage", "send {\"room\": \"room-1\", \"person\": \"<login>|owner|<member id>\", \"action\": \"kick|mute|unmute|deafen|undeafen\"}");
+    };
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    let Some(space) = view.space.as_ref().filter(|s| s.state == admin_space::SPACE_READY).and_then(|s| s.space_id.clone()) else {
+        return no(503, "voice_unavailable", "the K2 Admin Space isn't ready (k2 voice status)");
+    };
+    let occ: BTreeMap<String, Vec<Occupant>> = occupancy::snapshot().1;
+    match bff::moderate(&p, &room, &who, &action, &space, &view.rooms, &occ, &bff::deps()) {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
+}
+
+// ── the entry point ──────────────────────────────────────────────────
+
+/// One `/cli/voice/*` call (blocking; the dispatcher runs it on the
+/// blocking pool: a held join waits up to 20 s).
+pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body: &[u8]) -> CliResponse {
+    if !voice_rooms::enabled() {
+        return dark();
+    }
+    if is_post_route(path) && !is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if !is_post_route(path) && is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if GET_ROUTES.contains(&path) {
+        if let Some(r) = not_a_caller(&caller) {
+            return r;
+        }
+        return match path {
+            ROOMS => rooms_view(&caller),
+            _ => match &caller {
+                Caller::Login { role, .. } if *role < Role::Admin => no(403, "owner_or_admin_only", "k2 voice status is the owner's and Admins'; k2 voice rooms is everyone's"),
+                _ => status_view(),
+            },
+        };
+    }
+    let b = match body_json(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    match path {
+        SETTINGS => settings(&caller, &b),
+        ROOM_RENAME => rename(&caller, &b),
+        ROOM_CLOSE => close(&caller, &b),
+        JOIN => join(&caller, owner_token, &b),
+        LEAVE => leave(&caller, owner_token, &b),
+        SESSION_STATE => session(&caller, owner_token, Forward::State, &b),
+        SESSION_STATS => session(&caller, owner_token, Forward::Stats, &b),
+        SESSION_KEY_PACKAGES => session(&caller, owner_token, Forward::KeyPackages, &b),
+        SESSION_KEYS_JOIN => session(&caller, owner_token, Forward::KeysJoin, &b),
+        MODERATE => moderate(&caller, owner_token, &b),
+        _ => CliResponse::not_found(),
+    }
+}

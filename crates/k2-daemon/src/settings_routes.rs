@@ -489,6 +489,8 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             k2_core::voice_rooms::set_tunnel_enabled(merged.voice_tunnel_preview);
             if voice_touched {
                 k2_core::tool_hook::kick_reconcile();
+                // Lane C: the occupancy follower looks again now.
+                crate::voice::occupancy::kick();
             }
             sync_permission_cards(merged.permission_cards, actor.audit_user());
             sync_garden_access(merged.garden_access, actor.audit_user());

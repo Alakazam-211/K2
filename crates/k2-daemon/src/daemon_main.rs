@@ -1910,6 +1910,10 @@ async fn async_main() {
     // and access changes.
     let _sew_hub_handle = crate::sew_chat::hub::spawn();
 
+    // Voice rooms (preview): the SW-3 occupancy follower. Headless; idle
+    // (holds nothing, sends nothing) while voice_rooms_preview is off.
+    let _voice_occupancy_handle = crate::voice::occupancy::spawn();
+
     // Sew S27 grant hook: delivers `tool_outbox` rows (written in the same
     // skin.db transaction as each chat grant change) to Sew's mgmt socket,
     // and runs the reconcile sweep. Its FIRST pass is the boot pass, so

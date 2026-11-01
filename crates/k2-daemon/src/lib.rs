@@ -62,6 +62,9 @@ pub mod tool_hook_worker;
 // Voice rooms (preview): the K2 Admin Space's facts, grants and the fixed
 // default Space, before each grant-hook sweep plans it.
 pub mod voice_admin;
+// Voice rooms (preview), lane C: the voice BFF, occupancy feed, moderation
+// and `/cli/voice/*`.
+pub mod voice;
 pub mod feedback_routes;
 pub mod federation_rosters;
 pub mod federation_routes;

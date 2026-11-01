@@ -8298,6 +8298,41 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Voice rooms (preview, prd-k2-voice-rooms-v1 §9.1, lane C): dark
+        // (404 voice_rooms_off) while voice_rooms_preview is off. Floors for
+        // logins live in route_policy; the handler classifies every caller.
+        // A held join waits up to 20 s on the blocking pool (M11).
+        p if crate::voice::routes::is_route(p) => {
+            if !k2_core::voice_rooms::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::voice::routes::dark();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if crate::voice::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::voice::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::voice::routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::voice::routes::Caller::from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let owner = state.token.to_string();
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::voice::routes::handle(&p_owned, caller, &owner, is_post, &body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Sew on K2 (S29 K12): the Sew server on this box. Floors live in
         // route_policy; the handler classifies the caller (owner, login,
         // passport + "Manage Sew") and runs person-only steps on a vault

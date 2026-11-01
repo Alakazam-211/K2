@@ -386,6 +386,10 @@ _cli_tool_id_for_verb() {
         # daemon sees the session passport and the "Manage Sew" switch
         # applies; person-only steps refuse it.
         hostchat) echo "hostchat" ;;
+        # k2 voice (voice rooms, preview): rides the locked hostchat tool id,
+        # so inside a K2 terminal the daemon sees the session passport (agents
+        # read rooms; joins and changes refuse it), never the owner token.
+        voice) echo "hostchat" ;;
         # k2 chat (Sew S30 K21): id + locked, so inside a K2 terminal the
         # daemon sees the session passport (the agent's own Sew member,
         # levels and Manage Sew), never the owner token.
@@ -876,6 +880,13 @@ if [ "${1:-}" = "changes" ]; then
 fi
 # `k2 chat` / `k2 chat --help` only print help.
 if [ "${1:-}" = "chat" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
+# `k2 voice` / `k2 voice --help` only print help.
+if [ "${1:-}" = "voice" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
@@ -11186,6 +11197,63 @@ K2's door: request heads over 64 KiB → 431; 120 writes a minute per
 visitor per App (the Owner: k2 firewall guard). Sew 0.6.1, this K2's
 pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
 DM calls, upload and message-rate quotas) and the unbound-Space gaps.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_voice_rooms() {
+    cat <<'EOF'
+k2 study voice-rooms — Voice rooms on this server (preview)
+
+NOT App voice. This page is the box's own rooms: one K2 Admin Space per
+Linux server, rooms Room 1..N for its owner, Admins and Members. An App's
+own rooms and channels are k2 study chat-voice-rooms.
+
+WHAT EXISTS. A Linux server with Pro and Chat / Voice Hosting hosts 0-10
+rooms (default 1, 25 people each), named "Room N" until renamed; slugs
+room-1..room-10 never change. People see and join rooms only on servers
+their K2 app is signed in to, with their own login there. Nothing is
+shared between servers. Preview: until the owner turns voiceRoomsPreview
+on, every k2 voice command answers voice_rooms_off.
+
+READ (anyone, agents too)
+  k2 voice rooms       who's in each room; closing / unavailable rooms
+  k2 voice status      owner/Admin; agents read it: why the server can or
+                       can't host (hosting.state), the K2 Admin Space and
+                       its members, sync holds, the voice lane, the feed
+Never poll: the app refreshes on the server's voice_rooms_changed event.
+
+HOSTING STATES (k2 voice status, first one that applies)
+  preview_off · sew_off (Chat / Voice Hosting not on: k2 hostchat status)
+  · voice_off + detail (Sew older than 0.7.0, or the Admin Space blocked)
+  · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
+  joins wait) · voice_lane_down (joins refused, live calls end) · ok.
+
+CHANGE (owner or an Admin login; an agent is refused owner_or_admin_only:
+ask your human in your Thread)
+  k2 voice set rooms <n> [--now]   lower = close from the top. An empty
+                                   room closes at once; a room with people
+                                   is "closing" (no one new joins) until
+                                   the last leaves. --now: a 10 s notice,
+                                   then the room closes and its calls end.
+  k2 voice rename <room> <name>    the slug stays
+  k2 voice close <room> [--now]    only the top room (close_from_top)
+
+JOIN. People join from the K2 app with their own login. Agents never join
+(agents_not_in_voice). The bare owner token never joins or moderates
+(owner_token_cannot_join; agents can read it on shared boxes). k2 voice
+join exists for voice clients and tests; the CLI has no audio.
+
+MODERATE. k2 voice kick|mute|unmute|deafen|undeafen <room> <person>,
+from the owner's or an Admin's own login: K2 uses that person's own Sew
+session, so Sew records who did it. <person> is a login, owner or a
+member id from k2 voice rooms --json.
+
+REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
+voice_unavailable (details.engine media_path_down = the voice lane is
+down) · voice_member_pending / chat_member_pending (retry in 2 s) ·
+owner_or_admin_only · moderator_only · not_in_room.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -43117,6 +43185,7 @@ cmd_schema() {
     {"name": "hostchat on-behalf", "usage": "k2 hostchat on-behalf [list] [--state pending|approved|declined|all] [--limit N] | approve <act_…|msg_…> [--note \"…\"] | decline <act_…|msg_…> [--note \"…\"] [--json]", "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review.", "args": [], "flags": []},
     {"name": "hostchat deliveries", "usage": "k2 hostchat deliveries [list] [<workspace>] | set <workspace> [--quiet-hours …] [--tz …] [--batch …] | reset <workspace> [--json]", "description": "Every chat agent's delivery hub: running, cursor, held, delivered and missed counts, prefs and follows. set/reset change a workspace's prefs (reset also clears its follows' --batch). Manage Chat / Voice Hosting (agents) or owner/admin; audited (GET /cli/sew/admin/deliveries, POST /set, /reset).", "args": [], "flags": []},
     {"name": "hostchat log", "usage": "k2 hostchat log [--limit N] [--json]", "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log.", "args": [], "flags": []},
+    {"name": "voice", "usage": "k2 voice <rooms|status|set rooms <0-10>|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K2 Admin Space, members, sync holds, the voice lane (owner/Admin; agents read it). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
     {"name": "chat", "usage": "k2 chat <spaces|channels|messages|read|unread|mark-read|ack|wait|whoami|send|post|reply|dm|edit|delete|outbox|follow|unfollow|prefs|deliveries|access|channel|space|role|ban|unban|timeout|mute> ...", "description": "Chat inside Spaces, for agents (Chat / Voice Hosting, powered by Sew; runs as the agent's own Sew member; id + locked tool, so a K2 terminal sends its passport). Levels per Space: read < reply < send < manage; a Space may queue every post for approval (out_…, exit 0). Server admin is k2 hostchat. Exit 0 ok (incl. queued), 1 error, 2 usage or wait timeout, 3 not allowed here.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}]},
     {"name": "chat send", "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]", "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --on-behalf-of <user>: you speak for the person you assist; the post is yours, goes out at once (unless the Space holds every post) and they can review it later. --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin.", "args": [], "flags": []},
     {"name": "chat reply", "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--on-behalf-of <user>] [--key K] [--json]", "description": "Reply under a message (replying to a reply answers in the same chain). --broadcast also shows it in the channel; fine at level reply.", "args": [], "flags": []},
@@ -45358,7 +45427,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -45376,7 +45445,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
-  app-chat  chat-voice  chat-voice-rooms  tauri  app-errors
+  app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
@@ -45420,6 +45489,7 @@ _study_title() {
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
         chat-voice-rooms) echo "Rooms and channels in your App Space" ;;
+        voice-rooms) echo "Voice rooms on this server (preview)" ;;
         tauri) echo "The K2 side of a Tauri app, end to end" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
@@ -45534,6 +45604,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
+  voice-rooms         This server's own voice rooms (preview): k2 voice, who may change or join
   tauri               A Tauri app on K2: web build, server, updates, signing, links, push, uploads
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
@@ -45605,6 +45676,7 @@ _study_page() {
         app-chat) _study_page_app_chat ;;
         chat-voice) _study_page_chat_voice ;;
         chat-voice-rooms) _study_page_chat_voice_rooms ;;
+        voice-rooms) _study_page_voice_rooms ;;
         tauri) _study_page_tauri ;;
         email-notifications) _study_page_email_notifications ;;
         skins)
@@ -65352,6 +65424,185 @@ cmd_mail_access() {
 # key: the owner; dropping the old master key: the owner or an admin) need a
 # vault confirm from a terminal outside K2. Setup links print to stdout only (never stderr).
 # Exit: 0 ok · 1 you said no at a [y/N] prompt · 2 bad request · 3 refused / infra.
+
+# ── `k2 voice` — voice rooms on this server (prd-k2-voice-rooms-v1 §9.3) ──
+# Preview: every route answers voice_rooms_off until the owner turns
+# voiceRoomsPreview on. The daemon (/cli/voice/*) owns the rooms, who's in
+# them and the hosting state; this CLI only reads and asks.
+
+_voice_usage() {
+    cat <<'EOF'
+Usage: k2 voice <command> [args] [--json]
+
+Voice rooms on this server (a preview; Linux servers with Pro host them).
+People talk in them from the K2 app; this CLI lists them, shows why a
+server can't host, and lets the owner or an Admin change them. Read
+`k2 study voice-rooms` first.
+
+  k2 voice rooms                      the rooms and who is in each (anyone, agents too)
+  k2 voice status                     hosting state and why, the K2 Admin Space,
+                                      members, rooms, sync holds, the voice lane
+                                      (owner/Admin; agents read it)
+  k2 voice set rooms <0-10> [--now]   how many rooms this server hosts (owner/Admin).
+                                      Lowering closes rooms from the top: an empty
+                                      room closes at once, a room with people closes
+                                      when the last one leaves. --now: people get a
+                                      10 s notice, then the room closes and calls end.
+  k2 voice rename <room> <name>       rename a room (owner/Admin). <room> is 1, room-1
+                                      or its name; the slug never changes
+  k2 voice close <room> [--now]       close the top room (same as lowering the count
+                                      by one; owner/Admin)
+  k2 voice join <room>                join as your own login (for voice clients and
+                                      tests: the CLI has no audio). Agents and the
+                                      bare owner token can't join
+  k2 voice leave [--call <callId>]    leave your call
+  k2 voice kick|mute|unmute|deafen|undeafen <room> <person>
+                                      moderate, from the owner's or an Admin's own
+                                      login on this server (Sew records who did it).
+                                      <person> is a login name, owner, or a member id
+
+Talks to this server (or the one --host names), like every k2 verb.
+Exit codes: 0 ok, 2 bad usage, 3 refused or unavailable (the JSON on
+stderr names why: voice_rooms_off, owner_or_admin_only,
+owner_token_cannot_join, agents_not_in_voice, room_closing, room_full,
+voice_unavailable, close_from_top …).
+EOF
+}
+
+# Print _CP_BODY for a verb: raw JSON with --json, else a summary.
+_voice_print() {
+    local verb="$1" as_json="$2"
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$_CP_BODY"
+        return 0
+    fi
+    printf '%s' "$_CP_BODY" | K2_VC_VERB="$verb" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+verb = os.environ["K2_VC_VERB"]
+h = v.get("hosting") or {}
+def hosting_line():
+    if h.get("state") == "ok":
+        return "on"
+    s = "%s: %s" % (h.get("state"), h.get("line") or "")
+    if h.get("detail"):
+        s += " (%s)" % h["detail"]
+    return s
+if verb == "rooms":
+    print("Voice rooms on %s: %s" % (v.get("server") or "this server", hosting_line()))
+    rooms = v.get("rooms") or []
+    if not rooms:
+        print("  no rooms open")
+    for r in rooms:
+        occ = r.get("occupants") or []
+        tag = ""
+        if r.get("closing"):
+            tag = "  closing"
+        elif r.get("unavailable"):
+            tag = "  unavailable: %s" % r["unavailable"]
+        print("  %-8s %-24s %d/%s%s" % (r.get("slug"), r.get("name"), len(occ), r.get("limit"), tag))
+        for o in occ:
+            flags = [f for f, on in (("muted", o.get("muted")), ("deafened", o.get("deafened"))) if on]
+            print("      %s%s" % (o.get("user"), (" (" + ", ".join(flags) + ")") if flags else ""))
+elif verb == "status":
+    print("hosting:    %s" % hosting_line())
+    print("rooms:      %s (tier %s)" % (v.get("count"), v.get("tier")))
+    sp = v.get("space") or {}
+    print("K2 Admin Space: %s%s" % (sp.get("state") or "not made yet", (" " + sp["spaceId"]) if sp.get("spaceId") else ""))
+    if sp.get("why"):
+        print("  why:      %s" % sp["why"])
+    for r in v.get("rooms") or []:
+        print("  %-8s %-24s %s%s" % (r.get("slug"), r.get("wantName") or r.get("name") or "", r.get("state"), "  (close now)" if r.get("closeNow") else ""))
+    m = v.get("members") or []
+    print("members:    %d" % len(m))
+    for x in m:
+        if x.get("state") != "added" or (x.get("wantLevel") and x.get("wantLevel") != x.get("level")):
+            print("  %s: %s%s" % (x.get("externalId"), x.get("state"), (" — " + x["why"]) if x.get("why") else ""))
+    for x in v.get("holds") or []:
+        print("hold:       %s %s %s%s" % (x.get("op"), x.get("subject"), x.get("state"), (" — " + x["error"]) if x.get("error") else ""))
+    if v.get("carriedAgents"):
+        print("agents carried to k2-admin: %s" % ", ".join(v["carriedAgents"]))
+    ln = v.get("lane") or {}
+    print("voice lane: %s%s" % (ln.get("state"), (" — " + ln["reason"]) if ln.get("reason") else ""))
+    fd = v.get("feed") or {}
+    print("feed:       %s%s" % (fd.get("state"), (" — " + fd["lastError"]) if fd.get("lastError") else ""))
+elif verb in ("set", "close"):
+    print("rooms: %s" % v.get("count"))
+    if v.get("closing"):
+        print("closing: %s%s" % (", ".join(v["closing"]), " (calls end in 10 s)" if v.get("closeNowAt") else " (when empty)"))
+elif verb == "rename":
+    print("%s is now %s" % (v.get("room"), v.get("name")))
+elif verb == "join":
+    r = v.get("room") or {}
+    print("joined %s (call %s). The CLI has no audio: a voice client connects with the answer (--json)." % (r.get("name"), v.get("callId")))
+elif verb == "leave":
+    print("left")
+else:
+    print("%s %s in %s" % (v.get("action"), v.get("person"), (v.get("room") or {}).get("name")))
+'
+}
+
+cmd_voice() {
+    if [ $# -eq 0 ]; then _voice_usage; return 0; fi
+    local sub="$1"; shift
+    case "$sub" in -h|--help|help) _voice_usage; return 0 ;; esac
+    local as_json=0 now=0 call="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --now) now=1; shift ;;
+            --call) call="${2:?--call <callId>}"; shift 2 ;;
+            -h|--help) _voice_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 voice --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local n=${#pos[@]}
+    _voice_bad() { echo "{\"error\":\"usage\",\"hint\":\"$1 (k2 voice --help)\"}" >&2; exit 2; }
+    if [ "$now" = "1" ]; then
+        case "$sub" in set|close) ;; *) _voice_bad "--now only applies to k2 voice set rooms and k2 voice close" ;; esac
+    fi
+    case "$sub" in
+        rooms|list)
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice rooms takes no arguments"
+            _hostchat_call GET /cli/voice/rooms ""
+            _voice_print rooms "$as_json" ;;
+        status)
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice status takes no arguments"
+            _hostchat_call GET /cli/voice/status ""
+            _voice_print status "$as_json" ;;
+        set)
+            [ "$n" -eq 2 ] && [ "${pos[0]}" = "rooms" ] || _voice_bad "k2 voice set rooms <0-10> [--now]"
+            case "${pos[1]}" in ''|*[!0-9]*) _voice_bad "the room count is a number 0-10" ;; esac
+            [ "${pos[1]}" -le 10 ] || _voice_bad "the room count is 0-10"
+            local nb=""; [ "$now" = "1" ] && nb=1
+            _hostchat_call POST /cli/voice/settings "$(_compute_json K2_CJ_count_n="${pos[1]}" K2_CJ_now_b="$nb")"
+            _voice_print set "$as_json" ;;
+        rename)
+            [ "$n" -ge 2 ] || _voice_bad "k2 voice rename <room> <name>"
+            local name="${pos[*]:1}"
+            _hostchat_call POST /cli/voice/rooms/rename "$(_compute_json K2_CJ_room="${pos[0]}" K2_CJ_name="$name")"
+            _voice_print rename "$as_json" ;;
+        close)
+            [ "$n" -eq 1 ] || _voice_bad "k2 voice close <room> [--now]"
+            local nb=""; [ "$now" = "1" ] && nb=1
+            _hostchat_call POST /cli/voice/rooms/close "$(_compute_json K2_CJ_room="${pos[0]}" K2_CJ_now_b="$nb")"
+            _voice_print close "$as_json" ;;
+        join)
+            [ "$n" -eq 1 ] || _voice_bad "k2 voice join <room>"
+            _hostchat_call POST /cli/voice/join "$(_compute_json K2_CJ_room="${pos[0]}")"
+            _voice_print join "$as_json" ;;
+        leave)
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice leave [--call <callId>]"
+            _hostchat_call POST /cli/voice/session/leave "$(_compute_json K2_CJ_callId="$call")"
+            _voice_print leave "$as_json" ;;
+        kick|mute|unmute|deafen|undeafen)
+            [ "$n" -eq 2 ] || _voice_bad "k2 voice $sub <room> <person>"
+            _hostchat_call POST /cli/voice/moderate "$(_compute_json K2_CJ_room="${pos[0]}" K2_CJ_person="${pos[1]}" K2_CJ_action="$sub")"
+            _voice_print moderate "$as_json" ;;
+        *) _voice_bad "unknown command $sub" ;;
+    esac
+}
 
 _hostchat_usage() {
     cat <<'EOF'
@@ -86789,6 +87040,10 @@ EOF
     hostchat)
         # The Sew chat + voice server on this box (Sew S29 K14).
         shift; cmd_hostchat "$@"
+        ;;
+    voice)
+        # Voice rooms on this server (prd-k2-voice-rooms-v1 §9.3, preview).
+        shift; cmd_voice "$@"
         ;;
     chat)
         # Sew chat inside Spaces, for agents (Sew S30 K21).

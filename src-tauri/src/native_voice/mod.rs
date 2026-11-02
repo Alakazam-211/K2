@@ -15,8 +15,9 @@ use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_sew_voice::real::CallClientEngine;
 use tauri_plugin_sew_voice::sew_call_client::ClientConfig;
-use tauri_plugin_sew_voice::{Builder, VoiceEngine, VoiceService};
+use tauri_plugin_sew_voice::{Builder, DeviceKeyStore, VoiceEngine, VoiceService};
 
+pub mod device_keys;
 pub mod lazy;
 pub mod provider;
 
@@ -27,12 +28,19 @@ pub const QUIT_LEAVE_BOUND: Duration = Duration::from_secs(1);
 
 static PROVIDER: OnceLock<Arc<K2Provider<SavedLogins>>> = OnceLock::new();
 
-/// The engine's device store. Today Sew's `os-keystore` feature picks where the
-/// call device's private key goes. Sew's coming `Builder::device_key_store(...)`
-/// is where K2 will hand it a store over K2's own keyring code (vs-live V46),
-/// beside this folder.
+fn k2_dir() -> PathBuf {
+    k2_client::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2")
+}
+
+/// The engine's data folder. With K2's store it holds only the server's pins.
 fn device_dir() -> PathBuf {
-    k2_client::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".k2").join("voice-device")
+    k2_dir().join("voice-device")
+}
+
+/// K2's device key store's folder ([`device_keys`]): the public records, and on
+/// Linux with no Secret Service the key too.
+fn device_keys_dir() -> PathBuf {
+    k2_dir().join("voice-device-keys")
 }
 
 /// The plugin. The engine is made on first use ([`lazy`]), so a person who never
@@ -49,7 +57,8 @@ pub fn plugin<R: Runtime>(app_identifier: &str) -> TauriPlugin<R> {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log_debug!("[native-voice] can't create {}: {e}", dir.display());
         }
-        Arc::new(CallClientEngine::with_mls(ClientConfig::new(&app_id, dir))) as Arc<dyn VoiceEngine>
+        let keys: Arc<dyn DeviceKeyStore> = Arc::new(device_keys::K2DeviceKeys::for_app(device_keys_dir()));
+        Arc::new(CallClientEngine::with_mls(ClientConfig::new(&app_id, dir).with_device_key_store(keys))) as Arc<dyn VoiceEngine>
     });
     Builder::with_provider(Arc::clone(provider) as Arc<dyn tauri_plugin_sew_voice::JoinProvider>).engine(Arc::new(engine)).build()
 }

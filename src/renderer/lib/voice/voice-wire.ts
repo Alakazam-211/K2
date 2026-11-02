@@ -290,13 +290,13 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
     case 'e2ee_unsupported':
       return 'Call audio arrives in a later K2 update. You can see who is in the rooms now.'
     case 'server_too_old':
-      return `${serverLabel} needs a K2 update before you can join from this app.`
+      return `${serverLabel} is running an older K2. Ask its owner to update it.`
     case 'mic_denied':
       return "K2 can't use your microphone. Turn it on for K2 in your system's privacy settings, then join again."
     case 'mic_unavailable':
       return "K2 can't open your microphone. Check that one is connected and that no other app is holding it."
     case 'e2ee_refused':
-      return `Couldn't join ${roomName}: the call's encryption didn't check out.`
+      return `Couldn't join ${roomName}. The secure connection failed. Try again.`
     case 'turn_unreachable':
       return `Can't reach ${serverLabel}'s voice server from this network.`
     case 'signin_required':
@@ -335,16 +335,16 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
       return `The call to ${roomName} dropped: the connection was lost.`
     case 'seat_lost':
     case 'connect_timeout':
-      if (native) return `${serverLabel} dropped you from ${roomName}.`
+      if (native) return `${serverLabel} dropped you from ${roomName}. Join again, or ask its owner if it keeps happening.`
       return `${serverLabel} dropped you from ${roomName}. This K2 can't carry call audio yet.`
     case 'unavailable':
-      return `The call to ${roomName} ended: ${serverLabel} isn't answering.`
+      return `The call to ${roomName} ended: K2 lost contact with ${serverLabel}. Check your internet, then join again.`
     case 'e2ee_refused':
-      return `The call to ${roomName} ended: its encryption didn't check out.`
+      return `The call to ${roomName} ended: the secure connection failed. Join again to continue.`
     case 'credential_lost':
       return `The call to ${roomName} ended: your login joined from another device.`
     case 'mic_denied':
-      return `The call to ${roomName} ended: K2 can't use your microphone.`
+      return `The call to ${roomName} ended: K2 lost your microphone. Allow it in your system's privacy settings.`
     default:
       return `The call to ${roomName} ended.`
   }
@@ -355,11 +355,11 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
 export function engineErrorText(code: string, serverLabel: string): { line: string; kind: 'error' | 'info' } | null {
   switch (code) {
     case 'mic_denied':
-      return { line: "K2 can't use your microphone. Turn it on for K2 in your system's privacy settings.", kind: 'error' }
+      return { line: "K2 can't use your microphone, so no one can hear you. Allow it in your system's privacy settings.", kind: 'error' }
     case 'mic_unavailable':
       return { line: "K2 can't open your microphone. Check that one is connected and that no other app is holding it.", kind: 'error' }
     case 'device_lost':
-      return { line: 'Your audio device went away. The call moved to the default one.', kind: 'info' }
+      return { line: 'Your audio device disconnected. K2 switched to your default device.', kind: 'info' }
     case 'turn_unreachable':
       return { line: `Can't reach ${serverLabel}'s voice server from this network.`, kind: 'error' }
     default:

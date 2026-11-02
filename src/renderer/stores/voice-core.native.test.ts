@@ -206,7 +206,7 @@ describe('native join', () => {
     const s = setup({ plugin: { joinError: { code: 'e2ee_unsupported_client', detail: { hint: '', details: null } } } })
     await s.ctl.join(SEW, room1)
     const text = s.ctl.store.getState().notice?.text ?? ''
-    expect(text).toContain('sewlab needs a K2 update')
+    expect(text).toContain('sewlab is running an older K2')
     expect(text).not.toContain('later K2 update')
   })
 
@@ -259,7 +259,7 @@ describe('microphone', () => {
   it('device_lost mid-call: an info line, the call stays', async () => {
     const s = await inCall()
     s.fire('errors', { code: 'device_lost', detail: { audio: 'stream_lost' } })
-    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'Your audio device went away. The call moved to the default one.', kind: 'info' })
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'Your audio device disconnected. K2 switched to your default device.', kind: 'info' })
     expect(s.ctl.store.getState().call?.phase).toBe('connected')
     expect(s.openMicSettings).not.toHaveBeenCalled()
   })

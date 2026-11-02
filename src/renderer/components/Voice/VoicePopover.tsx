@@ -78,7 +78,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
       ) : null}
       {engineKind === 'seat' ? (
         <p data-testid="voice-seat-only" className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
-          {isWebClient() ? 'To talk, join from the K2 desktop app. Here you hold a seat in the room.' : 'No call audio in this version: you hold a seat in the room.'}
+          {isWebClient() ? 'You can see this room here, but not talk. Use the K2 desktop app to talk.' : 'No call audio in this version: you hold a seat in the room.'}
         </p>
       ) : null}
       {call.participants.length > 0 ? (

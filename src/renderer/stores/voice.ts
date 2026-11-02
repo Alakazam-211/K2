@@ -8,6 +8,8 @@
 // (which Home's pool already makes) is ever sent.
 
 import { useStore } from 'zustand'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { hostPool } from '@/lib/host-pool-instance'
 import { homeHostKey, LOCAL_HOME_HOST, savedHostForKey } from '@/lib/host-key'
 import { primaryScope, scopeForHost } from '@/kessel/server-scope'
@@ -17,6 +19,8 @@ import { onVoiceRoomsChanged } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
 import { fetchVoiceRooms, joinVoiceRoom, leaveVoiceCall, sendVoiceSelfState } from '@/lib/voice/voice-api'
 import { makeVoiceEngine } from '@/lib/voice/voice-engine'
+import { NativeVoiceEngine, type NativeStatus, type NativeVoiceBridge } from '@/lib/voice/native-voice-engine'
+import { setUpdateInstallGuard } from '@/stores/update'
 import { createVoiceController, type VoicePrefs, type VoiceState } from './voice-core'
 
 const REPORTED_KEY = 'k2.voice.reportedServers.v1'
@@ -56,6 +60,48 @@ function labelOf(hostKey: string): string {
   if (hostKey === LOCAL_HOME_HOST) return 'This computer'
   const saved = savedHostForKey(useConnectHostStore.getState().hosts, hostKey)
   return saved ? saved.label || saved.hostname : hostKey
+}
+
+const tauriBridge: NativeVoiceBridge = {
+  invoke: (command, args) => invoke(command, args),
+  listen: (event, handler) => listen(event, (e) => handler(e.payload)),
+}
+
+/** The native engine, when this desktop build has it (the `native-voice`
+ *  feature). The web client has no plugin, and holds seats only (V42). */
+async function loadNative(): Promise<NativeVoiceEngine | null> {
+  if (isWebClient()) return null
+  const status = await invoke<NativeStatus>('voice_native_status')
+  return status.available ? new NativeVoiceEngine(tauriBridge) : null
+}
+
+function targetFor(hostKey: string): string | null {
+  if (hostKey === LOCAL_HOME_HOST) return null
+  return savedHostForKey(useConnectHostStore.getState().hosts, hostKey)?.id ?? null
+}
+
+function hostKeyForTarget(target: string): string | null {
+  const host = useConnectHostStore.getState().hosts.find((h) => h.id === target)
+  return host ? homeHostKey(host) : null
+}
+
+/** How long a join waits for the person to answer the OS's mic prompt. */
+const MIC_PROMPT_WAIT_MS = 60_000
+
+/** §14.6: on macOS the first call raises the OS prompt, and the join waits for
+ *  the answer. Windows and Linux have no prompt: the engine reports a refusal. */
+async function micPreflight(): Promise<'granted' | 'denied'> {
+  const state = (): Promise<string> => invoke<string>('permissions_microphone_state')
+  let now = await state()
+  if (now === 'undetermined') {
+    await invoke('permissions_request_microphone')
+    const until = Date.now() + MIC_PROMPT_WAIT_MS
+    while (now === 'undetermined' && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 300))
+      now = await state()
+    }
+  }
+  return now === 'granted' ? 'granted' : 'denied'
 }
 
 export const voice = createVoiceController({
@@ -100,6 +146,20 @@ export const voice = createVoiceController({
   loadPrefs: () => ({ ...DEFAULT_PREFS, ...readJson<Partial<VoicePrefs>>(PREFS_KEY, {}) }),
   savePrefs: (p) => writeJson(PREFS_KEY, p),
   now: () => Date.now(),
+  openMicSettings: () => {
+    void invoke('permissions_open_microphone_settings').catch((err: unknown) => console.warn('[voice] privacy settings:', err))
+  },
+  loadNative,
+  targetFor,
+  hostKeyForTarget,
+  micPreflight,
+})
+
+// vs-live V36: installing an update restarts the app, which ends a call.
+setUpdateInstallGuard(async () => {
+  const call = voice.store.getState().call
+  if (!call || voice.store.getState().engineKind !== 'native') return true
+  return window.confirm(`Updating K2 ends your call in ${call.roomName}. Update now?`)
 })
 
 let starts = 0

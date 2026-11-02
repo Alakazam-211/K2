@@ -13,7 +13,7 @@ import { useVoice, voice } from '@/stores/voice'
 import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
 import { hostingStateText, isLaneReconnecting, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
-import { voiceEngineKind, type VoiceDevices } from '@/lib/voice/voice-engine'
+import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,18 +45,12 @@ function Occupants({ list, size }: { list: VoiceOccupant[]; size: number }): Rea
 }
 
 function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
-  const [devices, setDevices] = useState<VoiceDevices | null>(null)
+  const devices = useVoice((s) => s.devices)
   const prefs = useVoice((s) => s.prefs)
+  const engineKind = useVoice((s) => s.engineKind)
   useEffect(() => {
-    const e = voice.engine()
-    if (!e || call.phase !== 'connected') return
-    let alive = true
-    void e.listDevices().then((d) => {
-      if (alive) setDevices(d)
-    })
-    return () => {
-      alive = false
-    }
+    if (call.phase !== 'connected') return
+    void voice.loadDevices().catch((err: unknown) => console.warn('[voice] reading audio devices failed:', err))
   }, [call.phase])
   const phaseLine =
     call.phase === 'joining'
@@ -82,9 +76,9 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           Through K2's network (relay only)
         </p>
       ) : null}
-      {voiceEngineKind() === 'seat' ? (
+      {engineKind === 'seat' ? (
         <p data-testid="voice-seat-only" className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
-          No call audio in this version: you hold a seat in the room.
+          {isWebClient() ? 'To talk, join from the K2 desktop app. Here you hold a seat in the room.' : 'No call audio in this version: you hold a seat in the room.'}
         </p>
       ) : null}
       {call.participants.length > 0 ? (

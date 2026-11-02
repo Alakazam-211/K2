@@ -9,9 +9,12 @@
 // same split as Home: no shared truth in the renderer, and no loop the
 // headless daemon needs.
 //
-// 0.46.8 carries no call audio: a call is the seat the server gave, on the
-// signalling path only. It runs in the window that joined. Native audio
-// (`sew-call-client`, 0.46.9) plugs in behind the same engine seam.
+// Two kinds of call. With the K2 app's native engine (§14, N2) the call lives in
+// the app's Rust process: the plugin's `join` reaches the server through K2's
+// provider, the engine's events are the call's truth, and every window of the
+// app shows the same call. Without it (a build without the feature, the web
+// client) a call is the seat the server gave, on the signalling path only, and
+// it runs in the window that joined.
 
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { HostEntry, PoolAuth } from '@/lib/host-pool'
@@ -20,7 +23,9 @@ import type { VoiceEngine, EngineParticipant } from '@/lib/voice/voice-engine'
 import { EngineError } from '@/lib/voice/voice-engine'
 import {
   callEndedText,
+  engineErrorText,
   joinErrorText,
+  nativeJoinErrorCode,
   type VoiceJoinAnswer,
   type VoiceErrorCode,
   type VoiceRoom,
@@ -29,6 +34,16 @@ import {
 import { reportsVoice, voiceServers, type VoiceServer } from '@/lib/voice/voice-servers'
 import { canonicalHostKey } from '@/lib/host-key'
 import { VoiceRequestError, voiceCodeOfError, type JoinOptions } from '@/lib/voice/voice-api'
+import {
+  NativeVoiceError,
+  type NativeCallState,
+  type NativeDevices,
+  type NativeEvents,
+  type NativeLevel,
+  type NativeParticipant,
+  type NativeVoiceEngine,
+} from '@/lib/voice/native-voice-engine'
+import type { VoiceDevices } from '@/lib/voice/voice-engine'
 
 /** §4.3: a 30 s check while the popover is open or a call runs. */
 export const VOICE_ROOMS_POLL_MS = 30_000
@@ -39,6 +54,9 @@ export const VOICE_DISCOVERY_MS = 60_000
 export const VOICE_SEAT_GRACE_MS = 10_000
 /** Lists in a row without the seat before the call counts as gone. */
 export const VOICE_SEAT_MISSES = 2
+/** A native `speaking` level above this draws the ring (0 to 1). Not yet tuned
+ *  on real microphones (N4). */
+export const SPEAKING_LEVEL = 0.05
 
 export interface ServerRooms {
   list: VoiceRoomsList | null
@@ -80,6 +98,10 @@ export interface VoiceState {
   notice: { text: string; at: number; kind: 'error' | 'info' } | null
   popoverOpen: boolean
   prefs: VoicePrefs
+  /** `native` once this app's native engine is attached; else the seat only. */
+  engineKind: 'seat' | 'native'
+  /** The audio devices, while a native call's panel has asked (hot-plug updates it). */
+  devices: VoiceDevices | null
 }
 
 export interface VoiceDeps {
@@ -114,6 +136,16 @@ export interface VoiceDeps {
   now: () => number
   /** "Opens the OS privacy pane" on `mic_denied` (§4.6). */
   openMicSettings?: () => void
+  /** The app's native engine, when this build has one. Null: seats only. */
+  loadNative?: () => Promise<NativeVoiceEngine | null>
+  /** The plugin's `target` for a server: its saved host's id. Null: this client
+   *  has no login of its own there. */
+  targetFor?: (hostKey: string) => string | null
+  /** The way back, for a window opened mid-call. */
+  hostKeyForTarget?: (target: string) => string | null
+  /** Before a native join: may the mic be used? Runs the OS prompt if it hasn't
+   *  been answered yet (macOS). */
+  micPreflight?: () => Promise<'granted' | 'denied'>
 }
 
 export interface VoiceController {
@@ -137,6 +169,8 @@ export interface VoiceController {
   setDeafened(deafened: boolean): void
   setPrefs(patch: Partial<VoicePrefs>): void
   engine(): VoiceEngine | null
+  /** Read the audio devices for the call panel (`state.devices`). */
+  loadDevices(): Promise<void>
   /** Start the discovery and refresh timers; returns the stop. */
   start(): () => void
 }
@@ -157,9 +191,21 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     notice: null,
     popoverOpen: false,
     prefs: deps.loadPrefs(),
+    engineKind: 'seat',
+    devices: null,
   }))
   let reported = deps.loadReported()
   let engine: VoiceEngine | null = null
+  /** The native engine, once loaded (one per window; the call is the app's). */
+  let native: NativeVoiceEngine | null = null
+  let nativeLoad: Promise<NativeVoiceEngine | null> | null = null
+  let nativeAttached = false
+  /** This window is inside `native.join`: its answer explains a failure, so the
+   *  `ended` and `errors` events of that failure stay quiet here. */
+  let nativeJoining = false
+  /** The engine's own list and levels; `participants` is drawn from them. */
+  let nativePeople: NativeParticipant[] = []
+  let nativeSpeaking = new Set<string>()
   /** Bumped per join/leave so a stale async step never touches a newer call. */
   let callGen = 0
   /** Lists in a row that didn't show this login in its room. */
@@ -231,7 +277,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
    *  counts, since a stale one shows nobody. */
   const checkSeat = (hostKey: string, list: VoiceRoomsList): void => {
     const c = store.getState().call
-    if (!c || c.phase !== 'connected' || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
+    if (native || !c || c.phase !== 'connected' || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
     if (c.connectedAt === null || deps.now() - c.connectedAt < VOICE_SEAT_GRACE_MS) return
     const names = deps.selfNames(hostKey).map((n) => n.toLowerCase())
     if (names.length === 0) return
@@ -250,6 +296,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const list = await deps.api.rooms(deps.scopeFor(hostKey))
       setRooms(hostKey, { list, error: null, loading: false, at: deps.now() })
       checkSeat(hostKey, list)
+      followNativeRoom(hostKey, list)
+      drawNativeParticipants()
     } catch (err) {
       setRooms(hostKey, { error: err instanceof Error ? err.message : String(err), loading: false })
     }
@@ -317,7 +365,16 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     engine = null
     store.setState({ call: null })
     if (opts.toast) {
-      notice(callEndedText(reason, call.roomName, call.serverLabel), reason === 'left' ? 'info' : 'error')
+      notice(callEndedText(reason, call.roomName, call.serverLabel, native !== null), reason === 'left' ? 'info' : 'error')
+    }
+    if (native) {
+      // The engine tells Sew itself, with the call credential.
+      clearNativeCall()
+      await native.leave().catch((err: unknown) => {
+        console.warn('[voice] leave failed:', err)
+      })
+      void refreshRooms(call.hostKey)
+      return
     }
     if (e) await e.disconnect().catch(() => undefined)
     if (opts.tellServer && call.callId) {
@@ -339,7 +396,262 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (code === 'mic_denied') deps.openMicSettings?.()
   }
 
+  // ── the native engine ────────────────────────────────────────────
+
+  const clearNativeCall = (): void => {
+    nativePeople = []
+    nativeSpeaking = new Set()
+    store.setState({ devices: null })
+  }
+
+  /** The name of a Sew member: the rooms list is the only place that knows. */
+  const nameOfMember = (hostKey: string, memberId: string): string | null => {
+    for (const r of store.getState().rooms[hostKey]?.list?.rooms ?? []) {
+      const o = r.occupants.find((x) => x.memberId === memberId)
+      if (o) return o.name ?? o.user
+    }
+    return null
+  }
+
+  const drawNativeParticipants = (): void => {
+    const c = store.getState().call
+    if (!native || !c) return
+    const self = nativePeople.find((p) => p.isSelf)
+    const list: EngineParticipant[] = nativePeople.map((p) => ({
+      user: nameOfMember(c.hostKey, p.memberId) ?? (p.isSelf ? deps.selfNames(c.hostKey)[0] ?? 'You' : 'Someone'),
+      speaking: nativeSpeaking.has(p.memberId),
+      muted: p.muted || p.serverMuted,
+    }))
+    const muted = self ? self.muted : c.muted
+    const deafened = self ? self.deafened : c.deafened
+    if (JSON.stringify(list) === JSON.stringify(c.participants) && muted === c.muted && deafened === c.deafened) return
+    store.setState({ call: { ...c, participants: list, muted, deafened } })
+  }
+
+  /** A moderator can move someone to another room with no break in the call
+   *  (the state stays `connected`). The server's list says where they are. */
+  const followNativeRoom = (hostKey: string, list: VoiceRoomsList): void => {
+    const c = store.getState().call
+    const me = nativePeople.find((p) => p.isSelf)
+    if (!native || !c || !me || canon(c.hostKey) !== canon(hostKey) || !list.feedLive) return
+    const at = list.rooms.find((r) => r.occupants.some((o) => o.memberId === me.memberId))
+    if (at && at.id !== c.roomId) store.setState({ call: { ...c, roomId: at.id, roomName: at.name } })
+  }
+
+  /** A call this window didn't start: another window's, or one from before a
+   *  reload. The engine and K2's Rust side say what it is. */
+  const adoptNativeCall = async (): Promise<void> => {
+    const n = native
+    if (!n || store.getState().call || nativeJoining) return
+    const gen = callGen
+    const snap = await n.snapshot()
+    if (gen !== callGen || store.getState().call || !snap.target || !snap.room) return
+    const phase = snap.state.state
+    if (phase !== 'connecting' && phase !== 'connected' && phase !== 'reconnecting') return
+    const hostKey = deps.hostKeyForTarget?.(snap.target) ?? null
+    if (!hostKey) {
+      console.warn('[voice] the live call is on a server this window has no entry for')
+      return
+    }
+    const roomName = store.getState().rooms[hostKey]?.list?.rooms.find((r) => r.id === snap.room)?.name ?? snap.room
+    nativePeople = snap.participants
+    callGen += 1
+    store.setState({
+      call: {
+        hostKey,
+        serverLabel: deps.labelOf(hostKey),
+        roomId: snap.room,
+        roomName,
+        callId: snap.callId,
+        phase,
+        muted: false,
+        deafened: false,
+        relayOnly: false,
+        connectedAt: phase === 'connected' ? deps.now() : null,
+        participants: [],
+      },
+    })
+    drawNativeParticipants()
+    void refreshRooms(hostKey)
+  }
+
+  const onNativeState = (s: NativeCallState): void => {
+    if (s.state === 'idle') return
+    if (s.state === 'ended') {
+      // This window's own failed join is explained by the join's answer.
+      if (nativeJoining) return
+      const c = store.getState().call
+      if (!c) return
+      callGen += 1
+      engine = null
+      clearNativeCall()
+      store.setState({ call: null })
+      if (s.reason !== 'left') notice(callEndedText(s.reason, c.roomName, c.serverLabel, true), 'error')
+      void refreshRooms(c.hostKey)
+      return
+    }
+    const c = store.getState().call
+    if (!c) {
+      void adoptNativeCall().catch((err: unknown) => console.warn('[voice] reading the live call failed:', err))
+      return
+    }
+    if (s.state === 'connected') store.setState({ call: { ...c, phase: 'connected', connectedAt: c.connectedAt ?? deps.now() } })
+    else if (s.state === 'reconnecting') store.setState({ call: { ...c, phase: 'reconnecting' } })
+    else if (c.phase !== 'joining') store.setState({ call: { ...c, phase: 'connecting' } })
+  }
+
+  const onNativeParticipants = (list: NativeParticipant[]): void => {
+    const c = store.getState().call
+    const unknown = c && list.some((p) => !p.isSelf && nameOfMember(c.hostKey, p.memberId) === null)
+    nativePeople = list
+    drawNativeParticipants()
+    // Someone the last list didn't have: the server's list names them.
+    if (c && unknown) void refreshRooms(c.hostKey)
+  }
+
+  const onNativeSpeaking = (levels: NativeLevel[]): void => {
+    const next = new Set(levels.filter((l) => l.level > SPEAKING_LEVEL).map((l) => l.memberId))
+    if (next.size === nativeSpeaking.size && [...next].every((m) => nativeSpeaking.has(m))) return
+    nativeSpeaking = next
+    drawNativeParticipants()
+  }
+
+  const onNativeError = (code: string): void => {
+    const c = store.getState().call
+    // A failed join says this itself; with no call there's nothing to explain.
+    if (nativeJoining || !c) return
+    const text = engineErrorText(code, c.serverLabel)
+    if (text) notice(text.line, text.kind)
+    else console.warn(`[voice] engine says: ${code}`)
+    if (code === 'mic_denied') deps.openMicSettings?.()
+  }
+
+  const nativeEvents: NativeEvents = {
+    onState: onNativeState,
+    onParticipants: onNativeParticipants,
+    onSpeaking: onNativeSpeaking,
+    onDevices: (d: NativeDevices) => {
+      if (store.getState().devices) store.setState({ devices: d })
+    },
+    onError: onNativeError,
+  }
+
+  /** Load the native engine once and attach this window to it. */
+  const loadNativeEngine = (): Promise<NativeVoiceEngine | null> => {
+    if (nativeLoad) return nativeLoad
+    nativeLoad = (async () => {
+      const n = (await deps.loadNative?.()) ?? null
+      if (!n) return null
+      await n.start(nativeEvents)
+      native = n
+      nativeAttached = true
+      store.setState({ engineKind: 'native' })
+      await adoptNativeCall()
+      return n
+    })().catch((err: unknown) => {
+      // Reported, not hidden; this window then holds seats only.
+      console.error('[voice] the native engine did not start:', err)
+      nativeLoad = null
+      return null
+    })
+    return nativeLoad
+  }
+
+  const failNativeJoin = (gen: number, err: unknown, room: VoiceRoom, label: string, hostKey: string): void => {
+    if (gen !== callGen) return
+    const e = err instanceof NativeVoiceError ? err : new NativeVoiceError('failed', err instanceof Error ? err.message : String(err))
+    // Our own leave cancelled it: nothing to say.
+    if (e.code === 'left') return
+    if (e.code === 'already_in_call') {
+      // Another window got there first: show that call.
+      store.setState({ call: null })
+      callGen += 1
+      nativeJoining = false
+      void adoptNativeCall().catch((failure: unknown) => console.warn('[voice] reading the live call failed:', failure))
+      return
+    }
+    const detail = e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null
+    const hint = typeof detail?.hint === 'string' ? detail.hint : ''
+    failJoin(gen, nativeJoinErrorCode(e.code, detail), room, label, hint)
+    void refreshRooms(hostKey)
+  }
+
+  const joinNative = async (n: NativeVoiceEngine, hostKey: string, room: VoiceRoom): Promise<void> => {
+    const current = store.getState().call
+    if (current) await endCall(callGen, 'left', { tellServer: true, toast: false })
+    const gen = ++callGen
+    const label = deps.labelOf(hostKey)
+    const prefs = store.getState().prefs
+    clearNativeCall()
+    store.setState({
+      notice: null,
+      call: {
+        hostKey,
+        serverLabel: label,
+        roomId: room.id,
+        roomName: room.name,
+        callId: null,
+        phase: 'joining',
+        muted: prefs.joinMuted,
+        deafened: false,
+        relayOnly: false,
+        connectedAt: null,
+        participants: [],
+      },
+    })
+    const target = deps.targetFor?.(hostKey) ?? null
+    if (target === null) {
+      failJoin(gen, canon(hostKey) === 'local' ? 'owner_token_cannot_join' : 'signin_required', room, label)
+      return
+    }
+    nativeJoining = true
+    try {
+      if ((await deps.micPreflight?.()) === 'denied') {
+        failJoin(gen, 'mic_denied', room, label)
+        return
+      }
+      if (gen !== callGen) return
+      // Saved picks apply to the next call. A pick that's gone is no reason to
+      // refuse the call: it runs on the default device.
+      if (prefs.inputDeviceId || prefs.outputDeviceId) {
+        await n
+          .setDevice({ ...(prefs.inputDeviceId ? { input: prefs.inputDeviceId } : {}), ...(prefs.outputDeviceId ? { output: prefs.outputDeviceId } : {}) })
+          .catch((err: unknown) => console.warn('[voice] saved audio device not applied:', err))
+      }
+      const { callId } = await n.join({ target, room: room.id, muted: prefs.joinMuted })
+      nativeJoining = false
+      if (gen !== callGen) return
+      const phase = (await n.snapshot()).state.state
+      if (gen !== callGen) return
+      const c = store.getState().call
+      if (!c) return
+      if (phase === 'ended') {
+        store.setState({ call: null })
+        callGen += 1
+        clearNativeCall()
+        void refreshRooms(hostKey)
+        return
+      }
+      store.setState({
+        call: {
+          ...c,
+          callId,
+          phase: phase === 'connected' ? 'connected' : phase === 'reconnecting' ? 'reconnecting' : 'connecting',
+          connectedAt: phase === 'connected' ? (c.connectedAt ?? deps.now()) : c.connectedAt,
+        },
+      })
+      drawNativeParticipants()
+      void refreshRooms(hostKey)
+    } catch (err) {
+      failNativeJoin(gen, err, room, label, hostKey)
+    } finally {
+      nativeJoining = false
+    }
+  }
+
   const join = async (hostKey: string, room: VoiceRoom): Promise<void> => {
+    const n = deps.loadNative ? await loadNativeEngine() : null
+    if (n) return joinNative(n, hostKey, room)
     const current = store.getState().call
     if (current) await endCall(callGen, 'left', { tellServer: true, toast: false })
     const gen = ++callGen
@@ -427,7 +739,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
 
   const sendSelf = (): void => {
     const c = store.getState().call
-    if (!c?.callId) return
+    // The native engine sends Sew's self state itself.
+    if (!c?.callId || native) return
     void deps.api.selfState(deps.scopeFor(c.hostKey), c.callId, c.muted, c.deafened).catch((err: unknown) => {
       console.warn('[voice] self state failed:', err)
     })
@@ -436,6 +749,12 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const setMuted = (muted: boolean): void => {
     const c = store.getState().call
     if (!c) return
+    if (native) {
+      // Optimistic; the engine's `participants` event is the truth.
+      store.setState({ call: { ...c, muted } })
+      void native.mute({ muted }).catch((err: unknown) => console.warn('[voice] mute failed:', err))
+      return
+    }
     engine?.setMuted(muted)
     store.setState({ call: { ...c, muted } })
     sendSelf()
@@ -444,6 +763,11 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const setDeafened = (deafened: boolean): void => {
     const c = store.getState().call
     if (!c) return
+    if (native) {
+      store.setState({ call: { ...c, deafened, muted: deafened ? true : c.muted } })
+      void native.mute({ deafened }).catch((err: unknown) => console.warn('[voice] deafen failed:', err))
+      return
+    }
     engine?.setDeafened(deafened)
     // Deafen mutes too (the usual rule); undeafen leaves the mic as it was.
     store.setState({ call: { ...c, deafened, muted: deafened ? true : c.muted } })
@@ -455,8 +779,35 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     const prefs = { ...store.getState().prefs, ...patch }
     store.setState({ prefs })
     deps.savePrefs(prefs)
+    if (native) {
+      void applyNativeDevice(native, patch).catch((err: unknown) => {
+        console.warn('[voice] switching audio device failed:', err)
+        notice("K2 couldn't switch to that audio device.", 'error')
+      })
+      return
+    }
     if (patch.inputDeviceId !== undefined) void engine?.setInputDevice(patch.inputDeviceId)
     if (patch.outputDeviceId !== undefined) void engine?.setOutputDevice(patch.outputDeviceId)
+  }
+
+  /** "System default" (`null`): `set_device` takes only an id, so it means the
+   *  device the OS calls default right now. */
+  const applyNativeDevice = async (n: NativeVoiceEngine, patch: Partial<VoicePrefs>): Promise<void> => {
+    const list = patch.inputDeviceId === null || patch.outputDeviceId === null ? await n.devices() : null
+    const pick = (id: string | null | undefined, rows: NativeDevices['inputs'] | undefined): string | undefined =>
+      id === undefined ? undefined : (id ?? rows?.find((d) => d.isDefault)?.id)
+    const input = pick(patch.inputDeviceId, list?.inputs)
+    const output = pick(patch.outputDeviceId, list?.outputs)
+    if (input === undefined && output === undefined) return
+    await n.setDevice({ ...(input !== undefined ? { input } : {}), ...(output !== undefined ? { output } : {}) })
+  }
+
+  const loadDevices = async (): Promise<void> => {
+    if (native) {
+      store.setState({ devices: await native.devices() })
+      return
+    }
+    if (engine) store.setState({ devices: await engine.listDevices() })
   }
 
   // §4.4: signed out, kicked or removed on the call's server ends the call.
@@ -484,8 +835,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     setDeafened,
     setPrefs,
     engine: () => engine,
+    loadDevices,
     start() {
       started = true
+      void loadNativeEngine()
       const unsubPool = deps.onPoolChange(recompute)
       const unsubWindow = deps.onWindowRoomsChanged((rev) => noteRoomsChanged(deps.windowKey(), rev))
       recompute()
@@ -503,6 +856,13 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         subs.clear()
         clearInterval(discoverTimer)
         clearInterval(roomsTimer)
+        if (native && nativeAttached) {
+          native.stop()
+          native = null
+          nativeAttached = false
+          nativeLoad = null
+          store.setState({ engineKind: 'seat' })
+        }
       }
     },
   }

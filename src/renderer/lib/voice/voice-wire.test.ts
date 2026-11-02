@@ -49,7 +49,7 @@ describe('parseVoiceRooms (voice/routes.rs rooms_view)', () => {
     expect(list.rev).toBe(7)
     expect(list.hosting).toEqual({ state: 'ok', line: 'Voice rooms are on.', detail: null })
     expect(list.rooms.map((r) => r.id)).toEqual(['room-1', 'room-2', 'room-3'])
-    expect(list.rooms[0].occupants).toEqual([{ user: 'ada', name: null, role: 'admin', color: null, muted: true, deafened: false, speaking: false }])
+    expect(list.rooms[0].occupants).toEqual([{ user: 'ada', name: null, memberId: 'm1', role: 'admin', color: null, muted: true, deafened: false, speaking: false }])
     expect(list.rooms[1]).toMatchObject({ closing: true, closesAt: 9_000 })
     expect(list.rooms[2].unavailable).toBe('media_path_down')
   })

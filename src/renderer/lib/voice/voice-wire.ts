@@ -34,6 +34,9 @@ export interface VoiceOccupant {
   user: string
   /** Display name, when the server sends one. */
   name: string | null
+  /** Sew's member id: how the native engine's people (who have no names) are
+   *  matched to this list. */
+  memberId?: string
   role: string | null
   color: string | null
   muted: boolean
@@ -93,6 +96,7 @@ function parseOccupant(raw: unknown): VoiceOccupant | null {
   return {
     user,
     name: str(r.name),
+    memberId: str(r.memberId) ?? undefined,
     role: str(r.role),
     color: str(r.color),
     muted: r.muted === true,
@@ -206,7 +210,10 @@ export type VoiceErrorCode =
   | 'media_path_down'
   | 'member_pending'
   | 'e2ee_unsupported'
+  | 'server_too_old'
   | 'mic_denied'
+  | 'mic_unavailable'
+  | 'e2ee_refused'
   | 'turn_unreachable'
   | 'signin_required'
   | 'join_timeout'
@@ -239,6 +246,31 @@ export function voiceErrorCode(code: string | null, details: Record<string, unkn
   return 'unknown'
 }
 
+/** The §4.6 code of a native engine's `join` rejection: the plugin's own codes,
+ *  or a server refusal K2's provider passed on as `{hint, details}`. */
+export function nativeJoinErrorCode(code: string, detail: Record<string, unknown> | null): VoiceErrorCode {
+  switch (code) {
+    case 'mic_denied':
+    case 'mic_unavailable':
+    case 'turn_unreachable':
+    case 'signin_required':
+    case 'join_timeout':
+    case 'e2ee_refused':
+      return code
+    case 'ca_pin_mismatch':
+    case 'relay_only_no_turns':
+      return 'turn_unreachable'
+    case 'unavailable':
+      return 'voice_unavailable'
+    case 'voice_server_too_old':
+      return 'server_too_old'
+  }
+  const details = detail?.details && typeof detail.details === 'object' ? (detail.details as Record<string, unknown>) : null
+  const mapped = voiceErrorCode(code, details)
+  // A native join has its keys: this refusal means the server's Sew is behind.
+  return mapped === 'e2ee_unsupported' ? 'server_too_old' : mapped
+}
+
 /** §4.6 join errors (with V16's `media_path_down` row). `hint` is the
  *  daemon's own line, for a refusal this client has no words for. */
 export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabel: string, limit: number | null, hint = ''): string {
@@ -257,8 +289,14 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
       return `K2 is still setting up your login on ${serverLabel}. Try again in a moment.`
     case 'e2ee_unsupported':
       return 'Call audio arrives in a later K2 update. You can see who is in the rooms now.'
+    case 'server_too_old':
+      return `${serverLabel} needs a K2 update before you can join from this app.`
     case 'mic_denied':
-      return "K2 can't use your microphone."
+      return "K2 can't use your microphone. Turn it on for K2 in your system's privacy settings, then join again."
+    case 'mic_unavailable':
+      return "K2 can't open your microphone. Check that one is connected and that no other app is holding it."
+    case 'e2ee_refused':
+      return `Couldn't join ${roomName}: the call's encryption didn't check out.`
     case 'turn_unreachable':
       return `Can't reach ${serverLabel}'s voice server from this network.`
     case 'signin_required':
@@ -274,8 +312,9 @@ export function joinErrorText(code: VoiceErrorCode, roomName: string, serverLabe
 
 /** Why a call ended (§4.4 "a one-line toast says why"): Sew's leave reasons
  *  (`VoiceLeaveReason`) and the client's own `signed_out`, `network` and
- *  `seat_lost`. */
-export function callEndedText(reason: string, roomName: string, serverLabel: string): string {
+ *  `seat_lost`, and the native engine's end reasons. Treats a reason it doesn't
+ *  know as "ended" (§14.3). */
+export function callEndedText(reason: string, roomName: string, serverLabel: string, native = false): string {
   switch (reason) {
     case 'left':
       return `You left ${roomName}.`
@@ -285,18 +324,46 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
       return `${roomName} closed.`
     case 'removed_by_moderator':
     case 'removed_from_space':
+    case 'kicked':
       return `You were removed from ${roomName}.`
     case 'session_revoked':
     case 'signed_out':
+    case 'signin_required':
       return `You were signed out of ${serverLabel}.`
     case 'network':
     case 'disconnected':
       return `The call to ${roomName} dropped: the connection was lost.`
     case 'seat_lost':
     case 'connect_timeout':
+      if (native) return `${serverLabel} dropped you from ${roomName}.`
       return `${serverLabel} dropped you from ${roomName}. This K2 can't carry call audio yet.`
+    case 'unavailable':
+      return `The call to ${roomName} ended: ${serverLabel} isn't answering.`
+    case 'e2ee_refused':
+      return `The call to ${roomName} ended: its encryption didn't check out.`
+    case 'credential_lost':
+      return `The call to ${roomName} ended: your login joined from another device.`
+    case 'mic_denied':
+      return `The call to ${roomName} ended: K2 can't use your microphone.`
     default:
       return `The call to ${roomName} ended.`
+  }
+}
+
+/** What an `errors` event from the native engine says during a call. Null: not
+ *  something to show (`key_storage_file`, an unknown code): the log has it. */
+export function engineErrorText(code: string, serverLabel: string): { line: string; kind: 'error' | 'info' } | null {
+  switch (code) {
+    case 'mic_denied':
+      return { line: "K2 can't use your microphone. Turn it on for K2 in your system's privacy settings.", kind: 'error' }
+    case 'mic_unavailable':
+      return { line: "K2 can't open your microphone. Check that one is connected and that no other app is holding it.", kind: 'error' }
+    case 'device_lost':
+      return { line: 'Your audio device went away. The call moved to the default one.', kind: 'info' }
+    case 'turn_unreachable':
+      return { line: `Can't reach ${serverLabel}'s voice server from this network.`, kind: 'error' }
+    default:
+      return null
   }
 }
 

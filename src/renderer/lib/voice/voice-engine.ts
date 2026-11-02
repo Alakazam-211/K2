@@ -1,10 +1,11 @@
 // Voice rooms (prd-k2-voice-rooms-v1 §4.4, lane D): the media engine seam.
 //
-// 0.46.8 carries no call audio. `SeatOnlyEngine` holds the seat the server
-// gave and starts no media, so join, leave, mute and the room list run on the
-// signalling path alone. Native audio arrives in 0.46.9 through
-// `sew-call-client`; wiring it is one `setVoiceEngineFactory` call. (The spike
-// found stock WebKitGTK has no WebRTC, so calls won't run in the webview.)
+// `SeatOnlyEngine` holds the seat the server gave and starts no media, so join,
+// leave, mute and the room list run on the signalling path alone. It's what a
+// client without the native engine has: a build without the `native-voice`
+// feature, and the web client. The native engine (`native-voice-engine.ts`) is
+// the K2 app's real call, and does its own join. (The spike found stock
+// WebKitGTK has no WebRTC, so calls won't run in the webview.)
 //
 // Relay-only (§6.6 M9/M10): when the box's media tier is tunnel, Sew's join
 // answer says `media.relay_only: true`. A real engine must then use only the
@@ -72,8 +73,7 @@ export class EngineError extends Error {
   }
 }
 
-/** 0.46.8: the seat only. Mute and deafen still reach the server through the
- *  store. */
+/** The seat only. Mute and deafen still reach the server through the store. */
 export class SeatOnlyEngine implements VoiceEngine {
   async connect(_opts: EngineConnectOptions, events: EngineEvents): Promise<void> {
     events.onState('connected')
@@ -88,21 +88,7 @@ export class SeatOnlyEngine implements VoiceEngine {
   async disconnect(): Promise<void> {}
 }
 
-/** Which engine joins use: `seat` until native audio is installed. */
-export type VoiceEngineKind = 'seat' | 'native'
-
-let factory: (() => VoiceEngine) | null = null
-
-/** Install the native engine (0.46.9), or null for the seat only. */
-export function setVoiceEngineFactory(make: (() => VoiceEngine) | null): void {
-  factory = make
-}
-
-export function voiceEngineKind(): VoiceEngineKind {
-  return factory ? 'native' : 'seat'
-}
-
-/** A fresh engine for one call. */
+/** A fresh seat engine for one call. */
 export function makeVoiceEngine(): VoiceEngine {
-  return factory ? factory() : new SeatOnlyEngine()
+  return new SeatOnlyEngine()
 }

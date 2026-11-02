@@ -77,6 +77,13 @@ interface UpdateState {
   installAndRelaunch: () => Promise<void>
 }
 
+/** Asked before an install restarts the app; false stops it. Set from outside so
+ *  this store doesn't depend on what it's protecting (a voice call, V36). */
+let installGuard: (() => Promise<boolean>) | null = null
+export function setUpdateInstallGuard(guard: (() => Promise<boolean>) | null): void {
+  installGuard = guard
+}
+
 function updateErrorText(err: unknown): string {
   if (typeof err === 'string') return err
   if (err instanceof Error && err.message) return err.message
@@ -231,6 +238,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   installLinuxPackage: async () => {
     const version = get().version
     if (!version || !get().linuxCanInstall || get().linuxInstalling) return
+    if (installGuard && !(await installGuard())) return
     set({ status: 'downloading', progress: 0, error: null, linuxInstalling: true, linuxManualCommand: null })
     let outcome: LinuxInstallOutcome
     try {
@@ -292,6 +300,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     // Arch offers a pkg URL and never sets pendingUpdate. Do not relaunch
     // or the unknown bundle type falls through to an AppImage install.
     if (!pendingUpdate) return
+    if (installGuard && !(await installGuard())) return
     try {
       // Unlock k2-daemon.exe so NSIS can replace it (Windows file lock).
       await invoke('stop_bundled_daemon_for_update').catch((e) => {

@@ -155,7 +155,7 @@ describe('voice controller: join and leave', () => {
     await ctl.join(SEW, room1)
     expect(ctl.store.getState().call).toBeNull()
     expect(api.leave).toHaveBeenCalledWith(scopeFor(SEW), 'call-1')
-    expect(ctl.store.getState().notice?.text).toBe("K2 can't use your microphone.")
+    expect(ctl.store.getState().notice?.text).toContain("K2 can't use your microphone")
   })
 
   it("Sew refusing a client without E2EE says audio comes later, and takes no seat", async () => {

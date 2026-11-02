@@ -121,13 +121,16 @@ pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, cus
         out.push_str("transport.proxyProtocolVersion = \"v2\"\n");
     }
 
-    if e2e && !sub.is_empty() && !custom.is_empty() {
+    // The relay registers these names only on `k2-custom-<label>` from that
+    // label: the confirmed one, as for the main proxy.
+    let custom_label = proxy_label(cfg).filter(|_| e2e && !custom.is_empty());
+    if let Some(label) = custom_label {
         out.push('\n');
         out.push_str("# Path B (0.46.8): this box's own domains through K2's relays. The relay\n");
         out.push_str("# passes each TLS stream through by name; the daemon ends TLS with the\n");
         out.push_str("# name's own certificate.\n");
         out.push_str("[[proxies]]\n");
-        out.push_str(&format!("name = {}\n", toml_str(&format!("{}{sub}", super::custom_names::PROXY_PREFIX))));
+        out.push_str(&format!("name = {}\n", toml_str(&format!("{}{label}", super::custom_names::PROXY_PREFIX))));
         out.push_str("type = \"https\"\n");
         out.push_str("localIP = \"127.0.0.1\"\n");
         out.push_str(&format!("localPort = {local_port}\n"));
@@ -427,6 +430,9 @@ mod tests {
             let main = render_frpc_toml(&cfg, 57839, true);
             assert!(main.contains("name = \"k2so-rosson\""), "{requested:?}\n{main}");
             assert_eq!(main.matches("name = ").count(), 1, "{main}");
+            let names = ["a.example.com".to_string()];
+            let with_custom = render_frpc_toml_with(&cfg, 57839, true, &names);
+            assert!(with_custom.contains("name = \"k2-custom-rosson\""), "{requested:?}\n{with_custom}");
             let voice = render_voice_frpc_toml(&cfg, &relay).expect("a confirmed label");
             assert!(voice.contains("name = \"k2voice-rosson\""), "{requested:?}\n{voice}");
             assert!(voice.contains("customDomains = [\"turn.rosson.k2.dev\"]"), "{voice}");
@@ -447,6 +453,8 @@ mod tests {
                 assert!(!toml.contains("[[proxies]]"), "{confirmed:?}\n{toml}");
                 assert!(!toml.contains("k2so-"), "{toml}");
                 assert!(toml.contains("[metadatas]\ntoken = \"tok_secret\""), "frpc still logs in\n{toml}");
+                let with_custom = render_frpc_toml_with(&cfg, 57839, e2e, &["a.example.com".to_string()]);
+                assert!(!with_custom.contains("[[proxies]]"), "no label, no custom proxy either\n{with_custom}");
             }
             assert_eq!(render_voice_frpc_toml(&cfg, &relay), None);
         }

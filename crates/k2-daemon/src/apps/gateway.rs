@@ -180,6 +180,9 @@ pub fn app_session(raw: &str, app_service_id: &str) -> Option<SkinPass> {
     k2_core::skin::resolve_skin_token(raw).filter(|p| p.session && p.app == app_service_id)
 }
 
+/// `auth.logout` on the link (see [`gate_on`]).
+const LOGOUT: &str = "/cli/skin/logout";
+
 /// `/v1/apps/<id>/<verb…>` → `<id>` (the App-scoped key's door, S45).
 pub fn v1_app_id(path: &str) -> Option<&str> {
     let rest = path.strip_prefix(super::app_key_routes::PREFIX)?;
@@ -1127,6 +1130,15 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
         }),
     };
     let Some(pass) = resolved else {
+        // 0.46.8: logout takes any live login session the caller holds:
+        // holding it is the proof, and `skin_routes::handle_logout` ends only
+        // that one. Never a non-session pass (it stays `pass_wrong_link`).
+        if method == "POST" && path == LOGOUT {
+            if let Some(p) = k2_core::skin::resolve_skin_token(raw).filter(|p| p.session) {
+                seen.actor = Some(format!("guest:{}", p.principal_id.as_deref().unwrap_or(p.username.as_str())));
+                return Gate::Continue;
+            }
+        }
         return match passes::classify_presented(raw) {
             PresentedPass::Unknown => deny(Some(c), 401, "pass_invalid", "the pass is expired or revoked: read K2_PASS_FILE again (K2 rotates it)"),
             other => {

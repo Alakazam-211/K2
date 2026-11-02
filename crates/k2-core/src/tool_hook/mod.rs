@@ -1802,8 +1802,8 @@ pub fn app_spaces(app_id: &str) -> Result<Vec<governed::AppSpace>, String> {
 pub fn put_app_channel_for_tests(space: &str, slug: &str, app: &str, channel_id: &str, name: &str) -> Result<(), String> {
     crate::skin::with_skin_conn(|conn| {
         conn.execute(
-            "INSERT INTO tool_app_space_channels (space_id, slug, app_id, source, channel_id, name, kind, private, state)
-             VALUES (?1, ?2, ?3, 'manifest', ?4, ?5, 'text', 0, ?6)",
+            "INSERT INTO tool_app_space_channels (space_id, slug, app_id, source, channel_id, name, kind, private, state, updated_at)
+             VALUES (?1, ?2, ?3, 'manifest', ?4, ?5, 'text', 0, ?6, 0)",
             rusqlite::params![space, slug, app, channel_id, name, governed::CH_READY],
         )
         .map(|_| ())

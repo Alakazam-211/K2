@@ -608,6 +608,31 @@ pub const LINK_LOGINS_PER_APP: usize = 600;
 /// Flood breaker: every guest login through every App's link together
 /// per window (0.46.6; it was 300).
 pub const LINK_LOGINS_ALL_APPS: usize = 3000;
+/// Failed guest logins per (App, visitor) per window (0.46.8, Path B
+/// PB-G3; vs-live PB-A9), like the main login's per-IP budget. The visitor
+/// is the `X-K2-Client-IP` the App's server forwards on the link (the
+/// address K2 gave it); trusted only as a bucket key: an App that lies
+/// only hurts its own guests. One visitor's failures then lock out that
+/// visitor, never every guest of the App.
+pub const LINK_LOGIN_FAILS_PER_VISITOR: usize = crate::login_throttle::LIMIT;
+
+/// The header an App's server forwards on a link login: the visitor K2
+/// passed it (`client_ip::HEADER`).
+pub const VISITOR_HEADER: &str = crate::client_ip::HEADER;
+
+/// The visitor an App's server named on a link request (`X-K2-Client-IP`),
+/// keyed like the guard (IPv6 by /64). Not an address: no visitor.
+pub fn link_visitor(headers_blob: &str) -> Option<std::net::IpAddr> {
+    let raw = headers_blob.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case(VISITOR_HEADER).then(|| value.trim().to_string())
+    })?;
+    let ip: std::net::IpAddr = raw.parse().ok()?;
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    Some(super::guard::visitor_key(ip))
+}
 
 /// The limiter keys of a guest login on one App's link (the skin table).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,6 +647,9 @@ pub struct LinkLoginKeys {
     pub all: String,
     /// Failures through every App's link.
     pub all_fails: String,
+    /// Failures for this (App, visitor), when the App's server named one
+    /// (0.46.8, PB-G3).
+    pub per_visitor: Option<String>,
 }
 
 /// The limiter keys of a login on `app`'s link for `username`.
@@ -633,7 +661,16 @@ pub fn link_login_keys(app_service_id: &str, username: &str) -> LinkLoginKeys {
         app_fails: format!("{p}app-link-fails:{app_service_id}"),
         all: format!("{p}app-link:*"),
         all_fails: format!("{p}app-link-fails:*"),
+        per_visitor: None,
     }
+}
+
+/// [`link_login_keys`] with the visitor's bucket (PB-G3).
+pub fn link_login_keys_for(app_service_id: &str, username: &str, visitor: Option<std::net::IpAddr>) -> LinkLoginKeys {
+    let mut k = link_login_keys(app_service_id, username);
+    k.per_visitor =
+        visitor.map(|ip| format!("{}app-link-visitor:{app_service_id}:{ip}", crate::login_throttle::SKIN_KEY_PREFIX));
+    k
 }
 
 /// What the dispatcher does with a guest login on a link.
@@ -656,7 +693,12 @@ fn is_app_key(k: &str) -> bool {
 /// naming another App is refused), then the per-App bucket, the
 /// link-wide bucket and the (App, username) failure count. `None` = not
 /// on a link.
-pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], content_type: &str) -> Option<LinkLogin> {
+pub fn link_login(
+    limiter: &crate::login_throttle::LoginLimiter,
+    body: &[u8],
+    content_type: &str,
+    visitor: Option<std::net::IpAddr>,
+) -> Option<LinkLogin> {
     let l = current()?;
     let svc = l.service_id.as_str();
     // The handler's own notion of a form body (it also reads multipart as
@@ -717,8 +759,16 @@ pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], co
     // counted against the guest it signs in as: `ada`, `ADA` and ada's
     // email are one budget, as they are one lockout (0.46.5 review nit).
     let subject = k2_core::skin::login_throttle_subject(&crate::skin_routes::login_username(&body, content_type));
-    let keys = link_login_keys(svc, &subject);
+    let keys = link_login_keys_for(svc, &subject, visitor);
     let now = limiter.now();
+    // PB-G3 (0.46.8): this visitor's own failures first, so a visitor who
+    // is limited spends nothing of the App's budgets. No visitor named:
+    // no per-visitor bucket (never one shared bucket for all of them).
+    if let Some(k) = keys.per_visitor.as_deref() {
+        if limiter.is_limited(k, LINK_LOGIN_FAILS_PER_VISITOR, now) {
+            return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed logins from this visitor on this App; wait 5 minutes"));
+        }
+    }
     // The failure ceilings first (they record nothing), then the flood
     // breakers (they record every attempt that gets this far).
     if limiter.is_limited(&keys.per_user, LINK_LOGIN_FAILS_PER_USER, now) {
@@ -743,6 +793,9 @@ pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], co
 /// that (App, guest), for the App, and for every App's link together.
 pub fn link_login_refused(limiter: &crate::login_throttle::LoginLimiter, keys: &LinkLoginKeys) {
     let now = limiter.now();
+    if let Some(k) = keys.per_visitor.as_deref() {
+        limiter.record_with_limit(k, LINK_LOGIN_FAILS_PER_VISITOR, now);
+    }
     limiter.record_with_limit(&keys.per_user, LINK_LOGIN_FAILS_PER_USER, now);
     limiter.record_with_limit(&keys.app_fails, LINK_LOGIN_FAILS_PER_APP, now);
     limiter.record_with_limit(&keys.all_fails, LINK_LOGIN_FAILS_ALL_APPS, now);
@@ -1231,7 +1284,17 @@ mod tests {
     }
 
     fn login(l: &crate::login_throttle::LoginLimiter, svc: &str, body: &str, ct: &str) -> LinkLogin {
-        LINK.sync_scope(ctx(&format!("app-{svc}"), svc), || link_login(l, body.as_bytes(), ct)).expect("on a link")
+        login_from(l, svc, body, ct, None)
+    }
+
+    fn login_from(
+        l: &crate::login_throttle::LoginLimiter,
+        svc: &str,
+        body: &str,
+        ct: &str,
+        visitor: Option<std::net::IpAddr>,
+    ) -> LinkLogin {
+        LINK.sync_scope(ctx(&format!("app-{svc}"), svc), || link_login(l, body.as_bytes(), ct, visitor)).expect("on a link")
     }
 
     fn proceed_keys(r: LinkLogin) -> (Vec<u8>, LinkLoginKeys) {
@@ -1272,7 +1335,7 @@ mod tests {
         // The per-guest key reads skin.db (who the name signs in as).
         let _home = k2_core::test_env::TempHome::new();
         let l = crate::login_throttle::LoginLimiter::new();
-        assert!(link_login(&l, b"{}", "application/json").is_none(), "off a link: nothing to do");
+        assert!(link_login(&l, b"{}", "application/json", None).is_none(), "off a link: nothing to do");
         let (b, _) = proceed(login(&l, "svc-a", r#"{"username":"ann","password":"x"}"#, "application/json"));
         let v: Value = serde_json::from_slice(&b).unwrap();
         assert_eq!((v["app"].as_str(), v["username"].as_str()), (Some("svc-a"), Some("ann")));
@@ -1464,5 +1527,44 @@ mod tests {
         assert_eq!(hint, "too many guest logins through App links on this server; wait a few minutes");
         l.advance_clock_for_tests(crate::login_throttle::WINDOW_SECS + 1);
         proceed(login(&l, "svc-a", &body("late"), JSON));
+    }
+
+    /// PB-G3 (PRD test 10): the 6th failed login from one visitor on an
+    /// App's link is a 429 that spends none of the App's budgets; another
+    /// visitor on the same App still logs in. A login whose App names no
+    /// visitor gets no per-visitor bucket at all, so 200 of them never trip
+    /// one (relay fact 3: unknown is never one shared bucket). The header
+    /// is a bucket key only: not an address → no visitor; IPv6 by /64.
+    #[test]
+    fn link_logins_are_also_limited_per_visitor() {
+        let _home = k2_core::test_env::TempHome::new();
+        let l = crate::login_throttle::LoginLimiter::new();
+        const JSON: &str = "application/json";
+        let body = |u: &str| format!(r#"{{"username":"{u}","password":"x"}}"#);
+        let mallory: std::net::IpAddr = "203.0.113.66".parse().unwrap();
+        for i in 0..LINK_LOGIN_FAILS_PER_VISITOR {
+            let (_, keys) = proceed_keys(login_from(&l, "svc-v", &body(&format!("guess{i}")), JSON, Some(mallory)));
+            assert_eq!(keys.per_visitor.as_deref(), Some("skin:app-link-visitor:svc-v:203.0.113.66"));
+            link_login_refused(&l, &keys);
+        }
+        let (status, code, hint) = refused_hint(login_from(&l, "svc-v", &body("guess-next"), JSON, Some(mallory)));
+        assert_eq!((status, code.as_str()), ("429 Too Many Requests", "rate_limited"), "the 6th from one visitor");
+        assert_eq!(hint, "too many failed logins from this visitor on this App; wait 5 minutes");
+        // Another visitor on the same App, and the same visitor on another App.
+        proceed(login_from(&l, "svc-v", &body("alice"), JSON, Some("198.51.100.4".parse().unwrap())));
+        proceed(login_from(&l, "svc-w", &body("alice"), JSON, Some(mallory)));
+        // No visitor named: no per-visitor bucket, however many.
+        for i in 0..200 {
+            let (_, keys) = proceed_keys(login_from(&l, "svc-u", &body(&format!("u{i}")), JSON, None));
+            assert_eq!(keys.per_visitor, None, "unknown visitor is never one bucket");
+        }
+        // The header, read from a request head.
+        assert_eq!(link_visitor("Host: x\r\nX-K2-Client-IP: 203.0.113.66\r\n"), Some(mallory));
+        assert_eq!(link_visitor("x-k2-client-ip:  2001:db8:1:2::9 \r\n"), Some("2001:db8:1:2::".parse().unwrap()));
+        assert_eq!(link_visitor("X-K2-Client-IP: not-an-ip\r\n"), None);
+        assert_eq!(link_visitor("X-K2-Client-IP: 127.0.0.1\r\n"), None);
+        assert_eq!(link_visitor("Host: x\r\n"), None);
+        l.advance_clock_for_tests(crate::login_throttle::WINDOW_SECS + 1);
+        proceed(login_from(&l, "svc-v", &body("again"), JSON, Some(mallory)));
     }
 }

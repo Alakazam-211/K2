@@ -239,9 +239,16 @@ export class K2App {
   // (AppGuestMustChange): send the person's browser to changeUrl, where
   // they choose a new password; then they sign in with it. Check
   // `'mustChangePassword' in s` before using `s.pass`.
-  async login(args: { username: string; password: string }): Promise<AppGuestLogin | AppGuestMustChange> {
+  //
+  // `clientIp` (K2 0.46.8): the visitor this login came from, from the
+  // X-K2-Client-IP header K2 put on the request to your server. Sent on the
+  // link, so one visitor's failed logins limit that visitor and not all of
+  // your guests. Omit it when the request has no such header.
+  async login(args: { username: string; password: string; clientIp?: string }): Promise<AppGuestLogin | AppGuestMustChange> {
+    const { clientIp, ...body } = args
+    const extra: Record<string, string> = clientIp ? { 'x-k2-client-ip': clientIp } : {}
     try {
-      return await this.actor({ kind: 'default' }).call(LOGIN_VERB, args)
+      return (await this.callAs({ kind: 'default' }, LOGIN_VERB, body, extra)) as AppGuestLogin
     } catch (e) {
       const changed = mustChangeOf(e)
       if (changed) return changed
@@ -339,7 +346,7 @@ export class K2App {
     return this.passFile.read()
   }
 
-  private async callAs(cred: Cred, verb: string, args: Record<string, unknown> | undefined): Promise<unknown> {
+  private async callAs(cred: Cred, verb: string, args: Record<string, unknown> | undefined, extraHeaders: Record<string, string> = {}): Promise<unknown> {
     const row = this.row(verb)
     if (!row.http) throw new K2Error({ code: 'usage', hint: `${verb} is a subscribe verb: use subscribe`, verb })
     if (row.door === 'helper') throw new K2Error({ code: 'not_on_link', hint: `${verb} is for a guest's own browser session, never a server`, verb })
@@ -349,7 +356,7 @@ export class K2App {
     const usesAppPass = verb === LOGIN_VERB || cred.kind === 'app'
     for (let attempt = 0; ; attempt++) {
       const pass = this.passFor(cred, verb)
-      const headers: Record<string, string> = {}
+      const headers: Record<string, string> = { ...extraHeaders }
       if (pass) headers.authorization = `Bearer ${pass}`
       if (req.body !== null) headers['content-type'] = 'application/json'
       const res = await this.fetchImpl(`${this.gatewayUrl}${req.pathAndQuery}`, { method: req.method, headers, body: req.body ?? undefined })

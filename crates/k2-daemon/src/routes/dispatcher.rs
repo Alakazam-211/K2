@@ -5026,7 +5026,10 @@ async fn handle_one_request(
             // (`apps::gateway::link_login`).
             let mut link_keys = None;
             if ingress == Ingress::App {
-                match crate::apps::gateway::link_login(&state.login_limiter, &body_bytes, &content_type) {
+                // PB-G3 (0.46.8): the visitor the App's server forwards
+                // (`X-K2-Client-IP`), a bucket key only.
+                let visitor = crate::apps::gateway::link_visitor(&headers_blob);
+                match crate::apps::gateway::link_login(&state.login_limiter, &body_bytes, &content_type, visitor) {
                     Some(crate::apps::gateway::LinkLogin::Proceed { body, keys }) => {
                         body_bytes = body;
                         link_keys = Some(keys);

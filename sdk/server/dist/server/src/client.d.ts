@@ -104,6 +104,7 @@ export declare class K2App {
     login(args: {
         username: string;
         password: string;
+        clientIp?: string;
     }): Promise<AppGuestLogin | AppGuestMustChange>;
     readonly users: {
         list: () => Promise<AppKeyUsers>;

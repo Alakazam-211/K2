@@ -418,6 +418,16 @@ describe('login (must-not-break: the BFF logs its guests in)', () => {
     expect(JSON.parse(gw.seen[0]?.body ?? '')).toEqual({ username: 'dana', password: 'pw', app: 'svc-jobs-1' })
   })
 
+  it('clientIp goes on the X-K2-Client-IP header, never in the body (K2 0.46.8)', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: { ok: true, token: GUEST, username: 'dana', principalId: 'p1', rooms: [], roomHandles: [], caps: [], role: null, roomAccess: [], app: 'svc-jobs-1' } })
+    await k2.login({ username: 'dana', password: 'pw', clientIp: '203.0.113.7' })
+    expect(gw.seen[0]?.headers['x-k2-client-ip']).toBe('203.0.113.7')
+    expect(JSON.parse(gw.seen[0]?.body ?? '')).toEqual({ username: 'dana', password: 'pw', app: 'svc-jobs-1' })
+    await k2.login({ username: 'dana', password: 'pw' })
+    expect(gw.seen[1]?.headers['x-k2-client-ip']).toBeUndefined()
+  })
+
   it('a --cmd service (no pass file) logs in with no credential; 423 carries retryAfterSecs', async () => {
     const k2 = client({ K2_PASS_FILE: join(dir, 'none') })
     answer = () => ({ status: 423, body: { error: 'locked', retryAfterSecs: 900 }, headers: { 'retry-after': '900' } })

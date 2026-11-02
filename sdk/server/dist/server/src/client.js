@@ -152,9 +152,16 @@ export class K2App {
     // (AppGuestMustChange): send the person's browser to changeUrl, where
     // they choose a new password; then they sign in with it. Check
     // `'mustChangePassword' in s` before using `s.pass`.
+    //
+    // `clientIp` (K2 0.46.8): the visitor this login came from, from the
+    // X-K2-Client-IP header K2 put on the request to your server. Sent on the
+    // link, so one visitor's failed logins limit that visitor and not all of
+    // your guests. Omit it when the request has no such header.
     async login(args) {
+        const { clientIp, ...body } = args;
+        const extra = clientIp ? { 'x-k2-client-ip': clientIp } : {};
         try {
-            return await this.actor({ kind: 'default' }).call(LOGIN_VERB, args);
+            return (await this.callAs({ kind: 'default' }, LOGIN_VERB, body, extra));
         }
         catch (e) {
             const changed = mustChangeOf(e);
@@ -246,7 +253,7 @@ export class K2App {
         }
         return this.passFile.read();
     }
-    async callAs(cred, verb, args) {
+    async callAs(cred, verb, args, extraHeaders = {}) {
         const row = this.row(verb);
         if (!row.http)
             throw new K2Error({ code: 'usage', hint: `${verb} is a subscribe verb: use subscribe`, verb });
@@ -259,7 +266,7 @@ export class K2App {
         const usesAppPass = verb === LOGIN_VERB || cred.kind === 'app';
         for (let attempt = 0;; attempt++) {
             const pass = this.passFor(cred, verb);
-            const headers = {};
+            const headers = { ...extraHeaders };
             if (pass)
                 headers.authorization = `Bearer ${pass}`;
             if (req.body !== null)

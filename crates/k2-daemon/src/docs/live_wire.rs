@@ -210,14 +210,17 @@ pub fn hunks(hs: &[Hunk]) -> Value {
     Value::List(hs.iter().map(hunk).collect())
 }
 
-/// `ChangeEvent`: `{version, pid, client, via, root, hunks, at_ms, on_behalf_of}`
-/// (`on_behalf_of` is `null` when absent, never left out).
+/// `ChangeEvent`: `{version, pid, client, via, kind, root, hunks, at_ms,
+/// on_behalf_of}` (`on_behalf_of` is `null` when absent, never left out).
+/// `kind` (`ChangeKind::as_str`) is what lets a client tell a lost edit that
+/// landed late from an undo that landed late under the same client ID.
 pub fn change(e: &ChangeEvent) -> Value {
     Value::obj([
         ("version", Value::from(e.version)),
         ("pid", Value::from(e.pid.as_str())),
         ("client", Value::from(e.client)),
         ("via", Value::from(e.via.as_str())),
+        ("kind", Value::from(e.kind.as_str())),
         ("root", Value::from(e.root.as_str())),
         ("hunks", hunks(&e.hunks)),
         ("at_ms", Value::from(e.at_ms)),

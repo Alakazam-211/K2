@@ -667,3 +667,26 @@ fn the_service_owner_external_id_round_trips_and_app_native_ids_stay_other() {
         "/mgmt/v1/spaces/spc_meeting1/members/k2%3Aprincipal%3A4d5e6f70-0000-4000-8000-000000000004/channels"
     );
 }
+
+/// Sew's settings route refuses a bound Space's switch unless `app_id` names
+/// its App (409 `app_mismatch`). The App is added when the row is sent, so a
+/// row queued or blocked without it goes through on retry, and the stored
+/// body (what `sent_body` compares against) doesn't change.
+#[test]
+fn a_bound_spaces_switch_names_its_app_when_sent() {
+    let _e = setup();
+    let subject = settings_subject(SPACE);
+    let stored = json!({"governance": "app"}).to_string();
+
+    let unbound = skin::with_skin_conn(|c| space_settings_body(c, &subject, &stored)).expect("unbound body");
+    assert_eq!(unbound, stored, "a Space that is not bound sends no app_id");
+
+    skin::with_skin_conn(|c| app_space::bind(c, APP, SPACE, "owner-token", 1).map(|_| ())).expect("bind");
+    let sent = skin::with_skin_conn(|c| space_settings_body(c, &subject, &stored)).expect("bound body");
+    let parsed: sew_wire::SpaceSettingsRequest = serde_json::from_str(&sent).expect("Sew's request shape");
+    assert_eq!(parsed.governance, "app");
+    assert_eq!(parsed.app_id.as_deref(), Some(APP), "a bound Space names its App");
+
+    let other = skin::with_skin_conn(|c| space_settings_body(c, "app:someapp", &stored)).expect("other subject");
+    assert_eq!(other, stored, "only a Space's settings row gains app_id");
+}

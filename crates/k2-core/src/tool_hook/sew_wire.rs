@@ -869,12 +869,18 @@ pub fn pct_path(s: &str) -> String {
 pub const GOVERNANCE_APP: &str = "app";
 pub const GOVERNANCE_SEW: &str = "sew";
 
-/// I3 body: only `governance` (K2 never sends the other PRIV1 fields).
+/// I3 body: `governance`, and the Space's App when it has one (K2 never
+/// sends the other PRIV1 field). Sew's settings route answers 409
+/// `app_mismatch` unless `app_id` names the Space's App, absent only for a
+/// Space that is not bound.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpaceSettingsRequest {
     /// [`GOVERNANCE_APP`] | [`GOVERNANCE_SEW`].
     pub governance: String,
+    /// The bound App's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
 }
 
 /// Levels in an App-governed Space (I4), lowest first.

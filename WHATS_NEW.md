@@ -9,6 +9,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
 
 ### Chat and voice (Sew)
+- **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
 - **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
 
 ## 0.46.7 — Apps run their own chat

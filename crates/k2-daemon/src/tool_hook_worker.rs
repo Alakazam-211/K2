@@ -938,7 +938,20 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                 let path = hook::home::path_for(op, &row.subject_key)
                     .or_else(|| hook::admin_space::path_for(op, &row.subject_key))
                     .unwrap_or_else(|| path_for(op).to_string());
-                client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await
+                if op == Op::SpaceSettings {
+                    // Sew wants the Space's App named on this route.
+                    let (subject, payload) = (row.subject_key.clone(), row.payload_raw.clone());
+                    match blocking(move || hook::space_settings_body(&subject, &payload)).await {
+                        Ok(body) => client.post(&path, body.as_bytes(), &row.idem_key, &row.actor).await,
+                        Err(e) => {
+                            let id = row.id.clone();
+                            blocking(move || hook::record_blocked(&id, None, &e)).await?;
+                            continue;
+                        }
+                    }
+                } else {
+                    client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await
+                }
             };
             let now = k2_core::tool_hook::outbox::now_secs();
             let outcome = refine_space(cfg, &row, classify(cfg, &row, res.as_ref(), now));

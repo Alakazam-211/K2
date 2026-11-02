@@ -1558,7 +1558,7 @@ fn is_box_user(ext: &str) -> bool {
     ext == "k2:owner" || ext.starts_with("k2:connect:")
 }
 
-/// I3: `POST /mgmt/v1/spaces/{space_id}/settings {governance}`.
+/// I3: `POST /mgmt/v1/spaces/{space_id}/settings {governance[, app_id]}`.
 fn space_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     if !s.features.iter().any(|f| f == GOVERNED) {
         return no_route(s, path);
@@ -1579,6 +1579,16 @@ fn space_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&space) else {
         return err(404, "not_found", "no such space", json!({}));
     };
+    // Sew's `bound_space`: `app_id` must name the Space's App, absent only
+    // for a Space that is not bound.
+    if req.app_id != sp.app_id {
+        return err(
+            409,
+            "conflict",
+            "app_id must name the space's App (absent for a space that is not bound)",
+            json!({"reason": "app_mismatch", "field": "app_id"}),
+        );
+    }
     if req.governance == "app" {
         let Some(app) = sp.app_id.clone() else {
             return err(409, "conflict", "no governing App", json!({"reason": "no_governing_app"}));

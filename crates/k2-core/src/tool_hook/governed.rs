@@ -476,6 +476,20 @@ pub fn sendable(body: &serde_json::Map<String, Value>, flags: &[String]) -> Opti
     Some(json!({ "governance": g }))
 }
 
+/// What a queued `space_settings` row sends: its stored body plus the
+/// Space's App, read now. Added at send time, not when queued, so a row
+/// blocked before this existed goes through when retried, and the stored
+/// body stays what `sent_body` compares against. Not a Space settings row,
+/// or a Space that isn't bound: the body as stored.
+pub fn space_settings_body(conn: &Connection, subject: &str, payload: &str) -> Result<String, String> {
+    let Some(space) = space_of_settings(subject) else { return Ok(payload.to_string()) };
+    let Some(app) = super::app_space::bound_app(conn, space)? else { return Ok(payload.to_string()) };
+    let mut body: serde_json::Map<String, Value> =
+        serde_json::from_str(payload).map_err(|e| format!("space settings body: {e}"))?;
+    body.insert("app_id".to_string(), Value::String(app));
+    serde_json::to_string(&body).map_err(|e| format!("space settings body: {e}"))
+}
+
 fn forget_members(conn: &Connection, space_id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM tool_app_space_member_channels WHERE space_id = ?1", params![space_id])
         .map(|_| ())

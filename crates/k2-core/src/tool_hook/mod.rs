@@ -1735,6 +1735,11 @@ pub fn set_space_governance(app_id: &str, space_id: &str, value: &str, actor: &s
 }
 
 /// The governance K2 wants and Sew confirmed for a Space.
+/// The body a queued `space_settings` row sends ([`governed::space_settings_body`]).
+pub fn space_settings_body(subject: &str, payload: &str) -> Result<String, String> {
+    crate::skin::with_skin_conn(|conn| governed::space_settings_body(conn, subject, payload))
+}
+
 pub fn space_governance(space_id: &str) -> Result<(Option<String>, Option<String>), String> {
     if !skin_store_exists() {
         return Ok((None, None));

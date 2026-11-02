@@ -16,7 +16,7 @@
 // (sim/status, sim/devices) and keeps no state.
 
 import { SmartphoneIcon } from '@/components/icons/K2Icons'
-import type { SimDeviceProfile, SimLaneNeed, SimLaneSetup, SimPlatform, SimState } from './simApi'
+import { setupAcceptedLine, type SimDeviceProfile, type SimLaneNeed, type SimLaneSetup, type SimPlatform, type SimState } from './simApi'
 
 export interface DevicePickerGroup {
   platform: SimPlatform
@@ -136,7 +136,7 @@ function NotReady({
   if (cards.length === 0 && g.setup?.running) {
     cards.push(
       <div key="installing" className="px-1 text-[11px] text-[var(--color-text-secondary)]" data-mobile-need="installing">
-        Setting up {PLATFORM_LABEL[g.platform]}: {g.detail ?? 'installing…'}
+        {setupAcceptedLine(g.setup)}Setting up {PLATFORM_LABEL[g.platform]}: {g.detail ?? 'installing…'}
       </div>,
     )
   } else if (cards.length === 0 && failed) {

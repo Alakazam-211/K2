@@ -54,6 +54,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Mailed links reach your server.** Confirm and stop links for mailbox forwards and email notifications, and set-password links, could answer "Unknown subdomain", which left forwards waiting for confirmation. They now use your server's own address.
 - **Scrolling a remote Claude Code session is steadier,** because K2 now tells Claude Code it supports synchronized output.
 - **Claude Max 20x now shows as Ultra,** matching Anthropic's new name for the plan.
+### Mobile devices
+- **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
 
 ## 0.46.7 — Apps run their own chat
 

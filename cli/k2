@@ -84636,29 +84636,33 @@ import json, sys
 v = json.load(sys.stdin)
 lanes = v.get("lanes") or []
 for l in lanes:
-    word = "ready" if l.get("ready") else ("needs a step" if l.get("usable") else "not available")
+    setup = l.get("setup") or {}
+    word = "ready" if l.get("ready") else ("setting up" if setup.get("running") else "needs a step" if l.get("usable") else "not available")
     line = "%-9s %s" % (l.get("lane", "?"), word)
     if l.get("detail"):
         line += " (%s)" % l["detail"]
     print("lane " + line)
     needs = l.get("needs") or []
     licences = [n for n in needs if n.get("kind") == "licence"]
+    accepted = setup.get("licencesAccepted") or 0
     for n in needs:
         k = n.get("kind")
         if k == "licence":
             title, lid = n.get("title") or n.get("id"), n.get("id") or ""
             print("  the owner must accept the %s%s (a card; never you)" % (title, "" if lid in title else " [%s]" % lid))
         elif k == "install":
-            print("  first use downloads %s" % n.get("what"))
+            if not setup.get("error"):
+                print("  first use downloads %s" % n.get("what"))
         elif k == "owner-step":
             print("  owner step: %s: %s" % (n.get("what"), n.get("command")))
     if len(licences) > 1:
         print("  one card covers all %d licences; the owner accepts them together" % len(licences))
-    setup = l.get("setup") or {}
     if setup.get("running"):
-        print("  setup running; k2 sim status again to follow it")
+        if accepted:
+            print("  the owner accepted %s; nothing left to accept" % ("the licence" if accepted == 1 else "all %d licences" % accepted))
+        print("  installing now; devices can boot when it finishes. k2 sim status again to follow it")
     elif setup.get("error") and not licences:
-        print("  setup failed; the owner of this server retries it (Retry setup on the Mobile tab), never you")
+        print("  setup failed%s; the owner of this server runs it again (Retry setup on the Mobile tab), never you" % ("; the licences stay accepted" if accepted else ""))
 s = v.get("sim")
 if not s or s.get("state") in ("stopped", "failed"):
     ready = any(l.get("ready") for l in lanes)

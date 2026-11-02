@@ -402,16 +402,20 @@ impl Manager {
         let mut probe = lane.probe();
         self.fold_setup(&mut probe);
         if !probe.ready {
-            let mut e = SimError::new(
-                409,
-                "sim_needs_setup",
+            let detail = probe.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default();
+            let setup = probe.setup.as_ref();
+            let has_licence = probe.needs.iter().any(|n| matches!(n, LaneNeed::Licence { .. }));
+            let message = if setup.is_some_and(|s| s.running) {
+                format!("the {} lane is still setting up{detail}. Devices can boot when it finishes; `k2 sim status` follows it.", lane.kind())
+            } else if setup.is_some_and(|s| s.error.is_some()) && !has_licence {
+                format!("the {} lane isn't set up{detail}. The server's owner runs it again: Retry setup on the Mobile tab.", lane.kind())
+            } else {
                 format!(
-                    "the {} lane needs a one-time setup by the server's owner before devices can boot{}. The owner sees a card (Settings → K2 Server → Mobile devices).",
+                    "the {} lane needs a one-time setup by the server's owner before devices can boot{detail}. The owner sees a card (Settings → K2 Server → Mobile devices).",
                     lane.kind(),
-                    probe.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
-                ),
-            )
-            .exit(3);
+                )
+            };
+            let mut e = SimError::new(409, "sim_needs_setup", message).exit(3);
             e.needs = probe.needs.clone();
             e.lane = Some(lane.kind());
             return Err(e);
@@ -1100,16 +1104,23 @@ impl Manager {
             let conn = db.lock();
             store::audit(&conn, now(), by, None, Some(lane_kind), "licence_accept", json!({ "licence": t.id, "sha1": t.sha1 }));
         }
-        {
+        let already_running = {
             let mut s = self.setup.lock();
-            if s.get(&lane_kind).is_some_and(|x| x.running) {
-                return Ok(());
+            let running = s.get(&lane_kind).is_some_and(|x| x.running);
+            if !running {
+                s.insert(lane_kind, SetupState { running: true, ..Default::default() });
             }
-            s.insert(lane_kind, SetupState { running: true, ..Default::default() });
+            running
+        };
+        // The answer counts now: a tab showing this lane re-reads at once,
+        // not at its next slow poll.
+        emit("sim_state", json!({ "lane": lane_kind, "state": "setup-started" }));
+        if already_running {
+            return Ok(());
         }
         let accepted = super::licence::accepted_ids(lane_kind);
         let by = by.to_string();
-        std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name(format!("k2-sim-setup-{lane_kind}"))
             .spawn(move || {
                 let m = self;
@@ -1153,32 +1164,48 @@ impl Manager {
                 );
                 drop(conn);
                 emit("sim_state", json!({ "lane": lane_kind, "state": if err.is_none() { "setup-done" } else { "setup-failed" } }));
-            })
-            .map_err(|e| SimError::new(500, "sim_io", format!("spawn setup: {e}")))?;
+            });
+        if let Err(e) = spawned {
+            // Nothing runs: don't leave the lane reading "installing".
+            let why = format!("K2 couldn't start the setup: {e}");
+            if let Some(st) = self.setup.lock().get_mut(&lane_kind) {
+                st.running = false;
+                st.error = Some(why.clone());
+            }
+            emit("sim_state", json!({ "lane": lane_kind, "state": "setup-failed" }));
+            return Err(SimError::new(500, "sim_io", why));
+        }
         Ok(())
     }
 
-    /// Fold the owner's setup into a lane's probe: a running setup's
-    /// progress, or the last one's failure, as `setup` and `detail`; and any
-    /// licence that setup failed on (not accepted since) as a need, so the
-    /// tab, the CLI and the next Start ask the owner for it.
+    /// Fold the owner's answers into a lane's probe. The probe is cached
+    /// (refreshed at boot and when a setup ends), so it can be older than
+    /// the answer: a licence accepted since is no longer a need, whatever
+    /// the cache says. Then a running setup's progress, or the last one's
+    /// failure, as `setup` and `detail`; and any licence that setup failed
+    /// on (not accepted since) as a need, so the tab, the CLI and the next
+    /// Start ask the owner for it.
     fn fold_setup(&self, p: &mut LaneProbe) {
+        let accepted = super::licence::accepted_ids(p.lane);
+        p.needs.retain(|n| !matches!(n, LaneNeed::Licence { id, .. } if accepted.contains(id)));
+        let licences_accepted = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
         let s = self.setup.lock();
         let Some(st) = s.get(&p.lane) else { return };
         if st.running {
             p.ready = false;
+            // The download is under way, so it is no longer a step to take.
+            p.needs.retain(|n| !matches!(n, LaneNeed::Install { .. }));
             p.detail = Some(if st.total > 0 {
                 format!("installing: {}% of {:.1} GB", st.done * 100 / st.total.max(1), st.total as f64 / 1e9)
             } else {
                 "installing…".to_string()
             });
-            p.setup = Some(SetupView { running: true, done: st.done, total: st.total, error: None });
+            p.setup = Some(SetupView { running: true, done: st.done, total: st.total, error: None, licences_accepted });
             return;
         }
         let Some(e) = &st.error else { return };
         p.detail = Some(format!("the last setup failed: {e}"));
-        p.setup = Some(SetupView { running: false, done: st.done, total: st.total, error: Some(e.clone()) });
-        let accepted = super::licence::accepted_ids(p.lane);
+        p.setup = Some(SetupView { running: false, done: st.done, total: st.total, error: Some(e.clone()), licences_accepted });
         for n in &st.needs {
             if let LaneNeed::Licence { id, .. } = n {
                 let listed = p.needs.iter().any(|x| matches!(x, LaneNeed::Licence { id: have, .. } if have == id));

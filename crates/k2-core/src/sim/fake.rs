@@ -31,6 +31,9 @@ pub struct FakeLane {
     pub hidden_licences: Mutex<Vec<(String, String)>>,
     /// The install fails as a tool error (a download that broke).
     pub fail_install: AtomicBool,
+    /// The install reports 82% and waits here until this goes false (a test
+    /// reads what status says mid-install).
+    pub hold_install: AtomicBool,
     pub installs: AtomicU64,
 }
 
@@ -48,6 +51,7 @@ impl FakeLane {
             licences: Mutex::new(vec![("fake-license".into(), "Fake SDK licence".into())]),
             hidden_licences: Mutex::new(Vec::new()),
             fail_install: AtomicBool::new(false),
+            hold_install: AtomicBool::new(false),
             installs: AtomicU64::new(0),
         }
     }
@@ -107,8 +111,14 @@ impl SimLane for FakeLane {
         LaneProbe { lane: self.kind, usable: true, ready, needs, detail: None, versions: vec![], setup: None }
     }
 
-    fn install(&self, licence_accepted: &[String], _progress: &(dyn Fn(u64, u64) + Sync)) -> Result<(), LaneError> {
+    fn install(&self, licence_accepted: &[String], progress: &(dyn Fn(u64, u64) + Sync)) -> Result<(), LaneError> {
         self.installs.fetch_add(1, Ordering::SeqCst);
+        if self.hold_install.load(Ordering::SeqCst) {
+            progress(82, 100);
+            while self.hold_install.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
         let missing: Vec<LaneNeed> = self
             .all_licences()
             .into_iter()

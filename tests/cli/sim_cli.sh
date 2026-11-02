@@ -96,6 +96,17 @@ class H(BaseHTTPRequestHandler):
             return
         if u.path == "/cli/sim/tree":
             return self.reply({"snapshot": {"id": "t7"}, "text": TREE})
+        if u.path == "/cli/sim/status" and mode() == "setup-running":
+            return self.reply({"lanes": [{"lane": "android", "usable": True, "ready": False, "needs": [],
+                                          "detail": "installing: 82% of 2.2 GB",
+                                          "setup": {"running": True, "done": 82, "total": 100, "licencesAccepted": 2}}],
+                               "sim": None, "running": 0, "limits": {}, "agentsAllowed": True})
+        if u.path == "/cli/sim/status" and mode() == "setup-failed":
+            return self.reply({"lanes": [{"lane": "android", "usable": True, "ready": False,
+                                          "needs": [{"kind": "install", "what": "the Android tools"}],
+                                          "detail": "the last setup failed: connection reset",
+                                          "setup": {"running": False, "done": 1, "total": 2, "error": "connection reset", "licencesAccepted": 2}}],
+                               "sim": None, "running": 0, "limits": {}, "agentsAllowed": True})
         if u.path == "/cli/sim/status":
             return self.reply({"lanes": [{"lane": "android", "usable": True, "ready": False,
                                           "needs": [{"kind": "licence", "id": "android-sdk-license", "title": "Android SDK licence"}]},
@@ -226,6 +237,21 @@ grep -qF 'lane android   needs a step' <<<"$out" \
     && grep -qF 'device: sim s1 · android · Pixel 9 · running · 412x915 pt · com.acme.app' <<<"$out" \
     && grep -qF 'held: rosson is using the device' <<<"$out" \
     && grep -qF 'agents: allowed (Allow mobile devices is on)' <<<"$out" && ok "3: status" || bad "3: status: $out"
+# The owner answered: accepted and installing, with progress, no "must accept".
+echo setup-running > "$WORK/mode"
+out="$(k2 sim status 2>&1)"
+grep -qF 'lane android   setting up (installing: 82% of 2.2 GB)' <<<"$out" \
+    && grep -qF '  the owner accepted all 2 licences; nothing left to accept' <<<"$out" \
+    && grep -qF '  installing now; devices can boot when it finishes. k2 sim status again to follow it' <<<"$out" \
+    && ! grep -qF 'must accept' <<<"$out" && ! grep -qF 'one card covers' <<<"$out" && ! grep -qF 'first use downloads' <<<"$out" \
+    && ok "3: status right after the owner's answer" || bad "3: status after the answer: $out"
+echo setup-failed > "$WORK/mode"
+out="$(k2 sim status 2>&1)"
+grep -qF 'lane android   needs a step (the last setup failed: connection reset)' <<<"$out" \
+    && grep -qF '  setup failed; the licences stay accepted; the owner of this server runs it again (Retry setup on the Mobile tab), never you' <<<"$out" \
+    && ! grep -qF 'must accept' <<<"$out" && ! grep -qF 'first use downloads' <<<"$out" \
+    && ok "3: status after a failed install" || bad "3: status after a failed install: $out"
+echo ok > "$WORK/mode"
 out="$(k2 sim list-devices --platform android 2>&1)"
 [ "$(req)" = '/cli/sim/devices {"platform": "android", "workspace": "/ws/docs"}' ] && ok "3: list-devices query" || bad "3: list-devices: $(req)"
 grep -qE '^pixel_9 +Pixel 9 +412x915 pt  android-35 google_apis x86_64  \(default\)$' <<<"$out" && ok "3: list-devices" || bad "3: list-devices: $out"

@@ -132,6 +132,10 @@ pub struct SetupView {
     /// Why the last setup failed (redacted, for a person).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// How many licences the owner has accepted on this lane. An acceptance
+    /// outlives a failed setup: a retry asks for none of them again.
+    #[serde(default)]
+    pub licences_accepted: u32,
 }
 
 /// A step between "usable" and "ready".

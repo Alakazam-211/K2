@@ -272,6 +272,19 @@ describe('DevicePicker', () => {
     )
     expect(document.querySelector('[data-mobile-need="installing"]')?.textContent).toBe('Setting up Android: installing: 40% of 2.2 GB')
     cleanup()
+    // Right after the owner's answer: accepted and installing, no licence card.
+    render(
+      <DevicePicker
+        {...props({
+          canSetup: true,
+          onRetrySetup: vi.fn(),
+          groups: [{ platform: 'android', devices: [PIXEL_9], ready: false, loading: false, needs: [], detail: 'installing: 82% of 2.2 GB', setup: { running: true, done: 82, total: 100, licencesAccepted: 2 } }],
+        })}
+      />,
+    )
+    expect(document.querySelector('[data-mobile-need="installing"]')?.textContent).toBe('Licences accepted. Setting up Android: installing: 82% of 2.2 GB')
+    expect(document.querySelector('[data-mobile-need="licence"]')).toBeNull()
+    cleanup()
     render(
       <DevicePicker
         {...props({

@@ -43,12 +43,12 @@ const daemon = vi.hoisted(() => ({
   devicesAsked: [] as unknown[],
   devicesByPlatform: null as Record<string, unknown> | null,
 }))
-const simEvents = vi.hoisted(() => ({ fns: new Set<(e: { kind: string; workspace: string; sim: string }) => void>() }))
+const simEvents = vi.hoisted(() => ({ fns: new Set<(e: { kind: string; workspace?: string; sim?: string; lane?: string; state?: string }) => void>() }))
 vi.mock('@/stores/session-events', async () => {
   const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
   return {
     ...actual,
-    onSimChanged: (_scope: unknown, fn: (e: { kind: string; workspace: string; sim: string }) => void) => {
+    onSimChanged: (_scope: unknown, fn: (e: { kind: string; workspace?: string; sim?: string; lane?: string; state?: string }) => void) => {
       simEvents.fns.add(fn)
       return () => simEvents.fns.delete(fn)
     },
@@ -512,6 +512,18 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-start]')).toBeNull()
     expect(document.querySelector('[data-mobile-watching]')).not.toBeNull()
     expect(daemon.gets).not.toContain('sim/devices')
+  })
+
+  it("a lane's setup event (no workspace) re-reads the status at once, so the owner's answer shows", async () => {
+    daemon.status = status({ sim: STOPPED })
+    renderMobile(createStubSimStream())
+    await flush()
+    const before = daemon.gets.filter((g) => g === 'sim/status').length
+    await act(async () => {
+      for (const fn of simEvents.fns) fn({ kind: 'sim_state', lane: 'android', state: 'setup-started' })
+    })
+    await flush()
+    expect(daemon.gets.filter((g) => g === 'sim/status').length).toBe(before + 1)
   })
 
   it('a sim_state event for this workspace re-reads the status at once', async () => {

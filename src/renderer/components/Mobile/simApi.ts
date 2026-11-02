@@ -49,6 +49,14 @@ export interface SimLaneSetup {
   total: number
   /** Why the last setup failed. */
   error?: string
+  /** Licences the owner has accepted on this lane (a retry asks for none of them). */
+  licencesAccepted?: number
+}
+
+/** "Licences accepted." while a setup runs, so the owner's answer shows at once. */
+export function setupAcceptedLine(setup: SimLaneSetup | undefined): string {
+  const n = setup?.licencesAccepted ?? 0
+  return n === 0 ? '' : n === 1 ? 'Licence accepted. ' : 'Licences accepted. '
 }
 
 /** `stream::SimState`. */
@@ -161,6 +169,7 @@ function parseSetup(raw: unknown): SimLaneSetup {
     done: typeof raw.done === 'number' ? raw.done : 0,
     total: typeof raw.total === 'number' ? raw.total : 0,
     ...(error ? { error } : {}),
+    ...(typeof raw.licencesAccepted === 'number' && raw.licencesAccepted > 0 ? { licencesAccepted: raw.licencesAccepted } : {}),
   }
 }
 

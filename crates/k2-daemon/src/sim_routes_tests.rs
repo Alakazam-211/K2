@@ -479,6 +479,80 @@ fn a_failed_setup_is_reported_and_retry_runs_it_again() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Rosson 2026-11-02: from the moment the owner's answer is recorded, status
+/// says accepted and installing, with progress and no "must accept" (on the
+/// card and on POST setup alike), and a `sim_state` event says so at once.
+/// A failed install then says that, with the licences still accepted, and
+/// a Start while it runs doesn't send anyone to the owner's card.
+#[test]
+fn status_says_accepted_and_installing_the_moment_the_owner_answers() {
+    let _serial = sim_test_lock();
+    manager::set_event_hook(crate::session_events::emit_sim);
+    let (tmp, fake, ws) = lane_needing_setup("answered", &[("fake-license", "Fake SDK licence"), ("fake-arm-license", "Fake ARM licence")], &[]);
+    let lane = android_lane(&body(&get(STATUS, Caller::Owner, &[("workspace", &ws)])));
+    assert_eq!(licence_ids(&lane), vec!["fake-license", "fake-arm-license"], "before the answer: {lane}");
+
+    fake.hold_install.store(true, std::sync::atomic::Ordering::SeqCst);
+    fake.fail_install.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut events = crate::session_events::subscribe();
+    let card = licence_card(LaneKind::Android, "sim-answered").expect("a card");
+    let out = run_card(&card.params, CARD_ACCEPT, "owner").expect("accepted");
+    assert_eq!(out["ok"], json!(true), "{out}");
+
+    // The tab's event, with no poll to wait for.
+    let mut started = false;
+    while let Ok(ev) = events.try_recv() {
+        if let crate::session_events::SessionEvent::SimState { payload } = ev {
+            if payload.get("state") == Some(&json!("setup-started")) && payload.get("lane") == Some(&json!("android")) {
+                started = true;
+            }
+        }
+    }
+    assert!(started, "the accept must push a sim_state event");
+
+    // Right after the answer: accepted and installing, nothing to accept.
+    let lane = android_lane(&body(&get(STATUS, Caller::Owner, &[("workspace", &ws)])));
+    assert_eq!(licence_ids(&lane), Vec::<String>::new(), "the answer is recorded: {lane}");
+    assert!(lane["needs"].is_null(), "nothing is left to do: {lane}");
+    assert_eq!(lane["setup"]["running"], json!(true), "{lane}");
+    assert_eq!(lane["setup"]["licencesAccepted"], json!(2), "{lane}");
+    assert!(lane["detail"].as_str().expect("detail").starts_with("installing"), "{lane}");
+
+    // With progress.
+    let t0 = std::time::Instant::now();
+    loop {
+        let lane = android_lane(&body(&get(STATUS, Caller::Owner, &[("workspace", &ws)])));
+        if lane["setup"]["done"] == json!(82) {
+            assert!(lane["needs"].is_null(), "{lane}");
+            break;
+        }
+        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "no progress after 20 s: {lane}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    // A Start while it runs says so; no card, no "one-time setup".
+    let r = post(BOOT, Caller::Owner, json!({ "workspace": ws }));
+    assert_eq!(code(&r), "sim_needs_setup", "{}", r.body);
+    assert!(r.body.contains("still setting up"), "{}", r.body);
+    assert!(!r.body.contains("The owner sees a card"), "{}", r.body);
+
+    // The install fails later: plainly, with the licences still accepted.
+    fake.hold_install.store(false, std::sync::atomic::Ordering::SeqCst);
+    let lane = wait_setup(&ws);
+    assert_eq!(lane["ready"], json!(false), "{lane}");
+    assert_eq!(licence_ids(&lane), Vec::<String>::new(), "{lane}");
+    assert_eq!(lane["setup"]["running"], json!(false), "{lane}");
+    assert_eq!(lane["setup"]["licencesAccepted"], json!(2), "{lane}");
+    assert!(lane["setup"]["error"].as_str().expect("setup.error").contains("connection reset"), "{lane}");
+    let r = post(BOOT, Caller::Owner, json!({ "workspace": ws }));
+    assert_eq!(code(&r), "sim_needs_setup", "{}", r.body);
+    assert!(r.body.contains("Retry setup on the Mobile tab"), "{}", r.body);
+    assert!(!r.body.contains("The owner sees a card"), "{}", r.body);
+
+    crate::sim_routes::clear_lanes_for_tests();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Accepting stays the box owner's, by person: agents and non-owners are
 /// refused on every form (route list, legacy fields, the card), nothing is
 /// recorded; status tells the tab who may set up.

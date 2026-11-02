@@ -3,7 +3,8 @@
 // Read while the tab is shown: often while the device is changing state
 // (booting, stopping), slowly otherwise, and at once after a gesture
 // (`refresh`), and at once on the daemon's `sim_state` / `sim_hold` events
-// for this workspace's device. Hidden tabs do not poll.
+// for this workspace's device or a lane's setup (the owner accepted, the
+// install ended; those name no workspace). Hidden tabs do not poll.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -62,7 +63,8 @@ export function useSimStatus(scope: ServerScope, workspace: string | null, visib
     if (!workspace || !visible) return
     return onSimChanged(scope, (e) => {
       const mine = statusRef.current?.sim
-      if (e.workspace === workspace || (mine && (e.sim === mine.sim || e.workspace === mine.workspace))) refresh()
+      const laneWide = e.kind === 'sim_state' && e.workspace === undefined && e.sim === undefined
+      if (laneWide || e.workspace === workspace || (mine && (e.sim === mine.sim || e.workspace === mine.workspace))) refresh()
     })
   }, [scope, workspace, visible, refresh])
 

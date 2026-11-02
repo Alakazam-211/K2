@@ -58,6 +58,7 @@ import {
   lanePlatform,
   offeredPlatforms,
   screenshotSim,
+  setupAcceptedLine,
   setupSim,
   simIsUp,
   stopSim,
@@ -326,7 +327,7 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
     }
     const step = lane.needs.find((n) => n.kind === 'owner-step')
     if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
-    if (lane.setup?.running) return `Setting up the device tools: ${lane.detail ?? 'installing…'}`
+    if (lane.setup?.running) return `${setupAcceptedLine(lane.setup)}Setting up the device tools: ${lane.detail ?? 'installing…'}`
     if (lane.setup?.error) return `The device setup didn't finish: ${lane.setup.error}`
     if (lane.detail) return `The owner of this server must set up devices first (${lane.detail}).`
   }

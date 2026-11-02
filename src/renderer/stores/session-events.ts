@@ -690,12 +690,14 @@ export interface OpenMobileEvent {
   sim: string
 }
 
-/** APP-LEVEL — a workspace's device changed state (k2-core::sim::api):
- *  a Mobile tab showing it re-reads `GET /cli/sim/status`. */
+/** APP-LEVEL — a workspace's device changed state (k2-core::sim::api), or a
+ *  lane's setup did (`lane`, no workspace; `setup-started`, `setup-done`,
+ *  `setup-failed`): a Mobile tab showing it re-reads `GET /cli/sim/status`. */
 export interface SimStateEvent {
   kind: 'sim_state'
-  workspace: string
-  sim: string
+  workspace?: string
+  sim?: string
+  lane?: string
   state: string
 }
 

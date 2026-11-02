@@ -66198,15 +66198,20 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
   k2 hostchat media status [--json]
   k2 hostchat media renew                   renew the TURN certificate now
   k2 hostchat media tier tunnel|direct [--json]
-                                            (preview, voice_tunnel_preview / K2_VOICE_TUNNEL) tunnel:
-                                            TURN through K2 Connect's tunnel on a second frpc (the
-                                            voice lane), relay-only, turn.<label>.k2.dev:443, no public
-                                            port or IP (K2 Connect Pro, Sew 0.7.0, helper protocol 12).
-                                            direct: public TCP 5349 + UDP 7882, the box IP in DNS.
-                                            Restarts sew-media (calls in progress drop). With the
-                                            preview on, media install uses tunnel.
+                                            (preview, voice_tunnel_preview / K2_VOICE_TUNNEL; direct also
+                                            works with it off) tunnel: all voice through K2 Connect, at
+                                            turn.<label>.k2.dev:443 (the relay's port, nothing to open
+                                            here), on a second frpc. The box's IP leaves voice DNS and K2
+                                            opens no voice port. Needs K2 Connect Pro, Sew 0.7.0 and root
+                                            helper protocol 12: media preflight checks them.
+                                            direct (the way back): public TCP 5349 + UDP 7882 at
+                                            turn-<label>.k2.dev. The box's IP becomes public, in DNS, in
+                                            certificate logs and to everyone in a call: tell the owner
+                                            first. Both restart sew-media (calls in progress drop). With
+                                            the preview on, media install uses tunnel.
   k2 hostchat media probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail
-                                            record a call test from outside the box; a failed leg
+                                            record the result of a real call made from outside the box
+                                            (this tests nothing itself); a failed leg
                                             makes status degraded (k2_voice_probe_failed) until a
                                             passing probe; probes go stale after 30 days or a node
                                             IP / TURN tier change

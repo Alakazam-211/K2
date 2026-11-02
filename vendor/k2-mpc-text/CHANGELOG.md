@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.12 (2026-11-02): pairs with kit v0.10.2
+
+**Requires `k2-mpc-base` v0.10.2** (the first host release after v0.10.0.3; it keeps the
+disk-sync fix). This pack's code and tests are unchanged from v0.2.11.
+
+- Pairs with kit v0.10.2: the client as a library only, presence and marks as data,
+  per-connection carets and the caret re-send. The kit's `join`, `join_shared` and
+  `join_replacing` are unchanged, and this pack's code doesn't build or match the roster types
+  that changed.
+- `Cargo.lock`: k2-mpc-base 0.10.2 (only the kit's crate version moves); the crate version.
+
 ## v0.2.11 (2026-11-01): pairs with kit v0.10.0.3
 
 **Requires `k2-mpc-base` v0.10.0.3** (v0.10.0.2 plus the disk-sync fix). This pack's code and

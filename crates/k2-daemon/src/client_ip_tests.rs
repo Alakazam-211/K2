@@ -55,6 +55,26 @@ async fn preamble_v6_client_and_mapped_v4() {
     assert_eq!(read_tunnel_preamble(&mut s, peer, deadline()).await, Ok(Some(ip("198.51.100.3"))));
 }
 
+/// PB-6 (vs-live PB-A6): a header naming one of K2's own relays is no
+/// client (a relay that passed its own address would put every visitor in
+/// one bucket). Counted; any other address still counts.
+#[tokio::test]
+async fn a_relay_address_is_never_a_visitor() {
+    let relay = "192.0.2.61";
+    crate::relay_addrs::set_for_test(&[ip(relay)]);
+    let (mut c, mut s, peer) = pair().await;
+    c.write_all(&proxy_v2::header(sa(&format!("{relay}:1")), sa("[::1]:443"))).await.unwrap();
+    assert_eq!(read_tunnel_preamble(&mut s, peer, deadline()).await, Ok(None));
+    let (mut c, mut s, peer) = pair().await;
+    c.write_all(&proxy_v2::header(sa(&format!("[::ffff:{relay}]:1")), sa("[::1]:443"))).await.unwrap();
+    assert_eq!(read_tunnel_preamble(&mut s, peer, deadline()).await, Ok(None), "mapped form too");
+    assert!(crate::relay_addrs::status_json()["relayAsClient"].as_u64().unwrap() >= 2);
+    let (mut c, mut s, peer) = pair().await;
+    c.write_all(&proxy_v2::header(sa("198.51.100.61:1"), sa("[::1]:443"))).await.unwrap();
+    assert_eq!(read_tunnel_preamble(&mut s, peer, deadline()).await, Ok(Some(ip("198.51.100.61"))));
+    crate::relay_addrs::set_for_test(&[]);
+}
+
 #[tokio::test]
 async fn no_header_old_frpc_config_reads_nothing() {
     let (mut c, mut s, peer) = pair().await;

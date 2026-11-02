@@ -43,6 +43,10 @@ pub mod custom_domains;
 pub mod custom_domain_flow;
 /// The App TLS door: front443 routes custom App names here (0.46.6).
 pub mod tls_door;
+/// The custom App names both terminators serve (0.46.8, PB-A3).
+pub mod custom_names;
+/// Path B: this box's claim on a custom name at K2 Connect (0.46.8, PB-3).
+pub mod relay_claims;
 /// The minimal E3 guard (0.46.6): per-visitor connections (G1) and writes (G2).
 pub mod guard;
 /// `k2 app move-plan`: every step of a move, one owner approval (0.46.4).

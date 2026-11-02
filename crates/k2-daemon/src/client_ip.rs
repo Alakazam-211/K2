@@ -120,12 +120,21 @@ fn is_owned(norm: &str) -> bool {
 
 /// The client address a parsed header vouches for. Loopback and
 /// unspecified sources are no client: an old relay's frps only saw HAProxy
-/// on 127.0.0.1.
+/// on 127.0.0.1. 0.46.8 (PB-6, vs-live PB-A6): neither is one of K2's own
+/// relays (`relay_addrs`): a relay that passed its own address would put
+/// every visitor in one bucket. Counted as `relayAsClient`.
 pub fn trusted_source(p: &proxy_v2::Parsed) -> Option<IpAddr> {
     match p {
         proxy_v2::Parsed::Tcp { src, .. } => {
             let ip = proxy_v2::canonical(src.ip());
-            (!(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast())).then_some(ip)
+            if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+                return None;
+            }
+            if crate::relay_addrs::is_relay(&ip) {
+                crate::relay_addrs::note_relay_as_client();
+                return None;
+            }
+            Some(ip)
         }
         proxy_v2::Parsed::Local | proxy_v2::Parsed::Other => None,
     }

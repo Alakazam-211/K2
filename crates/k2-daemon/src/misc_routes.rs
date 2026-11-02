@@ -553,6 +553,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         k2_core::tunnel::config::load().map(|c| c.auto_start).unwrap_or(false),
                     ),
                 );
+                // 0.46.8 (PB-6): "Visitor IPs: known | not passed yet".
+                obj.insert("visitorIps".to_string(), crate::relay_addrs::status_json());
                 obj.insert(
                     "e2eListener".to_string(),
                     match crate::tunnel_tls_listener::live_listener() {

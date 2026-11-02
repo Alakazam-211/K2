@@ -376,6 +376,8 @@ pub mod triage;
 pub mod tunnel_tls_listener;
 // 0.46.3: the real client IP for tunnelled Apps (PROXY v2 from frpc).
 pub mod client_ip;
+// 0.46.8: K2's relay addresses are never a visitor; visitor-IP status (PB-6).
+pub mod relay_addrs;
 // 0.46.7: the gate in front of a published site (private, PIN, public).
 pub mod site_gate;
 pub mod tunnel_autostart;

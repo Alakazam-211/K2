@@ -288,6 +288,41 @@ pub fn max_e2e_connections() -> usize {
     *CAP.get_or_init(|| k2_core::connection_cap(E2E_CAP_FLOOR, E2E_CAP_CEILING))
 }
 
+/// PB-G2 (0.46.8): one visitor's share of the E2E listener's cap, for
+/// every tunnel name: a quarter of the cap, at least 64, at most 1024 (the
+/// relays' own per-visitor limit sits above the box's App limits, KW-B4).
+/// Keyed by the address in frpc's PROXY v2 header (`client_ip`); a
+/// connection without one (an unpatched relay, an old frpc, a relay
+/// address, PB-6) is "visitor unknown": never counted, so it can never
+/// put every visitor in one bucket. The global cap still applies to it.
+pub fn per_visitor_share() -> u32 {
+    (max_e2e_connections() / 4).clamp(64, 1024) as u32
+}
+
+/// The PB-G2 table (its own, apart from the App guard's G1).
+pub(crate) fn visitor_limiter() -> &'static Arc<crate::apps::guard::Limiter> {
+    static L: OnceLock<Arc<crate::apps::guard::Limiter>> = OnceLock::new();
+    L.get_or_init(|| crate::apps::guard::Limiter::new(0))
+}
+
+/// PB-G2 counters for `k2 tunnel status` / `k2 firewall`.
+pub fn visitor_cap_json() -> serde_json::Value {
+    let l = visitor_limiter();
+    serde_json::json!({
+        "perVisitor": per_visitor_share(),
+        "refused": l.per_ip_refused.load(std::sync::atomic::Ordering::Relaxed),
+        "visitorsWithOpenConnections": l.counters()["visitorsWithOpenConnections"],
+    })
+}
+
+/// The refusal for a visitor over a per-visitor cap.
+fn over_visitor_cap(ip: Option<std::net::IpAddr>) -> String {
+    format!(
+        "{} is over the per-visitor connection cap (k2 firewall guard)",
+        ip.map(|i| i.to_string()).unwrap_or_default()
+    )
+}
+
 /// The global E2E connection semaphore (lazily created, lives for the
 /// process). Shared by every accept loop (there is normally exactly one).
 fn conn_semaphore() -> &'static Arc<Semaphore> {
@@ -370,7 +405,7 @@ async fn spawn_listener_with(
     // (`cert_covers`).
     let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert(&subdomain)
         .map_err(|e| format!("provision tunnel cert: {e}"))?;
-    let server_config = k2_core::tunnel::tls::server_config(&cert_pem, &key_pem)
+    let server_config = e2e_server_config(&cert_pem, &key_pem)
         .map_err(|e| format!("build rustls ServerConfig: {e}"))?;
 
     // Hold the live ServerConfig behind an ArcSwap so the renewal loop can
@@ -806,7 +841,7 @@ async fn cert_renewal_loop(
         let provisioned =
             tokio::task::spawn_blocking(move || cert_broker::provision_via_broker(&sub)).await;
         let outcome = match provisioned {
-            Ok(Ok((cert_pem, key_pem))) => k2_core::tunnel::tls::server_config(&cert_pem, &key_pem)
+            Ok(Ok((cert_pem, key_pem))) => e2e_server_config(&cert_pem, &key_pem)
                 .map_err(|e| format!("fresh cert didn't build a ServerConfig: {e}")),
             Ok(Err(e)) => Err(format!("broker request failed: {e}")),
             Err(e) => Err(format!("provision task panicked: {e}")),
@@ -1007,6 +1042,65 @@ pub(crate) fn unreachable_502_bytes() -> Vec<u8> {
     .into_bytes()
 }
 
+/// The E2E listener's certificate pick (0.46.8, Path B, PB-1 / PB-A2):
+///
+/// - a hello offering `acme-tls/1` gets ONLY the TLS-ALPN-01 certificate
+///   the issuer registered for its name (`apps::custom_names::Challenge`),
+///   else none: the handshake fails;
+/// - no SNI, or a name in `k2.dev` → the tunnel's own certificate
+///   (`<sub>.k2.dev` + `*.<sub>.k2.dev`), exactly as before;
+/// - a name outside `k2.dev` → that custom name's own certificate when it
+///   is `live` here (Path B: the relay passed it through by name), else
+///   none: the handshake fails, and the connection never reaches the
+///   daemon (it used to complete with the tunnel's certificate and then
+///   close, CD-A12).
+pub(crate) fn pick_cert(
+    sni: Option<&str>,
+    acme: bool,
+    tunnel: &Arc<rustls::sign::CertifiedKey>,
+) -> Option<Arc<rustls::sign::CertifiedKey>> {
+    let sni = sni.map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase()).filter(|s| !s.is_empty());
+    if acme {
+        return sni.as_deref().and_then(crate::apps::custom_names::challenge_cert);
+    }
+    match sni {
+        None => Some(Arc::clone(tunnel)),
+        Some(s) if !outside_k2_dev(&s) => Some(Arc::clone(tunnel)),
+        Some(s) => crate::apps::custom_names::live_cert(&s),
+    }
+}
+
+/// [`pick_cert`] as rustls' resolver. The tunnel certificate is fixed per
+/// config (the renewer builds a new config); custom names are read live.
+#[derive(Debug)]
+struct E2eResolver {
+    tunnel: Arc<rustls::sign::CertifiedKey>,
+}
+
+impl rustls::server::ResolvesServerCert for E2eResolver {
+    fn resolve(&self, hello: rustls::server::ClientHello<'_>) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        let acme = hello.alpn().is_some_and(|mut a| a.any(|p| p == crate::apps::tls_door::ACME_TLS_ALPN));
+        pick_cert(hello.server_name(), acme, &self.tunnel)
+    }
+}
+
+/// The E2E listener's rustls config for the tunnel certificate `cert_pem`
+/// (0.46.8): a resolver ([`pick_cert`]) instead of one certificate, and
+/// ALPN `http/1.1` (real traffic; never h2: the App path and the daemon
+/// splice speak HTTP/1.1) plus `acme-tls/1` (the CA's TLS-ALPN-01 hello for
+/// a Path B name being issued; answered only with that name's challenge
+/// certificate, then closed).
+pub(crate) fn e2e_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfig, String> {
+    let tunnel = crate::apps::custom_names::certified_key(cert_pem, key_pem).map_err(|e| format!("tunnel cert: {e}"))?;
+    let mut c = ServerConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("rustls protocol versions: {e}"))?
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(E2eResolver { tunnel }));
+    c.alpn_protocols = vec![b"http/1.1".to_vec(), crate::apps::tls_door::ACME_TLS_ALPN.to_vec()];
+    Ok(c)
+}
+
 /// A non-empty SNI that is neither `k2.dev` nor under it (CD-A12).
 pub(crate) fn outside_k2_dev(sni: &str) -> bool {
     let h = sni.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -1051,6 +1145,13 @@ async fn serve_one(
         Err(e) if e == crate::client_ip::CLOSED_BEFORE_FIRST_BYTE => return Ok(()),
         Err(e) => return Err(format!("TLS handshake failed: {e}")),
     };
+    // PB-6: what the relay passes ("Visitor IPs: known | not passed yet").
+    crate::relay_addrs::note_tunnel_visitor(client_ip);
+    // PB-G2 (0.46.8): this visitor's share of the listener, before the
+    // handshake, for every name. Unknown visitor: not counted.
+    let Some(_visitor_share) = visitor_limiter().try_conn(client_ip, Some(per_visitor_share())) else {
+        return Err(over_visitor_cap(client_ip));
+    };
 
     let mut tls = match tokio::time::timeout_at(deadline, acceptor.accept(tcp)).await {
         Ok(Ok(tls)) => tls,
@@ -1072,16 +1173,36 @@ async fn serve_one(
         .map(|s| s.to_string())
         .unwrap_or_default();
 
+    // 0.46.8 (Path B): a TLS-ALPN-01 handshake carries no application data
+    // (RFC 8737 §3). Only a name with a registered challenge got this far.
+    if tls.get_ref().1.alpn_protocol() == Some(crate::apps::tls_door::ACME_TLS_ALPN) {
+        let _ = tls.shutdown().await;
+        return Ok(());
+    }
+
     // 0.46.6 (vs-live CD-A12): a name outside k2.dev never reaches the
     // daemon here. `route_for_host` falls back to `Route::Daemon` for any
     // host outside `*.<sub>.k2.dev`; once the relay passes customer names
     // that fallback would put K2's own login surface on a customer's
-    // domain. Closed instead (custom App names are served by the App TLS
-    // door; on this listener they come with path (b)). An empty SNI keeps
-    // today's route.
+    // domain. 0.46.8 (Path B): such a handshake only completes for a
+    // custom App name that is live here (`pick_cert`), and it goes to its
+    // App on the one App path, exactly as through the App TLS door. A name
+    // that stopped being live between the handshake and now is closed. An
+    // empty SNI keeps today's route.
     if outside_k2_dev(&sni) {
-        log_debug!("[daemon/e2e] closing a connection for {sni:?}: not a k2.dev name (never the daemon)");
-        let _ = tls.shutdown().await;
+        let Some(app) = crate::apps::custom_names::app_for_host(&sni) else {
+            log_debug!("[daemon/e2e] closing a connection for {sni:?}: not a k2.dev name (never the daemon)");
+            let _ = tls.shutdown().await;
+            return Ok(());
+        };
+        // G1 (PB-G1): the visitor's open connections to Apps, box-wide and
+        // shared with the App TLS door. No visitor (no PROXY v2 address
+        // yet) is never counted.
+        let Some(_visitor_slot) = crate::apps::guard::door_conn(client_ip) else {
+            let _ = tls.shutdown().await;
+            return Err(over_visitor_cap(client_ip));
+        };
+        crate::apps::router::serve_app_conn_with(&mut tls, &app, crate::client_ip::Mode::Door(client_ip)).await;
         return Ok(());
     }
 
@@ -1184,6 +1305,13 @@ where
         label.and_then(|l| crate::apps::router::live(&l).map(|be| (l, be)))
     {
         log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
+        // G1 (PB-G1, 0.46.8): the visitor's open connections to Apps,
+        // box-wide (shared with the App TLS door). Unknown visitor: not
+        // counted.
+        let Some(_visitor_slot) = crate::apps::guard::door_conn(client_ip) else {
+            let _ = tls.shutdown().await;
+            return Err(over_visitor_cap(client_ip));
+        };
         // The one App path (vs-live CD-A8), shared with the App TLS
         // door: client-IP rewrite, K2's own pairing link-file
         // answers (App phone pairing V5), then the splice.
@@ -1239,6 +1367,19 @@ where
     let opted_in = subdomains::current()
         .nested_label(sni)
         .is_some_and(|label| k2_core::tunnel::client_ip_labels::enabled(&label));
+    // G1 (PB-G1): a nested service that opted into the client IP is
+    // guarded like an App.
+    let _visitor_slot = if opted_in {
+        match crate::apps::guard::door_conn(client_ip) {
+            Some(slot) => Some(slot),
+            None => {
+                let _ = tls.shutdown().await;
+                return Err(over_visitor_cap(client_ip));
+            }
+        }
+    } else {
+        None
+    };
     let res = if opted_in {
         let mode = crate::client_ip::Mode::Tunnel(client_ip);
         crate::client_ip::forward(&mut *tls, &mut upstream, mode)
@@ -1598,7 +1739,10 @@ mod tests {
         subdomains::store(SubdomainMap { primary: "rosson".to_string(), targets: Default::default() });
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
-        let shared = Arc::new(ArcSwap::from_pointee(k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("config")));
+        // 0.46.8 (PB-A2): the listener's real config: the handshake itself
+        // fails for these names (no certificate), and the `outside_k2_dev`
+        // close behind it stays as the belt.
+        let shared = Arc::new(ArcSwap::from_pointee(e2e_server_config(&cert_pem, &key_pem).expect("config")));
         let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
         let port = l.local_addr().unwrap().port();
         tokio::spawn(async move { accept_loop(Arc::new(l), shared, daemon_port).await });
@@ -2310,6 +2454,230 @@ mod tests {
         subdomains::store(SubdomainMap::default());
     }
 
+    // ── 0.46.8: custom names through the relay (Path B) ──────────────
+
+    /// A listener on the real E2E config for tunnel name `sub`, with an
+    /// echo App live as `shop` (`shop.<sub>.k2.dev`).
+    async fn path_b_listener(sub: &str) -> (String, u16) {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let daemon_port = install_test_ingress_state();
+        let app = crate::client_ip::tests::echo_app().await;
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("shop".to_string(), format!("localhost:{}", closed.port()));
+        mark_public(&["shop"]);
+        subdomains::store(SubdomainMap { primary: sub.to_string(), targets });
+        crate::apps::router::switch("shop", app);
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert(sub).expect("cert");
+        let shared = Arc::new(ArcSwap::from_pointee(e2e_server_config(&cert_pem, &key_pem).expect("config")));
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { accept_loop(Arc::new(l), shared, daemon_port).await });
+        (cert_pem, port)
+    }
+
+    fn relay_saw(src: &str) -> Option<Vec<u8>> {
+        Some(crate::front443::proxy_v2::header(src.parse().unwrap(), "127.0.0.1:443".parse().unwrap()))
+    }
+
+    /// PRD tests 1 and 2: a `live` custom name arriving through the tunnel
+    /// is served with its OWN certificate and reaches its App on the one
+    /// App path, with the PROXY header's visitor as K2's headers, forged
+    /// copies gone and `X-Forwarded-Proto: https`. `issuing` has no
+    /// certificate yet; an unknown name fails the handshake; `<sub>.k2.dev`
+    /// still gets the tunnel's certificate.
+    #[tokio::test]
+    async fn a_live_custom_name_through_the_tunnel_reaches_its_app() {
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        crate::apps::guard::reload();
+        let (tunnel_pem, port) = path_b_listener("example").await;
+        let host = "shop.customer-b.example";
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap().self_signed(&key).unwrap();
+        let ck = crate::apps::custom_names::certified_key(&cert.pem(), &key.serialize_pem()).unwrap();
+        crate::apps::custom_names::install_for_test(host, "shop", k2_core::domains::STATE_LIVE, Some(ck));
+
+        let mut tls = frpc_session(&cert.pem(), port, host, relay_saw("203.0.113.7:51515")).await.expect("its own certificate");
+        let req = format!("GET /k HTTP/1.1\r\nHost: {host}\r\n{SPOOFED}X-Forwarded-Proto: http\r\n\r\n");
+        tls.write_all(req.as_bytes()).await.unwrap();
+        let (head, seen) = next_response(&mut tls, &mut Vec::new()).await;
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        assert_app_saw(&seen, Some("203.0.113.7"));
+        assert_eq!(header_values(&seen, "x-forwarded-proto"), vec!["https".to_string()], "{seen}");
+        assert_eq!(header_values(&seen, "host"), vec![host.to_string()], "Host passes through: {seen}");
+        drop(tls);
+
+        // No PROXY header (the relay half isn't deployed): served, no client IP.
+        let mut tls = frpc_session(&cert.pem(), port, host, None).await.expect("TLS");
+        tls.write_all(format!("GET / HTTP/1.1\r\nHost: {host}\r\n{SPOOFED}\r\n").as_bytes()).await.unwrap();
+        let (_, seen) = next_response(&mut tls, &mut Vec::new()).await;
+        assert_app_saw(&seen, None);
+        drop(tls);
+
+        // Issuing: routed, but no certificate for a real hello.
+        crate::apps::custom_names::install_for_test(host, "shop", k2_core::domains::STATE_ISSUING, None);
+        assert!(frpc_session(&cert.pem(), port, host, None).await.is_err(), "issuing serves no real hello");
+        crate::apps::custom_names::remove_for_test(host);
+        assert!(frpc_session(&cert.pem(), port, host, None).await.is_err(), "gone: the handshake fails");
+
+        // The tunnel's own names are untouched.
+        let mut tls = frpc_session(&tunnel_pem, port, "shop.example.k2.dev", None).await.expect("the tunnel certificate");
+        tls.write_all(b"GET / HTTP/1.1\r\nHost: shop.example.k2.dev\r\n\r\n").await.unwrap();
+        let (head, _) = next_response(&mut tls, &mut Vec::new()).await;
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        crate::apps::router::clear("shop");
+        k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
+    }
+
+    /// PRD test 3: a hello offering `acme-tls/1` gets only the challenge
+    /// certificate registered for its name, then the connection closes; with
+    /// none registered (any name, k2.dev's too), no certificate. A real
+    /// client never negotiates `acme-tls/1` (`http/1.1` is preferred).
+    #[tokio::test]
+    async fn an_acme_hello_gets_only_its_challenge_certificate() {
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (tunnel_pem, port) = path_b_listener("example").await;
+        let host = "issuing.customer-b.example";
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap().self_signed(&key).unwrap();
+        let ck = crate::apps::custom_names::certified_key(&cert.pem(), &key.serialize_pem()).unwrap();
+
+        async fn acme_hello(trust_pem: &str, port: u16, sni: &str) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+            use rustls_pemfile::Item;
+            let mut roots = rustls::RootCertStore::empty();
+            for item in rustls_pemfile::read_all(&mut trust_pem.as_bytes()) {
+                if let Ok(Item::X509Certificate(der)) = item {
+                    roots.add(der).expect("root");
+                }
+            }
+            let mut cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+            cfg.alpn_protocols = vec![crate::apps::tls_door::ACME_TLS_ALPN.to_vec()];
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
+            let name = rustls::pki_types::ServerName::try_from(sni.to_string()).expect("SNI");
+            tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp).await
+        }
+
+        assert!(acme_hello(&cert.pem(), port, host).await.is_err(), "no challenge registered: no certificate");
+        assert!(acme_hello(&tunnel_pem, port, "example.k2.dev").await.is_err(), "k2.dev names have no challenge here");
+        let challenge = crate::apps::custom_names::Challenge::register(host, ck);
+        let mut tls = acme_hello(&cert.pem(), port, host).await.expect("the challenge certificate");
+        assert_eq!(tls.get_ref().1.alpn_protocol(), Some(crate::apps::tls_door::ACME_TLS_ALPN));
+        let mut buf = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut buf)).await.expect("closed after the handshake");
+        assert!(buf.is_empty(), "a challenge handshake carries no data");
+        drop(challenge);
+        assert!(acme_hello(&cert.pem(), port, host).await.is_err(), "the guard's life");
+        // A browser offering both gets the real protocol, never the challenge.
+        let mut roots = rustls::RootCertStore::empty();
+        for item in rustls_pemfile::read_all(&mut tunnel_pem.as_bytes()) {
+            if let Ok(rustls_pemfile::Item::X509Certificate(der)) = item {
+                roots.add(der).expect("root");
+            }
+        }
+        let mut cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let name = rustls::pki_types::ServerName::try_from("shop.example.k2.dev".to_string()).unwrap();
+        let tls = tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp).await.expect("TLS");
+        assert_eq!(tls.get_ref().1.alpn_protocol(), Some(&b"http/1.1"[..]), "never h2");
+        crate::apps::router::clear("shop");
+        k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
+    }
+
+    /// K2 Web 11-01 (E2 may land late): 200 open connections with no client
+    /// IP trip no per-visitor limit (G1's 64, the listener's share): they are
+    /// "visitor unknown", never one shared bucket, and nothing is counted.
+    /// A relay naming its own address is unknown too (PB-A6).
+    #[tokio::test]
+    async fn two_hundred_connections_with_no_client_ip_trip_no_per_visitor_limit() {
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        crate::apps::guard::reload();
+        crate::relay_addrs::set_for_test(&["192.0.2.77".parse().unwrap()]);
+        let (pem, port) = path_b_listener("example").await;
+        let refused_before = visitor_limiter().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed);
+        let g1_before = crate::apps::guard::global().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed);
+        let mut held = Vec::new();
+        for i in 0..200 {
+            // Half no header at all, half a relay's own address or loopback.
+            let pre = match i % 4 {
+                0 | 1 => None,
+                2 => relay_saw("192.0.2.77:1000"),
+                _ => relay_saw("127.0.0.1:1000"),
+            };
+            let mut tls = frpc_session(&pem, port, "shop.example.k2.dev", pre).await.unwrap_or_else(|e| panic!("connection {i}: {e}"));
+            tls.write_all(b"GET /held HTTP/1.1\r\nHost: shop.example.k2.dev\r\n\r\n").await.unwrap();
+            let (head, seen) = next_response(&mut tls, &mut Vec::new()).await;
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "connection {i}: {head}");
+            assert_app_saw(&seen, None);
+            held.push(tls);
+        }
+        assert_eq!(visitor_limiter().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed), refused_before);
+        assert_eq!(crate::apps::guard::global().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed), g1_before);
+        crate::relay_addrs::set_for_test(&[]);
+        crate::apps::router::clear("shop");
+        k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
+    }
+
+    /// PRD test 9, K2 Web 11-01: when PROXY v2 carries an address the limits
+    /// apply: the 65th open connection from one visitor to an App through the
+    /// tunnel is refused, another visitor is unaffected, closing frees a slot.
+    #[tokio::test]
+    async fn per_visitor_limits_apply_when_proxy_v2_carries_an_address() {
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        crate::apps::guard::reload();
+        let (pem, port) = path_b_listener("example").await;
+        let visitor = "203.0.113.88:4000";
+        let open_app = |pre: Option<Vec<u8>>| {
+            let pem = pem.clone();
+            async move {
+                let mut tls = frpc_session(&pem, port, "shop.example.k2.dev", pre).await?;
+                tls.write_all(b"GET /v HTTP/1.1\r\nHost: shop.example.k2.dev\r\n\r\n").await?;
+                let mut buf = Vec::new();
+                let mut b = [0u8; 4096];
+                loop {
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        return Ok::<_, std::io::Error>(tls);
+                    }
+                    let n = tokio::time::timeout(Duration::from_secs(10), tls.read(&mut b)).await??;
+                    if n == 0 {
+                        return Err(std::io::Error::other("closed"));
+                    }
+                    buf.extend_from_slice(&b[..n]);
+                }
+            }
+        };
+        let mut held = Vec::new();
+        for i in 0..64 {
+            held.push(open_app(relay_saw(visitor)).await.unwrap_or_else(|e| panic!("connection {i}: {e}")));
+        }
+        assert_eq!(crate::apps::guard::global().open_for("203.0.113.88".parse().unwrap()), 64);
+        assert!(open_app(relay_saw(visitor)).await.is_err(), "the 65th from one visitor is refused");
+        assert!(crate::apps::guard::global().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed) >= 1 || visitor_limiter().per_ip_refused.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+        open_app(relay_saw("198.51.100.88:4000")).await.expect("another visitor is unaffected");
+        drop(held.pop());
+        for _ in 0..50 {
+            if crate::apps::guard::global().open_for("203.0.113.88".parse().unwrap()) < 64 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        open_app(relay_saw(visitor)).await.expect("a closed connection frees its slot");
+        crate::apps::router::clear("shop");
+        k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
+    }
+
+    /// PB-G2: the listener-wide share is a real share and survives no guard.
+    #[test]
+    fn the_per_visitor_share_is_bounded() {
+        let share = per_visitor_share();
+        assert!((64..=1024).contains(&share), "{share}");
+    }
+
     // ── H2: slowloris handshake timeout ─────────────────────────────
 
     /// Slowloris: a client opens the TCP connection to the TLS listener
@@ -2487,6 +2855,18 @@ mod tests {
     }
 
     // ── H7: ALPN is http/1.1 ONLY (no h2 over the byte-splice) ───────
+
+    /// 0.46.8: the listener's real config offers `http/1.1` first, and
+    /// `acme-tls/1` only for the CA's challenge hello (never h2).
+    #[test]
+    fn e2e_server_config_offers_http1_1_and_the_acme_protocol_never_h2() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let _home = crate::test_support::TempHome::new();
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
+        let cfg = e2e_server_config(&cert_pem, &key_pem).expect("server config");
+        assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec(), crate::apps::tls_door::ACME_TLS_ALPN.to_vec()]);
+    }
 
     /// Defence-in-depth duplicate of the k2-core assertion: the rustls
     /// `ServerConfig` this listener terminates with MUST advertise ONLY

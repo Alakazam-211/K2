@@ -12,7 +12,8 @@
 //! client-IP rewrite, the pairing link files, the counted splice), exactly
 //! as the K2 Connect E2E listener does for `*.<sub>.k2.dev`.
 //!
-//! - **Which names**: [`reload`] builds the table from `domain_names`:
+//! - **Which names** (shared with the E2E listener's Path B since 0.46.8,
+//!   `apps::custom_names`): [`reload`] builds the table from `domain_names`:
 //!   `app:` rows on an attached apex, for a runtime App that exists, in
 //!   state `live` (served with their certificate) or `issuing` (routed so
 //!   the CA's TLS-ALPN-01 hello reaches the door, but only a challenge
@@ -29,11 +30,9 @@
 //!   `handoff::Role::AppDoor`; front443's table keeps `App` routes because
 //!   their backend is fixed.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use rustls::ServerConfig;
@@ -41,7 +40,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
-use k2_core::domains::{self, STATE_ISSUING, STATE_LIVE};
 use k2_core::log_debug;
 
 /// RFC 8737's ALPN protocol id.
@@ -51,150 +49,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const CAP_FLOOR: usize = 256;
 const CAP_CEILING: usize = 16_384;
 
-/// One routed custom name.
-#[derive(Clone)]
-pub struct DoorName {
-    pub app_id: String,
-    pub state: String,
-    /// The served certificate (`live` names only; `None` = the store has
-    /// no usable pair, so the name is routed but every handshake fails).
-    pub cert: Option<Arc<CertifiedKey>>,
-}
-
-impl std::fmt::Debug for DoorName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DoorName").field("app_id", &self.app_id).field("state", &self.state).field("cert", &self.cert.is_some()).finish()
-    }
-}
-
-type Names = HashMap<String, DoorName>;
-
-fn names() -> &'static ArcSwap<Names> {
-    static N: OnceLock<ArcSwap<Names>> = OnceLock::new();
-    N.get_or_init(|| ArcSwap::from_pointee(HashMap::new()))
-}
-
-fn challenges() -> &'static Mutex<HashMap<String, Arc<CertifiedKey>>> {
-    static C: OnceLock<Mutex<HashMap<String, Arc<CertifiedKey>>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Parse a PEM chain + key into a rustls signing identity.
-pub fn certified_key(chain_pem: &str, key_pem: &str) -> Result<Arc<CertifiedKey>, String> {
-    let certs = rustls_pemfile::certs(&mut chain_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("certificate PEM: {e}"))?;
-    if certs.is_empty() {
-        return Err("no certificate in the chain PEM".into());
-    }
-    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
-        .map_err(|e| format!("key PEM: {e}"))?
-        .ok_or("no private key in the key PEM")?;
-    let signer = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key).map_err(|e| format!("private key: {e}"))?;
-    Ok(Arc::new(CertifiedKey::new(certs, signer)))
-}
-
-/// What [`reload`] built.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Reloaded {
-    /// Names routed to the door (live + issuing), sorted.
-    pub routed: Vec<String>,
-    /// Live names whose certificate is missing or unreadable (they are
-    /// routed, but no handshake succeeds until the store has a pair).
-    pub without_cert: Vec<String>,
-}
-
-/// Rebuild the door's name table from the daemon's state and swap it in.
-/// Called by `front443::rebuild` (every 30 s, and on each bind, unbind and
-/// state change) and by the issuer after a certificate lands.
-pub fn reload() -> Reloaded {
-    let rows = match k2_core::db::try_shared() {
-        Some(db) => {
-            let conn = db.lock();
-            domains::app_domains(&conn).unwrap_or_else(|e| {
-                log_debug!("[apps/door] read App domains: {e}");
-                Vec::new()
-            })
-        }
-        None => Vec::new(),
-    };
-    let mut next: Names = HashMap::new();
-    let mut out = Reloaded::default();
-    for d in rows {
-        if !d.apex_attached || !(d.state == STATE_LIVE || d.state == STATE_ISSUING) {
-            continue;
-        }
-        if !runtime_app_exists(&d.app) {
-            continue;
-        }
-        let cert = if d.state == STATE_LIVE {
-            match crate::domains::store::load(&d.hostname).map(|p| certified_key(&p.chain_pem, &p.key_pem)) {
-                Some(Ok(k)) => Some(k),
-                Some(Err(e)) => {
-                    log_debug!("[apps/door] {}: stored certificate unusable: {e}", d.hostname);
-                    out.without_cert.push(d.hostname.clone());
-                    None
-                }
-                None => {
-                    out.without_cert.push(d.hostname.clone());
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        out.routed.push(d.hostname.clone());
-        next.insert(d.hostname.clone(), DoorName { app_id: d.app.clone(), state: d.state.clone(), cert });
-    }
-    out.routed.sort();
-    names().store(Arc::new(next));
-    out
-}
-
-fn runtime_app_exists(app: &str) -> bool {
-    let Some(db) = k2_core::db::try_shared() else { return false };
-    let conn = db.lock();
-    matches!(k2_core::deploy::store::get_app(&conn, app), Ok(Some(_)))
-}
-
-/// The names front443 must route to the door (live + issuing), sorted.
-pub fn routed_hosts() -> Vec<String> {
-    let mut v: Vec<String> = names().load().keys().cloned().collect();
-    v.sort();
-    v
-}
-
-/// The App a LIVE custom name serves.
-pub fn app_for_host(host: &str) -> Option<String> {
-    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    names().load().get(&h).filter(|n| n.state == STATE_LIVE).map(|n| n.app_id.clone())
-}
-
-/// A TLS-ALPN-01 challenge certificate, served to `acme-tls/1` hellos for
-/// its name while this guard lives.
-pub struct Challenge {
-    host: String,
-}
-
-impl Challenge {
-    /// Register `key` for `host`'s challenge hellos (replacing any other).
-    pub fn register(host: &str, key: Arc<CertifiedKey>) -> Challenge {
-        let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
-        challenges().lock().unwrap_or_else(|p| p.into_inner()).insert(h.clone(), key);
-        Challenge { host: h }
-    }
-}
-
-impl Drop for Challenge {
-    fn drop(&mut self) {
-        challenges().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.host);
-    }
-}
-
-/// Is a TLS-ALPN-01 challenge waiting for `host`?
-pub fn challenge_pending(host: &str) -> bool {
-    challenges().lock().unwrap_or_else(|p| p.into_inner()).contains_key(&host.to_ascii_lowercase())
-}
+// The name table and the challenge registry live in `apps::custom_names`
+// (0.46.8, PB-A3): the K2 Connect E2E listener reads them too (Path B).
+pub use super::custom_names::{app_for_host, certified_key, challenge_pending, reload, Challenge};
 
 /// The door's certificate pick: a challenge hello gets the challenge
 /// certificate (or nothing); any other hello gets the live name's own.
@@ -206,9 +63,9 @@ impl ResolvesServerCert for Resolver {
         let sni = hello.server_name()?.trim_end_matches('.').to_ascii_lowercase();
         let acme = hello.alpn().is_some_and(|mut a| a.any(|p| p == ACME_TLS_ALPN));
         if acme {
-            return challenges().lock().unwrap_or_else(|p| p.into_inner()).get(&sni).cloned();
+            return super::custom_names::challenge_cert(&sni);
         }
-        names().load().get(&sni).filter(|n| n.state == STATE_LIVE).and_then(|n| n.cert.clone())
+        super::custom_names::live_cert(&sni)
     }
 }
 

@@ -1638,6 +1638,12 @@ async fn async_main() {
     // DNS re-checks (waiting every 10 min, served names daily) and the
     // first certificate of a proven name. Nothing under air-gap.
     crate::apps::custom_domain_flow::spawn_loop();
+    // 0.46.8 (Path B): the custom-name table both terminators serve, built
+    // now (so the tunnel's first frpc render below already carries this
+    // box's Path B names) and every 30 s after, front443 or not; and K2's
+    // relay addresses, which are never a visitor (PB-6).
+    crate::apps::custom_names::spawn_refresh();
+    crate::relay_addrs::spawn_refresh();
 
     // Hosted-mail backup B1: the churn observer (Linux, hostmail installed
     // only). One detached thread, first tick ~10 min after boot, then
@@ -2061,6 +2067,8 @@ async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
     // daemon's on a hand-off) — taken before `drop_untaken` closes it.
     // No socket = no front; never fails boot.
     crate::front443::start().await;
+    // 0.46.8 (PB-8): the box :80 socket, the same way.
+    crate::front443::http80::start().await;
     // Before the TLS listener accepts: nested App hosts route from the
     // first connection (runtime stage H).
     // The gate's hooks first: the persisted map must not route a label that

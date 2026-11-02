@@ -75,12 +75,9 @@ fn chat_space_is_the_apps_own_space_and_manifest_channels() {
     assert_eq!((st, v["app"].clone()), (200, json!(f.jobs)), "its own id is fine: {v}");
 
     // A guest's session pass never reads it.
-    let dana = skin::add_principal_for_app("dana", None, &f.jobs, None, "test").unwrap();
-    skin::set_principal_password(&dana.username, Some("s3cret-horse")).unwrap();
-    let guest = skin::app_login::login_device(&dana.username, &f.jobs, &skin::app_login::Device { id: "d1".into(), name: "d".into() })
-        .expect("login")
-        .expect("device session");
-    let (st, v) = call(&f, &guest.session.raw, SPACE, false, json!({}), &[]);
+    skin::add_principal_for_app("dana", None, &f.jobs, None, "test").unwrap();
+    let guest = skin::create_app_session_token("dana", &f.jobs).expect("session");
+    let (st, v) = call(&f, &guest.raw, SPACE, false, json!({}), &[]);
     assert_eq!((st, code(&v)), (403, "app_pass_required"), "{v}");
 
     // A live manifest with two channels; no Space yet: known, without ids.

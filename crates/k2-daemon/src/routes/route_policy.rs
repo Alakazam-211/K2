@@ -1521,8 +1521,8 @@ pub const ROUTES: &[Route] = &[
     // own App-governed Space, with a chat key (the handler refuses the rest).
     post("/cli/sew/app/channels/bulk", NoLogin),
     get("/cli/sew/app/member", NoLogin),
-    get("/cli/sew/app/space", NoLogin),
     post("/cli/sew/app/member-channels", NoLogin),
+    get("/cli/sew/app/space", NoLogin),
     post("/cli/sew/app/whois", NoLogin),
     get("/cli/sew/approvals", Admin),
     post("/cli/sew/approvals/approve", Admin),

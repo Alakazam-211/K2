@@ -31,16 +31,23 @@ fn restarts_are_immediate_until_frpc_voice_keeps_dying() {
 /// Its argv stays `<sh> <…/frpc> -c <cfg>` (never `exec`s), as the adopt
 /// check expects.
 fn fake_frpc(dir: &Path) -> PathBuf {
+    fake_frpc_main_named(dir, "k2so-rosson")
+}
+
+/// [`fake_frpc`] with the main proxy under another name.
+fn fake_frpc_main_named(dir: &Path, main_proxy: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mk dir");
     let script = dir.join("frpc");
     crate::test_env::write_executable(
         &script,
-        "#!/bin/sh\n\
-         case \"$2\" in\n\
-           *frpc-voice.toml) echo '[I] [proxy_wrapper.go:204] [x] [k2voice-rosson] start proxy success' ;;\n\
-           *) echo '[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success' ;;\n\
-         esac\n\
-         while :; do sleep 1; done\n",
+        &format!(
+            "#!/bin/sh\n\
+             case \"$2\" in\n\
+               *frpc-voice.toml) echo '[I] [proxy_wrapper.go:204] [x] [k2voice-rosson] start proxy success' ;;\n\
+               *) echo '[I] [proxy_wrapper.go:204] [x] [{main_proxy}] start proxy success' ;;\n\
+             esac\n\
+             while :; do sleep 1; done\n"
+        ),
     );
     script
 }
@@ -215,7 +222,7 @@ fn by_default_the_main_frpc_keeps_its_name_and_the_voice_lane_gets_the_confirmed
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
         let _naming = crate::test_env::EnvVar::remove(crate::tunnel::confirmed_label::PROXY_NAME_ENV);
         let dir = crate::test_env::unique_temp_path("voice-lane-default-names");
-        let script = fake_frpc(&dir);
+        let script = fake_frpc_main_named(&dir, "k2so-old-box");
         set_source(confirms_nothing);
         config::save(&TunnelConfig {
             server_addr: "9.9.9.9".to_string(),

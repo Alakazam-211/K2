@@ -17720,6 +17720,7 @@ cmd_app() {
             shift
             case "${1:-}" in
                 settings) shift; cmd_app_invite_settings "$@" ;;
+                -h|--help) cmd_app_invite_settings --help ;;
                 *) echo "usage: k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--max-devices <n>] [--default <field>]" >&2; exit 2 ;;
             esac
             ;;
@@ -49552,8 +49553,7 @@ LIMITS (an hour)
 
 REFUSALS
   push_off (not approved or turned off)  push_not_configured (no key)
-  push_server_only (this App set k2 app push set <app> --register server:
-  the phone sends its token to your server, and your server registers it)
+  push_server_only (--register server: the App's server registers the token)
   not_for_host  guest_required (register is a guest's own pass)  token_in_use
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)
@@ -87902,7 +87902,9 @@ EOF
                 shift; cmd_app "$@"
                 ;;
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.
-            init|links)
+            # 0.46.8: `k2 app push`, `k2 app pairing` and `k2 app login` too
+            # (their pages say --help; it printed the whole family before).
+            init|links|push|pairing|login)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

@@ -1,7 +1,7 @@
 //! The K2 Admin Space and its voice rooms (prd-k2-voice-rooms-v1 v1.9 §2,
 //! §3; slices S1 and S2; Sew 0.7.0 SW-1 and SW-4).
 //!
-//! **What it is.** Exactly one Sew Space per box, slug `k2-admin`, owned by
+//! **What it is.** Exactly one Sew Space per box, slug `k5-admin`, owned by
 //! K2's service owner `k2:server` with governance `server`: only K2, over
 //! mgmt, changes its channels and members. It holds the box's voice rooms
 //! and is K2's fixed default Space (the daemon sets `default_space` to it).
@@ -213,10 +213,10 @@ pub struct SpaceRow {
     /// `ready` | `blocked` (no row: not made yet).
     pub state: String,
     pub why: Option<String>,
-    /// The default Space before the switch to `k2-admin` (§6.6 2.7 d).
+    /// The default Space before the switch to `k5-admin` (§6.6 2.7 d).
     pub default_from: Option<String>,
     pub default_at: Option<i64>,
-    /// Workspace ids whose access was carried over to `k2-admin`.
+    /// Workspace ids whose access was carried over to `k5-admin`.
     pub carried: Vec<String>,
     /// `voiceRoomsCount` was written to the settings at set-up (§3.1:
     /// "written as 1 at setup").
@@ -269,7 +269,7 @@ fn set_space(conn: &Connection, space_id: Option<&str>, name: Option<&str>, stat
     .map_err(|e| format!("admin space write: {e}"))
 }
 
-/// The daemon switched `default_space` to `k2-admin` (from `from`) and
+/// The daemon switched `default_space` to `k5-admin` (from `from`) and
 /// carried `carried` agents' access over (§6.6 2.7 d).
 pub fn note_default_switch(conn: &Connection, from: Option<&str>, carried: &[String], now: i64) -> Result<(), String> {
     let c = serde_json::to_string(carried).map_err(|e| e.to_string())?;
@@ -684,7 +684,7 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
             let created: Option<sew_wire::SpaceCreateResponse> = serde_json::from_str(result).ok();
             let space_id = created.map(|c| c.space_id).or_else(|| error_detail(result, "space_id"));
             let Some(space_id) = space_id.filter(|s| sew_wire::is_sew_id(s)) else {
-                set_space(conn, None, None, SPACE_BLOCKED, Some("Sew named no space_id for the K2 Admin Space"), now)?;
+                set_space(conn, None, None, SPACE_BLOCKED, Some("Sew named no space_id for the K5 Space"), now)?;
                 return Ok(false);
             };
             let name = serde_json::from_str::<Value>(&row.payload_raw).ok().and_then(|v| v["name"].as_str().map(str::to_string));
@@ -842,14 +842,14 @@ pub fn note_room_state(conn: &Connection, channel_id: &str, state: &str, now: i6
 }
 
 /// A blocked create may be retried: the owner fixed what blocked it (e.g.
-/// renamed the Space that held `k2-admin`). Clears the blocked state so
+/// renamed the Space that held `k5-admin`). Clears the blocked state so
 /// the next sweep creates again. Returns whether it was blocked.
 pub fn clear_blocked(conn: &Connection, now: i64) -> Result<bool, String> {
     let n = conn
         .execute("DELETE FROM tool_admin_space WHERE id = 1 AND state = 'blocked'", [])
         .map_err(|e| format!("admin space clear: {e}"))?;
     if n > 0 {
-        outbox::skip_blocked_subject(conn, CHAT_KIND, SUBJECT_SPACE, now, "the K2 Admin Space create is retried")?;
+        outbox::skip_blocked_subject(conn, CHAT_KIND, SUBJECT_SPACE, now, "the K5 Space create is retried")?;
     }
     Ok(n > 0)
 }

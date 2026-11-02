@@ -1,4 +1,4 @@
-//! Voice rooms, daemon side of the K2 Admin Space (prd-k2-voice-rooms-v1
+//! Voice rooms, daemon side of the K5 Space (prd-k2-voice-rooms-v1
 //! v1.9 §2, §3; lane B, slices S1 and S2). The decisions and the ledger
 //! are `k2_core::tool_hook::admin_space`; this module gathers the facts
 //! that live outside skin.db before each sweep plans:
@@ -8,9 +8,9 @@
 //! - whether this box can host rooms ([`k2_core::voice_rooms::Hosting`]);
 //! - the room count and the Space's name;
 //! - **the fixed default Space** (§2.1, §6.6 2.7): once the Admin Space is
-//!   ready, `sew_chat_settings.default_space` becomes `k2-admin`. A box
+//!   ready, `sew_chat_settings.default_space` becomes `k5-admin`. A box
 //!   with another default carries its agents' access rows over to
-//!   `k2-admin` first; the switch is audited and `k2 voice status` lists
+//!   `k5-admin` first; the switch is audited and `k2 voice status` lists
 //!   the agents carried;
 //! - the agents with access to the Admin Space (they're added over mgmt).
 //!
@@ -39,13 +39,9 @@ fn hosting_now() -> Hosting {
     }
 }
 
-/// The Space's name: the box's label, else "K2".
+/// The Space's name (Rosson 11-02): the same on every box.
 fn space_name() -> String {
-    k2_core::tunnel::config::load()
-        .ok()
-        .map(|c| c.subdomain.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "K2".into())
+    "K5 Space".to_string()
 }
 
 /// Before the sweep plans: the facts, plus the grants written ahead and
@@ -58,8 +54,8 @@ pub fn prepare() -> Result<Option<Facts>, String> {
     let connect = Facts::load_connect()?;
     match hook::ensure_admin_connect_grants(&connect) {
         Ok(0) => {}
-        Ok(n) => log_debug!("[voice-rooms] {n} Connect login(s) got a chat grant for the K2 Admin Space"),
-        Err(e) => log_debug!("[voice-rooms] chat grants for the K2 Admin Space: {e}"),
+        Ok(n) => log_debug!("[voice-rooms] {n} Connect login(s) got a chat grant for the K5 Space"),
+        Err(e) => log_debug!("[voice-rooms] chat grants for the K5 Space: {e}"),
     }
     let space = hook::admin_space_id()?;
     let agents = match space.as_deref() {
@@ -96,7 +92,7 @@ fn agents_with_access(space_id: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// §6.6 2.7: make `k2-admin` the default Space. A box with another
+/// §6.6 2.7: make `k5-admin` the default Space. A box with another
 /// default first carries its agents' access over (an agent that could DM
 /// before still can), audited. Returns whether it switched now.
 pub fn sync_default_space(space_id: &str) -> Result<bool, String> {
@@ -138,7 +134,7 @@ pub fn sync_default_space(space_id: &str) -> Result<bool, String> {
                 op: "default_space".into(),
                 space_id: Some(space_id.to_string()),
                 target: Some(sew_wire::ADMIN_SPACE_SLUG.into()),
-                detail: Some(json!({"from": cur, "carried": carried, "why": "the K2 Admin Space is the fixed default Space (voice rooms)"}).to_string()),
+                detail: Some(json!({"from": cur, "carried": carried, "why": "the K5 Space is the fixed default Space (voice rooms)"}).to_string()),
                 outcome: "ok".into(),
                 reason: None,
                 created_at: now,
@@ -147,7 +143,7 @@ pub fn sync_default_space(space_id: &str) -> Result<bool, String> {
         (cur, carried)
     };
     hook::admin_space_note_default_switch(from.as_deref(), &carried)?;
-    log_debug!("[voice-rooms] default Space {} → k2-admin; carried {} agent(s)", from.as_deref().unwrap_or("none"), carried.len());
+    log_debug!("[voice-rooms] default Space {} → k5-admin; carried {} agent(s)", from.as_deref().unwrap_or("none"), carried.len());
     Ok(true)
 }
 
@@ -161,7 +157,7 @@ pub fn default_space_fixed(requested: Option<&str>) -> Result<Option<String>, St
         return Ok(None);
     }
     Ok(Some(
-        "the default Space is fixed to k2-admin (the K2 Admin Space) while voice rooms are on; give an agent access to k2-admin instead".into(),
+        "the default Space is fixed to k5-admin (the K5 Space) while voice rooms are on; give an agent access to k5-admin instead".into(),
     ))
 }
 

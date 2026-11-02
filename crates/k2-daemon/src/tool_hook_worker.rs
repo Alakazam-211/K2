@@ -311,7 +311,7 @@ pub fn classify(
         409 if op == Op::AdminSpaceCreate && reason == reasons::SLUG_TAKEN => Outcome::Blocked {
             status: Some(status),
             error: format!(
-                "{}: another Sew Space already has the slug k2-admin, so K2 can't make its Admin Space; rename that Space's slug in Sew, then retry (k2 voice status)",
+                "{}: another Sew Space already has the slug k5-admin, so K2 can't make its Admin Space; rename that Space's slug in Sew, then retry (k2 voice status)",
                 resp.error_line()
             ),
         },

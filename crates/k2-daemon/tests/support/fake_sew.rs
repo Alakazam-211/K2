@@ -128,7 +128,7 @@ pub struct Space {
     pub owner: Option<String>,
     /// Sew 0.6.0 I4: each person's level in an App-governed Space.
     pub levels: BTreeMap<String, String>,
-    /// The Space's slug (`k2-admin` for the server Space, SW-1).
+    /// The Space's slug (`k5-admin` for the server Space, SW-1).
     pub slug: Option<String>,
     /// The Space's name (SW-1: the same create body replays).
     pub name: Option<String>,
@@ -1863,7 +1863,7 @@ fn space_create(s: &mut State, body: &str) -> (u16, String) {
         return server_space_create(s, body);
     }
     if has_flag(s, SERVER_GOVERNED) && raw.get("slug").and_then(Value::as_str) == Some(sew_wire::ADMIN_SPACE_SLUG) {
-        return err(400, "validation_failed", "k2-admin is reserved", json!({"reason": "slug_reserved", "field": "slug"}));
+        return err(400, "validation_failed", "k5-admin is reserved", json!({"reason": "slug_reserved", "field": "slug"}));
     }
     if raw.get("owner").and_then(Value::as_str).is_some_and(|o| o.starts_with("app:")) {
         if !s.features.iter().any(|f| f == GOVERNED) {
@@ -2455,9 +2455,9 @@ fn list(s: &State, query: &str) -> (u16, String) {
 // "server"` and `owner: "k2:server"`; one per install (sew-56 v1.2: the
 // same body replays `200 created: false`; a different one is `409
 // conflict` `server_space_exists` + `details.space_id`); an `app_id` on it
-// → `409 app_mismatch`; `slug_taken` when another Space holds `k2-admin`;
+// → `409 app_mismatch`; `slug_taken` when another Space holds `k5-admin`;
 // `identity_not_k2` on a standalone install; any other create naming
-// `k2-admin` → `400 validation_failed` `slug_reserved`; a settings switch
+// `k5-admin` → `400 validation_failed` `slug_reserved`; a settings switch
 // to or from `server` → `409 server_governance_fixed`; `channels/create`
 // with `app_id` omitted in the server Space. Members: box users
 // and agents; `k2:principal:` / `app:` ids → `422 invalid_state`
@@ -2524,7 +2524,7 @@ fn ensure_server_member(s: &mut State) {
     );
 }
 
-/// SW-1: `POST /mgmt/v1/spaces/create {slug: k2-admin, name, owner:
+/// SW-1: `POST /mgmt/v1/spaces/create {slug: k5-admin, name, owner:
 /// k2:server, governance: server}`.
 fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
     if !has_flag(s, SERVER_GOVERNED) {
@@ -2567,7 +2567,7 @@ fn server_space_create(s: &mut State, body: &str) -> (u16, String) {
         return err(409, "conflict", "this install already has its server Space", json!({"reason": "server_space_exists", "space_id": id}));
     }
     if s.spaces.values().any(|sp| sp.slug.as_deref() == Some(sew_wire::ADMIN_SPACE_SLUG)) {
-        return err(409, "conflict", "another Space already has slug k2-admin", json!({"reason": "slug_taken", "field": "slug"}));
+        return err(409, "conflict", "another Space already has slug k5-admin", json!({"reason": "slug_taken", "field": "slug"}));
     }
     ensure_server_member(s);
     let owner_id = s.members[sew_wire::K2_SERVER].member_id;

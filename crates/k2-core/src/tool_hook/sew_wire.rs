@@ -1088,7 +1088,7 @@ pub struct ChannelsBulkResponse {
 pub const K2_SERVER: &str = "k2:server";
 /// SW-1: the one server-governed Space's slug, reserved by Sew (any other
 /// create naming it answers `422 validation_failed` `slug_reserved`).
-pub const ADMIN_SPACE_SLUG: &str = "k2-admin";
+pub const ADMIN_SPACE_SLUG: &str = "k5-admin";
 /// SW-1 governance (beside [`GOVERNANCE_APP`] / [`GOVERNANCE_SEW`]). Only
 /// `spaces/create` sets it; `spaces/{id}/settings` can't switch to or from
 /// it (`409 server_governance_fixed`).
@@ -1098,7 +1098,7 @@ pub const GOVERNANCE_SERVER: &str = "server";
 pub const MGMT_SPACES_CREATE: &str = "/mgmt/v1/spaces/create";
 
 /// SW-1 `MgmtSpaceCreateRequest` as K2 sends it for the Admin Space:
-/// `{"slug": "k2-admin", "name", "owner": "k2:server", "governance":
+/// `{"slug": "k5-admin", "name", "owner": "k2:server", "governance":
 /// "server"}`. No `app_id` (sending one answers `409 app_mismatch`), no
 /// managers, not hidden. sew-56 v1.2: the same body again (any
 /// Idempotency-Key) replays `200` with `created: false` and the Space's id;
@@ -1539,12 +1539,12 @@ pub mod reasons {
     /// `details.space_id` names it (K2 reads it back).
     pub const SERVER_SPACE_EXISTS: &str = "server_space_exists";
     /// SW-1 409 `conflict`: a non-server Space already holds slug
-    /// `k2-admin`. K2 reports it (blocked).
+    /// `k5-admin`. K2 reports it (blocked).
     pub const SLUG_TAKEN: &str = "slug_taken";
     /// SW-1 409 `conflict`: a standalone install (no K2 identity).
     pub const IDENTITY_NOT_K2: &str = "identity_not_k2";
     /// SW-1 400 `validation_failed` (sew-56 v1.2; Sew's validation_failed
-    /// is always 400): `k2-admin` on any other Space's create.
+    /// is always 400): `k5-admin` on any other Space's create.
     pub const SLUG_RESERVED: &str = "slug_reserved";
     /// SW-1 422 `invalid_state` (mgmt) / 403 `missing_permission` (client
     /// routes, sew-56 v1.2): a `k2:principal:` or `app:` id in a `server`
@@ -1744,11 +1744,11 @@ mod tests {
         req.validate().expect("valid");
         assert_eq!(
             serde_json::to_value(&req).unwrap(),
-            serde_json::json!({"slug": "k2-admin", "name": "sewlab", "owner": "k2:server", "governance": "server"})
+            serde_json::json!({"slug": "k5-admin", "name": "sewlab", "owner": "k2:server", "governance": "server"})
         );
         assert!(
             serde_json::from_str::<ServerSpaceCreateRequest>(
-                r#"{"slug":"k2-admin","name":"x","owner":"k2:server","governance":"server","app_id":"a"}"#
+                r#"{"slug":"k5-admin","name":"x","owner":"k2:server","governance":"server","app_id":"a"}"#
             )
             .is_err(),
             "an app_id never rides a server create"
@@ -1773,13 +1773,13 @@ mod tests {
 
         // The answer as today plus `governance`; older Sew: absent.
         let r: SpaceCreateResponse = serde_json::from_str(
-            r#"{"space_id":"77","slug":"k2-admin","name":"sewlab","owner_member_id":"5","created":true,"governance":"server","manager_member_ids":[]}"#,
+            r#"{"space_id":"77","slug":"k5-admin","name":"sewlab","owner_member_id":"5","created":true,"governance":"server","manager_member_ids":[]}"#,
         )
         .unwrap();
         assert_eq!((r.space_id.as_str(), r.governance.as_deref(), r.created), ("77", Some("server"), true));
         // sew-56 v1.2: the same body replays with created: false.
         let replay: SpaceCreateResponse = serde_json::from_str(
-            r#"{"space_id":"77","slug":"k2-admin","name":"sewlab","owner_member_id":"5","created":false,"governance":"server"}"#,
+            r#"{"space_id":"77","slug":"k5-admin","name":"sewlab","owner_member_id":"5","created":false,"governance":"server"}"#,
         )
         .unwrap();
         assert_eq!((replay.space_id.as_str(), replay.created), ("77", false));

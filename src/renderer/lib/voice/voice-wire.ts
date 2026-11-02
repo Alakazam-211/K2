@@ -11,7 +11,7 @@
 // (never guessed), and a body that isn't a rooms list throws.
 
 /** `/boot-status` `features` key a daemon reports while it hosts rooms
- *  (`voice::occupancy::hosts_rooms`: preview on, Linux, the K2 Admin Space
+ *  (`voice::occupancy::hosts_rooms`: preview on, Linux, the K5 Space
  *  ready, Pro, at least one room). A daemon with the preview off never lists
  *  it, so the headset shows nothing at all. */
 export const VOICE_ROOMS_FEATURE = 'voice-rooms-v1'

@@ -93,7 +93,7 @@ async fn admin_space(env: &Env) -> String {
     let r = env.post(sew_wire::MGMT_SPACES_CREATE, serde_json::to_value(sew_wire::ServerSpaceCreateRequest::admin("sewlab")).unwrap()).await;
     assert_eq!(r.status, 200, "{}", r.body_text());
     let a: sew_wire::SpaceCreateResponse = serde_json::from_str(&r.body_text()).expect("create answer");
-    assert_eq!((a.slug.as_str(), a.governance.as_deref(), a.created), ("k2-admin", Some("server"), true));
+    assert_eq!((a.slug.as_str(), a.governance.as_deref(), a.created), ("k5-admin", Some("server"), true));
     a.space_id
 }
 
@@ -113,13 +113,13 @@ async fn sw1_create_once_then_server_space_exists_names_it() {
     assert_eq!(r.error().unwrap().error.detail_str("space_id"), Some(id.as_str()));
     // An app_id on a server create: 409 app_mismatch.
     let r = env
-        .post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k2-admin", "name": "sewlab", "owner": "k2:server", "governance": "server", "app_id": "a1"}))
+        .post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k5-admin", "name": "sewlab", "owner": "k2:server", "governance": "server", "app_id": "a1"}))
         .await;
     assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::APP_MISMATCH.into()));
     // `k2:server` exists in Sew now and is never provisioned by K2.
     assert!(env.sew.member(sew_wire::K2_SERVER).is_some());
-    // Any other create naming k2-admin: 400 slug_reserved (v1.2).
-    let r = env.post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k2-admin", "name": "x", "owner": "k2:owner"})).await;
+    // Any other create naming k5-admin: 400 slug_reserved (v1.2).
+    let r = env.post(sew_wire::MGMT_SPACES_CREATE, json!({"slug": "k5-admin", "name": "x", "owner": "k2:owner"})).await;
     assert_eq!(refusal(&r), (400, "validation_failed".into(), sew_wire::reasons::SLUG_RESERVED.into()));
     // No settings switch to or from server: 409 server_governance_fixed.
     let r = env.post(&sew_wire::space_settings_path(&id), json!({"governance": "sew"})).await;
@@ -143,7 +143,7 @@ async fn sw1_create_once_then_server_space_exists_names_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sw1_slug_taken_and_identity_not_k2() {
     let env = setup(&ALL_070).await;
-    env.sew.add_sew_space_with_slug("6001", "k2-admin");
+    env.sew.add_sew_space_with_slug("6001", "k5-admin");
     let body = serde_json::to_value(sew_wire::ServerSpaceCreateRequest::admin("sewlab")).unwrap();
     let r = env.post(sew_wire::MGMT_SPACES_CREATE, body.clone()).await;
     assert_eq!(refusal(&r), (409, "conflict".into(), sew_wire::reasons::SLUG_TAKEN.into()));

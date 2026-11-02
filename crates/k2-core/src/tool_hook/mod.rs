@@ -1478,7 +1478,7 @@ pub fn admin_space_store_count() -> Result<bool, String> {
     Ok(true)
 }
 
-/// Record the default-Space switch to `k2-admin` (§6.6 2.7 d).
+/// Record the default-Space switch to `k5-admin` (§6.6 2.7 d).
 pub fn admin_space_note_default_switch(from: Option<&str>, carried: &[String]) -> Result<(), String> {
     crate::skin::with_skin_conn(|conn| admin_space::note_default_switch(conn, from, carried, outbox::now_secs()))
 }

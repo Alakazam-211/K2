@@ -194,7 +194,7 @@ async fn admin_space_box_users_levels_room_one_and_the_default_space() {
     let sp = space(&env);
     // The create, word for word (§6.6 2.2 SW-1).
     let create = env.sew.posts().into_iter().find(|c| c.path == sew_wire::MGMT_SPACES_CREATE).expect("a create");
-    assert_eq!(create.body, serde_json::json!({"slug": "k2-admin", "name": "K2", "owner": "k2:server", "governance": "server"}));
+    assert_eq!(create.body, serde_json::json!({"slug": "k5-admin", "name": "K2", "owner": "k2:server", "governance": "server"}));
     assert_eq!(create.actor.as_deref(), Some(admin_space::ACTOR));
     // Box users only, at their levels; the disabled login stays out.
     let s = env.sew.space(&sp).unwrap();
@@ -224,8 +224,8 @@ async fn admin_space_box_users_levels_room_one_and_the_default_space() {
     let room = env.sew.channels(&sp).get("room-1").cloned().expect("room-1");
     assert_eq!((room.kind.as_str(), room.name.as_str(), room.private, room.user_limit, room.archived), ("voice", "Room 1", false, Some(25), false));
     assert_eq!(env.sew.channels(&sp).len(), 1);
-    // The default Space is k2-admin now, and the view shows it all.
-    assert_eq!(default_space().as_deref(), Some("k2-admin"));
+    // The default Space is k5-admin now, and the view shows it all.
+    assert_eq!(default_space().as_deref(), Some("k5-admin"));
     let v = hook::admin_space_view().unwrap();
     assert_eq!(v.space.as_ref().map(|s| (s.state.as_str(), s.space_id.clone())), Some(("ready", Some(sp.clone()))));
     assert!(v.space.as_ref().is_some_and(|s| s.count_stored), "voiceRoomsCount = 1 written at set-up");
@@ -335,7 +335,7 @@ async fn below_pro_rooms_are_dormant_and_losing_pro_closes_them() {
     let sp = space(&env);
     assert!(env.sew.channels(&sp).is_empty(), "no rooms below Pro");
     assert_eq!(hook::admin_space_last_summary().and_then(|s| s.rooms_dormant).as_deref(), Some("not_pro"));
-    assert_eq!(default_space().as_deref(), Some("k2-admin"), "the Space and default exist whatever the tier");
+    assert_eq!(default_space().as_deref(), Some("k5-admin"), "the Space and default exist whatever the tier");
     voice_rooms::set_hosting_for_tests(Some(Hosting::Ok));
     hook::kick_reconcile();
     settle(&env).await;
@@ -378,7 +378,7 @@ async fn a_replayed_create_with_created_false_is_success() {
     assert_eq!((create.state.as_str(), create.last_status), ("done", Some(200)));
     assert_eq!(create.result.as_ref().and_then(|r| r["created"].as_bool()), Some(false), "a replay");
     assert!(env.sew.channels("7778").contains_key("room-1"), "rooms follow");
-    assert_eq!(default_space().as_deref(), Some("k2-admin"));
+    assert_eq!(default_space().as_deref(), Some("k5-admin"));
     env.sew.assert_clean();
 }
 
@@ -386,18 +386,18 @@ async fn a_replayed_create_with_created_false_is_success() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slug_taken_blocks_and_is_reported() {
     let env = setup(&SEW_070, true, Hosting::Ok).await;
-    env.sew.add_sew_space_with_slug("6001", "k2-admin");
+    env.sew.add_sew_space_with_slug("6001", "k5-admin");
     settle(&env).await;
     // The next sweep sees the blocked Space and sends nothing more.
     settle(&env).await;
     let v = hook::admin_space_view().unwrap();
     let s = v.space.expect("a space row");
     assert_eq!(s.state, "blocked");
-    assert!(s.why.as_deref().is_some_and(|w| w.contains("slug_taken") || w.contains("k2-admin")), "{s:?}");
+    assert!(s.why.as_deref().is_some_and(|w| w.contains("slug_taken") || w.contains("k5-admin")), "{s:?}");
     assert_eq!(v.holds.len(), 1, "the create is the one hold: {:?}", v.holds);
     assert_eq!(hook::admin_space_last_summary().and_then(|s| s.waiting).as_deref(), Some("space_blocked"));
     assert!(env.sew.posts().iter().all(|c| c.path != sew_wire::MGMT_CHANNELS_BULK), "no rooms");
-    assert_ne!(default_space().as_deref(), Some("k2-admin"), "the default isn't switched to a Space that isn't there");
+    assert_ne!(default_space().as_deref(), Some("k5-admin"), "the default isn't switched to a Space that isn't there");
     env.sew.assert_clean();
 }
 
@@ -444,13 +444,13 @@ async fn another_default_carries_agents_access_over_and_agents_join_over_mgmt() 
     assert_eq!(k2_daemon::voice_admin::default_space_fixed(Some("other")).unwrap(), None, "nothing fixed before the Space exists");
     settle(&env).await;
     let sp = space(&env);
-    assert_eq!(default_space().as_deref(), Some("k2-admin"));
+    assert_eq!(default_space().as_deref(), Some("k5-admin"));
     let carried = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::get_access(&conn, &ws, &sp).unwrap().expect("access carried to k2-admin")
+        store::get_access(&conn, &ws, &sp).unwrap().expect("access carried to k5-admin")
     };
-    assert_eq!((carried.space_slug.as_str(), carried.level, carried.updated_by.as_str()), ("k2-admin", Level::Reply, admin_space::ACTOR));
+    assert_eq!((carried.space_slug.as_str(), carried.level, carried.updated_by.as_str()), ("k5-admin", Level::Reply, admin_space::ACTOR));
     let s = hook::admin_space_view().unwrap().space.unwrap();
     assert_eq!((s.default_from.as_deref(), s.carried.clone()), (Some("hearth"), vec![ws.clone()]));
     {
@@ -467,6 +467,6 @@ async fn another_default_carries_agents_access_over_and_agents_join_over_mgmt() 
     // `set default_space` is fixed now (409 default_space_fixed).
     assert!(k2_daemon::voice_admin::default_space_fixed(Some("hearth")).unwrap().is_some());
     assert!(k2_daemon::voice_admin::default_space_fixed(None).unwrap().is_some(), "clearing it is refused too");
-    assert_eq!(k2_daemon::voice_admin::default_space_fixed(Some("k2-admin")).unwrap(), None);
+    assert_eq!(k2_daemon::voice_admin::default_space_fixed(Some("k5-admin")).unwrap(), None);
     env.sew.assert_clean();
 }

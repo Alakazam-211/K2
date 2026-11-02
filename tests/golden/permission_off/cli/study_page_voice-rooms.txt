@@ -3,7 +3,7 @@ exit: 0
 --- stdout
 k2 study voice-rooms — Voice rooms on this server (preview)
 
-NOT App voice. This page is the box's own rooms: one K2 Admin Space per
+NOT App voice. This page is the box's own rooms: one K5 Space per
 Linux server, rooms Room 1..N for its owner, Admins and Members. An App's
 own rooms and channels are k2 study chat-voice-rooms.
 
@@ -17,13 +17,13 @@ on, every k2 voice command answers voice_rooms_off.
 READ (anyone, agents too)
   k2 voice rooms       who's in each room; closing / unavailable rooms
   k2 voice status      owner/Admin; agents read it: why the server can or
-                       can't host (hosting.state), the K2 Admin Space and
+                       can't host (hosting.state), the K5 Space and
                        its members, sync holds, the voice lane, the feed
 Never poll: the app refreshes on the server's voice_rooms_changed event.
 
 HOSTING STATES (k2 voice status, first one that applies)
   preview_off · sew_off (Chat / Voice Hosting not on: k2 hostchat status)
-  · voice_off + detail (Sew older than 0.7.0, or the Admin Space blocked)
+  · voice_off + detail (Sew older than 0.7.0, or the K5 Space blocked)
   · starting · not_pro · count_zero · voice_lane_reconnecting (under 20 s:
   joins wait) · voice_lane_down (joins refused, live calls end) · ok.
 

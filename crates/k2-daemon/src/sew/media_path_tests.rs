@@ -13,10 +13,8 @@ fn under_20_s_of_lane_down_sew_hears_nothing_and_joins_are_held() {
     m.sew_started(); // Sew holds `up`
     m.observe(true, true, t0);
     assert_eq!(m.state(), PathState::Up);
-    assert_eq!(gate_of(m.state()), JoinGate::Open);
     m.observe(true, false, secs(t0, 1));
     assert_eq!(m.state(), PathState::Reconnecting);
-    assert_eq!(gate_of(m.state()), JoinGate::Hold);
     for s in [1, 5, 10, 20] {
         m.observe(true, false, secs(t0, s));
         assert_eq!(m.state(), PathState::Reconnecting, "{s}");
@@ -25,7 +23,6 @@ fn under_20_s_of_lane_down_sew_hears_nothing_and_joins_are_held() {
     // 20 s of continuous lane-down (from 1 s): down.
     m.observe(true, false, secs(t0, 21));
     assert_eq!(m.state(), PathState::Down);
-    assert_eq!(gate_of(m.state()), JoinGate::Refuse);
     assert_eq!(m.next_action(secs(t0, 21)), Some(Action::Send(SewSide::Down)));
     m.sent(SewSide::Down, true, secs(t0, 21));
     assert_eq!(m.next_action(secs(t0, 22)), None);
@@ -102,7 +99,6 @@ fn leaving_the_tunnel_tier_sends_up() {
     m.sent(SewSide::Down, true, secs(t0, 20));
     m.observe(false, false, secs(t0, 25));
     assert_eq!(m.state(), PathState::Off);
-    assert_eq!(gate_of(m.state()), JoinGate::Open);
     assert_eq!(m.next_action(secs(t0, 25)), Some(Action::Send(SewSide::Up)));
 }
 
@@ -129,6 +125,44 @@ fn failed_sends_back_off() {
     assert_eq!(waits, vec![1, 2, 4, 8, 16, 30, 30]);
 }
 
+/// Each state as the voice BFF reads it (lane C's `voice::lane`).
+#[test]
+fn every_state_maps_to_the_bff_lane_state() {
+    use crate::voice::lane::LaneKind;
+    let off = lane_state_of(PathState::Off);
+    assert_eq!(off.state, LaneKind::NotApplicable);
+    assert!(off.admits_joins());
+    let up = lane_state_of(PathState::Up);
+    assert_eq!(up.state, LaneKind::Up);
+    assert!(up.admits_joins());
+    let re = lane_state_of(PathState::Reconnecting);
+    assert_eq!(re.state, LaneKind::Reconnecting);
+    assert!(!re.admits_joins());
+    assert_eq!(re.reason.as_deref(), Some(REASON_RECONNECTING));
+    let down = lane_state_of(PathState::Down);
+    assert_eq!(down.state, LaneKind::Down);
+    assert!(!down.admits_joins());
+    assert_eq!(down.reason.as_deref(), Some("voice_lane_down"));
+}
+
+/// A published transition reaches `voice::lane`: joins are refused while
+/// the lane is down and go through again when it leaves the tunnel tier.
+#[test]
+fn a_transition_reaches_the_voice_bffs_join_gate() {
+    use crate::voice::lane::{self, Gate, LaneKind};
+    let _g = lane::test_lock();
+    let snap = |state| Snapshot { state, since: 1, sew: None, sew_has_route: true };
+    publish(snap(PathState::Down));
+    assert_eq!(lane::state().state, LaneKind::Down);
+    assert!(matches!(lane::gate_join(Duration::ZERO), Gate::Refuse { .. }));
+    assert_eq!(snapshot().state, PathState::Down);
+    publish(snap(PathState::Up));
+    assert_eq!(lane::state().state, LaneKind::Up);
+    assert!(matches!(lane::gate_join(Duration::ZERO), Gate::Go { .. }));
+    publish(snap(PathState::Off));
+    assert_eq!(lane::state().state, LaneKind::NotApplicable);
+}
+
 #[test]
 fn state_names_match_the_contract() {
     assert_eq!(PathState::Reconnecting.as_str(), "voice_lane_reconnecting");
@@ -137,5 +171,4 @@ fn state_names_match_the_contract() {
     assert_eq!(ROUTE, "/mgmt/v1/voice/media-path");
     assert_eq!(FEATURE_VOICE_MEDIA_PATH, "voice_media_path");
     assert_eq!(GRACE, Duration::from_secs(20));
-    assert_eq!(JoinRefused::CODE, "media_path_down");
 }

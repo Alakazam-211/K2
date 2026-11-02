@@ -171,13 +171,6 @@ pub trait SewOps: Send + Sync {
     fn voice_lane_up(&self) -> bool {
         k2_core::tunnel::voice_lane::is_up()
     }
-    /// The small-box floor lets this box host voice (PRD §7.3: 2–4 GiB
-    /// boxes run chat only). INTEGRATION (lane E): this default becomes
-    /// `super::autosetup::floor_now().voice` when lane E lands; until then
-    /// every box passes, as before 0.46.8.
-    fn voice_floor_ok(&self) -> bool {
-        true
-    }
     /// The voice lane is armed (runs whenever the tunnel runs).
     fn voice_lane_armed(&self) -> bool {
         k2_core::tunnel::voice_lane::armed()
@@ -200,13 +193,6 @@ pub trait SewOps: Send + Sync {
     /// An frpc binary resolves (the voice lane runs one).
     fn frpc_installed(&self) -> bool {
         k2_core::tunnel::connector::resolve_frpc(&k2_core::tunnel::connector::FrpcBinary::Auto).is_ok()
-    }
-    /// The K2 Connect plan of this box's label (`pro`, `single`, `free`),
-    /// read live from the control plane.
-    fn connect_tier(&self) -> Result<Option<String>, String> {
-        let cfg = k2_core::tunnel::config::load()?;
-        let label = self.confirmed_label().unwrap_or_else(|| cfg.subdomain.trim().to_string());
-        k2_core::tunnel::subdomains::fetch_account(&label, &cfg.token).map(|a| a.tier)
     }
 
     /// This build pins a published Sew release
@@ -240,11 +226,10 @@ pub trait SewOps: Send + Sync {
     /// Make Sew's keyring mirror folder `path` (absolute, under the owner's
     /// off-box ship folder) owned by `sew:sew`, mode 0700, no links, so
     /// Sew's `sew` user can write it (the daemon user can't make it with
-    /// that owner). Root helper protocol 12 (lane A of the voice rooms
-    /// work, vs-live V18); see [`MIRROR_DIR_PENDING`] until it lands.
+    /// that owner). Root helper protocol 12, `engine sew mirror-dir`; an
+    /// older helper answers [`MIRROR_DIR_PENDING`].
     fn mirror_dir(&self, path: &str) -> Result<(), String> {
-        let _ = path;
-        Err(MIRROR_DIR_PENDING.to_string())
+        mirror_dir_via_helper(&self.helper_state(), path, |argv, stdin| self.helper(argv, Some(stdin)))
     }
 
     // ── the plan tier (voice rooms PRD v1.9 §8, S7) ───────────────────────
@@ -265,10 +250,31 @@ pub trait SewOps: Send + Sync {
     }
 }
 
-/// What [`SewOps::mirror_dir`] answers while no root helper verb makes the
-/// mirror folder (protocol 12). K2 retries the tie on its own.
+/// What [`SewOps::mirror_dir`] answers while the root helper is older than
+/// protocol 12. K2 retries the tie on its own.
 pub const MIRROR_DIR_PENDING: &str =
     "this K2's root helper can't make Sew's keyring mirror folder yet (it needs root helper protocol 12)";
+
+/// `engine sew mirror-dir` for the mirror folder `path` (`<ship>/sew-keyring-
+/// <install id>`), when the helper serves it (protocol 12 AND
+/// `namespaces.sewmirror`).
+fn mirror_dir_via_helper(
+    st: &RootHelperState,
+    path: &str,
+    call: impl FnOnce(&[String], &[u8]) -> Result<Value, String>,
+) -> Result<(), String> {
+    let served = st.usable(k2_root_proto::version::SEW_MIRROR_DIR_MIN_PROTOCOL)
+        && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sewmirror")).and_then(Value::as_bool) == Some(true);
+    if !served {
+        return Err(MIRROR_DIR_PENDING.to_string());
+    }
+    let req = k2_root_proto::sew::MirrorDirRequest::from_mirror_path(path)
+        .ok_or_else(|| format!("{path} is not a <ship folder>/sew-keyring-<install id> path"))?;
+    req.validate().map_err(str::to_string)?;
+    let body = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+    let argv = ["engine", "sew", "mirror-dir"].map(str::to_string);
+    call(&argv, &body).map(|_| ())
+}
 
 /// A control-plane answer that was not 2xx (`status` 0 = unreachable).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -877,9 +883,6 @@ pub mod fake {
         pub confirmed: Mutex<Option<String>>,
         pub e2e: Mutex<bool>,
         pub frpc: Mutex<bool>,
-        pub connect_tier: Mutex<Result<Option<String>, String>>,
-        /// [`SewOps::voice_floor_ok`] (default true: a big box).
-        pub voice_floor: Mutex<bool>,
         /// The `connect` host of every served-leaf check, in order.
         pub served_connects: Mutex<Vec<String>>,
         /// Queued `/api/v1/health` answers (default: 200 ready).
@@ -943,9 +946,7 @@ pub mod fake {
                 confirmed: Mutex::new(Some("lztek".into())),
                 e2e: Mutex::new(true),
                 frpc: Mutex::new(true),
-                connect_tier: Mutex::new(Ok(Some("pro".into()))),
                 served_connects: Mutex::new(Vec::new()),
-                voice_floor: Mutex::new(true),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
                 mgmt_status: Mutex::new(json!({
@@ -1592,9 +1593,6 @@ pub mod fake {
         fn voice_lane_armed(&self) -> bool {
             *self.lane_armed.lock().unwrap()
         }
-        fn voice_floor_ok(&self) -> bool {
-            *self.voice_floor.lock().unwrap()
-        }
         fn voice_lane_status(&self) -> Value {
             json!({"armed": *self.lane_armed.lock().unwrap(), "up": self.voice_lane_up()})
         }
@@ -1606,9 +1604,6 @@ pub mod fake {
         }
         fn frpc_installed(&self) -> bool {
             *self.frpc.lock().unwrap()
-        }
-        fn connect_tier(&self) -> Result<Option<String>, String> {
-            self.connect_tier.lock().unwrap().clone()
         }
         fn served_leaf(&self, connect: &str, _sni: &str, port: u16) -> Option<String> {
             self.served_ports.lock().unwrap().push(port);
@@ -1669,6 +1664,43 @@ pub mod fake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keyring-mirror tie's helper call: protocol 12 AND the namespace,
+    /// `engine sew mirror-dir` with `{shipPath, installId}` on stdin; an
+    /// older helper is never called (the tie waits).
+    #[test]
+    fn mirror_dir_calls_the_protocol_12_verb_only_on_a_helper_that_has_it() {
+        const PATH: &str = "/mnt/backup/sew-keyring-48831765147549701";
+        let pin = k2_root_proto::sew::pinned().version;
+        let not_called = |_: &[String], _: &[u8]| -> Result<Value, String> { panic!("an older helper is never called") };
+        let old = fake::helper_ok(11, true, pin);
+        assert_eq!(mirror_dir_via_helper(&old, PATH, not_called).unwrap_err(), MIRROR_DIR_PENDING);
+        let no_flag = fake::helper_ok(12, true, pin);
+        assert_eq!(mirror_dir_via_helper(&no_flag, PATH, not_called).unwrap_err(), MIRROR_DIR_PENDING);
+
+        let mut h = fake::helper_ok(12, true, pin);
+        h.version_json.as_mut().unwrap()["namespaces"]["sewmirror"] = json!(true);
+        let mut seen = None;
+        mirror_dir_via_helper(&h, PATH, |argv, stdin| {
+            seen = Some((argv.to_vec(), serde_json::from_slice::<Value>(stdin).unwrap()));
+            Ok(json!({"path": PATH, "created": true}))
+        })
+        .unwrap();
+        let (argv, body) = seen.expect("the helper was called");
+        assert_eq!(argv, ["engine", "sew", "mirror-dir"]);
+        assert_eq!(body, json!({"shipPath": "/mnt/backup", "installId": "48831765147549701"}));
+        // The helper's own parser takes exactly that argv and body.
+        let v = k2_root_proto::verbs::Verb::parse(&["engine", "sew", "mirror-dir"]).expect("the verb parses");
+        assert_eq!(v.argv(), argv);
+        let req: k2_root_proto::sew::MirrorDirRequest = serde_json::from_value(body).unwrap();
+        req.validate().unwrap();
+
+        let bad = mirror_dir_via_helper(&h, "/mnt/backup/other", not_called).unwrap_err();
+        assert!(bad.contains("sew-keyring"), "{bad}");
+        assert_eq!(mirror_dir_via_helper(&h, "/etc/sew-keyring-1", not_called).unwrap_err(), "mirror-dir refused: shipPath");
+        let down = mirror_dir_via_helper(&h, PATH, |_, _| Err("helper said no".to_string())).unwrap_err();
+        assert_eq!(down, "helper said no", "a helper failure comes back as is (the tie stays pending)");
+    }
 
     #[test]
     fn parsers_read_systemd_proc_and_http() {

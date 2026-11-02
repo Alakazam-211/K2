@@ -556,7 +556,7 @@ pub(crate) mod test_support {
         // Ensure a clean connector singleton for this test.
         let _ = super::connector::stop("test teardown");
         super::voice_lane::disarm("test teardown");
-        super::voice_lane::set_preview(false);
+        crate::voice_rooms::set_tunnel_enabled(false);
         // 0.46.6: the relay-list refresh state (served list, default-name
         // lookups) is a process global that decides what the tunnel dials;
         // no test may inherit another's.
@@ -567,7 +567,7 @@ pub(crate) mod test_support {
         // Best-effort connector teardown.
         let _ = super::connector::stop("test teardown");
         super::voice_lane::disarm("test teardown");
-        super::voice_lane::set_preview(false);
+        crate::voice_rooms::set_tunnel_enabled(false);
         super::relay_list::reset_state_for_test();
     }
 }

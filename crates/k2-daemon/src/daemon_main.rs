@@ -1524,10 +1524,9 @@ async fn async_main() {
     // finishing or rolling back an upgrade the last daemon died in. Linux
     // only; nothing runs while no Sew is installed.
     crate::sew::supervisor::spawn_background();
-    // Voice rooms 0.46.8 (S9a/S9b): the voice tunnel preview switch, then
-    // the media-path loop (it arms frpc-voice exactly while voice runs the
-    // tunnel tier and tells Sew when the lane is down, §6.6 M11).
-    k2_core::tunnel::voice_lane::set_preview(k2_core::app_settings::load().voice_tunnel_preview);
+    // Voice rooms 0.46.8 (S9a/S9b): the media-path loop (it arms frpc-voice
+    // exactly while voice runs the tunnel tier with the preview on, and tells
+    // Sew and the voice BFF when the lane is down, §6.6 M11).
     crate::sew::media_path::spawn();
 
     // Files-drawer multi-writer live refresh — recursive watcher over

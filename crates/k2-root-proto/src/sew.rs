@@ -1960,6 +1960,14 @@ pub struct MirrorDirRequest {
 }
 
 impl MirrorDirRequest {
+    /// The request for a mirror folder path `<ship>/sew-keyring-<id>` (what
+    /// the daemon's keyring-mirror tie holds). `None` for any other shape.
+    pub fn from_mirror_path(path: &str) -> Option<Self> {
+        let (ship, name) = path.rsplit_once('/')?;
+        let id = name.strip_prefix("sew-keyring-")?;
+        Some(Self { ship_path: ship.to_string(), install_id: id.to_string() })
+    }
+
     /// `sew-keyring-<install id>`.
     pub fn dir_name(&self) -> String {
         format!("sew-keyring-{}", self.install_id)
@@ -2828,6 +2836,9 @@ mod tests {
         let ok = MirrorDirRequest { ship_path: "/mnt/backup/k2".into(), install_id: "48831765147549701".into() };
         ok.validate().unwrap();
         assert_eq!(ok.mirror_path(), "/mnt/backup/k2/sew-keyring-48831765147549701");
+        assert_eq!(MirrorDirRequest::from_mirror_path(&ok.mirror_path()).as_ref(), Some(&ok), "the round trip the daemon's tie uses");
+        assert_eq!(MirrorDirRequest::from_mirror_path("/mnt/backup/other-48831765147549701"), None);
+        assert_eq!(MirrorDirRequest::from_mirror_path("no-slash"), None);
         for (ship, id) in [
             ("/mnt/backup", "none"),
             ("/mnt/backup", "0123"),

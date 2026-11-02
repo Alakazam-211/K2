@@ -430,7 +430,7 @@ mod tests {
             let voice = render_voice_frpc_toml(&cfg, &relay).expect("a confirmed label");
             assert!(voice.contains("name = \"k2voice-rosson\""), "{requested:?}\n{voice}");
             assert!(voice.contains("customDomains = [\"turn.rosson.k2.dev\"]"), "{voice}");
-            assert!(!voice.contains(requested.trim()) || requested.trim() == "rosson", "never the request\n{voice}");
+            assert_eq!(voice, render_voice_frpc_toml(&sample(), &relay).unwrap(), "the request never reaches the voice lane: {requested:?}");
         }
     }
 

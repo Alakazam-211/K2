@@ -100,12 +100,10 @@ pub fn ready(env: &Env) -> R<()> {
             "voice through the tunnel is a preview: turn on voice_tunnel_preview (Settings) or set K2_VOICE_TUNNEL=1 in the daemon's environment",
         ));
     }
-    if !env.ops.voice_floor_ok() {
-        return Err(no(
-            "voice_floor",
-            409,
-            "this box is below the voice floor (PRD §7.3: boxes with 2–4 GiB of RAM run chat only, no voice)",
-        ));
+    // §7.3: a box under the voice floor runs chat only.
+    let floor = super::autosetup::floor_now(env);
+    if !floor.voice {
+        return Err(no("voice_floor", 409, floor.line.unwrap_or_else(|| format!("this box is under the voice floor ({})", floor.code))));
     }
     if !helper_ok(env) {
         let st = env.ops.helper_state();
@@ -251,11 +249,18 @@ pub fn preflight(env: &Env) -> Vec<Value> {
         Some(l) => c.push(check("tunnel_label", "ok", format!("TURN host {}", host(&l)), "")),
         None => c.push(check("tunnel_label", "fail", "no confirmed K2 Connect label".into(), "the tunnel must reach the control plane once (k2 tunnel status)")),
     }
-    match env.ops.connect_tier() {
-        Ok(Some(t)) if t == "pro" => c.push(check("pro", "ok", "K2 Connect Pro".into(), "")),
-        Ok(Some(t)) => c.push(check("pro", "fail", format!("K2 Connect {t}"), "voice through the tunnel needs K2 Connect Pro (nested names)")),
-        Ok(None) => c.push(check("pro", "info", "the control plane named no plan".into(), "the TURN certificate is refused below Pro")),
-        Err(e) => c.push(check("pro", "info", format!("plan not checked: {e}"), "the TURN certificate is refused below Pro")),
+    // The cached plan (never the network here); unknown is only a note: the
+    // cert broker's `403 tier_required` is the firm answer.
+    let plan = env.ops.plan_tier();
+    match plan.reading() {
+        _ if plan.is_pro() => c.push(check("pro", "ok", "K2 Connect Pro".into(), "")),
+        Some(r) => c.push(check(
+            "pro",
+            "fail",
+            format!("K2 Connect {}", r.tier.as_deref().unwrap_or("plan not reported")),
+            "voice through the tunnel needs K2 Connect Pro (nested names)",
+        )),
+        None => c.push(check("pro", "info", "K2 doesn't know this box's plan yet".into(), "the TURN certificate is refused below Pro")),
     }
     if env.ops.tunnel_e2e() {
         c.push(check("e2e", "ok", "the tunnel is end-to-end encrypted".into(), ""));

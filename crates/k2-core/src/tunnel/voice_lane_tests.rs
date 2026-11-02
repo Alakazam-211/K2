@@ -111,7 +111,7 @@ fn the_lane_follows_the_tunnel_restarts_at_once_and_stops_with_it() {
         start_tunnel(&script);
         set_listener(heard);
         let heard_before = HEARD.load(Ordering::SeqCst);
-        set_preview(true);
+        crate::voice_rooms::set_tunnel_enabled(true);
         arm().expect("arm");
         wait_until("the voice lane comes up", 10, is_up);
         assert!(HEARD.load(Ordering::SeqCst) > heard_before, "the listener heard `up`");
@@ -232,7 +232,7 @@ fn both_frpcs_are_named_from_the_confirmed_label_and_none_means_no_proxy() {
         assert!(main.contains("subdomain = \"staging.rosson\""), "the request still goes out\n{main}");
         assert!(!main.contains("user ="), "frp `user` stays empty\n{main}");
         wait_until("the main proxy registers", 10, connector::proxy_registered);
-        set_preview(true);
+        crate::voice_rooms::set_tunnel_enabled(true);
         arm().expect("arm");
         wait_until("voice up", 10, is_up);
         let voice = std::fs::read_to_string(voice_config_path()).expect("frpc-voice.toml");
@@ -279,7 +279,7 @@ fn a_restarted_daemon_adopts_the_running_frpc_voice() {
         let dir = crate::test_env::unique_temp_path("voice-lane-adopt");
         let script = fake_frpc(&dir);
         start_tunnel(&script);
-        set_preview(true);
+        crate::voice_rooms::set_tunnel_enabled(true);
         arm().expect("arm");
         wait_until("up", 10, is_up);
         let pid = voice_pid();

@@ -383,9 +383,9 @@ fn status_view() -> CliResponse {
         "hosting": hosting,
         "tier": super::pro_view(),
         "count": count,
-        // Lane A owns the real media tier; until it lands this reads the
-        // tunnel preview switch.
-        "media": { "tier": if voice_rooms::tunnel_enabled() { "tunnel" } else { "direct" } },
+        // The TURN tier voice runs now (`direct`, `passthrough`, `tunnel`);
+        // null while voice isn't installed.
+        "media": { "tier": crate::sew::voice::current_tier(&crate::sew::supervisor::live()) },
         "features": flags,
         "space": view.space,
         "members": view.members,

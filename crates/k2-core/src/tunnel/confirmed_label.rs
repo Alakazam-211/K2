@@ -8,10 +8,10 @@
 //! or empty. It still goes to the relay as the requested `subdomain`, but
 //! it never names a proxy.
 //!
-//! - **Source:** `GET /subdomains` with the tunnel token; the row the control
-//!   plane marks as this token's (`connected` / `current` / `is_current`,
-//!   the same row the Pro tier is read from). Nothing else counts: no
-//!   guess from `primary`, from the requested label, or from row order.
+//! - **Source:** `GET /subdomains` with the tunnel token; the one row with
+//!   `primary: true`, which k2-connect sets on the parent subdomain it
+//!   resolved from that token (`subdomains::confirmed_of`). Nothing else
+//!   counts: no guess from the requested label or from row order.
 //! - **Cache:** `~/.k2/tunnel-label.json` (0600) holds the last confirmation
 //!   per token (a hash of it, never the token), so a restart or a box whose
 //!   control plane is unreachable at boot keeps its name. Every `/subdomains`

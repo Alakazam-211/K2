@@ -81,24 +81,11 @@ fn k2_dir() -> PathBuf {
 
 // ── the preview switch ───────────────────────────────────────────────────
 
-static PREVIEW_SETTING: AtomicBool = AtomicBool::new(false);
-
-/// The persisted `voice_tunnel_preview` setting, synced in by the daemon at
-/// boot and on every settings change.
-pub fn set_preview(on: bool) {
-    PREVIEW_SETTING.store(on, Ordering::SeqCst);
-    kick();
-}
-
-/// The voice tunnel preview is on: [`PREVIEW_ENV`] or the setting. Default
-/// OFF: then no box runs frpc-voice and nothing renders a turn proxy.
+/// The voice tunnel preview is on (`voice_tunnel_preview` or
+/// `K2_VOICE_TUNNEL`, [`crate::voice_rooms::tunnel_enabled`]). Default OFF:
+/// then no box runs frpc-voice and nothing renders a turn proxy.
 pub fn preview_enabled() -> bool {
-    if let Ok(v) = std::env::var(PREVIEW_ENV) {
-        if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") {
-            return true;
-        }
-    }
-    PREVIEW_SETTING.load(Ordering::SeqCst)
+    crate::voice_rooms::tunnel_enabled()
 }
 
 // ── restarts ─────────────────────────────────────────────────────────────

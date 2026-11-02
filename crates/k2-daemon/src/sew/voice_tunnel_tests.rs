@@ -49,6 +49,7 @@ fn t() -> T {
     drop(latch);
     t.helper(12, true);
     t.features(&[FEATURE_TURN_RELAY_ONLY, media_path::FEATURE_VOICE_MEDIA_PATH]);
+    t.ops.set_tier(Some("pro"));
     *t.ops.tunnel_preview.lock().unwrap() = true;
     t.ops.clear();
     t.ops.cp_calls.lock().unwrap().clear();
@@ -173,7 +174,7 @@ fn the_tunnel_tier_needs_the_preview_helper_12_and_a_relay_only_sew() {
     assert!(t3.ops.cp_log().is_empty(), "nothing issued");
     // PRD §7.3: a 2–4 GiB box runs chat only (lane E's floor).
     let t4 = self::t();
-    *t4.ops.voice_floor.lock().unwrap() = false;
+    *t4.ops.mem.lock().unwrap() = Some(3 * crate::sew::ops::fake::GIB);
     refused(&t4, "voice_floor");
     assert_eq!(set_tier_named(&t4.env(), "tunnel").unwrap_err().code, "voice_not_installed");
 }
@@ -264,7 +265,7 @@ fn uninstall_in_the_tunnel_tier_deletes_no_dns_and_stops_the_lane() {
 fn the_tunnel_preflight_checks_the_tunnel_not_public_ports() {
     let t = t();
     *t.ops.e2e.lock().unwrap() = false;
-    *t.ops.connect_tier.lock().unwrap() = Ok(Some("single".into()));
+    t.ops.set_tier(Some("single"));
     let c = voice::preflight(&t.env());
     let get = |id: &str| c.iter().find(|x| x["id"] == id).cloned().unwrap_or_else(|| panic!("no {id}: {c:?}"));
     assert_eq!(get("tunnel_tier")["status"], "ok");

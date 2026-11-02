@@ -345,14 +345,21 @@ fn tier_of_connected(rows: &[SubdomainRow], primary: &str) -> Option<String> {
     }
 }
 
-/// The label of the row the control plane marks as THIS token's
-/// (`connected` / `current` / `is_current`), lowercased. Nothing else is a
-/// confirmation (relay name binding, 0.46.8; [`super::confirmed_label`]).
+/// The label the control plane confirms for THIS token, lowercased (relay
+/// name binding, 0.46.8; [`super::confirmed_label`]): the one row with
+/// `primary: true`, which k2-connect sets on "the parent subdomain the
+/// token belongs to" (`GET /subdomains` resolves the row from the token,
+/// `project_rows`). A row marked `connected` / `current` / `is_current`
+/// also counts when no row is primary. Two primaries, or none of these, is
+/// no confirmation: never a guess from the requested label or row order.
 fn confirmed_of(rows: &[SubdomainRow]) -> Option<String> {
-    rows.iter()
-        .find(|r| r.connected || r.current || r.is_current)
-        .map(|r| r.label.trim().to_ascii_lowercase())
-        .filter(|l| !l.is_empty())
+    let mut primaries = rows.iter().filter(|r| r.primary);
+    let row = match (primaries.next(), primaries.next()) {
+        (Some(r), None) => Some(r),
+        (Some(_), Some(_)) => None,
+        (None, _) => rows.iter().find(|r| r.connected || r.current || r.is_current),
+    };
+    row.map(|r| r.label.trim().to_ascii_lowercase()).filter(|l| !l.is_empty())
 }
 
 /// `GET /subdomains` → the token's confirmed label (`None` when no row is
@@ -1267,6 +1274,28 @@ mod tests {
         );
         // Reset so we don't bleed into other tests in this binary.
         let _ = swap_and_changed(SubdomainMap::default());
+    }
+
+    /// Relay name binding: the shape k2-connect's `GET /subdomains` really
+    /// sends (`SubdomainView`: no `connected` key; `primary` marks the row
+    /// the token belongs to). Nested rows and the request never confirm.
+    #[test]
+    fn the_confirmed_label_is_the_primary_row_of_the_real_answer() {
+        let parse = |body: &str| serde_json::from_str::<SubdomainsResponse>(body).unwrap().subdomains;
+        let real = parse(
+            r#"{"subdomains":[
+                {"label":"jim","host":"jim.rosson.k2.dev","target":"localhost:3000","status":"active","cert_status":"issued","tier":"pro","primary":false,"effective":"active"},
+                {"label":"rosson","host":"rosson.k2.dev","target":null,"status":"active","cert_status":"issued","tier":"pro","primary":true,"effective":"active"}
+            ]}"#,
+        );
+        assert_eq!(confirmed_of(&real).as_deref(), Some("rosson"));
+        // A row marked as the token's counts when no row is primary.
+        let marked = parse(r#"{"subdomains":[{"label":"other"},{"label":"Box-1","connected":true}]}"#);
+        assert_eq!(confirmed_of(&marked).as_deref(), Some("box-1"));
+        // Nothing says whose it is, or two rows claim it: no guess.
+        assert_eq!(confirmed_of(&parse(r#"{"subdomains":[{"label":"a"},{"label":"b"}]}"#)), None);
+        assert_eq!(confirmed_of(&parse(r#"{"subdomains":[{"label":"a","primary":true},{"label":"b","primary":true}]}"#)), None);
+        assert_eq!(confirmed_of(&parse(r#"{"subdomains":[]}"#)), None);
     }
 
     #[test]

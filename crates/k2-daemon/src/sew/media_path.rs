@@ -8,7 +8,7 @@
 //! | K2 state | When | K2 does |
 //! |---|---|---|
 //! | `up` | frpc-voice's turn proxy is registered | nothing; tells Sew `up` at once if it had said `down` |
-//! | `voice_lane_reconnecting` | lane down for under 20 s | holds joins in its BFF ([`await_join`], at most 20 s each); tells Sew nothing |
+//! | `voice_lane_reconnecting` | lane down for under 20 s | the voice BFF holds joins (`voice::lane::gate_join`, at most 20 s each); tells Sew nothing |
 //! | `voice_lane_down` | lane down for 20 s straight | `POST /mgmt/v1/voice/media-path {"state":"down","reason":"voice_lane_down"}`; refuses joins itself |
 //! | `off` | not the tunnel tier, or the preview is off | nothing; a move to direct tells Sew `up` if it had said `down` |
 //!
@@ -26,9 +26,9 @@
 //! - The loop also arms the voice lane exactly while voice runs the tunnel
 //!   tier with the preview on, and stops it otherwise.
 //!
-//! **For lane C's BFF** (`/cli/voice/join`): call [`await_join`] (async) or
-//! [`join_gate`] before letting a join through. `Ok` = go; `Err` = refuse
-//! with [`JoinRefused::code`] (`media_path_down`) and its reason.
+//! Every transition is published to the voice BFF
+//! ([`crate::voice::lane::publish`]), before K2 calls Sew: `/cli/voice/join`
+//! holds and refuses from that state, and a slow Sew can't delay it.
 
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -45,14 +45,14 @@ use super::voice::{self, TIER_TUNNEL};
 pub const GRACE: Duration = Duration::from_secs(20);
 /// While down, compare Sew's state with the lane this often.
 pub const REASSERT_EVERY: Duration = Duration::from_secs(10);
-/// A held join waits at most this long.
-pub const JOIN_HOLD_MAX: Duration = GRACE;
 /// Sew's FEATURES flag for the route (SW-11).
 pub const FEATURE_VOICE_MEDIA_PATH: &str = "voice_media_path";
 /// SW-11's route.
 pub const ROUTE: &str = "/mgmt/v1/voice/media-path";
-/// The reason K2 gives Sew (`details.media_path_reason`).
-pub const REASON_LANE_DOWN: &str = "voice_lane_down";
+/// The reason K2 gives Sew (`details.media_path_reason`) and the BFF.
+pub const REASON_LANE_DOWN: &str = crate::voice::lane::REASON_VOICE_LANE_DOWN;
+/// What a person sees while a join is held.
+pub const REASON_RECONNECTING: &str = "the voice lane is reconnecting";
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
@@ -257,9 +257,13 @@ pub fn snapshot() -> Snapshot {
     *SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-fn publish(m: &Machine, sew_has_route: bool, now: Instant) -> Snapshot {
+fn snapshot_of(m: &Machine, sew_has_route: bool, now: Instant) -> Snapshot {
     let since = unix_now() - now.saturating_duration_since(m.since()).as_secs() as i64;
-    let new = Snapshot { state: m.state(), since, sew: m.acked(), sew_has_route };
+    Snapshot { state: m.state(), since, sew: m.acked(), sew_has_route }
+}
+
+/// Publish `new` for status, and a changed state to the voice BFF.
+fn publish(new: Snapshot) {
     let changed = {
         let mut s = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
         let changed = s.state != new.state;
@@ -272,80 +276,27 @@ fn publish(m: &Machine, sew_has_route: bool, now: Instant) -> Snapshot {
     if changed {
         on_transition(new.state);
     }
-    new
 }
 
-/// Every transition, once, outside the snapshot lock: lane C's BFF state.
-///
-/// INTEGRATION (lane C, `crate::voice::lane`, not on this branch): this
-/// body becomes
-/// `crate::voice::lane::publish(match state {
-///     PathState::Off => LaneState::not_applicable(),
-///     PathState::Up => LaneState::up(),
-///     PathState::Reconnecting => LaneState::reconnecting(REASON_LANE_DOWN),
-///     PathState::Down => LaneState::down(REASON_LANE_DOWN),
-/// })`.
-/// Until then lane C's default (not_applicable) holds and the BFF can read
-/// [`snapshot`] / [`await_join`] here instead.
+/// What the voice BFF reads for a state (`/cli/voice/join` holds and
+/// refuses from it, §6.6 M11).
+fn lane_state_of(state: PathState) -> crate::voice::lane::LaneState {
+    use crate::voice::lane::LaneState;
+    match state {
+        PathState::Off => LaneState::not_applicable(),
+        PathState::Up => LaneState::up(),
+        PathState::Reconnecting => LaneState::reconnecting(REASON_RECONNECTING),
+        PathState::Down => LaneState::down(REASON_LANE_DOWN),
+    }
+}
+
+/// Every transition, once, outside the snapshot lock.
 fn on_transition(state: PathState) {
-    let _ = state;
+    crate::voice::lane::publish(lane_state_of(state));
 }
 
 fn unix_now() -> i64 {
     chrono::Utc::now().timestamp()
-}
-
-// ── the BFF's join gate (lane C) ─────────────────────────────────────────
-
-/// A join refused because voice is unavailable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JoinRefused {
-    pub reason: &'static str,
-}
-
-impl JoinRefused {
-    /// The error code the BFF answers (503, as Sew's `voice_unavailable`
-    /// with `details.engine = media_path_down`).
-    pub const CODE: &'static str = "media_path_down";
-    pub fn code(&self) -> &'static str {
-        Self::CODE
-    }
-}
-
-/// What a join may do now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JoinGate {
-    Open,
-    /// The lane is reconnecting: hold the join (at most [`JOIN_HOLD_MAX`]).
-    Hold,
-    Refuse,
-}
-
-/// The join gate for the current state (no waiting).
-pub fn join_gate() -> JoinGate {
-    gate_of(snapshot().state)
-}
-
-fn gate_of(s: PathState) -> JoinGate {
-    match s {
-        PathState::Off | PathState::Up => JoinGate::Open,
-        PathState::Reconnecting => JoinGate::Hold,
-        PathState::Down => JoinGate::Refuse,
-    }
-}
-
-/// Hold a join while the lane reconnects (at most [`JOIN_HOLD_MAX`]), then
-/// let it through (`Ok`) or refuse it. For lane C's `/cli/voice/join`.
-pub async fn await_join() -> Result<(), JoinRefused> {
-    let deadline = tokio::time::Instant::now() + JOIN_HOLD_MAX;
-    loop {
-        match join_gate() {
-            JoinGate::Open => return Ok(()),
-            JoinGate::Refuse => return Err(JoinRefused { reason: REASON_LANE_DOWN }),
-            JoinGate::Hold if tokio::time::Instant::now() >= deadline => return Err(JoinRefused { reason: REASON_LANE_DOWN }),
-            JoinGate::Hold => tokio::time::sleep(Duration::from_millis(100)).await,
-        }
-    }
 }
 
 // ── the loop ─────────────────────────────────────────────────────────────
@@ -398,9 +349,8 @@ fn send(env: &Env, side: SewSide) -> Result<(), MgmtError> {
     sup::mgmt(env, "POST", ROUTE, Some(&body)).map(|_| ())
 }
 
-/// One pass: arm or stop the voice lane to match the tier, observe, and
-/// act on Sew (only when `sew_has_route`). Returns the published snapshot.
-pub fn drive(env: &Env, m: &mut Machine, sew_has_route: bool, now: Instant) -> Snapshot {
+/// Arm or stop the voice lane to match the tier, then observe it.
+fn look(env: &Env, m: &mut Machine, now: Instant) {
     let active = active(env);
     // The lane runs exactly while voice is on the tunnel tier.
     let armed = env.ops.voice_lane_armed();
@@ -415,6 +365,10 @@ pub fn drive(env: &Env, m: &mut Machine, sew_has_route: bool, now: Instant) -> S
         m.sew_started();
     }
     m.observe(active, env.ops.voice_lane_up(), now);
+}
+
+/// Act on Sew, only when it lists the route.
+fn tell_sew(env: &Env, m: &mut Machine, sew_has_route: bool, now: Instant) {
     if sew_has_route {
         // At most a few steps a pass (a read can lead to a send).
         for _ in 0..3 {
@@ -436,7 +390,15 @@ pub fn drive(env: &Env, m: &mut Machine, sew_has_route: bool, now: Instant) -> S
             }
         }
     }
-    publish(m, sew_has_route, now)
+}
+
+/// One whole pass without publishing anything process-wide (the machine and
+/// the fake Sew only; tests).
+#[cfg(all(test, unix))]
+pub(super) fn drive(env: &Env, m: &mut Machine, sew_has_route: bool, now: Instant) -> Snapshot {
+    look(env, m, now);
+    tell_sew(env, m, sew_has_route, now);
+    snapshot_of(m, sew_has_route, now)
 }
 
 /// Start the loop (Linux, once): a pass every second and at once on a lane
@@ -461,7 +423,11 @@ pub fn spawn() {
                 route_checked = Some(now);
                 has_route = k2_core::tool_hook::sew_has(FEATURE_VOICE_MEDIA_PATH).unwrap_or(false);
             }
-            drive(&env, &mut m, has_route, now);
+            look(&env, &mut m, now);
+            // The BFF first: joins are held or refused even while Sew is slow.
+            publish(snapshot_of(&m, has_route, now));
+            tell_sew(&env, &mut m, has_route, now);
+            publish(snapshot_of(&m, has_route, now));
             let _ = rx.recv_timeout(Duration::from_secs(1));
         }
     });

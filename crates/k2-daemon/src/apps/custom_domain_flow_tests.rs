@@ -397,6 +397,7 @@ struct FakeCp {
     claim: RefCell<Option<Result<ClaimAnswer, CpError>>>,
     verify: RefCell<Option<Result<ClaimAnswer, CpError>>>,
     list: RefCell<Vec<ClaimAnswer>>,
+    list_down: RefCell<bool>,
     release_err: RefCell<Option<CpError>>,
     calls: RefCell<Vec<String>>,
 }
@@ -430,6 +431,9 @@ impl RelayApi for FakeCp {
     }
     fn list(&self) -> Result<Vec<ClaimAnswer>, CpError> {
         self.calls.borrow_mut().push("list".into());
+        if *self.list_down.borrow() {
+            return Err(CpError::Unreachable("HTTP 502".into()));
+        }
         Ok(self.list.borrow().clone())
     }
 }
@@ -445,6 +449,7 @@ impl Drop for Seams {
 
 /// Pro, behind K2 Connect, on the fake control plane.
 fn path_b_box() -> (Rc<FakeCp>, Seams) {
+    relay_claims::reset_missing_for_test();
     let cp = Rc::new(FakeCp::default());
     relay_claims::set_test_api(Some(cp.clone()));
     relay_claims::set_test_pro(Some(Ok(true)));
@@ -789,23 +794,126 @@ fn the_control_plane_decides_a_relayed_names_fate() {
     assert!(!r.via_relay());
     assert!(crate::apps::custom_names::reload().tunnel.is_empty());
 
-    // Only rows of the label's current owner are listed: a name it no longer
-    // lists is no longer this box's.
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        domains::set_relay_state(&conn, HOST, Some(domains::RELAY_VERIFIED), None, 1).unwrap();
-        domains::set_app_state(&conn, HOST, STATE_LIVE, None).unwrap();
-    }
-    cp.list.borrow_mut().clear();
-    assert_eq!(relay_claims::with_api(relay_claims::sync), Ok(vec![HOST.to_string()]));
-    let r = row();
-    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_FAILING, Some(domains::RELAY_RELEASED)));
-    assert!(r.last_error.as_deref().unwrap().contains("no longer lists"), "{:?}", r.last_error);
-
     // Fixed: a fresh claim brings it back.
     let (r, o) = check_with(HOST, &cname_here(&row()), &|_| {}).unwrap();
     assert!(o.ok, "{o:?}");
     assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_LIVE, Some(domains::RELAY_VERIFIED)));
     let _ = k2_core::tunnel::custom_names::set(Vec::new());
+}
+
+// ── a name missing from K2 Connect's list (one wrong answer stops nothing) ──
+
+const OTHER: &str = "other.agentnsi.com";
+const MIN: i64 = 60;
+
+/// A live name K2 Connect routes, and a second held name so a list can be
+/// non-empty without it.
+fn live_pair() -> (Rc<FakeCp>, Seams) {
+    let d = setup();
+    set_box_label("nsi");
+    let (cp, s) = path_b_box();
+    let pem = crate::domains::acme::test_le_pem(HOST);
+    crate::domains::store::install(HOST, &pem.chain_pem, &pem.key_pem).unwrap();
+    let (r, _) = check_with(HOST, &cname_here(&d), &|_| {}).unwrap();
+    assert_eq!(r.state, STATE_LIVE);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        domains::upsert_name(&conn, OTHER, "agentnsi.com", "app:agentnsi").unwrap();
+        domains::set_relay_state(&conn, OTHER, Some(domains::RELAY_VERIFIED), None, 1).unwrap();
+    }
+    cp.calls.borrow_mut().clear();
+    (cp, s)
+}
+
+fn listed(host: &str) -> ClaimAnswer {
+    ClaimAnswer { hostname: host.into(), status: "verified".into(), verify_token: Some(PICKED.into()), last_error: None }
+}
+
+fn still_live() {
+    let r = row();
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_LIVE, Some(domains::RELAY_VERIFIED)));
+}
+
+/// A whole list that comes back empty is held: logged, nothing changes, as
+/// long as the verify doesn't say `not_claimed`. Then the list is back and
+/// nothing was counted, however often it happens.
+#[test]
+fn an_empty_list_once_then_back_changes_nothing() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let (cp, _s) = live_pair();
+    let t0 = 1_000_000;
+    cp.list.borrow_mut().clear();
+    for i in 0..5 {
+        assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + i * 60 * MIN), Ok(vec![]), "empty list {i}");
+        still_live();
+    }
+    assert!(cp.calls.borrow().iter().any(|c| c.starts_with("verify ")), "it asked: {:?}", cp.calls.borrow());
+    // A verify that fails for another reason doesn't confirm it either.
+    *cp.verify.borrow_mut() = Some(Err(CpError::Refused { code: "pro_required".into(), words: "x".into() }));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 6 * 60 * MIN), Ok(vec![]));
+    *cp.verify.borrow_mut() = Some(Err(CpError::Retry("x".into())));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 7 * 60 * MIN), Ok(vec![]));
+    still_live();
+    // Back: and still nothing against it.
+    *cp.list.borrow_mut() = vec![listed(HOST), listed(OTHER)];
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 8 * 60 * MIN), Ok(vec![]));
+    still_live();
+}
+
+/// An empty list the verify confirms (`not_claimed`) counts like any other,
+/// and still takes three lists over 30 minutes.
+#[test]
+fn an_empty_list_a_verify_confirms_counts_but_still_takes_three() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let (cp, _s) = live_pair();
+    let t0 = 1_000_000;
+    cp.list.borrow_mut().clear();
+    *cp.verify.borrow_mut() = Some(Err(CpError::Refused { code: "not_claimed".into(), words: "x".into() }));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0), Ok(vec![]));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 15 * MIN), Ok(vec![]));
+    still_live();
+    let released = relay_claims::sync_at(cp.as_ref(), t0 + 30 * MIN).unwrap();
+    assert!(released.contains(&HOST.to_string()), "{released:?}");
+    let r = row();
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_FAILING, Some(domains::RELAY_RELEASED)));
+}
+
+/// Missing from three successful lists over at least 30 minutes: released,
+/// with K2 Connect's words. Fewer, or sooner, or listed again in between: no.
+/// A failed fetch neither counts nor resets.
+#[test]
+fn missing_three_times_over_half_an_hour_releases_and_nothing_less_does() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let (cp, _s) = live_pair();
+    let t0 = 1_000_000;
+    let only_other = vec![listed(OTHER)];
+    *cp.list.borrow_mut() = only_other.clone();
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0), Ok(vec![]));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 60 * MIN), Ok(vec![]));
+    still_live();
+    // Listed again: the run starts over.
+    *cp.list.borrow_mut() = vec![listed(HOST), listed(OTHER)];
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t0 + 120 * MIN), Ok(vec![]));
+    *cp.list.borrow_mut() = only_other.clone();
+    let t1 = t0 + 180 * MIN;
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t1), Ok(vec![]));
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t1 + 5 * MIN), Ok(vec![]));
+    // A failed fetch: not a count, not a reset.
+    *cp.list_down.borrow_mut() = true;
+    assert!(relay_claims::sync_at(cp.as_ref(), t1 + 6 * MIN).is_err());
+    *cp.list_down.borrow_mut() = false;
+    // The third list, too soon: 10 minutes after the first. Still served.
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t1 + 10 * MIN), Ok(vec![]));
+    still_live();
+    // A later list, past 30 minutes: released.
+    assert_eq!(relay_claims::sync_at(cp.as_ref(), t1 + 30 * MIN), Ok(vec![HOST.to_string()]));
+    let r = row();
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_FAILING, Some(domains::RELAY_RELEASED)));
+    assert!(r.last_error.as_deref().unwrap().contains("no longer lists"), "{:?}", r.last_error);
+    assert_eq!(relay_claims::MISSING_LISTS_TO_RELEASE, 3);
+    assert_eq!(relay_claims::MISSING_MIN_SPAN_SECS, 30 * 60);
 }

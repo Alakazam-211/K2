@@ -594,9 +594,49 @@ pub fn release(d: &AppDomain, api: &dyn RelayApi) -> Result<bool, String> {
     }
 }
 
+/// A held name K2 Connect doesn't list counts as released only after this
+/// many successful lists in a row...
+pub const MISSING_LISTS_TO_RELEASE: u32 = 3;
+/// ...spanning at least this long: one wrong answer must never stop a name.
+pub const MISSING_MIN_SPAN_SECS: i64 = 30 * 60;
+
+/// One name's run of lists that didn't include it.
+#[derive(Debug, Clone, Copy)]
+struct MissingRun {
+    lists: u32,
+    first_at: i64,
+}
+
+/// In memory on purpose: a restart starts the count over, the safe direction.
+fn missing_runs() -> &'static std::sync::Mutex<std::collections::HashMap<String, MissingRun>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, MissingRun>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Test seam: forget every run.
+#[cfg(test)]
+pub(crate) fn reset_missing_for_test() {
+    missing_runs().lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
 /// The control plane's list, applied (PB-A15: its `released` wins over a
 /// passing box check). Returns the names it released.
 pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
+    sync_at(api, chrono::Utc::now().timestamp())
+}
+
+/// [`sync`] at `now`.
+///
+/// A row saying `released` is K2 Connect's word and applies at once. A held
+/// name that simply isn't listed could be a wrong answer, and one wrong answer
+/// must not stop every Path B name on the box, so:
+/// - it counts as released only when missing from [`MISSING_LISTS_TO_RELEASE`]
+///   successful lists in a row over at least [`MISSING_MIN_SPAN_SECS`];
+/// - a whole list that came back empty while this box holds names is suspect:
+///   it is logged and held (no count, no action) unless a verify on one of the
+///   names answers `not_claimed`, K2 Connect's own word;
+/// - a failed fetch never counts, either way.
+pub fn sync_at(api: &dyn RelayApi, now: i64) -> Result<Vec<String>, String> {
     let rows: Vec<AppDomain> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -609,11 +649,37 @@ pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
         Ok(v) => v,
         Err(CpError::Refused { words, .. }) | Err(CpError::Retry(words)) | Err(CpError::Unreachable(words)) => return Err(words),
     };
+    let held: Vec<&AppDomain> = rows.iter().filter(|d| d.holds_relay_claim()).collect();
+    if listed.is_empty() {
+        let probe = held[0].hostname.as_str();
+        let confirmed = matches!(api.verify(probe), Err(CpError::Refused { ref code, .. }) if code == "not_claimed");
+        if !confirmed {
+            k2_core::log_debug!(
+                "[apps/relay-claims] K2 Connect's list came back empty while this server holds {} name(s), and a verify of {probe} didn't confirm it: holding, nothing changes",
+                held.len()
+            );
+            return Ok(Vec::new());
+        }
+        k2_core::log_debug!("[apps/relay-claims] K2 Connect's list came back empty and it has no claim on {probe}: counting this list");
+    }
+    let mut runs = missing_runs().lock().unwrap_or_else(|p| p.into_inner());
+    runs.retain(|h, _| held.iter().any(|d| d.hostname == *h));
     let mut released = Vec::new();
-    for d in rows.iter().filter(|d| d.holds_relay_claim()) {
+    for d in held {
         // Only rows of this label's current owner are listed: a name this box
-        // thinks it holds and K2 Connect doesn't list is no longer its own.
+        // thinks it holds and K2 Connect keeps not listing is no longer its own.
         let Some(a) = listed.iter().find(|a| a.hostname.eq_ignore_ascii_case(&d.hostname)) else {
+            let run = runs.entry(d.hostname.clone()).or_insert(MissingRun { lists: 0, first_at: now });
+            run.lists += 1;
+            if run.lists < MISSING_LISTS_TO_RELEASE || now - run.first_at < MISSING_MIN_SPAN_SECS {
+                k2_core::log_debug!(
+                    "[apps/relay-claims] {}: missing from K2 Connect's list {} time(s) in a row; still served",
+                    d.hostname,
+                    run.lists
+                );
+                continue;
+            }
+            runs.remove(&d.hostname);
             let w = "K2 Connect released it: it no longer lists this name for this server";
             record(&d.hostname, Some(RELAY_RELEASED), Some(w));
             let db = k2_core::db::shared();
@@ -622,6 +688,8 @@ pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
             released.push(d.hostname.clone());
             continue;
         };
+        // Listed again: the run is over.
+        runs.remove(&d.hostname);
         match a.status.as_str() {
             "released" => {
                 let w = format!(

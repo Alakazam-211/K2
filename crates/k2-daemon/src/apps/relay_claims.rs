@@ -151,7 +151,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             "K2 Connect won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
         ),
         "bad_verify_token" => format!(
-            "K2 Connect refused this name's proof token (16 to 128 letters, digits, _ or -): remove the name and add it again to get a new one (k2 app domain rm, then add {hostname})"
+            "K2 Connect refused this name's proof token (16 to 128 letters, digits, _ or -): remove the name and add it again to get a new one: k2 app domain rm <app-id> {hostname}, then k2 app domain add <app-id> {hostname}"
         ),
         "not_claimed" => format!("K2 Connect has no claim on {hostname} from this server; K2 claims it again at the next check"),
         "verification_failed" => format!(

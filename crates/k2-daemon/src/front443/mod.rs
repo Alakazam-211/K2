@@ -566,7 +566,12 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
     let relay = if held > 0 {
         match crate::apps::relay_claims::with_api(|api| crate::apps::relay_claims::set_relay_redirect(on, api)) {
             Ok(_) => json!({ "applied": true, "names": held }),
-            Err(e) => return Err((409, "relay_switch_failed", format!("K2 Connect didn't take the change, nothing changed: {e}"))),
+            // Nothing retries an owner's switch: said so, whatever the
+            // control plane's words for a retried claim were.
+            Err(e) => {
+                let why = e.trim_end_matches(": K2 tries again").trim_end_matches("; K2 tries again");
+                return Err((409, "relay_switch_failed", format!("K2 Connect didn't take the change, so nothing changed ({why}). Run this again in a minute.")));
+            }
         }
     } else {
         Value::Null

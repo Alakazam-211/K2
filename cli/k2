@@ -14830,7 +14830,7 @@ if v.get("credError"):
 d = v.get("devices") or {}
 print("  devices:  %s for %s people (apns %s, fcm %s; sandbox %s)" % (d.get("total", 0), d.get("guests", 0), d.get("apns", 0), d.get("fcm", 0), d.get("sandbox", 0)))
 if v.get("serverOnly"):
-    print("  devices register only through the App's own server (k2 app push set <app> --register any to change)")
+    print("  devices register only through this App server (k2 app push set <app> --register any to change)")
 print("  agent replies %s, previews %s, at most %s devices" % ("on" if v.get("agentReplies") else "off", "on" if v.get("previews") else "off", v.get("maxDevices")))
 for s in v.get("set") or []:
     print("  set: " + s)

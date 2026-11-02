@@ -344,7 +344,7 @@ fn set_external(who: &Who, app: &AppRow, d: &k2_core::domains::AppDomain, on: bo
     labels::audit(&app.app_id, "custom_domain_external", &actor(who), json!({ "host": host, "external": on, "was": was }));
     // A name K2 served (live / issuing) leaves the door; one handed back
     // gets its TXT (on a K2-hosted zone) and its first check now.
-    crate::front443::rebuild_now();
+    super::custom_domain_flow::serving_changed(&app.app_id);
     let mut planted = J::Null;
     if !on {
         let binding = {
@@ -401,7 +401,7 @@ fn custom_rm(who: &Who, app: &AppRow, v: &J) -> R<J> {
             log_rm(&host, &e);
         }
     }
-    crate::front443::rebuild_now();
+    super::custom_domain_flow::serving_changed(&app.app_id);
     // No front443 here: the shared table (and the tunnel's list) still
     // drops the name now.
     super::custom_names::reload();
@@ -963,6 +963,48 @@ mod custom_tests {
     /// PRD test 6: a custom name equal to the mail host is refused at bind,
     /// naming its use; a k2.dev name is never custom; an unattached zone
     /// and another workspace's App name are refused.
+    /// 0.46.8: a name that turns live after `k2 app links set` answers the
+    /// link files at once (it used to wait for the next deploy); removed,
+    /// it stops.
+    #[test]
+    fn link_file_hosts_follow_a_custom_domain_turning_live_and_going_away() {
+        use k2_core::skin::app_pairing as pairing;
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        setup();
+        let me = agent("ws-nsi");
+        let host = "links.agentnsi.com";
+        let service = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::deploy::store::get_app(&conn, "agentnsi").unwrap().expect("the App").service_id
+        };
+        let input = pairing::LinksInput { ios: vec!["TEAMID1234.com.you.app".into()], android: vec![], paths: vec![], drop: vec![] };
+        pairing::set_links(&service, &input, "test", 1).expect("set links");
+        crate::app_pairing::refresh_links(&service);
+        let hosts = || crate::app_pairing::links::get_files("agentnsi").expect("link files").hosts.clone();
+        assert!(!hosts().iter().any(|h| h == host), "not bound yet: {:?}", hosts());
+
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": host })).unwrap();
+        assert!(!hosts().iter().any(|h| h == host), "bound, not live: {:?}", hosts());
+
+        // Proven with a usable certificate: live, and a link host now.
+        let pem = crate::domains::acme::test_le_pem(host);
+        crate::domains::store::install(host, &pem.chain_pem, &pem.key_pem).unwrap();
+        let txt = v["custom"]["records"].as_array().unwrap().iter().find(|r| r["type"] == "TXT").unwrap().clone();
+        flow::set_test_lookup(Some(Box::new(Proven(txt["value"].as_str().unwrap().to_string()))));
+        let _ = k2_core::tool_hook::take_reconcile_request();
+        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentnsi", "host": host })).unwrap();
+        assert_eq!(v["custom"]["state"], "live", "{v}");
+        assert!(hosts().iter().any(|h| h == host), "live: a link host at once: {:?}", hosts());
+        assert!(k2_core::tool_hook::take_reconcile_request(), "Sew's origins follow now too");
+
+        let _ = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": host })).unwrap();
+        assert!(!hosts().iter().any(|h| h == host), "removed: {:?}", hosts());
+        flow::set_test_lookup(None);
+        crate::app_pairing::links::set_files("agentnsi", None);
+    }
+
     #[test]
     fn conflicts_are_refused_at_bind() {
         let _db = k2_core::db::scoped_for_test();

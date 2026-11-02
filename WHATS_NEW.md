@@ -24,6 +24,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.
 - **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
 
+### Apps
+- **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used one. Lowering it signs nobody out until their next new device.
+- **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

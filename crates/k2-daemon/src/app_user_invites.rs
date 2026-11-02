@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use k2_core::skin::{self, invites};
+use k2_core::skin::{self, app_login, invites};
 
 use crate::cli_response::CliResponse;
 use crate::mail::send::{self, DbOutboundStore, Gate, OutboundMessage, OutboundRequest, SendError, SendOutcome, SubmitBackend};
@@ -1259,8 +1259,11 @@ fn text_field(v: &Value, key: &str) -> Result<Option<Option<String>>, CliRespons
 
 /// `POST /cli/skin/access/invites {app, inviteTtl?, resetTtl?,
 /// setPasswordUrl?, inviteSubject?, inviteBody?, resetSubject?,
-/// resetBody?}`: the owner, or the App's own agent with "…manage them end
-/// to end" (who builds the App). `null` (or "") puts a field back to K2's.
+/// resetBody?, maxDevices?}`: the owner, or the App's own agent with
+/// "…manage them end to end" (who builds the App). `null` (or "") puts a
+/// field back to K2's. `maxDevices` (0.46.8, 1 to 20, default 20) is how many
+/// devices one person may keep signed in to this App; the box login (`host`)
+/// has no cap of its own. The answer carries `maxDevices` beside `settings`.
 /// A GET-free route: read them with `GET /cli/skin/access?app=`.
 pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: bool) -> CliResponse {
     if !is_post {
@@ -1295,12 +1298,33 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
         Ok(p) => p,
         Err(r) => return r,
     };
+    // Checked before anything is written: one refused field changes nothing.
+    let max_devices: Option<Option<i64>> = match v.get("maxDevices") {
+        None => None,
+        Some(_) if app == skin::HOST_APP_ID => return usage("maxDevices is per published App, never the box login (host)"),
+        Some(Value::Null) => Some(None),
+        Some(x) => match x.as_i64().map(|n| app_login::check_max_devices(n).map(|()| n)) {
+            Some(Ok(n)) => Some(Some(n)),
+            Some(Err(e)) => return usage(&e),
+            None => return usage("maxDevices: a whole number from 1 to 20, or null for K2's default (20)"),
+        },
+    };
     let actor = who.label();
     let hosts = page_hosts(&app);
     match invites::set_settings(&app, &patch, &hosts, &actor) {
         Ok(s) => {
             audit("app_invite_settings", &actor, &format!("app={app} invite={}s reset={}s", s.invite_ttl_secs, s.reset_ttl_secs));
-            CliResponse::ok_json(json!({ "ok": true, "app": app, "settings": s }).to_string())
+            if let Some(cap) = max_devices {
+                if let Err(e) = app_login::set_max_devices(&app, cap, &actor) {
+                    return CliResponse::internal_error(e);
+                }
+                audit("app_max_devices", &actor, &format!("app={app} max={}", cap.map_or("default".to_string(), |n| n.to_string())));
+            }
+            let login = match app_login::settings(&app) {
+                Ok(l) => l,
+                Err(e) => return CliResponse::internal_error(e),
+            };
+            CliResponse::ok_json(json!({ "ok": true, "app": app, "settings": s, "maxDevices": login.max_devices }).to_string())
         }
         Err(e) => usage(&e),
     }

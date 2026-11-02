@@ -608,8 +608,31 @@ pub enum Next {
     Nothing,
     /// Proven and no usable certificate: order one.
     Issue,
-    /// Serving changed (live, failing): rebuild front443 and the door.
+    /// Serving changed (live, failing): [`serving_changed`].
     Reroute,
+}
+
+/// A custom name started or stopped being served (live, failing): rebuild
+/// front443 and the door, and bring the rest that follows the App's hosts up
+/// to date now: its "open in app" link files (they answer only on the App's
+/// live hosts, so a name that turned live after `k2 app links set` got none
+/// until the next deploy) and the origins K2 tells Sew.
+pub fn serving_changed(app_id: &str) {
+    crate::front443::rebuild_now();
+    hosts_changed(app_id);
+}
+
+/// [`serving_changed`] after the caller has rebuilt the door.
+pub(crate) fn hosts_changed(app_id: &str) {
+    let service = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::get_app(&conn, app_id).ok().flatten().map(|a| a.service_id)
+    };
+    if let Some(service) = service {
+        crate::app_pairing::refresh_links(&service);
+    }
+    k2_core::tool_hook::kick_reconcile();
 }
 
 /// A usable certificate for `host` in the store: covers it, not expired.
@@ -755,7 +778,7 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
     let d = get(host)?;
     match apply(&d, &o, now()) {
         Next::Issue => issue(host),
-        Next::Reroute => crate::front443::rebuild_now(),
+        Next::Reroute => serving_changed(&d.app),
         Next::Nothing => {}
     }
     Some((get(host)?, o))
@@ -829,14 +852,19 @@ pub fn issue_blocking(host: &str) -> Result<(), String> {
     }
     match crate::domains::acme::issue_attached(host) {
         Ok(_) => {
-            {
+            let app = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                if domains::app_domain(&conn, host).ok().flatten().is_some_and(|d| d.state == STATE_ISSUING) {
+                let d = domains::app_domain(&conn, host).ok().flatten().filter(|d| d.state == STATE_ISSUING);
+                if d.is_some() {
                     let _ = domains::set_app_state(&conn, host, STATE_LIVE, None);
                 }
+                d.map(|d| d.app)
+            };
+            match app {
+                Some(app) => serving_changed(&app),
+                None => crate::front443::rebuild_now(),
             }
-            crate::front443::rebuild_now();
             log_debug!("[apps/custom-domain] {host}: certificate issued, live");
             Ok(())
         }

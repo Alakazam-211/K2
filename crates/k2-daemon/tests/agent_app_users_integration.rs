@@ -710,6 +710,29 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": "host", "inviteTtl": "1h" })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
 
+    // 0.46.8: the App's device cap, on the same door and the same rule.
+    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "maxDevices": 5 })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!(r.json()["maxDevices"], Value::Null, "{}", r.body);
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop })).await;
+    assert_eq!((r.status, r.json()["maxDevices"].clone()), (200, json!(20)), "the default: {}", r.body);
+    for bad in [json!(0), json!(21), json!(-1), json!("5"), json!(1.5), json!(true)] {
+        // A refused cap writes nothing, not even the good field beside it.
+        let body = json!({ "app": shop, "maxDevices": bad, "inviteTtl": "9h" });
+        let r = post(port, "/cli/skin/access/invites", OWNER, body.clone()).await;
+        assert_eq!(r.status, 400, "{body}: {}", r.body);
+        assert!(r.body.contains("maxDevices"), "names the field: {}", r.body);
+    }
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "maxDevices": 5 })).await;
+    assert_eq!((r.status, r.json()["maxDevices"].clone()), (200, json!(5)), "{}", r.body);
+    assert_eq!(r.json()["settings"]["inviteTtlSecs"], 72 * 3600, "the refused ttl was not written: {}", r.body);
+    let r = get(port, "/cli/skin/access", OWNER, &format!("app={shop}")).await;
+    assert_eq!(r.json()["settings"]["maxDevices"], 5, "{}", r.body);
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "maxDevices": null })).await;
+    assert_eq!((r.status, r.json()["maxDevices"].clone()), (200, json!(20)), "back to the default: {}", r.body);
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": "host", "maxDevices": 5 })).await;
+    assert_eq!(r.status, 400, "the box login has no App cap: {}", r.body);
+
     // T5.1: mode on, a new person: App-only, stamped, tied; one mail from
     // the agent's address, no stored copy; the link in the fragment; 72 h
     // from the send.

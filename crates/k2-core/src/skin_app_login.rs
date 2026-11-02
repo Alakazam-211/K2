@@ -47,8 +47,9 @@ pub const MAX_STAY_DAYS: i64 = 90;
 pub const MAX_DEVICE_ID_LEN: usize = 128;
 /// A device name is cut to this many characters.
 pub const MAX_DEVICE_NAME_LEN: usize = 80;
-/// Live device sign-ins per (person, App); the least recently used one
-/// ends when another signs in.
+/// The most live device sign-ins per (person, App), and the default: an App
+/// may set a lower cap ([`set_max_devices`], `k2 app login settings
+/// --max-devices`). The least recently used one ends when another signs in.
 pub const MAX_LIVE_DEVICES: i64 = 20;
 
 /// Why a device sign-in ended (stored, shown to the owner).
@@ -95,7 +96,13 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             spent_at INTEGER NOT NULL
          );",
     )
-    .map_err(|e| format!("skin.db device logins: {e}"))
+    .map_err(|e| format!("skin.db device logins: {e}"))?;
+    // 0.46.8: an App's own device cap (NULL = the default, additive at open).
+    if !super::column_exists(conn, "app_login_settings", "max_devices")? {
+        conn.execute("ALTER TABLE app_login_settings ADD COLUMN max_devices INTEGER", [])
+            .map_err(|e| format!("skin.db app_login_settings.max_devices: {e}"))?;
+    }
+    Ok(())
 }
 
 // ── per-App settings ─────────────────────────────────────────────────
@@ -109,19 +116,27 @@ pub struct AppLoginSettings {
     pub listed: bool,
     /// Device sign-in length in days; `0` = off (today's 7-day login).
     pub stay_signed_in_days: i64,
+    /// Live device sign-ins one person may keep in this App,
+    /// 1..=[`MAX_LIVE_DEVICES`] (default [`MAX_LIVE_DEVICES`]).
+    pub max_devices: i64,
 }
 
 pub(super) fn settings_conn(conn: &Connection, app: &str) -> Result<AppLoginSettings, String> {
-    let row: Option<(i64, i64)> = conn
+    let row: Option<(i64, i64, Option<i64>)> = conn
         .query_row(
-            "SELECT listed, stay_days FROM app_login_settings WHERE app_id = ?1",
+            "SELECT listed, stay_days, max_devices FROM app_login_settings WHERE app_id = ?1",
             params![app],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| format!("app login settings: {e}"))?;
-    let (listed, stay) = row.unwrap_or((0, DEFAULT_STAY_DAYS));
-    Ok(AppLoginSettings { app: app.to_string(), listed: listed != 0, stay_signed_in_days: stay.clamp(0, MAX_STAY_DAYS) })
+    let (listed, stay, max_devices) = row.unwrap_or((0, DEFAULT_STAY_DAYS, None));
+    Ok(AppLoginSettings {
+        app: app.to_string(),
+        listed: listed != 0,
+        stay_signed_in_days: stay.clamp(0, MAX_STAY_DAYS),
+        max_devices: max_devices.unwrap_or(MAX_LIVE_DEVICES).clamp(1, MAX_LIVE_DEVICES),
+    })
 }
 
 /// An App's sign-in settings (`host` or a published service id).
@@ -148,6 +163,35 @@ pub fn set_settings(app: &str, listed: Option<bool>, stay_days: Option<i64>, act
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(app_id) DO UPDATE SET listed = ?2, stay_days = ?3, updated_at = ?4, updated_by = ?5",
             params![app, listed as i64, stay, now_secs(), actor],
+        )
+        .map_err(|e| format!("app login settings write: {e}"))?;
+        settings_conn(conn, &app)
+    })
+}
+
+/// Is `n` a device cap an App may set? `Err` says what is.
+pub fn check_max_devices(n: i64) -> Result<(), String> {
+    if (1..=MAX_LIVE_DEVICES).contains(&n) {
+        Ok(())
+    } else {
+        Err(format!("maxDevices must be 1 to {MAX_LIVE_DEVICES} (the devices one person may keep signed in to this App)"))
+    }
+}
+
+/// Set an App's device cap (`None` = back to the default,
+/// [`MAX_LIVE_DEVICES`]). Nobody is signed out now: a lower cap applies at
+/// each person's next new device sign-in, when their least recently used
+/// devices end until the new one fits.
+pub fn set_max_devices(app: &str, max_devices: Option<i64>, actor: &str) -> Result<AppLoginSettings, String> {
+    let app = normalize_app_target(Some(app));
+    if let Some(n) = max_devices {
+        check_max_devices(n)?;
+    }
+    with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO app_login_settings (app_id, updated_at, updated_by, max_devices) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(app_id) DO UPDATE SET max_devices = ?4, updated_at = ?2, updated_by = ?3",
+            params![app, now_secs(), actor, max_devices],
         )
         .map_err(|e| format!("app login settings write: {e}"))?;
         settings_conn(conn, &app)
@@ -426,11 +470,12 @@ pub(super) fn new_chain_conn(
     for id in old {
         end_chain_conn(conn, &id, REASON_REPLACED)?;
     }
-    // At most MAX_LIVE_DEVICES live per (person, App): the least recently
-    // used ones end.
+    // At most the App's cap live per (person, App): the least recently used
+    // ones end.
+    let cap = settings_conn(conn, app)?.max_devices;
     let live = live_devices_where(conn, "d.principal_id = ?2 AND d.app_id = ?3", &[&principal_id, &app])?;
-    if live.len() as i64 >= MAX_LIVE_DEVICES {
-        let drop = live.len() as i64 - MAX_LIVE_DEVICES + 1;
+    if live.len() as i64 >= cap {
+        let drop = live.len() as i64 - cap + 1;
         for d in live.iter().rev().take(drop as usize) {
             end_chain_conn(conn, &d.id, REASON_LIMIT)?;
         }

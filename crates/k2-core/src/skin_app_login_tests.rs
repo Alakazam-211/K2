@@ -71,6 +71,84 @@ fn defaults_are_thirty_days_unlisted_and_bounded() {
     assert!(!settings(&f.other_app).unwrap().listed, "per App");
 }
 
+/// 0.46.8: an App sets its own cap. Nobody is signed out when it changes;
+/// at the next new sign-in the least recently used devices end until it
+/// fits. Other Apps and the other settings are untouched.
+#[test]
+fn an_apps_device_cap_ends_the_least_recently_used_at_the_next_sign_in() {
+    let f = fx("maxd");
+    assert_eq!(settings(&f.app).unwrap().max_devices, MAX_LIVE_DEVICES, "the default is the most");
+    for bad in [0, -1, MAX_LIVE_DEVICES + 1] {
+        let e = set_max_devices(&f.app, Some(bad), "owner").unwrap_err();
+        assert!(e.contains("1 to 20"), "says the range: {e}");
+    }
+    assert_eq!(settings(&f.app).unwrap().max_devices, MAX_LIVE_DEVICES, "a refused cap changes nothing");
+
+    let sign_in = |id: &str| login_device("dana", &f.app, &Device { id: id.into(), name: id.into() }).unwrap().unwrap();
+    // Each older than the next, so which one is least recently used is plain.
+    let age = |id: &str, secs: i64| {
+        with_conn(|c| {
+            c.execute("UPDATE device_logins SET last_used_at = last_used_at - ?1 WHERE device_id = ?2", params![secs, id])
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    };
+    let a = sign_in("a");
+    age("a", 300);
+    let b = sign_in("b");
+    age("b", 200);
+    let c = sign_in("c");
+    age("c", 100);
+    let pid = resolve_skin_token(&a.session.raw).unwrap().principal_id.unwrap();
+    let live = || {
+        let mut ids: Vec<String> = devices_for(&pid, &f.app).unwrap().into_iter().map(|d| d.device_id).collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(live(), ["a", "b", "c"]);
+
+    assert_eq!(set_max_devices(&f.app, Some(2), "owner").unwrap().max_devices, 2);
+    assert_eq!(live(), ["a", "b", "c"], "nobody is signed out when the cap changes");
+    assert!(resolve_skin_token(&a.session.raw).is_some());
+
+    // A device already signed in replaces itself: one more sign-in on c ends
+    // only as many others as the cap needs (a, the oldest).
+    let c2 = sign_in("c");
+    assert_eq!(live(), ["b", "c"], "down to the cap, oldest first");
+    assert!(resolve_skin_token(&a.session.raw).is_none(), "a ended");
+    assert!(resolve_skin_token(&b.session.raw).is_some(), "b kept");
+    assert!(resolve_skin_token(&c.session.raw).is_none(), "c's earlier sign-in was replaced");
+    assert!(resolve_skin_token(&c2.session.raw).is_some());
+    age("c", 100);
+
+    // A new device ends the least recently used one.
+    let d = sign_in("d");
+    assert_eq!(live(), ["c", "d"]);
+    assert!(resolve_skin_token(&b.session.raw).is_none(), "b ended");
+    assert!(resolve_skin_token(&d.session.raw).is_some());
+    let ended: i64 = with_conn(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM device_logins WHERE app_id = ?1 AND revoked_reason = ?2", params![f.app, REASON_LIMIT], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    })
+    .unwrap();
+    assert_eq!(ended, 2, "a and b, both with reason device_limit");
+
+    // A cap of 1: one device at a time, the newest.
+    set_max_devices(&f.app, Some(1), "owner").unwrap();
+    sign_in("e");
+    assert_eq!(live(), ["e"]);
+
+    // Per App, and back to the default.
+    assert_eq!(settings(&f.other_app).unwrap().max_devices, MAX_LIVE_DEVICES, "per App");
+    assert_eq!(set_max_devices(&f.app, None, "owner").unwrap().max_devices, MAX_LIVE_DEVICES);
+    // Each setter keeps the other's fields.
+    let s = set_settings(&f.app, Some(true), Some(9), "owner").unwrap();
+    assert_eq!((s.listed, s.stay_signed_in_days, s.max_devices), (true, 9, MAX_LIVE_DEVICES));
+    set_max_devices(&f.app, Some(3), "owner").unwrap();
+    let s = set_settings(&f.app, None, Some(10), "owner").unwrap();
+    assert_eq!((s.listed, s.stay_signed_in_days, s.max_devices), (true, 10, 3));
+}
+
 #[test]
 fn device_shapes() {
     assert_eq!(parse_device(None).unwrap(), None);

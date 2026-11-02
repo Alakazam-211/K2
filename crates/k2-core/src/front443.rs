@@ -28,11 +28,20 @@ pub struct FrontConfig {
     /// Stalwart behind the front (only meaningful with `enabled`).
     pub mail: bool,
     pub changed_at: Option<i64>,
+    /// The :80 front (0.46.8, PB-8): `None` = on (the default once
+    /// installed), `Some(false)` = the owner turned it off
+    /// (`k2 front http off`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<bool>,
 }
 
 impl FrontConfig {
     pub fn mail_behind_front(&self) -> bool {
         self.enabled && self.mail
+    }
+    /// The :80 front's switch (on unless the owner turned it off).
+    pub fn http_on(&self) -> bool {
+        self.http != Some(false)
     }
 }
 

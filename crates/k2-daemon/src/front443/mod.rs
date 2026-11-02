@@ -31,12 +31,15 @@
 //!
 //! Owner surface: `GET /cli/front/status`, `POST /cli/front/enable`
 //! (`{"mail": bool}`), `POST /cli/front/disable`, `GET
-//! /cli/front/passthrough`, `POST /cli/front/passthrough/{add,rm}`; CLI
+//! /cli/front/passthrough`, `POST /cli/front/passthrough/{add,rm}`,
+//! `POST /cli/front/http` (`{"on": bool}`, the :80 front, [`http80`]); CLI
 //! `k2 front …`. `status` and `enable` name a web server that isn't K2's
 //! holding :443 ([`port443_holder`]) with the ways to fix it: K2 never
 //! fights for the port.
 
 pub mod client_hello;
+/// The box's :80 front: the https redirect and ACME HTTP-01 (0.46.8, PB-8).
+pub mod http80;
 pub mod proxy_v2;
 pub mod routes;
 pub mod server;
@@ -53,7 +56,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use k2_core::log_debug;
-use k2_root_proto::version::FRONT_MIN_PROTOCOL;
+use k2_root_proto::version::{FRONT80_MIN_PROTOCOL, FRONT_MIN_PROTOCOL};
 
 use routes::{Backend, Kind, RouteTable};
 
@@ -504,6 +507,102 @@ fn converge_voice(passthrough: bool) {
     }
 }
 
+/// Why the root helper can't run the `front http` verbs (`Ok` = it can).
+fn helper80_gate() -> Result<(), String> {
+    let st = crate::root_helper::state();
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/front80")).and_then(Value::as_bool) == Some(true);
+    if st.usable(FRONT80_MIN_PROTOCOL) && ns {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed("the :80 front", FRONT80_MIN_PROTOCOL, &st))
+    }
+}
+
+fn helper_front_http(verb: &str) -> Result<Value, String> {
+    let out = crate::root_helper::call_text(&["front".to_string(), "http".to_string(), verb.to_string()], None)?;
+    serde_json::from_str(&out).map_err(|e| format!("root helper answer: {e}"))
+}
+
+/// Install :80 for `k2 front enable` when its switch is on. Never fails the
+/// enable: what went wrong is the `warning`.
+fn http_install_note(cfg: &k2_core::front443::FrontConfig) -> Value {
+    if !cfg.http_on() {
+        return json!({"on": false});
+    }
+    if let Err(e) = helper80_gate() {
+        return json!({"on": true, "installed": false, "warning": format!("no https redirect on :80 yet: {e}")});
+    }
+    match helper_front_http("install") {
+        Ok(v) => json!({"on": true, "installed": true, "helper": v}),
+        Err(e) => json!({"on": true, "installed": false, "warning": format!("no https redirect on :80: {e}")}),
+    }
+}
+
+/// `POST /cli/front/http {"on": bool}` (`k2 front http on|off`, PB-8).
+/// On: install the :80 socket; the daemon restarts once to take it (as for
+/// :443). Off: stop answering and remove the socket, so :80 is free again
+/// and K2's HTTP-01 orders bind it per order. Blocking.
+pub fn http_set(on: bool) -> Result<Value, Refusal> {
+    gate()?;
+    let mut cfg = k2_core::front443::load();
+    if on && !cfg.enabled {
+        return Err((
+            409,
+            "front_off",
+            "the :80 front comes with K2's :443 front, which is off here: the owner runs k2 front enable first".into(),
+        ));
+    }
+    helper80_gate().map_err(|e| (409, "helper_needed", e))?;
+    if on {
+        if http80::serving() {
+            cfg.http = Some(true);
+            k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
+            return Ok(json!({"ok": true, "on": true, "httpServing": true, "restarting": false, "next": "already holding port 80"}));
+        }
+        let helper = helper_front_http("install").map_err(|e| (409, "http_install_failed", e))?;
+        cfg.http = Some(true);
+        k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
+        let restart = helper["restartScheduled"] == true;
+        return Ok(json!({
+            "ok": true,
+            "on": true,
+            "httpServing": false,
+            "helper": helper,
+            "restarting": restart,
+            "next": if restart {
+                "K2 will restart its daemon once to take port 80 (a few seconds; agents resume)."
+            } else {
+                "restart the daemon to take port 80"
+            },
+        }));
+    }
+    let stopped = http80::stop();
+    let helper = helper_front_http("remove").map_err(|e| (500, "http_remove_failed", format!("the :80 front stopped answering, but the socket stayed: {e}")))?;
+    cfg.http = Some(false);
+    k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
+    Ok(json!({
+        "ok": true,
+        "on": false,
+        "httpServing": false,
+        "stopped": stopped,
+        "helper": helper,
+        "next": "port 80 is free. Visitors who type http:// get no redirect from this server; K2's HTTP-01 certificates bind :80 per order.",
+    }))
+}
+
+/// The `http` block of `GET /cli/front/status`.
+fn http_status(cfg: &k2_core::front443::FrontConfig) -> Value {
+    let serving = http80::serving();
+    let next = (cfg.enabled && cfg.http_on() && !serving).then_some("k2 front http on installs it (the daemon restarts once)");
+    json!({
+        "on": cfg.http_on(),
+        "serving": serving,
+        "local": http80::local_addr().map(|a| a.to_string()),
+        "helper": helper80_gate().err(),
+        "next": next,
+    })
+}
+
 /// `GET /cli/front/status`.
 pub fn status_json() -> Value {
     let cfg = k2_core::front443::load();
@@ -527,6 +626,7 @@ pub fn status_json() -> Value {
     };
     json!({
         "enabled": cfg.enabled,
+        "http": http_status(&cfg),
         "passthrough": passthrough,
         // Who holds :443 when the front doesn't (a web server that isn't
         // K2's is named, with the ways to fix it).
@@ -613,7 +713,7 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
         mail_check().map_err(|e| (409, "mail_not_movable", e))?;
     }
     let now = chrono::Utc::now().timestamp();
-    let cfg = k2_core::front443::FrontConfig { enabled: true, mail: mail || prev.mail_behind_front(), changed_at: Some(now) };
+    let cfg = k2_core::front443::FrontConfig { enabled: true, mail: mail || prev.mail_behind_front(), changed_at: Some(now), http: prev.http };
     k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
     let mut warnings: Vec<String> = Vec::new();
     // Free :443: Caddy to loopback, Stalwart to 127.0.0.1:8443.
@@ -645,6 +745,14 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
             return Err((409, "front_install_failed", format!("{e}{}", if warnings.is_empty() { String::new() } else { format!(" ({})", warnings.join("; ")) })));
         }
     };
+    // 0.46.8 (PB-8): :80 comes with the front unless the owner turned it
+    // off. Optional: an old helper, or :80 held by something else, costs
+    // the redirect, never the front.
+    let mut http = http_install_note(&cfg);
+    if let Some(w) = http["warning"].as_str() {
+        warnings.push(w.to_string());
+    }
+    http.as_object_mut().map(|m| m.remove("warning"));
     // systemd passes the socket only to a service it starts, and won't
     // start the socket while this service is active, so the daemon takes it
     // at its next start: the helper scheduled that one restart (systemctl
@@ -673,6 +781,7 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
         "mail": cfg.mail,
         "helper": helper,
         "voice": voice,
+        "http": http,
         "restarting": restart,
         "routes": table.json(),
         "warnings": warnings,
@@ -710,8 +819,15 @@ pub fn disable(daemon_port: u16) -> Result<Value, Refusal> {
         }
     }
     let now = chrono::Utc::now().timestamp();
-    k2_core::front443::save(&k2_core::front443::FrontConfig { enabled: false, mail: false, changed_at: Some(now) })
+    k2_core::front443::save(&k2_core::front443::FrontConfig { enabled: false, mail: false, changed_at: Some(now), http: cfg.http })
         .map_err(|e| (500, "config_write_failed", e))?;
+    // The :80 front goes with it; its switch is kept for the next enable.
+    http80::stop();
+    if cfg!(target_os = "linux") && helper80_gate().is_ok() {
+        if let Err(e) = helper_front_http("remove") {
+            warnings.push(format!(":80 socket stayed: {e}"));
+        }
+    }
     if let Some(w) = reapply_skin(daemon_port) {
         warnings.push(w);
     }
@@ -785,8 +901,8 @@ pub fn foreign_443_message(units: &[String]) -> String {
          certificates), then run k2 front enable and k2 front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
          for every name K2 doesn't serve): its sites keep working and K2 serves your App names; (2) keep it and have it \
          proxy the App's name to the App yourself, and add the name with k2 app domain add <app-id> <name> \
-         --external so the App takes it as its origin; or (3) use K2 Connect for this name \
-         (path b, coming in 0.46.7). K2 never takes :443 from another server."
+         --external so the App takes it as its origin; or (3) on K2 Connect Pro, point the name at K2's relays \
+         (Path B, k2 app domain --help): nothing on :443, no sudo. K2 never takes :443 from another server."
     )
 }
 

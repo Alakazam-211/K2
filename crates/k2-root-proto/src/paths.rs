@@ -131,6 +131,16 @@ pub const FRONT_RESTART_UNIT: &str = "k2-front-restart";
 /// answer goes out first).
 pub const FRONT_RESTART_DELAY_SECS: u32 = 3;
 
+/// The :80 front's socket unit (`front http install`, protocol 12, 0.46.8:
+/// the redirect to https and ACME HTTP-01 for names this box serves).
+pub const FRONT80_SOCKET_UNIT: &str = "k2-front-80.socket";
+/// Its file name inside [`SYSTEMD_SYSTEM_DIR`].
+pub const FRONT80_SOCKET_FILE: &str = "k2-front-80.socket";
+/// The daemon drop-in (`Sockets=`) inside `<unit>.d`.
+pub const FRONT80_DROPIN_FILE: &str = "k2-front80.conf";
+/// `FileDescriptorName=` of the :80 socket.
+pub const FRONT80_FD_NAME: &str = "k2-front-80";
+
 // ── Postgres sidecar ────────────────────────────────────────────────────
 
 /// Distro-owned unit — K2 drops in, never rewrites postgresql.service.

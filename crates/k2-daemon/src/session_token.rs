@@ -942,6 +942,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/front/passthrough",
         "/cli/front/passthrough/add",
         "/cli/front/passthrough/rm",
+        "/cli/front/http",
         // 0.46.4: extra subdomains of its own workspace on its App.
         "/cli/app/domains",
         "/cli/app/domain/add",

@@ -62,6 +62,20 @@ fn the_front_owns_443() {
     assert_eq!(row(&both.public, 443).source, "front443");
 }
 
+/// PB-A12 (0.46.8): the :80 front lists 80/tcp as its own while it serves.
+#[test]
+fn the_http_front_lists_80_while_it_serves() {
+    let mut i = base();
+    i.front_enabled = true;
+    assert!(!has(&compute(&i).public, 80, Proto::Tcp));
+    let hash_off = compute(&i).hash;
+    i.front80_serving = true;
+    let on = compute(&i);
+    assert_eq!(row(&on.public, 80).source, "front80");
+    assert_ne!(on.hash, hash_off, "K2 Web re-applies when :80 opens");
+    assert_eq!(on.version, compute(&base()).version, "additive: the contract version stays");
+}
+
 /// PA-A5, A7 and the LAN listen.
 #[test]
 fn voice_skin_fallback_and_lan_listen() {

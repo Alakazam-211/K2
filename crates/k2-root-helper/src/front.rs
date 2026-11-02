@@ -34,14 +34,20 @@
 //! socket and starts the daemon with the fd. A hand-off can't carry it: the
 //! successor is started by the daemon, not by systemd, and systemd only
 //! passes a socket to a service it starts.
+//!
+//! **`front http install|remove|status`** (protocol 12, 0.46.8, custom
+//! domains PB-8): the same for the box's :80 (`k2-front-80.socket`,
+//! `<unit>.d/k2-front80.conf`), where the daemon answers `308 https://…`
+//! for the names it serves and ACME HTTP-01 for names being issued. Its
+//! own socket and drop-in, so either can be removed alone.
 
 use std::ffi::OsStr;
 
 use k2_root_proto::paths::{
-    FRONT_DROPIN_FILE, FRONT_RESTART_DELAY_SECS, FRONT_RESTART_UNIT, FRONT_SOCKET_FILE, FRONT_SOCKET_UNIT, JOURNALCTL,
-    SYSTEMCTL, SYSTEMD_RUN, SYSTEMD_SYSTEM_DIR,
+    FRONT80_DROPIN_FILE, FRONT80_SOCKET_FILE, FRONT80_SOCKET_UNIT, FRONT_DROPIN_FILE, FRONT_RESTART_DELAY_SECS,
+    FRONT_RESTART_UNIT, FRONT_SOCKET_FILE, FRONT_SOCKET_UNIT, JOURNALCTL, SYSTEMCTL, SYSTEMD_RUN, SYSTEMD_SYSTEM_DIR,
 };
-use k2_root_proto::templates::{front_dropin, front_socket_unit};
+use k2_root_proto::templates::{front80_dropin, front80_socket_unit, front_dropin, front_socket_unit};
 
 use crate::caller::{self, Caller, DaemonEntry};
 use crate::ctx::{Ctx, Fail, HResult};
@@ -50,8 +56,36 @@ use crate::fsx::Kind;
 
 /// Largest socket unit file the helper reads back.
 const UNIT_READ_CAP: usize = 16 * 1024;
-/// The front's port.
-const FRONT_PORT: u16 = 443;
+
+/// One of the front's sockets: every name and template is fixed here.
+pub(crate) struct Sock {
+    pub port: u16,
+    pub file: &'static str,
+    pub unit: &'static str,
+    pub dropin: &'static str,
+    pub unit_text: fn(&str) -> Option<String>,
+    pub dropin_text: fn() -> &'static str,
+}
+
+/// :443 (protocol 8).
+pub(crate) const S443: Sock = Sock {
+    port: 443,
+    file: FRONT_SOCKET_FILE,
+    unit: FRONT_SOCKET_UNIT,
+    dropin: FRONT_DROPIN_FILE,
+    unit_text: front_socket_unit,
+    dropin_text: front_dropin,
+};
+
+/// :80 (protocol 12).
+pub(crate) const S80: Sock = Sock {
+    port: 80,
+    file: FRONT80_SOCKET_FILE,
+    unit: FRONT80_SOCKET_UNIT,
+    dropin: FRONT80_DROPIN_FILE,
+    unit_text: front80_socket_unit,
+    dropin_text: front80_dropin,
+};
 
 /// Local addresses in LISTEN state on `port` in a `/proc/net/tcp` or
 /// `/proc/net/tcp6` table, with their socket inodes. Pure.
@@ -112,12 +146,12 @@ fn socket_owner(ctx: &Ctx, inode: u64) -> Option<String> {
     None
 }
 
-/// Who already listens on :443 (empty when it is free).
-fn port_443_taken(ctx: &Ctx) -> Vec<String> {
+/// Who already listens on `port` (empty when it is free).
+fn port_taken(ctx: &Ctx, port: u16) -> Vec<String> {
     let mut who = Vec::new();
     for t in ["/proc/net/tcp", "/proc/net/tcp6"] {
         let Ok(text) = std::fs::read_to_string(ctx.p(t)) else { continue };
-        for (addr, inode) in listeners_on(&text, FRONT_PORT) {
+        for (addr, inode) in listeners_on(&text, port) {
             who.push(match socket_owner(ctx, inode) {
                 Some(o) => format!("{addr} ({o})"),
                 None => addr,
@@ -129,7 +163,7 @@ fn port_443_taken(ctx: &Ctx) -> Vec<String> {
 
 /// `systemctl show` state of the socket unit, plus systemd's own last log
 /// lines for it (why it did or didn't start), trimmed.
-fn socket_unit_report(ctx: &Ctx) -> serde_json::Value {
+fn socket_unit_report(ctx: &Ctx, sock: &Sock) -> serde_json::Value {
     let run = |prog: &str, args: &[&str]| -> String {
         let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         ctx.exec
@@ -137,7 +171,7 @@ fn socket_unit_report(ctx: &Ctx) -> serde_json::Value {
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
     };
-    let show = run(SYSTEMCTL, &["show", "-p", "ActiveState", "-p", "SubState", "-p", "Result", FRONT_SOCKET_UNIT]);
+    let show = run(SYSTEMCTL, &["show", "-p", "ActiveState", "-p", "SubState", "-p", "Result", sock.unit]);
     let mut state = serde_json::Map::new();
     for line in show.lines() {
         if let Some((k, v)) = line.split_once('=') {
@@ -146,7 +180,7 @@ fn socket_unit_report(ctx: &Ctx) -> serde_json::Value {
             }
         }
     }
-    let journal: Vec<String> = run(JOURNALCTL, &["-u", FRONT_SOCKET_UNIT, "-n", "6", "-o", "cat", "--no-pager"])
+    let journal: Vec<String> = run(JOURNALCTL, &["-u", sock.unit, "-n", "6", "-o", "cat", "--no-pager"])
         .lines()
         .map(|l| l.chars().filter(|c| !c.is_control()).take(200).collect())
         .filter(|l: &String| !l.is_empty())
@@ -164,11 +198,11 @@ enum SocketFile {
     Odd,
 }
 
-fn read_socket_file(ctx: &Ctx) -> HResult<SocketFile> {
+fn read_socket_file(ctx: &Ctx, sock: &Sock) -> HResult<SocketFile> {
     let base = ctx
         .dir(SYSTEMD_SYSTEM_DIR)
         .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
-    let name = OsStr::new(FRONT_SOCKET_FILE);
+    let name = OsStr::new(sock.file);
     match base.kind(name).map_err(|e| Fail::io_err("stat", e))? {
         Kind::Missing => Ok(SocketFile::Missing),
         Kind::File => {
@@ -197,15 +231,18 @@ fn system_entry(ctx: &Ctx, who: &Caller) -> HResult<DaemonEntry> {
 
 /// The socket unit may be (re)written for `unit` only when it is absent,
 /// already ours, or names a unit no configured daemon owns (a leftover).
-fn refuse_foreign(ctx: &Ctx, cur: &SocketFile, unit: &str) -> HResult<()> {
+fn refuse_foreign(ctx: &Ctx, cur: &SocketFile, unit: &str, sock: &Sock) -> HResult<()> {
     match cur {
-        SocketFile::Odd => Err(Fail::state("front refused: k2-front-443.socket is not a regular file")),
+        SocketFile::Odd => Err(Fail::state(format!("front refused: {} is not a regular file", sock.file))),
         SocketFile::File { service: Some(s), .. } if s != unit => {
             let owned = caller::load_daemons(ctx)
                 .map(|ds| ds.iter().any(|d| d.unit == *s))
                 .unwrap_or(true);
             if owned {
-                Err(Fail::state("front refused: the :443 front is held for another K2 daemon on this box"))
+                Err(Fail::state(format!(
+                    "front refused: the :{} front is held for another K2 daemon on this box",
+                    sock.port
+                )))
             } else {
                 Ok(())
             }
@@ -218,44 +255,58 @@ fn reload(ctx: &Ctx) -> HResult<()> {
     ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None).map(|_| ())
 }
 
-fn remove_socket_file(ctx: &Ctx) -> HResult<bool> {
+fn remove_socket_file(ctx: &Ctx, sock: &Sock) -> HResult<bool> {
     let base = ctx
         .dir(SYSTEMD_SYSTEM_DIR)
         .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
-    let name = OsStr::new(FRONT_SOCKET_FILE);
+    let name = OsStr::new(sock.file);
     match base.kind(name).map_err(|e| Fail::io_err("stat", e))? {
         Kind::Missing => Ok(false),
         Kind::File | Kind::Symlink => {
             base.unlink(name).map_err(|e| Fail::io_err("remove socket unit", e))?;
             Ok(true)
         }
-        _ => Err(Fail::state("front refused: k2-front-443.socket is not a regular file")),
+        _ => Err(Fail::state(format!("front refused: {} is not a regular file", sock.file))),
     }
 }
 
 pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
+    install_sock(ctx, who, &S443)
+}
+
+/// `front http install` (protocol 12): :80, as `front install` does :443.
+pub fn install_http(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
+    install_sock(ctx, who, &S80)
+}
+
+fn install_sock(ctx: &Ctx, who: &Caller, sock: &Sock) -> HResult<serde_json::Value> {
     let d = system_entry(ctx, who)?;
-    let want = front_socket_unit(&d.unit).ok_or_else(|| Fail::state("daemon.toml unit invalid"))?;
-    let cur = read_socket_file(ctx)?;
-    refuse_foreign(ctx, &cur, &d.unit)?;
+    let want = (sock.unit_text)(&d.unit).ok_or_else(|| Fail::state("daemon.toml unit invalid"))?;
+    let cur = read_socket_file(ctx, sock)?;
+    refuse_foreign(ctx, &cur, &d.unit, sock)?;
     // Another configured daemon's `Sockets=` drop-in still pulls the socket
     // in (its socket file gone, say): two daemons would accept on :443.
     let others = caller::load_daemons(ctx).map_err(Fail::state)?;
     if others
         .iter()
         .filter(|o| o.scope == "system" && o.unit != d.unit)
-        .any(|o| dropin_matches(ctx, &o.unit, FRONT_DROPIN_FILE, front_dropin().as_bytes()).is_some())
+        .any(|o| dropin_matches(ctx, &o.unit, sock.dropin, (sock.dropin_text)().as_bytes()).is_some())
     {
         return Err(Fail::state("front refused: another K2 daemon's unit still carries the front drop-in"));
     }
-    // :443 must be free, unless our socket already holds it (a re-run).
-    let socket_active = is_active(ctx);
+    // The port must be free, unless our socket already holds it (a re-run).
+    let socket_active = is_active(ctx, sock);
     if !socket_active {
-        let who = port_443_taken(ctx);
+        let who = port_taken(ctx, sock.port);
         if !who.is_empty() {
+            let fix = if sock.port == 443 {
+                "stop it or move it behind the front (hosted mail on :443: k2 front enable --mail)"
+            } else {
+                "stop it, or leave :80 to it (the https redirect is optional; K2's :443 front works without it)"
+            };
             return Err(Fail::state(format!(
-                "front refused: port 443 is already in use on this box by {} — stop it or move it behind the \
-                 front (hosted mail on :443: k2 front enable --mail)",
+                "front refused: port {} is already in use on this box by {} — {fix}",
+                sock.port,
                 who.join(", ")
             )));
         }
@@ -266,16 +317,16 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
             let base = ctx
                 .dir(SYSTEMD_SYSTEM_DIR)
                 .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
-            base.write_atomic(OsStr::new(FRONT_SOCKET_FILE), want.as_bytes(), 0o644, ctx.root_owner())
+            base.write_atomic(OsStr::new(sock.file), want.as_bytes(), 0o644, ctx.root_owner())
                 .map_err(|e| Fail::io_err("write socket unit", e))?;
             true
         }
     };
-    let dropin_changed = match set_dropin(ctx, &d.unit, FRONT_DROPIN_FILE, Some(front_dropin().as_bytes()), "front") {
+    let dropin_changed = match set_dropin(ctx, &d.unit, sock.dropin, Some((sock.dropin_text)().as_bytes()), "front") {
         Ok(c) => c,
         Err(f) => {
             if socket_changed {
-                let _ = remove_socket_file(ctx);
+                let _ = remove_socket_file(ctx, sock);
             }
             return Err(f);
         }
@@ -284,10 +335,10 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     if changed {
         if let Err(f) = reload(ctx) {
             if socket_changed {
-                let _ = remove_socket_file(ctx);
+                let _ = remove_socket_file(ctx, sock);
             }
             if dropin_changed {
-                let _ = set_dropin(ctx, &d.unit, FRONT_DROPIN_FILE, None, "front");
+                let _ = set_dropin(ctx, &d.unit, sock.dropin, None, "front");
             }
             let _ = reload(ctx);
             return Err(f);
@@ -299,12 +350,12 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     // the one restart that starts the socket and hands the daemon its fd.
     let mut restart_scheduled = false;
     if !socket_active {
-        let _ = ctx.exec.run(SYSTEMCTL, &["reset-failed".to_string(), FRONT_SOCKET_UNIT.to_string()], None);
+        let _ = ctx.exec.run(SYSTEMCTL, &["reset-failed".to_string(), sock.unit.to_string()], None);
         restart_scheduled = schedule_restart(ctx, &d.unit)?;
     }
     Ok(serde_json::json!({
         "unit": d.unit,
-        "socket": FRONT_SOCKET_UNIT,
+        "socket": sock.unit,
         "installed": true,
         "changed": changed,
         "active": socket_active,
@@ -337,20 +388,29 @@ fn schedule_restart(ctx: &Ctx, unit: &str) -> HResult<bool> {
     Ok(true)
 }
 
-fn is_active(ctx: &Ctx) -> bool {
-    let args = vec!["is-active".to_string(), FRONT_SOCKET_UNIT.to_string()];
+fn is_active(ctx: &Ctx, sock: &Sock) -> bool {
+    let args = vec!["is-active".to_string(), sock.unit.to_string()];
     ctx.exec
         .run(SYSTEMCTL, &args, None)
         .is_ok_and(|o| o.status == 0 && String::from_utf8_lossy(&o.stdout).trim() == "active")
 }
 
 pub fn remove(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
+    remove_sock(ctx, who, &S443)
+}
+
+/// `front http remove` (protocol 12).
+pub fn remove_http(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
+    remove_sock(ctx, who, &S80)
+}
+
+fn remove_sock(ctx: &Ctx, who: &Caller, sock: &Sock) -> HResult<serde_json::Value> {
     let d = system_entry(ctx, who)?;
-    let cur = read_socket_file(ctx)?;
-    refuse_foreign(ctx, &cur, &d.unit)?;
+    let cur = read_socket_file(ctx, sock)?;
+    refuse_foreign(ctx, &cur, &d.unit, sock)?;
     if cur != SocketFile::Missing {
         // 5 = not loaded (a file systemd never reloaded): nothing to stop.
-        let args: Vec<String> = ["stop", FRONT_SOCKET_UNIT].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["stop", sock.unit].iter().map(|s| s.to_string()).collect();
         let out = ctx
             .exec
             .run(SYSTEMCTL, &args, None)
@@ -360,30 +420,39 @@ pub fn remove(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
             return Err(Fail::io(format!("{SYSTEMCTL} stop exit {}: {}", out.status, err.trim())));
         }
     }
-    let socket_removed = remove_socket_file(ctx)?;
-    let dropin_removed = set_dropin(ctx, &d.unit, FRONT_DROPIN_FILE, None, "front")?;
+    let socket_removed = remove_socket_file(ctx, sock)?;
+    let dropin_removed = set_dropin(ctx, &d.unit, sock.dropin, None, "front")?;
     let changed = socket_removed || dropin_removed;
     if changed {
         reload(ctx)?;
     }
     Ok(serde_json::json!({
         "unit": d.unit,
-        "socket": FRONT_SOCKET_UNIT,
+        "socket": sock.unit,
         "installed": false,
         "changed": changed,
     }))
 }
 
 pub fn status(ctx: &Ctx) -> HResult<serde_json::Value> {
+    status_sock(ctx, &S443)
+}
+
+/// `front http status` (protocol 12, open).
+pub fn status_http(ctx: &Ctx) -> HResult<serde_json::Value> {
+    status_sock(ctx, &S80)
+}
+
+fn status_sock(ctx: &Ctx, sock: &Sock) -> HResult<serde_json::Value> {
     let daemons = caller::load_daemons(ctx).unwrap_or_default();
-    let cur = read_socket_file(ctx)?;
+    let cur = read_socket_file(ctx, sock)?;
     let (socket, held_for) = match &cur {
         SocketFile::Missing => ("missing", None),
         SocketFile::Odd => ("not-a-file", None),
         SocketFile::File { bytes, service } => {
             let canned = service
                 .as_deref()
-                .and_then(front_socket_unit)
+                .and_then(sock.unit_text)
                 .is_some_and(|w| w.as_bytes() == bytes.as_slice());
             (if canned { "canned" } else { "other" }, service.as_ref().map(|s| s.chars().take(80).collect::<String>()))
         }
@@ -391,7 +460,7 @@ pub fn status(ctx: &Ctx) -> HResult<serde_json::Value> {
     let active = if cur == SocketFile::Missing {
         "inactive".to_string()
     } else {
-        let args = vec!["is-active".to_string(), FRONT_SOCKET_UNIT.to_string()];
+        let args = vec!["is-active".to_string(), sock.unit.to_string()];
         ctx.exec
             .run(SYSTEMCTL, &args, None)
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().chars().take(32).collect())
@@ -401,7 +470,7 @@ pub fn status(ctx: &Ctx) -> HResult<serde_json::Value> {
         .iter()
         .filter(|d| d.scope == "system")
         .map(|d| {
-            let m = dropin_matches(ctx, &d.unit, FRONT_DROPIN_FILE, front_dropin().as_bytes());
+            let m = dropin_matches(ctx, &d.unit, sock.dropin, (sock.dropin_text)().as_bytes());
             serde_json::json!({
                 "unit": d.unit,
                 "dropin": match m { None => "missing", Some(true) => "canned", Some(false) => "other" },
@@ -409,11 +478,12 @@ pub fn status(ctx: &Ctx) -> HResult<serde_json::Value> {
         })
         .collect();
     Ok(serde_json::json!({
-        "socket": FRONT_SOCKET_UNIT,
+        "socket": sock.unit,
+        "port": sock.port,
         "socketFile": socket,
         "heldFor": held_for,
         "active": active,
         "dropins": dropins,
-        "unit": if cur == SocketFile::Missing { serde_json::Value::Null } else { socket_unit_report(ctx) },
+        "unit": if cur == SocketFile::Missing { serde_json::Value::Null } else { socket_unit_report(ctx, sock) },
     }))
 }

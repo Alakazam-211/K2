@@ -172,6 +172,46 @@ pub fn front_dropin() -> &'static str {
      Sockets=k2-front-443.socket\n"
 }
 
+/// The :80 front's socket unit (`/etc/systemd/system/k2-front-80.socket`,
+/// helper `front http install`, protocol 12, 0.46.8): systemd owns the
+/// box's :80 and hands it to the daemon (`LISTEN_FDS`, named
+/// [`crate::paths::FRONT80_FD_NAME`]), which answers `308 https://…` for
+/// the names it serves and ACME HTTP-01 for names being issued. Same shape
+/// as [`front_socket_unit`]. `None` for an invalid unit name.
+pub fn front80_socket_unit(service_unit: &str) -> Option<String> {
+    if !crate::caller::unit_ok(service_unit) {
+        return None;
+    }
+    Some(format!(
+        "# K2 front: the box :80 redirect's socket. Written by k2-root-helper\n\
+         # `front http install`; remove with `front http remove`.\n\
+         [Unit]\n\
+         Description=K2 box :80 front (https redirect and ACME HTTP-01 in the K2 daemon)\n\
+         \n\
+         [Socket]\n\
+         ListenStream=[::]:80\n\
+         BindIPv6Only=both\n\
+         FileDescriptorName={fd}\n\
+         Service={service_unit}\n\
+         NoDelay=true\n\
+         Backlog=4096\n",
+        fd = crate::paths::FRONT80_FD_NAME,
+    ))
+}
+
+/// The daemon unit's :80 drop-in (`<unit>.d/k2-front80.conf`). `Sockets=`
+/// adds to the :443 drop-in's (systemd merges the list).
+pub fn front80_dropin() -> &'static str {
+    "# K2 :80 front. Written by k2-root-helper `front http install`; remove\n\
+     # with `front http remove`.\n\
+     [Unit]\n\
+     Wants=k2-front-80.socket\n\
+     After=k2-front-80.socket\n\
+     \n\
+     [Service]\n\
+     Sockets=k2-front-80.socket\n"
+}
+
 /// The recovery admin password the daemon may send to `mail render-unit`:
 /// exactly 64 lowercase hex characters.
 pub fn recovery_pw_ok(pw: &str) -> bool {

@@ -48,6 +48,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/front/passthrough",
     "/cli/front/passthrough/add",
     "/cli/front/passthrough/rm",
+    "/cli/front/http",
 ];
 
 pub const POST_ROUTES: &[&str] = &[
@@ -58,6 +59,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/firewall/upstream",
     "/cli/front/passthrough/add",
     "/cli/front/passthrough/rm",
+    "/cli/front/http",
 ];
 
 /// Request bodies here are small.
@@ -261,6 +263,16 @@ fn post(path: &str, c: &Caller, who: &Who, b: &Value, port: u16) -> Result<CliRe
             let r = crate::front443::passthrough_add(host, to, b["proxyV2"] == true, b["label"].as_str().unwrap_or(""), actor, port)
                 .map_err(front_refusal)?;
             audit("passthrough-add", actor, &format!("{host} -> {to}"));
+            Ok(json_ok(r))
+        }
+        // 0.46.8 (PB-8): the :80 front's switch (`{on: bool}`).
+        "/cli/front/http" => {
+            let Caller::Person { actor, .. } = c else {
+                return Err(owner_only("k2 front http on|off"));
+            };
+            let on = b["on"].as_bool().ok_or_else(|| refuse(400, "bad_request", "say on or off: k2 front http on|off"))?;
+            let r = crate::front443::http_set(on).map_err(front_refusal)?;
+            audit(if on { "http-on" } else { "http-off" }, actor, "");
             Ok(json_ok(r))
         }
         "/cli/front/passthrough/rm" => {

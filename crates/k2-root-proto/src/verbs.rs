@@ -760,6 +760,15 @@ pub enum Verb {
     /// `front remove` (daemon): stop the socket, remove both files,
     /// `daemon-reload`.
     FrontRemove,
+    /// `front http status` (open, read-only; protocol 12): the :80 socket
+    /// unit and drop-ins, as `front status` for :443.
+    FrontHttpStatus,
+    /// `front http install` (daemon; protocol 12, 0.46.8): the canned
+    /// `k2-front-80.socket` (`ListenStream=[::]:80`) and its daemon drop-in;
+    /// refused while another program listens on :80.
+    FrontHttpInstall,
+    /// `front http remove` (daemon): stop the :80 socket, remove both files.
+    FrontHttpRemove,
     // creds (protocol 10, 0.46.4; see `crate::creds`)
     /// `creds status` (open, read-only): systemd version, TPM2, the
     /// credentials and drop-ins K2 wrote.
@@ -1228,6 +1237,9 @@ impl Verb {
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
             ["front", "remove"] => Verb::FrontRemove,
+            ["front", "http", "status"] => Verb::FrontHttpStatus,
+            ["front", "http", "install"] => Verb::FrontHttpInstall,
+            ["front", "http", "remove"] => Verb::FrontHttpRemove,
             ["creds", "status"] => Verb::CredsStatus,
             ["creds", "put", c] => Verb::CredsPut(cred_token(c)?),
             ["creds", "bind", u, c] => Verb::CredsBind { unit: unit_token(u)?, cred: cred_token(c)? },
@@ -1456,6 +1468,9 @@ impl Verb {
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
             Verb::FrontRemove => s(&["front", "remove"]),
+            Verb::FrontHttpStatus => s(&["front", "http", "status"]),
+            Verb::FrontHttpInstall => s(&["front", "http", "install"]),
+            Verb::FrontHttpRemove => s(&["front", "http", "remove"]),
             Verb::CredsStatus => s(&["creds", "status"]),
             Verb::CredsPut(c) => s(&["creds", "put", c]),
             Verb::CredsBind { unit, cred } => s(&["creds", "bind", unit, cred]),
@@ -1588,10 +1603,10 @@ impl Verb {
             // Takes Apps' container stack away.
             | Verb::AppsPodmanUninstall => Daemon,
             Verb::Sew(v) => v.class(),
-            Verb::FrontStatus => Open,
+            Verb::FrontStatus | Verb::FrontHttpStatus => Open,
             // Moves who owns the box's :443 onto the daemon's own unit (and
             // back): only the daemon itself may ask.
-            Verb::FrontInstall | Verb::FrontRemove => Daemon,
+            Verb::FrontInstall | Verb::FrontRemove | Verb::FrontHttpInstall | Verb::FrontHttpRemove => Daemon,
             // Sets a credential a root unit reads, changes what a unit
             // loads, restarts a unit, deletes one: the daemon's call only
             // (owner/Admin + a vault confirm on the daemon side). Status
@@ -1675,6 +1690,7 @@ impl Verb {
                 | Verb::AppsStatus
                 | Verb::AppsLogs { .. }
                 | Verb::FrontStatus
+                | Verb::FrontHttpStatus
                 | Verb::CredsStatus
         )
     }
@@ -1882,6 +1898,7 @@ pub fn catalog() -> Vec<Verb> {
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);
+    v.extend([Verb::FrontHttpStatus, Verb::FrontHttpInstall, Verb::FrontHttpRemove]);
     v.extend([
         Verb::CredsStatus,
         Verb::CredsPut("ingest_key".into()),
@@ -2000,6 +2017,8 @@ mod tests {
             &["daemon", "handoff-dropin", "remove"],
             &["front", "install"],
             &["front", "remove"],
+            &["front", "http", "install"],
+            &["front", "http", "remove"],
             // Root writes a file on every admin's PATH (protocol 9).
             &["helper", "cli-refresh"],
             // A credential a root unit reads; what a unit loads (protocol 10).
@@ -2012,6 +2031,7 @@ mod tests {
         ];
         let open: &[&[&str]] = &[
             &["front", "status"],
+            &["front", "http", "status"],
             &["helper", "version"],
             &["helper", "self-update"],
             &["helper", "audit-tail"],
@@ -2157,6 +2177,11 @@ mod tests {
             &["front", "socket", "install"],
             &["front", "install\n"],
             &["front", "Install"],
+            &["front", "http"],
+            &["front", "http", "install", "80"],
+            &["front", "http", "install", "k2-daemon.service"],
+            &["front", "http", "enable"],
+            &["front", "http", "remove", "--all"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

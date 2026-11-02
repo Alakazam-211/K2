@@ -116,13 +116,17 @@ pub enum Role {
     /// where front443 routes custom App names. Only sent to a successor
     /// that names it in its HELLO.
     AppDoor,
+    /// The box :80 front (0.46.8, custom domains PB-8): systemd passes it at
+    /// a unit start like `Front443`. Only sent to a successor that names it.
+    Front80,
 }
 
 impl Role {
     /// The roles every hand-off-capable daemon understands (0.46.0).
     pub const LEGACY: [Role; 3] = [Role::Main, Role::TunnelIngress, Role::TunnelTls];
     /// Every role this build understands.
-    pub const ALL: [Role; 5] = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443, Role::AppDoor];
+    pub const ALL: [Role; 6] =
+        [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443, Role::AppDoor, Role::Front80];
 }
 
 /// The roles to send a successor that announced `accepts` (`None`: a

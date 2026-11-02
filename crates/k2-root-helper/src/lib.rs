@@ -52,14 +52,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=11 arch=x86_64;"
+    " proto=12 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=11 arch=aarch64;"
+    " proto=12 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -259,6 +259,9 @@ fn dispatch(
         Verb::FrontStatus => Some(front::status(ctx)?),
         Verb::FrontInstall => Some(front::install(ctx, who)?),
         Verb::FrontRemove => Some(front::remove(ctx, who)?),
+        Verb::FrontHttpStatus => Some(front::status_http(ctx)?),
+        Verb::FrontHttpInstall => Some(front::install_http(ctx, who)?),
+        Verb::FrontHttpRemove => Some(front::remove_http(ctx, who)?),
 
         Verb::CredsStatus => Some(creds::status(ctx, who)?),
         Verb::CredsPut(c) => Some(creds::put(ctx, who, c, stdin)?),

@@ -15,7 +15,7 @@
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
-use k2_root_proto::paths::FRONT_FD_NAME;
+use k2_root_proto::paths::{FRONT80_FD_NAME, FRONT_FD_NAME};
 
 /// First passed fd (`SD_LISTEN_FDS_START`).
 #[cfg(unix)]
@@ -24,6 +24,12 @@ const FDS_START: i32 = 3;
 const MAX_FDS: usize = 32;
 
 fn slot() -> &'static Mutex<Option<std::net::TcpListener>> {
+    static S: OnceLock<Mutex<Option<std::net::TcpListener>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+/// The :80 front's socket (0.46.8, `k2-front-80`).
+fn slot80() -> &'static Mutex<Option<std::net::TcpListener>> {
     static S: OnceLock<Mutex<Option<std::net::TcpListener>>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(None))
 }
@@ -38,6 +44,8 @@ pub struct Passed {
     pub names: Vec<String>,
     /// The front's socket was among them and is a listening TCP socket.
     pub front: bool,
+    /// The :80 front's socket was among them (0.46.8).
+    pub front80: bool,
     pub refused: Option<String>,
 }
 
@@ -53,6 +61,11 @@ pub fn report() -> Passed {
 /// Take the systemd-passed front socket (once).
 pub fn take_front() -> Option<std::net::TcpListener> {
     slot().lock().unwrap_or_else(|p| p.into_inner()).take()
+}
+
+/// Take the systemd-passed :80 socket (once).
+pub fn take_front80() -> Option<std::net::TcpListener> {
+    slot80().lock().unwrap_or_else(|p| p.into_inner()).take()
 }
 
 /// Parse the three variables. Pure: `(fd count, names)` when they are for
@@ -94,6 +107,21 @@ pub fn capture() {
                 if flags >= 0 {
                     libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
                 }
+            }
+            // 0.46.8: the :80 front's socket, by its own name.
+            if names.get(i).map(String::as_str) == Some(FRONT80_FD_NAME) {
+                if !rep.front80 && is_listening_stream(fd) {
+                    use std::os::fd::FromRawFd;
+                    // SAFETY: systemd passed this fd to this process; nothing
+                    // else owns it, and it is a listening stream socket.
+                    let l = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+                    *slot80().lock().unwrap_or_else(|p| p.into_inner()) = Some(l);
+                    rep.front80 = true;
+                } else {
+                    // SAFETY: an fd systemd passed us that nothing else owns.
+                    unsafe { libc::close(fd) };
+                }
+                continue;
             }
             let ours = names.get(i).map(String::as_str) == Some(FRONT_FD_NAME);
             if ours && rep.front {

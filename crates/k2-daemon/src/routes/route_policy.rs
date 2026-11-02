@@ -842,6 +842,8 @@ pub const ROUTES: &[Route] = &[
     // owns the box's :443 (a root-helper socket) and restart the daemon.
     post("/cli/front/disable", Admin),
     post("/cli/front/enable", Admin),
+    // 0.46.8: the :80 front's switch (the https redirect, ACME HTTP-01).
+    post("/cli/front/http", Admin),
     // 0.46.6: the owner's passthrough names on :443.
     get("/cli/front/passthrough", Admin),
     post("/cli/front/passthrough/add", Admin),

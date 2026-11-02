@@ -134,7 +134,7 @@ fn the_front_socket_goes_only_to_a_successor_that_names_it() {
     // A 0.46.1 HELLO carries its roles, and an old parser would ignore the
     // extra field (no deny_unknown_fields on Msg).
     let new = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.1".into(), roles: Some(Role::ALL.to_vec()), app_listeners: false }).unwrap();
-    assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443","appDoor"]"#), "{new}");
+    assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443","appDoor","front80"]"#), "{new}");
     assert!(!new.contains("app_listeners"), "a successor without App listeners says nothing new: {new}");
 }
 

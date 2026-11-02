@@ -101,6 +101,8 @@ label is fine), or point an A at this box"
     if std::env::var("K2_ACME_HTTP01")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
+        // 0.46.8 (PB-A10): the :80 front holds the port and answers tokens.
+        || crate::front443::http80::serving()
         || port_seems_free(80)
     {
         return Ok(ChallengeKind::Http01);
@@ -212,6 +214,14 @@ pub(crate) fn app_name_may_issue(hostname: &str) -> Result<(), String> {
     }
 }
 
+/// Is `hostname` a custom App name K2 Connect verified for this box, with
+/// DNS at this box's k2.dev name (Path B)?
+pub(crate) fn app_name_via_relay(hostname: &str) -> bool {
+    let Some(db) = k2_core::db::try_shared() else { return false };
+    let conn = db.lock();
+    k2_core::domains::app_domain(&conn, hostname).ok().flatten().is_some_and(|d| d.via_relay())
+}
+
 /// The proof for a custom App name (prd-app-custom-domains-v1 §7, vs-live
 /// CD-A10), in order: DNS-01 when k2.dev hosts the zone (`dns_write`, not
 /// pending); else TLS-ALPN-01 answered by the App TLS door (front443
@@ -221,12 +231,20 @@ pub fn select_app_challenge(binding: &DomainBinding, hostname: &str) -> Result<C
     if binding.dns_write && !binding.is_pending_ns() && crate::dns::proxy::tunnel_bearer_token().is_ok() {
         return Ok(ChallengeKind::Dns01);
     }
+    // Path B (0.46.8, vs-live PB-A14): a name K2 Connect routes here is
+    // reached through the relay; the E2E listener answers the CA's
+    // `acme-tls/1` hello from the shared challenge registry. No front443,
+    // no :80 needed (a desktop, a box whose :443 another server holds).
+    if app_name_via_relay(hostname) && crate::tunnel_tls_listener::live_listener().is_some() {
+        return Ok(ChallengeKind::TlsAlpn01);
+    }
     if crate::apps::tls_door::serving() && crate::front443::serving() {
         return Ok(ChallengeKind::TlsAlpn01);
     }
     if std::env::var("K2_ACME_HTTP01")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
+        || crate::front443::http80::serving()
         || port_seems_free(80)
     {
         return Ok(ChallengeKind::Http01);
@@ -853,12 +871,18 @@ fn delete_txt(record_id: &str) -> Result<(), String> {
     }
 }
 
-struct Http01Guard {
-    stop: Arc<Mutex<bool>>,
+/// An HTTP-01 answer while it lives: registered with the :80 front when it
+/// holds the port (0.46.8, PB-A10), else a listener bound for this order.
+enum Http01Guard {
+    Front(#[allow(dead_code)] crate::front443::http80::Http01Token),
+    Bound { stop: Arc<Mutex<bool>> },
 }
 
 impl Http01Guard {
     fn spawn(token: &str, body: &str) -> Result<Self, String> {
+        if crate::front443::http80::serving() {
+            return Ok(Self::Front(crate::front443::http80::Http01Token::register(token, body)));
+        }
         let port: u16 = std::env::var("K2_ACME_HTTP_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -897,14 +921,16 @@ impl Http01Guard {
                 Err(_) => std::thread::sleep(Duration::from_millis(50)),
             }
         });
-        Ok(Self { stop })
+        Ok(Self::Bound { stop })
     }
 }
 
 impl Drop for Http01Guard {
     fn drop(&mut self) {
-        if let Ok(mut g) = self.stop.lock() {
-            *g = true;
+        if let Self::Bound { stop } = self {
+            if let Ok(mut g) = stop.lock() {
+                *g = true;
+            }
         }
     }
 }

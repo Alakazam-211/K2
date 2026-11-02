@@ -134,6 +134,54 @@ fn proc_net_listeners_parse_both_families() {
     assert!(crate::front::listeners_on("garbage\nnot a table", 443).is_empty());
 }
 
+// ── :80 (protocol 12, 0.46.8, custom domains PB-8) ──────────────────────
+
+const SOCKET80: &str = "/etc/systemd/system/k2-front-80.socket";
+const DROPIN80: &str = "/etc/systemd/system/k2-daemon.service.d/k2-front80.conf";
+
+#[test]
+fn http_install_writes_its_own_pair_and_leaves_443_alone() {
+    let t = box_root();
+    let v = json(&t.call(&["front", "http", "install"]));
+    assert_eq!((v["socket"].as_str(), v["changed"].as_bool()), (Some("k2-front-80.socket"), Some(true)));
+    let sock = std::fs::read_to_string(t.p(SOCKET80)).unwrap();
+    assert_eq!(sock, k2_root_proto::templates::front80_socket_unit("k2-daemon.service").unwrap());
+    assert!(sock.contains("\nListenStream=[::]:80\n") && sock.contains("\nFileDescriptorName=k2-front-80\n"));
+    assert!(sock.contains("\nService=k2-daemon.service\n"));
+    assert_eq!(std::fs::read_to_string(t.p(DROPIN80)).unwrap(), k2_root_proto::templates::front80_dropin());
+    assert!(!t.p(SOCKET).exists() && !t.p(DROPIN).exists(), ":443's files are not touched");
+    assert_eq!(count(&t, "start k2-front-80.socket"), 0, "never started by the helper");
+    assert_eq!(v["restartScheduled"], true);
+    let line = t.audit.0.borrow().last().unwrap().clone();
+    let a: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!((a["ns"].as_str(), a["verb"].as_str()), (Some("front"), Some("front http install")));
+    // Status, then remove: only :80's pair goes.
+    let st = json(&t.call(&["front", "http", "status"]));
+    assert_eq!((st["socketFile"].as_str(), st["port"].as_u64()), (Some("canned"), Some(80)));
+    json(&t.call(&["front", "install"]));
+    let v = json(&t.call(&["front", "http", "remove"]));
+    assert_eq!(v["changed"], true);
+    assert!(!t.p(SOCKET80).exists() && !t.p(DROPIN80).exists());
+    assert!(t.p(SOCKET).exists() && t.p(DROPIN).exists(), ":443 stays");
+}
+
+#[test]
+fn http_install_refuses_a_taken_port_80_and_agents() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/proc/net")).unwrap();
+    let four = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+    1: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 556 1 0 100 0 0 10 0\n";
+    std::fs::write(t.p("/proc/net/tcp"), four).unwrap();
+    let o = t.call(&["front", "http", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("port 80 is already in use on this box by 0.0.0.0:80"), "{}", o.stderr);
+    assert!(o.stderr.contains("the https redirect is optional"), "{}", o.stderr);
+    assert!(!t.p(SOCKET80).exists() && !t.p(DROPIN80).exists(), "nothing written");
+    t.as_agent();
+    let o = t.call(&["front", "http", "install"]);
+    assert_eq!(o.code, exit::NOT_DAEMON, "{}", o.stderr);
+}
+
 #[test]
 fn another_daemons_front_is_never_taken_over() {
     let t = box_root();
@@ -243,7 +291,8 @@ fn status_reports_files_and_the_socket_state() {
 fn version_announces_the_front_namespace_from_protocol_8() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 11, "front came in 8; 11 is 0.46.6's one bump");
+    assert_eq!(v["protocol"], 12, "front came in 8; 12 is 0.46.8's one bump");
+    assert_eq!(v["namespaces"]["front80"], true, "the :80 front came in 12");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::FRONT_MIN_PROTOCOL));
     assert_eq!(v["namespaces"]["front"], true);

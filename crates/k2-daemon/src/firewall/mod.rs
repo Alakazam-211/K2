@@ -49,6 +49,8 @@ pub struct Inputs {
     /// The :443 front: the owner turned it on, and/or it serves now.
     pub front_enabled: bool,
     pub front_serving: bool,
+    /// The :80 front serves (0.46.8, PB-A12).
+    pub front80_serving: bool,
     /// Skin Direct's live Caddy listen (`:443`, `0.0.0.0:38472`,
     /// `127.0.0.1:38473`), when Direct mode runs.
     pub skin_direct_listen: Option<String>,
@@ -126,6 +128,9 @@ pub fn compute(i: &Inputs) -> View {
     let front = i.front_enabled || i.front_serving;
     if front {
         public.push(PortEntry::public(443, Tcp, "front443", ANY, "the :443 front: Apps on their own domains, mail web, TURN"));
+    }
+    if i.front80_serving {
+        public.push(PortEntry::public(80, Tcp, "front80", ANY, "the :80 front: the https redirect and ACME HTTP-01"));
     }
 
     match i.skin_direct_listen.as_deref() {
@@ -247,6 +252,7 @@ pub fn gather(daemon_port: u16) -> Result<Inputs, String> {
         cfg,
         front_enabled: front_cfg.enabled && cfg!(target_os = "linux"),
         front_serving: crate::front443::serving(),
+        front80_serving: crate::front443::http80::serving(),
         skin_direct_listen,
         mail_on,
         mail_behind_front: front_cfg.mail_behind_front(),
@@ -291,6 +297,11 @@ pub fn status_json(daemon_port: u16) -> Result<Value, String> {
             "enabled": k2_core::front443::load().enabled,
             "serving": crate::front443::serving(),
             "passthrough": k2_core::front443::load_passthrough_checked().unwrap_or_default(),
+            // 0.46.8 (PB-8): the :80 front (`k2 front http on|off`).
+            "http": {
+                "on": k2_core::front443::load().http_on(),
+                "serving": crate::front443::http80::serving(),
+            },
         },
     }))
 }

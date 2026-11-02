@@ -92,7 +92,7 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 11, "0.46.6's one bump");
+    assert_eq!(v["protocol"], 12, "11 was 0.46.6's one bump; 12 is 0.46.8's (additive)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::SEW_MIN_PROTOCOL));

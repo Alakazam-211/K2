@@ -129,8 +129,9 @@ there is no web build and no second App.
    Put the public key it prints in `plugins.updater.pubkey`.
 3. Give K2 the same public key (never the private one):
    `k2 app updates key {app_id} --set "$(cat ~/.tauri/myapp.key.pub)"`
-4. Ask K2 Web for this App's download-host token{token_for}, then keep it
-   (never on the command line): `k2 app updates token {app_id} --file <file>`
+4. Ask K2 Web (the team that runs k2.dev, through your K2 contact) for this
+   App's download-host token{token_for}, then keep it (never on the command
+   line): `k2 app updates token {app_id} --file <file>`
 5. Ship a signed update to testers, then to everyone:
    `k2 app updates push {app_id} --channel beta --version 1.0.1 --artifact darwin-aarch64=<file>.app.tar.gz`
    `k2 app updates promote {app_id} --from beta --to stable`
@@ -170,8 +171,9 @@ pub fn tauri_readme(app_id: &str, host: &str) -> String {
 2. Create the App once, with its public URL: `k2 app install {app_id} --tunnel`
 3. Give K2 the same public key (never the private one):
    `k2 app updates key {app_id} --set "$(cat ~/.tauri/myapp.key.pub)"`
-4. Ask K2 Web for this App's download-host token, then keep it (never on the
-   command line): `k2 app updates token {app_id} --file <file>`
+4. Ask K2 Web (the team that runs k2.dev, through your K2 contact) for this
+   App's download-host token, then keep it (never on the command line):
+   `k2 app updates token {app_id} --file <file>`
 5. Deploy the web build: `npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json`
 6. Ship a signed update to testers, then to everyone:
    `k2 app updates push {app_id} --channel beta --version 1.0.1 --artifact darwin-aarch64=<file>.app.tar.gz`

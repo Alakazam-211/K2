@@ -10967,7 +10967,8 @@ YOUR SERVER (never the browser):
       → {spaceId, spaces: [{spaceId, governed, channels}], manifestChannels:
       [{slug, name, type, private, spaceId, channelId}]}. spaceId is null
       with no Space or several (then read spaces). A manifest channel's
-      channelId is null until Sew has made it. A stable shape: only
+      channelId is null until K2's sync has Sew make it, in a Space your App
+      governs; k2 app chat <app> shows how far it got. A stable shape: only
       additions under the feature app-chat-space-v1 in /boot-status.
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
@@ -14253,8 +14254,8 @@ file: one that is already there is listed as skipped and left as it is.
       --app <app>   a thin shell over an App already on this box, loading its
                     live site: no web manifest and no <name>-web. The updater
                     asks that App's host first, then the download host. The
-                    App must be yours and K2 must front it (not_found,
-                    needs_k2_front otherwise).
+                    App must be yours and K2 must sit in front of it
+                    (app_not_found, needs_k2_front otherwise).
       --voice       the mic and camera keys for calls. New files only:
                     src-tauri/Info.plist (macOS), Info.ios.plist (iOS),
                     Entitlements.plist (macOS), and
@@ -14782,12 +14783,17 @@ agent and other Apps can use the keys, never read them.
   k2 app push set <app> [--agent-replies on|off] [--previews on|off]
                  [--max-devices N] [--register server|any]
                                        Agent-reply pushes (off by default) and
-                                       their previews; the device ceiling (owner).
+                                       their previews; --max-devices: phones
+                                       that can get this App's notifications,
+                                       everyone together (owner; not sign-ins:
+                                       k2 app login settings --max-devices).
                                        --register server: only your App's own
                                        server may call push.register and
                                        push.viewing, never a phone calling K2
-                                       directly (push_server_only; pairing's
-                                       push step too). Default any.
+                                       directly (push_server_only). Pairing
+                                       still signs the phone in, its answer says
+                                       push {registered: false}, and your server
+                                       registers the token. Default any.
   k2 app push send <app> (--to <user> [--to <user>…] | --room <room>)
                  --title T --body B [--data key=value]… [--topic t]
                  [--collapse-id c] [--thread-id t] [--sound s] [--badge n]
@@ -16749,10 +16755,13 @@ usage: k2 app login settings <app> [flags]        (also: k2 app invite-settings)
   --reset-subject <text>    the App's reset subject
   --reset-body-file <f>     the App's reset body
   --max-devices <n>         devices one person may keep signed in to this App (1 to 20; default 20).
-                            Past it, a new device's sign-in ends their least recently used one.
-                            Lowering it signs nobody out until their next new device.
+                            Past it, a new device's sign-in ends their least recently used ones
+                            until it fits. Lowering it signs nobody out until their next new device.
+                            (Sign-ins per person. k2 app push set --max-devices is another number:
+                            phones that can get this App's notifications, everyone together.)
   --default <field>         back to K2's: inviteTtl resetTtl setPasswordUrl inviteSubject inviteBody resetSubject resetBody maxDevices
-No flags: show the settings. The owner, or the App's own agent with "…manage them end to end".
+No flags: show the settings. The owner, or the App's own agent with the switch
+"…and manage them end to end" (k2 app access).
 EOF
                 return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -49154,7 +49163,9 @@ THE SHAPE
   Either way K2 runs the parts around it: its users, the update feed, its
   "open in app" links and push. The phone and desktop apps talk only to the
   App's server; the App's server talks to K2. <box> on this page is this
-  server's K2 Connect name (k2 connect status).
+  server's K2 Connect name (k2 connect status). Sew is K2's chat and voice
+  server. K2 Web is the team that runs k2.dev: reach it through your K2
+  contact.
 
 THIN SHELL OVER A LIVE SITE
   For a server App already on this box (k2 app list). In the Tauri repo's root:
@@ -49167,8 +49178,9 @@ THIN SHELL OVER A LIVE SITE
     browser, and there is nothing to allow. A bundled page
     (tauri://localhost) is different: it needs bearer auth to your server.
   - Feed and links live on the server App: K2 answers /_k2/updates/… and the
-    two link files for any App it fronts, even while the App is stopped. In
-    3 and 5 below, use <app> for <name>-web.
+    two link files for any App it fronts (it sits in front of the App: the
+    default; not with host.clientIp: false in the manifest), even while the
+    App is stopped. Below, use <app> wherever it says <name>-web or <name>-api.
   - Two endpoints: k2 app updates list <app> --json prints endpoints. --app
     writes the App's own host first, then endpoints.fallback (the stable
     channel's latest.json on K2's download host), which still answers when
@@ -49222,16 +49234,18 @@ START (A BUNDLED WEB BUILD)
   Tauri's updater asks the App's own host for new versions:
     https://<name>-web.<box>.k2.dev/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
   init writes the stable channel; for testers, build a copy with stable
-  changed to beta in that endpoint. The archives come from K2's download
+  changed to beta in each endpoint. The archives come from K2's download
   host, never from your box.
-  The updater's PUBLIC key goes in two places: tauri.conf.json
+  Make the updater's key once, on your own Mac:
+    npx tauri signer generate -w ~/.tauri/myapp.key
+  Its PUBLIC key goes in two places: tauri.conf.json
   plugins.updater.pubkey (the app checks updates with it) and K2 (K2 checks
   archives with it before anything is uploaded):
     k2 app updates key <name>-web --set "$(cat ~/.tauri/myapp.key.pub)"
   The download host needs this App's own token (k2dl_…). K2 Web mints one per
-  App: ask K2 Web for it, naming the id k2 app updates token <name>-web
-  prints. Keep it (never on the command line); until then, a push stops with
-  dl_token_missing:
+  App: ask K2 Web for it, naming the id that k2 app updates token <name>-web
+  prints with no flags. Keep it (never on the command line); until then, a
+  push stops with dl_token_missing:
     k2 app updates token <name>-web --file <file>
   Then push:
     k2 app updates push <name>-web --channel beta --version 1.5.0 \
@@ -49314,10 +49328,11 @@ START (A BUNDLED WEB BUILD)
 
 9. LOGINS: ONE SIGN-IN PER DEVICE
   From an app, your server passes device {id, name} in guests.login. One id
-  per install, kept in the app's storage, never one per platform. K2 never
-  signs out another device when one signs in: each person keeps up to 20 per
-  App, or fewer if you set it (k2 app login settings <app> --max-devices 5).
-  If a second device signs out the first, look in your own server.
+  per install, kept in the app's storage, never one per platform. Each person
+  keeps up to 20 devices per App, or fewer if you set it (k2 app login
+  settings <app> --max-devices 5); K2 signs out another device only past
+  that cap, or when the same id signs in again. If a second device signs out
+  the first, check for a cap of 1 and a fixed id, then your own server.
   More: k2 study app-profile.
 
 10. CALLS
@@ -49339,7 +49354,7 @@ START (A BUNDLED WEB BUILD)
     Tauri on Android            expected, not yet tested
   Every webview also needs a persistent data folder (encryption keys live in
   IndexedDB), audio that plays without a tap, and a connect-src covering your
-  /rtc/v1 and the .wasm URL.
+  /rtc/v1 and the voice kit's .wasm URL.
 
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
 k2 study app-profile, k2 app init --help, k2 app links --help.
@@ -49456,13 +49471,14 @@ DEVICES: ONE ID PER INSTALL
   stay-signed-in). The id is made once per install and kept in the app's
   own storage, never one per platform: a fixed id like "ios" makes each
   phone replace the one before it. A login with no device is a plain 7-day
-  pass, uncounted, with no refresh token. K2 never signs out someone's other
-  devices because a new one signed in, up to the App's cap: 20 devices per
-  person, or lower if the App sets it (1 to 20):
+  pass, uncounted, with no refresh token. A person keeps up to 20 devices
+  per App, or fewer if the App sets it (1 to 20):
     k2 app login settings <app> --max-devices 5
-  Past the cap, a new device ends that person's least recently used one
-  (reason device_limit). Lowering it signs nobody out until their next new
-  device. The owner, or the App's own agent with "…manage them end to end".
+  K2 signs out another device only past that cap: a new device ends that
+  person's least recently used ones until it fits (reason device_limit).
+  Lowering the cap signs nobody out until their next new device; someone on
+  8 with a cap of 5 then goes down to 5. The owner, or the App's own agent
+  with the switch "…and manage them end to end" (k2 app access).
 
 WHO DECIDES (per App; both on by default)
   k2 app profile settings <app> [--names on|off] [--image on|off]

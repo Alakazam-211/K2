@@ -763,7 +763,7 @@ for needle in "k2 app init --template tauri" "k2 app deploy <name>-web dist --ma
     assert_contains "tauri: $needle" "$ta_out" "$needle"
 done
 ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
-if [ "$ta_lines" -le 200 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 200)" >&2; fail=$((fail + 1)); fi
+if [ "$ta_lines" -le 210 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 210)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
 assert_contains "app-deploys: static Apps" "$("$K2" study app-deploys)" "STATIC APPS (0.46.7: a built site, no server)"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"

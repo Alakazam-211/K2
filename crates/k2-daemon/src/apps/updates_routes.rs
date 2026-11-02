@@ -145,7 +145,9 @@ fn need_front(app: &AppRow) -> R<()> {
             crate::app_pairing::NotServed::Raw => {
                 "this App's manifest says host.clientIp: false (a raw splice), so K2 can't answer /_k2/updates/ on its host; turn the client-IP front back on (host.clientIp: true) and deploy"
             }
-            crate::app_pairing::NotServed::NotRuntime => "the update feed needs a runtime App (k2 app deploy)",
+            crate::app_pairing::NotServed::NotRuntime => {
+                "the update feed needs an App that K2 runs (k2 app install, then k2 app deploy), static or server; a k2 publish --cmd service has no feed"
+            }
         };
         return Err(no(uc::NEEDS_K2_FRONT, 409, hint));
     }

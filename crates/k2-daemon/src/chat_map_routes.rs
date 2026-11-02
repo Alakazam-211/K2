@@ -116,7 +116,7 @@ pub fn handle(path: &str, pass: Option<SkinPass>, link: Option<&OnLink>, is_post
 /// manifestChannels}`. Only additions under `app-chat-space-v1`.
 fn space(app: &str, params: &HashMap<String, String>) -> CliResponse {
     if params.get("app").map(|a| a.trim()).is_some_and(|a| !a.is_empty() && a != app) {
-        return refusal(&Refusal::NotFound);
+        return error(404, "not_found", "this call answers only for the App whose pass this is: leave app out", None);
     }
     let spaces = match k2_core::tool_hook::app_spaces(app) {
         Ok(s) => s,

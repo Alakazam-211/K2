@@ -1281,7 +1281,7 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
     let app_ws = skin::ties::app_workspace(&app);
     let allowed = may_set_invite_settings(who, &app, app_ws.as_deref());
     if !allowed {
-        return owner_only("only the owner, or this App's own agent with \"…manage them end to end\" on, sets an App's invite settings");
+        return owner_only("only the owner, or this App's own agent with \"…and manage them end to end\" on (k2 app access), sets an App's login settings");
     }
     let patch = (|| -> Result<invites::InviteSettingsPatch, CliResponse> {
         Ok(invites::InviteSettingsPatch {
@@ -1301,7 +1301,7 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
     // Checked before anything is written: one refused field changes nothing.
     let max_devices: Option<Option<i64>> = match v.get("maxDevices") {
         None => None,
-        Some(_) if app == skin::HOST_APP_ID => return usage("maxDevices is per published App, never the box login (host)"),
+        Some(_) if app == skin::HOST_APP_ID => return usage("maxDevices is per published App, never the box login (host): name the App"),
         Some(Value::Null) => Some(None),
         Some(x) => match x.as_i64().map(|n| app_login::check_max_devices(n).map(|()| n)) {
             Some(Ok(n)) => Some(Some(n)),

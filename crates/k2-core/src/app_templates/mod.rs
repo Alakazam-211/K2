@@ -329,7 +329,7 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
                     None => p.files.push(FilePlan {
                         path: "src-tauri/tauri.conf.json".into(),
                         action: Action::Skipped,
-                        note: format!("already has plugins.updater and bundle.createUpdaterArtifacts: left as it is (check its endpoints: {})", endpoints.join(" , ")),
+                        note: format!("already has plugins.updater and bundle.createUpdaterArtifacts: left as it is (make sure its endpoints are: {})", endpoints.join(" , ")),
                         content: String::new(),
                         before: None,
                     }),
@@ -384,7 +384,7 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     }
     let token_step = |dl: Option<&str>| {
         format!(
-            "ask K2 Web for this App's download-host token ({}), then k2 app updates token {app_id} --file <file>   (never on the command line)",
+            "ask K2 Web (the team that runs k2.dev, through your K2 contact) for this App's download-host token ({}), then k2 app updates token {app_id} --file <file>   (never on the command line)",
             dl.unwrap_or("k2 app updates token <app> names the id it is for")
         )
     };

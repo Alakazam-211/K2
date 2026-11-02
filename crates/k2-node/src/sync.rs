@@ -24,6 +24,9 @@ use crate::util::{run_cmd, CmdOut};
 
 const FETCH_LIMIT: Duration = Duration::from_secs(600);
 const LOCAL_LIMIT: Duration = Duration::from_secs(300);
+/// A mirror holds at most this many packs before the node folds them into
+/// one ([`Git::keep_packs_few`]). Well under the 32 below.
+const MIRROR_PACKS_MAX: usize = 20;
 
 /// Env for git: nothing inherited, no prompts, no system/global config.
 pub fn git_env(git_home: &Path, path: &str) -> Vec<(String, String)> {
@@ -287,6 +290,23 @@ impl Git {
         Ok(())
     }
 
+    /// Fold a mirror's packs into one when they pile up. Mirrors run with
+    /// `gc.auto 0` and every bundle or fetch adds a pack. A job's user doesn't
+    /// own its mirror, so gix (`cargo package`) opens it at reduced trust,
+    /// which caps its pack index table at 32: past that it fails with "The
+    /// slotmap turned out to be too small". Unreachable objects stay (`-k`),
+    /// and a job already reading an old pack retries on the new one. Returns
+    /// `(before, after)` when it repacked.
+    pub async fn keep_packs_few(&self, mirror: &Path) -> Result<Option<(usize, usize)>, String> {
+        let before = pack_count(mirror);
+        if before <= MIRROR_PACKS_MAX {
+            return Ok(None);
+        }
+        let m = mirror.display().to_string();
+        check("git repack", self.git(&["--git-dir", &m, "repack", "-a", "-d", "-k", "-q", "--no-write-bitmap-index"], None, FETCH_LIMIT).await?)?;
+        Ok(Some((before, pack_count(mirror))))
+    }
+
     pub async fn worktree_add(&self, mirror: &Path, dir: &Path, sha: &str) -> Result<(), String> {
         let m = mirror.display().to_string();
         let d = dir.display().to_string();
@@ -338,6 +358,13 @@ impl Git {
 
 /// Copy files and symlinks from `src` into `dst`, refusing escapes.
 ///
+/// How many packs a mirror holds (0 when it has none yet).
+fn pack_count(mirror: &Path) -> usize {
+    std::fs::read_dir(mirror.join("objects/pack"))
+        .map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "idx")).count())
+        .unwrap_or(0)
+}
+
 /// Never writes through a link already in `dst` (V49): the worktree is
 /// the server's checkout, so `dst/foo` may be a symlink to anywhere the
 /// node user can write (its key, another server's mirror). A link where
@@ -450,6 +477,51 @@ pub mod tests {
         assert_eq!(tree, sh_git(&repo, &["rev-parse", &format!("{first}^{{tree}}")]));
         g.worktree_remove(&mirror, &wt).await;
         assert!(!wt.exists());
+    }
+
+    /// Every bundle adds a pack (`gc.auto 0`). Past the limit the mirror folds
+    /// them into one and keeps everything: every commit, an unreachable one, a
+    /// live worktree. At or under the limit nothing runs.
+    #[tokio::test]
+    async fn a_mirror_folds_its_packs_before_they_reach_gix_s_limit() {
+        let (repo, _first, _second) = repo_with_commits("sync-packs");
+        let home = crate::util::temp_dir("sync-packs-home");
+        let g = git(&home);
+        let mirror = home.join("m.git");
+        g.ensure_mirror(&mirror).await.unwrap();
+        let m = mirror.to_str().unwrap();
+        // A real bundle is big enough to stay a pack; these small ones too.
+        sh_git(&mirror, &["--git-dir", m, "config", "fetch.unpackLimit", "1"]);
+        let bundle = home.join("b.bundle");
+        let mut shas = Vec::new();
+        for i in 0..=MIRROR_PACKS_MAX {
+            std::fs::write(repo.join("a.txt"), format!("{i}\n")).unwrap();
+            sh_git(&repo, &["commit", "-q", "-am", &format!("c{i}")]);
+            let sha = sh_git(&repo, &["rev-parse", "HEAD"]);
+            sh_git(&repo, &["update-ref", "refs/k2-compute/job1", &sha]);
+            let _ = std::fs::remove_file(&bundle);
+            sh_git(&repo, &["bundle", "create", bundle.to_str().unwrap(), "refs/k2-compute/job1"]);
+            g.fetch_bundle(&mirror, &bundle).await.unwrap();
+            shas.push(sha);
+            if i == 0 {
+                assert_eq!(g.keep_packs_few(&mirror).await.unwrap(), None, "one pack: nothing to do");
+            }
+        }
+        assert_eq!(pack_count(&mirror), MIRROR_PACKS_MAX + 1, "one pack per bundle");
+
+        let wt = home.join("jobs/j/src");
+        g.worktree_add(&mirror, &wt, shas.last().unwrap()).await.unwrap();
+        // Each bundle moved the one ref: only the last commit is at a tip.
+        assert_eq!(g.tips(&mirror).await.unwrap(), vec![shas.last().unwrap().clone()]);
+
+        assert_eq!(g.keep_packs_few(&mirror).await.unwrap(), Some((MIRROR_PACKS_MAX + 1, 1)));
+        assert_eq!(pack_count(&mirror), 1);
+        assert_eq!(g.keep_packs_few(&mirror).await.unwrap(), None, "folded: nothing more to do");
+        for sha in &shas {
+            assert!(g.has_commit(&mirror, sha).await, "{sha} is still in the mirror");
+        }
+        assert_eq!(sh_git(&wt, &["status", "--porcelain"]), "", "the live worktree still reads");
+        assert_eq!(&sh_git(&wt, &["rev-parse", "HEAD"]), shas.last().unwrap());
     }
 
     /// The dirty blob as the controller builds it.

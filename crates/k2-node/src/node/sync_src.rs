@@ -168,6 +168,12 @@ impl Node {
                 return Err(fail("sync_failed", format!("commit {commit} not found after the bundle")));
             }
         }
+        match git.keep_packs_few(&mirror).await {
+            Ok(Some((before, after))) => sys(format!("folded the mirror's {before} packs into {after}")),
+            Ok(None) => {}
+            // The job can still run; only tools that open the repo with gix may fail.
+            Err(e) => sys(format!("couldn't fold the mirror's packs: {e}")),
+        }
         let _ = std::fs::remove_dir_all(dest);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| fail("sync_failed", format!("create {}: {e}", parent.display())))?;

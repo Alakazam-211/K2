@@ -201,7 +201,9 @@ BOX SERVICES (a service on this box's loopback, like Sew)
   approved, the App dials 127.0.0.1:<port> inside its wall (the env var
   K2_BOX_<NAME>, like K2_BOX_SEW_API=127.0.0.1:8470); HTTP, websockets
   and long uploads pass unchanged. Declared in the manifest, approving
-  opens it without a restart; asked for later, restart once.
+  opens it without a restart; asked for later, restart once. If the deploy
+  itself is held for new caps, its card lists these services too: approving
+  that one card allows them, and the App starts with them.
   k2 app box-service revoke <app-id> <name> shuts it at once. Never: ports
   below 1024 (ssh…), 38600-38999 (other Apps), 5432-5449 (Postgres), K2's own.
 

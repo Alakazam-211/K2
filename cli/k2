@@ -11605,7 +11605,9 @@ BOX SERVICES (a service on this box's loopback, like Sew)
   approved, the App dials 127.0.0.1:<port> inside its wall (the env var
   K2_BOX_<NAME>, like K2_BOX_SEW_API=127.0.0.1:8470); HTTP, websockets
   and long uploads pass unchanged. Declared in the manifest, approving
-  opens it without a restart; asked for later, restart once.
+  opens it without a restart; asked for later, restart once. If the deploy
+  itself is held for new caps, its card lists these services too: approving
+  that one card allows them, and the App starts with them.
   k2 app box-service revoke <app-id> <name> shuts it at once. Never: ports
   below 1024 (ssh…), 38600-38999 (other Apps), 5432-5449 (Postgres), K2's own.
 
@@ -11691,12 +11693,26 @@ EOF
 }
 
 _app_held_exit() {
-    # stdin: a held answer. Print it; exit 2 (loopable) unless already allowed.
+    # stdin: a held answer. Print it; exit 2 (loopable) unless it is allowed
+    # (now, under the agent's own switch, or from before); 3 if applying failed.
     python3 -c '
 import json, sys
 v = json.load(sys.stdin)
+if v.get("status") == "failed":
+    r = v.get("result") if isinstance(v.get("result"), dict) else {}
+    print("not applied: %s" % (r.get("hint") or r.get("code") or "applying it failed"), file=sys.stderr)
+    sys.exit(3)
 if v.get("status") != "held":
-    print("already allowed: " + ", ".join(v.get("alreadyAllowed") or []))
+    new = v.get("added") or [x.get("name") for x in (v.get("services") or []) if isinstance(x, dict) and x.get("name")]
+    already = v.get("alreadyAllowed") or []
+    if new:
+        print("allowed: " + ", ".join(new))
+    if already:
+        print("already allowed: " + ", ".join(already))
+    r = v.get("result") if isinstance(v.get("result"), dict) else {}
+    note = r.get("note") or (v.get("hint") if new or not already else None)
+    if note:
+        print("  " + note)
     sys.exit(0)
 r = v["request"]
 print("held for the owner: %s" % r["id"])
@@ -16258,6 +16274,9 @@ r = v["request"]
 print("%s %s: %s" % (r["id"], v.get("status"), r["summary"]))
 if v.get("note"):
     print("  %s" % v["note"])
+box = (v.get("result") or {}).get("boxServices") if isinstance(v.get("result"), dict) else None
+for x in (box or {}).get("refused") or []:
+    print("  box service %s not allowed: %s" % (x.get("name"), x.get("hint")))
 if v.get("error"):
     print("  %s" % v["error"].get("hint")); sys.exit(1)'
 }

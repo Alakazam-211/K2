@@ -484,6 +484,60 @@ pub fn request_manifest(who: &Who, app: &deploy::store::AppRow, seed_hash: &str,
     Some(out)
 }
 
+/// What a held deploy's card names: the box services the Seed's manifest
+/// asks for that can join the App's list and aren't allowed yet. The hold
+/// files nothing; approving the card allows these
+/// ([`allow_on_approved_deploy`]).
+pub(crate) fn manifest_wants(app: &str, seed_hash: &str) -> Vec<Want> {
+    let Ok(text) = std::fs::read_to_string(deploy::seed::seed_path(seed_hash).join(deploy::manifest::MANIFEST_FILE)) else {
+        return Vec::new();
+    };
+    let Ok(m) = deploy::manifest::parse(&text) else { return Vec::new() };
+    let wants: Vec<Want> = m.box_services.iter().filter_map(|b| resolve(&b.name, b.host_port, b.app_port, b.proto.as_deref()).ok()).collect();
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    wants
+        .into_iter()
+        .filter(|w| {
+            let allowed = matches!(bs::get(&conn, app, &w.name), Ok(Some(r)) if r.status == bs::STATUS_ALLOWED);
+            !allowed && matches!(bs::conflict(&conn, app, w), Ok(None))
+        })
+        .collect()
+}
+
+/// The owner approved a held deploy: allow the box services its card named,
+/// before the deploy starts, so the one start has them. Whatever else the
+/// Seed's manifest asks for (a hold filed before its card named them, one
+/// that couldn't be resolved then) goes the way it does on any deploy.
+pub(crate) fn allow_on_approved_deploy(app: &deploy::store::AppRow, seed_hash: &str, on_card: &[Want], by: &str) -> Option<J> {
+    let done = match db(|c| bs::allow_approved(c, &app.app_id, on_card, by, deploy::now())) {
+        Ok(d) => d,
+        Err(e) => return Some(json!({ "status": "error", "code": e.code, "hint": e.hint })),
+    };
+    if !done.allowed.is_empty() {
+        audit(&app.app_id, "box_service_approved_with_deploy", by, json!({ "services": done.allowed }));
+    }
+    for req in &done.emptied_requests {
+        let closed = db(|c| Ok(k2_core::app_grace::requests::decide(c, req, k2_core::app_grace::requests::STATUS_WITHDRAWN, by, None, Some("approved with the held deploy"), deploy::now())));
+        if let Err(e) = closed {
+            k2_core::log_debug!("[apps] {}: withdraw {req}: {}", app.app_id, e.hint);
+        }
+        super::approvals::changed(Some(req));
+    }
+    let rest = request_manifest(&Who::Owner, app, seed_hash, None);
+    if on_card.is_empty() && rest.is_none() {
+        return None;
+    }
+    let mut out = json!({
+        "allowed": done.allowed,
+        "refused": done.refused.iter().map(|(name, why)| json!({ "name": name, "hint": why })).collect::<Vec<_>>(),
+    });
+    if let Some(r) = rest.filter(|r| r["status"] != "allowed") {
+        out["rest"] = r;
+    }
+    Some(out)
+}
+
 // ── narrow ───────────────────────────────────────────────────────────
 
 /// POST `/cli/app/box-service/revoke {app, name}`: at once (approved or

@@ -31,11 +31,21 @@ struct TestEngine {
     prepares: AtomicU32,
     starts: AtomicU32,
     stopped: Mutex<HashSet<String>>,
+    /// What each start could see of the App's box services, read as the real
+    /// engine reads them: forwards, `K2_BOX_*`, the ports the nft rule opens.
+    box_at_start: Mutex<Vec<BoxAtStart>>,
+}
+
+#[derive(Debug, Clone)]
+struct BoxAtStart {
+    forwards: Vec<(u16, u16)>,
+    env: Vec<(String, String)>,
+    door: Vec<u16>,
 }
 
 impl TestEngine {
     fn leak(mode: u8) -> &'static TestEngine {
-        Box::leak(Box::new(TestEngine { mode: AtomicU8::new(mode), prepares: AtomicU32::new(0), starts: AtomicU32::new(0), stopped: Mutex::new(HashSet::new()) }))
+        Box::leak(Box::new(TestEngine { mode: AtomicU8::new(mode), prepares: AtomicU32::new(0), starts: AtomicU32::new(0), stopped: Mutex::new(HashSet::new()), box_at_start: Mutex::new(Vec::new()) }))
     }
     fn set(&self, mode: u8) {
         self.mode.store(mode, Ordering::SeqCst);
@@ -89,6 +99,12 @@ impl RuntimeEngine for TestEngine {
     }
     fn start(&self, spec: &AppSpec, _: &Prepared, port: u16) -> k2_core::deploy::engine::Result<RunHandle> {
         self.starts.fetch_add(1, Ordering::SeqCst);
+        let app = spec.app_id.as_str();
+        self.box_at_start.lock().unwrap().push(BoxAtStart {
+            forwards: crate::apps::box_service_routes::forwards_for(app, port).0.iter().map(|f| (f.app_port, f.host_port)).collect(),
+            env: crate::apps::box_service_routes::env_for(app, false).into_iter().collect(),
+            door: crate::apps::box_service_routes::allowed_ports(app),
+        });
         if self.mode.load(Ordering::SeqCst) != APP_BROKEN {
             serve(port).map_err(|e| EngineError::new(codes::ENGINE_UNAVAILABLE, e.to_string()))?;
         } else {
@@ -887,4 +903,122 @@ fn static_apps_are_served_at_boot_before_the_engine_and_never_503() {
     stop_app(&app_row(id), "owner").unwrap();
     forget(id);
     forget(down);
+}
+
+// ── a held deploy, approved: the manifest's box services ─────────────
+
+/// Field report: a deploy whose manifest added `boxServices` was held (new
+/// caps) and approved; the App went live without them, and only a second
+/// restart after a separate request gave it `K2_BOX_*`. The deploy path files
+/// a manifest's services before it starts, and the path that carries out an
+/// approved hold didn't. Now the hold's card names them, and approving it
+/// covers them: the one start has the forwards, the env and the door. The
+/// hosts the same manifest asks for are filed too, as on any deploy.
+#[test]
+fn an_approved_held_deploy_starts_with_its_manifests_box_services() {
+    use k2_core::app_grace::requests as reqs;
+    use k2_core::deploy::box_service as bs;
+    let f = fx();
+    k2_core::deploy::set_enabled(true);
+    let id = "s1t-held-box";
+    let eng = TestEngine::leak(OK);
+    app(id, &f.seed, "running", eng);
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        crate::apps::grants::record(&c, id, &[]).unwrap();
+    }
+
+    // The Seed: a new cap (so the deploy is held), two box services, a host.
+    let src = f._home.path().join("src").join("held-box");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("server.js"), "require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT)").unwrap();
+    let manifest = serde_json::json!({
+        "schema": 1, "kind": "app", "id": "s1", "name": "s1", "version": "2.0.0",
+        "caps": ["thread:read"],
+        "boxServices": [{ "name": "sew-api", "hostPort": 18470 }, { "name": "sew-signal", "hostPort": 17880 }],
+        "egress": { "hosts": ["api.example.com"] },
+        "host": { "mode": "cmd", "start": ["node", "server.js"], "health": { "path": "/", "timeoutSecs": 2 } }
+    });
+    std::fs::write(src.join("manifest.json"), manifest.to_string()).unwrap();
+    let stored = k2_core::deploy::seed::store_folder(&src, &std::collections::BTreeSet::new()).unwrap();
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        store::upsert_seed(
+            &c,
+            &store::SeedRow {
+                hash: stored.hash.clone(),
+                seed_id: "s1".into(),
+                version: Some("2.0.0".into()),
+                host_mode: "cmd".into(),
+                manifest,
+                created_with: serde_json::json!({}),
+                report: serde_json::json!({ "ok": true }),
+                signer: "owner".into(),
+                origin: "build".into(),
+                built_for: None,
+                built_from: None,
+                source_ref: None,
+                data_revision: 0,
+                size_bytes: stored.size_bytes as i64,
+                created_at: 1,
+                last_used_at: 1,
+            },
+        )
+        .unwrap();
+    }
+
+    // Held: nothing filed, nothing started, and the card names them.
+    let r = crate::apps::routes::handle(
+        "/cli/app/deploy",
+        crate::apps::routes::Who::Owner,
+        serde_json::json!({ "app": id, "seed": stored.hash }).to_string().as_bytes(),
+        &std::collections::HashMap::new(),
+    );
+    let held: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(held["status"], "held", "{held}");
+    assert_eq!(held["kind"], "deploy", "{held}");
+    assert!(crate::apps::box_service_routes::allowed_ports(id).is_empty(), "nothing opens while held");
+    assert_eq!(eng.starts.load(Ordering::SeqCst), 0, "the live Seed keeps serving");
+
+    // The owner approves the one card.
+    let req_id = held["request"]["id"].as_str().expect("request id").to_string();
+    let req = {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        reqs::get(&c, &req_id).unwrap().expect("the held request")
+    };
+    let out = crate::apps::approvals::apply_as(&req, "owner", "local-auth").expect("approved");
+    assert_eq!(out["request"]["status"], "approved", "{out}");
+    let dep = out["result"]["deployment"].as_str().unwrap_or_else(|| panic!("no deployment: {out}"));
+    let row = wait_done(dep, 30).expect("row");
+    assert_eq!(row.result, store::RESULT_LIVE, "{row:?}");
+
+    // The one start had everything: no second restart.
+    assert_eq!(eng.starts.load(Ordering::SeqCst), 1, "one start");
+    let seen = eng.box_at_start.lock().unwrap()[0].clone();
+    assert_eq!(seen.forwards, vec![(18470, 18470), (17880, 17880)], "{seen:?}");
+    assert_eq!(
+        seen.env,
+        vec![("K2_BOX_SEW_API".to_string(), "127.0.0.1:18470".to_string()), ("K2_BOX_SEW_SIGNAL".to_string(), "127.0.0.1:17880".to_string())],
+        "{seen:?}"
+    );
+    assert_eq!(seen.door, vec![18470, 17880], "the firewall rule opens both at start: {seen:?}");
+
+    // The owner saw what they approved, and the approval says what it did.
+    let summary = held["request"]["summary"].as_str().expect("summary");
+    assert!(summary.contains("sew-api") && summary.contains("sew-signal"), "the owner sees what they approve: {summary}");
+    let lines = held["diff"]["lines"].to_string();
+    assert!(lines.contains("sew-api") && lines.contains("sew-signal"), "{held}");
+    assert_eq!(out["result"]["boxServices"]["allowed"], serde_json::json!(["sew-api", "sew-signal"]), "{out}");
+
+    // On the list as allowed, approved by the owner; no second card for them,
+    // and the hosts wait for the owner as on any deploy.
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    let rows = bs::list(&c, id).unwrap();
+    assert_eq!(rows.iter().map(|r| (r.name.as_str(), r.status.as_str())).collect::<Vec<_>>(), vec![("sew-api", "allowed"), ("sew-signal", "allowed")]);
+    let open = reqs::list(&c, &reqs::Filter { app_id: Some(id), status: Some(reqs::STATUS_PENDING), ..Default::default() }, 100).unwrap();
+    assert_eq!(open.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(), vec![reqs::KIND_EGRESS], "{open:?}");
 }

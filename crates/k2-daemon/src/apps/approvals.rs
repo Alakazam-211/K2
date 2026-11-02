@@ -84,7 +84,7 @@ pub(crate) fn request_json(r: &reqs::AppRequest) -> J {
     if r.kind == reqs::KIND_EGRESS {
         v["hosts"] = json!(r.hosts().iter().map(k2_core::deploy::egress::HostSpec::display).collect::<Vec<_>>());
     }
-    if r.kind == reqs::KIND_BOX_SERVICE {
+    if r.kind == reqs::KIND_BOX_SERVICE || ((r.kind == reqs::KIND_DEPLOY || r.kind == reqs::KIND_INSTALL) && !r.box_services().is_empty()) {
         v["services"] = json!(r.box_services());
     }
     v
@@ -674,9 +674,22 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
                 super::grants::record(&conn, &app.app_id, &all).map_err(db_err)?;
                 super::grants::recorded(&conn, &app.app_id).map_err(db_err)?.unwrap_or_default()
             };
+            // Before the start: it renders the forwards and the door from
+            // this list. Like the caps, they stay approved if `begin` refuses
+            // (a deploy already running): the retry isn't held again.
+            let box_services = super::box_service_routes::allow_on_approved_deploy(&app, seed, &r.box_services(), by);
             let reason = r.body.get("reason").and_then(J::as_str);
             let dep = super::supervisor::begin(&app, seed, k2_core::deploy::store::KIND_DEPLOY, &r.requested_by, reason)?;
-            Ok(json!({ "applied": "deploy", "deployment": dep, "approvedCaps": now_set, "approvedBy": by }))
+            // The hosts this Seed asks for wait for the owner, as on any deploy.
+            let egress = super::egress_routes::request_manifest_hosts(&Who::Owner, &app.app_id, seed, &dep);
+            let mut out = json!({ "applied": "deploy", "deployment": dep, "approvedCaps": now_set, "approvedBy": by });
+            if let Some(b) = box_services {
+                out["boxServices"] = b;
+            }
+            if let Some(e) = egress {
+                out["egress"] = e;
+            }
+            Ok(out)
         }
         reqs::KIND_MANAGE => {
             let route = r.body.get("route").and_then(J::as_str).ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "unreadable held request"))?;

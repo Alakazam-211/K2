@@ -1324,6 +1324,17 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
     } else {
         format!("deploy {} with new caps {}", app.app_id, add.join(", "))
     };
+    // Box services the Seed asks for: on this card, so approving it covers
+    // them and the App starts with them (no second card, no second restart).
+    let box_wants = super::box_service_routes::manifest_wants(&app.app_id, seed);
+    let box_list: Vec<String> = box_wants.iter().map(k2_core::deploy::box_service::Want::display).collect();
+    let summary = if box_wants.is_empty() { summary } else { format!("{summary}; and let it reach {} on this box", box_list.join(", ")) };
+    if !box_wants.is_empty() {
+        diff["boxServices"] = json!({ "add": box_wants });
+        if let Some(lines) = diff["lines"].as_array_mut() {
+            lines.extend(box_list.iter().map(|b| json!(format!("+ box service {b}"))));
+        }
+    }
     let r = super::approvals::file(&super::approvals::Filing {
         who,
         kind,
@@ -1339,6 +1350,7 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
             "new caps beyond the App's approved set wait for the owner (every caller)".to_string()
         })
         .chain(core_reasons)
+        .chain((!box_wants.is_empty()).then(|| "it opens a door from the App's wall to a service on this box".to_string()))
         .collect(),
         reason: s(v, "reason"),
     })?;

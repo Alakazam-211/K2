@@ -57,6 +57,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Mobile devices
 - **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
 
+### Apps
+- **A deploy held for your approval now starts with the box services its manifest asks for.** The held card names them, and approving it covers them: the App starts with `K2_BOX_*` and its firewall rule, with no second request or restart. `k2 app box-service request` also says which service it allowed now, instead of printing an empty `already allowed:`, and reports a request that failed to apply.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

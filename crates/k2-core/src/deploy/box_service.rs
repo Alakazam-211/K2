@@ -404,6 +404,56 @@ pub fn request(conn: &Connection, app: &str, wants: &[Want], ask: &Ask<'_>, now:
     Ok((Some(w), allowed))
 }
 
+/// What [`allow_approved`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Allowed {
+    /// Allowed by this approval.
+    pub allowed: Vec<String>,
+    /// `(name, why)`: can't join the list now (another service took its
+    /// in-wall port since, the App is full). The deploy goes on without them.
+    pub refused: Vec<(String, String)>,
+    /// Pending `box_service` requests left asking for nothing.
+    pub emptied_requests: Vec<String>,
+}
+
+/// The owner approved a held deploy whose card named these services: allow
+/// them now, before that deploy starts, so its start has the forwards, the
+/// env and the door. A service that was already pending moves to allowed
+/// (only the ones named: the rest of its request still waits).
+pub fn allow_approved(conn: &Connection, app: &str, wants: &[Want], by: &str, now: i64) -> rusqlite::Result<Allowed> {
+    let mut out = Allowed::default();
+    for w in wants {
+        if let Some(why) = conflict(conn, app, w)? {
+            out.refused.push((w.name.clone(), why));
+            continue;
+        }
+        match get(conn, app, &w.name)? {
+            Some(r) if r.status == STATUS_ALLOWED => {}
+            Some(r) => {
+                conn.execute(
+                    "UPDATE app_box_services SET status = 'allowed', request_id = NULL, approved_by = ?3, approved_at = ?4 WHERE app_id = ?1 AND name = ?2",
+                    params![app, w.name, by, now],
+                )?;
+                if let Some(req) = r.request_id {
+                    if request_is_empty(conn, app, &req)? && !out.emptied_requests.contains(&req) {
+                        out.emptied_requests.push(req);
+                    }
+                }
+                out.allowed.push(w.name.clone());
+            }
+            None => {
+                conn.execute(
+                    "INSERT INTO app_box_services (app_id, name, host_port, app_port, proto, preset, source, status, request_id, added_by, added_at, approved_by, approved_at) \
+                     VALUES (?1, ?2, ?3, ?4, 'tcp', ?5, ?6, 'allowed', NULL, ?7, ?8, ?7, ?8)",
+                    params![app, w.name, w.host_port as i64, w.app_port as i64, w.preset, SOURCE_MANIFEST, by, now],
+                )?;
+                out.allowed.push(w.name.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Revoke one service (allowed or pending) at once. Returns the row it
 /// removed. A pending request left asking for nothing is the caller's to
 /// withdraw ([`request_is_empty`]).
@@ -595,5 +645,36 @@ mod tests {
         assert!(!request_is_empty(&c, "hearth", &w2.as_ref().unwrap().id).unwrap());
         revoke(&c, "hearth", "b").unwrap();
         assert!(request_is_empty(&c, "hearth", &w2.unwrap().id).unwrap());
+    }
+
+    /// A held deploy's approval allows only what its card named: a new row,
+    /// or a pending one (its request keeps waiting for the rest, and is
+    /// reported once it asks for nothing); never what can't join the list.
+    #[test]
+    fn a_held_deploys_approval_allows_only_what_its_card_named() {
+        let c = conn();
+        let (w, _) = request(&c, "hearth", &[want("sew-api", 8470, 8470), want("third", 9000, 9000)], &ask("agent:x"), 1).unwrap();
+        let req = w.unwrap().id;
+
+        let wants = [want("sew-api", 8470, 8470), want("sew-signal", 7880, 7880), want("clash", 9100, 9000)];
+        let out = allow_approved(&c, "hearth", &wants, "owner", 2).unwrap();
+        assert_eq!(out.allowed, vec!["sew-api", "sew-signal"]);
+        assert_eq!(out.refused.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["clash"]);
+        assert!(out.refused[0].1.contains("already third's"), "{:?}", out.refused);
+        assert!(out.emptied_requests.is_empty(), "third still waits on {req}");
+
+        let rows = list(&c, "hearth").unwrap();
+        let of = |n: &str| rows.iter().find(|r| r.name == n).unwrap_or_else(|| panic!("no {n}: {rows:?}"));
+        assert_eq!((of("sew-api").status.as_str(), of("sew-api").approved_by.as_deref()), (STATUS_ALLOWED, Some("owner")));
+        assert_eq!((of("sew-signal").status.as_str(), of("sew-signal").source.as_str()), (STATUS_ALLOWED, SOURCE_MANIFEST));
+        assert_eq!((of("third").status.as_str(), of("third").request_id.as_deref()), (STATUS_PENDING, Some(req.as_str())));
+        assert_eq!(allowed_host_ports(&c, "hearth").unwrap(), vec![8470, 7880], "the door opens only for the allowed ones");
+
+        // Asking again changes nothing; the last pending one empties the request.
+        let again = allow_approved(&c, "hearth", &[want("sew-api", 8470, 8470)], "owner", 3).unwrap();
+        assert_eq!(again, Allowed::default());
+        let last = allow_approved(&c, "hearth", &[want("third", 9000, 9000)], "owner", 4).unwrap();
+        assert_eq!(last.allowed, vec!["third"]);
+        assert_eq!(last.emptied_requests, vec![req]);
     }
 }

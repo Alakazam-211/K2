@@ -778,6 +778,9 @@ pub const FEATURE_EMAIL_NOTIFICATIONS: &str = "email-notifications-v1";
 /// `chat.member|whois` (A6) and the home-client settings (decision 13).
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_CHAT: &str = "app-chat-v1";
+/// `chat.space` (0.46.8): an App's server learns its own Sew Space id and
+/// its manifest channels' ids. A stable shape: only additions under this key.
+pub const FEATURE_APP_CHAT_SPACE: &str = "app-chat-space-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -1135,6 +1138,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_APP_CHAT);
+    out.push(FEATURE_APP_CHAT_SPACE);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     out.push(FEATURE_PUBLISH_DEV);
     out.push(FEATURE_SITE_VISIBILITY);
@@ -1317,6 +1321,7 @@ mod tests {
                 "app-user-profile-v1",
                 "email-notifications-v1",
                 "app-chat-v1",
+                "app-chat-space-v1",
                 "activity-live-busy",
                 "publish-dev-v1",
                 "site-visibility-v1",

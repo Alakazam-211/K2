@@ -684,6 +684,46 @@ fn channel_rows(conn: &Connection, space_id: &str) -> Result<Vec<ChannelRow>, St
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("channels row: {e}"))
 }
 
+/// One channel of a Space, as `chat.space` shows it to its App.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSpaceChannel {
+    pub slug: String,
+    pub channel_id: Option<String>,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub private: bool,
+    pub source: String,
+    pub state: String,
+}
+
+/// One bound Space, as `chat.space` shows it to its App.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSpace {
+    pub space_id: String,
+    /// The App governs it and Sew confirmed that.
+    pub governed: bool,
+    pub channels: Vec<AppSpaceChannel>,
+}
+
+/// The Spaces bound to `app_id` and the channels K2 keeps for them.
+pub fn app_spaces(conn: &Connection, app_id: &str) -> Result<Vec<AppSpace>, String> {
+    let bound: Vec<String> =
+        super::app_space::bindings(conn)?.into_iter().filter(|b| b.app_id == app_id).map(|b| b.space_id).collect();
+    bound
+        .into_iter()
+        .map(|space_id| {
+            let channels = channel_rows(conn, &space_id)?
+                .into_iter()
+                .map(|c| AppSpaceChannel { slug: c.slug, channel_id: c.channel_id, name: c.name, kind: c.kind, private: c.private, source: c.source, state: c.state })
+                .collect();
+            Ok(AppSpace { governed: is_governed(conn, &space_id)?, space_id, channels })
+        })
+        .collect()
+}
+
 /// The channels a manifest names for one governed Space of its App:
 /// those naming the Space, plus those naming none when the App governs
 /// exactly one Space.

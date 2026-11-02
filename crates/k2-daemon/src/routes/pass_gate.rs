@@ -365,6 +365,7 @@ mod tests {
             // chat.member, chat.whois, chat.createChannel (catalog rows).
             ("crate::chat_map_routes::MEMBER", vec![crate::chat_map_routes::MEMBER]),
             ("crate::chat_map_routes::WHOIS", vec![crate::chat_map_routes::WHOIS]),
+            ("crate::chat_map_routes::SPACE", vec![crate::chat_map_routes::SPACE]),
             ("crate::chat_channel_routes::ROUTE", vec![crate::chat_channel_routes::ROUTE]),
             // Live docs (0.46.7): the Live socket and its auth probe; both
             // refuse an App pass (REFUSING_ARMS).

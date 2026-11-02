@@ -10962,6 +10962,13 @@ YOUR SERVER (never the browser):
   chat.whois({memberIds})   POST /cli/sew/app/whois (≤100) → your users in
       full; anyone else only {memberId, kind, isThisAppUser: false}.
   guests.chat / guests.setChat  GET|POST /cli/skin/guests/chat (step 4).
+  chat.space()              GET /cli/sew/app/space: your own Space and channel
+      ids, so nothing is hard-coded. Your App's own pass, no cap.
+      → {spaceId, spaces: [{spaceId, governed, channels}], manifestChannels:
+      [{slug, name, type, private, spaceId, channelId}]}. spaceId is null
+      with no Space or several (then read spaces). A manifest channel's
+      channelId is null until Sew has made it. A stable shape: only
+      additions under the feature app-chat-space-v1 in /boot-status.
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.

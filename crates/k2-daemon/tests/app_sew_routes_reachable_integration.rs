@@ -24,6 +24,7 @@ use serde_json::json;
 const MEMBER: &str = "/cli/sew/app/member";
 const WHOIS: &str = "/cli/sew/app/whois";
 const CHANNELS: &str = "/cli/sew/app/channels";
+const SPACE: &str = "/cli/sew/app/space";
 
 /// One request with `Authorization: Bearer` (how an App calls its link).
 fn bearer_req(port: u16, method: &str, path: &str, pass: &str, body: Option<&str>) -> Resp {
@@ -83,9 +84,15 @@ async fn an_apps_chat_map_and_channel_routes_reach_their_handlers() {
     // A POST route: refused for GET (the route policy answers before the handler).
     assert_eq!(r.status, 405, "channels is a POST: {}", r.body);
 
+    // chat.space: no cap, so this same pass is answered.
+    let r = get(port, SPACE, &remote, "").await;
+    assert_eq!((r.status, r.json()["app"].clone(), r.json()["spaceId"].clone()), (200, json!(svc), serde_json::Value::Null), "space: {}", r.body);
+    let r = post(port, SPACE, &remote, json!({})).await;
+    assert_eq!(r.status, 405, "space is a GET: {}", r.body);
+
     // The owner token is never these routes' credential: the routes' own
     // answer, not the catch-all's.
-    for (path, is_post) in [(MEMBER, false), (WHOIS, true), (CHANNELS, true)] {
+    for (path, is_post) in [(MEMBER, false), (WHOIS, true), (CHANNELS, true), (SPACE, false)] {
         let r = if is_post { post(port, path, OWNER, json!({})).await } else { get(port, path, OWNER, "username=dana").await };
         assert_eq!((r.status, r.code()), (403, "app_pass_required".to_string()), "{path} with the owner token: {}", r.body);
     }
@@ -107,6 +114,8 @@ async fn an_apps_chat_map_and_channel_routes_reach_their_handlers() {
     assert_eq!((r.status, r.code()), (403, "cap_not_granted".to_string()), "whois on the link: {}", r.body);
     let r = bearer(lport, "POST", CHANNELS.into(), pass.clone(), Some(json!({ "slug": "desk", "name": "Desk" }))).await;
     assert_eq!((r.status, r.code()), (403, "cap_not_granted".to_string()), "channels on the link: {}", r.body);
+    let r = bearer(lport, "GET", SPACE.into(), pass.clone(), None).await;
+    assert_eq!((r.status, r.json()["app"].clone()), (200, json!(svc)), "space on the link: {}", r.body);
     gateway::close(&format!("chatapp{tag}"), None, true);
     drop(env);
 }

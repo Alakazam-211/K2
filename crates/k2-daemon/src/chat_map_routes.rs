@@ -7,6 +7,7 @@
 //! GET  /cli/sew/app/member ?principal=<id>|username=<name>[&app=<own id>]   chat.member
 //!   → 200 AppChatMember {ok, app, username, principalId, externalId, memberId, state}
 //! POST /cli/sew/app/whois {memberIds: [..≤100], app?}                       chat.whois
+//! GET  /cli/sew/app/space [?app=<own id>]                                    chat.space
 //!   → 200 AppChatWhois {ok, app, members: [{memberId, kind, isThisAppUser, principalId?, username?, displayName?, imageHash?, deleted}]}
 //! ```
 //!
@@ -33,9 +34,13 @@ use crate::guest_rooms_routes::{app_of, error, pass_invalid, OnLink};
 
 pub const MEMBER: &str = "/cli/sew/app/member";
 pub const WHOIS: &str = "/cli/sew/app/whois";
+/// `chat.space` (0.46.8, feature `app-chat-space-v1`): this App's own Space
+/// and manifest channels. The App's own pass, no cap: it says only what the
+/// App's own binding and manifest hold.
+pub const SPACE: &str = "/cli/sew/app/space";
 
 pub fn is_route(p: &str) -> bool {
-    p == MEMBER || p == WHOIS
+    p == MEMBER || p == WHOIS || p == SPACE
 }
 
 pub fn app_pass_required() -> CliResponse {
@@ -59,6 +64,9 @@ pub fn handle(path: &str, pass: Option<SkinPass>, link: Option<&OnLink>, is_post
     }
     let Some(pass) = pass else { return pass_invalid() };
     let Some(app) = app_of(&pass, link) else { return app_pass_required() };
+    if path == SPACE {
+        return space(&app, params);
+    }
     if !pass.has_cap(k2_core::skin::CAP_CHAT_READ) {
         return error(
             403,
@@ -102,6 +110,38 @@ pub fn handle(path: &str, pass: Option<SkinPass>, link: Option<&OnLink>, is_post
         Ok(body) => CliResponse::ok_json(body),
         Err(e) => refusal(&e),
     }
+}
+
+/// `GET /cli/sew/app/space[?app=<own id>]`: `{ok, app, spaceId, spaces,
+/// manifestChannels}`. Only additions under `app-chat-space-v1`.
+fn space(app: &str, params: &HashMap<String, String>) -> CliResponse {
+    if params.get("app").map(|a| a.trim()).is_some_and(|a| !a.is_empty() && a != app) {
+        return refusal(&Refusal::NotFound);
+    }
+    let spaces = match k2_core::tool_hook::app_spaces(app) {
+        Ok(s) => s,
+        Err(e) => return error(503, "chat_unavailable", e, None),
+    };
+    let block = crate::sew::governed::facts_for(app).and_then(|f| f.block);
+    let manifest_channels: Vec<J> = block
+        .map(|b| b.channels)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            // A manifest channel names its Space when the App has several.
+            let found = spaces
+                .iter()
+                .filter(|s| c.space.as_deref().is_none_or(|want| want == s.space_id))
+                .find_map(|s| s.channels.iter().find(|r| r.slug == c.slug).map(|r| (s.space_id.clone(), r.channel_id.clone())));
+            let (space_id, channel_id) = found.map_or((None, None), |(s, ch)| (Some(s), ch));
+            json!({ "slug": c.slug, "name": c.name, "type": c.kind, "private": c.private, "spaceId": space_id, "channelId": channel_id })
+        })
+        .collect();
+    let only = match spaces.as_slice() {
+        [one] => Some(one.space_id.clone()),
+        _ => None,
+    };
+    CliResponse::ok_json(json!({ "ok": true, "app": app, "spaceId": only, "spaces": spaces, "manifestChannels": manifest_channels }).to_string())
 }
 
 fn refusal(r: &Refusal) -> CliResponse {

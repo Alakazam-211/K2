@@ -29,6 +29,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **K2 is ready to tell Sew every live host of an App,** so calls can work on all of them. It starts once Sew supports it; until then calls work on the App's primary host (`k2 app domain primary <app> <host>`).
 - **A Tauri shell over a server App you already run:** `k2 app init --template tauri --app <app>` wires the updater to that App's host, with the download host as a second endpoint, and writes no web manifest.
 - **`k2 app init --template tauri --voice` adds the mic and camera keys for calls** on macOS and iOS, and prints the Android lines.
+- **An App's server can ask K2 for its own chat Space and channel ids:** `k2.asApp().chat.space()`, feature key `app-chat-space-v1`.
 - **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
 
 ## 0.46.7 — Apps run their own chat

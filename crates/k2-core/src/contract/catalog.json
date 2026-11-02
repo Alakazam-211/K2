@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 43,
+  "catalogVersion": 44,
   "caps": [
     {
       "name": "agents:read",
@@ -24207,6 +24207,201 @@
       ],
       "doc": "Set which of this App's private channels each of its users is in (the App's list, in full), in its own App-governed Space. Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.channels.",
       "example": "await k2.asApp().chat.setChannels({items: [{username: 'dana', channels: ['job-1042', 'job-1043']}]})"
+    },
+    {
+      "verb": "chat.space",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-chat-space-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/sew/app/space",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "Absent, or this App's own service id.",
+              "default": ""
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppChatSpace",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This App's Sew Space id, when it has exactly one; null with none or several (see spaces)."
+          },
+          "spaces": {
+            "type": "array",
+            "description": "The Spaces bound to this App (k2 hostchat app-space bind).",
+            "items": {
+              "title": "AppChatSpaceRow",
+              "type": "object",
+              "properties": {
+                "spaceId": {
+                  "type": "string"
+                },
+                "governed": {
+                  "type": "boolean",
+                  "description": "true: the App governs this Space and Sew confirmed it."
+                },
+                "channels": {
+                  "type": "array",
+                  "description": "The channels K2 keeps for this Space: the manifest's and those made with chat.channels. chat.createChannel's aren't listed; its answer has the id.",
+                  "items": {
+                    "title": "AppChatSpaceChannel",
+                    "type": "object",
+                    "properties": {
+                      "slug": {
+                        "type": "string"
+                      },
+                      "channelId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Sew's channel id; null until Sew has made it."
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "text or voice."
+                      },
+                      "private": {
+                        "type": "boolean"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "manifest",
+                          "app"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "description": "ready once Sew has made it."
+                      }
+                    },
+                    "required": [
+                      "slug",
+                      "channelId",
+                      "name",
+                      "type",
+                      "private",
+                      "source",
+                      "state"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "spaceId",
+                "governed",
+                "channels"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "manifestChannels": {
+            "type": "array",
+            "description": "The channels in the live manifest's chat block, known before any Space is bound.",
+            "items": {
+              "title": "AppChatManifestChannel",
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "text or voice."
+                },
+                "private": {
+                  "type": "boolean"
+                },
+                "spaceId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The Space it is made in; null until one is bound and K2 has it."
+                },
+                "channelId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Sew's channel id; null until Sew has made it."
+                }
+              },
+              "required": [
+                "slug",
+                "name",
+                "type",
+                "private",
+                "spaceId",
+                "channelId"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "spaceId",
+          "spaces",
+          "manifestChannels"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "chat_unavailable",
+        "failed"
+      ],
+      "doc": "This App's own Sew Space id and its manifest channels with their Sew ids, read by the App's own pass (no cap). A stable shape: only additions under app-chat-space-v1.",
+      "example": "const {spaceId, manifestChannels} = await k2.asApp().chat.space()"
     },
     {
       "verb": "project.list",

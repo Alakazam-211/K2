@@ -237,6 +237,25 @@ fn governed_flag() -> &'static str {
 }
 
 /// Bans win; a deprovisioned person is skipped and never reactivated.
+/// 0.46.8 `chat.space`: once the sync has run, the App reads its governed
+/// Space and each manifest channel's Sew id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_app_reads_its_own_space_and_channel_ids_after_the_sync() {
+    let env = setup(&[governed_flag(), "app_channel_create", "home_client", "app_origin"]).await;
+    let _ = bound_space(&env).await;
+    let spaces = hook::app_spaces(APP).expect("app spaces");
+    assert_eq!(spaces.len(), 1, "{spaces:?}");
+    assert_eq!((spaces[0].space_id.as_str(), spaces[0].governed), (SPACE, true), "{spaces:?}");
+    assert!(!spaces[0].channels.is_empty(), "{spaces:?}");
+    for c in &spaces[0].channels {
+        assert_eq!(c.source, "manifest", "{c:?}");
+        assert_eq!(c.state, governed::CH_READY, "{c:?}");
+        assert_eq!(c.channel_id.as_deref(), Some(channel_id(&env, &c.slug).as_str()), "{c:?}");
+    }
+    assert_eq!(hook::app_spaces("another-app").expect("none").len(), 0);
+    env.sew.assert_clean();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bans_win_and_a_deprovisioned_person_is_never_reactivated() {
     let env = setup(&[governed_flag()]).await;

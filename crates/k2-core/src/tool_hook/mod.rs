@@ -1788,6 +1788,15 @@ pub fn governed_view(app_id: &str) -> Result<governed::AppView, String> {
     crate::skin::with_skin_conn(|conn| governed::view(conn, app_id))
 }
 
+/// `chat.space`: the Spaces bound to `app_id` (none when chat isn't set up
+/// on this box).
+pub fn app_spaces(app_id: &str) -> Result<Vec<governed::AppSpace>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(|conn| governed::app_spaces(conn, app_id))
+}
+
 /// The App's own lists (`chat.setChannels`): stored, then synced within
 /// seconds. Returns how many changed.
 pub fn set_app_member_lists(app_id: &str, lists: &[governed::AppList], actor: &str) -> Result<usize, String> {

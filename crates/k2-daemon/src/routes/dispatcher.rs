@@ -11456,7 +11456,7 @@ async fn handle_one_request(
         // with chat:read (floor NoLogin; the handler refuses). Its own arm:
         // these paths don't start with /cli/skin (inside that branch they
         // were never reached, and an App's pass got the catch-all's 403).
-        crate::chat_map_routes::MEMBER | crate::chat_map_routes::WHOIS => {
+        crate::chat_map_routes::MEMBER | crate::chat_map_routes::WHOIS | crate::chat_map_routes::SPACE => {
             let body = if is_post {
                 super::http::read_post_body(&mut *stream, &mut buf).await
             } else {

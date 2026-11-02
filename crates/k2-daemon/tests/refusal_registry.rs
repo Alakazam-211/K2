@@ -347,6 +347,7 @@ fn every_rows_exit_is_what_the_cli_prints() {
         assert_eq!(row.exit, *exit, "{id}");
         match row.http {
             422 => assert_eq!(*exit, 1, "{id}: a 422 from build/deploy, or k2 chat's _chat_fail"),
+            _ if *id == "chat_account_pending" => assert_eq!(*exit, 1, "{id}: k2 chat's _chat_fail"),
             _ => assert!(["health_failed", "crashlooping"].contains(id), "{id}: a deployment result exits 1"),
         }
     }

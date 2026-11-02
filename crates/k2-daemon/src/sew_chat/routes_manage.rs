@@ -92,7 +92,7 @@ fn manager(c: &Caller) -> R<Admin> {
             "chat_manage_off",
             403,
             "community management needs the Manage Chat / Voice Hosting switch on your workspace — your owner or an admin turns it on \
-             (k2 agent access set <workspace> chat_manage on)",
+             (k2 agent access set <workspace> chat_manage on). It also makes your agent's own chat account",
         ));
     }
     Ok(Admin::Agent { project_id: c.project_id.clone(), label: format!("agent:{}", c.handle) })
@@ -642,7 +642,8 @@ fn owner_external_id(owner: Option<&str>) -> R<(String, String)> {
 
 /// Why a new Space needs the creating agent's chat account.
 const MANAGER_NEEDS_ACCOUNT: &str =
-    "Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one";
+    "Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one. \
+     Manage Chat / Voice Hosting makes that account by itself, so a person removed or turned off this one, or K2 couldn't make it";
 
 /// Sew's 422 for a manager it has no member for (`principal_unknown` on
 /// `managers.<n>`).
@@ -679,9 +680,14 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
     let sew = backend()?;
     // Fix A (0.46.8): Sew names only a person or an agent with its own chat
     // account a Space's manager (else 422 invalid_state, principal_unknown
-    // on managers.0). Refuse up front, before any Sew call, and say how to
-    // get the account (the `chat.account` card's wall).
+    // on managers.0). Refuse up front, before any Sew call. The switch this
+    // route already passed brings the account, so K2 makes it here if it
+    // can (the answer is then "pending"), and only an account a person
+    // removed or turned off ends at the `chat.account` card's wall.
     if assistant.is_none() && super::routes::chat_account(&c.project_id)? != super::routes::ChatAccount::Active {
+        if let Err(e) = k2_core::sew_chat::person::ensure_chat_manage_account(&c.project_id, k2_core::sew_chat::person::AutoAccount::Sweep) {
+            k2_core::log_debug!("[chat] the automatic chat account for {}: {e}", c.handle);
+        }
         return Err(super::routes::no_chat_account(c, MANAGER_NEEDS_ACCOUNT)?);
     }
     let a = act(c, m);

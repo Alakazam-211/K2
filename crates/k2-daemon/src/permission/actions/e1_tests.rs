@@ -304,7 +304,7 @@ fn the_walls_match_the_refusals() {
     assert_eq!(code("projects.manage"), ["agent_permission_off"]);
     assert_eq!(code("apps.build"), ["apps_manage_off"]);
     assert!(code("apps.manage-full").is_empty() && code("apps.core").is_empty());
-    assert_eq!(code("chat.manage"), ["chat_manage_off"]);
+    assert_eq!(code("chat.manage"), ["chat_manage_off", "not_granted"]);
     assert_eq!(code("vault.manage"), ["vault_manage_required"]);
     assert_eq!(code("gardens.manage"), ["person_only", "person_only"]);
     assert_eq!(code("dns.manage"), ["dns_manage_disabled"]);

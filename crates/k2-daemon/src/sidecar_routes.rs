@@ -1845,8 +1845,19 @@ fn handle_access(
         // S30 K21: the chat teaching follows the switch (AGENTS.md line,
         // `k2-chat` skill, `k2 hostchat` shown or hidden).
         crate::sew_chat::routes_admin::teach_refresh(&ws.path);
+        // The switch brings the agent's own chat account (Rosson
+        // 2026-11-02). It never fails the switch: with chat off or a bad
+        // handle, the worker's sweep tries again and `k2 chat` says why.
+        // Turning it off keeps the account.
+        let mut chat_account = false;
+        if value {
+            match k2_core::sew_chat::person::ensure_chat_manage_account(&ws.id, k2_core::sew_chat::person::AutoAccount::SwitchedOn) {
+                Ok(made) => chat_account = made,
+                Err(e) => k2_core::log_debug!("[chat] the automatic chat account for {}: {e}", ws.handle),
+            }
+        }
         return Ok((
-            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_manage", "agentsCanManageChat": value }),
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_manage", "agentsCanManageChat": value, "chatAccountMade": chat_account }),
             format!("ok {} chat_manage={value}", ws.handle),
         ));
     }

@@ -500,10 +500,17 @@ pub(crate) const ROWS: &[Row] = &[
         )
     },
     row(ask("chat.manage", Floor::Admin), code(403, "chat_manage_off"), "/cli/", ANY),
-    // 0.46.8: `k2 chat space create` by an agent with no chat account (fix
-    // A, refused before any Sew call), and any `k2 chat` read while the
-    // workspace has none (`not_granted` with `details.chatAccount`; plain
-    // `not_granted`, no Space access, is a person's: it can't be requested).
+    // 0.46.8 (Rosson 2026-11-02: the broad switch first). A `k2 chat` read
+    // with no chat account: "Manage Chat / Voice Hosting" while it's off
+    // (`details.chatManage`; `k2 chat space create` already stops at
+    // `chat_manage_off`). With the switch on and the account still not
+    // there: `chat.account`, for that read (`details.chatAccount`) and for
+    // create (`chat_account_needed`, refused before any Sew call). Plain
+    // `not_granted`, no Space access, is a person's: it can't be requested.
+    Row {
+        needs: Some("/error/details/chatManage"),
+        ..row(ask("chat.manage", Floor::Admin), code(403, "not_granted"), "/cli/sew/chat/", ANY)
+    },
     Row {
         fixed: &[("scope", "coworker")],
         ..row(ask("chat.account", CHAT_ACCOUNT_FLOOR), code(403, "chat_account_needed"), "/cli/sew/chat/manage/space/create", POST)
@@ -1734,6 +1741,17 @@ mod tests {
         )
         .expect("taught");
         assert_eq!(p["command"], "k2 permission request chat.account scope=coworker --why \"<what you need it for>\"", "{p}");
+        // The switch off: the broad switch first.
+        let p = teach_of(
+            403,
+            "GET",
+            "/cli/sew/chat/whoami",
+            &[],
+            None,
+            json!({"ok":false,"error":{"code":"not_granted","hint":"x","details":{"chatManage":false}}}),
+        )
+        .expect("taught");
+        assert_eq!(p["command"], "k2 permission request chat.manage --why \"<what you need it for>\"", "{p}");
         let p = teach_of(403, "GET", "/cli/sew/chat/whoami", &[], None, json!({"ok":false,"error":{"code":"not_granted","hint":"x"}}))
             .expect("a refusal");
         assert_eq!(p["requestable"], false, "Space access is a person's: {p}");

@@ -435,20 +435,49 @@ fn all_access(c: &Caller) -> R<Vec<store::Access>> {
 pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
     let all = all_access(c)?;
     if all.is_empty() {
-        // No chat account at all (0.46.8): say that first, so the agent
-        // asks for the account (the `chat.account` card) before a Space.
+        // No chat account at all (0.46.8, Rosson 2026-11-02): the broad
+        // switch first, which brings the account and lets the agent make
+        // its own Spaces; the `chat.account` card when the switch is on and
+        // the account still isn't there.
+        let manage = k2_core::workspace::settings::agents_can_manage_chat(&c.project_id);
         if !has_chat_grant(&c.project_id)? {
+            if !manage {
+                return Err(ChatErr::new(
+                    "not_granted",
+                    403,
+                    format!(
+                        "{h} has no chat account yet. To run chat for its Apps, it needs \"Manage Chat / Voice Hosting\", which also \
+                         makes its chat account, and it then makes its own Spaces: {how}. Only to take part in chat, ask for the account \
+                         alone instead of that line: k2 permission request chat.account scope=coworker --why \"<what you need it for>\"; \
+                         a person then gives it a Space: k2 chat access grant <space> {h}",
+                        h = c.handle,
+                        how = manage_how(c)
+                    ),
+                )
+                .with("chatManage", false));
+            }
             return Err(ChatErr::new(
                 "not_granted",
                 403,
                 format!(
-                    "{h} has no chat account yet. Grant the agent chat access first (its own chat account, not a Space): {how}. k2 chat answers once {h} \
-                     has its account and a Space (a person gives one: k2 chat access grant <space> {h})",
+                    "{h} has \"Manage Chat / Voice Hosting\" but no chat account (K2 makes one by itself, unless a person removed or \
+                     turned it off). Grant the agent chat access first (its own chat account, not a Space): {how}",
                     h = c.handle,
                     how = account_how(c)
                 ),
             )
             .with("chatAccount", false));
+        }
+        if manage {
+            return Err(ChatErr::new(
+                "not_granted",
+                403,
+                format!(
+                    "{h} has its chat account and no Space yet: make one (k2 chat space create <slug> --name \"<Name>\", --app <app> for an \
+                     App's own), or a person gives it one (k2 chat access grant <space> {h})",
+                    h = c.handle
+                ),
+            ));
         }
         return Err(ChatErr::new(
             "not_granted",
@@ -499,7 +528,7 @@ pub(crate) fn no_chat_account(c: &Caller, what: &str) -> R<ChatErr> {
             409,
             format!(
                 "{}'s chat account is granted but Sew is still setting it up (a few seconds after the grant). Run \
-                 this again in a few seconds",
+                 this again in a few seconds; if it stays like this past a minute, tell your human (k2 hostchat status shows Sew's health)",
                 c.handle
             ),
         )
@@ -526,6 +555,16 @@ fn account_how(c: &Caller) -> String {
         format!("ask for it with the Ask with: line below (the owner allows it), or the owner runs {grant}")
     } else {
         format!("ask your human; the owner runs {grant}")
+    }
+}
+
+/// How the agent gets "Manage Chat / Voice Hosting".
+fn manage_how(c: &Caller) -> String {
+    let set = format!("k2 agent access set {} chat_manage on", c.handle);
+    if k2_core::permission::gate::enabled_for(&c.project_id) {
+        format!("ask for it with the Ask with: line below (the owner or an admin allows it), or they run {set}")
+    } else {
+        format!("ask your human; the owner or an admin runs {set}")
     }
 }
 

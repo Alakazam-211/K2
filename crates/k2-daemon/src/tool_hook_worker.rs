@@ -1086,6 +1086,14 @@ pub struct SweepReport {
 /// One reconcile sweep over every enabled target (§16.2).
 pub async fn reconcile_once() -> Result<SweepReport, String> {
     let mut report = SweepReport::default();
+    // "Manage Chat / Voice Hosting" brings the agent's chat account: boot
+    // catches a switch turned on before this release, and enabling chat
+    // kicks this sweep for one turned on while chat was off.
+    match blocking(k2_core::sew_chat::person::ensure_chat_manage_accounts).await {
+        Ok(n) if n > 0 => log_debug!("[grant-hook] made {n} chat account(s) for Manage Chat / Voice Hosting"),
+        Ok(_) => {}
+        Err(e) => log_debug!("[grant-hook] automatic chat accounts: {e}"),
+    }
     let targets = blocking(hook::list_targets).await?;
     for t in targets.into_iter().filter(|t| t.enabled) {
         let client = MgmtClient::new(&t.socket, &t.token_file);

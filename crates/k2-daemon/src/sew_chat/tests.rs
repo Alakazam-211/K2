@@ -1346,32 +1346,90 @@ fn a_new_space_needs_the_creating_agents_own_chat_account_and_sew_is_never_calle
     routes::test_assist::clear();
 }
 
-/// A grant Sew hasn't confirmed yet: wait, don't ask again.
-#[test]
-fn a_granted_account_sew_hasnt_confirmed_yet_is_pending() {
-    let e = env();
-    set_manage(WC, true);
+fn chat_on() {
     k2_core::tool_hook::allow_target_off_linux_for_tests(true);
     k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, true, Some("/tmp/k2-test-sew.sock"), Some("/tmp/k2-test-sew.token"), "owner-token")
         .expect("chat target");
-    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
-        subject_kind: "workspace".into(),
-        subject_id: WC.into(),
-        kind: k2_core::tool_hook::CHAT_KIND.into(),
-        target_id: String::new(),
-        role: None,
-        scope: Some("coworker".into()),
-        created_by: Some("owner-token".into()),
-    })
-    .expect("gamma's chat grant");
+}
+
+fn chat_grant_of(p: &str) -> Option<k2_core::skin::SkinGrant> {
+    k2_core::skin::list_grants()
+        .expect("grants")
+        .into_iter()
+        .find(|g| g.kind == k2_core::tool_hook::CHAT_KIND && g.subject_kind == "workspace" && g.subject_id.eq_ignore_ascii_case(p))
+}
+
+/// Rosson 2026-11-02: the switch brings the account. With it on and chat
+/// on, create makes the grant itself and answers "wait", still with no Sew
+/// call; whoami then says how to get a Space.
+#[test]
+fn with_the_switch_on_create_makes_the_account_and_answers_pending() {
+    let e = env();
+    set_manage(WC, true);
+    chat_on();
     let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WC), json!({"slug": "jobs"}));
     assert_eq!((s, code(&v)), (409, "chat_account_pending"), "{v}");
     assert!(v["error"]["hint"].as_str().expect("hint").contains("Run this again in a few seconds"), "{v}");
     assert!(e.fake.calls().is_empty(), "still no Sew call");
-    // No Space access yet and an account: whoami's not_granted is the plain one.
+    let g = chat_grant_of(WC).expect("the automatic grant");
+    assert_eq!((g.scope.as_deref(), g.created_by.as_deref()), (Some("coworker"), Some(k2_core::sew_chat::person::AUTO_ACCOUNT_BY)));
     let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
     assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
-    assert!(v["error"].get("details").is_none(), "{v}");
+    assert!(v["error"].get("details").is_none(), "no card names a Space: {v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("k2 chat space create"), "{v}");
+}
+
+/// The sweep and the switch: only with the switch on and chat on; never
+/// over a grant; an account a person removed stays removed for the sweep
+/// (the mirror's tombstone) and comes back when they turn the switch on.
+#[test]
+fn the_automatic_account_follows_the_switch_and_respects_a_removal() {
+    use k2_core::sew_chat::person::{ensure_chat_manage_account as ensure, ensure_chat_manage_accounts as sweep, AutoAccount};
+    let _e = env();
+    chat_on();
+    // Nobody's switch is on yet.
+    assert_eq!(sweep().expect("sweep"), 0);
+    assert!(chat_grant_of(WC).is_none(), "switch off: no account");
+    set_manage(WC, true);
+    assert_eq!(sweep().expect("sweep"), 1, "a switch turned on earlier");
+    assert_eq!(sweep().expect("sweep"), 0, "once");
+    let g = chat_grant_of(WC).expect("made");
+    // Off keeps it.
+    set_manage(WC, false);
+    assert!(chat_grant_of(WC).is_some(), "turning the switch off keeps the account");
+    set_manage(WC, true);
+    // A person removes it; Sew confirmed it once, so the mirror has a row.
+    k2_core::tool_hook::map_member_for_tests(&format!("k2:workspace:{WC}"), "m-gamma", "agent", "gamma", k2_core::tool_hook::members::ACTIVE).expect("mirror");
+    assert!(k2_core::skin::delete_grant_by_id(&g.id).expect("removed"));
+    k2_core::tool_hook::tombstone_member_for_tests(&format!("k2:workspace:{WC}")).expect("tombstone");
+    assert_eq!(sweep().expect("sweep"), 0, "the sweep doesn't undo a person's removal");
+    assert!(chat_grant_of(WC).is_none());
+    // So chat asks for the card, with the switch on.
+    let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
+    assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
+    assert_eq!(v["error"]["details"]["chatAccount"], json!(false), "{v}");
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WC), json!({"slug": "jobs"}));
+    assert_eq!((s, code(&v)), (403, "chat_account_needed"), "{v}");
+    // A person turning the switch on again brings it back.
+    assert!(ensure(WC, AutoAccount::SwitchedOn).expect("switched on"), "the gesture");
+    assert!(chat_grant_of(WC).is_some());
+    // Never over an existing grant, an assistant's included.
+    assert!(!ensure(WC, AutoAccount::SwitchedOn).expect("again"));
+}
+
+/// The switch's own route makes the account, as an Admin or a card would.
+#[test]
+fn turning_the_switch_on_makes_the_account_and_off_keeps_it() {
+    let _e = env();
+    chat_on();
+    let on = |value: bool| crate::sidecar_routes::access_entry(&crate::permission::actions::Answerer::OwnerToken, &json!({"toggle": "chat_manage", "workspace": WC, "value": value}));
+    let r = on(true);
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    assert_eq!(serde_json::from_str::<Value>(&r.body).expect("json")["chatAccountMade"], json!(true), "{}", r.body);
+    assert_eq!(chat_grant_of(WC).expect("made").created_by.as_deref(), Some(k2_core::sew_chat::person::AUTO_ACCOUNT_BY));
+    let r = on(false);
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    assert!(chat_grant_of(WC).is_some(), "off keeps it");
 }
 
 /// K2's mirror was stale: Sew answers principal_unknown on managers.0;
@@ -1394,13 +1452,23 @@ fn sews_principal_unknown_for_the_manager_gets_the_same_words() {
 /// `k2 chat whoami` (any chat read) with no account at all says so, and
 /// carries the mark the chat.account wall reads.
 #[test]
-fn whoami_without_a_chat_account_says_grant_it_first() {
+fn whoami_without_a_chat_account_names_the_switch_first_then_the_account() {
     let _e = env();
     let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
     assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
-    assert_eq!(v["error"]["details"]["chatAccount"], json!(false), "{v}");
+    assert_eq!(v["error"]["details"]["chatManage"], json!(false), "the switch off: the broad switch: {v}");
+    assert!(v["error"]["details"].get("chatAccount").is_none(), "{v}");
     let hint = v["error"]["hint"].as_str().expect("hint");
     assert!(hint.starts_with("gamma has no chat account yet"), "{hint}");
+    assert!(hint.contains("k2 agent access set gamma chat_manage on"), "{hint}");
+    assert!(hint.contains("k2 permission request chat.account scope=coworker"), "{hint}");
+    // The switch on, chat not on to make it: the account.
+    set_manage(WC, true);
+    let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
+    assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
+    assert_eq!(v["error"]["details"]["chatAccount"], json!(false), "{v}");
+    assert!(v["error"]["details"].get("chatManage").is_none(), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
     assert!(hint.contains("k2 app grant add --kind chat --subject-kind workspace --subject gamma --scope coworker"), "{hint}");
 }
 

@@ -1416,11 +1416,13 @@ The owner sees who gets in, to which App, with which role, and what that role le
 
 ## Your own chat account
 
-`k2 chat` runs as your workspace's own chat account. With none, `k2 chat whoami` (and every `k2 chat` read) and `k2 chat space create` are refused and end with:
+`k2 chat` runs as your workspace's own chat account. "Manage Chat / Voice Hosting" makes it by itself, so an agent that runs chat for its Apps asks for that switch, not for the account.
 
-    k2 permission request chat.account scope=coworker --why "<what you need it for>"
+- The switch is off: `k2 chat whoami` (every `k2 chat` read) and `k2 chat space create` are refused and end with `k2 permission request chat.manage --why "..."`. The owner or an admin allows it. Run it as printed.
+- The switch is on and you still have no account (a person removed it): those refusals end with `k2 permission request chat.account scope=coworker --why "..."`. Run it as printed; only the owner allows it.
+- Only taking part in chat, not running it: ask for the account alone, the same `chat.account` line. With `scope=assistant:<username>` you are that person's assistant instead: they need chat of their own first (a person gives it: `k2 app user chat <username> member --app <app>`), you post for them with `k2 chat send <space>/<channel> "..." --on-behalf-of <username>`, and a Space you create as an assistant has no manager in Sew (the answer says so).
 
-Run it as printed, or with `scope=assistant:<username>` to be that person's assistant instead: you post for them with `k2 chat send <space>/<channel> "..." --on-behalf-of <username>`, and an assistant is never a Space's manager. It's only ever your own workspace's account (another workspace's agent asks for its own), and only the owner allows it. The account lasts until someone removes it. When the `[permission:]` turn says approved, wait a few seconds while Sew sets it up (`chat_account_pending` means not yet), then run your command again. A Space you didn't create still needs a person to give you access (`k2 chat access grant`).
+`chat.account` is only ever your own workspace's account (another workspace's agent asks for its own). The account lasts until someone removes it. After an approval, wait a few seconds while Sew sets it up (`chat_account_pending` means not yet), then run your command again. A Space you didn't create still needs a person to give you access (`k2 chat access grant`).
 
 ## Email sending
 

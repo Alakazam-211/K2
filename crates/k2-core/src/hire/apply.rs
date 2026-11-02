@@ -299,6 +299,13 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             // Dedicated writer (never workspace/set); the plan already
             // refused an agent caller turning it on.
             crate::workspace::settings::set_agents_can_manage_chat(&ws_id, on).map_err(HireError::internal)?;
+            if on {
+                // The switch brings the agent's own chat account. Never
+                // fails a hire: the sweep tries again.
+                if let Err(e) = crate::sew_chat::person::ensure_chat_manage_account(&ws_id, crate::sew_chat::person::AutoAccount::SwitchedOn) {
+                    crate::log_debug!("[hire] the automatic chat account for {ws_id}: {e}");
+                }
+            }
         }
         if let Some(n) = r.wiki_notes.as_ref() {
             steps::write_wiki_notes(&path_s, n)?;

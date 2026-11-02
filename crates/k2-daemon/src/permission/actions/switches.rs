@@ -258,6 +258,14 @@ pub(crate) const fn off_spec(
 }
 
 const CORE: &[ParamSpec] = &[ParamSpec { key: "core", kind: ParamKind::Core, required: true, list: false, choices: &[] }];
+/// `chat.manage`'s walls: its own refusal, and (0.46.8) a `k2 chat` read
+/// with no chat account while the switch is off (the walls map reads
+/// `details.chatManage`; the switch brings the account).
+const CHAT_MANAGE_WALLS: &[Wall] = &[
+    code_wall("chat_manage_off", "/cli/"),
+    code_wall("not_granted", "/cli/sew/chat/"),
+];
+
 /// `mail.send-mode`'s walls: a gated send, and (0.46.8) the agent's own
 /// `k2 mail sending <its workspace> approval|on` (`owner_only`; the walls
 /// map teaches it only for the agent's own workspace).
@@ -494,8 +502,8 @@ pub(crate) static SWITCHES: [Switch; 17] = [
             &[],
             "Manage Chat / Voice Hosting",
             "Let {ws} run Chat / Voice Hosting on this server and manage its communities",
-            "It may enable, upgrade, back up and roll back Chat / Voice Hosting here.",
-            &[code_wall("chat_manage_off", "/cli/")],
+            "It may enable, upgrade, back up and roll back Chat / Voice Hosting here. It gets its own chat account too, as a coworker, if it has none.",
+            CHAT_MANAGE_WALLS,
             WallCoverage::Code,
         ),
         off: off_spec(
@@ -504,7 +512,7 @@ pub(crate) static SWITCHES: [Switch; 17] = [
             &[],
             "Manage Chat / Voice Hosting",
             "Stop {ws} running Chat / Voice Hosting",
-            "Chat / Voice Hosting keeps running; managing it goes back to the owner and admins.",
+            "Chat / Voice Hosting keeps running; managing it goes back to the owner and admins. Its chat account stays.",
         ),
         writer: Writer::Access("chat_manage"),
     },

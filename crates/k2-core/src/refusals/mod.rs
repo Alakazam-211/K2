@@ -119,8 +119,9 @@ pub const EXIT_OVERRIDES: &[(&str, u8)] = &[
     ("lockfile_required", 1),
     ("seed_invalid", 1),
     // `k2 chat` and `k2 hostchat` print a refusal with `_chat_fail`: a 422
-    // (Sew's invalid_state passed through) exits 1.
+    // (Sew's invalid_state passed through) or a 409 exits 1.
     ("invalid_state", 1),
+    ("chat_account_pending", 1),
 ];
 
 /// A live row with the CLI's exit for `http`.

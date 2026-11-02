@@ -102,6 +102,19 @@ fn an_assistant_account_names_the_person_it_speaks_for() {
     let ws = seed("caa");
     let dana = format!("dana{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
     let p = k2_core::skin::add_principal(&dana).expect("a person");
+    // An assistant's person needs their own chat first: said at the ask.
+    let hint = ask_refused(&ws, ACTION, json!({ "scope": format!("assistant:{dana}") }));
+    assert!(hint.contains(&format!("{dana} has no chat of their own yet")), "{hint}");
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: p.id.clone(),
+        kind: CHAT_KIND.into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("member".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("dana's chat");
 
     let asked = ask_ok(&ws, ACTION, json!({ "scope": format!("assistant:{dana}") }));
     let card = card_of(&asked);

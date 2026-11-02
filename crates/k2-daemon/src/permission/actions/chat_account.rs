@@ -7,11 +7,18 @@
 //! manager of a Space it creates (`k2 chat space create … --app`): Sew
 //! names only a person or an agent with its own account a manager.
 //!
+//! **The broad switch comes first (Rosson 2026-11-02).** An agent with
+//! "Manage Chat / Voice Hosting" on gets this account by itself
+//! (`k2_core::sew_chat::person::ensure_chat_manage_account`), so this card
+//! is for an agent without the switch that only takes part in chat, and
+//! for one whose account a person removed.
+//!
 //! The walls (cards on): an agent's own `k2 app grant add --kind chat
 //! --subject-kind workspace --subject <its own workspace>` (`owner_only`),
 //! `k2 chat space create` refused up front with `chat_account_needed`, and
-//! any `k2 chat` read refused `not_granted` while the workspace has no
-//! account (`error.details.chatAccount`).
+//! any `k2 chat` read refused `not_granted` while the switch is on and the
+//! workspace has no account (`error.details.chatAccount`; with the switch
+//! off that read teaches `chat.manage`).
 //!
 //! - **Who asks:** an agent, for its own workspace only: the card has no
 //!   workspace value (the workspace comes from the passport), and the
@@ -102,6 +109,14 @@ pub(crate) struct Scope {
     pub person: Option<String>,
 }
 
+/// An assistant's person needs their own member chat grant first (the
+/// grant's own rule), said at the ask, not as a failure at the click.
+fn person_has_chat(person_id: &str) -> Result<bool, String> {
+    Ok(k2_core::skin::list_grants()?.into_iter().any(|g| {
+        g.kind == CHAT_KIND && g.subject_kind == "principal" && g.subject_id == person_id && g.enabled && g.scope.as_deref() == Some("member")
+    }))
+}
+
 pub(crate) fn scope_of(ctx: &Ctx) -> Result<Scope, String> {
     let raw = text_param(ctx, "scope").unwrap_or(DEFAULT_SCOPE);
     let (kw, rest) = match raw.split_once(':') {
@@ -121,6 +136,12 @@ pub(crate) fn scope_of(ctx: &Ctx) -> Result<Scope, String> {
                 .ok_or_else(|| format!("there's no person named {want} on this server (k2 app user list)"))?;
             if k2_core::skin::principal_agent_workspace(&found.id).map_err(|e| e.to_string())?.is_some() {
                 return Err(format!("{} is an agent's login: an agent assists a person, never another agent", found.username));
+            }
+            if !person_has_chat(&found.id)? {
+                return Err(format!(
+                    "{} has no chat of their own yet, and an assistant needs that person in chat first: a person gives it (k2 app user chat {} member --app <app>), then ask again",
+                    found.username, found.username
+                ));
             }
             Ok(Scope { stored: format!("assistant:{}", found.id), label: format!("{}'s assistant", found.username), person: Some(found.username) })
         }

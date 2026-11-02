@@ -54,8 +54,8 @@ THE ORDER
       k2 chat space create <slug> --name "<Name>" --owner <owner-user>
       k2 hostchat app-space bind <app> <space.id from the answer>
     If a workspace has that name too, write @<owner-user> (else 400
-    agent_owner). Your Server acts as this person to make channels. Exit 3
-    chat_account_needed: your agent needs its own chat account. The Owner:
+    agent_owner). Your Server acts as this person to make channels.
+    chat_account_pending: run it again in a few seconds. chat_account_needed: the Owner:
     k2 app grant add --kind chat --subject-kind workspace --subject <ws> --scope coworker
     (or the Agent asks: k2 permission request chat.account scope=coworker); retry.
  6. Roles (Owner, or Agent with "manage its Apps' users"):

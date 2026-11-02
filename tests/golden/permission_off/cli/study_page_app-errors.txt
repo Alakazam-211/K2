@@ -400,6 +400,10 @@ CHAT (an App's chat key, the Spaces it governs, an agent's chat account)
       with (k2 permission request chat.account scope=coworker). Or the owner
       runs k2 app grant add --kind chat --subject-kind workspace --subject
       <ws> --scope coworker. Then run it again.
+  chat_account_pending (exit 1)
+      fix: Run the command again in a few seconds. If it stays like this
+      past a minute, tell your human (k2 hostchat status shows Sew's
+      health).
   chat_key_required (exit 3)
       fix: The owner gives it one, in person: k2 app grant <app> --kind
       chat-key (an agent asks on a card: k2 permission request apps.chat-key

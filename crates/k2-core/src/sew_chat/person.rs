@@ -93,6 +93,92 @@ pub fn has_chat_grant(project_id: &str) -> Result<bool, String> {
     crate::skin::with_skin_conn(|conn| has_chat_grant_in(conn, project_id))
 }
 
+/// Who K2 stamps on a chat grant it made because "Manage Chat / Voice
+/// Hosting" is on.
+pub const AUTO_ACCOUNT_BY: &str = "auto:chat_manage";
+
+/// Why [`ensure_chat_manage_account`] looks at a workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoAccount {
+    /// A person just turned the switch on: that gesture also brings back
+    /// an account someone removed earlier.
+    SwitchedOn,
+    /// A sweep or a chat call: an account a person removed stays removed
+    /// (K2's member mirror still has its row) until they turn the switch
+    /// on again or the agent asks on a card.
+    Sweep,
+}
+
+/// "Manage Chat / Voice Hosting" on means the agent has its own chat
+/// account (Rosson 2026-11-02: an agent with the switch manages end to
+/// end, so no second ask). Makes the workspace's `coworker` grant when the
+/// switch is on, chat is on, and it has no grant at all. Never touches an
+/// existing grant: an assistant stays one, and a grant a person turned off
+/// stays off. Turning the switch off keeps the account. `Ok(true)` = made.
+pub fn ensure_chat_manage_account(project_id: &str, why: AutoAccount) -> Result<bool, String> {
+    if !crate::tool_hook::skin_store_exists() || !crate::workspace::settings::agents_can_manage_chat(project_id) {
+        return Ok(false);
+    }
+    let ext = format!("k2:workspace:{}", project_id.trim().to_ascii_lowercase());
+    let wanted = crate::skin::with_skin_conn(|conn| {
+        if !crate::tool_hook::outbox::target_enabled(conn, crate::tool_hook::CHAT_KIND)? {
+            return Ok(false);
+        }
+        let any_grant = conn
+            .query_row(
+                "SELECT 1 FROM grants WHERE kind = 'chat' AND subject_kind = 'workspace' AND lower(subject_id) = lower(?1) LIMIT 1",
+                params![project_id.trim()],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| format!("chat grant lookup: {e}"))?
+            .is_some();
+        if any_grant {
+            return Ok(false);
+        }
+        let removed = why == AutoAccount::Sweep && crate::tool_hook::members::by_external_id(conn, &ext)?.is_some();
+        Ok(!removed)
+    })?;
+    if !wanted {
+        return Ok(false);
+    }
+    crate::skin::create_grant(&crate::skin::SkinGrantWrite {
+        subject_kind: "workspace".into(),
+        subject_id: project_id.trim().to_string(),
+        kind: crate::tool_hook::CHAT_KIND.into(),
+        target_id: crate::tool_hook::CHAT_TARGET_ID.into(),
+        role: None,
+        scope: Some("coworker".into()),
+        created_by: Some(AUTO_ACCOUNT_BY.into()),
+    })?;
+    Ok(true)
+}
+
+/// The sweep: every workspace with the switch on (one turned on before
+/// this release, or before chat was enabled). One workspace's failure
+/// doesn't stop the others; returns how many accounts it made.
+pub fn ensure_chat_manage_accounts() -> Result<usize, String> {
+    if !crate::tool_hook::skin_store_exists() {
+        return Ok(0);
+    }
+    let ids: Vec<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let mut st = conn.prepare("SELECT id FROM projects WHERE agents_can_manage_chat = 1").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+    };
+    let mut made = 0;
+    for id in ids {
+        match ensure_chat_manage_account(&id, AutoAccount::Sweep) {
+            Ok(true) => made += 1,
+            Ok(false) => {}
+            Err(e) => crate::log_debug!("[chat] the automatic chat account for {id}: {e}"),
+        }
+    }
+    Ok(made)
+}
+
 /// The Sew external id of the person behind a Connect login: an
 /// owner-linked login is the owner (`k2:owner`, S27: one person, one
 /// member); any other login is `k2:connect:<login>` (never an assistant's

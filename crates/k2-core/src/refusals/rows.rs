@@ -298,9 +298,13 @@ pub(super) const ROWS: &[Refusal] = &[
         "Name one of this App's Spaces (k2 app chat <app> lists them), or leave space out when the App has only one."),
     r("channel_type_mismatch", "chat", 409, Who::Agent, "A channel with that slug already exists with the other type (text or voice); Sew never changes a channel's type.",
         "Use another slug for the new channel, or keep the type the channel has."),
-    r("chat_account_needed", "chat", 403, Who::Owner, "The agent has no chat account of its own, and the call needs one: Sew makes the agent that creates a Space (k2 chat space create, --app too) its manager.",
+    r("chat_account_needed", "chat", 403, Who::Owner, "The agent has no chat account of its own, and the call needs one: Sew makes the agent that creates a Space (k2 chat space create, --app too) its manager. \"Manage Chat / Voice Hosting\" makes the account by itself, so a person removed or turned off this one.",
         "You ask, the owner allows: run the Ask with: line the error ends with (k2 permission request chat.account scope=coworker). Or the owner runs k2 app grant add --kind chat --subject-kind workspace --subject <ws> --scope coworker. Then run it again.")
         .ask(),
+    // `k2 chat` (`_chat_fail`) exits 1 on a 409.
+    r("chat_account_pending", "chat", 409, Who::K2, "The agent's chat account is granted, and Sew is still setting it up.",
+        "Run the command again in a few seconds. If it stays like this past a minute, tell your human (k2 hostchat status shows Sew's health).")
+        .exit(1),
     r("chat_key_required", "chat", 409, Who::Owner, "The App has no chat key, so it can't set its people's channels or make channels in its Spaces.",
         "The owner gives it one, in person: k2 app grant <app> --kind chat-key (an agent asks on a card: k2 permission request apps.chat-key app=<app>)."),
     r("chat_unavailable", "chat", 409, Who::Owner, "Chat / Voice Hosting isn't set up on this server (or K2 can't read its chat store right now).",

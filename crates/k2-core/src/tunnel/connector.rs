@@ -1314,10 +1314,12 @@ pub fn start(
                 .to_string(),
         );
     }
-    // 0.46.8 relay name binding: the proxy is named from the label the
-    // control plane confirmed for this token (cached; one fetch when not),
-    // never from the requested `subdomain`. None → frpc logs in with no
-    // proxy and a retry loop asks again (never `k2so-daemon`).
+    // 0.46.8 relay name binding, opt-in (K2_TUNNEL_PROXY_NAME=confirmed): the
+    // proxy is named from the label the control plane confirmed for this
+    // token (cached; one fetch when not), never from the requested
+    // `subdomain`. None → frpc logs in with no proxy and a retry loop asks
+    // again (never `k2so-daemon`). By default this asks nothing and the proxy
+    // keeps today's name; the voice lane finds its own label.
     let mut label_pending = false;
     if !super::confirmed_label::config_naming() {
         match super::confirmed_label::resolve(&cfg) {

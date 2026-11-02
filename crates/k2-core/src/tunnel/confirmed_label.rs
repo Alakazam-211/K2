@@ -16,13 +16,20 @@
 //!   per token (a hash of it, never the token), so a restart or a box whose
 //!   control plane is unreachable at boot keeps its name. Every `/subdomains`
 //!   fetch (the routing-map refresh) renews it.
-//! - **None:** no confirmed label → no tunnel proxy is rendered (never
-//!   `k2so-daemon`), the reason is logged, and the connector keeps asking
-//!   the control plane until it answers ([`super::connector`]).
-//! - **Off switch:** `K2_TUNNEL_PROXY_NAME=config` in the daemon's
-//!   environment brings back the pre-0.46.8 naming from `subdomain` (the old
-//!   path, kept until the confirmed name is proven; Rosson's keep-the-old-
-//!   path rule). Remove it in the release after the relay enforces names.
+//! - **Who uses it, by default:** the voice lane only. The main tunnel's
+//!   proxies keep today's names from `subdomain` (`K2_TUNNEL_PROXY_NAME`
+//!   unset, or `config`): with confirmed names, a box whose label the control
+//!   plane doesn't confirm would log in and serve nothing, and that hasn't
+//!   been tried against a real token yet. Keep-the-old-path rule: the flip
+//!   comes after a live check on the voice test boxes.
+//! - **Opt-in:** `K2_TUNNEL_PROXY_NAME=confirmed` in the daemon's environment
+//!   names the main tunnel's proxies from the confirmed label too. Then:
+//!   no confirmed label → no tunnel proxy is rendered (never `k2so-daemon`),
+//!   the reason is logged, and the connector keeps asking the control plane
+//!   until it answers ([`super::connector`]).
+//! - **The voice lane** always wants the confirmed label, whichever way the
+//!   main tunnel is named: [`voice_label`] (no network), [`voice_label_or_ask`]
+//!   (armed, preview on: asks at most every [`VOICE_ASK_EVERY`]).
 
 use std::path::PathBuf;
 
@@ -30,12 +37,59 @@ use serde::{Deserialize, Serialize};
 
 use super::config::TunnelConfig;
 
-/// Env switch: `config` = the pre-0.46.8 proxy naming from `subdomain`.
+/// How the main tunnel's proxies are named: `confirmed` = from the
+/// server-confirmed label (opt-in); anything else, or unset, = today's naming
+/// from `subdomain`.
 pub const PROXY_NAME_ENV: &str = "K2_TUNNEL_PROXY_NAME";
+/// The opt-in value of [`PROXY_NAME_ENV`].
+pub const PROXY_NAME_CONFIRMED: &str = "confirmed";
+/// How often an armed voice lane asks the control plane for a label it
+/// doesn't have.
+pub const VOICE_ASK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The old naming is forced on (`K2_TUNNEL_PROXY_NAME=config`).
+/// The main tunnel is named from `subdomain`, as before 0.46.8: the default.
+/// Only `K2_TUNNEL_PROXY_NAME=confirmed` turns it off, so a typo keeps today's
+/// names and never a box that serves nothing.
 pub fn config_naming() -> bool {
-    std::env::var(PROXY_NAME_ENV).is_ok_and(|v| v.trim().eq_ignore_ascii_case("config"))
+    !std::env::var(PROXY_NAME_ENV).is_ok_and(|v| v.trim().eq_ignore_ascii_case(PROXY_NAME_CONFIRMED))
+}
+
+/// The label the voice lane uses for `cfg` without asking anyone: the one
+/// the connector resolved, else the cache (every `/subdomains` fetch renews
+/// it). Never the requested `subdomain`: the relay takes only the exact
+/// `k2voice-<label>` of the confirmed label.
+pub fn voice_label(cfg: &TunnelConfig) -> Option<String> {
+    cfg.confirmed_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| label_ok(l))
+        .map(str::to_string)
+        .or_else(|| cached(&cfg.token))
+}
+
+/// [`voice_label`], asking the control plane when there's none, at most
+/// every [`VOICE_ASK_EVERY`]. Only for a voice lane that is armed with the
+/// preview on, and the tunnel tier's own commands: with the preview off,
+/// this never runs and a box makes no extra call.
+pub fn voice_label_or_ask(cfg: &TunnelConfig) -> Option<String> {
+    if let Some(l) = voice_label(cfg) {
+        return Some(l);
+    }
+    static LAST_ASK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST_ASK.lock().unwrap_or_else(|p| p.into_inner());
+        if !cfg!(test) && last.is_some_and(|t| t.elapsed() < VOICE_ASK_EVERY) {
+            return None;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    match resolve(cfg) {
+        Ok(l) => Some(l),
+        Err(why) => {
+            crate::log_debug!("[tunnel] the voice lane has no confirmed label yet ({why}); asking again in {VOICE_ASK_EVERY:?}");
+            None
+        }
+    }
 }
 
 /// One k2.dev label: 1–63 of `[a-z0-9-]`, no leading or trailing hyphen.
@@ -157,6 +211,43 @@ mod tests {
         for bad in ["", "Rosson", "rosson.k2.dev", "staging.rosson", "-a", "a-", "a_b", &"a".repeat(64)] {
             assert!(!label_ok(bad), "{bad}");
         }
+    }
+
+    /// Today's naming is the default; only the exact opt-in leaves it, so
+    /// a typo can't leave a box serving nothing.
+    #[test]
+    fn the_main_tunnel_keeps_todays_naming_unless_confirmed_is_asked_for() {
+        {
+            let _unset = crate::test_env::EnvVar::remove(PROXY_NAME_ENV);
+            assert!(config_naming(), "unset");
+        }
+        for v in ["config", "CONFIG", "", "confirm", "true"] {
+            let _v = crate::test_env::EnvVar::set(PROXY_NAME_ENV, v);
+            assert!(config_naming(), "{v:?}");
+        }
+        for v in ["confirmed", " Confirmed "] {
+            let _v = crate::test_env::EnvVar::set(PROXY_NAME_ENV, v);
+            assert!(!config_naming(), "{v:?}");
+        }
+    }
+
+    /// The voice lane's label: the resolved one, else the cache, never the
+    /// requested `subdomain`; asking fills the cache and a refusal is `None`.
+    #[test]
+    fn the_voice_label_is_always_a_confirmed_one() {
+        with_temp_home(|| {
+            let mut cfg = TunnelConfig { token: "tok-v".into(), subdomain: "staging.rosson".into(), ..Default::default() };
+            assert_eq!(voice_label(&cfg), None, "the request never counts");
+            *TEST_SOURCE.lock().unwrap() = Some(|_| Err("the fake control plane is unreachable".into()));
+            assert_eq!(voice_label_or_ask(&cfg), None);
+            *TEST_SOURCE.lock().unwrap() = Some(|_| Ok("rosson".into()));
+            assert_eq!(voice_label_or_ask(&cfg).as_deref(), Some("rosson"));
+            assert_eq!(voice_label(&cfg).as_deref(), Some("rosson"), "from the cache now");
+            cfg.confirmed_label = Some("box2".into());
+            assert_eq!(voice_label(&cfg).as_deref(), Some("box2"), "what the connector resolved comes first");
+            cfg.confirmed_label = Some("Not.A.Label".into());
+            assert_eq!(voice_label(&cfg).as_deref(), Some("rosson"));
+        });
     }
 
     #[test]

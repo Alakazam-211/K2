@@ -34,12 +34,12 @@ use super::config::{RelayEndpoint, TunnelConfig};
 ///     `localPort` (the daemon's rustls HTTPS listener port), which
 ///     terminates TLS itself. The relay never sees plaintext.
 ///
-/// The proxy is named `k2so-<label>` from the SERVER-CONFIRMED label
-/// (`cfg.confirmed_label`, 0.46.8 relay name binding), never from the
-/// requested `subdomain`: the relay will accept only that exact name. With
-/// no confirmed label NO proxy is rendered (never `k2so-daemon`); the
-/// connector logs why. `subdomain` still goes out as the requested label.
-/// `K2_TUNNEL_PROXY_NAME=config` restores the pre-0.46.8 naming.
+/// The proxy is named deterministically per subdomain, so a restart reuses
+/// the same name: `k2so-<subdomain>`, or `k2so-daemon` when none is set.
+/// `K2_TUNNEL_PROXY_NAME=confirmed` (opt-in, 0.46.8 relay name binding) names
+/// it `k2so-<label>` from the SERVER-CONFIRMED label (`cfg.confirmed_label`)
+/// instead; then with no confirmed label NO proxy is rendered and the
+/// connector logs why. `subdomain` goes out as the requested label either way.
 pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> String {
     render_frpc_toml_with(cfg, local_port, e2e, &custom_for_render())
 }
@@ -175,9 +175,11 @@ pub fn render_frpc_toml_for_relay_with(
     render_frpc_toml_with(&c, local_port, e2e, custom)
 }
 
-/// The label that names the proxies: the server-confirmed one (a valid
-/// k2.dev label), or under `K2_TUNNEL_PROXY_NAME=config` the requested
-/// `subdomain` as before 0.46.8. `None` = no proxy.
+/// The label that names the main tunnel's proxies: the requested `subdomain`
+/// (the default), or under `K2_TUNNEL_PROXY_NAME=confirmed` the
+/// server-confirmed one. `None` = no subdomain to name a custom proxy from
+/// (and, opt-in, no main proxy either). The voice lane doesn't use this:
+/// [`confirmed_label_of`].
 pub fn proxy_label(cfg: &TunnelConfig) -> Option<String> {
     proxy_label_in(cfg, super::confirmed_label::config_naming())
 }
@@ -187,12 +189,17 @@ fn proxy_label_in(cfg: &TunnelConfig, config_naming: bool) -> Option<String> {
         let sub = cfg.subdomain.trim();
         return (!sub.is_empty()).then(|| sub.to_string());
     }
+    confirmed_label_of(cfg)
+}
+
+/// `cfg.confirmed_label`, when it is a valid k2.dev label.
+pub fn confirmed_label_of(cfg: &TunnelConfig) -> Option<String> {
     cfg.confirmed_label.as_deref().map(str::trim).filter(|l| super::confirmed_label::label_ok(l)).map(str::to_string)
 }
 
-/// The main frpc's proxy name: `k2so-<confirmed label>`; `None` = no
-/// proxy. (`K2_TUNNEL_PROXY_NAME=config`: the pre-0.46.8 `k2so-<subdomain>`
-/// or `k2so-daemon`.)
+/// The main frpc's proxy name: `k2so-<subdomain>` or `k2so-daemon` (the
+/// default). `K2_TUNNEL_PROXY_NAME=confirmed`: `k2so-<confirmed label>`, and
+/// `None` = no proxy.
 pub fn main_proxy_name(cfg: &TunnelConfig) -> Option<String> {
     main_proxy_name_in(cfg, super::confirmed_label::config_naming())
 }
@@ -228,11 +235,11 @@ pub const VOICE_LOCAL_PORT: u16 = 5349;
 /// `k2voice-<label>`, for `turn.<label>.k2.dev` → `127.0.0.1:5349` with a
 /// PROXY v2 header. No `transport.tcpMux` line: frp's default (on) is what
 /// frps requires; isolation comes from the separate process and TCP
-/// connection. `<label>` is the server-confirmed label ([`proxy_label`]),
-/// never the requested `subdomain`. `None` without one (no proxy, so no
-/// lane).
+/// connection. `<label>` is the server-confirmed label
+/// ([`confirmed_label_of`]) however the main tunnel is named, never the
+/// requested `subdomain`. `None` without one (no proxy, so no lane).
 pub fn render_voice_frpc_toml(cfg: &TunnelConfig, relay: &RelayEndpoint) -> Option<String> {
-    let label = proxy_label(cfg)?;
+    let label = confirmed_label_of(cfg)?;
     let label = label.as_str();
     let mut out = String::new();
     out.push_str("# K2 voice lane (frpc-voice): auto-generated frpc config.\n");
@@ -408,6 +415,7 @@ mod tests {
 
     #[test]
     fn empty_subdomain_omits_subdomain_key_and_keeps_the_confirmed_name() {
+        let _naming = crate::test_env::EnvVar::set(super::super::confirmed_label::PROXY_NAME_ENV, "confirmed");
         let mut cfg = sample();
         cfg.subdomain = String::new();
         let toml = render_frpc_toml(&cfg, 57839, false);
@@ -419,10 +427,51 @@ mod tests {
         assert!(!toml.contains("k2so-daemon"), "{toml}");
     }
 
-    /// Relay name binding (0.46.8): the proxy names come from the label the
-    /// control plane confirmed, whatever the requested `subdomain` says.
+    /// The default (0.46.8): the main tunnel's names stay what they are today,
+    /// whatever the control plane confirms, and only the voice lane uses the
+    /// confirmed label. A box with no confirmed label still serves.
+    #[test]
+    fn by_default_the_main_tunnel_keeps_todays_names_and_only_voice_is_confirmed() {
+        let relay = RelayEndpoint { host: "relay.k2.dev".into(), port: 7000 };
+        for setting in [None, Some("config"), Some("typo")] {
+            let _naming = match setting {
+                Some(v) => crate::test_env::EnvVar::set(super::super::confirmed_label::PROXY_NAME_ENV, v),
+                None => crate::test_env::EnvVar::remove(super::super::confirmed_label::PROXY_NAME_ENV),
+            };
+            for confirmed in [Some("rosson"), None, Some("Not.A.Label")] {
+                let mut cfg = sample();
+                cfg.confirmed_label = confirmed.map(str::to_string);
+                cfg.subdomain = "old-box".into();
+                let names = ["a.example.com".to_string()];
+                let main = render_frpc_toml_with(&cfg, 57839, true, &names);
+                assert!(main.contains("name = \"k2so-old-box\""), "{setting:?} {confirmed:?}\n{main}");
+                assert!(main.contains("name = \"k2-custom-old-box\""), "{main}");
+                assert!(main.contains("subdomain = \"old-box\""), "{main}");
+                assert_eq!(main_proxy_name(&cfg).as_deref(), Some("k2so-old-box"));
+                let voice = render_voice_frpc_toml(&cfg, &relay);
+                match confirmed {
+                    Some("rosson") => {
+                        let v = voice.expect("a confirmed label");
+                        assert!(v.contains("name = \"k2voice-rosson\"") && v.contains("turn.rosson.k2.dev"), "{v}");
+                    }
+                    _ => assert_eq!(voice, None, "the requested name never reaches the voice lane"),
+                }
+                // No subdomain: `k2so-daemon`, as ever, and no custom proxy.
+                cfg.subdomain = String::new();
+                let toml = render_frpc_toml_with(&cfg, 57839, true, &names);
+                assert!(toml.contains("[[proxies]]\nname = \"k2so-daemon\""), "{toml}");
+                assert!(!toml.contains("k2-custom-"), "{toml}");
+                assert!(!toml.contains("subdomain ="), "{toml}");
+            }
+        }
+    }
+
+    /// Relay name binding (opt-in, `K2_TUNNEL_PROXY_NAME=confirmed`): the proxy
+    /// names come from the label the control plane confirmed, whatever the
+    /// requested `subdomain` says.
     #[test]
     fn stale_or_odd_subdomains_still_name_the_confirmed_label() {
+        let _naming = crate::test_env::EnvVar::set(super::super::confirmed_label::PROXY_NAME_ENV, "confirmed");
         let relay = RelayEndpoint { host: "relay.k2.dev".into(), port: 7000 };
         for requested in ["old-box", "rosson.k2.dev", "staging.rosson", "Rosson", "", "  rosson  "] {
             let mut cfg = sample();
@@ -440,10 +489,12 @@ mod tests {
         }
     }
 
-    /// No confirmed label: no tunnel proxy at all (never `k2so-daemon`),
-    /// and no voice lane. An invalid confirmation counts as none.
+    /// Opt-in, no confirmed label: no tunnel proxy at all (never
+    /// `k2so-daemon`), and no voice lane. An invalid confirmation counts as
+    /// none.
     #[test]
     fn no_confirmed_label_renders_no_proxy() {
+        let _naming = crate::test_env::EnvVar::set(super::super::confirmed_label::PROXY_NAME_ENV, "confirmed");
         let relay = RelayEndpoint { host: "relay.k2.dev".into(), port: 7000 };
         for confirmed in [None, Some(""), Some("Rosson"), Some("rosson.k2.dev")] {
             let mut cfg = sample();
@@ -460,9 +511,9 @@ mod tests {
         }
     }
 
-    /// The off switch (`K2_TUNNEL_PROXY_NAME=config`): the pre-0.46.8 names.
+    /// The two namings, side by side.
     #[test]
-    fn the_config_switch_restores_the_old_naming() {
+    fn config_naming_uses_the_subdomain_and_confirmed_naming_the_label() {
         let mut cfg = sample();
         cfg.confirmed_label = Some("rosson".into());
         cfg.subdomain = "old-box".into();

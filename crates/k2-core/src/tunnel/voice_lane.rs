@@ -352,12 +352,15 @@ fn want() -> Option<Want> {
     if !ARMED.load(Ordering::SeqCst) || !preview_enabled() {
         return None;
     }
-    let (cfg, relay, e2e, frpc) = connector::voice_follow()?;
+    let (mut cfg, relay, e2e, frpc) = connector::voice_follow()?;
     if !e2e {
         return None;
     }
+    // Always the confirmed label, however the main tunnel is named: its own
+    // config has one only under K2_TUNNEL_PROXY_NAME=confirmed.
+    let label = super::confirmed_label::voice_label_or_ask(&cfg)?;
+    cfg.confirmed_label = Some(label.clone());
     let rendered = render_voice_frpc_toml(&cfg, &relay)?;
-    let label = super::render::proxy_label(&cfg)?;
     Some(Want { label, relay, rendered, frpc })
 }
 
@@ -574,7 +577,7 @@ pub fn status() -> VoiceLaneStatus {
     let preview = preview_enabled();
     let armed = armed();
     let follow = connector::voice_follow();
-    let label = follow.as_ref().and_then(|(c, ..)| super::render::proxy_label(c));
+    let label = follow.as_ref().and_then(|(c, ..)| super::confirmed_label::voice_label(c));
     let l = lane();
     let (failures, last_error) = l.health.as_ref().map(|h| h.snapshot()).unwrap_or((0, None));
     let registered = l.registered();

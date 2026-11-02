@@ -180,10 +180,13 @@ pub trait SewOps: Send + Sync {
         serde_json::to_value(k2_core::tunnel::voice_lane::status()).unwrap_or(Value::Null)
     }
     /// The label the control plane confirmed for the tunnel token (relay
-    /// name binding; `None` until it has, once).
+    /// name binding): the cache, else one question to the control plane,
+    /// since the main tunnel only resolves it under
+    /// `K2_TUNNEL_PROXY_NAME=confirmed`. The tunnel tier's commands only;
+    /// `None` until it has answered.
     fn confirmed_label(&self) -> Option<String> {
         let cfg = k2_core::tunnel::config::load().ok()?;
-        k2_core::tunnel::confirmed_label::cached(&cfg.token)
+        k2_core::tunnel::confirmed_label::voice_label_or_ask(&cfg)
     }
     /// The tunnel is end-to-end encrypted (the relay passes `turn.<label>`
     /// only for E2E labels).

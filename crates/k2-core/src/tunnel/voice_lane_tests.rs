@@ -205,15 +205,62 @@ fn set_source(f: fn(&TunnelConfig) -> Result<String, String>) {
     *crate::tunnel::confirmed_label::TEST_SOURCE.lock().unwrap() = Some(f);
 }
 
-/// Relay name binding (0.46.8): both frpcs are named from the label the
-/// control plane confirmed, whatever tunnel.json requests; with none, the
-/// main frpc renders no proxy (never `k2so-daemon`) and the tunnel restarts
-/// with its proxy once the control plane answers.
+/// The default (0.46.8): the main frpc keeps today's name and serves whatever
+/// the control plane says, without asking it; the voice lane, armed with the
+/// preview on, asks for the confirmed label and comes up on it. The main
+/// tunnel never restarts for it.
+#[test]
+fn by_default_the_main_frpc_keeps_its_name_and_the_voice_lane_gets_the_confirmed_one() {
+    with_temp_home(|| {
+        let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
+        let _naming = crate::test_env::EnvVar::remove(crate::tunnel::confirmed_label::PROXY_NAME_ENV);
+        let dir = crate::test_env::unique_temp_path("voice-lane-default-names");
+        let script = fake_frpc(&dir);
+        set_source(confirms_nothing);
+        config::save(&TunnelConfig {
+            server_addr: "9.9.9.9".to_string(),
+            server_port: 7009,
+            token: "tok_default_names".to_string(),
+            subdomain: "old-box".to_string(),
+            ..Default::default()
+        })
+        .expect("seed config");
+        crate::tunnel::tls::publish_https_port(48217).expect("publish https port");
+        connector::start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
+        let main = std::fs::read_to_string(connector::frpc_config_path()).expect("frpc.toml");
+        assert!(main.contains("name = \"k2so-old-box\""), "no confirmation needed\n{main}");
+        wait_until("the main proxy registers", 10, connector::proxy_registered);
+        let rendered_before = main.clone();
+
+        // Armed with the control plane unreachable: no lane yet, the requested
+        // name never stands in, the main tunnel keeps serving.
+        crate::voice_rooms::set_tunnel_enabled(true);
+        arm().expect("arm");
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(!voice_config_path().exists(), "no confirmed label, no voice lane");
+        assert!(connector::proxy_registered(), "the main tunnel is untouched");
+
+        set_source(confirms_rosson);
+        wait_until("voice up on the confirmed label", 10, is_up);
+        let voice = std::fs::read_to_string(voice_config_path()).expect("frpc-voice.toml");
+        assert!(voice.contains("name = \"k2voice-rosson\"") && voice.contains("turn.rosson.k2.dev"), "{voice}");
+        assert_eq!(status().proxy_name.as_deref(), Some("k2voice-rosson"));
+        assert_eq!(std::fs::read_to_string(connector::frpc_config_path()).expect("frpc.toml"), rendered_before, "the main config never changed");
+        connector::stop("test").expect("stop");
+        disarm("test");
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// Relay name binding (opt-in, `K2_TUNNEL_PROXY_NAME=confirmed`): both frpcs
+/// are named from the label the control plane confirmed, whatever tunnel.json
+/// requests; with none, the main frpc renders no proxy (never `k2so-daemon`)
+/// and the tunnel restarts with its proxy once the control plane answers.
 #[test]
 fn both_frpcs_are_named_from_the_confirmed_label_and_none_means_no_proxy() {
     with_temp_home(|| {
         let _lease = crate::test_env::EnvVar::set(crate::tunnel::lease::LEASE_ENV_VAR, "off");
-        let _naming = crate::test_env::EnvVar::remove(crate::tunnel::confirmed_label::PROXY_NAME_ENV);
+        let _naming = crate::test_env::EnvVar::set(crate::tunnel::confirmed_label::PROXY_NAME_ENV, "confirmed");
         let dir = crate::test_env::unique_temp_path("voice-lane-names");
         let script = fake_frpc(&dir);
         set_source(confirms_rosson);

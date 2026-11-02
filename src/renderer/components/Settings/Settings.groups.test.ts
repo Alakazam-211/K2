@@ -151,7 +151,11 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'email-notifications', 'sew', 'compute', 'data', 'multiplayer', 'skin-access', 'app-approvals'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'email-notifications', 'sew', 'voice-rooms', 'compute', 'data', 'multiplayer', 'skin-access', 'app-approvals'])
+    // Voice Rooms (prd-k2-voice-rooms-v1 §3.3) hides until the window's
+    // server reports `voice-rooms-v1` (its preview on).
+    expect(group(nav, 'Cores').items[3]).toEqual({ id: 'voice-rooms', label: 'Voice Rooms', beta: true, hide: true })
+    expect(SECTION_LABELS['voice-rooms']).toBe('Voice Rooms')
     expect(SECTION_LABELS['email-notifications']).toBe('Email Notifications')
     // Chat Hosting is a real page since S32 K27 (was a SOON placeholder).
     const chat = group(nav, 'Cores').items[2]

@@ -144,6 +144,9 @@ export type SettingsSection =
   | 'app-approvals'
   /** Settings → Cores → Chat Hosting (Sew S32 K27): the Sew server on this box. */
   | 'sew'
+  /** Settings → Cores → Voice Rooms (prd-k2-voice-rooms-v1 §3.3; shown while
+   *  the window's server reports `voice-rooms-v1`). */
+  | 'voice-rooms'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'
   /** Settings → Cores → Multiplayer (Beta, prd-multiplayer-cores-settings-v1
@@ -248,6 +251,11 @@ interface SettingsState {
   // Owner-only server-side. DEFAULTS OFF: every /cli/compute/* route 404s
   // `compute_disabled` until it is on (or K2_COMPUTE=1).
   computePreview: boolean
+
+  // Voice rooms (preview) on the focused server: Settings → Voice Rooms shows
+  // while it's on, even when the server can't host (it says why). DEFAULTS
+  // OFF; the owner sets it (`k2 settings set voiceRoomsPreview true`).
+  voiceRoomsPreview: boolean
 
   // Apps (beta) on the focused server (Settings → Apps → This server).
   // Owner-only server-side, default ON since 0.46.3. While off every
@@ -546,6 +554,7 @@ async function persistAndApply(
       bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -596,6 +605,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   bootStatusPublic: 'compat',
   federationEnabled: false,
   computePreview: false,
+  voiceRoomsPreview: false,
   apps: true,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -1018,6 +1028,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -1086,6 +1097,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
+      voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

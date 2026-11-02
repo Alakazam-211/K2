@@ -447,6 +447,26 @@ export function MoonIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
+/** Voice rooms (prd-k2-voice-rooms-v1 §4.1): Lucide `headset`, squared (the
+ *  band's arc stays round; the ear cups lose their corner radius). `muted`
+ *  adds the bell's 2,2 → 22,22 slash (§4.2 "mic slash when muted"); `live`
+ *  adds a small accent dot top right (someone's in a room, or in a call). */
+export function HeadsetIcon({
+  muted = false,
+  live = false,
+  ...props
+}: K2IconProps & { muted?: boolean; live?: boolean }): React.JSX.Element {
+  return (
+    <svg {...iconProps('headset', props)} data-testid="voice-icon" data-muted={muted ? 'true' : 'false'} data-live={live ? 'true' : 'false'}>
+      <path d="M3 21v-9a9 9 0 0 1 18 0v9" />
+      <path d="M3 14h5v7H3Z" />
+      <path d="M16 14h5v7h-5Z" />
+      {muted ? <path data-testid="voice-icon-slash" d="M2 2l20 20" /> : null}
+      {live ? <circle data-testid="voice-icon-dot" cx="20" cy="4" r="2.5" fill="var(--color-accent)" stroke="none" /> : null}
+    </svg>
+  )
+}
+
 /** More actions: Lucide `ellipsis` (three true dots). */
 export function MoreIcon(props: K2IconProps = {}): React.JSX.Element {
   return (

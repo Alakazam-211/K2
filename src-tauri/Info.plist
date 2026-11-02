@@ -8,8 +8,10 @@
 	     the OS silently denies all audio access — Fn-Fn does nothing,
 	     no permission prompt appears, no error surfaces. The string
 	     here is what shows up in the system permission dialog and in
-	     System Settings → Privacy & Security → Microphone. -->
+	     System Settings → Privacy & Security → Microphone.
+	     0.46.8: voice rooms (prd-k2-voice-rooms-v1 §4.4) use the same key
+	     and the same `com.apple.security.device.audio-input` entitlement. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>K2SO needs microphone access so macOS Dictation can transcribe speech into terminal panes.</string>
+	<string>K2 uses your microphone for voice rooms, and for macOS Dictation in terminal panes.</string>
 </dict>
 </plist>

@@ -67,6 +67,7 @@ import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
 import {
   onAgentStatusChanged,
   onMailChanged,
+  onVoiceRoomsChanged,
   subscribeToActiveState,
   subscribeToWorkspaceSessionEvents,
   subscribeToWorkspaceTabEvents,
@@ -232,6 +233,26 @@ describe('agent_status_changed reaches a room through its own server (Z22)', () 
     push(carrier, frame)
     expect(onB).toEqual([frame])
     expect(onA).toEqual([])
+  })
+})
+
+describe('voice_rooms_changed (voice rooms S5)', () => {
+  it('the app socket fires onVoiceRoomsChanged with the rev, on that server only', async () => {
+    const a = scopeForHost(A)
+    const b = scopeForHost(B)
+    const onA: Array<number | null> = []
+    const onB: Array<number | null> = []
+    cleanups.push(onVoiceRoomsChanged(a, (r) => onA.push(r)))
+    cleanups.push(onVoiceRoomsChanged(b, (r) => onB.push(r)))
+    const app = await newSocket(() => subscribeToActiveState(a), 'wss://rosson.k2.dev/cli/sessions/events?path=&')
+    push(app, { kind: 'voice_rooms_changed', rev: 4 })
+    expect(onA).toEqual([4])
+    expect(onB).toEqual([])
+    expect(unknownWarnings()).toEqual([])
+  })
+
+  it('a Home room carries it, for a server with no app socket of its own', () => {
+    expect(CARRIED_KINDS.has('voice_rooms_changed')).toBe(true)
   })
 })
 

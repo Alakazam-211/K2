@@ -299,9 +299,9 @@ export interface SewChangedEvent {
 
 /** APP-LEVEL — the voice rooms view on this box moved (prd-k2-voice-rooms
  *  S3, lane C): occupancy, a room added or closed. Refetch signal for GET
- *  /cli/voice/rooms; `rev` only ever grows. Not sent while the voice
- *  preview is off. No desktop consumer until the voice client (lane D)
- *  lands. */
+ *  /cli/voice/rooms (its hosting state rides it too); `rev` is that list's
+ *  own `rev`. Not sent while the voice preview is off. The consumer is the
+ *  headset's list (`stores/voice.ts`, `onVoiceRoomsChanged`). */
 export interface VoiceRoomsChangedEvent {
   kind: 'voice_rooms_changed'
   rev: number
@@ -1456,6 +1456,7 @@ type SimChangedHandler = (e: SimStateEvent | SimHoldEvent) => void
 type MailChangedHandler = (reason: string) => void
 // S32 K27 — Settings → Chat Hosting's refetch signal (`reason` unwrapped).
 type SewChangedHandler = (reason: string) => void
+type VoiceRoomsChangedHandler = (rev: number | null) => void
 // DN12e — Settings → Domains' refetch signal.
 type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 // 0.45.2 — Settings → Connections' refetch signal.
@@ -1521,6 +1522,7 @@ interface AppBusHandlers {
   simChanged: Set<SimChangedHandler>
   mailChanged: Set<MailChangedHandler>
   sewChanged: Set<SewChangedHandler>
+  voiceRoomsChanged: Set<VoiceRoomsChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
@@ -1582,6 +1584,7 @@ function createBusState(scopeId: string): BusState {
       simChanged: new Set(),
       mailChanged: new Set(),
       sewChanged: new Set(),
+      voiceRoomsChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
       notifyPrefsChanged: new Set(),
@@ -1926,6 +1929,13 @@ export function onSewChanged(scope: ServerScope, fn: SewChangedHandler): Unsubsc
   return addHandler(busFor(scope).handlers.sewChanged, fn)
 }
 
+/** Voice rooms: subscribe to APP-LEVEL `voice_rooms_changed` on `scope`'s
+ *  server. Refetch signal for GET /cli/voice/rooms; the callback gets the
+ *  list's `rev`. */
+export function onVoiceRoomsChanged(scope: ServerScope, fn: VoiceRoomsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.voiceRoomsChanged, fn)
+}
+
 /** prd-dns-pending-and-cutover-safety-v1 DN12e — subscribe to APP-LEVEL
  *  `domains_changed` on `scope`'s server (custom domains attached, removed,
  *  re-checked, or flipped by the daemon's own pending-zone re-check).
@@ -2156,6 +2166,10 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   sew_changed: (h, m) => {
     for (const fn of h.sewChanged) fn(m.reason)
   },
+  voice_rooms_changed: (h, m) => {
+    const rev = typeof m.rev === 'number' && Number.isFinite(m.rev) ? m.rev : null
+    for (const fn of h.voiceRoomsChanged) fn(rev)
+  },
   domains_changed: (h, m) => {
     for (const fn of h.domainsChanged) fn(m)
   },
@@ -2254,6 +2268,7 @@ export interface AppBus {
   onSimChanged(fn: SimChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onSewChanged(fn: SewChangedHandler): UnsubscribeFn
+  onVoiceRoomsChanged(fn: VoiceRoomsChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
   onSourcesChanged(fn: SourcesChangedHandler): UnsubscribeFn
@@ -2309,6 +2324,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onSimChanged: (fn) => onSimChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onSewChanged: (fn) => onSewChanged(scope, fn),
+    onVoiceRoomsChanged: (fn) => onVoiceRoomsChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
     onSourcesChanged: (fn) => onSourcesChanged(scope, fn),

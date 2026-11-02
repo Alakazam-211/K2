@@ -112,12 +112,11 @@ export const SESSION_EVENT_ROUTES = {
   // Sew on K2 (S29 K14, S32 K27): Settings → Cores → Chat Hosting refetches
   // GET /cli/sew/status on it (`onSewChanged`).
   sew_changed: { class: 'app', app: true },
-  // Voice rooms S3 (lane C): the rooms view moved. Not consumed until the
-  // voice client (lane D) lands; dark in 0.46.8 behind the voice preview.
-  voice_rooms_changed: {
-    class: 'app',
-    ignored: 'Voice rooms client (lane D) not wired yet; the daemon sends it only while the voice preview is on.',
-  },
+  // Voice rooms S3/S5: the rooms view moved; the headset's list refetches
+  // GET /cli/voice/rooms (`onVoiceRoomsChanged`). Carried: the list covers
+  // every signed-in server, so a Home room's socket delivers its server's.
+  // The daemon sends it only while the voice preview is on.
+  voice_rooms_changed: { class: 'app', app: true, carried: true },
   // prd-dns-pending-and-cutover-safety-v1 DN12e: Settings → Domains
   // refetches on it (`onDomainsChanged`). Not carried: Settings reads the
   // window's own server.

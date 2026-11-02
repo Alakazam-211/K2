@@ -31,7 +31,14 @@ import PresenceModal from './PresenceModal'
 /** Read when no room is followed (a hook can't be skipped). */
 const NO_ROOM_PRESENCE: PresenceViewStore = createStore<PresenceView>(() => ({ roster: [], supported: false }))
 
-export default function PresenceRoster(): React.JSX.Element | null {
+/** `trailing` (voice rooms §4.1): the headset sits inside the presence
+ *  group: avatars, headset, then the divider. With the roster hidden it is
+ *  rendered on its own and brings its own divider (`withPipe`). */
+export default function PresenceRoster({
+  trailing,
+}: {
+  trailing?: (opts: { withPipe: boolean }) => React.ReactNode
+} = {}): React.JSX.Element | null {
   const target = useTopBarScope()
   const windowRoster = usePresenceStore((s) => s.roster)
   const windowSupported = usePresenceStore((s) => s.supported)
@@ -43,7 +50,7 @@ export default function PresenceRoster(): React.JSX.Element | null {
   const roster = following ? roomPresence.roster : windowRoster
   const supported = following ? roomPresence.supported : windowSupported
 
-  if (!shouldShowRoster(roster, supported)) return null
+  if (!shouldShowRoster(roster, supported)) return trailing ? <>{trailing({ withPipe: true })}</> : null
 
   const { visible, overflow } = rosterDisplay(roster)
 
@@ -72,6 +79,7 @@ export default function PresenceRoster(): React.JSX.Element | null {
           {overflow > 0 && <PresenceMoreChip count={overflow} size={20} title={`${overflow} more connected`} />}
         </span>
       </button>
+      {trailing ? trailing({ withPipe: false }) : null}
       {/* Rosson 2026-10-17: a divider between the people and the usage
           chip. It lives here so it shows only while the roster does. */}
       <TopBarPipe />

@@ -4,6 +4,7 @@ import UsageButton from '@/components/Timer/UsageButton'
 import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
 import HelpButton from '@/components/Help/HelpButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
+import VoiceButton from '@/components/Voice/VoiceButton'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { TopBarFollowRoomContext } from './top-bar-scope'
@@ -44,7 +45,9 @@ export default function TopBarUtilities({
     <TopBarFollowRoomContext.Provider value={followRoom}>
     <div className="flex items-center gap-1 no-drag">
       {leading}
-      <PresenceRoster />
+      {/* Voice rooms §4.1: avatars, headset, divider. The headset never
+          follows a focused room (the call belongs to the app). */}
+      <PresenceRoster trailing={({ withPipe }) => <VoiceButton withPipe={withPipe} />} />
       <UsageButton />
       <TopBarPipe />
       <TimerButton />

@@ -49,6 +49,8 @@ import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/MultiplayerSection'
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
+import { VoiceRoomsSection, VOICE_ROOMS_MANIFEST } from './sections/VoiceRoomsSection'
+import { voice } from '@/stores/voice'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
 import { APPS_SERVER_MANIFEST } from './sections/AppsServerSection'
@@ -123,6 +125,15 @@ function thirdPartyBotLeaves(): NavLeaf[] {
   })
   const soon = COMING_SOON_BOTS.map((bot): NavLeaf => ({ id: bot.id, label: bot.name, comingSoon: true }))
   return [...live, ...soon]
+}
+
+/** Settings → Cores → Voice Rooms: the window's server has the preview on, or
+ *  is a live section in the headset's list. A daemon lists `voice-rooms-v1`
+ *  only while it hosts, and this page is where the owner sees why it doesn't,
+ *  so the feature alone can't gate it. */
+function voiceRoomsShown(): boolean {
+  if (useSettingsStore.getState().voiceRoomsPreview) return true
+  return voice.store.getState().servers.some((s) => s.isWindow && s.kind === 'live')
 }
 
 /** Settings → Cores → Multiplayer shows only for a server that reports
@@ -267,6 +278,8 @@ export function settingsNav({
         { id: 'email-notifications', label: 'Email Notifications' },
         // Sew, run on this box (Rosson 2026-10-15): the S32 K27 page (`k2 hostchat` headless).
         { id: 'sew', label: 'Chat / Voice' },
+        // prd-k2-voice-rooms-v1 §3.3: only with the preview on (voiceRoomsShown).
+        { id: 'voice-rooms', label: 'Voice Rooms', beta: true, hide: !voiceRoomsShown() },
         // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
@@ -357,6 +370,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_NOTIFICATIONS_MANIFEST,
       ...SEW_MANIFEST,
+      ...(voiceRoomsShown() ? VOICE_ROOMS_MANIFEST : []),
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
@@ -763,6 +777,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'sew' && (
           <SectionErrorBoundary>
             <SewSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'voice-rooms' && (
+          <SectionErrorBoundary>
+            <VoiceRoomsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'email-link' && (

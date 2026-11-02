@@ -338,11 +338,15 @@ fn every_rows_exit_is_what_the_cli_prints() {
     let build = cli.split("\ncmd_app_build() {").nth(1).expect("cmd_app_build");
     let build = &build[..build.find("\n}\n").expect("end")];
     assert!(build.contains("if [ \"$_CP_STATUS\" = \"422\" ]") && build.contains("exit 1"), "a 422 build exits 1");
+    // `k2 chat` / `k2 hostchat` refusals (`invalid_state`): a 422 exits 1.
+    let chat_fail = cli.split("\n_chat_fail() {").nth(1).expect("_chat_fail");
+    let chat_fail = &chat_fail[..chat_fail.find("\n}\n").expect("end")];
+    assert!(chat_fail.contains("401|403) exit 3 ;;") && chat_fail.contains("*) exit 1 ;;"), "k2 chat: 403 exits 3, a 422 exits 1:\n{chat_fail}");
     for (id, exit) in refusals::EXIT_OVERRIDES {
         let row = refusals::lookup(id).unwrap_or_else(|| panic!("{id}"));
         assert_eq!(row.exit, *exit, "{id}");
         match row.http {
-            422 => assert_eq!(*exit, 1, "{id}: a 422 from build/deploy"),
+            422 => assert_eq!(*exit, 1, "{id}: a 422 from build/deploy, or k2 chat's _chat_fail"),
             _ => assert!(["health_failed", "crashlooping"].contains(id), "{id}: a deployment result exits 1"),
         }
     }

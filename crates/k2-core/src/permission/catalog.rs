@@ -200,6 +200,10 @@ pub enum ParamKind {
     /// param names: `docs.share from= path=` (Markdown multiplayer v1,
     /// MI25). Jailed and deny-listed by the action's check.
     Path,
+    /// A workspace's chat scope, as the `chat` grant takes it: `coworker`,
+    /// or `assistant:<person>` (a username, an id, or `owner`):
+    /// `chat.account scope=` (0.46.8). Checked against the box's people.
+    ChatScope,
 }
 
 /// One value an action takes (`key=value` on the CLI).
@@ -750,6 +754,7 @@ mod tests {
     fn sew_space_and_chat_caps_values_are_their_own_kinds() {
         assert_eq!(serde_json::to_value(ParamKind::SewSpace).unwrap(), serde_json::json!("sew-space"));
         assert_eq!(serde_json::to_value(ParamKind::ChatCaps).unwrap(), serde_json::json!("chat-caps"));
+        assert_eq!(serde_json::to_value(ParamKind::ChatScope).unwrap(), serde_json::json!("chat-scope"));
         let mut s = USE;
         s.params = &[
             ParamSpec { key: "app", kind: ParamKind::App, required: true, list: false, choices: &[] },

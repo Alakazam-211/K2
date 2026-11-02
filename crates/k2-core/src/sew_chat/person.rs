@@ -70,6 +70,29 @@ pub fn assistant_of(project_id: &str) -> Result<Option<Person>, String> {
     crate::skin::with_skin_conn(|conn| assistant_of_in(conn, project_id, owner_login.as_deref()))
 }
 
+/// Whether `project_id`'s agent has its own chat account: an enabled
+/// workspace `chat` grant (coworker or assistant) on `conn` (skin.db).
+pub fn has_chat_grant_in(conn: &Connection, project_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM grants WHERE kind = 'chat' AND subject_kind = 'workspace'
+           AND lower(subject_id) = lower(?1) AND enabled = 1 LIMIT 1",
+        params![project_id.trim()],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|e| format!("chat grant lookup: {e}"))
+}
+
+/// [`has_chat_grant_in`] on this box's skin store (`false` when there is
+/// none yet: nobody has a chat grant).
+pub fn has_chat_grant(project_id: &str) -> Result<bool, String> {
+    if !crate::tool_hook::skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(|conn| has_chat_grant_in(conn, project_id))
+}
+
 /// The Sew external id of the person behind a Connect login: an
 /// owner-linked login is the owner (`k2:owner`, S27: one person, one
 /// member); any other login is `k2:connect:<login>` (never an assistant's
@@ -126,6 +149,18 @@ mod tests {
         assert_eq!(assistant_of_in(&c, "w-none", None).unwrap(), None);
         grant(&c, "w-co", "coworker", 1);
         assert_eq!(assistant_of_in(&c, "W-CO", None).unwrap(), None, "case-insensitive id, coworker = nobody");
+    }
+
+    #[test]
+    fn a_chat_account_is_an_enabled_workspace_chat_grant_of_either_scope() {
+        let c = conn();
+        assert!(!has_chat_grant_in(&c, "w-none").unwrap());
+        grant(&c, "w-co", "coworker", 1);
+        assert!(has_chat_grant_in(&c, "W-CO").unwrap(), "case-insensitive id");
+        grant(&c, "w-as", &format!("assistant:{P}"), 1);
+        assert!(has_chat_grant_in(&c, "w-as").unwrap(), "an assistant has its own account too");
+        grant(&c, "w-off", "coworker", 0);
+        assert!(!has_chat_grant_in(&c, "w-off").unwrap(), "a turned-off grant is no account");
     }
 
     #[test]

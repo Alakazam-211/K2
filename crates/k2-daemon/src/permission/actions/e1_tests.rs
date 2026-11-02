@@ -311,7 +311,7 @@ fn the_walls_match_the_refusals() {
     assert_eq!(code("connections.create"), ["agents_create_connections_disabled"]);
     assert_eq!(code("connections.add"), ["agents_create_connections_disabled", "not_connected"]);
     assert_eq!(code("mail.manage"), ["owner_only"]);
-    assert_eq!(code("mail.send-mode"), ["gated"]);
+    assert_eq!(code("mail.send-mode"), ["gated", "owner_only"]);
     assert_eq!(code("db.agent-access"), ["forbidden"]);
     assert!(code("garden.keep-mine").is_empty());
 }

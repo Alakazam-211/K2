@@ -118,6 +118,9 @@ pub const EXIT_OVERRIDES: &[(&str, u8)] = &[
     ("build_failed", 1),
     ("lockfile_required", 1),
     ("seed_invalid", 1),
+    // `k2 chat` and `k2 hostchat` print a refusal with `_chat_fail`: a 422
+    // (Sew's invalid_state passed through) exits 1.
+    ("invalid_state", 1),
 ];
 
 /// A live row with the CLI's exit for `http`.
@@ -203,7 +206,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("handover", "moving Apps between workspaces and boxes"),
     ("push", "notifications to an App's users"),
     ("pairing", "pairing a phone with an App"),
-    ("chat", "an App's chat key and the Spaces it governs"),
+    ("chat", "an App's chat key, the Spaces it governs, an agent's chat account"),
     ("links", "iOS and Android link files"),
     ("updates", "a desktop app's update feed"),
     ("static", "static Apps (a built folder, no process)"),

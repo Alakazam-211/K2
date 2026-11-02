@@ -87,6 +87,11 @@ pub(crate) struct Row {
     /// string there (ASCII case aside): `app.login-grant` is `kind=app`
     /// only. Read for a match only.
     pub body_eq: &'static [(&'static str, &'static str)],
+    /// A JSON pointer in the refused request's body that must name the
+    /// asking agent's **own** workspace (a handle, name, path or id):
+    /// `chat.account` is only ever its own account, and `mail.send-mode`
+    /// only its own sending (0.46.8). Read for a match only.
+    pub own_ws: Option<&'static str>,
 }
 
 const fn ask(action: &'static str, floor: Floor) -> Target {
@@ -101,7 +106,20 @@ const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
 const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: WallMethod) -> Row {
-    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None, optional: &[], body_eq: &[] }
+    Row {
+        target,
+        matches,
+        prefix,
+        method,
+        when: &[],
+        needs: None,
+        params: &[],
+        fixed: &[],
+        body_has: None,
+        optional: &[],
+        body_eq: &[],
+        own_ws: None,
+    }
 }
 
 /// "a person does this in Settings" for never / dropped walls a broad row
@@ -128,7 +146,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 50] = [
+pub(crate) const V1_ACTIONS: [&str; 52] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -209,6 +227,10 @@ pub(crate) const V1_ACTIONS: [&str; 50] = [
     // the list (narrowing it is the agent's own; widening is a person's).
     "compute.allow-nodes",
     "compute.allow-nodes-clear",
+    // 0.46.8: the agent's own chat account (the `chat` grant), and turning
+    // off a workspace's agent email sending (any workspace on the server).
+    "chat.account",
+    "mail.stop-sending",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -240,6 +262,9 @@ const PASSWORD_RESET_SET_PARAMS: &[(&str, &[ParamFrom])] = &[("user", &[ParamFro
 
 /// The password-reset card's floor, from its one constant (PR-A2).
 const PASSWORD_RESET_FLOOR: Floor = super::actions::password_reset::FLOOR;
+
+/// `chat.account`: the grants route's own floor (the owner).
+const CHAT_ACCOUNT_FLOOR: Floor = super::actions::chat_account::FLOOR;
 
 /// `app.login-grant`: the route's own floor, and its values from the
 /// refused `k2 app grant add` body (never a password: there is none).
@@ -425,6 +450,16 @@ pub(crate) const ROWS: &[Row] = &[
         optional: &["level", "caps", "uploads"],
         ..row(ask("apps.chat-key", Floor::Admin), code(403, "owner_only"), "/cli/app/chat-key", POST)
     },
+    // 0.46.8: an agent's own `k2 app grant add --kind chat --subject-kind
+    // workspace --subject <its own workspace>` (the owner's route). Another
+    // workspace's chat grant isn't this card's: it can't be requested.
+    Row {
+        body_eq: &[("/kind", "chat"), ("/subjectKind", "workspace")],
+        own_ws: Some("/subjectId"),
+        params: &[("scope", &[ParamFrom::Body("/scope")])],
+        optional: &["scope"],
+        ..row(ask("chat.account", CHAT_ACCOUNT_FLOOR), code(403, "owner_only"), "/cli/skin/grants", POST)
+    },
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
     // same id (§3.2, the agent sheet's HELD rule).
@@ -465,6 +500,19 @@ pub(crate) const ROWS: &[Row] = &[
         )
     },
     row(ask("chat.manage", Floor::Admin), code(403, "chat_manage_off"), "/cli/", ANY),
+    // 0.46.8: `k2 chat space create` by an agent with no chat account (fix
+    // A, refused before any Sew call), and any `k2 chat` read while the
+    // workspace has none (`not_granted` with `details.chatAccount`; plain
+    // `not_granted`, no Space access, is a person's: it can't be requested).
+    Row {
+        fixed: &[("scope", "coworker")],
+        ..row(ask("chat.account", CHAT_ACCOUNT_FLOOR), code(403, "chat_account_needed"), "/cli/sew/chat/manage/space/create", POST)
+    },
+    Row {
+        needs: Some("/error/details/chatAccount"),
+        fixed: &[("scope", "coworker")],
+        ..row(ask("chat.account", CHAT_ACCOUNT_FLOOR), code(403, "not_granted"), "/cli/sew/chat/", ANY)
+    },
     row(ask("vault.manage", Floor::Admin), code(403, "vault_manage_required"), "/cli/", ANY),
     // `k2 vault delivery NAME file|env` on a secret the agent may not widen
     // (2026-10-28): the refusal names the secret and the delivery.
@@ -605,6 +653,29 @@ pub(crate) const ROWS: &[Row] = &[
         fixed: &[("mode", "approval")],
         ..row(ask("mail.send-mode", Floor::Admin), code(403, "gated"), "/cli/mail/", ANY)
     },
+    // 0.46.8: `k2 mail sending <ws> off` by an agent (no "manage hosted
+    // mail", or its own workspace with it): any workspace on the server,
+    // its own too. Turning off only tightens; a person allows it.
+    Row {
+        body_eq: &[("/agentSend", "off")],
+        params: &[("target", &[ParamFrom::Body("/workspace")])],
+        ..row(ask("mail.stop-sending", Floor::Admin), code(403, "owner_only"), "/cli/mail/config/set", POST)
+    },
+    // `k2 mail sending <its own workspace> approval|on`: the agent's own
+    // "Let this agent send email" switch. Another workspace's stays as it
+    // was (the mail.manage row, or "It can't be requested").
+    Row {
+        body_eq: &[("/agentSend", "approval")],
+        own_ws: Some("/workspace"),
+        fixed: &[("mode", "approval")],
+        ..row(ask("mail.send-mode", Floor::Admin), code(403, "owner_only"), "/cli/mail/config/set", POST)
+    },
+    Row {
+        body_eq: &[("/agentSend", "on")],
+        own_ws: Some("/workspace"),
+        fixed: &[("mode", "on")],
+        ..row(ask("mail.send-mode", Floor::Admin), code(403, "owner_only"), "/cli/mail/config/set", POST)
+    },
     Row {
         params: &[("message", &[ParamFrom::Response("/id")])],
         ..row(
@@ -649,6 +720,9 @@ pub(crate) struct Refused<'a> {
     pub body: Option<&'a Value>,
     /// The refusal (or held answer), parsed.
     pub response: &'a Value,
+    /// The asking agent's workspace id (`own_ws` rows); empty = unknown,
+    /// and no `own_ws` row matches.
+    pub workspace_id: &'a str,
 }
 
 /// The status code of a `"403 Forbidden"` status line.
@@ -686,6 +760,34 @@ fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
         && r.needs.is_none_or(|p| req.response.pointer(p).is_some())
         && r.body_has.is_none_or(|(p, present)| body_value(req.body, p) == present)
         && body_eq_ok(r, req.body)
+        && own_ws_ok(r, req.body, req.workspace_id)
+}
+
+/// An `own_ws` row: the body names the asking agent's own workspace.
+fn own_ws_ok(r: &Row, body: Option<&Value>, workspace_id: &str) -> bool {
+    let Some(pointer) = r.own_ws else { return true };
+    let Some(token) = body.and_then(|b| b.pointer(pointer)).and_then(Value::as_str) else { return false };
+    names_own_workspace(token, workspace_id)
+}
+
+/// `token` (a handle, name, path or id) resolves to `workspace_id`.
+pub(crate) fn names_own_workspace(token: &str, workspace_id: &str) -> bool {
+    let t = token.trim();
+    if t.is_empty() || workspace_id.is_empty() {
+        return false;
+    }
+    if t.eq_ignore_ascii_case(workspace_id) {
+        return true;
+    }
+    let mine = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::get(&conn, workspace_id).ok().map(|p| p.path)
+    };
+    match (mine, crate::workspace_msg::resolve_workspace(t)) {
+        (Some(mine), Some(theirs)) => mine == theirs,
+        _ => false,
+    }
 }
 
 fn body_eq_ok(r: &Row, body: Option<&Value>) -> bool {
@@ -850,7 +952,7 @@ fn teach(
     if response.pointer("/card/raised").and_then(Value::as_bool) == Some(true) {
         return None;
     }
-    let req = Refused { status: code, method, path, params, body: req_body, response: &response };
+    let req = Refused { status: code, method, path, params, body: req_body, response: &response, workspace_id };
     let p = permission_for(&req)?;
     add_permission(body, &p)
 }
@@ -932,7 +1034,7 @@ pub(crate) fn cell_gated_body(
     let mut body = serde_json::json!({"error": {"code": "owner_only", "hint": CELL_GATED_HINT}});
     let json = json_body(req_body);
     let empty = Value::Object(Map::new());
-    let req = Refused { status: 403, method, path, params, body: json.as_ref(), response: &empty };
+    let req = Refused { status: 403, method, path, params, body: json.as_ref(), response: &empty, workspace_id };
     let row = ROWS
         .iter()
         .filter(|r| {
@@ -943,6 +1045,7 @@ pub(crate) fn cell_gated_body(
                 && method_ok(r.method, method)
                 && r.when.iter().all(|(k, v)| params.get(*k).map(String::as_str) == Some(*v))
                 && body_eq_ok(r, json.as_ref())
+                && own_ws_ok(r, json.as_ref(), workspace_id)
         })
         .max_by_key(|r| r.prefix.len());
     let permission = match row {
@@ -972,7 +1075,7 @@ mod tests {
         body: Option<&'a Value>,
         response: &'a Value,
     ) -> Refused<'a> {
-        Refused { status, method, path, params, body, response }
+        Refused { status, method, path, params, body, response, workspace_id: "" }
     }
 
     fn teach_of(status: u16, method: &str, path: &str, q: &[(&str, &str)], body: Option<Value>, response: Value) -> Option<Value> {
@@ -1063,6 +1166,10 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
+            // 0.46.8: `k2 chat space create --app` with no chat account (fix A),
+            // and `k2 mail sending <ws> off` by an agent without mail-manage.
+            (403, "POST", "/cli/sew/chat/manage/space/create", vec![], Some(json!({"slug":"jobs","app":"jobs"})), json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}), "chat.account"),
+            (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","agentSend":"off"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":"alpha","path":"/a","id":"w"}}}), "mail.stop-sending"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -1538,7 +1645,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 50);
+        assert_eq!(V1_ACTIONS.len(), 52);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -1549,7 +1656,8 @@ mod tests {
                     && a.when == b.when
                     && a.needs == b.needs
                     && a.body_has == b.body_has
-                    && a.body_eq == b.body_eq;
+                    && a.body_eq == b.body_eq
+                    && a.own_ws == b.own_ws;
                 assert!(!same, "two rows claim {:?} on {}", a.matches, a.prefix);
             }
         }
@@ -1597,5 +1705,99 @@ mod tests {
         assert_eq!(status_code("403 Forbidden"), 403);
         assert_eq!(status_code("202 Accepted"), 202);
         assert_eq!(status_code(""), 0);
+    }
+
+    /// 0.46.8: the two chat.account walls with no request body to read, the
+    /// whoami flavour of `not_granted` only (a workspace with an account
+    /// and no Space is a person's), and the stop-sending ask naming the
+    /// workspace from the refused body.
+    #[test]
+    fn chat_account_and_stop_sending_teach_from_the_refusal() {
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/sew/chat/manage/space/create",
+            &[],
+            Some(json!({"slug":"jobs","name":"Jobs","app":"jobs"})),
+            json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}),
+        )
+        .expect("taught");
+        assert_eq!(p["command"], "k2 permission request chat.account scope=coworker --why \"<what you need it for>\"", "{p}");
+        assert_eq!(p["approvers"], "owner", "{p}");
+        let p = teach_of(
+            403,
+            "GET",
+            "/cli/sew/chat/whoami",
+            &[],
+            None,
+            json!({"ok":false,"error":{"code":"not_granted","hint":"x","details":{"chatAccount":false}}}),
+        )
+        .expect("taught");
+        assert_eq!(p["command"], "k2 permission request chat.account scope=coworker --why \"<what you need it for>\"", "{p}");
+        let p = teach_of(403, "GET", "/cli/sew/chat/whoami", &[], None, json!({"ok":false,"error":{"code":"not_granted","hint":"x"}}))
+            .expect("a refusal");
+        assert_eq!(p["requestable"], false, "Space access is a person's: {p}");
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/mail/config/set",
+            &[],
+            Some(json!({"workspace":"/Users/x/sales","agentSend":"off"})),
+            json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}),
+        )
+        .expect("taught");
+        assert_eq!(p["command"], "k2 permission request mail.stop-sending target=/Users/x/sales --why \"<what you need it for>\"", "{p}");
+        assert_eq!(p["approvers"], "owner or admin", "{p}");
+    }
+
+    /// 0.46.8: `own_ws` rows teach only for the asking agent's own
+    /// workspace, by any of its names. Another workspace's chat grant can't
+    /// be requested; another workspace's sending on stays mail.manage's.
+    #[test]
+    fn own_workspace_rows_match_only_the_askers_workspace() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let me = crate::permission::actions::held::tests::seed("wom");
+        let other = crate::permission::actions::held::tests::seed("woo");
+        let mine_path = format!("/tmp/pc-e2-{}", me.handle);
+        let owner_only = json!({"ok":false,"error":{"code":"owner_only","hint":"x"}});
+        let teach_as = |ws: &str, path: &str, body: Value, response: &Value| {
+            let params = HashMap::new();
+            permission_for(&Refused { status: 403, method: "POST", path, params: &params, body: Some(&body), response, workspace_id: ws })
+        };
+        let upper = me.handle.to_uppercase();
+        for token in [me.handle.as_str(), me.id.as_str(), mine_path.as_str(), upper.as_str()] {
+            let body = json!({"subjectKind":"workspace","subjectId":token,"kind":"chat","targetId":"sew","scope":"coworker"});
+            let p = teach_as(&me.id, "/cli/skin/grants", body, &owner_only).expect("taught");
+            assert_eq!(p["command"], "k2 permission request chat.account scope=coworker --why \"<what you need it for>\"", "{token}: {p}");
+        }
+        // No scope in the body: the card picks its default.
+        let p = teach_as(&me.id, "/cli/skin/grants", json!({"subjectKind":"workspace","subjectId":me.handle,"kind":"chat"}), &owner_only)
+            .expect("taught");
+        assert_eq!(p["command"], "k2 permission request chat.account --why \"<what you need it for>\"", "{p}");
+        // Another workspace's chat grant: never this card.
+        let body = json!({"subjectKind":"workspace","subjectId":other.handle,"kind":"chat","scope":"coworker"});
+        let p = teach_as(&me.id, "/cli/skin/grants", body, &owner_only).expect("a refusal");
+        assert_eq!(p["requestable"], false, "{p}");
+        assert!(p.get("action").is_none(), "{p}");
+        // With no known asker, an own-workspace row never matches.
+        let body = json!({"subjectKind":"workspace","subjectId":me.handle,"kind":"chat"});
+        assert_eq!(teach_as("", "/cli/skin/grants", body, &owner_only).expect("a refusal")["requestable"], false);
+
+        // Its own sending, approval or on: the agent's own switch.
+        for mode in ["approval", "on"] {
+            let p = teach_as(&me.id, "/cli/mail/config/set", json!({"workspace": me.handle, "agentSend": mode}), &owner_only).expect("taught");
+            assert_eq!(p["command"], format!("k2 permission request mail.send-mode mode={mode} --why \"<what you need it for>\""), "{p}");
+        }
+        // Another workspace's sending on: what it was (mail.manage, from the
+        // refusal that names the asker's own toggle).
+        let manage = json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":me.handle,"path":mine_path,"id":me.id}}});
+        let p = teach_as(&me.id, "/cli/mail/config/set", json!({"workspace": other.handle, "agentSend": "on"}), &manage).expect("taught");
+        assert_eq!(action_of(&p), "mail.manage", "{p}");
+        // Off: any workspace, its own too.
+        for ws in [&other.handle, &me.handle] {
+            let p = teach_as(&me.id, "/cli/mail/config/set", json!({"workspace": ws, "agentSend": "off"}), &owner_only).expect("taught");
+            assert_eq!(p["command"], format!("k2 permission request mail.stop-sending target={ws} --why \"<what you need it for>\""), "{p}");
+        }
     }
 }

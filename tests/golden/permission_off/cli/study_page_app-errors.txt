@@ -385,7 +385,7 @@ PAIRING (pairing a phone with an App)
   reauth_required (exit 3)
       fix: Ask the person for the password and send it with the start.
 
-CHAT (an App's chat key and the Spaces it governs)
+CHAT (an App's chat key, the Spaces it governs, an agent's chat account)
   agent_subject (exit 3)
       fix: Leave the agent out of chat.setChannels. To put an agent in a
       channel, list it in the manifest's chat block (agents: [...]).
@@ -395,6 +395,11 @@ CHAT (an App's chat key and the Spaces it governs)
   channel_type_mismatch (exit 3)
       fix: Use another slug for the new channel, or keep the type the
       channel has.
+  chat_account_needed (exit 3)
+      fix: You ask, the owner allows: run the Ask with: line the error ends
+      with (k2 permission request chat.account scope=coworker). Or the owner
+      runs k2 app grant add --kind chat --subject-kind workspace --subject
+      <ws> --scope coworker. Then run it again.
   chat_key_required (exit 3)
       fix: The owner gives it one, in person: k2 app grant <app> --kind
       chat-key (an agent asks on a card: k2 permission request apps.chat-key
@@ -405,6 +410,11 @@ CHAT (an App's chat key and the Spaces it governs)
   home_client_cannot_govern (exit 3)
       fix: Use another App for the chat key, or the owner moves the home
       client first: k2 hostchat home client <app>|none
+  invalid_state (exit 1)
+      fix: principal_unknown on managers.0: your agent needs its own chat
+      account (k2 permission request chat.account scope=coworker). On
+      owner_external_id: the --owner person has no chat yet; the owner gives
+      it (k2 app user chat <user> member --app <app>). Else fix that value.
   no_chat_caps (exit 3)
       fix: The owner approves the App's chat caps (k2 app approvals; k2 app
       approve <id>), or name them: k2 app grant <app> --kind chat-key --caps

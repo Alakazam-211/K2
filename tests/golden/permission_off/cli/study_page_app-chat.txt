@@ -19,7 +19,9 @@ GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
     "Manage Chat / Voice Hosting" once:
     k2 agent access set <your workspace> chat_manage on. Then you run:
       k2 chat space create <slug> --name "<Name>"   (the box owner owns it;
-                          you get manage access; the answer shows space.id)
+                          you get manage access; the answer shows space.id;
+                          your agent needs its own chat account first: see
+                          step 3 of THE CHAT KEY below)
       k2 hostchat app-space bind <app> <space-id>
     A person is in your bound Space while they hold your App's login AND
     chat (step 4). No k2 hostchat people step for App users; Connect owners
@@ -70,7 +72,17 @@ every App user gets chat, and your App decides who sees which channel.
     per-person step; at most N people, default 500). Until Sew confirms
     them the pass answers 503 chat_member_pending: retry.
     You ask: k2 permission request apps.chat-key app=<app> --why "…".
- 3. A Space your App owns (you, with Manage Chat / Voice Hosting):
+ 3. A Space your App owns (you, with your workspace's "Manage Chat /
+    Voice Hosting" switch on: the owner or an admin runs k2 agent access
+    set <your workspace> chat_manage on; else create exits 3
+    chat_manage_off, and its Ask with: line asks for it).
+    First, your agent needs its own chat account: Sew makes the agent
+    that creates a Space its manager. The owner gives it:
+      k2 app grant add --kind chat --subject-kind workspace \
+        --subject <your workspace> --scope coworker
+    or you ask: k2 permission request chat.account scope=coworker --why "…".
+    Without it, create exits 3 chat_account_needed before calling Sew.
+    Then:
       k2 chat space create <slug> --name "<Name>" --app <app>
     Owned by the App itself (never a person), bound in the same step;
     you keep level manage in it (k2 chat).

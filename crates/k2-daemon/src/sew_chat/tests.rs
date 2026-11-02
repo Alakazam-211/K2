@@ -69,6 +69,12 @@ fn env() -> Env {
     fake.add_channel("sp-eng", "c-eng", "builds", None, true);
     fake.add_dm("c-dm-ar", &[alpha.as_str(), rosson.as_str()]);
     let _ = beta;
+    // K2's member mirror: alpha and beta have their own chat accounts
+    // (gamma has none: `chat_account_needed`, fix A).
+    for (id, name, member) in [(WA, "alpha", alpha.as_str()), (WB, "beta", "m-beta")] {
+        k2_core::tool_hook::map_member_for_tests(&format!("k2:workspace:{id}"), member, "agent", name, k2_core::tool_hook::members::ACTIVE)
+            .expect("mirror an agent member");
+    }
     test_seam::set(Some(fake.clone()));
     approval_seams::set_vault(Some(crate::compute_admin::test_seams::vault_handle()));
     let _ = test_hooks::take();
@@ -1307,6 +1313,101 @@ fn the_default_space_for_dms_is_a_persons_setting_an_agent_may_only_clear() {
     assert_eq!(v["defaultSpace"], "hearth", "nothing changed: {v}");
     let (s, v) = post("/cli/sew/approvals/policy/set", &agent(WA), json!({"defaultSpace": "none"}));
     assert_eq!((s, v["defaultSpace"].clone()), (200, Value::Null), "clearing narrows, so Manage Sew may: {v}");
+}
+
+// ── fix A (0.46.8): a new Space needs the agent's own chat account ───
+
+fn sew_principal_unknown(field: &str) -> SewError {
+    let mut e = SewError::new(422, "invalid_state", "no principal with that external id");
+    e.reason = Some("principal_unknown".into());
+    e.field = Some(field.into());
+    e
+}
+
+#[test]
+fn a_new_space_needs_the_creating_agents_own_chat_account_and_sew_is_never_called_without_one() {
+    let e = env();
+    set_manage(WC, true);
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WC), json!({"slug": "jobs", "name": "Jobs"}));
+    assert_eq!((s, code(&v)), (403, "chat_account_needed"), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.starts_with("gamma has no chat account yet."), "{hint}");
+    assert!(hint.contains("Grant the agent chat access first"), "{hint}");
+    assert!(hint.contains("k2 app grant add --kind chat --subject-kind workspace --subject gamma --scope coworker"), "{hint}");
+    assert_eq!(v["error"]["details"]["workspace"], "gamma", "{v}");
+    assert!(e.fake.calls().is_empty(), "refused before any Sew call: {:?}", e.fake.calls().iter().map(|c| c.op.clone()).collect::<Vec<_>>());
+    assert!(e.fake.space_creates().is_empty());
+    assert!(store_rows(WC).is_empty(), "no access row either");
+
+    // An assistant is never a manager: no account check, Sew names none.
+    routes::test_assist::set(WC, Some(owner_person()));
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WC), json!({"slug": "notes"}));
+    assert_eq!((s, v["sewManager"].clone()), (200, json!(false)), "{v}");
+    routes::test_assist::clear();
+}
+
+/// A grant Sew hasn't confirmed yet: wait, don't ask again.
+#[test]
+fn a_granted_account_sew_hasnt_confirmed_yet_is_pending() {
+    let e = env();
+    set_manage(WC, true);
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, true, Some("/tmp/k2-test-sew.sock"), Some("/tmp/k2-test-sew.token"), "owner-token")
+        .expect("chat target");
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "workspace".into(),
+        subject_id: WC.into(),
+        kind: k2_core::tool_hook::CHAT_KIND.into(),
+        target_id: String::new(),
+        role: None,
+        scope: Some("coworker".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("gamma's chat grant");
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WC), json!({"slug": "jobs"}));
+    assert_eq!((s, code(&v)), (409, "chat_account_pending"), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("Run this again in a few seconds"), "{v}");
+    assert!(e.fake.calls().is_empty(), "still no Sew call");
+    // No Space access yet and an account: whoami's not_granted is the plain one.
+    let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
+    assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
+    assert!(v["error"].get("details").is_none(), "{v}");
+}
+
+/// K2's mirror was stale: Sew answers principal_unknown on managers.0;
+/// the agent gets the same words. Any other principal_unknown passes
+/// through as Sew's.
+#[test]
+fn sews_principal_unknown_for_the_manager_gets_the_same_words() {
+    let e = env();
+    set_manage(WA, true);
+    e.fake.fail_next(sew_principal_unknown("managers.0"));
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WA), json!({"slug": "jobs"}));
+    assert_eq!((s, code(&v)), (403, "chat_account_needed"), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("Grant the agent chat access first"), "{v}");
+    e.fake.fail_next(sew_principal_unknown("owner_external_id"));
+    let (s, v) = post("/cli/sew/chat/manage/space/create", &agent(WA), json!({"slug": "jobs"}));
+    assert_eq!((s, code(&v)), (422, "invalid_state"), "{v}");
+    assert_eq!((v["error"]["details"]["reason"].as_str(), v["error"]["details"]["field"].as_str()), (Some("principal_unknown"), Some("owner_external_id")));
+}
+
+/// `k2 chat whoami` (any chat read) with no account at all says so, and
+/// carries the mark the chat.account wall reads.
+#[test]
+fn whoami_without_a_chat_account_says_grant_it_first() {
+    let _e = env();
+    let (s, v) = get("/cli/sew/chat/whoami", &agent(WC), &[]);
+    assert_eq!((s, code(&v)), (403, "not_granted"), "{v}");
+    assert_eq!(v["error"]["details"]["chatAccount"], json!(false), "{v}");
+    let hint = v["error"]["hint"].as_str().expect("hint");
+    assert!(hint.starts_with("gamma has no chat account yet"), "{hint}");
+    assert!(hint.contains("k2 app grant add --kind chat --subject-kind workspace --subject gamma --scope coworker"), "{hint}");
+}
+
+fn store_rows(p: &str) -> Vec<store::Access> {
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    store::list_access(&c, p).unwrap()
 }
 
 /// S31 K24: the delivery hub's verbs (same fake Sew and helpers).

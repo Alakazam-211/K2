@@ -86,6 +86,7 @@ async fn an_agent_refused_a_wider_delivery_asks_and_the_owner_allow_widens_it() 
         params: &params,
         body: None,
         response: &refusal,
+        workspace_id: "",
     };
     let p = crate::permission::walls::permission_for(&req).expect("teaches");
     assert_eq!(p["action"], ACTION, "{p}");

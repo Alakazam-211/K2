@@ -916,6 +916,7 @@ pub(crate) fn sew_error(e: ClientError) -> SewError {
         ClientError::Api(f) => {
             let mut s = SewError::new(f.status, &f.code_str, &f.hint);
             s.reason = f.details.get("reason").and_then(Value::as_str).map(str::to_string);
+            s.field = f.details.get("field").and_then(Value::as_str).map(str::to_string);
             s.retry_after_ms = f.retry_after.map(|d| d.as_millis() as u64);
             s
         }

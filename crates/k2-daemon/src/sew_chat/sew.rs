@@ -54,12 +54,14 @@ pub struct SewError {
     pub hint: String,
     /// Sew's `details.reason` (for 403 missing_permission / 422).
     pub reason: Option<String>,
+    /// Sew's `details.field`: the value a 422 is about (`managers.0`).
+    pub field: Option<String>,
     pub retry_after_ms: Option<u64>,
 }
 
 impl SewError {
     pub fn new(status: u16, code: &str, hint: &str) -> Self {
-        Self { status, code: code.into(), hint: hint.into(), reason: None, retry_after_ms: None }
+        Self { status, code: code.into(), hint: hint.into(), reason: None, field: None, retry_after_ms: None }
     }
 
     /// Sew's masked not-found.

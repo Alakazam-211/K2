@@ -1414,6 +1414,22 @@ The owner sees who gets in, to which App, with which role, and what that role le
 - Your App's chat key: `k2 app grant <app> --kind chat-key` is refused when it would turn the key on or widen it, and ends with the line to ask with, for example `k2 permission request apps.chat-key app=<your app> caps=chat:read,chat:post,voice:join --why "..."` (`level=member|moderator|admin` and `uploads=on|off` when you asked for them). The owner or an admin allows it and confirms it's them; level admin, caps past what your App's manifest asked for, more than 500 people or uploads back on is the owner's alone. When the `[permission:]` turn says approved, the key is on: don't run the grant again. Narrowing or revoking your own App's key needs no card.
 - Who governs one of your App's Spaces: `k2 hostchat app-space governance <app> <space-id> app|sew` is a person's, and the refusal ends with `k2 permission request sew.space-governance app=<your app> space=<space-id> to=app --why "..."`. Switching to `app` needs the chat key first. The owner or an admin allows it; box users in the Space leave first (`k2 app chat <app>` shows them).
 
+## Your own chat account
+
+`k2 chat` runs as your workspace's own chat account. With none, `k2 chat whoami` (and every `k2 chat` read) and `k2 chat space create` are refused and end with:
+
+    k2 permission request chat.account scope=coworker --why "<what you need it for>"
+
+Run it as printed, or with `scope=assistant:<username>` to be that person's assistant instead: you post for them with `k2 chat send <space>/<channel> "..." --on-behalf-of <username>`, and an assistant is never a Space's manager. It's only ever your own workspace's account (another workspace's agent asks for its own), and only the owner allows it. The account lasts until someone removes it. When the `[permission:]` turn says approved, wait a few seconds while Sew sets it up (`chat_account_pending` means not yet), then run your command again. A Space you didn't create still needs a person to give you access (`k2 chat access grant`).
+
+## Email sending
+
+- Run `k2 mail sending <workspace> off|approval|on` first. If your workspace may manage hosted mail, it works for other workspaces; never for your own.
+- When it's refused (exit 3) for your own workspace, approval or on: the refusal ends with `k2 permission request mail.send-mode mode=approval --why "..."` (or `mode=on`).
+- When it's refused for off, for your own workspace or any other workspace on this server: it ends with `k2 permission request mail.stop-sending target=<workspace> --why "..."`. The owner or an admin allows it, and sending stays off until someone turns it on again.
+- Either card makes the change itself when it's allowed: don't run `k2 mail sending` again.
+- No card turns another workspace's sending on by itself. That refusal's Ask with: line, if any, asks for `mail.manage` ("manage hosted mail" for your own workspace), which lets you set other workspaces' sending yourself. With no line, tell your human (the owner or an admin runs `k2 mail sending <workspace> on`).
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

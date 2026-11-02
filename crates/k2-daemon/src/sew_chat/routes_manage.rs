@@ -640,6 +640,17 @@ fn owner_external_id(owner: Option<&str>) -> R<(String, String)> {
     Err(ChatErr::new("not_found", 404, format!("no person '{u}' on this box")))
 }
 
+/// Why a new Space needs the creating agent's chat account.
+const MANAGER_NEEDS_ACCOUNT: &str =
+    "Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one";
+
+/// Sew's 422 for a manager it has no member for (`principal_unknown` on
+/// `managers.<n>`).
+fn manager_unknown(e: &ChatErr) -> bool {
+    let d = |k: &str| e.details.get(k).and_then(Value::as_str);
+    e.code == "invalid_state" && d("reason") == Some("principal_unknown") && d("field").is_some_and(|f| f.starts_with("managers"))
+}
+
 fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
     let b: SpaceCreateBody = parse_body(body)?;
     let slug = b.slug.trim().to_ascii_lowercase();
@@ -666,6 +677,13 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
     // target_not_eligible), so an assistant's Space names no manager.
     let assistant = super::routes::assistant_of(&c.project_id)?;
     let sew = backend()?;
+    // Fix A (0.46.8): Sew names only a person or an agent with its own chat
+    // account a Space's manager (else 422 invalid_state, principal_unknown
+    // on managers.0). Refuse up front, before any Sew call, and say how to
+    // get the account (the `chat.account` card's wall).
+    if assistant.is_none() && super::routes::chat_account(&c.project_id)? != super::routes::ChatAccount::Active {
+        return Err(super::routes::no_chat_account(c, MANAGER_NEEDS_ACCOUNT)?);
+    }
     let a = act(c, m);
     let ns = NewSpace {
         slug: slug.clone(),
@@ -675,7 +693,12 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         manager: assistant.is_none(),
         app_id: app.clone(),
     };
-    let sp = sew_step(c, m, "space.create", None, Some(&slug), Some(format!("owner={owner_ext}")), || sew.space_create(&a, &ns))?;
+    let sp = match sew_step(c, m, "space.create", None, Some(&slug), Some(format!("owner={owner_ext}")), || sew.space_create(&a, &ns)) {
+        Ok(sp) => sp,
+        // K2's mirror was stale: Sew doesn't know the manager. Same words.
+        Err(e) if ns.manager && manager_unknown(&e) => return Err(super::routes::no_chat_account(c, MANAGER_NEEDS_ACCOUNT)?),
+        Err(e) => return Err(e),
+    };
     if let Some(svc) = &app {
         // Sew wrote the governing link with the create: K2 records the
         // binding (no separate bind call). It starts Sew-governed.

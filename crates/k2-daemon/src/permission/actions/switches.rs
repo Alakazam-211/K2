@@ -258,6 +258,19 @@ pub(crate) const fn off_spec(
 }
 
 const CORE: &[ParamSpec] = &[ParamSpec { key: "core", kind: ParamKind::Core, required: true, list: false, choices: &[] }];
+/// `mail.send-mode`'s walls: a gated send, and (0.46.8) the agent's own
+/// `k2 mail sending <its workspace> approval|on` (`owner_only`; the walls
+/// map teaches it only for the agent's own workspace).
+const MAIL_SEND_MODE_WALLS: &[Wall] = &[
+    code_wall("gated", "/cli/mail/"),
+    Wall {
+        matches: WallMatch::Code { status: 403, code: "owner_only" },
+        route_prefix: "/cli/mail/config/set",
+        method: WallMethod::Post,
+        params: &[("mode", k2_core::permission::catalog::ParamFrom::Body("/agentSend"))],
+    },
+];
+
 const MODE: &[ParamSpec] =
     &[ParamSpec { key: "mode", kind: ParamKind::Choice, required: true, list: false, choices: &["approval", "on"] }];
 const MODE_OFF: &[ParamSpec] =
@@ -592,7 +605,7 @@ pub(crate) static SWITCHES: [Switch; 17] = [
             "Let this agent send email",
             "Set {ws}'s email sending to {mode}",
             "With approval, each send waits for an owner or admin. On, it sends freely from its inboxes.",
-            &[code_wall("gated", "/cli/mail/")],
+            MAIL_SEND_MODE_WALLS,
             WallCoverage::PrefixOnly,
         ),
         off: off_spec(

@@ -210,6 +210,9 @@ pub(crate) fn sew_err(e: SewError) -> ChatErr {
             if let Some(r) = e.reason {
                 c = c.with("reason", r);
             }
+            if let Some(f) = e.field {
+                c = c.with("field", f);
+            }
             c
         }
         (400, _) => ChatErr::new("usage", 400, e.hint),
@@ -432,6 +435,21 @@ fn all_access(c: &Caller) -> R<Vec<store::Access>> {
 pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
     let all = all_access(c)?;
     if all.is_empty() {
+        // No chat account at all (0.46.8): say that first, so the agent
+        // asks for the account (the `chat.account` card) before a Space.
+        if !has_chat_grant(&c.project_id)? {
+            return Err(ChatErr::new(
+                "not_granted",
+                403,
+                format!(
+                    "{h} has no chat account yet. Grant the agent chat access first (its own chat account, not a Space): {how}. k2 chat answers once {h} \
+                     has its account and a Space (a person gives one: k2 chat access grant <space> {h})",
+                    h = c.handle,
+                    how = account_how(c)
+                ),
+            )
+            .with("chatAccount", false));
+        }
         return Err(ChatErr::new(
             "not_granted",
             403,
@@ -440,6 +458,79 @@ pub(crate) fn need_any_access(c: &Caller) -> R<Vec<store::Access>> {
     }
     Ok(all)
 }
+
+/// The workspace has its own chat account (an enabled workspace `chat`
+/// grant). Unreadable = 503: never a guess.
+pub(crate) fn has_chat_grant(project_id: &str) -> R<bool> {
+    person::has_chat_grant(project_id)
+        .map_err(|e| ChatErr::new("chat_grant_unreadable", 503, format!("can't read this workspace's chat grant ({e})")))
+}
+
+/// A workspace's chat account as K2 knows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChatAccount {
+    /// K2's mirror holds its Sew member, active.
+    Active,
+    /// It has a chat grant, and Sew hasn't confirmed the member yet.
+    Pending,
+    /// No chat grant: no account.
+    None,
+}
+
+/// `project_id`'s chat account: K2's member mirror (`k2:workspace:<id>`,
+/// active), else whether a grant is waiting on Sew.
+pub(crate) fn chat_account(project_id: &str) -> R<ChatAccount> {
+    let ext = format!("k2:workspace:{}", project_id.to_ascii_lowercase());
+    let member = k2_core::tool_hook::chat_member(&ext)
+        .map_err(|e| ChatErr::new("chat_unavailable", 503, format!("can't read K2's chat members ({e})")))?;
+    if member.is_some_and(|m| m.state == k2_core::tool_hook::members::ACTIVE) {
+        return Ok(ChatAccount::Active);
+    }
+    Ok(if has_chat_grant(project_id)? { ChatAccount::Pending } else { ChatAccount::None })
+}
+
+/// The refusal for an agent that needs its own chat account and has none
+/// Sew knows: 403 `chat_account_needed` (the `chat.account` card's wall)
+/// when it has no grant, 409 `chat_account_pending` while Sew sets one up.
+pub(crate) fn no_chat_account(c: &Caller, what: &str) -> R<ChatErr> {
+    Ok(if has_chat_grant(&c.project_id)? {
+        ChatErr::new(
+            "chat_account_pending",
+            409,
+            format!(
+                "{}'s chat account is granted but Sew is still setting it up (a few seconds after the grant). Run \
+                 this again in a few seconds",
+                c.handle
+            ),
+        )
+    } else {
+        ChatErr::new(
+            CHAT_ACCOUNT_NEEDED,
+            403,
+            format!(
+                "{h} has no chat account yet. {what}. Grant the agent chat access first (its own chat account): {how}. Then run this again",
+                h = c.handle,
+                how = account_how(c)
+            ),
+        )
+        .with("workspace", c.handle.clone())
+    })
+}
+
+/// How the agent gets its chat account: ask on a card (the refusal ends
+/// with the line while permission cards are on for its workspace), or the
+/// owner's grant.
+fn account_how(c: &Caller) -> String {
+    let grant = format!("k2 app grant add --kind chat --subject-kind workspace --subject {} --scope coworker", c.handle);
+    if k2_core::permission::gate::enabled_for(&c.project_id) {
+        format!("ask for it with the Ask with: line below (the owner allows it), or the owner runs {grant}")
+    } else {
+        format!("ask your human; the owner runs {grant}")
+    }
+}
+
+/// The refusal code for "this agent needs its own chat account first".
+pub const CHAT_ACCOUNT_NEEDED: &str = "chat_account_needed";
 
 /// The Space that governs a channel: its own, or the default Space for a
 /// DM outside every Space.

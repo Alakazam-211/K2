@@ -9680,7 +9680,10 @@ async fn handle_one_request(
                 scoped_principal.as_ref(),
             ) {
                 // #34: M5 flag-off / M6 / Member → owner_only (exit 3).
-                let _ = stream.read(&mut buf).await;
+                // Read (and note) the whole body: the permission-card
+                // wrapper reads it (0.46.8: `k2 mail sending <ws> …` names
+                // its card from `workspace` and `agentSend`).
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
                     .await;
                 return DispatchOutcome::Done;

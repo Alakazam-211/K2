@@ -298,12 +298,20 @@ pub(super) const ROWS: &[Refusal] = &[
         "Name one of this App's Spaces (k2 app chat <app> lists them), or leave space out when the App has only one."),
     r("channel_type_mismatch", "chat", 409, Who::Agent, "A channel with that slug already exists with the other type (text or voice); Sew never changes a channel's type.",
         "Use another slug for the new channel, or keep the type the channel has."),
+    r("chat_account_needed", "chat", 403, Who::Owner, "The agent has no chat account of its own, and the call needs one: Sew makes the agent that creates a Space (k2 chat space create, --app too) its manager.",
+        "You ask, the owner allows: run the Ask with: line the error ends with (k2 permission request chat.account scope=coworker). Or the owner runs k2 app grant add --kind chat --subject-kind workspace --subject <ws> --scope coworker. Then run it again.")
+        .ask(),
     r("chat_key_required", "chat", 409, Who::Owner, "The App has no chat key, so it can't set its people's channels or make channels in its Spaces.",
         "The owner gives it one, in person: k2 app grant <app> --kind chat-key (an agent asks on a card: k2 permission request apps.chat-key app=<app>)."),
     r("chat_unavailable", "chat", 409, Who::Owner, "Chat / Voice Hosting isn't set up on this server (or K2 can't read its chat store right now).",
         "The owner sets it up (k2 hostchat status shows what is missing); if it is set up, try again in a moment."),
     r("home_client_cannot_govern", "chat", 409, Who::Owner, "The App is the chat install's home client (it sees every Space a person is in), so it can't hold a chat key or govern a Space.",
         "Use another App for the chat key, or the owner moves the home client first: k2 hostchat home client <app>|none"),
+    // Sew's own 422 passed through (k2 chat, k2 hostchat) and K2's for a
+    // chat grant it can't make; `k2 chat` (`_chat_fail`) exits 1 on a 422.
+    r("invalid_state", "chat", 422, Who::Agent, "Sew (or K2) can't do it in the current state. error.details has reason and field (the value it is about). principal_unknown: Sew has no chat account for that person or agent. member_not_provisioned: the account isn't set up yet (retry in a few seconds). target_not_eligible: that member can't take the role (an assistant is never a manager).",
+        "principal_unknown on managers.0: your agent needs its own chat account (k2 permission request chat.account scope=coworker). On owner_external_id: the --owner person has no chat yet; the owner gives it (k2 app user chat <user> member --app <app>). Else fix that value.")
+        .exit(1),
     r("no_chat_caps", "chat", 409, Who::Owner, "The App's manifest chat caps aren't approved yet (or the App is suspended), so a chat key has nothing to grant.",
         "The owner approves the App's chat caps (k2 app approvals; k2 app approve <id>), or name them: k2 app grant <app> --kind chat-key --caps \"chat:read chat:post\""),
     r("not_app_governed", "chat", 409, Who::Admin, "The Space is still governed by Sew's own roles, so the App can't make channels or set who is in them yet.",

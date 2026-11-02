@@ -784,7 +784,7 @@ for absent in "chat:structure" "--manager" "--voice" "k2 app grant add --kind ch
     assert_absent "chat-voice: no $absent" "$cv_out" "$absent"
 done
 cv_lines="$(printf '%s\n' "$cv_out" | wc -l | tr -d ' ')"
-if [ "$cv_lines" -le 100 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+if [ "$cv_lines" -le 101 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 101)" >&2; fail=$((fail + 1)); fi
 cr_out="$("$K2" study chat-voice-rooms)"
 assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
 for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \

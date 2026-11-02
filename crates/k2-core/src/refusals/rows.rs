@@ -264,6 +264,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "Raise the limit (k2 app push set <app> --max-devices N), or remove a device: k2 app push devices rm <app> <apd_…>"),
     r("push_not_configured", "push", 409, Who::Agent, "The App has no push key for that platform.",
         "Add it: k2 app push setup <app> (--apns-key … or --fcm-service-account …). Check: k2 app push status <app>"),
+    r("push_server_only", "push", 403, Who::Agent, "This App takes push.register and push.viewing only from its own server, never a phone calling K2 directly.",
+        "Send the device token to your App's server; it calls K2 as that person (k2.asGuest(pass).push.register). To change it: k2 app push set <app> --register any"),
     r("token_in_use", "push", 409, Who::Person, "Another person on this App is still signed in with this phone's push token.",
         "Sign them out first (the App calls push.unregister on sign-out), then register again."),
     // ── pairing ──

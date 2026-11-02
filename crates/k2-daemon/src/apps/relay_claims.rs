@@ -7,19 +7,29 @@
 //! `requested ∩ verified(label)`. The box asks with its tunnel token:
 //!
 //! ```text
-//! POST {base}/api/custom-hostnames                    {hostname, verifyToken, capabilities:["customSni"]}
-//! POST {base}/api/custom-hostnames/{hostname}/verify  {}
-//! POST {base}/api/custom-hostnames/{hostname}/release {}
-//! GET  {base}/api/custom-hostnames                    this label's names
+//! POST {base}/api/custom-hostnames               {hostname, verifyToken, capabilities:["customSni"], httpRedirect}
+//! POST {base}/api/custom-hostnames/verify        {hostname}
+//! POST {base}/api/custom-hostnames/release       {hostname}
+//! POST {base}/api/custom-hostnames/http-redirect {hostname?, enabled}   the relay's :80 (no hostname: all of them)
+//! GET  {base}/api/custom-hostnames               this label's names (released ones too), counts, limits
 //! ```
 //!
 //! `{base}` is K2 Connect's control plane (`K2_CUSTOM_HOSTNAMES_BASE`, else
-//! `K2_CONNECT_BASE`, else `https://connect.k2.dev`). Answers carry
-//! `{hostname, status: pending|verified|failing|released, lastError?}` (one,
-//! or `{hostnames:[…]}` for the list); refusals `{error: <code>, detail?,
-//! count?, cap?}`. The control plane does the authoritative TXT check
-//! through public resolvers (never the box's word), uniqueness, the deny
-//! list, the Pro gate and the caps (20 per box, 100 per account).
+//! `K2_CONNECT_BASE`, else `https://connect.k2.dev`); k2-connect's
+//! `control-plane/src/custom_hostnames.rs`. Answers carry `{hostname, status:
+//! pending|verified|failing|released, lastError?, …}` (one, or `{names:[…],
+//! counts, limits}` for the list; a new claim is 201, repeating a held one
+//! 200); refusals `{error: <code>, detail, scope?, count?, limit?}`. It does
+//! the authoritative TXT check through public resolvers (never the box's
+//! word), uniqueness, the deny list, the Pro gate, the caps (20 held names per
+//! box, 100 per account; held = pending, verified or failing) and 5 new claims
+//! an hour per account. `failing` still routes (`verified` here). Release,
+//! list and the :80 switch work without Pro, so a downgraded box can clean up.
+//!
+//! None of these refusals is about this agent's rights: those stop earlier,
+//! at the one broad App switch (`apps_manage_off`, `Ask with: k2 permission
+//! request apps.build`). These are about the server's plan, the name or K2
+//! Connect, and each one's words say who can act.
 //!
 //! The box's own checks before a claim (PB-4) are courtesy, for good words:
 //! the box is Pro behind K2 Connect, and holds fewer than
@@ -49,16 +59,21 @@ pub struct ClaimAnswer {
 pub enum CpError {
     /// The control plane said no: its code and K2's plain words.
     Refused { code: String, words: String },
-    /// No answer (network, a 5xx, a body K2 can't read).
+    /// K2 Connect answered, and it may well go through later (its rate
+    /// limit, a race, its DNS or database down): plain words; nothing sticks.
+    Retry(String),
+    /// No answer (network, a body K2 can't read).
     Unreachable(String),
 }
 
 /// The four calls (production: [`LiveApi`]; tests: a fake).
 pub trait RelayApi {
-    fn claim(&self, hostname: &str, verify_token: &str) -> Result<ClaimAnswer, CpError>;
+    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError>;
     fn verify(&self, hostname: &str) -> Result<ClaimAnswer, CpError>;
     fn release(&self, hostname: &str) -> Result<(), CpError>;
     fn list(&self) -> Result<Vec<ClaimAnswer>, CpError>;
+    /// The relay's :80 redirect for one name, or all of this box's (`None`).
+    fn http_redirect(&self, hostname: Option<&str>, enabled: bool) -> Result<(), CpError>;
 }
 
 /// Overrides the control plane's base for these calls (staging, tests).
@@ -67,6 +82,9 @@ pub const BASE_ENV: &str = "K2_CUSTOM_HOSTNAMES_BASE";
 /// fails the handshake for names it doesn't serve (PB-1, CD-A12), so the
 /// relay may pass customer names to it.
 pub const CAPABILITY: &str = "customSni";
+/// What K2 says while frps refuses the custom proxy: not verified on the
+/// relay yet, or another box's live proxy still holds the name. Not a failure.
+pub const WAITING_TO_TAKE_OVER: &str = "waiting to take over at K2's relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; K2 tries again)";
 /// Where a person upgrades to Pro.
 pub const UPGRADE_URL: &str = "https://k2.dev/dashboard";
 
@@ -81,51 +99,75 @@ pub fn endpoint() -> String {
     format!("{base}/api/custom-hostnames")
 }
 
-/// One hostname as a path segment (lowercase; only DNS name characters
-/// ever reach here, but anything else is percent-encoded).
-fn seg(hostname: &str) -> String {
-    hostname
-        .trim()
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
-        .bytes()
-        .map(|b| if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' { (b as char).to_string() } else { format!("%{b:02X}") })
-        .collect()
+/// A hostname as the API takes it: lowercase, no trailing dot.
+fn host_arg(hostname: &str) -> String {
+    hostname.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Plain words for a control-plane refusal code (CLI, Settings).
+/// Plain words for a control-plane refusal code (CLI, Settings). `v` is its
+/// body (`detail`, and for `cap_reached` `scope`, `count`, `limit`).
 pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
     let detail = v.get("detail").and_then(J::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let d = detail.map(|d| format!(": {d}")).unwrap_or_default();
     match code {
         "pro_required" => format!(
-            "K2 Connect says this box's plan isn't Pro: your own domain through K2's relays needs Pro. Upgrade at {UPGRADE_URL}"
+            "K2 Connect says this server's plan isn't Pro: your own domain through K2's relays needs Pro. The owner upgrades at {UPGRADE_URL}"
         ),
         "cap_reached" => {
-            let cap = v.get("cap").and_then(J::as_u64);
-            let count = v.get("count").and_then(J::as_u64);
-            match (count, cap) {
-                (Some(n), Some(c)) => format!(
-                    "K2 Connect's limit is reached ({n} of {c} names): remove a name you no longer need (k2 app domain rm), then try again"
-                ),
-                _ => "K2 Connect's limit on custom names is reached (20 per server, 100 per account): remove a name you no \
-                      longer need (k2 app domain rm), then try again"
-                    .to_string(),
-            }
+            let n = v.get("count").and_then(J::as_u64);
+            let l = v.get("limit").and_then(J::as_u64);
+            let (what, default_l) = match v.get("scope").and_then(J::as_str) {
+                Some("account") => ("this K2 account", 100),
+                _ => ("this server", 20),
+            };
+            let of = match (n, l) {
+                (Some(n), Some(l)) => format!("{n} of {l}"),
+                _ => format!("the most ({default_l})"),
+            };
+            format!(
+                "{what} already holds {of} names through K2's relays: remove one you no longer need (k2 app domain rm <app-id> <name>), then try again"
+            )
         }
-        "hostname_claimed_elsewhere" => format!(
-            "{hostname} is already verified for another K2 account. Its owner removes it there first; K2 never takes over another account's name"
-        ),
+        "hostname_claimed_elsewhere" => match detail {
+            // k2-connect names the case: another box of this account, or another account.
+            Some(d) if d.contains("your account") => format!("{d}. K2 never takes a name over"),
+            _ => format!(
+                "{hostname} is already verified for another K2 account. Its owner removes it there first; K2 never takes over another account's name"
+            ),
+        },
         "capability_missing" => {
             "K2 Connect says this K2 can't serve custom names yet: update K2 on this server (the owner runs k2 update), then try again".to_string()
         }
-        "rate_limited" => "K2 Connect is taking claims slowly from this account right now (5 an hour): try again later".to_string(),
+        "invalid_token" => {
+            "K2 Connect refused this server's tunnel token: the owner re-pairs this server (k2 tunnel status shows how)".to_string()
+        }
+        "nested_label" => {
+            "this server's tunnel token is for a nested label, which has no tunnel of its own: the owner re-pairs it under the server's main name".to_string()
+        }
+        "hostname_invalid" => format!(
+            "K2 Connect says {hostname} isn't a valid domain name{d}. Check the spelling: k2 app domain rm, then add it again"
+        ),
+        "hostname_not_allowed" => format!(
+            "K2 Connect won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
+        ),
+        "bad_verify_token" => format!(
+            "K2 Connect refused this name's proof token (16 to 128 letters, digits, _ or -): remove the name and add it again to get a new one (k2 app domain rm, then add {hostname})"
+        ),
+        "not_claimed" => format!("K2 Connect has no claim on {hostname} from this server; K2 claims it again at the next check"),
+        "verification_failed" => format!(
+            "K2 Connect can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; K2 tries again"
+        ),
         "txt_missing" | "not_verified" | "pending" => format!(
             "K2 Connect can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
         ),
-        other => match detail {
-            Some(d) => format!("K2 Connect won't route {hostname}: {d} ({other})"),
-            None => format!("K2 Connect won't route {hostname} ({other})"),
-        },
+        "rate_limited" => "K2 Connect takes 5 new names an hour per account and this account is over that now: K2 tries again later".to_string(),
+        "conflict" => format!("another change to {hostname} reached K2 Connect at the same moment: K2 tries again"),
+        "supabase_error" => "K2 Connect's database didn't answer: K2 tries again".to_string(),
+        "dns_unavailable" => "K2 Connect couldn't look up the TXT record right now: K2 tries again".to_string(),
+        "custom_hostnames_disabled" => {
+            "K2 Connect hasn't turned on custom names yet: Path B starts working once K2's relays do; K2 tries again".to_string()
+        }
+        other => format!("K2 Connect won't route {hostname} ({other}){d}"),
     }
 }
 
@@ -148,15 +190,17 @@ pub fn parse_reply(status: u16, body: &str, hostname: &str) -> Result<J, CpError
         return Ok(v);
     }
     if let Some(code) = v.get("error").and_then(J::as_str).map(str::trim).filter(|c| !c.is_empty()) {
+        let words = words_for(code, hostname, &v);
+        // These may well go through later: nothing sticks to the name.
+        if status >= 500 || matches!(code, "rate_limited" | "conflict") {
+            return Err(CpError::Retry(words));
+        }
         if (400..500).contains(&status) {
-            return Err(CpError::Refused { code: code.to_string(), words: words_for(code, hostname, &v) });
+            return Err(CpError::Refused { code: code.to_string(), words });
         }
     }
     if status == 401 {
-        return Err(CpError::Refused {
-            code: "unauthorized".into(),
-            words: "K2 Connect refused this server's tunnel token: re-pair K2 Connect (k2 tunnel status)".into(),
-        });
+        return Err(CpError::Refused { code: "invalid_token".into(), words: words_for("invalid_token", hostname, &J::Null) });
     }
     if status == 404 {
         return Err(CpError::Unreachable(
@@ -195,27 +239,39 @@ impl LiveApi {
 }
 
 impl RelayApi for LiveApi {
-    fn claim(&self, hostname: &str, verify_token: &str) -> Result<ClaimAnswer, CpError> {
-        let body = json!({ "hostname": seg(hostname), "verifyToken": verify_token, "capabilities": [CAPABILITY] });
+    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError> {
+        let body = json!({
+            "hostname": host_arg(hostname),
+            "verifyToken": verify_token,
+            "capabilities": [CAPABILITY],
+            "httpRedirect": http_redirect,
+        });
         let v = self.call("POST", &endpoint(), Some(body), hostname)?;
         answer(&v, hostname)
     }
     fn verify(&self, hostname: &str) -> Result<ClaimAnswer, CpError> {
-        let v = self.call("POST", &format!("{}/{}/verify", endpoint(), seg(hostname)), Some(json!({})), hostname)?;
+        let v = self.call("POST", &format!("{}/verify", endpoint()), Some(json!({ "hostname": host_arg(hostname) })), hostname)?;
         answer(&v, hostname)
     }
     fn release(&self, hostname: &str) -> Result<(), CpError> {
-        match self.call("POST", &format!("{}/{}/release", endpoint(), seg(hostname)), Some(json!({})), hostname) {
+        match self.call("POST", &format!("{}/release", endpoint()), Some(json!({ "hostname": host_arg(hostname) })), hostname) {
             Ok(_) => Ok(()),
             // Already gone there: released.
-            Err(CpError::Refused { code, .. }) if code == "not_found" => Ok(()),
+            Err(CpError::Refused { code, .. }) if code == "not_claimed" => Ok(()),
             Err(e) => Err(e),
         }
     }
     fn list(&self) -> Result<Vec<ClaimAnswer>, CpError> {
         let v = self.call("GET", &endpoint(), None, "")?;
-        let rows = v.get("hostnames").and_then(J::as_array).cloned().unwrap_or_default();
+        let rows = v.get("names").and_then(J::as_array).cloned().unwrap_or_default();
         rows.iter().map(|r| answer(r, r.get("hostname").and_then(J::as_str).unwrap_or(""))).collect()
+    }
+    fn http_redirect(&self, hostname: Option<&str>, enabled: bool) -> Result<(), CpError> {
+        let mut body = json!({ "enabled": enabled });
+        if let Some(h) = hostname {
+            body["hostname"] = json!(host_arg(h));
+        }
+        self.call("POST", &format!("{}/http-redirect", endpoint()), Some(body), hostname.unwrap_or("this server's names")).map(|_| ())
     }
 }
 
@@ -251,7 +307,10 @@ pub fn with_api<T>(f: impl FnOnce(&dyn RelayApi) -> T) -> T {
     {
         struct Down;
         impl RelayApi for Down {
-            fn claim(&self, _: &str, _: &str) -> Result<ClaimAnswer, CpError> {
+            fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+                Err(CpError::Unreachable("no control plane in tests".into()))
+            }
+            fn http_redirect(&self, _: Option<&str>, _: bool) -> Result<(), CpError> {
                 Err(CpError::Unreachable("no control plane in tests".into()))
             }
             fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {
@@ -390,14 +449,21 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
         // Box-side: nothing was sent; the row keeps any earlier claim.
         return Step::Refused { code, words };
     }
+    // The relay's :80 follows the owner's switch (`k2 front http`).
+    let redirect = k2_core::front443::load().http_on();
+    let claim_then_verify = || match api.claim(host, &d.verify_token, redirect) {
+        Ok(a) if a.status == "verified" || a.status == "failing" => Ok(a),
+        Ok(_) => api.verify(host),
+        Err(e) => Err(e),
+    };
     let claimed = if d.relay_state.as_deref() == Some(RELAY_CLAIMED) {
-        api.verify(host)
-    } else {
-        match api.claim(host, &d.verify_token) {
-            Ok(a) if a.status == "verified" => Ok(a),
-            Ok(_) => api.verify(host),
-            Err(e) => Err(e),
+        match api.verify(host) {
+            // K2 Connect dropped an old claim (7 days unverified): claim again.
+            Err(CpError::Refused { code, .. }) if code == "not_claimed" => claim_then_verify(),
+            other => other,
         }
+    } else {
+        claim_then_verify()
     };
     match claimed {
         Ok(a) if a.status == "verified" || a.status == "failing" => {
@@ -414,7 +480,8 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
             record(host, Some(RELAY_CLAIMED), Some(&w));
             Step::Waiting(w)
         }
-        Err(CpError::Refused { code, words }) if code == "txt_missing" || code == "not_verified" => {
+        // Claimed; its own TXT check hasn't passed yet.
+        Err(CpError::Refused { code, words }) if code == "verification_failed" => {
             record(host, Some(RELAY_CLAIMED), Some(&words));
             Step::Waiting(words)
         }
@@ -422,6 +489,7 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
             record(host, Some(k2_core::domains::RELAY_REFUSED), Some(&words));
             Step::Refused { code, words }
         }
+        Err(CpError::Retry(w)) => Step::Waiting(w),
         Err(CpError::Unreachable(w)) => Step::Unreachable(w),
     }
 }
@@ -434,7 +502,7 @@ pub fn release(d: &AppDomain, api: &dyn RelayApi) -> Result<bool, String> {
     }
     match api.release(&d.hostname) {
         Ok(()) => Ok(true),
-        Err(CpError::Refused { words, .. }) | Err(CpError::Unreachable(words)) => Err(words),
+        Err(CpError::Refused { words, .. }) | Err(CpError::Retry(words)) | Err(CpError::Unreachable(words)) => Err(words),
     }
 }
 
@@ -451,7 +519,7 @@ pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
     }
     let listed = match api.list() {
         Ok(v) => v,
-        Err(CpError::Refused { words, .. }) | Err(CpError::Unreachable(words)) => return Err(words),
+        Err(CpError::Refused { words, .. }) | Err(CpError::Retry(words)) | Err(CpError::Unreachable(words)) => return Err(words),
     };
     let mut released = Vec::new();
     for d in rows.iter().filter(|d| d.holds_relay_claim()) {
@@ -475,6 +543,28 @@ pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
         }
     }
     Ok(released)
+}
+
+/// What frps last said about the tunnel's custom proxy (`setup.pathB.proxy`).
+pub fn proxy_json() -> J {
+    use k2_core::tunnel::custom_names::{proxy_state, ProxyState};
+    match proxy_state() {
+        ProxyState::Unknown => json!({ "state": "unknown" }),
+        ProxyState::Registered => json!({ "state": "registered" }),
+        ProxyState::Waiting(why) => json!({ "state": "waiting", "words": WAITING_TO_TAKE_OVER, "why": why }),
+    }
+}
+
+/// The owner's :80 switch at the relay, for all this box's names
+/// (`k2 front http`, no Pro needed). `Ok(false)`: this box holds none.
+pub fn set_relay_redirect(enabled: bool, api: &dyn RelayApi) -> Result<bool, String> {
+    if claims_held() == 0 {
+        return Ok(false);
+    }
+    match api.http_redirect(None, enabled) {
+        Ok(()) => Ok(true),
+        Err(CpError::Refused { words, .. }) | Err(CpError::Retry(words)) | Err(CpError::Unreachable(words)) => Err(words),
+    }
 }
 
 #[cfg(test)]

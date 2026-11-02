@@ -62,6 +62,72 @@ fn the_front_owns_443() {
     assert_eq!(row(&both.public, 443).source, "front443");
 }
 
+/// `k2 front http` (0.46.8, relay `http-redirect`): an agent is refused with
+/// no card; GET is 405; with names through K2 Connect the switch goes to the
+/// relay, needs no root helper or front, and a refusal there changes nothing;
+/// with none, the box's own :80 rules apply.
+#[test]
+fn the_http_switch_goes_to_the_relay_for_path_b_names() {
+    use crate::apps::relay_claims::{self, ClaimAnswer, CpError, RelayApi};
+    struct Cp(std::cell::RefCell<Vec<String>>, bool);
+    impl RelayApi for Cp {
+        fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+            panic!("no claim")
+        }
+        fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {
+            panic!("no verify")
+        }
+        fn release(&self, _: &str) -> Result<(), CpError> {
+            panic!("no release")
+        }
+        fn list(&self) -> Result<Vec<ClaimAnswer>, CpError> {
+            panic!("no list")
+        }
+        fn http_redirect(&self, h: Option<&str>, on: bool) -> Result<(), CpError> {
+            self.0.borrow_mut().push(format!("{h:?} {on}"));
+            if self.1 {
+                return Err(CpError::Retry("K2 Connect's database didn't answer".into()));
+            }
+            Ok(())
+        }
+    }
+    let _e = env();
+    let _db = k2_core::db::scoped_for_test();
+    let (st, v) = call(&agent(), true, "/cli/front/http", serde_json::json!({"on": false}));
+    assert_eq!((st.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("owner_only")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("k2 front http on|off"), "{v}");
+    let (st, _) = call(&Who::Owner, false, "/cli/front/http", serde_json::json!({}));
+    assert_eq!(st, "405 Method Not Allowed");
+    let (st, _) = call(&Who::Owner, true, "/cli/front/http", serde_json::json!({}));
+    assert_eq!(st, "400 Bad Request", "on or off");
+    // No names through the relays, no front: nothing the switch can do here.
+    let (st, _) = call(&Who::Owner, true, "/cli/front/http", serde_json::json!({"on": true}));
+    assert_eq!(st, "409 Conflict");
+    assert_eq!(k2_core::front443::load().http, None, "unchanged");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, "example.com", None, false).unwrap();
+        k2_core::domains::upsert_name(&conn, "shop.example.com", "example.com", "app:shop").unwrap();
+        k2_core::domains::set_relay_state(&conn, "shop.example.com", Some(k2_core::domains::RELAY_VERIFIED), None, 1).unwrap();
+    }
+    // The control plane refuses: nothing changes.
+    relay_claims::set_test_api(Some(std::rc::Rc::new(Cp(Default::default(), true))));
+    let (st, v) = call(&Who::Owner, true, "/cli/front/http", serde_json::json!({"on": false}));
+    assert_eq!(st, "409 Conflict", "{v}");
+    assert_eq!(v["error"]["code"], "relay_switch_failed", "{v}");
+    assert_eq!(k2_core::front443::load().http, None);
+    // It takes it: saved, and no front or helper was needed.
+    let cp = std::rc::Rc::new(Cp(Default::default(), false));
+    relay_claims::set_test_api(Some(cp.clone()));
+    let (st, v) = call(&Who::Owner, true, "/cli/front/http", serde_json::json!({"on": false}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!((v["on"].as_bool(), v["relay"]["applied"].as_bool()), (Some(false), Some(true)), "{v}");
+    assert_eq!(*cp.0.borrow(), vec!["None false".to_string()]);
+    assert_eq!(k2_core::front443::load().http, Some(false));
+    relay_claims::set_test_api(None);
+}
+
 /// PB-A12 (0.46.8): the :80 front lists 80/tcp as its own while it serves.
 #[test]
 fn the_http_front_lists_80_while_it_serves() {

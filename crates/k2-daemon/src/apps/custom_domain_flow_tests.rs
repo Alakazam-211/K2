@@ -406,8 +406,12 @@ fn answer(status: &str) -> ClaimAnswer {
 }
 
 impl RelayApi for FakeCp {
-    fn claim(&self, hostname: &str, verify_token: &str) -> Result<ClaimAnswer, CpError> {
-        self.calls.borrow_mut().push(format!("claim {hostname} {verify_token}"));
+    fn http_redirect(&self, hostname: Option<&str>, enabled: bool) -> Result<(), CpError> {
+        self.calls.borrow_mut().push(format!("http-redirect {hostname:?} {enabled}"));
+        Ok(())
+    }
+    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError> {
+        self.calls.borrow_mut().push(format!("claim {hostname} {verify_token} {http_redirect}"));
         self.claim.borrow().clone().unwrap_or_else(|| Ok(answer("pending")))
     }
     fn verify(&self, hostname: &str) -> Result<ClaimAnswer, CpError> {
@@ -568,7 +572,7 @@ fn a_verified_claim_issues_and_the_tunnel_carries_the_name() {
     assert_eq!(r.relay_state.as_deref(), Some(domains::RELAY_VERIFIED));
     assert!(r.via_relay());
     assert_eq!(*orders.borrow(), vec![HOST.to_string()]);
-    assert_eq!(*cp.calls.borrow(), vec![format!("claim {HOST} {}", d.verify_token), format!("verify {HOST}")]);
+    assert_eq!(*cp.calls.borrow(), vec![format!("claim {HOST} {} true", d.verify_token), format!("verify {HOST}")]);
     assert!(crate::domains::acme::app_name_via_relay(HOST));
     let rl = crate::apps::custom_names::reload();
     assert_eq!(rl.tunnel, vec![HOST.to_string()], "issuing names ride the custom proxy");
@@ -602,7 +606,7 @@ fn control_plane_refusals_are_plain_words_and_never_issue() {
     let no_order = |h: &str| panic!("no order for {h}");
     for (code, want) in [
         ("pro_required", "isn't Pro"),
-        ("cap_reached", "limit"),
+        ("cap_reached", "already holds"),
         ("hostname_claimed_elsewhere", "another K2 account"),
         ("capability_missing", "update K2"),
     ] {
@@ -619,6 +623,29 @@ fn control_plane_refusals_are_plain_words_and_never_issue() {
     let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
     assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_WAITING_DNS, Some(domains::RELAY_CLAIMED)));
     assert!(r.last_error.as_deref().unwrap().contains("can't see the TXT record yet"), "{:?}", r.last_error);
+    // Its own TXT check fails: claimed, waiting, K2 Connect's words.
+    *cp.verify.borrow_mut() = Some(Err(CpError::Refused {
+        code: "verification_failed".into(),
+        words: relay_claims::words_for("verification_failed", HOST, &json!({"detail": "TXT does not hold it"})),
+    }));
+    let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_WAITING_DNS, Some(domains::RELAY_CLAIMED)));
+    assert!(r.last_error.as_deref().unwrap().contains("TXT does not hold it"), "{:?}", r.last_error);
+    // Its rate limit: said, nothing sticks.
+    *cp.verify.borrow_mut() = Some(Err(CpError::Retry(relay_claims::words_for("rate_limited", HOST, &J::Null))));
+    let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
+    assert_eq!(r.relay_state.as_deref(), Some(domains::RELAY_CLAIMED));
+    assert!(r.last_error.as_deref().unwrap().contains("5 new names an hour"), "{:?}", r.last_error);
+    // It dropped the old claim: K2 claims again.
+    *cp.verify.borrow_mut() = Some(Err(CpError::Refused { code: "not_claimed".into(), words: "x".into() }));
+    cp.calls.borrow_mut().clear();
+    let _ = check_with(HOST, &cname_here(&d), &no_order).unwrap();
+    assert!(cp.calls.borrow().iter().any(|c| c.starts_with("claim ")), "{:?}", cp.calls.borrow());
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        domains::set_relay_state(&conn, HOST, Some(domains::RELAY_CLAIMED), None, 1).unwrap();
+    }
     // No answer at all: says so, tries again, no state change at the plane.
     *cp.verify.borrow_mut() = Some(Err(CpError::Unreachable("HTTP 502".into())));
     let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();

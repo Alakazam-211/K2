@@ -13920,6 +13920,9 @@ for c in v.get("custom") or []:
         print("  last check: %s" % c["lastError"])
     if c.get("path"):
         print("  DNS shows: %s" % ("Path B, through K2 Connect" if c["path"] == "connect" else "Path A, this box"))
+    pr = ((c.get("setup") or {}).get("pathB") or {}).get("proxy") or {}
+    if c.get("path") == "connect" and pr.get("state") == "waiting":
+        print("  %s" % pr.get("words"))
     rs = (c.get("relay") or {}).get("state")
     if rs:
         words = {"claimed": "claimed, waiting for its own check of the TXT", "verified": "verified: its relays route this name here", "released": "released: its relays no longer route this name", "refused": "refused (see last check)"}
@@ -23256,11 +23259,12 @@ closed.
                                     certificate renewal (TLS-ALPN-01) keeps working;
                                     the mail server restarts once
   k2 front disable [--json]         give :443 back (voice to TCP 5349, mail to :443)
-  k2 front http on|off [--json]     the :80 front: http:// visitors of the names this
-                                    box serves get a redirect to https, and K2's own
-                                    HTTP-01 certificates answer there. On by default:
-                                    k2 front enable installs it when :80 is free. On
-                                    takes :80 (the daemon restarts once); off frees it.
+  k2 front http on|off [--json]     the https redirect for people who type http://: on
+                                    K2's relays for names through K2 Connect, and on this
+                                    box's :80 where K2's front runs (K2's own HTTP-01
+                                    certificates answer there too). On by default:
+                                    k2 front enable installs :80 when it is free. On takes
+                                    :80 (the daemon restarts once); off frees it.
   k2 front passthrough [--json]     names passed through to your own web server
   k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>]
                                     pass <host> (or '*': every name K2 doesn't serve),

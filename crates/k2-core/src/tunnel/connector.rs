@@ -323,6 +323,7 @@ impl ProxyRegistration {
     pub(crate) fn begin_run(&self) -> u64 {
         let run = self.run.fetch_add(1, Ordering::SeqCst) + 1;
         self.registered_run.store(0, Ordering::SeqCst);
+        super::custom_names::reset_proxy_state();
         run
     }
 
@@ -3164,6 +3165,16 @@ fn handle_line(
     proxy: &(Arc<ProxyRegistration>, u64),
     health: &FrpcHealth,
 ) {
+    // 0.46.8 (Path B): the custom proxy's lines are about the custom names
+    // only. frps refusing it (`custom_domains: none of …`: not verified yet,
+    // or another box's live proxy still holds the name) is "waiting to take
+    // over", never a tunnel failure.
+    if super::custom_names::is_custom_proxy_line(line) {
+        if proxy.0.is_current_run(proxy.1) {
+            super::custom_names::note_frpc_line(line);
+        }
+        return;
+    }
     if let Some(w) = watch {
         w.observe_line(line);
     }

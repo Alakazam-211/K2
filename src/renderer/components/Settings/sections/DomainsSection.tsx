@@ -784,7 +784,7 @@ export type FirewallStatus = {
     counters: { perIpRefused: number; guardLimited: number }
   }
   /** 0.46.8: the :443 front and the :80 front's switch. */
-  front?: { enabled: boolean; http?: { on: boolean; serving: boolean } }
+  front?: { enabled: boolean; http?: { on: boolean; serving: boolean; relayNames?: number | null } }
 }
 
 /** Plain words for a row's source (K2-owned rows say which feature). */
@@ -952,19 +952,23 @@ export function FirewallPanel(): React.JSX.Element {
           Add
         </button>
       </div>
-      {st?.front?.enabled && st.front.http && (
+      {st?.front?.http && (st.front.enabled || (st.front.http.relayNames ?? 0) > 0) && (
         <div className="mt-2 flex items-center gap-2" data-testid="fw-http">
           <span className="text-[10px] flex-1">
-            Redirect http:// to https on port 80: {st.front.http.on ? 'on' : 'off'}
-            {st.front.http.on && !st.front.http.serving ? ' (not holding port 80 yet)' : ''}
+            Redirect http:// to https: {st.front.http.on ? 'on' : 'off'}
+            {st.front.enabled && st.front.http.on && !st.front.http.serving ? ' (not holding port 80 yet)' : ''}
           </span>
           <button
             type="button"
             disabled={busy}
-            onClick={() => void act('/cli/front/http', { on: !(st.front?.http?.on && st.front.http.serving) })}
+            onClick={() =>
+              void act('/cli/front/http', {
+                on: !(st.front?.http?.on && (st.front.http.serving || !st.front.enabled)),
+              })
+            }
             className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
           >
-            {st.front.http.on && st.front.http.serving ? 'Turn off' : 'Turn on'}
+            {st.front.http.on && (st.front.http.serving || !st.front.enabled) ? 'Turn off' : 'Turn on'}
           </button>
         </div>
       )}

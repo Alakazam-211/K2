@@ -44,7 +44,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODE_FILE, LOG_FILE = os.environ["MODE_FILE"], os.environ["LOG_FILE"]
 PATH_B = {"available": True, "connect": True, "pro": True, "why": None, "used": 3, "cap": 20,
-          "meter": "3 of 20 names through K2's relays", "upgrade": None}
+          "meter": "3 of 20 names through K2's relays", "upgrade": None,
+          "proxy": {"state": "waiting", "words": "waiting to take over at K2's relay", "why": "custom_domains: none of x"}}
 ADVICE = {"path": "b", "pathA": True, "records": "shown", "pathB": PATH_B,
           "message": "Another web server holds port 443 on this server. Through K2 Connect (Pro) your domain points at K2's relays instead."}
 def custom(host, first, relay="claimed"):
@@ -147,6 +148,7 @@ echo "== domains: the meter =="
 run app domains shop
 assert_eq "domains: exit 0" "$rc" "0"
 assert_contains "domains: which path DNS shows" "$out" "DNS shows: Path B, through K2 Connect"
+assert_contains "domains: waiting, not failing" "$out" "waiting to take over at K2's relay"
 assert_contains "domains: meter" "$out" "3 of 20 names through K2's relays"
 assert_contains "domains: both caps" "$out" "100 custom names at most per box"
 echo closed >"$MODE_FILE"

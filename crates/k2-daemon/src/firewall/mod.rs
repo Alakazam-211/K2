@@ -301,6 +301,11 @@ pub fn status_json(daemon_port: u16) -> Result<Value, String> {
             "http": {
                 "on": k2_core::front443::load().http_on(),
                 "serving": crate::front443::http80::serving(),
+                // Names K2's relays redirect (`k2 front http` covers them too).
+                "relayNames": k2_core::db::try_shared().map(|db| {
+                    let conn = db.lock();
+                    k2_core::domains::relay_claims(&conn).unwrap_or(0)
+                }),
             },
         },
     }))

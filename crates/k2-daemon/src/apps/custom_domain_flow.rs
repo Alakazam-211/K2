@@ -247,6 +247,7 @@ impl PathB {
             "cap": cap,
             "meter": format!("{} of {cap} names through K2's relays", self.used),
             "upgrade": (self.pro == Ok(false)).then_some(super::relay_claims::UPGRADE_URL),
+            "proxy": super::relay_claims::proxy_json(),
         })
     }
 }
@@ -814,8 +815,17 @@ pub fn issue_blocking(host: &str) -> Result<(), String> {
         if !k2_core::tunnel::custom_names::wait_running(g, Duration::from_secs(45)) {
             log_debug!("[apps/custom-domain] {host}: the tunnel hasn't restarted with it yet; ordering anyway");
         }
-        // frpc logs in and registers its proxies a moment after it starts.
-        std::thread::sleep(Duration::from_secs(3));
+        // frps's answer on the custom proxy: while it refuses (another box's
+        // live proxy still holds the name) the CA can't reach this box, so
+        // no order is spent; the next tick tries again.
+        use k2_core::tunnel::custom_names::{wait_proxy_answer, ProxyState};
+        if let ProxyState::Waiting(why) = wait_proxy_answer(Duration::from_secs(20)) {
+            let words = format!("{}: {why}", super::relay_claims::WAITING_TO_TAKE_OVER);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = domains::set_app_state(&conn, host, STATE_ISSUING, Some(&words));
+            return Err(words);
+        }
     }
     match crate::domains::acme::issue_attached(host) {
         Ok(_) => {

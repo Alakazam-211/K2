@@ -847,8 +847,11 @@ mod custom_tests {
             down: bool,
         }
         impl RelayApi for Cp {
-            fn claim(&self, _: &str, _: &str) -> Result<ClaimAnswer, CpError> {
+            fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
                 panic!("no claim on rm")
+            }
+            fn http_redirect(&self, _: Option<&str>, _: bool) -> Result<(), CpError> {
+                panic!("no switch on rm")
             }
             fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {
                 panic!("no verify on rm")

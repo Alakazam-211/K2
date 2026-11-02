@@ -13,6 +13,13 @@
 //! (Rosson 2026-11-01: OK). Changes that land within [`SETTLE`] of each
 //! other share one restart. Memory only: the daemon sets the list at boot
 //! before the tunnel starts, and on every rebuild after.
+//!
+//! **What frps said** ([`note_frpc_line`], [`proxy_state`]): frps refuses the
+//! custom proxy while none of its names is verified for this label, and with
+//! the same error while another box's live proxy still holds them
+//! (`custom_domains: none of …`). That is "waiting to take over", never a
+//! tunnel failure: the custom proxy's lines don't touch the main proxy's
+//! registration, the tunnel's health or the watchdog.
 
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -45,6 +52,61 @@ fn state() -> &'static Mutex<State> {
 
 fn lock() -> std::sync::MutexGuard<'static, State> {
     state().lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// What frps last said about the custom proxy for the current frpc.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ProxyState {
+    /// Nothing yet (no names, or frpc just started).
+    #[default]
+    Unknown,
+    /// frps took it: the relay routes these names here.
+    Registered,
+    /// frps refused it for now (no verified name, or another box's live
+    /// proxy still holds them): frps's words.
+    Waiting(String),
+}
+
+fn proxy_slot() -> &'static Mutex<ProxyState> {
+    static P: OnceLock<Mutex<ProxyState>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(ProxyState::Unknown))
+}
+
+/// Is this frpc log line about the custom proxy (`[k2-custom-<label>]`)?
+pub fn is_custom_proxy_line(line: &str) -> bool {
+    line.contains(&format!("[{PROXY_PREFIX}"))
+}
+
+/// One frpc log line about the custom proxy.
+pub fn note_frpc_line(line: &str) {
+    let mut p = proxy_slot().lock().unwrap_or_else(|e| e.into_inner());
+    if line.contains("start proxy success") {
+        *p = ProxyState::Registered;
+    } else if let Some((_, why)) = line.split_once("start error:") {
+        *p = ProxyState::Waiting(why.trim().chars().take(300).collect());
+    }
+}
+
+/// A new frpc run: frps hasn't answered it yet.
+pub fn reset_proxy_state() {
+    *proxy_slot().lock().unwrap_or_else(|e| e.into_inner()) = ProxyState::Unknown;
+}
+
+/// What frps last said about the custom proxy.
+pub fn proxy_state() -> ProxyState {
+    proxy_slot().lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Wait (blocking) for frps's answer on the custom proxy, at most `timeout`.
+pub fn wait_proxy_answer(timeout: Duration) -> ProxyState {
+    let until = Instant::now() + timeout;
+    loop {
+        let s = proxy_state();
+        if s != ProxyState::Unknown || Instant::now() >= until {
+            return s;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 /// Normalize a list: lowercase, no trailing dot, sorted, no duplicates,
@@ -136,6 +198,26 @@ pub fn reset_for_test() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Relay fact (K2 Web 11-01): `custom_domains: none of …` is waiting to
+    /// take over; only the custom proxy's own lines count.
+    #[test]
+    fn frps_answers_on_the_custom_proxy_are_read_from_its_own_lines() {
+        let _g = crate::test_env::lock();
+        reset_proxy_state();
+        assert_eq!(proxy_state(), ProxyState::Unknown);
+        let refused = "[W] [client/proxy_wrapper.go:180] [ab12] [k2-custom-box1] start error: custom_domains: none of [\"a.example.com\"] is verified for 'box1'";
+        assert!(is_custom_proxy_line(refused));
+        assert!(!is_custom_proxy_line("[I] [proxy_wrapper.go:204] [x] [k2so-box1] start proxy success"));
+        note_frpc_line(refused);
+        match proxy_state() {
+            ProxyState::Waiting(w) => assert!(w.starts_with("custom_domains: none of"), "{w}"),
+            other => panic!("{other:?}"),
+        }
+        note_frpc_line("[I] [proxy_wrapper.go:204] [ab12] [k2-custom-box1] start proxy success");
+        assert_eq!(proxy_state(), ProxyState::Registered);
+        reset_proxy_state();
+    }
 
     #[test]
     fn set_normalizes_and_counts_changes_and_restart_waits_to_settle() {

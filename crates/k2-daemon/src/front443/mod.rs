@@ -538,34 +538,63 @@ fn http_install_note(cfg: &k2_core::front443::FrontConfig) -> Value {
     }
 }
 
-/// `POST /cli/front/http {"on": bool}` (`k2 front http on|off`, PB-8).
-/// On: install the :80 socket; the daemon restarts once to take it (as for
-/// :443). Off: stop answering and remove the socket, so :80 is free again
-/// and K2's HTTP-01 orders bind it per order. Blocking.
+/// `POST /cli/front/http {"on": bool}` (`k2 front http on|off`, PB-8). Two
+/// redirects, one switch: K2's relays for this box's Path B names (no root
+/// helper, any OS, no Pro needed), and the box's own :80 where K2's front
+/// runs. On, locally: install the :80 socket; the daemon restarts once to
+/// take it (as for :443). Off, locally: stop answering and remove the socket,
+/// so :80 is free again and K2's HTTP-01 orders bind it per order. Blocking.
 pub fn http_set(on: bool) -> Result<Value, Refusal> {
-    gate()?;
     let mut cfg = k2_core::front443::load();
-    if on && !cfg.enabled {
-        return Err((
-            409,
-            "front_off",
-            "the :80 front comes with K2's :443 front, which is off here: the owner runs k2 front enable first".into(),
-        ));
+    let held = k2_core::db::try_shared()
+        .map(|db| {
+            let conn = db.lock();
+            k2_core::domains::relay_claims(&conn).unwrap_or(0)
+        })
+        .unwrap_or(0);
+    // Nothing through the relays: this is the box's own :80 alone.
+    if held == 0 {
+        gate()?;
+        if on && !cfg.enabled {
+            return Err((
+                409,
+                "front_off",
+                "the :80 front comes with K2's :443 front, which is off here: the owner runs k2 front enable first. Names through K2 Connect need nothing here: K2's relays redirect them".into(),
+            ));
+        }
     }
-    helper80_gate().map_err(|e| (409, "helper_needed", e))?;
+    let relay = if held > 0 {
+        match crate::apps::relay_claims::with_api(|api| crate::apps::relay_claims::set_relay_redirect(on, api)) {
+            Ok(_) => json!({ "applied": true, "names": held }),
+            Err(e) => return Err((409, "relay_switch_failed", format!("K2 Connect didn't take the change, nothing changed: {e}"))),
+        }
+    } else {
+        Value::Null
+    };
+    cfg.http = Some(on);
+    k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
+    // The box's own :80, where K2's front runs.
+    let local = cfg.enabled && cfg!(target_os = "linux") && gate().is_ok() && helper80_gate().is_ok();
+    if !local {
+        return Ok(json!({
+            "ok": true,
+            "on": on,
+            "relay": relay,
+            "httpServing": http80::serving(),
+            "restarting": false,
+            "next": if on { "K2's relays redirect http:// to https for this server's names." } else { "K2's relays no longer redirect http:// for this server's names." },
+        }));
+    }
     if on {
         if http80::serving() {
-            cfg.http = Some(true);
-            k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
-            return Ok(json!({"ok": true, "on": true, "httpServing": true, "restarting": false, "next": "already holding port 80"}));
+            return Ok(json!({"ok": true, "on": true, "relay": relay, "httpServing": true, "restarting": false, "next": "already holding port 80"}));
         }
         let helper = helper_front_http("install").map_err(|e| (409, "http_install_failed", e))?;
-        cfg.http = Some(true);
-        k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
         let restart = helper["restartScheduled"] == true;
         return Ok(json!({
             "ok": true,
             "on": true,
+            "relay": relay,
             "httpServing": false,
             "helper": helper,
             "restarting": restart,
@@ -578,11 +607,10 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
     }
     let stopped = http80::stop();
     let helper = helper_front_http("remove").map_err(|e| (500, "http_remove_failed", format!("the :80 front stopped answering, but the socket stayed: {e}")))?;
-    cfg.http = Some(false);
-    k2_core::front443::save(&cfg).map_err(|e| (500, "config_write_failed", e))?;
     Ok(json!({
         "ok": true,
         "on": false,
+        "relay": relay,
         "httpServing": false,
         "stopped": stopped,
         "helper": helper,

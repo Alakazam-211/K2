@@ -131,6 +131,17 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 | **License** | **Apache-2.0 OR MIT** (Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy) — full text in `third_party/wry/LICENSE-MIT`, `third_party/wry/LICENSE-APACHE`, and `third_party/wry/LICENSE.spdx` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |
 
+## Third-party: Sew native voice crates (MIT OR Apache-2.0; Apache-2.0)
+
+K2's desktop app can carry voice calls with Sew's client crates (the `native-voice` build feature), vendored under `third_party/sew-voice`. Each crate's licence and notice stays in its folder; `third_party/sew-voice/VENDOR.txt` pins the source commit and every file.
+
+| | |
+|--|--|
+| **What** | `tauri-plugin-sew-voice`, `sew-call-client` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto`, `sew-proto`, `sew-e2ee` (Apache-2.0) |
+| **Upstream** | Alakazam Labs, Sew |
+| **Notice** | `sew-lk-compat` holds code ported from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). Its NOTICE ships in the app as `resources/notices/sew-lk-compat-NOTICE`. Not affiliated with or endorsed by LiveKit, Inc. |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crates do **not** relicense the product. |
+
 ## Third-party: objc2 (MIT)
 
 K2 vendors a patched copy of **objc2** 0.6.5 under `third_party/objc2` so a

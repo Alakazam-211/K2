@@ -1,0 +1,39 @@
+{
+  "_": "The JSON of tauri-plugin-sew-voice's commands, answers and events (Sew's tests/contract.rs, J4). src-tauri's native_voice::tests holds this file to the plugin's real types; native-voice-engine.test.ts holds the TS adapter to this file.",
+  "plugin": "sew-voice",
+  "eventPrefix": "sew-voice://",
+  "events": ["state", "participants", "speaking", "errors", "devices"],
+  "commands": ["join", "leave", "mute", "devices", "set_device", "state"],
+  "states": {
+    "idle": { "state": "idle" },
+    "connecting": { "state": "connecting" },
+    "connected": { "state": "connected" },
+    "reconnecting": { "state": "reconnecting", "attempt": 3 },
+    "ended": { "state": "ended", "reason": "channel_archived" }
+  },
+  "participants": [
+    { "member_id": "48831765147549699", "is_self": true, "muted": true, "deafened": false, "server_muted": false, "server_deafened": true },
+    { "member_id": "7", "is_self": false, "muted": false, "deafened": false, "server_muted": false, "server_deafened": false }
+  ],
+  "speaking": [{ "member_id": "7", "level": 0.25 }],
+  "devices": {
+    "inputs": [{ "id": "in:1", "name": "Mic", "default": true }],
+    "outputs": [{ "id": "out:1", "name": "Speakers", "default": true }, { "id": "out:2", "name": "Headset", "default": false }],
+    "input": "in:1",
+    "output": null
+  },
+  "errors": {
+    "mic_denied": { "code": "mic_denied", "detail": null },
+    "device_lost": { "code": "device_lost", "detail": { "audio": "stream_lost" } },
+    "refused": { "code": "voice_channel_full", "detail": { "limit": 25 } }
+  },
+  "joinArgs": { "target": "host-1", "room": "room-1", "muted": true, "deafened": false },
+  "joinResult": { "call_id": "r_x" },
+  "muteArgs": { "muted": true },
+  "setDeviceArgs": { "output": "out:2" },
+  "snapshots": {
+    "live": { "state": "reconnecting", "attempt": 1, "participants": [], "call_id": "r_x" },
+    "idle": { "state": "idle", "participants": [], "call_id": null }
+  },
+  "rejoinReasons": ["admit_lost", "credential_expired"]
+}

@@ -149,6 +149,20 @@ fn write_tokens_map(map: &serde_json::Map<String, serde_json::Value>) -> Result<
     Ok(())
 }
 
+/// The token mirrored for `hostname`, if any: the native voice provider's
+/// fallback when the keychain has none. Same key forms as
+/// [`connect_cli_token_delete`]. An unreadable file reads as none: the caller
+/// answers "sign in".
+#[cfg(feature = "native-voice")]
+pub fn read_cli_token(hostname: &str) -> Option<String> {
+    let map = read_tokens_map().ok()?;
+    let host = hostname.trim();
+    let bare = host.trim_end_matches(".k2.dev");
+    [host.to_string(), bare.to_string(), format!("{bare}.k2.dev")]
+        .iter()
+        .find_map(|k| map.get(k).and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(str::to_string))
+}
+
 /// Upsert a hostname → session token for CLI tray / remote verbs.
 ///
 /// `hostname` is the Connect host name (e.g. `claimchaser.k2.dev`). Empty

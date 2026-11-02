@@ -8,8 +8,16 @@ fn main() {
     // Windows. A debug build script (dev and test builds) uses the dynamic
     // runtime; a release one (the installer, which has no k2-core) keeps the
     // static runtime, as before.
-    let attributes = tauri_build::Attributes::new()
+    let mut attributes = tauri_build::Attributes::new()
         .windows_attributes(tauri_build::WindowsAttributes::new().static_vc_runtime(!cfg!(debug_assertions)));
+    // `sew-voice:*` exists only when the plugin is linked, and a capability that
+    // names an unknown permission fails the build. So its entry sits in its own
+    // folder, read only with the `native-voice` feature.
+    if std::env::var_os("CARGO_FEATURE_NATIVE_VOICE").is_some() {
+        println!("cargo:rerun-if-changed=capabilities");
+        println!("cargo:rerun-if-changed=capabilities-native-voice");
+        attributes = attributes.capabilities_path_pattern("./capabilities*/**/*");
+    }
     if let Err(error) = tauri_build::try_build(attributes) {
         println!("{error:#}");
         std::process::exit(1);

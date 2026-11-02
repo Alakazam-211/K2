@@ -54,7 +54,11 @@
     ],
     "linux": {
       "deb": {
-        "section": "devel"
+        "section": "devel",
+        "depends": ["libasound2t64 | libasound2"]
+      },
+      "rpm": {
+        "depends": ["alsa-lib"]
       }
     },
     "macOS": {
@@ -67,7 +71,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
     },
-    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs"],
+    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-lk-compat-NOTICE"],
     "externalBin": ["binaries/frpc"]
   },
   "plugins": {

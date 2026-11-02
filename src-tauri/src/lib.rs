@@ -48,6 +48,9 @@ mod linux_daemon;
 // setup() once; reconnects forever so we survive daemon restarts.
 mod daemon_events;
 mod k2_app_window;
+// Native voice calls (prd-k2-voice-rooms-v1 §14): Sew's plugin + K2's sign-in.
+#[cfg(feature = "native-voice")]
+mod native_voice;
 mod watcher;
 mod window;
 // macOS: field log for events vendored tao drops instead of aborting in
@@ -1194,6 +1197,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
+    #[cfg(feature = "native-voice")]
+    let builder = builder.plugin(native_voice::plugin("dev.k2.app"));
 
     // App menu bar is macOS-only. Win/Linux use the in-app "Menu" button
     // (frameless chrome). Tray menu is installed separately and stays.
@@ -1580,6 +1585,9 @@ pub fn run() {
                         // (launchd-managed) and the CLI still needs a
                         // valid port file to find it.
 
+                        // The red-close path never reaches ExitRequested.
+                        commands::native_voice::leave_on_quit(&app_handle);
+
                         // Use _exit() to skip C++ static destructors (ggml_metal).
                         // Without this, __cxa_finalize_ranges runs ggml's Metal cleanup
                         // which races against macOS Metal device teardown → SIGABRT.
@@ -1930,6 +1938,9 @@ pub fn run() {
             commands::permissions::permissions_request_full_disk_access,
             commands::permissions::permissions_request_accessibility,
             commands::permissions::permissions_request_microphone,
+            commands::permissions::permissions_microphone_state,
+            commands::permissions::permissions_open_microphone_settings,
+            commands::native_voice::voice_native_status,
             commands::permissions::permissions_request_apple_events,
             commands::permissions::permissions_request_local_network,
             // Phase 2 Unit 6 — `commands::whats_new::*` shims
@@ -2140,6 +2151,9 @@ pub fn run() {
                 // is only the red-close path above.
                 tauri::RunEvent::ExitRequested { .. } => {
                     window::save_window_state(app);
+                    // A call in progress: the app `_exit`s below, so nothing
+                    // later would tell Sew (vs-live V36). At most a second.
+                    commands::native_voice::leave_on_quit(app);
                 }
                 tauri::RunEvent::Exit => {
                     if RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed) {

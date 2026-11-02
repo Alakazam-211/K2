@@ -718,4 +718,18 @@ mod tests {
             "default capability must not set remote.urls"
         );
     }
+
+    /// Native voice's commands reach K2's own UI webviews and nothing else:
+    /// not Browser pane children, no remote origin, no window glob a child could
+    /// inherit (vs-live V35). Its own file because `sew-voice:*` only exists
+    /// with the `native-voice` feature (build.rs).
+    #[test]
+    fn sew_voice_capability_is_pinned_to_k2_ui_webviews() {
+        let raw = include_str!("../capabilities-native-voice/sew-voice.json");
+        let v: serde_json::Value = serde_json::from_str(raw).expect("capability JSON");
+        assert_eq!(v["webviews"], serde_json::json!(["main", "window-*", "focus-*"]));
+        assert!(v.get("windows").is_none(), "child webviews must not inherit through windows");
+        assert!(v.get("remote").is_none(), "no remote origin may call the plugin");
+        assert_eq!(v["permissions"], serde_json::json!(["sew-voice:default"]));
+    }
 }

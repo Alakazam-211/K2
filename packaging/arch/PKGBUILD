@@ -30,6 +30,9 @@ depends=(
     'libsecret'
     'openssl'
     'libcap'
+    # Native voice calls: cpal's ALSA backend (PipeWire serves it through
+    # pipewire-alsa). Build needs it too; alsa-lib carries the headers on Arch.
+    'alsa-lib'
 )
 makedepends=(
     'cargo'

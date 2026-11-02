@@ -40,6 +40,8 @@ pub mod format;
 pub mod daemon;
 pub mod linux_desktop;
 pub mod permissions;
+// Native voice: what the renderer asks, with or without the feature.
+pub mod native_voice;
 pub mod memory_watcher;
 // Phase 2.1c Item 2 — workspace inbox badge count; forwards to the
 // daemon's `/cli/inbox/count` (0.46.4).

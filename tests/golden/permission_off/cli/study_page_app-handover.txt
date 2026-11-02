@@ -36,6 +36,9 @@ WHAT MOVES, AND HOW
               password is cleared; they set a new one when the sign-in
               ends (B sends k2 app user reset). Guests who also use A's
               other Apps stay A's unless the owner takes them over.
+  rooms       the rooms the owner approved for the App's guests (its
+              guests-rooms grant) stay with the App: B hands them out as A
+              could, and the card lists them.
   secrets     A's secrets only this App uses move to B; ones A uses too are
               copied (rotate them: A knew them). A name B already has keeps
               the App's value as NAME__<app>. The Seed's k2v://ws/<A>/NAME
@@ -58,6 +61,7 @@ REFUSED (409), and what to do
 
 AFTERWARDS
   k2 app handover status [<app>]   open and recent handovers
+                                   (--detail: the card's id and what moves)
   k2 app handover brief <app>      the previous agent's notes
   k2 app handover rekey <app>      retry a re-key that didn't go live
   k2 app handover finish <app>     end the undo window (B after a deploy)

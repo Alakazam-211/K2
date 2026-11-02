@@ -67,6 +67,7 @@ THE OWNER
   k2 app user show <u> --app <app>          profile, picture hash, sessions
   k2 app user image <u> --clear
   k2 app user sessions <u> --app <app> [--revoke <id> | --revoke-all]
+                                            the App's own agent may too (never a box login)
 
 NOT YET
   Email change, a self-service forgot door, and K2's own account page come

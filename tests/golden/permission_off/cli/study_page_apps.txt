@@ -108,12 +108,25 @@ PER-APP LOGINS (0.45.5)
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
+  WHAT WORKS AT ONCE: such a login uses the App's own room and every room on
+  the App's guests-rooms grant, right away, with no owner step and no reset:
+  the owner already approved those rooms for this App's guests. A role naming
+  another room is refused (outside_app_rooms); ask for the room once for the
+  whole App (k2 app grant <app> --kind guests-rooms --room <room>, a card for
+  the owner). Take the grant back and those logins lose those rooms at their
+  next request. --temp-password or an invite lets the person choose their own
+  password at first sign-in. Signed-in people get new rooms and caps at their
+  next request; nobody signs out for it. An agent may end its App's people's
+  sessions (k2 app user sessions <u> --app <app> --revoke-all); a box login's
+  access is a card for the owner (k2 permission request apps.user-grant-box).
   WAITS FOR A RESET: a person an agent created, or whose password or
   email it set, or invited (or an App key made) is tied to that agent's
-  workspace. If you give them more (the box login, another App or room,
-  files:download, chat), the extra waits until they reset their password:
-  sign-in, refresh and live sessions stay at that workspace's access, no
-  chat pass. Settings → User Access shows "Waiting for reset"; K2 also
+  workspace: an agent could know their password. If you give them more than
+  that workspace's rooms and the App's approved ones (the box login, another
+  App or room, files:download, chat), the extra waits until they use your
+  reset link. A password they choose on the App's own page doesn't count:
+  that page could see it. Sign-in, refresh and live sessions stay held back
+  until then, no chat pass. Settings → User Access shows "Waiting for reset"; K2 also
   posts one card (its answers point to your terminal or Settings: no
   link is ever minted on, or shown in, a Thread). k2 app user reset <u>
   --code gives you a one-time link on K2's own page (never the App's);

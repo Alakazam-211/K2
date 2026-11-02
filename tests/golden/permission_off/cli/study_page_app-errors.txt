@@ -518,9 +518,16 @@ GENERAL (any App route)
       fix: Slow down and try again later; the hint says how often is fine.
   skin_error (exit 3)
       fix: Run it again. If it repeats, report it with the hint.
+  outside_app_rooms (exit 3)
+      fix: Ask for it once for the whole App: k2 app grant <app-id> --kind
+      guests-rooms --room <room>, adding a --room for each room it has
+      already (k2 app guest ceiling <app-id>). The owner approves it on a
+      card; then every login of the App can use it.
   skin_room (exit 3)
       fix: Use a room the pass holds, or have the owner add the room to the
-      pass.
+      pass. Agent-tied: get the room approved for the App (k2 app grant
+      <app-id> --kind guests-rooms --room <room>), or the person uses a
+      reset link the owner sends (k2 app user reset <username>).
   state_write_failed (exit 3)
       fix: Check the box's disk, then run it again. If it repeats, report
       it.

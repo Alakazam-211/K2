@@ -156,7 +156,7 @@ function tieLine(person: PersonRow): string | null {
   if (!person.tiedTo) return null
   return person.pendingReset
     ? `${person.tiedTo}’s agent set ${person.username} up, so the extra access you gave them starts only after they use a reset link from you.`
-    : `${person.tiedTo}’s agent set ${person.username} up, so their access is limited to what ${person.tiedTo} gives. A reset link from you, once they use it, lifts that limit.`
+    : `${person.tiedTo}’s agent set ${person.username} up, so they use ${person.tiedTo}’s room and the rooms you approved for its App. A reset link from you, once they use it, lifts that limit.`
 }
 
 type ResetResult =
@@ -394,8 +394,8 @@ export function SetPasswordDialog({
           </p>
           {person.tiedTo ? (
             <p className={NOTE}>
-              {person.tiedTo}’s agent set {person.username} up, so their access is limited to what {person.tiedTo}{' '}
-              gives. Setting a password here doesn’t lift that limit; only a reset link they use does.{' '}
+              {person.tiedTo}’s agent set {person.username} up, so they use {person.tiedTo}’s room and the rooms you{' '}
+              approved for its App. Setting a password here doesn’t lift that limit; only a reset link they use does.{' '}
               <button type="button" className={LINK_BTN} onClick={onReset}>
                 Reset password instead…
               </button>

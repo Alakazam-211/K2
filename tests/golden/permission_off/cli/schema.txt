@@ -2702,12 +2702,13 @@ exit: 0
     },
     {
       "name": "app user add",
-      "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
+      "usage": "k2 app user add <username> [--email e] [--password-stdin | --temp-password] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--email", "arg": "e", "description": "Optional guest email, used for invites and password resets."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."},
+        {"name": "--temp-password", "arg": null, "description": "K2 makes a password and prints it once; the person chooses their own at first sign-in."},
         {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. No box login. Agents: one of their own workspace's Apps."},
         {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
       ]
@@ -2789,7 +2790,7 @@ exit: 0
     {
       "name": "app user sessions",
       "usage": "k2 app user sessions <username> --app <app> [--revoke <id> | --revoke-all] [--json]",
-      "description": "Owner only. A person's signed-in browsers and devices in one App (coarse client label, never an IP); --revoke ends one (an id from the list), --revoke-all every one in that App.",
+      "description": "The owner, or the App's own agent with \"Let this agent manage its Apps' users\" (never a box login). A person's signed-in browsers and devices in one App (coarse client label, never an IP); --revoke ends one (an id from the list), --revoke-all every one in that App, and their chat session with it.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--app", "arg": "app", "description": "The App (required)."},
@@ -2860,11 +2861,11 @@ exit: 0
     {
       "name": "app user rooms",
       "usage": "k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]",
-      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. Signed-in people get the change at their next request (--apply-tokens is kept for scripts and changes nothing). --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
-        {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."},
+        {"name": "--apply-tokens", "arg": null, "description": "Kept for scripts; changes nothing. Signed-in people get the change at their next request."},
         {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. Agents: one of their own workspace's Apps."}
       ]
     },

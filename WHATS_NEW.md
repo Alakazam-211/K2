@@ -8,6 +8,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### When you update
 - **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
 - **Outside mail forwards still waiting for a confirm:** K2 no longer asks for one. Those set in the 7 days before you update turn on by themselves over a few minutes, and each address gets an email first with a link to stop it. Older ones stay off and send nothing until someone sets them again (`k2 hostmail forward add`). You get one notice listing both, and `k2 hostmail forward list` shows them.
+- **A `guests-rooms` grant now reaches logins the App's agent set up.** Those logins start using the rooms on the grant on their next request, and that agent could know their passwords. To see what an App holds, run `k2 app grants <app>`; `k2 app grant <app> --kind guests-rooms --revoke` takes it back.
 
 ### Hosted mail
 - **A mailbox can now forward to several addresses, up to 5.** `k2 hostmail forward set <mailbox> --to a@x --to b@y` sets the whole list; `add` and `rm` change one without touching the others. Each address has its own state, so one can pause or stop while the rest carry on. A single `--to` still works the way it did.
@@ -69,6 +70,17 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A message's sender checks now come only from this server's own verdict.** `k2 mail read` and the check on replying to a message that failed DMARC read just the result your mail server stamped. A message with no such stamp shows no result, and a result that can't be read cleanly counts as failed.
 ### Mobile devices
 - **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
+
+### An agent runs its App's users
+- **An agent's login works right away.** A login an agent makes on its own App can use the App's own room and every room the owner approved for that App (its `guests-rooms` grant), with no owner step and no reset. A room past those is refused as `outside_app_rooms`, and the refusal names the one line that asks for it for the whole App. Logins that were waiting clear by themselves, with the same password and session. Take the grant back and those logins lose those rooms at their next request.
+- **Temporary passwords.** `k2 app user add <name> --app <app> --temp-password` makes one and shows it once. The person chooses their own at first sign-in.
+- **New access at the next request.** When someone's role or rooms change, they get it at their next request, without signing out. That covers App logins and box logins; `--apply-tokens` is no longer needed.
+- **Ending sessions.** With "Let this agent manage its Apps' users" on, an agent can list and end its own App's people's sessions with `k2 app user sessions`, chat sessions included.
+- **Box logins.** An agent still can't change a box login's access, but it can ask: the owner approves the new `apps.user-grant-box` card from the Thread, so nobody needs a terminal.
+- **Clearer words.** A login held back says "waiting for reset (agent-tied)" and what clears it, `k2 explain outside_app_rooms` explains that refusal, and the password-reset card says whether the reset unties someone. A new password chosen on an App's own page still doesn't untie: that page could see it. Only a reset link on K2's own page does.
+- **Handing over an App.** The rooms the owner approved stay with the App and carry to the new agent, and the handover card says so. `k2 app handover status <app> --detail` shows the card's list and its id.
+- **`k2 app chat` shows what it's waiting on.** The App's own agent sees the current step toward Sew and Sew's last answer, including a blocked one, not only "sending to Sew".
+- **Signing out from any App's server.** Logout on an App's link now takes any valid session the caller presents and ends only that one. It no longer answers `pass_wrong_link`.
 
 ## 0.46.7 — Apps run their own chat
 

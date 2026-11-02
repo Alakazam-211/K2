@@ -365,7 +365,7 @@ pub fn tie_display() -> Result<HashMap<String, TieDisplay>, String> {
                 return hit.clone();
             }
             skin::ties::app_workspace(app)
-        });
+        }, &|app: &str| skin::ties::app_rooms(app).unwrap_or_default());
         for g in grants.iter().filter(|g| g.subject_id == tie.principal_id && g.kind == "app") {
             app_ws.entry(g.target_id.clone()).or_insert_with(|| skin::ties::app_workspace(&g.target_id));
         }
@@ -545,7 +545,7 @@ pub fn notify_owner_of_admin_reset(admin: &str, username: &str, how: &str) {
 /// The refusal for an agent on a guest that holds a box login.
 pub(crate) fn box_login_refused(username: &str) -> CliResponse {
     owner_only_with_hint(&format!(
-        "'{username}' has a box login: an agent never manages a box login, whatever its switches (ask your human; App users are App-only)"
+        "'{username}' has a box login: an agent never manages a box login, whatever its switches (ask your human; App users are App-only). To give them access to your App, ask the owner on a card: k2 permission request apps.user-grant-box user={username} app=<your app> role=<role> --why \"<what you need it for>\""
     ))
 }
 
@@ -580,25 +580,54 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
                 // The handler's own lookup (id first, then name), so a role
                 // named like another role's id is never the one checked.
                 if let Some(r) = skin::find_role(token).map_err(CliResponse::internal_error)? {
-                    if !role_in_workspace(&r, ws) {
-                        return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
+                    // A guest's role goes on its App login: it may reach what
+                    // that App may hand out (`skin::assign_login_role` picks
+                    // the login the role fits).
+                    let own_apps: Vec<&str> = grants
+                        .iter()
+                        .filter(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id != skin::HOST_APP_ID)
+                        .filter(|g| r.app_id.as_deref().is_none_or(|a| a == g.target_id))
+                        .map(|g| g.target_id.as_str())
+                        .collect();
+                    let fits = role_in_workspace(&r, ws) || own_apps.iter().any(|a| role_within(&r, &app_rooms_of(ws, a)));
+                    if !fits {
+                        return Err(match own_apps.first() {
+                            Some(app) => outside_app_rooms(app, &role_rooms_outside(&r, &app_rooms_of(ws, app))),
+                            None => outside_workspace(format!("role '{}' reaches outside your workspace", r.name)),
+                        });
                     }
                 }
             }
         }
         "/cli/skin/users/rooms" => {
-            if let Some(list) = rooms_field(&v) {
-                if let Ok(ids) = skin::resolve_room_tokens(&list) {
-                    if ids.iter().any(|id| id != ws) {
-                        return Err(outside_workspace("those rooms are outside your workspace".to_string()));
-                    }
-                }
-            }
             // agent-app-users S2: an App's rooms only for an App of `ws`
             // (the box login, `host`, is the plain rooms path).
-            if let Some(Ok(app)) = app_field(&v).map(resolve_app_target) {
-                if app != skin::HOST_APP_ID && !app_of_workspace(&app, ws) {
-                    return Err(not_your_app(&app));
+            let app = match app_field(&v).map(resolve_app_target) {
+                Some(Ok(app)) if app != skin::HOST_APP_ID => {
+                    if !app_of_workspace(&app, ws) {
+                        return Err(not_your_app(&app));
+                    }
+                    Some(app)
+                }
+                _ => None,
+            };
+            if let Some(list) = rooms_field(&v) {
+                if let Ok(ids) = skin::resolve_room_tokens(&list) {
+                    match &app {
+                        // Its own room and what the owner approved for this App.
+                        Some(app) => {
+                            let allowed = app_rooms_of(ws, app);
+                            let outside: Vec<String> = ids.into_iter().filter(|id| !allowed.contains(id)).collect();
+                            if !outside.is_empty() {
+                                return Err(outside_app_rooms(app, &outside));
+                            }
+                        }
+                        None => {
+                            if ids.iter().any(|id| id != ws) {
+                                return Err(outside_workspace("those rooms are outside your workspace".to_string()));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -607,37 +636,85 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
     Ok(())
 }
 
-/// The role writes (security review, 0.46.4): an agent makes or edits
-/// only roles whose rooms are all in its own workspace (and, for an App's
-/// role, an App of it). Making one with a room elsewhere, giving a role a
-/// room elsewhere, or editing or removing a role that already reaches
-/// elsewhere is `owner_only`. What the handler can't read is its own 400.
+/// The caps an agent may write on a role's line for a room outside its own
+/// workspace (0.46.8): the owner's `guests-rooms` grant hands out the room,
+/// and a role-less guest gets exactly these there. More (files, heartbeats,
+/// the workspace's settings) reaches into another agent's workspace, past
+/// the App: a person's.
+const AGENT_CAPS_ELSEWHERE: &[&str] = &[skin::CAP_THREAD_READ, skin::CAP_THREAD_POST];
+
+/// 403 `owner_only`: a role line asking for more than [`AGENT_CAPS_ELSEWHERE`].
+fn caps_elsewhere_refused(room: &str, cap: &str) -> CliResponse {
+    owner_only_with_hint(&format!(
+        "{cap} in {room}: on another workspace's room, a role line you write holds only thread:read and thread:post. More reaches into that workspace: ask your human to set it (they run: k2 app role room <role> {room} --caps <the caps>)"
+    ))
+}
+
+/// The role writes (security review, 0.46.4; 0.46.8): an agent makes or
+/// edits only roles whose rooms are all in its own workspace, or, for a role
+/// of one of its Apps, inside what that App may hand out ([`app_rooms_of`]),
+/// with only [`AGENT_CAPS_ELSEWHERE`] on a room elsewhere. Giving a role a
+/// room outside that is `outside_app_rooms` (an App's role) or `owner_only`;
+/// editing or removing a role that already reaches past it is `owner_only`.
+/// What the handler can't read is its own 400.
 fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResponse> {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Ok(()) };
+    // The handlers' own lookup (id first, then name): a decoy role named
+    // like another role's id never stands in for it.
+    let found = |keys: &[&str]| -> Result<Option<skin::SkinRole>, CliResponse> {
+        match str_field(&v, keys) {
+            Some(token) => skin::find_role(token).map_err(CliResponse::internal_error),
+            None => Ok(None),
+        }
+    };
     let existing = |keys: &[&str]| -> Result<(), CliResponse> {
-        let Some(token) = str_field(&v, keys) else { return Ok(()) };
-        // The handlers' own lookup (id first, then name): a decoy role named
-        // like another role's id never stands in for it.
-        match skin::find_role(token).map_err(CliResponse::internal_error)? {
-            Some(r) if !role_in_workspace(&r, ws) => {
+        match found(keys)? {
+            Some(r) if !role_is_agents(&r, ws) => {
                 Err(outside_workspace(format!("role '{}' reaches outside your workspace (another workspace's room or App)", r.name)))
             }
             _ => Ok(()),
         }
     };
-    let rooms_ok = |ids: &[String]| -> Result<(), CliResponse> {
-        if rooms_in(ids, ws) {
-            Ok(())
-        } else {
-            Err(outside_workspace("a role of yours may name only your workspace's room".to_string()))
-        }
+    // The App a role belongs to, when it is one of `ws`'s.
+    let own_app_of = |r: Option<&skin::SkinRole>| -> Option<String> {
+        r.and_then(|r| r.app_id.clone()).filter(|a| app_of_workspace(a, ws))
     };
-    let room_token_ok = |keys: &[&str]| -> Result<(), CliResponse> {
-        let Some(token) = str_field(&v, keys) else { return Ok(()) };
-        match skin::resolve_room_tokens(&[token.to_string()]) {
-            Ok(ids) => rooms_ok(&ids),
-            Err(_) => Ok(()),
+    let policy_ok = |policy: &RoomPolicy, app: Option<&str>| -> Result<(), CliResponse> {
+        let allowed = match app {
+            Some(a) => app_rooms_of(ws, a),
+            None => vec![ws.to_string()],
+        };
+        let outside: Vec<String> = policy.keys().filter(|k| !allowed.contains(k)).cloned().collect();
+        if !outside.is_empty() {
+            return Err(match app {
+                Some(a) => outside_app_rooms(a, &outside),
+                None => outside_workspace("a role of yours may name only your workspace's room".to_string()),
+            });
         }
+        for (room, caps) in policy.iter().filter(|(room, _)| room.as_str() != ws) {
+            if let Some(cap) = caps.iter().find(|c| !AGENT_CAPS_ELSEWHERE.contains(&c.as_str())) {
+                return Err(caps_elsewhere_refused(&room_label(room), cap));
+            }
+        }
+        Ok(())
+    };
+    // One room line: the room inside what the role's App may hand out.
+    let room_token_ok = |keys: &[&str], role: Option<&skin::SkinRole>| -> Result<Option<String>, CliResponse> {
+        let Some(token) = str_field(&v, keys) else { return Ok(None) };
+        let Ok(ids) = skin::resolve_room_tokens(&[token.to_string()]) else { return Ok(None) };
+        let app = own_app_of(role);
+        let allowed = match &app {
+            Some(a) => app_rooms_of(ws, a),
+            None => vec![ws.to_string()],
+        };
+        let outside: Vec<String> = ids.iter().filter(|id| !allowed.contains(id)).cloned().collect();
+        if !outside.is_empty() {
+            return Err(match &app {
+                Some(a) => outside_app_rooms(a, &outside),
+                None => outside_workspace("a role of yours may name only your workspace's room".to_string()),
+            });
+        }
+        Ok(ids.into_iter().next())
     };
     let app_ok = |raw: Option<&str>| -> Result<(), CliResponse> {
         match raw.map(resolve_app_target) {
@@ -649,24 +726,38 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
     };
     match path {
         "/cli/skin/roles" => {
+            let raw_app = opt_text_field(&v, &["appId", "app_id", "app"]);
+            app_ok(raw_app)?;
+            let app = raw_app.and_then(|a| resolve_app_target(a).ok()).filter(|a| a != skin::HOST_APP_ID);
             if let Ok(Some(p)) = role_policy_from_body(&v, false) {
-                rooms_ok(&p.keys().cloned().collect::<Vec<_>>())?;
+                policy_ok(&p, app.as_deref())?;
             }
-            app_ok(opt_text_field(&v, &["appId", "app_id", "app"]))?;
         }
         "/cli/skin/roles/update" => {
             existing(&["id", "name", "role"])?;
+            let role = found(&["id", "name", "role"])?;
             if let Ok(Some(p)) = role_policy_from_body(&v, true) {
-                rooms_ok(&p.keys().cloned().collect::<Vec<_>>())?;
+                policy_ok(&p, own_app_of(role.as_ref()).as_deref())?;
             }
         }
         "/cli/skin/roles/room" => {
             existing(&["id", "name", "role"])?;
-            room_token_ok(&["handle", "id"])?;
+            let role = found(&["id", "name", "role"])?;
+            let room = room_token_ok(&["handle", "id"], role.as_ref())?;
+            let clearing = v.get("clear").and_then(|x| x.as_bool()) == Some(true);
+            if let (Some(room), false) = (room, clearing) {
+                if room != ws {
+                    // No caps named is Thread-only: already inside the list.
+                    if let Some(cap) = caps_field(&v).unwrap_or_default().iter().find(|c| !AGENT_CAPS_ELSEWHERE.contains(&c.as_str())) {
+                        return Err(caps_elsewhere_refused(&room_label(&room), cap));
+                    }
+                }
+            }
         }
         "/cli/skin/roles/paths" => {
             existing(&["name", "role", "id"])?;
-            room_token_ok(&["handle", "room", "workspace"])?;
+            let role = found(&["name", "role", "id"])?;
+            room_token_ok(&["handle", "room", "workspace"], role.as_ref())?;
         }
         "/cli/skin/roles/remove" => existing(&["id", "name", "role"])?,
         "/cli/skin/roles/from-template" => {
@@ -679,7 +770,9 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
                 .unwrap_or_default();
             if !tokens.is_empty() {
                 if let Ok(ids) = skin::resolve_room_tokens(&tokens) {
-                    rooms_ok(&ids)?;
+                    if !rooms_in(&ids, ws) {
+                        return Err(outside_workspace("a role of yours may name only your workspace's room".to_string()));
+                    }
                 }
             }
         }
@@ -756,6 +849,66 @@ fn role_in_workspace(r: &skin::SkinRole, ws: &str) -> bool {
     rooms_in(&r.rooms, ws) && r.room_policy.keys().all(|k| k == ws) && r.app_id.as_deref().map_or(true, |app| app_of_workspace(app, ws))
 }
 
+/// What an agent of `ws` may hand out on its App `app` (0.46.8): its own
+/// room and the rooms of the App's owner-approved `guests-rooms` grant.
+/// Read errors count as no grant: never wider.
+pub(crate) fn app_rooms_of(ws: &str, app: &str) -> Vec<String> {
+    let mut rooms = skin::ties::app_rooms(app).unwrap_or_default();
+    rooms.push(ws.to_string());
+    rooms
+}
+
+/// Every room `r` names is in `allowed`.
+fn role_within(r: &skin::SkinRole, allowed: &[String]) -> bool {
+    r.rooms.iter().chain(r.room_policy.keys()).all(|k| allowed.contains(k))
+}
+
+/// The rooms `r` names outside `allowed`.
+fn role_rooms_outside(r: &skin::SkinRole, allowed: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = r.rooms.iter().chain(r.room_policy.keys()).filter(|k| !allowed.contains(k)).cloned().collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// A role an agent of `ws` may edit: wholly its workspace's, or a role of
+/// one of its Apps inside what that App may hand out.
+fn role_is_agents(r: &skin::SkinRole, ws: &str) -> bool {
+    role_in_workspace(r, ws)
+        || r.app_id.as_deref().is_some_and(|app| app_of_workspace(app, ws) && role_within(r, &app_rooms_of(ws, app)))
+}
+
+/// A room's handle, for a hint (its id when it has none).
+fn room_label(room: &str) -> String {
+    skin::handles_for_project_ids(&[room.to_string()]).into_iter().next().unwrap_or_else(|| room.to_string())
+}
+
+/// The name an agent uses for one of its Apps in a `k2 app …` line.
+fn app_name_of(app: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::published_services::get_by_id(&conn, app).ok().flatten().map(|s| s.name).unwrap_or_else(|| app.to_string())
+}
+
+/// 403 `outside_app_rooms` for an agent on its own App: names the rooms and
+/// the broad path, the App's `guests-rooms` grant.
+pub(crate) fn outside_app_rooms(app: &str, rooms: &[String]) -> CliResponse {
+    let handles: Vec<String> = rooms.iter().map(|r| room_label(r)).collect();
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "outside_app_rooms",
+                "hint": skin::guest_rooms::outside_app_hint(&app_name_of(app), &handles),
+                "rooms": handles,
+            }
+        })
+        .to_string(),
+    }
+}
+
 /// The published service `id` belongs to workspace `ws`.
 fn app_of_workspace(id: &str, ws: &str) -> bool {
     let db = k2_core::db::shared();
@@ -765,7 +918,8 @@ fn app_of_workspace(id: &str, ws: &str) -> bool {
 
 /// Is guest `p` wholly inside workspace `ws`? Its rooms, its role, and
 /// every grant it holds: the box login (`app=host`) or an App of `ws`,
-/// each with rooms and a role inside `ws`. Any other grant (chat,
+/// each with rooms and a role inside `ws` (on an App, inside what that App
+/// may hand out, [`app_rooms_of`]). Any other grant (chat,
 /// mailbox, database, cli: box-wide) or an agent mark for another
 /// workspace puts it outside. It must also be tied to `ws`: a room, a
 /// role room or an App of `ws`, the agent mark, or the stamp of `ws`'s
@@ -779,7 +933,18 @@ pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::Ski
         Some(found) => found.is_some_and(|r| role_in_workspace(r, ws)),
     };
     let role_ties = |id: &Option<String>| matches!(role(id), Some(Some(r)) if !r.rooms.is_empty() || r.app_id.is_some());
-    if p.agent_workspace.as_deref().is_some_and(|a| a != ws) || !rooms_in(&p.default_rooms, ws) || !role_ok(&p.role_id) {
+    // `principals.role_id` shadows the App login's role on an App-only guest
+    // (`skin::set_app_grant_role`): the loop below checks that one.
+    let shadow_ok = role_ok(&p.role_id)
+        || grants.iter().any(|g| {
+            g.subject_kind == "principal"
+                && g.subject_id == p.id
+                && g.kind == "app"
+                && g.target_id != skin::HOST_APP_ID
+                && g.role_id == p.role_id
+                && app_of_workspace(&g.target_id, ws)
+        });
+    if p.agent_workspace.as_deref().is_some_and(|a| a != ws) || !rooms_in(&p.default_rooms, ws) || !shadow_ok {
         return false;
     }
     let mut tied = p.agent_workspace.as_deref() == Some(ws) || !p.default_rooms.is_empty() || role_ties(&p.role_id);
@@ -790,8 +955,15 @@ pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::Ski
             None | Some("") => Some(Vec::new()),
             Some(raw) => serde_json::from_str::<Vec<String>>(raw).ok(),
         };
-        let scope_ok = scope.as_ref().is_some_and(|rooms| rooms_in(rooms, ws));
-        if !(target_ok && scope_ok && role_ok(&g.role_id)) {
+        let allowed = if own_app { app_rooms_of(ws, &g.target_id) } else { vec![ws.to_string()] };
+        let scope_ok = scope.as_ref().is_some_and(|rooms| rooms.iter().all(|r| allowed.contains(r)));
+        let grant_role_ok = match role(&g.role_id) {
+            None => true,
+            Some(found) => found.is_some_and(|r| {
+                role_within(r, &allowed) && r.app_id.as_deref().map_or(true, |app| app_of_workspace(app, ws))
+            }),
+        };
+        if !(target_ok && scope_ok && grant_role_ok) {
             return false;
         }
         tied |= own_app || scope.is_some_and(|rooms| !rooms.is_empty()) || role_ties(&g.role_id);
@@ -931,9 +1103,10 @@ fn not_your_app(app: &str) -> CliResponse {
 
 /// agent-app-users S2 (§5.3): what an agent's `POST /cli/skin/users` must
 /// name. An App of its own workspace (never the box login), a role (if
-/// any) wholly inside its workspace and holding no person-only cap.
-/// Returns the App's service id. Anything else is `owner_only`, before
-/// any write; a body or App the handler can't read is its own 400.
+/// any) inside what that App may hand out and holding no person-only cap.
+/// Returns the App's service id. A role reaching past it is
+/// `outside_app_rooms`, anything else `owner_only`, before any write; a body
+/// or App the handler can't read is its own 400.
 fn agent_add_app(ws: &str, v: &serde_json::Value) -> Result<String, CliResponse> {
     let Some(raw_app) = app_field(v) else {
         return Err(owner_only_with_hint(AGENT_ADD_NEEDS_APP_HINT));
@@ -948,8 +1121,14 @@ fn agent_add_app(ws: &str, v: &serde_json::Value) -> Result<String, CliResponse>
     if let Some(token) = str_field(v, &["role", "roleId", "role_id"]) {
         match skin::find_role(token).map_err(CliResponse::internal_error)? {
             Some(r) => {
-                if !role_in_workspace(&r, ws) {
-                    return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
+                if r.app_id.as_deref().is_some_and(|a| a != app) {
+                    return Err(outside_workspace(format!("role '{}' belongs to another App", r.name)));
+                }
+                // Inside what the App may hand out: the login works at once
+                // (`skin::ties`, the ceiling). Outside it: the broad path.
+                let allowed = app_rooms_of(ws, &app);
+                if !role_within(&r, &allowed) {
+                    return Err(outside_app_rooms(&app, &role_rooms_outside(&r, &allowed)));
                 }
                 if let Some(cap) = skin::person_only_cap_in_policy(&r.room_policy) {
                     return Err(person_only_refused(cap));
@@ -2782,6 +2961,48 @@ pub fn skin_room_response() -> CliResponse {
         content_type: "application/json",
         body: SKIN_ROOM_JSON.to_string(),
     }
+}
+
+/// `skin_room` for a tied login whose own grant names a room the tie holds
+/// back (0.46.8): says so, and what clears it. Only ever about the person's
+/// own grant, never about the room they asked for, so it is no oracle on
+/// which rooms exist. Every other answer keeps its bytes.
+pub fn explain_skin_room<'a>(status: &str, body: &'a str) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    if !status.starts_with("403") || body != SKIN_ROOM_JSON {
+        return Cow::Borrowed(body);
+    }
+    let hint = crate::routes::pass_gate::request_pass().and_then(|t| tied_room_hint(&t));
+    match hint {
+        Some(h) => Cow::Owned(serde_json::json!({ "ok": false, "error": { "code": "skin_room", "hint": h } }).to_string()),
+        None => Cow::Borrowed(body),
+    }
+}
+
+/// [`explain_skin_room`]'s words, when this pass is a tied login with rooms
+/// held back on its App.
+fn tied_room_hint(raw: &str) -> Option<String> {
+    let pass = skin::resolve_skin_token(raw).filter(|p| p.session)?;
+    let pid = pass.principal_id.as_deref()?;
+    let tie = skin::ties::get(pid).ok().flatten()?;
+    let grants = skin::list_grants().ok()?;
+    let grant = grants.iter().find(|g| g.subject_kind == "principal" && g.subject_id == pid && g.kind == "app" && g.target_id == pass.app && g.enabled)?;
+    let wanted: Vec<String> = match grant.role_id.as_deref() {
+        Some(rid) => skin::list_roles().ok()?.into_iter().find(|r| r.id == rid)?.room_policy.into_keys().collect(),
+        None => skin::parse_rooms_json(grant.scope.as_deref()),
+    };
+    let approved = skin::ties::app_rooms(&pass.app).unwrap_or_default();
+    let held: Vec<String> = wanted.iter().filter(|r| !skin::ties::room_inside(&tie, &pass.app, &approved, r)).map(|r| room_label(r)).collect();
+    if held.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up and could know its password, so {} stays held back. What clears it, either one: the App's agent gets the room approved for the whole App (k2 app grant {} --kind guests-rooms --room {}, adding a --room for each room the App already has), or the person uses a reset link the owner sends on K2's own page (the owner: k2 app user reset {user}; the agent asks on a card: k2 permission request apps.user-password-reset user={user} mode=link). Choosing a new password on the App's own page doesn't clear it.",
+        held.join(", "),
+        app_name_of(&pass.app),
+        held.join(" --room "),
+        user = pass.username,
+    ))
 }
 
 /// Owner/Connect/hook on `GET /cli/skin/agents` — that list is skin-token only.

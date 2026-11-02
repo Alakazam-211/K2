@@ -1386,6 +1386,8 @@ pub(crate) async fn send_response_with_cookie_and_location(
     // switches are both on gains its `permission` object. A no-op (the same
     // bytes) while the global switch is off, and for everyone but a valid
     // agent passport.
+    let explained = crate::skin_routes::explain_skin_room(status, body);
+    let body: &str = &explained;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
     // CORS headers on every response so the Tauri WebView (cross-
@@ -1429,6 +1431,8 @@ pub(crate) async fn send_response_with_headers(
     extra: &str,
 ) {
     // Permission cards: as in `send_response_with_cookie_and_location`.
+    let explained = crate::skin_routes::explain_skin_room(status, body);
+    let body: &str = &explained;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
     let resp = format!(

@@ -1415,8 +1415,9 @@ fn waiting_parts(tie: &skin::ties::Tie, grants: &[skin::SkinGrant], roles: &[ski
             Some(rid) => roles.iter().find(|r| r.id == rid).map(|r| r.room_policy.clone()).unwrap_or_default(),
             None => skin::parse_rooms_json(g.scope.as_deref()).into_iter().map(|r| (r, Vec::new())).collect(),
         };
+        let approved = skin::ties::app_rooms(&g.target_id).unwrap_or_default();
         for (room, caps) in policy {
-            if room != tie.workspace_id {
+            if !skin::ties::room_inside(tie, &g.target_id, &approved, &room) {
                 push(format!("room {}", crate::apps::routes::ws_handle(&room)));
             } else {
                 for c in caps.iter().filter(|c| skin::PERSON_ONLY_CAPS.contains(&c.as_str())) {

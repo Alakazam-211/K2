@@ -272,6 +272,19 @@ fn core_refusal(e: gr::Refusal) -> Refusal {
     Refusal { code: e.code(), status: e.status(), hint: e.hint(), extra }
 }
 
+/// [`core_refusal`] naming the App in `outside_app_rooms`'s line to run.
+fn core_refusal_for(t: &Target, e: gr::Refusal) -> Refusal {
+    let hint = match &e {
+        gr::Refusal::OutsideApp(r) => Some(gr::outside_app_hint(&t.name, r)),
+        _ => None,
+    };
+    let mut out = core_refusal(e);
+    if let Some(h) = hint {
+        out.hint = h;
+    }
+    out
+}
+
 /// Review B4: the owner's calls don't spend the App's 60/min budget; an
 /// agent's do (it acts for its own App).
 fn owner_budget<T>(who: &Who, f: impl FnOnce() -> T) -> T {
@@ -351,7 +364,7 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
     let ceiling = ceiling_for(who, &t)?;
     let rooms = crate::guest_rooms_routes::rooms_of(&v)
         .ok_or_else(|| no(codes::BAD_REQUEST, 400, "rooms is required: handles or ids ([] takes every room away)"))?;
-    let out = owner_budget(who, || gr::set(&t.service_id, user, &rooms, &ceiling, &actor(who), "cli")).map_err(core_refusal)?;
+    let out = owner_budget(who, || gr::set(&t.service_id, user, &rooms, &ceiling, &actor(who), "cli")).map_err(|e| core_refusal_for(&t, e))?;
     let mut j = serde_json::to_value(&out.view).map_err(|e| store(e.to_string()))?;
     j["before"] = json!(out.before);
     j["beforeHandles"] = json!(k2_core::skin::handles_for_project_ids(&out.before));

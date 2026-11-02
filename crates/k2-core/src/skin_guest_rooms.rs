@@ -117,6 +117,11 @@ pub fn get_grant(service_id: &str) -> Result<Option<AppOwnerGrant>, String> {
     with_conn(|conn| grant_in(conn, service_id.trim()))
 }
 
+/// The rooms of the App's grant on an open connection (`[]` without one).
+pub(super) fn grant_rooms_conn(conn: &Connection, service_id: &str) -> Result<Vec<String>, String> {
+    Ok(grant_in(conn, service_id.trim())?.map(|g| g.rooms).unwrap_or_default())
+}
+
 /// Give (or re-give, replacing its rooms) the App `guests-rooms`. `rooms`
 /// are project ids the caller resolved. Returns `(before, after)`.
 pub fn grant(service_id: &str, rooms: &[String], by: &str) -> Result<(Option<AppOwnerGrant>, AppOwnerGrant), String> {
@@ -237,10 +242,7 @@ impl Refusal {
         match self {
             Refusal::NotFound => "no such guest of this App".into(),
             Refusal::Usage(m) | Refusal::Store(m) => m.clone(),
-            Refusal::OutsideApp(r) => format!(
-                "not a room this App may hand out: {} (the owner widens it: k2 app grant <app> --kind guests-rooms --room <handle>)",
-                r.join(", ")
-            ),
+            Refusal::OutsideApp(r) => outside_app_hint("<app>", r),
             Refusal::AboveRole(r) => format!("the guest's role doesn't cover: {} (rooms never add caps beyond the role)", r.join(", ")),
             Refusal::HasRole(role) => format!(
                 "the guest has the role '{role}' on this App, so its rooms are the role's; give a narrower role instead (k2 app grant)"
@@ -250,6 +252,18 @@ impl Refusal {
             }
         }
     }
+}
+
+/// What `outside_app_rooms` says, naming the broad path: the App's
+/// `guests-rooms` grant, on one card, not one guest at a time. `app` is how
+/// the caller names the App; `rooms` are the handles it was refused.
+pub fn outside_app_hint(app: &str, rooms: &[String]) -> String {
+    let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
+    format!(
+        "not a room this App may hand out: {}. Ask for it once for the whole App: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them; the owner approves it on a card on your Thread)",
+        rooms.join(", "),
+        flags.join(" "),
+    )
 }
 
 impl From<String> for Refusal {

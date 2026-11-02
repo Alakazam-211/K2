@@ -428,8 +428,8 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
             lines: vec![
                 format!("let {handle} set its own guests' rooms (guests-rooms): {shown}"),
                 format!(
-                    "then any of {handle}'s guests, test guests {} holds included, can be given {shown}",
-                    ws_handle(ws)
+                    "then any of {handle}'s guests can be given {shown}, at once: that includes test guests and logins {ws} sets up itself, and {ws} could know those logins' passwords",
+                    ws = ws_handle(ws)
                 ),
             ],
             summary: format!("guests-rooms for {handle}: {shown}"),

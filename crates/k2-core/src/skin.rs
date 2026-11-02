@@ -2865,7 +2865,8 @@ pub(crate) fn mint_app_session_conn(
             }
             None => return Err(HOST_LOGIN_DENIED.to_string()),
         };
-        let policy = match ties::clamp(tie.as_ref(), &app, app_ws, policy) {
+        let app_rooms = ties::app_rooms_conn(conn, &app)?;
+        let policy = match ties::clamp(tie.as_ref(), &app, app_ws, &app_rooms, policy) {
             Ok(p) => p,
             Err(ties::Denied) => {
                 crate::log_debug!("[skin] tied guest {username}: {app} is outside the ceiling");
@@ -4327,7 +4328,9 @@ pub fn token_scope(id: &str) -> Result<Option<TokenScope>, String> {
     })
 }
 
-/// Set principal default rooms. `apply_tokens` copies onto live **sessions**
+/// Set principal default rooms. Live sessions follow at their next request
+/// ([`live_session_policy`]); `apply_tokens` also copies onto the stored
+/// **sessions** rows
 /// only — never platform tokens. Without it, live sessions still lose any
 /// room that is no longer in `rooms` (removal is never deferred).
 pub fn set_principal_default_rooms(
@@ -4364,8 +4367,8 @@ pub fn set_principal_default_rooms(
             let policy = thread_only_policy(&rooms);
             rewrite_live_sessions(conn, &p.id, HOST_APP_ID, &policy)?;
         } else {
-            // Without --apply-tokens an added room waits for the next
-            // login, but a dropped room must leave live sessions now.
+            // The stored copy only: a live session reads its grant at each
+            // request either way (`live_session_policy`, 0.46.8).
             narrow_live_sessions(conn, &p.id, HOST_APP_ID, &rooms)?;
         }
         Ok(SkinPrincipal {
@@ -6274,8 +6277,9 @@ pub fn add_principal_for_app_by(
 /// S24-15: set the rooms of one guest's role-less grant on App `app`
 /// (`host` included). Creates the grant when there is none (owner route).
 /// A grant that carries a role is refused: change the role's rooms instead.
-/// `apply_tokens` copies onto that App's live sessions; without it a
-/// dropped room still leaves them now. A disabled grant stays disabled.
+/// Live sessions follow at their next request ([`live_session_policy`]);
+/// `apply_tokens` only decides how the stored rows are rewritten. A disabled
+/// grant stays disabled.
 pub fn set_app_grant_rooms(
     username: &str,
     app: &str,
@@ -6421,7 +6425,8 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
                 .map_err(|e| format!("skin grant shadow: {e}"))?;
             }
             let tie = ties::get_conn(&tx, &old.subject_id)?;
-            let policy = ties::clamp(tie.as_ref(), &old.target_id, app_ws.as_deref(), role.room_policy.clone())
+            let app_rooms = ties::app_rooms_conn(&tx, &old.target_id)?;
+            let policy = ties::clamp(tie.as_ref(), &old.target_id, app_ws.as_deref(), &app_rooms, role.room_policy.clone())
                 .unwrap_or_default();
             rewrite_live_sessions(&tx, &old.subject_id, &old.target_id, &policy)?;
         }
@@ -7096,7 +7101,9 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 /// A login session (`session=1`) also needs its principal and an enabled
 /// `kind=app` grant **for the App the session is bound to** (S24-5; NULL
 /// on a pre-0.45.5 row = `host`) at the moment of use: a backstop behind the
-/// revocations the grant writers do. Platform passes (`session=0`) skip it.
+/// revocations the grant writers do. Its rooms and caps are that grant's at
+/// the moment of use ([`live_session_policy`]). Platform passes
+/// (`session=0`) skip both.
 /// An App **link pass** (`link_id` set, runtime S14) is never returned
 /// here: it is valid only on its own link ([`link::resolve_link_pass`]).
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
@@ -7211,33 +7218,53 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
             .optional()
             .map_err(|e| format!("skin token resolve: {e}"))?
             .flatten();
-        // R3: a login's folders come from its own grant → role, now.
-        let row = row.map(|(mut pass, tie)| {
-            if pass.session {
-                pass.room_paths = paths::session_paths(conn, &pass);
-                // app-user-profile §3.7: last used, in memory only.
-                profile::touch(&pass.id);
+        let Some((mut pass, tie)) = row else { return Ok(None) };
+        if pass.session {
+            // 0.46.8 (Rosson 2026-11-02): new access at the next request, no
+            // sign-out. A login's rooms and caps are its grant's, now, like
+            // its folders (R3); the stored copy only says what it was when
+            // last written. A role that can't be read fails closed.
+            if let Some(policy) = live_session_policy(conn, &pass)? {
+                pass.caps = union_caps(&policy);
+                pass.rooms = rooms_from_policy(&policy);
+                pass.room_policy = policy;
             }
-            (pass, tie)
-        });
-        Ok(row)
+            pass.room_paths = paths::session_paths(conn, &pass);
+            // app-user-profile §3.7: last used, in memory only.
+            profile::touch(&pass.id);
+        }
+        let app_rooms = match &tie {
+            Some(_) => ties::app_rooms_conn(conn, &pass.app)?,
+            None => Vec::new(),
+        };
+        Ok(Some((pass, tie, app_rooms)))
     })?;
-    Ok(row.and_then(|(pass, tie)| match tie {
+    Ok(row.and_then(|(pass, tie, app_rooms)| match tie {
         None => Some(pass),
         // agent-app-users R2 (A2): a tied guest's live session is held to
-        // the ceiling on every use, whatever rewrote it since the mint
-        // (role and grant edits rewrite live sessions in place). The App's
-        // workspace is read after the skin mutex is released (A21).
-        Some(tie) => clamp_resolved(pass, &tie),
+        // the ceiling on every use. The App's workspace is read after the
+        // skin mutex is released (A21).
+        Some(tie) => clamp_resolved(pass, &tie, &app_rooms),
     }))
 }
 
+/// The policy a login session has right now: its App's enabled grant's
+/// ([`grant_login_policy`], what a fresh sign-in would get). `None`: no
+/// such grant (a chat-only box login, S28 §13, whose stored policy is
+/// empty), or no principal; the stored row stands.
+fn live_session_policy(conn: &Connection, pass: &SkinPass) -> Result<Option<RoomPolicy>, String> {
+    let Some(principal_id) = pass.principal_id.as_deref() else { return Ok(None) };
+    let Some(grant) = enabled_app_grant(conn, principal_id, &pass.app)? else { return Ok(None) };
+    Ok(Some(grant_login_policy(conn, &grant)?.0))
+}
+
 /// [`resolve_skin_token`]'s clamp for a tied guest's session: `None` when
-/// its App is outside the ceiling, else its policy cut to the tie's room.
-fn clamp_resolved(mut pass: SkinPass, tie: &ties::Tie) -> Option<SkinPass> {
+/// its App is outside the ceiling, else its policy cut to the tie's room
+/// and the rooms the owner approved for its App (`app_rooms`).
+fn clamp_resolved(mut pass: SkinPass, tie: &ties::Tie, app_rooms: &[String]) -> Option<SkinPass> {
     let app_ws = ties::app_workspace(&pass.app);
     let policy = std::mem::take(&mut pass.room_policy);
-    match ties::clamp(Some(tie), &pass.app, app_ws.as_deref(), policy) {
+    match ties::clamp(Some(tie), &pass.app, app_ws.as_deref(), app_rooms, policy) {
         Ok(p) => {
             pass.caps = union_caps(&p);
             pass.rooms = rooms_from_policy(&p);
@@ -10368,7 +10395,7 @@ mod tests {
     }
 
     #[test]
-    fn default_rooms_removal_reaches_sessions_without_apply_tokens() {
+    fn default_rooms_changes_reach_sessions_at_the_next_request() {
         with_temp_home(|| {
             add_principal("ada").expect("ada");
             add_principal("bob").expect("bob");
@@ -10383,7 +10410,7 @@ mod tests {
             let p = resolve_skin_token(&ada_raw).unwrap();
             assert!(p.has_room(&a));
             assert!(!p.has_room(&b), "removed default room must leave: {p:?}");
-            assert!(!p.has_room(&c), "added room waits for --apply-tokens: {p:?}");
+            assert!(p.has_room(&c), "an added room is there at the next request (0.46.8): {p:?}");
             set_principal_default_rooms("ada", &[a.clone(), c.clone()], true).unwrap();
             assert!(resolve_skin_token(&ada_raw).unwrap().has_room(&c));
             let bp = resolve_skin_token(&bob_raw).unwrap();
@@ -11701,7 +11728,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_132_copies_caps_onto_each_room_resolve_does_not_join() {
+    fn migrate_132_copies_caps_onto_each_room_and_resolve_reads_the_role_live() {
         with_temp_home(|| {
             let path = crate::paths::k2_home().join("skin.db");
             std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
@@ -11828,12 +11855,12 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-            let still = resolve_skin_token(&raw).expect("no JOIN at resolve");
-            assert!(
-                !still.has_cap_in_room(&anna, CAP_FILES_READ),
-                "resolve must not JOIN roles: {still:?}"
-            );
-            assert!(still.has_cap_in_room(&docs, CAP_FILES_READ));
+            // 0.46.8 (Rosson 2026-11-02): a login's access is its grant's and
+            // role's at each request, so even a role row no writer rewrote
+            // sessions for applies now, both ways.
+            let live = resolve_skin_token(&raw).expect("still signed in");
+            assert!(live.has_cap_in_room(&anna, CAP_FILES_READ), "the role, read at this request: {live:?}");
+            assert!(!live.has_room(&docs), "and what it dropped is gone: {live:?}");
         });
     }
 

@@ -109,7 +109,8 @@ fn person_in(conn: &Connection, principal_id: &str) -> Result<Option<Person>, St
 }
 
 /// Hold a tied person to their ceiling (agent-app-users R2): Apps outside
-/// it are dropped, rooms other than the tie's are dropped. Runs after the
+/// it are dropped, rooms other than the tie's and the App's approved ones
+/// are dropped. Runs after the
 /// skin mutex is released (the App → workspace reads the daemon DB, A21).
 fn clamp_person(mut p: Person, tie: Option<super::ties::Tie>) -> Result<Person, String> {
     let Some(tie) = tie else { return Ok(p) };
@@ -119,12 +120,14 @@ fn clamp_person(mut p: Person, tie: Option<super::ties::Tie>) -> Result<Person, 
         if !super::ties::app_inside(&tie, &app, ws.as_deref()) {
             continue;
         }
-        apps.insert(app, rooms.into_iter().filter(|r| *r == tie.workspace_id).collect());
+        let approved = super::ties::app_rooms(&app)?;
+        let kept = rooms.into_iter().filter(|r| super::ties::room_inside(&tie, &app, &approved, r)).collect();
+        apps.insert(app, kept);
     }
     p.apps = apps;
     let grants = super::list_grants()?;
     let roles = super::list_roles()?;
-    p.pending_reset = super::ties::pending(&tie, &p.principal_id, &grants, &roles, &|a: &str| super::ties::app_workspace(a));
+    p.pending_reset = super::ties::pending(&tie, &p.principal_id, &grants, &roles, &|a: &str| super::ties::app_workspace(a), &|a: &str| super::ties::app_rooms(a).unwrap_or_default());
     p.tied_to = Some(tie.workspace_id);
     Ok(p)
 }

@@ -9,12 +9,27 @@
 //!
 //! - App targets: the box login (`host`) only when `host_ok` (they already
 //!   had it when the tie was set), and any App of `workspace_id`;
-//! - rooms: only `workspace_id`, minus [`super::PERSON_ONLY_CAPS`];
+//! - rooms: `workspace_id`, and on an App the rooms the owner approved for
+//!   that App's guests (its `guests-rooms` grant, read live: 0.46.8, Rosson
+//!   2026-11-02), minus [`super::PERSON_ONLY_CAPS`];
 //! - no chat-only box login and no chat pass (a chat grant is box-wide).
 //!
-//! The owner may widen a tied user at any time; the extra access just
-//! waits (**pending reset**) until that person uses an owner-minted reset
-//! link (`owner_reset`), the only thing that drops the tie.
+//! The owner may widen a tied user at any time; what reaches past the
+//! ceiling just waits (**pending reset**) until that person uses an
+//! owner-minted reset link (`owner_reset`), the only thing that drops the
+//! tie. A must-change `password.reset` with the change token doesn't: an
+//! App's server can host that screen and see the new password, so only K2's
+//! own page proves the agent doesn't know it.
+//!
+//! **Why the App's approved rooms are inside the ceiling.** The owner
+//! already said this App may hand those rooms to its guests, and the App's
+//! server already sees its guests' sessions, so holding them back from a
+//! login the App's agent made protects nothing new. The tie itself stays:
+//! it still says an agent could know the credential, which is what keeps
+//! such a login from answering a person's cards, from having its stored
+//! email trusted, from a chat pass, from `host` and other workspaces' Apps,
+//! and from person-only caps. Read live, so revoking the grant takes those
+//! rooms away from these logins on their next request.
 //!
 //! skin.db step 6 adds the table (and `app_user_invites`, used by the
 //! invite and owner-reset slices): a numbered step, so a K2 older than
@@ -418,18 +433,38 @@ pub fn app_inside(tie: &Tie, app: &str, app_workspace: Option<&str>) -> bool {
     }
 }
 
+/// The rooms of `app`'s `guests-rooms` grant ([`clamp`]'s `app_rooms`):
+/// empty without a grant, and always for `host` (the box login is no App).
+pub(super) fn app_rooms_conn(conn: &Connection, app: &str) -> Result<Vec<String>, String> {
+    if app.trim().is_empty() || app == HOST_APP_ID {
+        return Ok(Vec::new());
+    }
+    super::guest_rooms::grant_rooms_conn(conn, app)
+}
+
+/// [`app_rooms_conn`] on its own connection.
+pub fn app_rooms(app: &str) -> Result<Vec<String>, String> {
+    with_conn(|conn| app_rooms_conn(conn, app))
+}
+
+/// Is `room` one `tie` lets through on an App with these approved rooms?
+pub fn room_inside(tie: &Tie, app: &str, app_rooms: &[String], room: &str) -> bool {
+    room == tie.workspace_id || (app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
+}
+
 /// What a tied user may use of `policy` on `app` (§5.2): no tie → the
-/// policy as is; an App outside the ceiling → [`Denied`]; inside → only
-/// the tie's room, without person-only caps (an empty result is allowed:
-/// the session is Thread-dark).
-pub fn clamp(tie: Option<&Tie>, app: &str, app_workspace: Option<&str>, policy: RoomPolicy) -> Result<RoomPolicy, Denied> {
+/// policy as is; an App outside the ceiling → [`Denied`]; inside → the
+/// tie's room and `app_rooms` ([`app_rooms_conn`]: the rooms the owner
+/// approved for this App's guests), without person-only caps (an empty
+/// result is allowed: the session is Thread-dark).
+pub fn clamp(tie: Option<&Tie>, app: &str, app_workspace: Option<&str>, app_rooms: &[String], policy: RoomPolicy) -> Result<RoomPolicy, Denied> {
     let Some(tie) = tie else { return Ok(policy) };
     if !app_inside(tie, app, app_workspace) {
         return Err(Denied);
     }
     let mut out = RoomPolicy::new();
     for (room, caps) in policy {
-        if room != tie.workspace_id {
+        if !room_inside(tie, app, app_rooms, &room) {
             continue;
         }
         let caps: Vec<String> = caps.into_iter().filter(|c| !PERSON_ONLY_CAPS.contains(&c.as_str())).collect();
@@ -459,6 +494,7 @@ pub fn pending(
     grants: &[SkinGrant],
     roles: &[SkinRole],
     app_workspace: &dyn Fn(&str) -> Option<String>,
+    app_rooms: &dyn Fn(&str) -> Vec<String>,
 ) -> bool {
     for g in grants.iter().filter(|g| g.subject_kind == "principal" && g.subject_id == principal_id && g.enabled) {
         if g.kind != "app" {
@@ -466,7 +502,7 @@ pub fn pending(
         }
         let ws = if g.target_id == HOST_APP_ID { None } else { app_workspace(&g.target_id) };
         let policy = grant_policy(g, roles);
-        match clamp(Some(tie), &g.target_id, ws.as_deref(), policy.clone()) {
+        match clamp(Some(tie), &g.target_id, ws.as_deref(), &app_rooms(&g.target_id), policy.clone()) {
             Err(Denied) => return true,
             Ok(kept) if kept != policy => return true,
             Ok(_) => {}
@@ -549,18 +585,29 @@ mod tests {
     fn clamp_is_the_ceiling() {
         let wide = policy(&[("ws", &["thread:read", "files:read", "files:download", "files:agentconfig"]), ("sales", &["thread:read"])]);
         // No tie: unchanged.
-        assert_eq!(clamp(None, "svc-x", Some("other"), wide.clone()), Ok(wide.clone()));
+        assert_eq!(clamp(None, "svc-x", Some("other"), &[], wide.clone()), Ok(wide.clone()));
         // An App of the tie's workspace: only that room, person-only caps gone.
-        let kept = clamp(Some(&tie("ws", false)), "svc-a", Some("ws"), wide.clone()).unwrap();
+        let kept = clamp(Some(&tie("ws", false)), "svc-a", Some("ws"), &[], wide.clone()).unwrap();
         assert_eq!(kept, policy(&[("ws", &["thread:read", "files:read"])]));
         // Another workspace's App, an App that's gone: denied.
-        assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), wide.clone()), Err(Denied));
-        assert_eq!(clamp(Some(&tie("ws", false)), "svc-gone", None, wide.clone()), Err(Denied));
+        assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), &[], wide.clone()), Err(Denied));
+        assert_eq!(clamp(Some(&tie("ws", false)), "svc-gone", None, &[], wide.clone()), Err(Denied));
         // The box login only with host_ok.
-        assert_eq!(clamp(Some(&tie("ws", false)), HOST_APP_ID, None, wide.clone()), Err(Denied));
-        assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, wide.clone()).unwrap(), kept);
+        assert_eq!(clamp(Some(&tie("ws", false)), HOST_APP_ID, None, &[], wide.clone()), Err(Denied));
+        assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &[], wide.clone()).unwrap(), kept);
+        // The rooms the owner approved for this App's guests are inside on
+        // this App, person-only caps still gone; another room still isn't.
+        let approved = vec!["sales".to_string()];
+        let mixed = policy(&[("ws", &["thread:read"]), ("sales", &["thread:read", "files:download"]), ("ops", &["thread:read"])]);
+        assert_eq!(
+            clamp(Some(&tie("ws", false)), "svc-a", Some("ws"), &approved, mixed.clone()).unwrap(),
+            policy(&[("ws", &["thread:read"]), ("sales", &["thread:read"])]),
+        );
+        // Never on the box login, and never for another workspace's App.
+        assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &approved, mixed.clone()).unwrap(), policy(&[("ws", &["thread:read"])]));
+        assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), &approved, mixed), Err(Denied));
         // Nothing in the tie's room: an empty (Thread-dark) policy, allowed.
-        assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, policy(&[("sales", &["thread:read"])])), Ok(RoomPolicy::new()));
+        assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &[], policy(&[("sales", &["thread:read"])])), Ok(RoomPolicy::new()));
     }
 
     fn grant(kind: &str, target: &str, role: Option<&str>, scope: Option<&str>) -> SkinGrant {
@@ -606,8 +653,14 @@ mod tests {
             role("r-dl", policy(&[("ws", &["files:download"])])),
         ];
         let t = tie("ws", false);
+        let no_rooms = |_: &str| Vec::new();
         let inside = vec![grant("app", "svc-a", Some("r-in"), None)];
-        assert!(!pending(&t, "p1", &inside, &roles, &ws_of), "inside the ceiling");
+        assert!(!pending(&t, "p1", &inside, &roles, &ws_of, &no_rooms), "inside the ceiling");
+        // A room the owner approved for that App's guests doesn't wait.
+        let wide = vec![grant("app", "svc-a", Some("r-wide"), None)];
+        let approved = |app: &str| if app == "svc-a" { vec!["sales".to_string()] } else { Vec::new() };
+        assert!(pending(&t, "p1", &wide, &roles, &ws_of, &no_rooms), "without the grant it waits");
+        assert!(!pending(&t, "p1", &wide, &roles, &ws_of, &approved), "inside the App's approved rooms");
         for (what, extra) in [
             ("box login without host_ok", grant("app", HOST_APP_ID, None, Some("[]"))),
             ("another workspace's App", grant("app", "svc-b", Some("r-in"), None)),
@@ -619,15 +672,15 @@ mod tests {
             let mut gs = inside.clone();
             gs.retain(|g| g.target_id != extra.target_id || g.kind != extra.kind);
             gs.push(extra);
-            assert!(pending(&t, "p1", &gs, &roles, &ws_of), "{what} is pending");
+            assert!(pending(&t, "p1", &gs, &roles, &ws_of, &no_rooms), "{what} is pending");
         }
         // A disabled grant is no grant.
         let mut off = grant("chat", "sew", None, Some("member"));
         off.enabled = false;
-        assert!(!pending(&t, "p1", &[inside[0].clone(), off], &roles, &ws_of));
+        assert!(!pending(&t, "p1", &[inside[0].clone(), off], &roles, &ws_of, &no_rooms));
         // Another principal's grants don't count.
         let mut theirs = grant("chat", "sew", None, Some("member"));
         theirs.subject_id = "p2".into();
-        assert!(!pending(&t, "p1", &[inside[0].clone(), theirs], &roles, &ws_of));
+        assert!(!pending(&t, "p1", &[inside[0].clone(), theirs], &roles, &ws_of, &no_rooms));
     }
 }

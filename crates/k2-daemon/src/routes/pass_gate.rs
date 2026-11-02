@@ -85,7 +85,14 @@ pub fn set_fenced(on: bool) {
     let _ = REQUEST.try_with(|r| {
         let mut r = r.borrow_mut();
         r.current = r.pending.take();
+        r.current_pass = r.pending_pass.take();
     });
+}
+
+/// The `k2skn_` pass the current request carries, whatever the permission
+/// cards switch says (`skin_routes::explain_skin_room`, 0.46.8).
+pub(crate) fn request_pass() -> Option<String> {
+    REQUEST.try_with(|r| r.borrow().current_pass.clone()).ok().flatten()
 }
 
 // ── Permission cards (PRD rev 3.1 §3.1, vs-live C2; lane C) ──────────────
@@ -116,9 +123,15 @@ pub(crate) struct NotedRequest {
 struct Noted {
     pending: Option<NotedRequest>,
     current: Option<NotedRequest>,
+    /// [`request_pass`]: noted with the switch on or off.
+    pending_pass: Option<String>,
+    current_pass: Option<String>,
 }
 
 fn note_request(method: &str, path: &str, query: &str) {
+    if let Some(tok) = super::http::extract_token(query).filter(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+        let _ = REQUEST.try_with(|r| r.borrow_mut().pending_pass = Some(tok.to_string()));
+    }
     if !k2_core::permission::gate::server_on() {
         return;
     }

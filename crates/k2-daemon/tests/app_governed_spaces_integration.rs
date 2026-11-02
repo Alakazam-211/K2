@@ -241,7 +241,7 @@ fn governed_flag() -> &'static str {
 /// Space and each manifest channel's Sew id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_app_reads_its_own_space_and_channel_ids_after_the_sync() {
-    let env = setup(&[governed_flag(), "app_channel_create", "home_client", "app_origin"]).await;
+    let env = setup(&[governed_flag(), "space_unbind"]).await;
     let _ = bound_space(&env).await;
     let spaces = hook::app_spaces(APP).expect("app spaces");
     assert_eq!(spaces.len(), 1, "{spaces:?}");

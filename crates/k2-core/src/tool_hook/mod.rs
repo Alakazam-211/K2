@@ -1797,6 +1797,20 @@ pub fn app_spaces(app_id: &str) -> Result<Vec<governed::AppSpace>, String> {
     crate::skin::with_skin_conn(|conn| governed::app_spaces(conn, app_id))
 }
 
+/// Tests: as if the sync had made a manifest text channel.
+#[cfg(any(test, feature = "test-util"))]
+pub fn put_app_channel_for_tests(space: &str, slug: &str, app: &str, channel_id: &str, name: &str) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| {
+        conn.execute(
+            "INSERT INTO tool_app_space_channels (space_id, slug, app_id, source, channel_id, name, kind, private, state)
+             VALUES (?1, ?2, ?3, 'manifest', ?4, ?5, 'text', 0, ?6)",
+            rusqlite::params![space, slug, app, channel_id, name, governed::CH_READY],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("put channel: {e}"))
+    })
+}
+
 /// The App's own lists (`chat.setChannels`): stored, then synced within
 /// seconds. Returns how many changed.
 pub fn set_app_member_lists(app_id: &str, lists: &[governed::AppList], actor: &str) -> Result<usize, String> {

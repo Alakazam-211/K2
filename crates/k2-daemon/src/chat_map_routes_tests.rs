@@ -145,15 +145,7 @@ fn chat_space_is_the_apps_own_space_and_manifest_channels() {
 
     // Bound, and K2 has one channel's id.
     k2_core::tool_hook::app_space_bind(&f.jobs, "5101", "owner-token").expect("bind");
-    skin::with_skin_conn(|c| {
-        c.execute(
-            "INSERT INTO tool_app_space_channels (space_id, slug, app_id, source, channel_id, name, kind, private, state, ensure_tries)
-             VALUES ('5101', 'desk', ?1, 'manifest', '77', 'Desk', 'text', 0, 'ready', 0)",
-            params![f.jobs],
-        )
-        .map_err(|e| e.to_string())
-    })
-    .unwrap();
+    k2_core::tool_hook::put_app_channel_for_tests("5101", "desk", &f.jobs, "77", "Desk").unwrap();
     let (st, v) = call(&f, &f.pass, SPACE, false, json!({}), &[]);
     assert_eq!(st, 200, "{v}");
     assert_eq!(v["spaceId"], json!("5101"));

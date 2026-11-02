@@ -158,13 +158,24 @@ fn is_home_client(app: &str) -> R<bool> {
     Ok(rows.iter().any(|r| r.subject == hook::home::HOME_SUBJECT && r.body.get("app_id").and_then(Value::as_str) == Some(app)))
 }
 
-/// `GET /cli/sew/app-chat?app=<app>`.
-pub fn view(app_in: &str) -> R<Value> {
+/// `GET /cli/sew/app-chat?app=<app>`. The App's steps toward Sew (each
+/// Space's `sync`: the current step, Sew's last answer, a blocked row, what
+/// `k2 app grant hooks` shows the owner for the whole box) go to a person
+/// and the App's own agent; another workspace's agent reads the rest as
+/// before.
+pub fn view(who: &Who, app_in: &str) -> R<Value> {
     if app_in.trim().is_empty() {
         return Err(no("bad_request", 400, "name the App (app=<app>)"));
     }
     let (app, name) = super::home::resolve_app(app_in)?;
-    let v = hook::governed_view(&app).map_err(|e| no("db_error", 500, e))?;
+    let mut v = hook::governed_view(&app).map_err(|e| no("db_error", 500, e))?;
+    if let Who::Agent { project_id, .. } = who {
+        if k2_core::skin::ties::app_workspace(&app).as_deref() != Some(project_id.as_str()) {
+            for s in &mut v.spaces {
+                s.sync.clear();
+            }
+        }
+    }
     Ok(json!({"ok": true, "name": name, "chat": v}))
 }
 
@@ -177,6 +188,36 @@ mod tests {
 
     fn body(to: &str) -> Value {
         json!({"app": APP, "spaceId": "5101", "governance": to})
+    }
+
+    /// `k2 app chat`'s steps toward Sew: a person and the App's own agent,
+    /// never another workspace's agent (0.46.8).
+    #[test]
+    fn the_apps_sync_steps_go_to_its_own_agent_and_a_person_only() {
+        let _home = k2_core::test_env::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        let svc = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-own', 'Own', '/tmp/k2-gv-own', 'own')", []).expect("workspace");
+            k2_core::published_services::insert(&conn, "w-own", "jobs", "node s.js", "/tmp", 47_531, "local", "stopped", "cmd", "").expect("App").id
+        };
+        hook::app_space_bind(&svc, "spc_sync", "owner-token").expect("bind");
+        rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db"))
+            .expect("skin.db")
+            .execute(
+                "INSERT INTO tool_outbox (id, tool, op, subject_key, payload, idem_key, cause, actor, state, attempts, next_attempt_at, last_status, last_error, created_at, updated_at)
+                 VALUES ('b1', 'chat', 'space_settings', 'space:spc_sync', '{}', 'b1', 'governance_switch', 'owner-token', 'blocked', 1, 1, 409, 'app_mismatch', 1, 1)",
+                [],
+            )
+            .expect("a blocked row");
+        let steps = |who: &Who| -> usize {
+            let v = view(who, &svc).expect("view");
+            v["chat"]["spaces"][0]["sync"].as_array().expect("sync").len()
+        };
+        assert_eq!(steps(&Who::Owner), 1);
+        assert_eq!(steps(&Who::Agent { project_id: "w-own".into(), session_id: "s".into() }), 1, "the App's own agent");
+        assert_eq!(steps(&Who::Agent { project_id: "w-else".into(), session_id: "s".into() }), 0, "another workspace's agent");
     }
 
     /// AG-7: "Manage Sew" is never enough; an agent asks on the card.

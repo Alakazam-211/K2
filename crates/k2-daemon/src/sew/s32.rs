@@ -1000,7 +1000,7 @@ pub fn route(env: &Env, path: &str, who: &Who, body: &[u8], params: &HashMap<Str
     };
     Some(match path {
         APP_SPACES => need_credential(who).and_then(|()| app_spaces_list()),
-        APP_CHAT => need_credential(who).and_then(|()| super::governed::view(params.get("app").map(String::as_str).unwrap_or(""))),
+        APP_CHAT => need_credential(who).and_then(|()| super::governed::view(who, params.get("app").map(String::as_str).unwrap_or(""))),
         // The Manage Sew floor like every S32 mutation, then the person
         // gate on top (AG-7): Manage Sew is needed, never enough.
         APP_SPACES_GOVERNANCE => need_manage(who).and_then(|()| super::governed::governance(who, &v)),

@@ -690,3 +690,35 @@ fn a_bound_spaces_switch_names_its_app_when_sent() {
     let other = skin::with_skin_conn(|c| space_settings_body(c, "app:someapp", &stored)).expect("other subject");
     assert_eq!(other, stored, "only a Space's settings row gains app_id");
 }
+
+/// `k2 app chat` names the current step and Sew's last answer, blocked rows
+/// first, the last finished one after; another Space's rows and the rows'
+/// payloads never show.
+#[test]
+fn the_view_names_the_spaces_steps_toward_sew() {
+    let _e = setup();
+    skin::with_skin_conn(|c| app_space::bind(c, APP, SPACE, "owner-token", 1).map(|_| ())).expect("bind");
+    sql("DELETE FROM tool_outbox", &[]);
+    let row = |id: &str, subject: &str, state: &str, status: Option<i64>, error: Option<&str>| {
+        sql(
+            "INSERT INTO tool_outbox (id, tool, op, subject_key, payload, idem_key, cause, actor, state, attempts, next_attempt_at, last_status, last_error, created_at, updated_at)
+             VALUES (?1, 'chat', 'space_settings', ?2, '{\"email\":\"secret@example.test\"}', ?1, 'governance_switch', 'owner-token', ?3, 2, 1, ?4, ?5, 1, 1)",
+            &[&id, &subject, &state, &status, &error],
+        );
+    };
+    let settings = settings_subject(SPACE);
+    row("done-1", &settings, "done", Some(200), None);
+    row("pend-1", &chan_subject(SPACE, &ExternalId::parse("k2:principal:4d5e6f70-0000-4000-8000-000000000004").unwrap()), "pending", None, None);
+    row("blok-1", &settings, "blocked", Some(409), Some("app_mismatch: the Space is bound to another App"));
+    row("gone-1", &settings, "superseded", None, None);
+    row("else-1", &settings_subject("spc_other"), "blocked", Some(500), Some("another Space"));
+
+    let v = skin::with_skin_conn(|c| view(c, APP)).expect("view");
+    let steps = &v.spaces[0].sync;
+    let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["blok-1", "pend-1", "done-1"], "blocked first, then open, then the last that finished");
+    assert_eq!((steps[0].state.as_str(), steps[0].last_status), ("blocked", Some(409)));
+    assert_eq!(steps[0].last_error.as_deref(), Some("app_mismatch: the Space is bound to another App"));
+    let wire = serde_json::to_string(steps).expect("json");
+    assert!(!wire.contains("secret@example.test"), "never a payload: {wire}");
+}

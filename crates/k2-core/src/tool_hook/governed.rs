@@ -1671,6 +1671,59 @@ pub struct LeavingView {
     pub state: String,
 }
 
+/// One step K2 is taking (or last took) toward Sew for a Space: an outbox
+/// row, never its payload (payloads hold emails).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStep {
+    pub id: String,
+    pub op: String,
+    pub subject: String,
+    pub state: String,
+    pub attempts: i64,
+    /// Sew's last HTTP answer to this step.
+    pub last_status: Option<i64>,
+    /// What Sew (or K2's worker) last said about it.
+    pub last_error: Option<String>,
+    pub updated_at: i64,
+}
+
+/// The Space's outbox rows `k2 app chat` shows, in the order a reader wants
+/// them: every open step (blocked first), then the last one that finished.
+fn sync_steps(conn: &Connection, space: &str) -> Result<Vec<SyncStep>, String> {
+    let settings = settings_subject(space);
+    let members = format!("{}{space}:%", super::app_space::SUBJECT_PREFIX);
+    let chan = format!("{CHAN_PREFIX}{space}:%");
+    let chans = format!("{CHANS_PREFIX}{space}");
+    let read = |filter: &str, limit: i64| -> Result<Vec<SyncStep>, String> {
+        let mut st = conn
+            .prepare(&format!(
+                "SELECT id, op, subject_key, state, attempts, last_status, last_error, updated_at FROM tool_outbox
+                 WHERE (subject_key = ?1 OR subject_key LIKE ?2 OR subject_key LIKE ?3 OR subject_key = ?4) AND {filter}
+                 ORDER BY CASE state WHEN 'blocked' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, seq DESC LIMIT ?5"
+            ))
+            .map_err(|e| format!("app chat sync: {e}"))?;
+        let rows = st
+            .query_map(params![settings, members, chan, chans, limit], |r| {
+                Ok(SyncStep {
+                    id: r.get(0)?,
+                    op: r.get(1)?,
+                    subject: r.get(2)?,
+                    state: r.get(3)?,
+                    attempts: r.get(4)?,
+                    last_status: r.get(5)?,
+                    last_error: r.get(6)?,
+                    updated_at: r.get(7)?,
+                })
+            })
+            .map_err(|e| format!("app chat sync: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("app chat sync row: {e}"))
+    };
+    let mut out = read("state IN ('blocked','held','pending')", 20)?;
+    out.extend(read("state = 'done'", 1)?);
+    Ok(out)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceView {
@@ -1683,6 +1736,9 @@ pub struct SpaceView {
     pub people: Vec<PersonView>,
     pub leaving: Vec<LeavingView>,
     pub waiting: Option<Waiting>,
+    /// The steps toward Sew ([`sync_steps`]): for a person and the App's own
+    /// agent (the daemon's door strips them for anyone else).
+    pub sync: Vec<SyncStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1753,6 +1809,7 @@ pub fn view(conn: &Connection, app_id: &str) -> Result<AppView, String> {
         spaces.push(SpaceView {
             governance: governance_wish(conn, &space)?,
             governance_confirmed: governance_confirmed(conn, &space)?,
+            sync: sync_steps(conn, &space)?,
             space_id: space,
             channels,
             people,

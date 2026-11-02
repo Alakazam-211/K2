@@ -1409,6 +1409,12 @@ Run it as printed. The owner or an admin allows it and confirms it's them, and t
 
 The owner sees who gets in, to which App, with which role, and what that role lets them do, and only the owner can allow it (the error says "owner/admin"; for logins it's the owner). `user=` takes a username. When the `[permission:]` turn says approved, the login exists: don't run the add again, and check it with `k2 app grant list`, which shows the logins on your own Apps. `op=remove user=<username> app=<your app>` takes a login away the same way (`k2 app grant rm` prints that line). Never an agent's login and never a box login.
 
+A box login is a person with `host` access to the whole server: you never change their access yourself. To give one access to your own App, ask the owner on its own card, which only the owner can allow:
+
+    k2 permission request apps.user-grant-box user=<login> app=<your app> role=<role> --why "<what you need it for>"
+
+When the `[permission:]` turn says approved, they have that role on your App, and their box login is as it was.
+
 ## Chat in your own App
 
 - Your App's chat key: `k2 app grant <app> --kind chat-key` is refused when it would turn the key on or widen it, and ends with the line to ask with, for example `k2 permission request apps.chat-key app=<your app> caps=chat:read,chat:post,voice:join --why "..."` (`level=member|moderator|admin` and `uploads=on|off` when you asked for them). The owner or an admin allows it and confirms it's them; level admin, caps past what your App's manifest asked for, more than 500 people or uploads back on is the owner's alone. When the `[permission:]` turn says approved, the key is on: don't run the grant again. Narrowing or revoking your own App's key needs no card.

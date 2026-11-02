@@ -319,7 +319,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 47;
 /// v6 = 0.46.7: "Chat in your own App" (`apps.chat-key`, `sew.space-governance`).
 /// v7 = 0.46.8: "Your own chat account" (`chat.manage` first, `chat.account`) and "Email sending"
 /// (`mail.send-mode` from `k2 mail sending`, `mail.stop-sending`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 7;
+/// v8 = 0.46.8: a box login's access to your own App (`apps.user-grant-box`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 8;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

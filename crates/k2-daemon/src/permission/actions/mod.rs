@@ -25,6 +25,7 @@
 //! | `docs.rs` | Markdown multiplayer v1 | `docs.share` (MI25) |
 //! | `chat_account.rs` | 0.46.8 | `chat.account` (the agent's own workspace's chat account) |
 //! | `mail_stop.rs` | 0.46.8 | `mail.stop-sending` (turn off a workspace's agent email sending) |
+//! | `box_login_grant.rs` | 0.46.8 | `apps.user-grant-box` (a box login's access to the agent's own App) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -35,6 +36,7 @@ use k2_core::permission::catalog::{ActionSpec, NotCardableSpec};
 use serde_json::{Map, Value};
 
 pub(crate) mod app_login;
+pub(crate) mod box_login_grant;
 pub(crate) mod chat_account;
 pub(crate) mod chat_cards;
 pub(crate) mod compute;
@@ -138,6 +140,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(docs::actions());
     out.extend(chat_account::actions());
     out.extend(mail_stop::actions());
+    out.extend(box_login_grant::actions());
     out
 }
 
@@ -161,6 +164,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(docs::not_cardable());
     out.extend(chat_account::not_cardable());
     out.extend(mail_stop::not_cardable());
+    out.extend(box_login_grant::not_cardable());
     out
 }
 

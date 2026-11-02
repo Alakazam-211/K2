@@ -151,7 +151,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 52] = [
+pub(crate) const V1_ACTIONS: [&str; 53] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -236,6 +236,9 @@ pub(crate) const V1_ACTIONS: [&str; 52] = [
     // off a workspace's agent email sending (any workspace on the server).
     "chat.account",
     "mail.stop-sending",
+    // 0.46.8: a box login's access to the agent's own App (the owner's on a
+    // card; `app.login-grant` names it for a box login).
+    "apps.user-grant-box",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -965,6 +968,12 @@ fn teach(
     if response.pointer("/card/raised").and_then(Value::as_bool) == Some(true) {
         return None;
     }
+    // `outside_app_rooms` (0.46.8) already names its next step, the App's
+    // guests-rooms grant, which raises its own card: no "It can't be
+    // requested." under it.
+    if response.pointer("/error/code").and_then(Value::as_str) == Some("outside_app_rooms") {
+        return None;
+    }
     let req = Refused { status: code, method, path, params, body: req_body, response: &response, workspace_id };
     let p = permission_for(&req)?;
     add_permission(body, &p)
@@ -1200,9 +1209,10 @@ mod tests {
         }
         // Every walled v1 action is reachable from some captured refusal,
         // except the two whose holds attach to apps.approve, keep-mine
-        // (K2-presented) — PRD §5.2 walls column.
+        // (K2-presented) — PRD §5.2 walls column — and apps.user-grant-box
+        // (asked; `app.login-grant` and the box-login refusal name it).
         for a in V1_ACTIONS {
-            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off" | "zen.sign-off" | "publish.pin") {
+            if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off" | "zen.sign-off" | "publish.pin" | "apps.user-grant-box") {
                 continue;
             }
             assert!(asked.contains(&a), "{a}: no captured wall teaches it");
@@ -1667,7 +1677,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 52);
+        assert_eq!(V1_ACTIONS.len(), 53);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -93,7 +93,7 @@ pub(crate) static LOGIN_GRANT: ActionSpec = ActionSpec {
 };
 
 /// One role capability in plain words (unknown ones as they are).
-fn cap_words(cap: &str) -> String {
+pub(crate) fn cap_words(cap: &str) -> String {
     match cap {
         "thread:read" => "read the Thread",
         "thread:post" => "post in the Thread",
@@ -154,17 +154,17 @@ pub(crate) fn role_allows(role: &SkinRole) -> String {
 }
 
 /// The person `user` names (a username or an id), anywhere on the box.
-fn principal(user: &str) -> Option<SkinPrincipal> {
+pub(crate) fn principal(user: &str) -> Option<SkinPrincipal> {
     let want = user.trim().to_ascii_lowercase();
     skin::list_principals().ok()?.into_iter().find(|p| p.username == want || p.id == user.trim())
 }
 
-fn role_named(token: &str) -> Option<SkinRole> {
+pub(crate) fn role_named(token: &str) -> Option<SkinRole> {
     let t = token.trim();
     skin::list_roles().ok()?.into_iter().find(|r| r.id == t || r.name.eq_ignore_ascii_case(t))
 }
 
-fn login_on(p: &SkinPrincipal, svc: &OwnService) -> Option<SkinGrant> {
+pub(crate) fn login_on(p: &SkinPrincipal, svc: &OwnService) -> Option<SkinGrant> {
     skin::list_grants().ok()?.into_iter().find(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == svc.id)
 }
 
@@ -191,7 +191,10 @@ fn login_of(ctx: &Ctx) -> Result<Login, String> {
     }
     let grants = skin::list_grants().map_err(|e| e.to_string())?;
     if crate::skin_routes::has_box_login(&person.id, &grants) {
-        return Err(format!("{} has a box login: only the owner changes a box login's access (ask your human)", person.username));
+        return Err(format!(
+            "{u} has a box login, so this card doesn't apply. For access to your App, ask the owner on this one instead: k2 permission request apps.user-grant-box user={u} app={app} role=<role> --why \"<what you need it for>\"",
+            u = person.username,
+        ));
     }
     let role = match (add, text_param(ctx, "role")) {
         (true, None) => return Err("name the role they get: role=<role> (k2 app role list)".into()),

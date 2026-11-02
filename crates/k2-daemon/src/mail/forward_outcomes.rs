@@ -51,7 +51,10 @@
 //! - `box_brake`: the whole box's outside forwards refused more than
 //!   [`store::BRAKE_PCT`]% with at least [`store::BRAKE_MIN`] forwards:
 //!   every active outside forward pauses and the owner gets one notice.
-//!   Only the owner or an Admin resumes these.
+//!   Only the owner or an Admin resumes these. If every refusal came from one
+//!   mailbox, only that mailbox pauses (`refused`): whoever can get one mailbox
+//!   refused can't stop the whole box. (Stalwart's events don't carry the
+//!   original sender, so the mailbox is as fine as this can count.)
 //!
 //! The windows are the last 24 hours, and never earlier than the
 //! forward's last start (activation or resume): a resumed forward isn't
@@ -366,6 +369,7 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
         return out;
     }
     let mut touched: BTreeSet<String> = BTreeSet::new();
+    let mut bounced_notices: Vec<Forward> = Vec::new();
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -398,7 +402,22 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
                 continue;
             }
             let Some((kind, code)) = classify(e) else { continue };
-            let Some(fid) = store::forward_for_queue(&conn, qid).ok().flatten() else { continue };
+            let Some(fid) = store::forward_for_queue(&conn, qid).ok().flatten() else {
+                // Not a forwarded copy. A notice K2 sent from the mailbox itself
+                // bouncing lands here: the row can't keep saying `sent`.
+                if e.kind == DSN_PERM_FAIL {
+                    if let Some(from) = e.from.as_deref() {
+                        for to in &e.to {
+                            if let Ok(Some(f)) = store::live_for_pair(&conn, &from.to_ascii_lowercase(), &to.to_ascii_lowercase()) {
+                                if f.is_external() && f.notice_state.as_deref() == Some(store::N_SENT) && f.notice_at.is_some_and(|t| now - t < store::WINDOW_SECS) {
+                                    bounced_notices.push(f);
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            };
             let Some(f) = store::get(&conn, &fid).ok().flatten() else { continue };
             // Only the forward's own destination (the message has no other).
             if !e.to.is_empty() && !e.to.iter().any(|t| t.eq_ignore_ascii_case(&f.dest)) {
@@ -413,6 +432,9 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
                 Err(_) => k2_core::log_debug!("{P} WARN an outcome for forward {fid} wasn't stored"),
             }
         }
+    }
+    for f in &bounced_notices {
+        super::forward_verify::notice_bounced(f, now);
     }
     if touched.is_empty() {
         return out;
@@ -451,8 +473,9 @@ fn evaluate_locked(forward_id: &str, now: i64) -> Option<&'static str> {
         let since = window_start(now, started_at(&conn, forward_id).ok()?);
         let c = store::counts(&conn, forward_id, since).ok()?;
         let in_a_row = store::user_refusals_in_a_row(&conn, forward_id, since).ok()?;
-        // The daily cap is the mailbox's: every destination's copies count.
-        let copies = store::mailbox_queued(&conn, &f.address_id, since).ok()?;
+        // The daily cap is the mailbox's: every destination's copies count, on
+        // any row it had in the window, so `rm` and `add` don't start it over.
+        let copies = store::mailbox_queued(&conn, &f.address_id, store::daily_window_start(&conn, &f.address_id, now).ok()?).ok()?;
         let siblings: Vec<Forward> = store::live_rows(&conn, &f.address_id)
             .ok()?
             .into_iter()
@@ -490,9 +513,17 @@ fn evaluate_box_locked(now: i64) -> Vec<String> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Ok(released) = brake_released_at(&conn) else { return Vec::new() };
-        let Ok(c) = store::box_counts(&conn, window_start(now, released)) else { return Vec::new() };
+        let since = window_start(now, released);
+        let Ok(c) = store::box_counts(&conn, since) else { return Vec::new() };
         if !brake_trip(&c) {
             return Vec::new();
+        }
+        // One mailbox's refusals stop that mailbox, not the whole box.
+        if let Ok([only]) = store::refused_mailboxes_since(&conn, since).as_deref() {
+            let only = only.clone();
+            let rows: Vec<Forward> = store::live_rows(&conn, &only).unwrap_or_default().into_iter().filter(|f| f.is_external() && f.is_active()).collect();
+            drop(conn);
+            return pause_one_mailbox(&rows, &c);
         }
         let active: Vec<Forward> = store::list(&conn, &store::ListFilter { state: Some(store::ST_ACTIVE), external_only: true, ..Default::default() })
             .unwrap_or_default();
@@ -527,6 +558,32 @@ fn evaluate_box_locked(now: i64) -> Vec<String> {
                 &[],
             );
         }
+    }
+    paused
+}
+
+/// The brake's numbers, but every refusal came from one mailbox: pause its
+/// outside forwards, and leave the rest of the box alone.
+fn pause_one_mailbox(rows: &[Forward], c: &Counts) -> Vec<String> {
+    let detail = json!({ "boxQueued": c.queued, "boxRefused": c.refused(), "boxFailed": c.failed, "oneMailbox": true });
+    let mut paused = Vec::new();
+    for f in rows {
+        if pause_and_tell(f, store::P_REFUSED, detail.clone(), None) {
+            paused.push(f.id.clone());
+        }
+    }
+    if let Some(f) = rows.first() {
+        super::forward_verify::tell_owner(
+            &format!("Forwarding from {} is paused", f.address),
+            &format!(
+                "Receiving servers refused {} of the {} messages this server forwarded in the last 24 hours, all of them from {}. To protect this server's mail reputation, K2 paused that mailbox's outside forwards; other mailboxes keep forwarding. New mail stays in the mailbox. Resume: k2 hostmail forward resume {}.",
+                c.refused(),
+                c.queued,
+                f.address,
+                f.address
+            ),
+            &[],
+        );
     }
     paused
 }
@@ -624,6 +681,32 @@ pub(crate) fn notice(title: &str, body: &str, extra: &[String]) {
         if let Err(e) = r {
             k2_core::log_debug!("{P} WARN owner notice: {}", crate::email_notify::send::mask_addresses(&e));
         }
+    }
+}
+
+// ── is the webhook working? ─────────────────────────────────────────
+
+/// Record whether delivery outcomes reach K2, and tell the owner when that
+/// changes while outside forwards rely on it: with none, `dest_gone`, `refused`,
+/// `daily_cap` and the box brake can't fire (the hourly throttles still hold).
+pub fn webhook_health(error: Option<&str>) {
+    let changed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_webhook_error(&conn, error).unwrap_or(false)
+    };
+    if !changed || !webhook_wanted() {
+        return;
+    }
+    match error {
+        Some(e) => super::forward_verify::tell_owner(
+            "K2 can't see what happens to forwarded mail",
+            &format!(
+                "K2 couldn't set up the delivery reports from this server's mail server ({e}), so it can't see bounces or refusals. Until that's fixed, a forward won't pause by itself when its destination refuses mail, and the daily limit won't count. K2 keeps trying hourly. Check: k2 hostmail doctor."
+            ),
+            &[],
+        ),
+        None => super::forward_verify::tell_owner("K2 can see forwarded mail's delivery again", "The delivery reports from this server's mail server work again, so forwards pause by themselves when they should.", &[]),
     }
 }
 

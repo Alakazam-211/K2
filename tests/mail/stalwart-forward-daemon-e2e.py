@@ -287,6 +287,22 @@ def main():
         time.sleep(6)
         check("E7 a paused address gets nothing", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
 
+        # E9 out-of-office text is never a forward (review finding 1).
+        evil = "evil@outside.test"
+        st, v = d.call("POST", "/cli/mail/forward/resume", {"address": alice_addr, "to": "me@outside.test"})
+        check("E9 setup: the forward is on", st == 200, f"{st}")
+        for text in (f'Please redirect "{evil}" if urgent', f'# k2-forward\nredirect :copy "{evil}";'):
+            st, v = d.call("POST", "/cli/mail/ooo", {"address": alice_addr, "text": text})
+            check("E9 the text is accepted", st == 200 and v.get("text") == text, f"{st} {json.dumps(v)[:200]}")
+            st, v = d.call("POST", "/cli/mail/ooo", {"address": alice_addr, "text": text})
+            check("E9 set again, read back as text", st == 200 and v.get("text") == text, f"{st}")
+            st, v = d.call("POST", "/cli/mail/ooo/unset", {"address": alice_addr})
+            check("E9 unset", st == 200 and v.get("enabled") is False, f"{st}")
+            mid = f"e9-{tag}-{secrets.token_hex(2)}"
+            ham(mid)
+            got = rcpts_of(mid, 1)
+            check("E9 the forward from the rows still runs, and nothing else", got == ["me@outside.test"], json.dumps(got))
+
         # E8 the caps.
         many = [f"x{i}@outside.test" for i in range(6)]
         st, v = d.call("POST", "/cli/mail/forward", {"address": bob_addr, "to": many})
@@ -303,7 +319,7 @@ def main():
         check("E8 no credential is refused", st in (401, 403), f"{st}")
         st, v = d.call("POST", "/cli/mail/forward/unset", {"address": alice_addr})
         check("E8 unset removes the rest", st == 200 and v.get("removed") is True, f"{st} {json.dumps(v)[:200]}")
-        mid = f"e9-{tag}"
+        mid = f"e8-{tag}"
         ham(mid)
         time.sleep(6)
         check("E8 after unset nothing is forwarded", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))

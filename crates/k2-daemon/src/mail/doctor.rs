@@ -286,6 +286,21 @@ pub fn run_checks_with_ptr_resolver(
         gates_direct: false,
     });
 
+    // Outside forwards pause by themselves only with delivery reports.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(e) = k2_core::mail_forward::webhook_error(&conn) {
+            checks.push(DoctorCheck {
+                id: "forward-outcomes".into(),
+                label: "Delivery reports for forwarded mail".into(),
+                status: ST_WARN,
+                detail: format!("not reaching K2 ({e}), so forwards won't pause by themselves when destinations refuse mail; K2 retries hourly"),
+                gates_direct: false,
+            });
+        }
+    }
+
     // Public IP.
     let ip = env.public_ip();
     checks.push(match &ip {

@@ -5,9 +5,12 @@
 //! **Opt-out, not opt-in** (Rosson 2026-11-02): a forward goes active at once.
 //! An outside address gets one "you've been added" email ([`tell_destination`]),
 //! sent BEFORE the mailbox's Sieve is written, so it arrives ahead of the
-//! first forwarded message. A failed email doesn't block the forward: the row
-//! says `failed`, `forward list` shows it, and K2 tries again hourly
-//! ([`minute_pass`]). The store is `k2_core::email_verify`; the pages are
+//! first forwarded message. An opt-out with no stop link isn't an opt-out, so
+//! an add is refused when no link can be built or the address is suppressed
+//! ([`can_tell`]). A failure that may pass doesn't block: the row says `failed`,
+//! `forward list` shows it, K2 retries with a growing gap ([`minute_pass`]), and
+//! after a day of failing the forward pauses (`not_told`) until the email goes.
+//! A row waiting its turn isn't turned on until its email has gone. The store is `k2_core::email_verify`; the pages are
 //! `email_notify::verify` (GET renders, only POST stops, so link scanners
 //! can't). K2 does NOT put a stop link in the forwarded mail itself: a body
 //! footer breaks the sender's DKIM, and a per-destination header would ride
@@ -86,12 +89,44 @@ impl Told {
 
     /// Record it on the row (with its audit event).
     pub fn record(&self, conn: &rusqlite::Connection, forward_id: &str, actor: &str, now: i64) -> Result<(), String> {
-        store::set_notice(conn, forward_id, self.notice_state(), now)?;
         match self.via {
-            Some(via) => store::record_event(conn, forward_id, store::E_NOTICE_SENT, actor, &json!({ "via": via }), now),
-            None => store::record_event(conn, forward_id, store::E_NOTICE_FAILED, actor, &json!({}), now),
+            Some(via) => {
+                store::set_notice(conn, forward_id, store::N_SENT, now)?;
+                store::record_event(conn, forward_id, store::E_NOTICE_SENT, actor, &json!({ "via": via }), now)
+            }
+            None => {
+                store::notice_failed(conn, forward_id, now)?;
+                store::record_event(conn, forward_id, store::E_NOTICE_FAILED, actor, &json!({}), now)
+            }
         }
     }
+}
+
+/// Can K2 give `dest` a stop link at all? Refuses, before anything changes, what
+/// isn't going to pass by itself: no front door to build the link on, no way
+/// to send, or an address K2 has stopped mailing. A sender that's paused for
+/// now is a failure that may pass, so it isn't refused here.
+pub fn can_tell(account_id: Option<&str>, dest: &str) -> R<()> {
+    verify::link(verify::STOP_PATH, "x").map_err(|f| {
+        fail(409, "no_front_door", format!("this server has no front door to build a stop link on, and K2 won't forward to an outside address that has no way to stop it ({})", f.hint))
+    })?;
+    let system = email_notify::send::sender_for(None).ok().flatten();
+    if system.is_none() && account_id.is_none_or(str::is_empty) {
+        return Err(fail(409, "no_mail_path", "this mailbox has no mail-server account to send the stop link from"));
+    }
+    let suppressed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::email_outcomes::suppressed_for(&conn, dest, system.as_ref().map_or("", |s| s.id.as_str()), None).is_some()
+    };
+    if suppressed {
+        return Err(fail(
+            409,
+            "suppressed",
+            format!("{dest} bounced or complained before, so this server won't email it, and K2 won't forward to an address it can't send a stop link. Nothing changed"),
+        ));
+    }
+    Ok(())
 }
 
 /// Open `dest`'s stop-link row and send its notice. `Err` only when K2's own
@@ -110,6 +145,12 @@ pub fn tell_destination(mailbox: &str, account_id: Option<&str>, dest: &str, ask
         }
         Err(f) => {
             k2_core::log_debug!("{P} WARN notice for row {} not sent: {}", row.id, f.code);
+            // That link went nowhere: tries don't pile up rows.
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Err(e) = vstore::forget_stop(&conn, &stop) {
+                k2_core::log_debug!("{P} WARN stop row: {e}");
+            }
             Told { verified_id: row.id, via: None, error: Some(email_notify::send::mask_addresses(&f.hint)) }
         }
     })
@@ -234,19 +275,28 @@ pub struct OutsideChange {
     pub not_told: Vec<String>,
     /// Added, waiting its turn: K2 emails it, then turns it on.
     pub queued: Vec<String>,
+    /// Paused or resumed by hand.
+    pub paused: Vec<String>,
+    pub resumed: Vec<String>,
     /// The kept copy changed to this.
     pub keep: Option<bool>,
 }
 
 impl OutsideChange {
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.queued.is_empty() && self.removed.is_empty() && self.restarted.is_empty() && self.keep.is_none()
+        self.added.is_empty()
+            && self.queued.is_empty()
+            && self.removed.is_empty()
+            && self.restarted.is_empty()
+            && self.paused.is_empty()
+            && self.resumed.is_empty()
+            && self.keep.is_none()
     }
 }
 
 /// An outside forward was added or changed: the owner hears now, and the
 /// Access Audit says who (the addresses' domains only).
-pub fn tell_owner_changed(mailbox: &str, actor: &str, c: &OutsideChange) {
+pub fn tell_owner_changed(mailbox_id: &str, mailbox: &str, actor: &str, c: &OutsideChange) {
     if c.is_empty() {
         return;
     }
@@ -255,11 +305,13 @@ pub fn tell_owner_changed(mailbox: &str, actor: &str, c: &OutsideChange) {
         "mail-forward-changed",
         actor,
         &format!(
-            "mailbox={mailbox} added={} queued={} removed={} restarted={} keep={:?}",
+            "mailbox={mailbox} added={} queued={} removed={} restarted={} paused={} resumed={} keep={:?}",
             domains(&c.added),
             domains(&c.queued),
             domains(&c.removed),
             domains(&c.restarted),
+            domains(&c.paused),
+            domains(&c.resumed),
             c.keep
         ),
     );
@@ -286,6 +338,12 @@ pub fn tell_owner_changed(mailbox: &str, actor: &str, c: &OutsideChange) {
             c.not_told.join(", ")
         ));
     }
+    if !c.paused.is_empty() {
+        lines.push(format!("Paused: {}. New mail stays in the mailbox.", c.paused.join(", ")));
+    }
+    if !c.resumed.is_empty() {
+        lines.push(format!("Resumed, so mail goes there again: {}.", c.resumed.join(", ")));
+    }
     if !c.removed.is_empty() {
         lines.push(format!("No longer forwarding to: {}.", c.removed.join(", ")));
     }
@@ -300,7 +358,14 @@ pub fn tell_owner_changed(mailbox: &str, actor: &str, c: &OutsideChange) {
         lines.push(format!("If you didn't expect this, stop it: k2 hostmail forward rm {mailbox} --to {one}"));
     }
     let mut what: Vec<String> = Vec::new();
-    for (word, list) in [("added", &c.added), ("added, on within minutes", &c.queued), ("turned back on after Stop", &c.restarted), ("removed", &c.removed)] {
+    for (word, list) in [
+        ("added", &c.added),
+        ("added, on within minutes", &c.queued),
+        ("turned back on after Stop", &c.restarted),
+        ("paused", &c.paused),
+        ("resumed", &c.resumed),
+        ("removed", &c.removed),
+    ] {
         if !list.is_empty() {
             what.push(format!("{word} {}", list.join(", ")));
         }
@@ -309,7 +374,33 @@ pub fn tell_owner_changed(mailbox: &str, actor: &str, c: &OutsideChange) {
         what.push(if keep { "keeps a copy".to_string() } else { "keeps no copy".to_string() });
     }
     let line = format!("{mailbox}: {} ({})", what.join("; "), actor_words(actor));
-    tell_owner_or_roll(store::OWNER_CHANGE, &line, &format!("Outside forwarding changed on {mailbox}"), &lines.join("\n\n"));
+    // New addresses have their own slots, and the summary names every one.
+    let kind = if c.added.is_empty() && c.queued.is_empty() && c.restarted.is_empty() { store::OWNER_CHANGE } else { store::OWNER_ADD };
+    let title = format!("Outside forwarding changed on {mailbox}");
+    let body = lines.join("\n\n");
+    // An agent acting on a person's mailbox: that person hears now, batch or not.
+    let person = if actor.starts_with("agent:") {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::person_principal(&conn, mailbox_id).ok().flatten().filter(|p| p != k2_core::notify_prefs::OWNER)
+    } else {
+        None
+    };
+    if let Some(person) = person {
+        note_told(kind, &line);
+        tell_owner(&title, &body, &[person]);
+        return;
+    }
+    tell_owner_or_roll(kind, &line, &title, &body);
+}
+
+/// Note a change the owner has been told about directly.
+fn note_told(kind: &str, line: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Err(e) = store::owner_note(&conn, kind, line, email_notify::now()) {
+        k2_core::log_debug!("{P} WARN owner note: {e}");
+    }
 }
 
 /// Tell the owner now if this hour's first few aren't spent, else leave it for
@@ -326,7 +417,8 @@ fn tell_owner_or_roll(kind: &str, line: &str, title: &str, body: &str) {
     }
 }
 
-/// How many waiting changes a summary spells out (every stop is, always).
+/// How many other changes a summary spells out (every new address and every
+/// stop is, always).
 const SUMMARY_LINES: usize = 20;
 
 /// The hourly summary: the count, every stop by name, a sample of the rest,
@@ -346,13 +438,18 @@ pub fn flush_owner_summary(now: i64) {
     if due.is_empty() {
         return;
     }
-    let (stops, changes): (Vec<_>, Vec<_>) = due.iter().partition(|(k, _)| k == store::OWNER_STOP);
+    let adds: Vec<&str> = due.iter().filter(|(k, _)| k == store::OWNER_ADD).map(|(_, l)| l.as_str()).collect();
+    let (stops, changes): (Vec<_>, Vec<_>) = due.iter().filter(|(k, _)| k != store::OWNER_ADD).partition(|(k, _)| k == store::OWNER_STOP);
     let mut lines = vec![format!(
         "{} more change{} to outside forwarding on this server. K2 told you about the first {} in the hour one by one and rolled up the rest.",
         due.len(),
         if due.len() == 1 { "" } else { "s" },
         store::OWNER_NOTES_PER_HOUR
     )];
+    // Every new outside address, in full: this is the owner's main protection.
+    if !adds.is_empty() {
+        lines.push(format!("New outside addresses ({}):\n{}", adds.len(), adds.join("\n")));
+    }
     if !stops.is_empty() {
         lines.push(format!(
             "Stopped by the address itself ({}). K2 won't forward to these again unless the owner or an Admin chooses to:\n{}",
@@ -364,7 +461,7 @@ pub fn flush_owner_summary(now: i64) {
         let shown: Vec<&str> = changes.iter().take(SUMMARY_LINES).map(|(_, l)| l.as_str()).collect();
         let more = changes.len().saturating_sub(SUMMARY_LINES);
         lines.push(format!(
-            "Changes ({}):\n{}{}",
+            "Other changes ({}):\n{}{}",
             changes.len(),
             shown.join("\n"),
             if more > 0 { format!("\nand {more} more") } else { String::new() }
@@ -416,8 +513,10 @@ pub fn note_cant_arrive(host: Option<&str>, now: i64) -> usize {
 // ── stop ────────────────────────────────────────────────────────────
 
 /// The destination pressed Stop: K2 forwards nothing more there, and the
-/// owner hears.
-pub fn on_stopped(v: &vstore::Verified) {
+/// owner hears. `false`: the row says stopped but the mail server hasn't taken
+/// it yet (K2 retries within the minute), so the page mustn't claim it's done.
+pub fn on_stopped(v: &vstore::Verified) -> bool {
+    let mut written = true;
     let live = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -433,6 +532,7 @@ pub fn on_stopped(v: &vstore::Verified) {
             _ => super::forward_sync::pause(&f.id, store::P_REVOKED, "recipient", None),
         };
         if let Err(e) = r {
+            written = false;
             k2_core::log_debug!("{P} forward {} stop: {}", f.id, email_notify::send::mask_addresses(&e.to_string()));
         }
     }
@@ -447,6 +547,7 @@ pub fn on_stopped(v: &vstore::Verified) {
             mb = v.subject_ref
         ),
     );
+    written
 }
 
 // ── the minute's work ───────────────────────────────────────────────
@@ -491,7 +592,7 @@ pub fn minute_pass(now: i64) -> Pass {
                 return pass;
             }
         };
-        let next = store::legacy_due(&conn, store::NOTICES_PER_PASS).unwrap_or_default();
+        let next = store::legacy_due(&conn, now, store::NOTICES_PER_PASS).unwrap_or_default();
         let failed = store::failed_notices(&conn, now, store::NOTICES_PER_PASS - next.len()).unwrap_or_default();
         (due, stale, next, failed)
     };
@@ -558,6 +659,21 @@ fn turn_on_due(f: &store::Forward, now: i64) -> bool {
             return false;
         }
     };
+    // It isn't turned on until its email has gone: no stop link, no forward.
+    if told.via.is_none() {
+        let first_long_fail = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Err(e) = told.record(&conn, &f.id, super::forward_sync::ACTOR_K2, now) {
+                k2_core::log_debug!("{P} WARN forward {}: {e}", f.id);
+            }
+            f.notice_failed_at.is_some_and(|t| now - t >= store::NOT_TOLD_PAUSE_SECS) && !store::has_event(&conn, &f.id, store::E_NOT_TOLD).unwrap_or(true)
+        };
+        if first_long_fail {
+            note_not_told(f, "it isn't on, and sends nothing until K2 can", now);
+        }
+        return false;
+    }
     let id = f.id.clone();
     let r = super::forward_sync::change_and_sync(&f.address_id, |c, now| {
         let row = store::transition(
@@ -590,10 +706,101 @@ fn turn_on_due(f: &store::Forward, now: i64) -> bool {
 fn retry_notice(f: &store::Forward, now: i64) -> bool {
     let account = super::forward_sync::mailbox(&f.address_id).ok().flatten().and_then(|m| m.account_id);
     let Ok(told) = tell_destination(&f.address, account.as_deref(), &f.dest, &asker_of(&f.set_by), now) else { return false };
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    if let Err(e) = told.record(&conn, &f.id, super::forward_sync::ACTOR_K2, now) {
-        k2_core::log_debug!("{P} WARN forward {} notice state: {e}", f.id);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = told.record(&conn, &f.id, super::forward_sync::ACTOR_K2, now) {
+            k2_core::log_debug!("{P} WARN forward {} notice state: {e}", f.id);
+        }
     }
-    told.via.is_some()
+    if told.via.is_some() {
+        // The email went: a forward K2 paused for it goes back on, and the owner hears.
+        if f.pause_reason.as_deref() == Some(store::P_NOT_TOLD) {
+            if let Err(e) = super::forward_sync::resume(&f.id, super::forward_sync::ACTOR_K2) {
+                k2_core::log_debug!("{P} forward {} resume: {}", f.id, email_notify::send::mask_addresses(&e.to_string()));
+            }
+            tell_owner(
+                &format!("Forwarding from {} to {} is back on", f.address, f.dest),
+                &format!("K2 could finally email {} its link to stop this, so forwarding from {} went back on.", f.dest, f.address),
+                &[],
+            );
+        }
+        return true;
+    }
+    // A day of failing: an opt-out with no stop link isn't an opt-out.
+    if f.is_active() && f.notice_failed_at.is_some_and(|t| now - t >= store::NOT_TOLD_PAUSE_SECS) {
+        let r = super::forward_sync::pause(&f.id, store::P_NOT_TOLD, super::forward_sync::ACTOR_K2, Some(json!({ "since": f.notice_failed_at })));
+        if let Err(super::forward_sync::ChangeError::Row(e)) = r {
+            k2_core::log_debug!("{P} WARN forward {} not paused: {e}", f.id);
+        } else {
+            note_not_told(f, "K2 paused it, and new mail stays in the mailbox", now);
+        }
+    }
+    false
+}
+
+/// Tell the owner once that an address still has no stop link.
+fn note_not_told(f: &store::Forward, what: &str, now: i64) {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = store::record_event(&conn, &f.id, store::E_NOT_TOLD, super::forward_sync::ACTOR_K2, &json!({}), now) {
+            k2_core::log_debug!("{P} WARN forward {}: {e}", f.id);
+        }
+    }
+    tell_owner(
+        &format!("{} can't be told about forwarding from {}", f.dest, f.address),
+        &format!(
+            "K2 has been trying for a day to email {} its link to stop forwarding from {}, and can't, so {what}. K2 keeps trying and goes on by itself when the email goes. See why: k2 hostmail forward show {}. Or remove it: k2 hostmail forward rm {} --to {}.",
+            f.dest, f.address, f.address, f.address, f.dest
+        ),
+        &[],
+    );
+}
+
+/// A notice K2 recorded as sent bounced: `show` and `list` must say so, and the
+/// owner, who was told it went, hears otherwise. K2 keeps trying (with a gap),
+/// and the row pauses after a day if it never goes.
+pub fn notice_bounced(f: &store::Forward, now: i64) {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let r = store::notice_failed(&conn, &f.id, now).and_then(|()| store::record_event(&conn, &f.id, store::E_NOTICE_FAILED, super::forward_sync::ACTOR_K2, &json!({ "bounced": true }), now));
+        if let Err(e) = r {
+            k2_core::log_debug!("{P} WARN forward {}: {e}", f.id);
+        }
+    }
+    tell_owner(
+        &format!("K2's email to {} bounced", f.dest),
+        &format!(
+            "K2 told you it had emailed {} its link to stop forwarding from {}. That email bounced, so {} doesn't have the link. K2 keeps trying; if it can't within a day, the forward pauses. See it: k2 hostmail forward show {}.",
+            f.dest, f.address, f.dest, f.address
+        ),
+        &[],
+    );
+}
+
+/// How long after a notice K2 still treats a suppression as its bounce.
+const NOTICE_BOUNCE_WINDOW_SECS: i64 = 7 * 86_400;
+
+/// Notices that went from the system sender come back through its own report
+/// pass, which suppresses the address. Find those and correct them.
+pub fn correct_bounced_notices(now: i64) {
+    let rows: Vec<store::Forward> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let system = email_notify::send::sender_for(None).ok().flatten();
+        store::list(&conn, &store::ListFilter { external_only: true, ..Default::default() })
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| {
+                f.notice_state.as_deref() == Some(store::N_SENT)
+                    && f.notice_at.is_some_and(|t| now - t < NOTICE_BOUNCE_WINDOW_SECS)
+                    && k2_core::email_outcomes::suppressed_for(&conn, &f.dest, system.as_ref().map_or("", |s| s.id.as_str()), None).is_some()
+            })
+            .collect()
+    };
+    for f in &rows {
+        notice_bounced(f, now);
+    }
 }

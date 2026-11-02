@@ -18,11 +18,13 @@
 //! envelope sender), so the caps and the delivery outcomes count every copy.
 //! But its user-script limit defaults to `maxRedirects: 1` and a `redirect`
 //! over the limit is **silently skipped**, so before K2 writes a script with
-//! more than one it raises the limit server-wide ([`SieveIo::ensure_redirects`],
-//! [`REDIRECT_LIMIT`]; never lowers it). If that fails the old script stays
-//! and the change reports as deferred: K2 never writes a script that would
-//! quietly drop a destination. Mailbox users can't write Sieve (the
-//! lockdown), so only K2's own scripts use the room.
+//! more redirects than it has now it raises the limit server-wide
+//! ([`SieveIo::ensure_redirects`], [`REDIRECT_LIMIT`]; never lowers it). If that
+//! fails the old script stays and the change reports as deferred: K2 never
+//! writes a script that would quietly drop a destination. A script with fewer
+//! redirects always goes: a Stop or a removal must never wait on the limit.
+//! Mailbox users can't write Sieve (the lockdown), so only K2's own scripts
+//! use the room.
 //!
 //! **When:** right after every change (the route waits for it), at daemon
 //! start (after the Sieve lockdown; it also imports same-box forwards that
@@ -98,9 +100,6 @@ pub fn plan_redirect_limits(redirects: Option<u64>, out_messages: Option<u64>) -
     (r < REDIRECT_LIMIT || o < OUT_MESSAGE_LIMIT).then_some((r.max(REDIRECT_LIMIT), o.max(OUT_MESSAGE_LIMIT)))
 }
 
-/// Limits saved, reload not yet confirmed: the next call reloads again.
-static RELOAD_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// Read and write a mailbox's K2 script (Stalwart; a fake in tests).
 pub trait SieveIo {
     fn read(&self, account_id: &str) -> Result<Current, String>;
@@ -132,15 +131,27 @@ impl SieveIo for StalwartClient {
         sieve_user::save_user_source(self, account_id, &current.scripts, source)
     }
     fn ensure_redirects(&self) -> Result<(), String> {
-        use std::sync::atomic::Ordering;
+        // "Owed" is written before the save and cleared after the reload, so a
+        // restart between them can't leave Stalwart on the old limit while K2
+        // shows every destination active.
+        let owed = |v: bool| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_reload_owed(&conn, v)
+        };
         let (redirects, out) = self.sieve_user_interpreter_limits()?;
         if let Some((r, o)) = plan_redirect_limits(redirects, out) {
+            owed(true)?;
             self.sieve_user_interpreter_set_limits(r, o)?;
-            RELOAD_OWED.store(true, Ordering::SeqCst);
         }
-        if RELOAD_OWED.load(Ordering::SeqCst) {
+        let reload = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::reload_owed(&conn)
+        };
+        if reload {
             self.action_reload_settings()?;
-            RELOAD_OWED.store(false, Ordering::SeqCst);
+            owed(false)?;
         }
         Ok(())
     }
@@ -323,7 +334,7 @@ pub fn desired_block(rows: &[Forward], ctx: &Ctx, outside: bool) -> Option<Forwa
     let mut others = others.into_iter();
     match (others.next(), host) {
         (Some(dest), Some(host)) => {
-            Some(ForwardBlock { dest, keep, guard: Some(ForwardGuard { host: host.to_string() }), more: others.collect(), same_box })
+            Some(ForwardBlock { dest, keep, guard: Some(ForwardGuard { host: host.to_string(), stay_home: Vec::new() }), more: others.collect(), same_box })
         }
         _ => {
             let mut inside = same_box.into_iter();
@@ -333,10 +344,29 @@ pub fn desired_block(rows: &[Forward], ctx: &Ctx, outside: bool) -> Option<Forwa
     }
 }
 
+/// K2's system senders (their mail stays home), sorted so a rewrite is stable.
+fn system_senders() -> Vec<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut out: Vec<String> = k2_core::email_notify::list_senders(&conn, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.is_system())
+        .map(|s| s.address.to_ascii_lowercase())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The full script K2 wants: the current out-of-office block kept, the
 /// forward block from the rows.
 pub fn desired(current: &Current, rows: &[Forward], ctx: &Ctx, outside: bool) -> UserSieve {
-    UserSieve { ooo: current.sieve.ooo.clone(), forward: desired_block(rows, ctx, outside) }
+    let mut forward = desired_block(rows, ctx, outside);
+    if let Some(g) = forward.as_mut().and_then(|f| f.guard.as_mut()) {
+        g.stay_home = system_senders();
+    }
+    UserSieve { ooo: current.sieve.ooo.clone(), forward }
 }
 
 /// Does the mailbox's Sieve already say exactly `want`?
@@ -467,10 +497,17 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
     if out.blocked {
         k2_core::log_debug!("{P} WARN mailbox {address_id}: {} active forward(s) not written (mail host name or mail server version)", active - written);
     }
-    // Before the in-sync check: a script that's right on paper still drops
-    // destinations if the mail server's limit went back down.
-    if written > 1 {
+    // Only more redirects than the script has now need the limit first, and
+    // they wait for it. Fewer always go: a Stop must never wait on this. The
+    // periodic pass also repairs a limit that went back down; on its own that
+    // failing changes nothing.
+    let had = current.sieve.forward.as_ref().map_or(0, ForwardBlock::redirects);
+    if written > 1 && written > had {
         io.ensure_redirects()?;
+    } else if written > 1 && why == Why::Periodic {
+        if let Err(e) = io.ensure_redirects() {
+            k2_core::log_debug!("{P} WARN mailbox {address_id}: the redirect limit: {}", crate::email_notify::send::mask_addresses(&e));
+        }
     }
     if in_sync(&current, &want) {
         return Ok(out);
@@ -548,6 +585,8 @@ pub fn change_and_sync(
         Ok(_) => Ok(row),
         Err(e) => {
             k2_core::log_debug!("{P} forward {} saved, Sieve write deferred: {}", row.id, crate::email_notify::send::mask_addresses(&e));
+            // Within the minute, not within the hour: a Stop may be waiting on it.
+            request_reconcile();
             Err(ChangeError::Sieve(Box::new(row), e))
         }
     }
@@ -652,6 +691,8 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
     strip_unbacked(io, ctx, &unread, &mut r);
     // Rows that can't arrive are listed for the owner, never silently changed.
     super::forward_verify::note_cant_arrive(ctx.host.as_deref(), ctx.now);
+    // A notice that "went" and has since bounced is corrected here too.
+    super::forward_verify::correct_bounced_notices(ctx.now);
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = store::purge(&conn, ctx.now) {
@@ -1107,6 +1148,16 @@ fn run_live() {
                     }
                     first = false;
                     import_owed = r.import_failed > 0;
+                    // Delivery outcomes not arriving means the auto-pauses can't
+                    // fire: try again each hour, not only at the next start.
+                    let broken = {
+                        let db = k2_core::db::shared();
+                        let conn = db.lock();
+                        store::webhook_error(&conn).is_some()
+                    };
+                    if broken {
+                        crate::email_notify::webhook::spawn_after("retry");
+                    }
                 }
                 Err(e) => k2_core::log_debug!("{P} pass skipped: {}", crate::email_notify::send::mask_addresses(&e)),
             }

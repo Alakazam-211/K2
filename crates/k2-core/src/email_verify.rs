@@ -325,16 +325,24 @@ pub fn open_for_notice(conn: &Connection, subject_ref: &str, address: &str, requ
 }
 
 /// Did `address` press Stop for this mailbox, with nobody choosing it again
-/// since? (The stop revokes the pair's one live row; choosing it again makes
-/// a new live row.) Fail closed: an unreadable store answers yes.
+/// since? Only a `verified` row newer than the stop clears it: that's a person
+/// choosing to (`--restart-stopped`). A confirm request left pending from
+/// before opt-out doesn't. Fail closed: an unreadable store answers yes.
 pub fn is_stopped(conn: &Connection, subject_ref: &str, address: &str) -> bool {
     conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM email_verified_addresses WHERE purpose = ?1 AND subject_ref = ?2 AND address = ?3 AND revoked_by = ?4) \
-         AND NOT EXISTS (SELECT 1 FROM email_verified_addresses WHERE purpose = ?1 AND subject_ref = ?2 AND address = ?3 AND state IN ('pending', 'verified'))",
+        "SELECT EXISTS (SELECT 1 FROM email_verified_addresses s WHERE s.purpose = ?1 AND s.subject_ref = ?2 AND s.address = ?3 AND s.revoked_by = ?4 \
+           AND NOT EXISTS (SELECT 1 FROM email_verified_addresses v WHERE v.purpose = ?1 AND v.subject_ref = ?2 AND v.address = ?3 \
+             AND v.state = 'verified' AND v.verified_at >= s.revoked_at))",
         params![PURPOSE_FORWARD, subject_ref.trim(), normalize_address(address), BY_RECIPIENT],
         |r| r.get::<_, bool>(0),
     )
     .unwrap_or(true)
+}
+
+/// Forget a stop token whose mail never went out, so failed tries don't pile up.
+pub fn forget_stop(conn: &Connection, stop: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM email_verified_stops WHERE stop_sha256 = ?1", params![sha256_hex(stop)]).map_err(err("forget stop"))?;
+    Ok(())
 }
 
 /// The row a confirm token names, in any state (the page for a forward's
@@ -448,19 +456,28 @@ pub fn peek_stop(conn: &Connection, stop: &str) -> Result<Option<Verified>, Stri
 /// Take a stop token: the address is revoked (pending or verified).
 /// `Ok(None)`: no such token. A second stop answers the same row again.
 pub fn stop(conn: &Connection, stop: &str, now: i64) -> Result<Option<Verified>, String> {
+    Ok(stop_changed(conn, stop, now)?.map(|(v, _)| v))
+}
+
+/// [`stop`], saying whether this press changed anything: only a press that did
+/// may tell anyone, or a link could be re-posted to flood them.
+pub fn stop_changed(conn: &Connection, stop: &str, now: i64) -> Result<Option<(Verified, bool)>, String> {
     let Some(v) = peek_stop(conn, stop)? else { return Ok(None) };
+    let mut changed = false;
     if v.state == ST_PENDING || v.state == ST_VERIFIED {
-        revoke(conn, &v.id, BY_RECIPIENT, now)?;
-    } else if v.purpose == PURPOSE_FORWARD && v.revoked_by.as_deref() != Some(BY_RECIPIENT) {
+        changed = revoke(conn, &v.id, BY_RECIPIENT, now)?;
+    } else if v.purpose == PURPOSE_FORWARD && v.revoked_by.as_deref() != Some(BY_RECIPIENT) && !is_stopped(conn, &v.subject_ref, &v.address) {
         // An old link of an address with no live row (an expired request):
         // the press still counts, so the address stays out.
-        conn.execute(
-            "UPDATE email_verified_addresses SET state = 'revoked', token_sha256 = NULL, verified_at = NULL, revoked_at = ?2, revoked_by = ?3 WHERE id = ?1",
-            params![v.id, now, BY_RECIPIENT],
-        )
-        .map_err(err("stop"))?;
+        changed = conn
+            .execute(
+                "UPDATE email_verified_addresses SET state = 'revoked', token_sha256 = NULL, verified_at = NULL, revoked_at = ?2, revoked_by = ?3 WHERE id = ?1",
+                params![v.id, now, BY_RECIPIENT],
+            )
+            .map_err(err("stop"))?
+            == 1;
     }
-    get(conn, &v.id)
+    Ok(get(conn, &v.id)?.map(|row| (row, changed)))
 }
 
 /// Revoke a live row. `Ok(false)`: it was not live.
@@ -658,6 +675,32 @@ mod tests {
         assert_eq!(super::stop(&c, &i.stop, 1200).expect("old stop").expect("row").id, v.id);
         assert!(is_stopped(&c, MB, DEST));
         drop(stop);
+    }
+
+    /// Review finding 7: on 0.46.7 `set` could re-ask after a Stop, making a new
+    /// pending request. That isn't anyone choosing the address again.
+    #[test]
+    fn a_pending_request_doesn_t_clear_a_stop_only_a_newer_verified_row_does() {
+        let c = conn();
+        let i = issue(&c, PURPOSE_FORWARD, MB, DEST, "owner", 1000).expect("issue");
+        super::stop(&c, &i.stop, 1100).expect("stop");
+        assert!(is_stopped(&c, MB, DEST));
+        issue(&c, PURPOSE_FORWARD, MB, DEST, "agent:x", 1200).expect("re-ask, as 0.46.7 allowed");
+        assert!(is_stopped(&c, MB, DEST), "the pending request hides nothing");
+        let (v, _) = open_for_notice(&c, MB, DEST, "owner", 1300).expect("chosen again");
+        assert_eq!(v.state, ST_VERIFIED);
+        assert!(!is_stopped(&c, MB, DEST));
+    }
+
+    #[test]
+    fn only_a_press_that_changed_something_says_so() {
+        let c = conn();
+        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        assert!(stop_changed(&c, &stop, 110).expect("stop").expect("row").1);
+        assert!(!stop_changed(&c, &stop, 120).expect("stop").expect("row").1, "the same press again");
+        let (_, gone) = open_for_notice(&c, MB, "other@outside.test", "owner", 100).expect("open");
+        forget_stop(&c, &gone).expect("forget");
+        assert!(peek_stop(&c, &gone).expect("peek").is_none());
     }
 
     #[test]

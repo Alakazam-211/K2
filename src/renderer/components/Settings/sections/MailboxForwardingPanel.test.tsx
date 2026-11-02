@@ -220,6 +220,7 @@ describe('resumeRule (mirrors the daemon)', () => {
   it('revoked and the self-lifting pauses never resume; the brake is staff only', () => {
     expect(resumeRule('staff', 'revoked').can).toBe(false)
     expect(resumeRule('staff', 'revoked').why).toContain('pressed Stop')
+    expect(resumeRule('staff', 'not_told').can).toBe(false)
     expect(resumeRule('person', 'air_gap').can).toBe(false)
     expect(resumeRule('staff', 'receive_only').can).toBe(false)
     expect(resumeRule('staff', 'upgrade_required').can).toBe(false)

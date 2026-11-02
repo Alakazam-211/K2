@@ -51,6 +51,9 @@ pub const P_RECEIVE_ONLY: &str = "receive_only";
 pub const P_AIR_GAP: &str = "air_gap";
 /// Someone paused it by hand.
 pub const P_MANUAL: &str = "manual";
+/// K2 couldn't tell the address it can stop this, for [`NOT_TOLD_PAUSE_SECS`].
+/// An opt-out with no stop link isn't an opt-out. Lifted when the email goes.
+pub const P_NOT_TOLD: &str = "not_told";
 /// The mail server is older than the one outside forwards need (or its
 /// version is unknown): `k2 hostmail upgrade`.
 pub const P_UPGRADE: &str = "upgrade_required";
@@ -78,6 +81,8 @@ pub const E_NOTICE_SENT: &str = "notice_sent";
 pub const E_NOTICE_FAILED: &str = "notice_failed";
 /// The owner or an Admin chose a destination again after it pressed Stop.
 pub const E_RESTARTED: &str = "restarted";
+/// K2 told the owner this row still has no stop link (once).
+pub const E_NOT_TOLD: &str = "not_told";
 /// K2 told the owner this row's mail can't arrive (once).
 pub const E_CANT_ARRIVE: &str = "cant_arrive";
 /// A row from before opt-out was recent enough to go active on update.
@@ -142,8 +147,15 @@ pub const NOTICES_PER_PASS: usize = 2;
 pub const OWNER_NOTES_PER_HOUR: i64 = 5;
 /// A rolled-up change waits at most this long for its summary.
 pub const OWNER_SUMMARY_SECS: i64 = 3600;
-/// How long before K2 tries a failed notice email again.
+/// How long before K2 tries a failed notice email again; the gap grows with
+/// how long it has been failing, up to [`NOTICE_RETRY_MAX_SECS`].
 pub const NOTICE_RETRY_SECS: i64 = 3600;
+pub const NOTICE_RETRY_MAX_SECS: i64 = 6 * 3600;
+/// A forward whose address K2 still can't tell after this long pauses.
+pub const NOT_TOLD_PAUSE_SECS: i64 = 24 * 3600;
+/// Notices one outside address can get from this box in a trailing day, across
+/// mailboxes and re-adds: so nobody is mailed the whole box's cap.
+pub const NOTICES_PER_DEST_PER_DAY: i64 = 3;
 
 /// Retention.
 pub const EVENTS_KEEP_SECS: i64 = 365 * 86_400;
@@ -181,6 +193,12 @@ pub struct Forward {
     /// [`N_STALE`]; `None` for same-box forwards and older confirmed ones.
     pub notice_state: Option<String>,
     pub notice_at: Option<i64>,
+    /// The audit actor who paused it (`None`: not paused, or from before this).
+    pub paused_by: Option<String>,
+    /// Since when K2 hasn't managed to email this address.
+    pub notice_failed_at: Option<i64>,
+    /// When K2 tries that email next.
+    pub notice_next_at: Option<i64>,
 }
 
 impl Forward {
@@ -196,7 +214,7 @@ impl Forward {
 }
 
 const COLS: &str = "id, address_id, address, dest, dest_kind, verified_address_id, keep, state, set_by, pause_reason, \
-                    created_at, updated_at, activated_at, paused_at, removed_at, notice_state, notice_at";
+                    created_at, updated_at, activated_at, paused_at, removed_at, notice_state, notice_at, paused_by, notice_failed_at, notice_next_at";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
     Ok(Forward {
@@ -217,6 +235,9 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
         removed_at: r.get(14)?,
         notice_state: r.get(15)?,
         notice_at: r.get(16)?,
+        paused_by: r.get(17)?,
+        notice_failed_at: r.get(18)?,
+        notice_next_at: r.get(19)?,
     })
 }
 
@@ -491,11 +512,163 @@ pub fn is_legacy_due(conn: &Connection, id: &str) -> Result<bool, String> {
     .map_err(err("legacy"))
 }
 
-/// Record what K2 told an outside address.
+/// Record what K2 told an outside address. A notice that went clears the
+/// failure clock.
 pub fn set_notice(conn: &Connection, id: &str, state: &str, now: i64) -> Result<(), String> {
-    conn.execute("UPDATE mail_forwards SET notice_state = ?2, notice_at = ?3 WHERE id = ?1", params![id, state, now])
-        .map_err(err("notice"))?;
+    conn.execute(
+        "UPDATE mail_forwards SET notice_state = ?2, notice_at = ?3, \
+         notice_failed_at = CASE WHEN ?2 = 'sent' THEN NULL ELSE notice_failed_at END, \
+         notice_next_at = CASE WHEN ?2 = 'sent' THEN NULL ELSE notice_next_at END WHERE id = ?1",
+        params![id, state, now],
+    )
+    .map_err(err("notice"))?;
     Ok(())
+}
+
+/// The notice didn't go: start or keep the failure clock and set the next try.
+/// A row still waiting its turn stays `due` (it isn't on); any other is `failed`.
+pub fn notice_failed(conn: &Connection, id: &str, now: i64) -> Result<(), String> {
+    let since: Option<i64> = conn
+        .query_row("SELECT notice_failed_at FROM mail_forwards WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(err("notice"))?
+        .flatten();
+    let since = since.unwrap_or(now);
+    let gap = (now - since).clamp(NOTICE_RETRY_SECS, NOTICE_RETRY_MAX_SECS);
+    conn.execute(
+        "UPDATE mail_forwards SET notice_state = CASE WHEN notice_state = 'due' THEN 'due' ELSE 'failed' END, \
+         notice_at = ?2, notice_failed_at = ?3, notice_next_at = ?4 WHERE id = ?1",
+        params![id, now, since, now + gap],
+    )
+    .map_err(err("notice"))?;
+    Ok(())
+}
+
+/// Has this row an event of this kind?
+pub fn has_event(conn: &Connection, id: &str, event: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM mail_forward_events WHERE forward_id = ?1 AND event = ?2)",
+        params![id, event],
+        |r| r.get(0),
+    )
+    .map_err(err("events"))
+}
+
+/// Notices this address got from this box since `since`, across mailboxes.
+pub fn notices_to_dest_since(conn: &Connection, dest: &str, since: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_forward_events e JOIN mail_forwards f ON f.id = e.forward_id \
+         WHERE f.dest = ?1 AND e.event = 'notice_sent' AND e.at >= ?2",
+        params![dest, since],
+        |r| r.get(0),
+    )
+    .map_err(err("notices"))
+}
+
+/// Pauses a person must undo: K2 stopped this for a reason an agent may not
+/// wave away. What a stop, a hold or a person's own pause isn't.
+pub fn is_automatic_pause(reason: &str) -> bool {
+    matches!(reason, P_DEST_GONE | P_REFUSED | P_DAILY_CAP | P_BOX_BRAKE | P_NOT_TOLD)
+}
+
+/// An automatic pause of (mailbox address, destination) since `since` with no
+/// resume after it, on any row of the pair, live or removed: `rm` and `add`
+/// don't wash one out.
+pub fn recent_automatic_pause(conn: &Connection, address: &str, dest: &str, since: i64) -> Result<Option<String>, String> {
+    let mut st = conn
+        .prepare(
+            "SELECT e.detail_json FROM mail_forward_events e JOIN mail_forwards f ON f.id = e.forward_id \
+             WHERE f.address = ?1 AND f.dest = ?2 AND e.event = 'paused' AND e.at >= ?3 \
+             AND NOT EXISTS (SELECT 1 FROM mail_forward_events r WHERE r.forward_id = e.forward_id AND r.event = 'resumed' AND r.at >= e.at) \
+             ORDER BY e.at DESC, e.rowid DESC",
+        )
+        .map_err(err("recent pause"))?;
+    let rows = st.query_map(params![address, dest, since], |r| r.get::<_, String>(0)).map_err(err("recent pause"))?;
+    for raw in rows {
+        let raw = raw.map_err(err("recent pause"))?;
+        let reason = serde_json::from_str::<J>(&raw).ok().and_then(|v| v.get("reason").and_then(J::as_str).map(str::to_string));
+        if let Some(r) = reason.filter(|r| is_automatic_pause(r)) {
+            return Ok(Some(r));
+        }
+    }
+    Ok(None)
+}
+
+/// Where the mailbox's daily count starts: the last 24 hours, across every row
+/// it had, or a person's resume of a `daily_cap` pause if that's later.
+pub fn daily_window_start(conn: &Connection, address_id: &str, now: i64) -> Result<i64, String> {
+    let resumed: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(r.at), 0) FROM mail_forward_events r JOIN mail_forwards f ON f.id = r.forward_id \
+             WHERE f.address_id = ?1 AND r.event = 'resumed' AND ( \
+               SELECT p.detail_json FROM mail_forward_events p WHERE p.forward_id = r.forward_id AND p.event = 'paused' \
+               AND p.at <= r.at ORDER BY p.at DESC, p.rowid DESC LIMIT 1) LIKE '%\"reason\":\"daily_cap\"%'",
+            params![address_id],
+            |r| r.get(0),
+        )
+        .map_err(err("daily window"))?;
+    Ok((now - WINDOW_SECS).max(resumed))
+}
+
+/// The mailboxes (`address_id`) whose forwards were refused since `since`.
+pub fn refused_mailboxes_since(conn: &Connection, since: i64) -> Result<Vec<String>, String> {
+    let mut st = conn
+        .prepare(
+            "SELECT DISTINCT f.address_id FROM mail_forward_outcomes o JOIN mail_forwards f ON f.id = o.forward_id \
+             WHERE o.at >= ?1 AND o.kind IN ('refused_user', 'refused_policy', 'failed') ORDER BY f.address_id",
+        )
+        .map_err(err("refused"))?;
+    let rows = st.query_map(params![since], |r| r.get::<_, String>(0)).map_err(err("refused"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(err("refused"))
+}
+
+/// Would a same-box forward from `from` to `to` close a loop: can mail already
+/// get from `to` back to `from` through live same-box rows?
+pub fn same_box_loop(conn: &Connection, from: &str, to: &str) -> Result<bool, String> {
+    let mut seen: Vec<String> = vec![to.to_string()];
+    let mut i = 0;
+    while i < seen.len() {
+        if seen[i] == from {
+            return Ok(true);
+        }
+        let mut st = conn
+            .prepare("SELECT dest FROM mail_forwards WHERE address = ?1 AND dest_kind = 'internal' AND state = 'active'")
+            .map_err(err("loop"))?;
+        let next = st
+            .query_map(params![seen[i]], |r| r.get::<_, String>(0))
+            .map_err(err("loop"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err("loop"))?;
+        for n in next {
+            if !seen.contains(&n) {
+                seen.push(n);
+            }
+        }
+        i += 1;
+    }
+    Ok(false)
+}
+
+/// Limits saved on the mail server but not confirmed loaded: survives a restart.
+pub fn reload_owed(conn: &Connection) -> bool {
+    conn.query_row("SELECT forward_reload_owed FROM mail_server WHERE id = 1", [], |r| r.get::<_, i64>(0)).is_ok_and(|n| n != 0)
+}
+
+pub fn set_reload_owed(conn: &Connection, owed: bool) -> Result<(), String> {
+    conn.execute("UPDATE mail_server SET forward_reload_owed = ?1 WHERE id = 1", params![owed as i64]).map_err(err("reload"))?;
+    Ok(())
+}
+
+/// Why delivery outcomes aren't reaching K2 (`None`: nothing known wrong).
+pub fn webhook_error(conn: &Connection) -> Option<String> {
+    conn.query_row("SELECT forward_webhook_error FROM mail_server WHERE id = 1", [], |r| r.get::<_, Option<String>>(0)).ok().flatten()
+}
+
+/// Record it. `Ok(true)`: this changed the answer (so someone should hear).
+pub fn set_webhook_error(conn: &Connection, error: Option<&str>) -> Result<bool, String> {
+    let before = webhook_error(conn);
+    conn.execute("UPDATE mail_server SET forward_webhook_error = ?1 WHERE id = 1", params![error]).map_err(err("webhook"))?;
+    Ok(before.is_some() != error.is_some())
 }
 
 /// Sort the rows from before opt-out that K2 hasn't looked at yet: set within
@@ -522,23 +695,28 @@ pub fn legacy_sort(conn: &Connection, now: i64) -> Result<(Vec<Forward>, Vec<For
 }
 
 /// The next rows waiting their turn, oldest first.
-pub fn legacy_due(conn: &Connection, limit: usize) -> Result<Vec<Forward>, String> {
+pub fn legacy_due(conn: &Connection, now: i64, limit: usize) -> Result<Vec<Forward>, String> {
     let mut st = conn
-        .prepare(&format!("SELECT {COLS} FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due' ORDER BY created_at, rowid LIMIT ?1"))
+        .prepare(&format!(
+            "SELECT {COLS} FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due' \
+             AND COALESCE(notice_next_at, 0) <= ?1 ORDER BY created_at, rowid LIMIT ?2"
+        ))
         .map_err(err("legacy due"))?;
-    let rows = st.query_map(params![limit as i64], row).map_err(err("legacy due"))?;
+    let rows = st.query_map(params![now, limit as i64], row).map_err(err("legacy due"))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err("legacy due"))
 }
 
-/// Active outside forwards whose notice failed at least [`NOTICE_RETRY_SECS`] ago.
+/// Outside forwards whose notice failed and whose next try is due: active
+/// ones, and ones K2 paused for it.
 pub fn failed_notices(conn: &Connection, now: i64, limit: usize) -> Result<Vec<Forward>, String> {
     let mut st = conn
         .prepare(&format!(
-            "SELECT {COLS} FROM mail_forwards WHERE state = 'active' AND dest_kind = 'external' AND notice_state = 'failed' \
-             AND COALESCE(notice_at, 0) <= ?1 ORDER BY notice_at, rowid LIMIT ?2"
+            "SELECT {COLS} FROM mail_forwards WHERE dest_kind = 'external' AND notice_state = 'failed' \
+             AND (state = 'active' OR (state = 'paused' AND pause_reason = 'not_told')) \
+             AND COALESCE(notice_next_at, 0) <= ?1 ORDER BY notice_next_at, rowid LIMIT ?2"
         ))
         .map_err(err("failed notices"))?;
-    let rows = st.query_map(params![now - NOTICE_RETRY_SECS, limit as i64], row).map_err(err("failed notices"))?;
+    let rows = st.query_map(params![now, limit as i64], row).map_err(err("failed notices"))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err("failed notices"))
 }
 
@@ -604,7 +782,7 @@ pub fn transition(conn: &Connection, id: &str, to: &str, c: &Change<'_>, now: i6
                 return Err(TransitionError::Illegal(cur.state.clone(), "active (unverified)".to_string()));
             }
             run(
-                "UPDATE mail_forwards SET state = 'active', pause_reason = NULL, paused_at = NULL, verified_address_id = ?2, \
+                "UPDATE mail_forwards SET state = 'active', pause_reason = NULL, paused_at = NULL, paused_by = NULL, verified_address_id = ?2, \
                  activated_at = COALESCE(activated_at, ?3), updated_at = ?3 WHERE id = ?1",
                 &[&id, &verified, &now],
             )?;
@@ -618,8 +796,8 @@ pub fn transition(conn: &Connection, id: &str, to: &str, c: &Change<'_>, now: i6
         ST_PAUSED => {
             let reason = c.reason.filter(|r| !r.is_empty()).ok_or_else(|| TransitionError::Illegal(cur.state.clone(), "paused (no reason)".to_string()))?;
             run(
-                "UPDATE mail_forwards SET state = 'paused', pause_reason = ?2, paused_at = COALESCE(paused_at, ?3), updated_at = ?3 WHERE id = ?1",
-                &[&id, &reason, &now],
+                "UPDATE mail_forwards SET state = 'paused', pause_reason = ?2, paused_at = COALESCE(paused_at, ?3), paused_by = ?4, updated_at = ?3 WHERE id = ?1",
+                &[&id, &reason, &now, &c.actor],
             )?;
             let mut d = detail.clone();
             if let J::Object(m) = &mut d {
@@ -812,7 +990,9 @@ pub fn user_refusals_in_a_row(conn: &Connection, forward_id: &str, since: i64) -
     Ok(n)
 }
 
-/// `mail_forward_owner_notes.kind`.
+/// `mail_forward_owner_notes.kind`. Each kind has its own hourly slots: a pile of
+/// keep flips or removals can't spend the ones new addresses use.
+pub const OWNER_ADD: &str = "add";
 pub const OWNER_CHANGE: &str = "change";
 pub const OWNER_STOP: &str = "stop";
 
@@ -860,7 +1040,7 @@ pub fn cant_arrive_unnoted(conn: &Connection, host: Option<&str>) -> Result<Vec<
 /// few). `Ok(false)`: it waits for the summary.
 pub fn owner_note(conn: &Connection, kind: &str, line: &str, now: i64) -> Result<bool, String> {
     let told: i64 = conn
-        .query_row("SELECT COUNT(*) FROM mail_forward_owner_notes WHERE rolled = 0 AND at > ?1", params![now - 3600], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM mail_forward_owner_notes WHERE rolled = 0 AND kind = ?2 AND at > ?1", params![now - 3600, kind], |r| r.get(0))
         .map_err(err("owner note"))?;
     let tell_now = told < OWNER_NOTES_PER_HOUR;
     conn.execute(
@@ -1113,7 +1293,7 @@ mod tests {
         assert_eq!(stale.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), vec![old.id.as_str()]);
         let again = legacy_sort(&c, now + 1).unwrap();
         assert!(again.0.is_empty() && again.1.is_empty(), "sorted once");
-        assert_eq!(legacy_due(&c, 1).unwrap().len(), 1, "paced by the limit");
+        assert_eq!(legacy_due(&c, now, 1).unwrap().len(), 1, "paced by the limit");
         assert_eq!(get(&c, &old.id).unwrap().unwrap().state, ST_PENDING_VERIFY, "stays off");
     }
 
@@ -1130,6 +1310,92 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_notice_backs_off_and_the_clock_clears_when_it_goes() {
+        let c = conn();
+        let aid = mailbox(&c, "b@brand.test");
+        let mut n = ext(&aid, "b@brand.test", "a@outside.test");
+        n.state = ST_ACTIVE;
+        n.verified_address_id = Some("v");
+        let f = add(&c, &n, 1).unwrap();
+        let t = 100_000;
+        notice_failed(&c, &f.id, t).unwrap();
+        let r = get(&c, &f.id).unwrap().unwrap();
+        assert_eq!((r.notice_state.as_deref(), r.notice_failed_at, r.notice_next_at), (Some(N_FAILED), Some(t), Some(t + NOTICE_RETRY_SECS)));
+        assert!(failed_notices(&c, t + NOTICE_RETRY_SECS - 1, 5).unwrap().is_empty(), "not yet");
+        assert_eq!(failed_notices(&c, t + NOTICE_RETRY_SECS, 5).unwrap().len(), 1);
+        // The gap grows with how long it has been failing, up to the most.
+        notice_failed(&c, &f.id, t + 3 * 3600).unwrap();
+        assert_eq!(get(&c, &f.id).unwrap().unwrap().notice_next_at, Some(t + 6 * 3600));
+        notice_failed(&c, &f.id, t + 20 * 3600).unwrap();
+        assert_eq!(get(&c, &f.id).unwrap().unwrap().notice_next_at, Some(t + 20 * 3600 + NOTICE_RETRY_MAX_SECS));
+        assert_eq!(get(&c, &f.id).unwrap().unwrap().notice_failed_at, Some(t), "the clock doesn't restart");
+        set_notice(&c, &f.id, N_SENT, t + 21 * 3600).unwrap();
+        let r = get(&c, &f.id).unwrap().unwrap();
+        assert_eq!((r.notice_state.as_deref(), r.notice_failed_at, r.notice_next_at), (Some(N_SENT), None, None));
+    }
+
+    #[test]
+    fn who_paused_is_kept_and_cleared() {
+        let c = conn();
+        let aid = mailbox(&c, "w@brand.test");
+        let mut n = ext(&aid, "w@brand.test", "a@outside.test");
+        n.state = ST_ACTIVE;
+        n.verified_address_id = Some("v");
+        let f = add(&c, &n, 1).unwrap();
+        let p = transition(&c, &f.id, ST_PAUSED, &Change { reason: Some(P_MANUAL), actor: "agent:it", ..Default::default() }, 2).unwrap();
+        assert_eq!(p.paused_by.as_deref(), Some("agent:it"));
+        let r = transition(&c, &f.id, ST_ACTIVE, &Change { actor: "owner", ..Default::default() }, 3).unwrap();
+        assert_eq!(r.paused_by, None);
+    }
+
+    #[test]
+    fn an_automatic_pause_outlives_rm_and_add_and_the_count_spans_rows() {
+        let c = conn();
+        let aid = mailbox(&c, "r@brand.test");
+        let (mb, dest) = ("r@brand.test", "a@outside.test");
+        let mut n = ext(&aid, mb, dest);
+        n.state = ST_ACTIVE;
+        n.verified_address_id = Some("v");
+        let f = add(&c, &n, 1).unwrap();
+        record_outcome(&c, &f.id, Some("1"), O_QUEUED, None, 5).unwrap();
+        transition(&c, &f.id, ST_PAUSED, &Change { reason: Some(P_DAILY_CAP), actor: "k2", ..Default::default() }, 10).unwrap();
+        transition(&c, &f.id, ST_REMOVED, &actor(), 11).unwrap();
+        assert_eq!(recent_automatic_pause(&c, mb, dest, 0).unwrap().as_deref(), Some(P_DAILY_CAP));
+        assert_eq!(recent_automatic_pause(&c, mb, dest, 11).unwrap(), None, "older than the window");
+        assert_eq!(recent_automatic_pause(&c, mb, "other@outside.test", 0).unwrap(), None);
+        // The removed row's copies still count for the mailbox.
+        assert_eq!(mailbox_queued(&c, &aid, daily_window_start(&c, &aid, 100).unwrap()).unwrap(), 1);
+        // A manual pause isn't automatic.
+        let g = add(&c, &n, 20).unwrap();
+        transition(&c, &g.id, ST_PAUSED, &Change { reason: Some(P_MANUAL), actor: "owner", ..Default::default() }, 21).unwrap();
+        assert_eq!(recent_automatic_pause(&c, mb, dest, 15).unwrap(), None);
+        // A person's resume of a daily_cap pause starts the count again.
+        let h = add(&c, &ext(&aid, mb, "h@outside.test"), 22).unwrap();
+        let v = Change { verified_address_id: Some("v"), actor: "k2", ..Default::default() };
+        transition(&c, &h.id, ST_ACTIVE, &v, 23).unwrap();
+        transition(&c, &h.id, ST_PAUSED, &Change { reason: Some(P_DAILY_CAP), actor: "k2", ..Default::default() }, 24).unwrap();
+        transition(&c, &h.id, ST_ACTIVE, &actor(), 30).unwrap();
+        assert_eq!(daily_window_start(&c, &aid, 100).unwrap(), 30);
+    }
+
+    #[test]
+    fn a_same_box_loop_is_found_through_any_number_of_mailboxes() {
+        let c = conn();
+        let (a, b) = (mailbox(&c, "a@brand.test"), mailbox(&c, "b@brand.test"));
+        let mut n = ext(&a, "a@brand.test", "b@brand.test");
+        n.dest_kind = KIND_INTERNAL;
+        n.state = ST_ACTIVE;
+        add(&c, &n, 1).unwrap();
+        let mut m = ext(&b, "b@brand.test", "c@brand.test");
+        m.dest_kind = KIND_INTERNAL;
+        m.state = ST_ACTIVE;
+        add(&c, &m, 1).unwrap();
+        assert!(same_box_loop(&c, "a@brand.test", "a@brand.test").unwrap());
+        assert!(same_box_loop(&c, "c@brand.test", "a@brand.test").unwrap(), "c → a → b → c");
+        assert!(!same_box_loop(&c, "a@brand.test", "c@brand.test").unwrap());
+    }
+
+    #[test]
     fn the_owner_hears_the_first_few_then_one_summary() {
         let c = conn();
         let t = 100_000;
@@ -1137,16 +1403,24 @@ mod tests {
             assert!(owner_note(&c, "change", &format!("c{i}"), t + i).unwrap(), "{i}");
         }
         assert!(!owner_note(&c, "change", "rolled-1", t + 10).unwrap());
-        assert!(!owner_note(&c, "stop", "rolled-2", t + 11).unwrap(), "a stop rolls too, and is in the summary");
+        assert!(!owner_note(&c, "change", "rolled-2", t + 11).unwrap());
         assert!(owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS - 1).unwrap().is_empty(), "not an hour yet");
         let got = owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS).unwrap();
-        assert_eq!(got, vec![("change".to_string(), "rolled-1".to_string()), ("stop".to_string(), "rolled-2".to_string())]);
+        assert_eq!(got, vec![("change".to_string(), "rolled-1".to_string()), ("change".to_string(), "rolled-2".to_string())]);
         assert!(owner_summary_due(&c, t + 20 + OWNER_SUMMARY_SECS).unwrap().is_empty(), "told once");
+        // Each kind has its own slots: changes didn't spend the adds'.
+        assert!(owner_note(&c, OWNER_ADD, "add", t + 12).unwrap());
+        assert!(owner_note(&c, OWNER_STOP, "stop", t + 13).unwrap());
         // An hour on, the next few go one by one again.
         assert!(owner_note(&c, "change", "later", t + 5 + 3600).unwrap());
         purge(&c, t + OWNER_NOTES_KEEP_SECS + 4000).unwrap();
         let left: i64 = c.query_row("SELECT COUNT(*) FROM mail_forward_owner_notes", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 0, "purged");
+        // Stops roll past their own slots too.
+        for i in 0..OWNER_NOTES_PER_HOUR {
+            assert!(owner_note(&c, OWNER_STOP, &format!("s{i}"), t + OWNER_NOTES_KEEP_SECS + 5000).unwrap());
+        }
+        assert!(!owner_note(&c, OWNER_STOP, "one more", t + OWNER_NOTES_KEEP_SECS + 5000).unwrap());
     }
 
     #[test]

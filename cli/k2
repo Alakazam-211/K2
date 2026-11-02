@@ -48836,7 +48836,9 @@ FORWARDING (`k2 hostmail forward`)
            notice address): the first 5 changes or Stop presses in an hour
            one by one, the rest in one summary an hour later, with how to list
            them. Every change is in the access audit. If that email to the address fails, forwarding
-           still starts: list and show say so, K2 retries hourly. set and
+           still starts: list and show say so, K2 retries, and the forward
+           pauses after a day (not_told). No front door, no way to send, or an
+           address that bounced or complained before: refused. set and
            add take --keep or --no-keep: one setting for the whole mailbox.
            With neither, a mailbox with any outside address keeps a copy.
            An address on one of this server's own domains with no mailbox
@@ -48873,17 +48875,22 @@ FORWARDING (`k2 hostmail forward`)
            policy, once 10 were sent), daily_cap, revoked (the address pressed Stop), box_brake
            (every outside forward on the server: too many were refused),
            upgrade_required (not forwarding: the mail server needs upgrading:
-           k2 hostmail upgrade), air_gap and receive_only (nothing may leave).
-           Only air_gap, receive_only and upgrade_required lift by themselves.
+           k2 hostmail upgrade), air_gap and receive_only (nothing may leave),
+           not_told (K2 couldn't email the address its stop link for a day).
+           Only air_gap, receive_only, upgrade_required and not_told lift by
+           themselves.
   Upgrade  outside forwards need the pinned mail server (Stalwart
            0.16.25 or later). On an older one set answers exit 1
            upgrade_required ("k2 hostmail upgrade"); same-box forwards
            work on any version.
   Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, add, rm,
-           show, unset, pause and resume a manual pause, on any mailbox they
-           manage, outside addresses included, end to end — no permission
+           show, unset, pause and resume their own manual pause, on any
+           mailbox they manage, outside addresses included, end to end — no permission
            card per forward; every change names the agent to the owner. The
-           one thing they can't change is the daily limit above.
+           one thing they can't change is the daily limit above. Your own
+           mailbox outside needs agent sending on (agent_send_required). After
+           K2 pauses an address by itself, set and add refuse it for an agent
+           for 24 hours, even if it was removed since.
            Without the toggle: exit 3 owner_only.
            dest_gone / refused / daily_cap: the owner, an Admin or the
            mailbox's person resumes (an agent gets exit 3 owner_only:
@@ -62558,7 +62565,8 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
                  "k2 mail forward is for a person's own mailbox (a box login, or the owner). "
                  "An agent uses k2 hostmail forward <set|add|rm|show|unset|pause|resume> <address> "
                  "(needs \"Allow agents to manage hosted mail on this host\" on)"}, 3)
-        if code in ("destination_stopped", "too_many_destinations", "new_outside_limit"):
+        if code in ("destination_stopped", "too_many_destinations", "new_outside_limit", "notice_limit",
+                    "suppressed", "no_front_door", "no_mail_path", "forward_loop"):
             # The daemon's hint says what to do. Exit 1, no "ask your human" tail.
             die({"code": code, "hint": hint}, 1)
         if code == "owner_only" and op == "resume":
@@ -62601,7 +62609,9 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
         elif f.get("state") == "paused" and f.get("pauseWords"):
             out.append("  paused because %s" % f["pauseWords"])
             reason = f.get("pauseReason") or ""
-            if reason == "revoked":
+            if reason == "not_told":
+                out.append("  it goes back on by itself when K2 can email the address its stop link; or remove it")
+            elif reason == "revoked":
                 out.append("  it can't be resumed; only the owner or an Admin can choose it again (--restart-stopped), and should ask that address first")
             elif reason in ("air_gap", "receive_only"):
                 out.append("  it resumes by itself when that changes")
@@ -62739,6 +62749,9 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
             print(dumps(d))
         else:
             rows = d.get("forwards") or []
+            oc = d.get("outcomes") or {}
+            if oc.get("ok") is False:
+                print("warning: delivery reports aren't reaching K2 (%s), so forwards won't pause by themselves; K2 retries hourly" % (oc.get("error") or "unknown"))
             if not rows:
                 print("no forwards")
             for f in rows:
@@ -73402,8 +73415,9 @@ which mailbox, with a stop link (no login, never expires), and then starts
 forwarding. K2 also tells the owner (their K2 Inbox, plus email if they have a notice address): the first
 5 changes or Stop presses in an hour one by one, the rest in one summary an
 hour later, with how to list them. If the
-email to the address fails, the forward still runs; list and show say so
-and K2 tries again hourly. Only mail that arrives from then on is
+email to the address fails for now, the forward still runs; list and show say so,
+K2 keeps trying, and after a day the forward pauses (not_told). If K2 can't give
+it a stop link at all, the add is refused. Only mail that arrives from then on is
 forwarded.
 
 An address on one of this server's own domains with no mailbox here is
@@ -73450,6 +73464,8 @@ gives the reason:
   box_brake     too many of this server's forwards were refused, so
                 every outside forward is paused (the server brake)
   revoked       the address pressed Stop in K2's email
+  not_told      K2 couldn't email the address its stop link for a day; it
+                goes back on by itself when the email goes
   air_gap, receive_only
                 nothing may leave; lifts by itself when that changes
   upgrade_required
@@ -73466,8 +73482,8 @@ again by itself after the upgrade. Same-box forwards work on any version.
 WHO
   Owner, Admin, and agents with "Allow agents to manage hosted mail on
   this host" on: set, add, rm, show, unset, pause, and resume a manual
-  pause, on any mailbox they manage, outside destinations included (no
-  extra approval; the owner is told who did it). Without that switch an
+  pause (an agent only its own), on any mailbox they manage, outside
+  destinations included (no extra approval; the owner is told who did it). Without that switch an
   agent gets exit 3 owner_only; the owner or an Admin turns it on in
   Settings → Workspaces → (the agent's workspace).
   Resume after any other pause, and list: see their own help.
@@ -73499,7 +73515,13 @@ name are removed. To change one without touching the others, use add or rm.
                                      has to confirm; keeps a copy unless
                                      --no-keep
 --keep and --no-keep together: exit 2.
-Refused, and then nothing changes and nobody is emailed: more than 5
+Refused, and then nothing changes and nobody is emailed: no way to give the
+address a stop link (no_front_door, no_mail_path, or suppressed because it
+bounced or complained before); K2 emailed it 3 times in 24 hours (notice_limit);
+a same-box forward that would loop (forward_loop). If you're an agent: your
+own mailbox, unless agent sending is on (agent_send_required; ask your human);
+an address K2 paused by itself in the 24 hours before this, even if it was
+removed since (owner_only). More than 5
 addresses (too_many_destinations); over this server's daily limit on new
 outside addresses, 20 unless the owner changed it (new_outside_limit); an address that pressed Stop
 (destination_stopped); an address on one of this server's domains that
@@ -73589,8 +73611,10 @@ cmd_help_hostmail_forward_resume() {
 Resume paused forwards: one with --to, otherwise all you may. Any you may
 not are left alone and named in the answer. Who may, by the reason show
 gives:
-  manual                    anyone who may set it: owner, Admin, a
-                            mail-manage agent, the mailbox's person
+  manual                    the owner, an Admin or the mailbox's person; an
+                            agent only if that agent paused it
+  not_told                  nobody: it goes back on by itself when K2 can
+                            email the address its stop link
   dest_gone, refused,       the owner, an Admin or the mailbox's person;
   daily_cap                 an agent gets exit 3 owner_only (tell your
                             human with k2 thread)

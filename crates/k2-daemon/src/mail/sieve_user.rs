@@ -82,7 +82,9 @@ impl ForwardBlock {
 /// FW-A25), in this order:
 ///
 /// 0. an empty envelope sender (a bounce, e.g. the destination refusing
-///    an earlier forward) stays home;
+///    an earlier forward) stays home, and so does mail From one of K2's system
+///    senders (password resets, codes, notices): K2's own mail is never
+///    forwarded out;
 /// 1. a message that already carries this box's `X-K2-Forwarded` marker
 ///    stays home (loop stop);
 /// 2. spam stays home (`spamtest`, or the mail server's own
@@ -99,6 +101,9 @@ pub struct ForwardGuard {
     /// This box's mail host name: the loop marker's value and the
     /// authserv-id of its own `Authentication-Results`.
     pub host: String,
+    /// K2's system senders: their mail stays home. Empty (no system sender)
+    /// writes no clause.
+    pub stay_home: Vec<String>,
 }
 
 /// The loop marker header.
@@ -285,6 +290,10 @@ fn compose_forward(fwd: &ForwardBlock) -> String {
     let host = sieve_quoted(&g.host);
     let home = "{\nkeep;\nstop;\n}\n";
     out.push_str(&format!("if envelope :is \"from\" \"\" {home}"));
+    if !g.stay_home.is_empty() {
+        let list = g.stay_home.iter().map(|a| sieve_quoted(a)).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!("if address :is \"from\" [{list}] {home}"));
+    }
     out.push_str(&format!("if header :contains \"{LOOP_HEADER}\" {host} {home}"));
     out.push_str(&format!(
         "if anyof (spamtest :value \"ge\" :comparator \"i;ascii-numeric\" \"{SPAMTEST_MIN}\", header :matches \"X-Spam-Score\" \"spam*\") {home}"
@@ -388,7 +397,7 @@ fn parse_forward_region(region: &str) -> Option<ForwardBlock> {
     let region = region.to_string();
     let keep = region.contains("redirect :copy") || region.contains("redirect :copy\n");
     let guard = extract_quoted_after(&region, &format!("header :contains \"{LOOP_HEADER}\""))
-        .map(|host| ForwardGuard { host });
+        .map(|host| ForwardGuard { host, stay_home: extract_stay_home(&region) });
     // Redirects before the guard's first test are the same-box ones.
     let guard_at = guard.as_ref().and_then(|_| region.find("if envelope"));
     let mut same_box = Vec::new();
@@ -468,6 +477,20 @@ fn extract_until(s: &str) -> Option<String> {
     let key = "\"date\"";
     let i = s.find(key)?;
     extract_quoted(&s[i + key.len()..]).filter(|d| parse_until_date(d).is_ok())
+}
+
+/// The list in `if address :is "from" ["a", "b"]`.
+fn extract_stay_home(s: &str) -> Vec<String> {
+    let key = "if address :is \"from\" [";
+    let Some(i) = s.find(key) else { return Vec::new() };
+    let mut rest = &s[i + key.len()..];
+    let mut out = Vec::new();
+    while let Some(q) = rest.find('"').filter(|q| rest.find(']').is_none_or(|e| *q < e)) {
+        let Some(item) = extract_quoted(&rest[q..]) else { break };
+        rest = &rest[q + 1 + item.len() + 1..];
+        out.push(item);
+    }
+    out
 }
 
 /// Every `redirect "…"` in `s`, with where it starts.
@@ -840,7 +863,7 @@ mod tests {
         ForwardBlock {
             dest: "me@outside.test".to_string(),
             keep,
-            guard: Some(ForwardGuard { host: "mail.brand.test".to_string() }),
+            guard: Some(ForwardGuard { host: "mail.brand.test".to_string(), stay_home: vec![] }),
             ..Default::default()
         }
     }
@@ -932,6 +955,21 @@ mod tests {
         assert!(team < src.find("if envelope").expect("guard"), "{src}");
         assert!(src.find("vacation").expect("vacation") < team, "vacation first: {src}");
         assert!(!src.contains(":copy"), "no-keep: {src}");
+    }
+
+    const GOLDEN_SYSTEM_SENDER: &str = include_str!("../../../../tests/mail/forward-goldens/external-system-sender.sieve");
+
+    /// Review finding 10: K2's own mail stays home, and the clause round-trips.
+    #[test]
+    fn golden_system_senders_stay_home() {
+        let mut fwd = outside(true);
+        fwd.guard = Some(ForwardGuard { host: "mail.brand.test".to_string(), stay_home: vec!["k2@brand.test".to_string(), "system@notify.brand.test".to_string()] });
+        let s = UserSieve { ooo: None, forward: Some(fwd) };
+        let src = compose(&s).expect("script");
+        assert_eq!(src, GOLDEN_SYSTEM_SENDER);
+        assert_eq!(parse(&src), s, "{src}");
+        let home = src.find("if address :is \"from\"").expect("clause");
+        assert!(home < src.find("addheader").expect("marker") && home < src.find("redirect").expect("redirect"), "{src}");
     }
 
     #[test]

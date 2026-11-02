@@ -78,9 +78,9 @@ pub(crate) fn why(purpose: &str, subject_ref: &str) -> String {
 pub(crate) fn who(person: &str, box_label: &str) -> String {
     if person == k2_core::notify_prefs::OWNER {
         format!("The owner of {box_label}")
-    } else if let Some(agent) = person.strip_prefix("agent:") {
-        let clean: String = agent.chars().filter(|c| !c.is_control()).take(64).collect();
-        format!("The AI agent {clean} on {box_label}")
+    } else if person.starts_with("agent:") {
+        // Never the workspace's name: the agent chose it, and this is K2's text.
+        format!("An AI agent on {box_label}")
     } else {
         let clean: String = person.chars().filter(|c| !c.is_control()).take(64).collect();
         format!("{clean}, a person on {box_label},")
@@ -461,13 +461,60 @@ pub fn page_get(path: &str, query: &str) -> Page {
 
 /// `POST /cli/email/verify` and `POST /cli/email/stop`.
 pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
+    let token = token_from(query, body).unwrap_or_default();
+    if stop_rate_limited(&token) {
+        return Page {
+            status: "429 Too Many Requests",
+            html: html("Try again shortly", "<h1>Try again in a minute</h1><p>This link was used many times just now.</p>"),
+        };
+    }
     let mut stopped: Option<store::Verified> = None;
     let page = page_post_inner(path, query, body, &mut stopped);
-    // A mailbox forward follows its address (outside the db lock).
+    // A mailbox forward follows its address (outside the db lock). Only a press
+    // that changed something gets here, so re-posting a link tells nobody.
     if let Some(v) = stopped.filter(|v| v.purpose == store::PURPOSE_FORWARD) {
-        crate::mail::forward_verify::on_stopped(&v);
+        if !crate::mail::forward_verify::on_stopped(&v) {
+            // The record says stopped; the mail server hasn't taken it yet.
+            return Page {
+                status: "200 OK",
+                html: html(
+                    "Stopping",
+                    &format!(
+                        "<h1>K2 has your stop</h1><p>K2 won't start sending to <strong>{}</strong> again for this. It's still telling its mail server, which is having trouble, so a message or two may arrive in the next few minutes.</p>",
+                        esc(&v.address)
+                    ),
+                ),
+            };
+        }
     }
     page
+}
+
+/// POSTs one link may make in [`STOP_RATE_WINDOW_SECS`].
+const STOP_RATE_MAX: u32 = 10;
+const STOP_RATE_WINDOW_SECS: i64 = 60;
+
+/// Per token, kept in memory (a restart forgetting it is harmless): a press that
+/// changes nothing is already silent, this bounds the work it can cause.
+fn stop_rate_limited(token: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashMap<String, (i64, u32)>>> = Mutex::new(None);
+    if !(store::token_shape_ok(token, store::STOP_PREFIX) || store::token_shape_ok(token, store::CONFIRM_PREFIX)) {
+        return false;
+    }
+    let now = super::now();
+    let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(HashMap::new);
+    if map.len() > 10_000 {
+        map.retain(|_, (start, _)| now - *start < STOP_RATE_WINDOW_SECS);
+    }
+    let entry = map.entry(store::sha256_hex(token)).or_insert((now, 0));
+    if now - entry.0 >= STOP_RATE_WINDOW_SECS {
+        *entry = (now, 0);
+    }
+    entry.1 += 1;
+    entry.1 > STOP_RATE_MAX
 }
 
 fn stopped_page(v: &store::Verified) -> Page {
@@ -490,12 +537,14 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<st
                 return gone("500 Internal Server Error", "K2 couldn't read its records. Try again later.");
             };
             if asks_stop(query, body) {
-                if store::revoke(&conn, &v.id, store::BY_RECIPIENT, now).is_err() {
+                let Ok(changed) = store::revoke(&conn, &v.id, store::BY_RECIPIENT, now) else {
                     return gone("500 Internal Server Error", "K2 couldn't save this. Try again later.");
-                }
-                super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                };
                 let page = stopped_page(&v);
-                *stopped = Some(v);
+                if changed {
+                    super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                    *stopped = Some(v);
+                }
                 return page;
             }
             forward_old_link_page(&conn, &v, &token, &crate::app_user_invites::box_label())
@@ -519,11 +568,13 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<st
             Err(store::ConfirmError::Invalid) => gone("404 Not Found", "It was already used, or it was replaced by a newer one."),
             Err(store::ConfirmError::Db(_)) => gone("500 Internal Server Error", "K2 couldn't save this. Try again later."),
         },
-        _ => match store::stop(&conn, &token, now) {
-            Ok(Some(v)) => {
-                super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+        _ => match store::stop_changed(&conn, &token, now) {
+            Ok(Some((v, changed))) => {
                 let page = stopped_page(&v);
-                *stopped = Some(v);
+                if changed {
+                    super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                    *stopped = Some(v);
+                }
                 page
             }
             Ok(None) => gone("404 Not Found", "K2 doesn't know this stop link."),

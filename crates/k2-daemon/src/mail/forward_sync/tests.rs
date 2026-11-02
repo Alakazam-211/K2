@@ -516,3 +516,58 @@ fn a_retired_mailbox_drops_all_its_rows() {
     drop(conn);
     drop(io);
 }
+
+/// Review finding 8: a Stop or removal never waits on the limit: fewer redirects
+/// always go, and a failed limit call only blocks growing.
+#[test]
+fn fewer_redirects_always_go_even_when_the_limit_call_fails() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("few@brand.test", "direct");
+    let mut ids = Vec::new();
+    for d in ["a@outside.test", "b@outside.test", "c@outside.test"] {
+        let v = verified_row("few@brand.test", d);
+        ids.push(add_row(&aid, "few@brand.test", d, store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v), true).id);
+    }
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    assert_eq!(*io.limit_calls.borrow(), 1);
+    *io.limit_fail.borrow_mut() = true;
+    pause(&ids[2], store::P_REVOKED, "recipient", None).expect("the removal is written");
+    let src = io.src("acc-few").expect("script");
+    assert!(!src.contains("c@outside.test"), "{src}");
+    assert!(src.contains("b@outside.test"), "{src}");
+    // Same count, nothing to do: no call needed (a periodic pass tries, and shrugs).
+    assert_eq!(*io.limit_calls.borrow(), 1);
+    let r = reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!(r.failed, 0, "{r:?}");
+    // Growing still waits for the limit.
+    resume(&ids[2], "owner").expect_err("deferred");
+    assert!(!io.src("acc-few").expect("script").contains("c@outside.test"));
+}
+
+/// Review finding 10: with a system sender, the guard keeps its mail home.
+#[test]
+fn a_system_sender_s_mail_stays_home() {
+    let _g = setup();
+    let io = install(false);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO email_senders (id, address, domain, path, owner_kind, from_name, state, created_at, updated_at) \
+             VALUES ('s1', 'K2@Brand.Test', 'brand.test', 'hosted', 'system', 'K2', 'ready', 1, 1)",
+            [],
+        )
+        .expect("sender");
+    }
+    let aid = seed_mailbox("h@brand.test", "direct");
+    let v = verified_row("h@brand.test", "a@outside.test");
+    add_row(&aid, "h@brand.test", "a@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v), true);
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    let g = io.forward("acc-h").expect("written").guard.expect("guard");
+    assert_eq!(g.stay_home, vec!["k2@brand.test".to_string()]);
+    // A rewrite is stable.
+    let writes = *io.writes.borrow();
+    let r = reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!((r.drift, *io.writes.borrow()), (0, writes), "{r:?}");
+}

@@ -22,7 +22,12 @@
 -- `mail_forward_owner_notes`: what K2 has told the owner about outside
 -- forwards this hour. The first few go out one by one; the rest wait
 -- (`told_at` NULL) for one hourly summary.
--- New index and table + three ADD COLUMNs: renumber freely on a slip (and edit the
+-- `mail_forwards.paused_by`: who paused it (agents resume only their own).
+-- `notice_failed_at`, `notice_next_at`: since when K2 hasn't managed to email
+-- this address, and when it tries next (a backoff, not a row per try).
+-- `mail_server.forward_reload_owed`: limits saved, reload not confirmed, across a
+-- restart. `forward_webhook_error`: why delivery outcomes aren't reaching K2.
+-- New index and table + ADD COLUMNs: renumber freely on a slip (and edit the
 -- migration-order tests). The store is `crate::mail_forward`.
 DROP INDEX IF EXISTS mail_forwards_live;
 --> statement-breakpoint
@@ -39,10 +44,20 @@ ALTER TABLE mail_server ADD COLUMN forward_new_per_day INTEGER;
 CREATE TABLE IF NOT EXISTS mail_forward_owner_notes (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     at       INTEGER NOT NULL,
-    kind     TEXT NOT NULL CHECK (kind IN ('change', 'stop')),
+    kind     TEXT NOT NULL CHECK (kind IN ('add', 'change', 'stop')),
     line     TEXT NOT NULL,
     rolled   INTEGER NOT NULL DEFAULT 0 CHECK (rolled IN (0, 1)),
     told_at  INTEGER
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS mail_forward_owner_notes_at ON mail_forward_owner_notes (at);
+--> statement-breakpoint
+ALTER TABLE mail_forwards ADD COLUMN paused_by TEXT;
+--> statement-breakpoint
+ALTER TABLE mail_forwards ADD COLUMN notice_failed_at INTEGER;
+--> statement-breakpoint
+ALTER TABLE mail_forwards ADD COLUMN notice_next_at INTEGER;
+--> statement-breakpoint
+ALTER TABLE mail_server ADD COLUMN forward_reload_owed INTEGER NOT NULL DEFAULT 0;
+--> statement-breakpoint
+ALTER TABLE mail_server ADD COLUMN forward_webhook_error TEXT;

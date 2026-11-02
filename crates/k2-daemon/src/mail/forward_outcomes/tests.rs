@@ -327,15 +327,17 @@ fn the_box_brake_pauses_every_outside_forward_with_one_notice_until_the_owner_re
         )
         .expect("internal")
     };
-    // 50 forwards from A; 5 refused for policy, then a 6th: 12% box-wide
-    // (A alone is under its own 20%).
-    seed_queued(&a, 100, 50, t + 5);
+    // 50 forwards, from A and from B; 5 refused for policy across both, then a
+    // 6th: 12% box-wide (A alone is under its own 20%, and B has under 10).
+    seed_queued(&a, 100, 49, t + 5);
+    seed_queued(&b, 300, 1, t + 5);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        for q in 100..105 {
+        for q in 100..104 {
             store::record_outcome(&conn, &a.id, Some(&q.to_string()), store::O_REFUSED_POLICY, Some("550 5.7.1"), t + 5).expect("refused");
         }
+        store::record_outcome(&conn, &b.id, Some("300"), store::O_REFUSED_POLICY, Some("550 5.7.1"), t + 5).expect("refused");
     }
     let out = apply(&events(json!([perm_fail(105, "a@brand.test", "a@outside.test", 550, "5.7.1", "policy")])), t + 10);
     let mut paused = out.paused.clone();
@@ -590,7 +592,8 @@ fn the_daily_cap_counts_every_copy_across_destinations() {
     assert_eq!(row(&b.id).state, store::ST_PAUSED, "resuming one leaves the other");
 }
 
-/// The box brake still counts every copy from every destination.
+/// The box brake still counts every copy from every destination, and pauses
+/// that mailbox's whole list when the refusals are all its own.
 #[test]
 fn the_brake_counts_each_destination_s_refusals() {
     let (_g, _io) = setup();
@@ -608,4 +611,77 @@ fn the_brake_counts_each_destination_s_refusals() {
     drop(conn);
     let paused = evaluate_box(t);
     assert_eq!(paused.len(), 2, "6 of 50 copies refused, split across destinations: {paused:?}");
+}
+
+/// Review finding 13: one mailbox's refusals stop that mailbox, not the box.
+#[test]
+fn one_mailbox_can_t_trip_the_whole_box_brake() {
+    let (_g, io) = setup();
+    let t = now();
+    let a = active("one@brand.test", "a@outside.test", t - 1000);
+    let b = active("other@brand.test", "b@outside.test", t - 1000);
+    seed_queued(&a, 7000, 30, t - 900);
+    seed_queued(&b, 8000, 30, t - 900);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for i in 0..7u64 {
+            store::record_outcome(&conn, &a.id, Some(&(7000 + i).to_string()), store::O_FAILED, None, t - 800).expect("outcome");
+        }
+    }
+    let paused = evaluate_box(t);
+    assert_eq!(paused, vec![a.id.clone()], "only that mailbox");
+    assert_eq!(row(&a.id).pause_reason.as_deref(), Some(store::P_REFUSED));
+    assert_eq!(row(&b.id).state, store::ST_ACTIVE, "the other mailbox carries on");
+    assert!(io.forward("acc-other").is_some());
+    let n = take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("other mailboxes keep forwarding"), "{}", n[0].1);
+    // Refusals from a second mailbox: that's the box.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::record_outcome(&conn, &b.id, Some("8000"), store::O_FAILED, None, t - 700).expect("outcome");
+    }
+    assert_eq!(evaluate_box(t), vec![b.id.clone()], "the brake pauses what's left");
+    assert_eq!(row(&b.id).pause_reason.as_deref(), Some(store::P_BOX_BRAKE));
+}
+
+/// Review finding 11: a notice K2 sent from the mailbox itself bouncing corrects
+/// the row and tells the owner, who was told it went.
+#[test]
+fn a_notice_that_bounces_stops_reading_as_sent() {
+    let (_g, _io) = setup();
+    let t = now();
+    let f = active("nb@brand.test", "a@outside.test", t - 100);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_notice(&conn, &f.id, store::N_SENT, t - 50).expect("sent");
+    }
+    let got = apply(&events(json!([perm_fail(99, "nb@brand.test", "a@outside.test", 550, "5.1.1", "no such user")])), t);
+    assert_eq!(got.recorded, 0, "not a forwarded copy: {got:?}");
+    assert_eq!(row(&f.id).notice_state.as_deref(), Some(store::N_FAILED));
+    let n = take_notices();
+    assert!(n[0].0.contains("bounced") && n[0].1.contains("a@outside.test"), "{n:?}");
+}
+
+/// Review finding 12: when delivery reports stop, the owner hears once.
+#[test]
+fn the_owner_hears_when_delivery_reports_break() {
+    let (_g, _io) = setup();
+    let t = now();
+    active("wh@brand.test", "a@outside.test", t - 100);
+    let db = k2_core::db::shared();
+    db.lock().execute("INSERT OR REPLACE INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).expect("server");
+    webhook_health(Some("no management client"));
+    let n = take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("no management client"), "{}", n[0].1);
+    webhook_health(Some("still no client"));
+    assert!(take_notices().is_empty(), "told once");
+    webhook_health(None);
+    assert_eq!(take_notices().len(), 1, "and when it's back");
+    webhook_health(None);
+    assert!(take_notices().is_empty());
 }

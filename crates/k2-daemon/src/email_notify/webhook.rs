@@ -707,6 +707,7 @@ fn run_live(reason: &'static str) {
                 let r = reconcile(&client, want_key.as_deref().map(|k| (port, k)));
                 k2_core::log_debug!("[email-notify] webhook setup ({reason}): {r:?}");
                 if !matches!(r, Reconciled::Failed(_)) {
+                    crate::mail::forward_outcomes::webhook_health(None);
                     return;
                 }
                 last = format!("{r:?}");
@@ -716,6 +717,7 @@ fn run_live(reason: &'static str) {
             std::thread::sleep(std::time::Duration::from_secs(WAIT_STEP_SECS));
         }
         k2_core::log_debug!("[email-notify] webhook setup gave up ({reason}; retried at the next start): {last}");
+        crate::mail::forward_outcomes::webhook_health(Some(&crate::email_notify::send::mask_addresses(&last)));
     }
     #[cfg(test)]
     let _ = reason;

@@ -1589,7 +1589,7 @@ mod tests {
                     forward: Some(sieve_user::ForwardBlock {
                         dest: "me@outside.test".to_string(),
                         keep,
-                        guard: Some(sieve_user::ForwardGuard { host: "mail.example.test".to_string() }),
+                        guard: Some(sieve_user::ForwardGuard { stay_home: vec![], host: "mail.example.test".to_string() }),
                         ..Default::default()
                     }),
                 };

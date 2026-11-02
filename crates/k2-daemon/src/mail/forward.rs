@@ -153,8 +153,16 @@ impl Caller {
         }
     }
 
-    /// May this caller resume a forward paused for `reason`?
-    pub fn may_resume(&self, reason: &str) -> Result<(), Fail> {
+    /// May this caller resume a forward `paused_by` paused for `reason`? An
+    /// agent resumes only its own hand pause: a person's stays a person's.
+    pub fn may_resume(&self, reason: &str, paused_by: Option<&str>) -> Result<(), Fail> {
+        if reason == store::P_NOT_TOLD {
+            return Err(fail(
+                409,
+                "held",
+                "K2 paused this forward because it can't email the address its link to stop it; it goes back on by itself when that email goes, or remove it (k2 hostmail forward rm)",
+            ));
+        }
         if reason == store::P_REVOKED {
             return Err(fail(
                 409,
@@ -170,6 +178,14 @@ impl Caller {
             ));
         }
         match self {
+            Caller::Agent { .. } if reason == store::P_MANUAL && paused_by != Some(self.actor().as_str()) => Err(fail(
+                403,
+                "owner_only",
+                format!(
+                    "{} paused this forward, so an agent can't turn it back on; the owner, an Admin or the mailbox's person resumes it (k2 hostmail forward resume)",
+                    paused_by.map_or("someone".to_string(), forward_verify::actor_words)
+                ),
+            )),
             Caller::Agent { .. } if reason != store::P_MANUAL => Err(fail(
                 403,
                 "owner_only",
@@ -206,6 +222,7 @@ pub fn reason_words(reason: &str) -> &'static str {
         store::P_RECEIVE_ONLY => "the mailbox's domain is receive-only",
         store::P_AIR_GAP => "air-gap is on",
         store::P_MANUAL => "someone paused it",
+        store::P_NOT_TOLD => "K2 hasn't been able to email the address its link to stop this",
         store::P_UPGRADE => "not forwarding: the mail server needs upgrading: k2 hostmail upgrade",
         _ => "of a rule",
     }
@@ -475,7 +492,11 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
         // What K2 told an outside address (`sent` | `failed` | `due` | `stale`).
         "notice": f.notice_state,
         "noticeAt": f.notice_at,
-        "noticeWords": f.notice_state.as_deref().and_then(notice_words),
+        "noticeWords": if f.notice_failed_at.is_some() && f.notice_state.as_deref() == Some(store::N_DUE) {
+            Some("not on: K2 hasn't been able to email this address its stop link, and it stays off until that email goes; K2 keeps trying".to_string())
+        } else {
+            f.notice_state.as_deref().and_then(notice_words)
+        },
         "cantArrive": cant_arrive.then(|| cant_arrive_words(f)),
         "last24h": {
             "forwarded": counts.queued,
@@ -490,7 +511,7 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
 /// `show`'s words for what K2 told an outside address, when they matter.
 fn notice_words(state: &str) -> Option<String> {
     match state {
-        store::N_FAILED => Some("K2 couldn't email this address its stop link yet, so it can't stop this itself; K2 tries again hourly".to_string()),
+        store::N_FAILED => Some("K2 couldn't email this address its stop link yet, so it can't stop this itself; K2 keeps trying, and pauses the forward after a day".to_string()),
         store::N_DUE => Some("not on yet: K2 is pacing its emails, so it will email this address and then turn this on, within minutes or a few hours if many are waiting".to_string()),
         store::N_STALE => Some(format!(
             "not on: it was waiting for a confirm and was set more than {} days ago, so K2 didn't turn it on. It sends nothing. To turn it on, set it again",
@@ -592,6 +613,42 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
             return Err(fail(403, "owner_only", format!("{d} pressed Stop in K2's email; only the owner or an Admin can choose it again")));
         }
     }
+    // Agents' own limits (review findings 6 and 9).
+    if let Caller::Agent { workspace_uuid } = caller {
+        if !outside.is_empty() && row.owner_project_id == *workspace_uuid {
+            // Fail closed: no workspace on record reads as off.
+            let path: Option<String> = db(|c| {
+                use rusqlite::OptionalExtension;
+                c.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![workspace_uuid], |r| r.get(0))
+                    .optional()
+                    .map_err(|e| format!("mail forwards: workspace: {e}"))
+            })?;
+            let mode = path.map_or_else(|| "off".to_string(), |p| k2_core::workspace::settings::mail_agent_send_for_path(&p));
+            if mode != "on" {
+                return Err(fail(
+                    403,
+                    "agent_send_required",
+                    format!(
+                        "this is your own mailbox, and forwarding it outside would send its mail past your sending rules (agent sending is {mode} here). The owner or an Admin sets the forward, or turns sending on: k2 mail sending <workspace> on"
+                    ),
+                ));
+            }
+        }
+        for d in &outside {
+            let recent = db(|c| store::recent_automatic_pause(c, &row.address, d, now - store::WINDOW_SECS))?;
+            if let Some(reason) = recent {
+                return Err(fail(
+                    403,
+                    "owner_only",
+                    format!(
+                        "K2 paused forwarding from {} to {d} in the last 24 hours because {}, so an agent can't start it again, removed or not. The owner, an Admin or the mailbox's person can",
+                        row.address,
+                        reason_words(&reason)
+                    ),
+                ));
+            }
+        }
+    }
     let stays = |f: &Forward| dests.iter().any(|d| d.address() == f.dest);
     let others_left = if mode == Mode::Add { live.iter().filter(|f| !stays(f)).count() } else { 0 };
     if others_left + dests.len() > store::MAX_DESTINATIONS {
@@ -608,6 +665,27 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         ));
     }
     let fresh: Vec<&Dest> = dests.iter().filter(|d| !live.iter().any(|f| row_stands(f, d))).collect();
+    // A same-box loop would rely on the mail server's own stops (review finding 15).
+    for d in fresh.iter().filter(|d| !tells_destination(d)) {
+        if db(|c| store::same_box_loop(c, &row.address, d.address()))? {
+            return Err(fail(409, "forward_loop", format!("{} already forwards back to {}, directly or through other mailboxes here, so this would loop. Nothing changed", d.address(), row.address)));
+        }
+    }
+    // An opt-out with no stop link isn't an opt-out (review finding 2), and
+    // nobody gets the box's whole cap in notices (finding 14).
+    for d in fresh.iter().filter(|d| tells_destination(d)) {
+        forward_verify::can_tell(row.stalwart_account_id.as_deref(), d.address())?;
+        let told = db(|c| store::notices_to_dest_since(c, d.address(), now - store::WINDOW_SECS))?;
+        if told >= store::NOTICES_PER_DEST_PER_DAY {
+            let mut f = fail(
+                429,
+                "notice_limit",
+                format!("K2 has emailed {} about forwards {told} times in the last 24 hours, the most it will. Nothing changed; try tomorrow", d.address()),
+            );
+            f.retry_after_ms = Some(3_600_000);
+            return Err(f);
+        }
+    }
     let fresh_outside = fresh.iter().filter(|d| tells_destination(d)).count() as i64;
     if fresh_outside > 0 {
         let (used, cap) = db(|c| Ok((store::new_outside_since(c, now - store::WINDOW_SECS)?, store::new_outside_cap(c)?)))?;
@@ -655,6 +733,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         let actor_ref = &actor;
         let change_ref = &mut change;
         let mut newest: Option<Forward> = None;
+        let mut no_copy_new = false;
         // After the change an outside row (even one just retired) tells
         // `after_change` the webhook may need to follow.
         let mut retired_outside: Option<String> = None;
@@ -689,6 +768,9 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 store::set_notice(c, &f.id, store::N_DUE, now).map_err(dbe)?;
                 change_ref.queued.push(f.dest.clone());
             }
+            if d.kind() == store::KIND_EXTERNAL && !keep {
+                no_copy_new = true;
+            }
             if let Some(t) = t {
                 t.record(c, &f.id, actor_ref, now).map_err(dbe)?;
                 if t.via.is_none() {
@@ -710,7 +792,8 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 newest = Some(f);
             }
         }
-        if keep_moved {
+        // A first outside add with no copy kept is a change the owner should hear.
+        if keep_moved || no_copy_new {
             change_ref.keep = Some(keep);
         }
         if newest.as_ref().is_none_or(|n| !n.is_external()) {
@@ -721,7 +804,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         newest.ok_or(store::TransitionError::NotFound)
     });
     let (_, note) = changed(r)?;
-    forward_verify::tell_owner_changed(&row.address, &actor, &change);
+    forward_verify::tell_owner_changed(&row.id, &row.address, &actor, &change);
 
     // The answer: one entry per destination asked for. The top-level fields
     // are the first one's, the shape from before several destinations.
@@ -816,7 +899,7 @@ fn remove_rows(row: &MailAddress, caller: &Caller, rows: &[Forward]) -> R<(Forwa
     });
     let out = changed(r)?;
     let removed: Vec<String> = rows.iter().filter(|f| f.is_external()).map(|f| f.dest.clone()).collect();
-    forward_verify::tell_owner_changed(&row.address, &actor, &OutsideChange { removed, ..Default::default() });
+    forward_verify::tell_owner_changed(&row.id, &row.address, &actor, &OutsideChange { removed, ..Default::default() });
     Ok(out)
 }
 
@@ -868,6 +951,7 @@ fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     let mut done = Vec::with_capacity(rows.len());
     let mut skipped = Vec::new();
     let mut note = None;
+    let mut told = Vec::new();
     let one = rows.len() == 1;
     for f in rows {
         if f.state == store::ST_PAUSED {
@@ -880,8 +964,12 @@ fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
         }
         let (f, n) = changed(forward_sync::pause(&f.id, store::P_MANUAL, &caller.actor(), None))?;
         note = note.or(n);
+        if f.is_external() {
+            told.push(f.dest.clone());
+        }
         done.push(f);
     }
+    forward_verify::tell_owner_changed(&row.id, &row.address, &caller.actor(), &OutsideChange { paused: told, ..Default::default() });
     Ok(state_answer(row, &done, skipped, note))
 }
 
@@ -892,6 +980,7 @@ fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     let mut skipped = Vec::new();
     let mut refused: Option<Fail> = None;
     let mut note = None;
+    let mut resumed = Vec::new();
     for f in rows {
         if f.state != store::ST_PAUSED {
             if one {
@@ -899,18 +988,22 @@ fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
             }
             continue;
         }
-        if let Err(no) = caller.may_resume(f.pause_reason.as_deref().unwrap_or("")) {
+        if let Err(no) = caller.may_resume(f.pause_reason.as_deref().unwrap_or(""), f.paused_by.as_deref()) {
             skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
             refused = refused.or(Some(no));
             continue;
         }
         let (f, n) = changed(forward_sync::resume(&f.id, &caller.actor()))?;
         note = note.or(n);
+        if f.is_external() {
+            resumed.push(f.dest.clone());
+        }
         done.push(f);
     }
     if done.is_empty() {
         return Err(refused.unwrap_or_else(|| fail(409, "bad_state", format!("no forward of {} is paused", row.address))));
     }
+    forward_verify::tell_owner_changed(&row.id, &row.address, &caller.actor(), &OutsideChange { resumed, ..Default::default() });
     Ok(state_answer(row, &done, skipped, note))
 }
 
@@ -996,10 +1089,16 @@ pub fn handle_forward_cap(body: &[u8]) -> CliResponse {
                 format!("--forward-new-per-day can be at most {}, and {n} is out of range. Nothing changed", store::NEW_OUTSIDE_PER_DAY_MAX),
             ));
         }
+        let before = db(store::new_outside_cap)?;
         if !db(|c| store::set_new_outside_cap(c, n))? {
             return Err(fail(409, "not_ready", "this server has no mail server yet (k2 hostmail enable)"));
         }
-        email_notify::audit_line("mail-forward-cap", "owner", &format!("new_outside_per_day={n}"));
+        email_notify::audit_line("mail-forward-cap", "owner", &format!("new_outside_per_day={before}->{n}"));
+        forward_verify::tell_owner(
+            "The daily limit on new forward addresses changed",
+            &format!("This server may now add {n} new outside forward addresses a day (it was {before}; the default is {}). This was done with the owner's credentials: if it wasn't you, change it back: k2 hostmail config --forward-new-per-day {before}.", store::NEW_OUTSIDE_PER_DAY),
+            &[],
+        );
         Ok(json!({
             "ok": true,
             "perDay": n,
@@ -1024,8 +1123,15 @@ pub fn handle_forwards_list(params: &HashMap<String, String>) -> CliResponse {
     let external_only = params.get("kind").is_some_and(|k| k.trim() == store::KIND_EXTERNAL);
     let now = now();
     respond(
-        db(|c| store::list(c, &store::ListFilter { state, external_only, include_removed: false }))
-            .map(|rows| json!({ "ok": true, "forwards": rows.iter().map(|f| forward_json(f, now)).collect::<Vec<_>>() })),
+        db(|c| Ok((store::list(c, &store::ListFilter { state, external_only, include_removed: false })?, store::webhook_error(c))))
+            .map(|(rows, webhook_error)| {
+                json!({
+                    "ok": true,
+                    "forwards": rows.iter().map(|f| forward_json(f, now)).collect::<Vec<_>>(),
+                    // Without delivery outcomes the automatic pauses can't fire.
+                    "outcomes": { "ok": webhook_error.is_none(), "error": webhook_error },
+                })
+            }),
     )
 }
 

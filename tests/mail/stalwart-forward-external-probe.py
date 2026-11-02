@@ -715,6 +715,24 @@ def main():
     check("X11 mixed: every outside destination gets it, even with the OOO reply", rcpts == ["me@outside.test", "three@outside.test", "two@outside.test"], json.dumps(rcpts))
     check("X11 mixed: no copy kept", kept(mid) == 0, f"kept {kept(mid)}")
 
+    # ── X13 K2's system senders stay home (bob plays the sender) ────
+    n, a = put_script(alice, golden("external-system-sender.sieve", "me@outside.test", args.host).replace("k2@brand.test", bob_addr))
+    check("X13 the script with a system sender is written", n == "SieveScript/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")
+    mid = f"x13-{tag}"
+    ham(mid)
+    time.sleep(6)
+    check("X13 mail From a system sender isn't forwarded", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
+    check("X13 it stays in the mailbox", kept_eventually(mid), "")
+
+    # ── X14 a same-box loop: what Stalwart does on its own ──────────
+    put_script(alice, f'require ["copy"];\n# k2-forward\nredirect :copy "{bob_addr}";\n')
+    put_script(bob, f'require ["copy"];\n# k2-forward\nredirect :copy "{alice_addr}";\n')
+    mid = f"x14-{tag}"
+    ham(mid)
+    time.sleep(8)
+    info("X14 alice <-> bob, keep on: copies after 8 s", f"alice {kept(mid)}, bob {kept(mid, bob)}")
+    put_script(bob, "keep;\r\n")
+
     # ── X12 a redirect to one of this server's own domains ──────────
     n, a = put_script(alice, f'require ["copy"];\n# k2-forward\nredirect :copy "ghost-{tag}@{domain}";\nredirect :copy "{bob_addr}";\n')
     check("X12 the script is written", n == "SieveScript/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")

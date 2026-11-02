@@ -160,16 +160,21 @@ FORWARDING (`k2 hostmail forward`)
            forwarded message, K2 emails that address who set this up and
            which mailbox, with a stop link (no login, never expires). The
            owner is told too (their K2 Inbox, plus email if they have a
-           notice address): the first 5 in an hour one by one, the rest in
-           one hourly summary. If that email to the address fails, forwarding
-           still starts: list and show say so, K2 retries hourly. set and
+           notice address): the first 5 changes or Stop presses in an hour
+           one by one, the rest in one summary an hour later, with how to list
+           them. Every change is in the access audit. If that email to the address fails, forwarding
+           still starts: list and show say so, K2 retries, and the forward
+           pauses after a day (not_told). No front door, no way to send, or an
+           address that bounced or complained before: refused. set and
            add take --keep or --no-keep: one setting for the whole mailbox.
            With neither, a mailbox with any outside address keeps a copy.
            An address on one of this server's own domains with no mailbox
            here is refused: this mail server delivers its own domains itself,
            so that mail would bounce here and never reach another provider,
-           whatever the domain's MX says. A mailbox here whose domain's MX
-           points elsewhere counts as outside, but its mail lands here.
+           whatever the domain's MX says. Use an address on a domain this
+           server doesn't host. A mailbox here whose domain's MX points
+           elsewhere counts as outside, but its mail lands in the mailbox
+           here, not at the other provider.
   Stopped  an address that pressed Stop gets nothing and stays out: set,
            add and resume all refuse (destination_stopped, exit 1). Only the
            owner or an Admin can override it:
@@ -197,17 +202,22 @@ FORWARDING (`k2 hostmail forward`)
            policy, once 10 were sent), daily_cap, revoked (the address pressed Stop), box_brake
            (every outside forward on the server: too many were refused),
            upgrade_required (not forwarding: the mail server needs upgrading:
-           k2 hostmail upgrade), air_gap and receive_only (nothing may leave).
-           Only air_gap, receive_only and upgrade_required lift by themselves.
+           k2 hostmail upgrade), air_gap and receive_only (nothing may leave),
+           not_told (K2 couldn't email the address its stop link for a day).
+           Only air_gap, receive_only, upgrade_required and not_told lift by
+           themselves.
   Upgrade  outside forwards need the pinned mail server (Stalwart
            0.16.25 or later). On an older one set answers exit 1
            upgrade_required ("k2 hostmail upgrade"); same-box forwards
            work on any version.
   Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, add, rm,
-           show, unset, pause and resume a manual pause, on any mailbox they
-           manage, outside addresses included, end to end — no permission
+           show, unset, pause and resume their own manual pause, on any
+           mailbox they manage, outside addresses included, end to end — no permission
            card per forward; every change names the agent to the owner. The
-           one thing they can't change is the daily limit above.
+           one thing they can't change is the daily limit above. Your own
+           mailbox outside needs agent sending on (agent_send_required). After
+           K2 pauses an address by itself, set and add refuse it for an agent
+           for 24 hours, even if it was removed since.
            Without the toggle: exit 3 owner_only.
            dest_gone / refused / daily_cap: the owner, an Admin or the
            mailbox's person resumes (an agent gets exit 3 owner_only:

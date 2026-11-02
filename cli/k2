@@ -11474,8 +11474,9 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   see k2 app domains <app-id>); a bound name that is not served yet is
   not an origin:
     k2 app domain add <app-id> app.example.com
-  First the owner or an Admin runs k2 front enable and k2 domain add
-  <apex>; then DNS records at your DNS host. Steps: k2 app domain --help.
+  First the owner or an Admin runs k2 domain add <apex> (and k2 front
+  enable, unless the name goes through K2 Connect); then DNS records at
+  your DNS host. Steps: k2 app domain --help.
   A name your own web server serves (not K2's front) counts once added
   with --external: k2 app domain add <app-id> <host> --external.
   K2 reads them at every start, so a changed binding reaches the App on
@@ -13723,7 +13724,7 @@ k2 app domain — more hostnames for an App (0.46.4; custom domains 0.46.6)
                                            custom domains (state + the DNS to set)
   <box> is this box's K2 Connect name (<box>.k2.dev).
 
-CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
+CUSTOM DOMAINS (your own name, e.g. shop.example.com)
   k2 app domain add <app-id> shop.example.com
                                            bind it; K2 prints the DNS records to set
   k2 app domain check <app-id> shop.example.com
@@ -13758,10 +13759,16 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
   A dotted name outside k2.dev is a custom domain; anything else is a
   subdomain (below).
 
+  TWO WAYS IN, chosen per name by where its DNS points (k2 app domains
+  shows both, and which one DNS shows now):
+    Path B, through K2 Connect (Pro): the name points at K2's relays. No
+      sudo, nothing on this box's :443; another web server may keep :443.
+      Works on a Linux server, behind a router, on a Mac or Windows
+      computer. Needs this box on K2 Connect with a Pro plan.
+    Path A, this box's own address (free; Linux with a public IP): the
+      name points here and K2's :443 front serves it.
+
   First, once per box and domain (the owner or an Admin):
-    k2 front enable           K2's :443 front (k2 front --help). It puts
-                              443/tcp on the public list itself; k2 firewall
-                              says whether that list is applied.
     k2 domain add example.com attach the domain: this box may serve names
                               under it. It doesn't move your nameservers:
                               keep your DNS where it is. (If k2 domain list
@@ -13769,6 +13776,36 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
                               only lets K2 write your records; ignore it.)
 
   Then:
+    k2 front enable           Path A only: K2's :443 front (k2 front --help).
+                              It puts 443/tcp on the public list itself;
+                              k2 firewall says whether that list is applied.
+
+  Path B, then:
+    1. k2 app domain add <app-id> shop.example.com prints (when Path B is
+       open to this box; k2 app domains <app-id> shows them again):
+         CNAME  shop.example.com              <app-id>.<box>.k2.dev
+         TXT    _k2-domain.shop.example.com   "k2-verify=<token>"
+       At an apex (example.com itself), which can't hold a CNAME: ALIAS,
+       ANAME or CNAME flattening to <app-id>.<box>.k2.dev if your DNS host
+       has it (Cloudflare, DNSimple, Route 53 alias...). If it has none, use
+       www and a redirect at your DNS host. K2 gives no relay addresses for
+       A records: they aren't promised to stay.
+    2. Set them, DNS-only (no proxy; Cloudflare: grey cloud), and wait for
+       state live: K2 checks every 10 minutes, or k2 app domain check
+       <app-id> shop.example.com now. K2 Connect also checks the TXT itself.
+       The tunnel restarts once when a name joins or leaves (a few seconds'
+       blip for everything on the tunnel), and K2 gets the certificate
+       through the relay.
+    3. Primary and restart as in step 4 below.
+    The box holds the key and ends TLS: the relay only passes the encrypted
+    stream through by name. At most 20 names per box through K2's relays
+    (100 custom names per box on both paths together; K2 Connect also caps
+    the account). Not Pro: the refusal has the upgrade link and says so.
+    K2 Connect decides whether it routes a name: its release (after 7 days
+    of failing its own check) moves the name to failing, and a failed check
+    on this box alone only says so.
+
+  Path A, then:
     1. k2 app domain add <app-id> shop.example.com. It prints the records,
        with this box's real addresses (k2 app domains <app-id> shows them
        again):
@@ -13797,16 +13834,14 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
   To recover: fix the records, then k2 app domain check <app-id> <name>.
   external: your own web server serves it (--external); K2 leaves it be.
 
-  Where this works: a Linux server with its own public IP (a datacentre
-  box). On a Mac or Windows computer there is no custom domain yet, even
-  with port 443 forwarded: add prints no records and says so. A CNAME to
-  the App's k2.dev name doesn't work yet either. Both come with Path B in
-  0.46.7: your domain points at K2's relays (K2 Connect, Pro). Until then
-  use the App's k2.dev address. A Linux server behind a home or office
-  router: Path B in 0.46.7 is the way (your address stays hidden); if you
-  forward the router's port 443 to it, the records still work (shown
-  under "Advanced: I've forwarded port 443"). Another web server already
-  on :443: k2 front --help, or let it keep serving the name (--external).
+  Where this works: Path A on a Linux server with its own public IP (a
+  datacentre box). Path B anywhere on K2 Connect with Pro: a Mac or Windows
+  computer has only Path B (without Pro, add prints no records and says
+  so). A Linux server behind a home or office router: Path B is the way
+  (your address stays hidden); without Pro, if you forward the router's
+  port 443 to it, the Path A records still work (shown under "Advanced:
+  I've forwarded port 443"). Another web server already on :443: Path B,
+  or k2 front --help, or let it keep serving the name (--external).
 
 SUBDOMAINS (k2 app domain add <app-id> <subdomain>)
   Any nested label your workspace holds, or one nobody holds yet (a label
@@ -13883,6 +13918,12 @@ for c in v.get("custom") or []:
     print("  %s" % c.get("words"))
     if c.get("lastError"):
         print("  last check: %s" % c["lastError"])
+    if c.get("path"):
+        print("  DNS shows: %s" % ("Path B, through K2 Connect" if c["path"] == "connect" else "Path A, this box"))
+    rs = (c.get("relay") or {}).get("state")
+    if rs:
+        words = {"claimed": "claimed, waiting for its own check of the TXT", "verified": "verified: its relays route this name here", "released": "released: its relays no longer route this name", "refused": "refused (see last check)"}
+        print("  K2 Connect: %s%s" % (words.get(rs, rs), " (" + c["relay"]["error"] + ")" if c["relay"].get("error") and c["relay"]["error"] != c.get("lastError") else ""))
     su = c.get("setup") or {}
     if st not in ("live", "external"):
         if su.get("message"):
@@ -13895,7 +13936,12 @@ for c in v.get("custom") or []:
     if c.get("next"):
         print("  %s" % c["next"])
     if c.get("ownServer"):
-        print("  %s" % c["ownServer"])'
+        print("  %s" % c["ownServer"])
+pb = v.get("pathB") or {}
+if pb.get("available"):
+    print("Path B (through K2 Connect): %s (%s custom names at most per box, both paths)" % (pb.get("meter"), v.get("maxCustomNames")))
+elif pb.get("why"):
+    print("Path B (through K2 Connect): not open here: %s" % pb["why"])'
 }
 
 # k2 app domain external <app-id> <host> on|off (0.46.6): your own web
@@ -13966,6 +14012,10 @@ print("%s   %s%s" % (c.get("hostname"), "external (served by your own server)" i
 print("  %s" % c.get("words"))
 if c.get("lastError"):
     print("  last check: %s" % c["lastError"])
+rs = (c.get("relay") or {}).get("state")
+if rs:
+    words = {"claimed": "claimed, waiting for its own check of the TXT", "verified": "verified: its relays route this name here", "released": "released: its relays no longer route this name", "refused": "refused (see last check)"}
+    print("  K2 Connect: %s" % words.get(rs, rs))
 t = v.get("txt")
 if isinstance(t, dict) and t.get("planted"):
     print("  K2 set the TXT record in your k2.dev zone")
@@ -13979,6 +14029,8 @@ if st not in ("live", "external") and su.get("records") != "none":
         print("  %s" % (su.get("advanced") or "Advanced:"))
     for r in c.get("records") or []:
         print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
+        if r.get("type") == "ALIAS" and r.get("note"):
+            print("          %s" % r["note"])
 if c.get("next"):
     print("  %s" % c["next"])
 if c.get("ownServer"):
@@ -23204,6 +23256,11 @@ closed.
                                     certificate renewal (TLS-ALPN-01) keeps working;
                                     the mail server restarts once
   k2 front disable [--json]         give :443 back (voice to TCP 5349, mail to :443)
+  k2 front http on|off [--json]     the :80 front: http:// visitors of the names this
+                                    box serves get a redirect to https, and K2's own
+                                    HTTP-01 certificates answer there. On by default:
+                                    k2 front enable installs it when :80 is free. On
+                                    takes :80 (the daemon restarts once); off frees it.
   k2 front passthrough [--json]     names passed through to your own web server
   k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>]
                                     pass <host> (or '*': every name K2 doesn't serve),
@@ -23244,7 +23301,9 @@ untouched, and HTTP-01 still reaches its :80, as long as :80 stays
 public: k2 firewall open 80/tcp --label "nginx" unless k2 firewall
 already lists it.
 
-Linux boxes under systemd with k2-root-helper protocol 8 (k2 root-helper update).
+Linux boxes under systemd with k2-root-helper protocol 8; the :80 front needs
+protocol 12 (k2 root-helper update). An App on your own domain that doesn't
+need this box's :443 at all: Path B (k2 app domain --help).
 EOF
 }
 
@@ -23287,6 +23346,11 @@ if "serving" in d:
     if d.get("restartNeeded"):
         print("note       : enabled but not serving: the daemon takes the socket at its next start")
     print("mail       :", "behind the front" if d.get("mail") else "not behind the front")
+    ht = d.get("http") or {}
+    if ht:
+        print(":80        :", ("on" if ht.get("on") else "off"), "· serving" if ht.get("serving") else "· not serving", "(" + ht["next"] + ")" if ht.get("next") else "")
+        if ht.get("helper"):
+            print("note       :", ht["helper"])
     print("cap        :", d.get("cap"), " (E2E listener", str(d.get("e2eCap")) + "; RLIMIT_NOFILE", str(d.get("nofileSoftLimit")) + ")")
     for r in d.get("routes") or []:
         print("route      :", r.get("host"), "->", r.get("kind"), r.get("backend"), "PROXY v2" if r.get("proxyV2") else "no PROXY")
@@ -23312,6 +23376,11 @@ if "serving" in d:
         print("socket unit:", st.get("ActiveState"), st.get("SubState") or "", "(" + str(st.get("Result")) + ")")
         for line in su.get("journal") or []:
             print("  systemd  :", line)
+    sys.exit(0)
+if "on" in d:
+    print(":80 front  :", "on" if d.get("on") else "off")
+    if d.get("next"):
+        print("next       :", d.get("next"))
     sys.exit(0)
 print("front      :", "on" if d.get("enabled") else "off")
 if d.get("enabled"):
@@ -23861,6 +23930,24 @@ if d.get("next") and d.get("next") != "routed now":
     print("note: " + d["next"])'
 }
 
+# k2 front http on|off (0.46.8, custom domains PB-8): the :80 front.
+_front_http() {
+    local mode="" as_json=0 raw body
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            on|off) mode="$1"; shift ;;
+            --json) as_json=1; shift ;;
+            -h|--help) _front_usage; return 0 ;;
+            *) echo "usage: k2 front http on|off [--json]" >&2; exit 2 ;;
+        esac
+    done
+    [ -n "$mode" ] || { echo "usage: k2 front http on|off [--json]" >&2; exit 2; }
+    body='{"on":false}'
+    [ "$mode" = on ] && body='{"on":true}'
+    raw="$(_sidecar_send POST /cli/front/http "$body")" || true
+    _front_render "$as_json" "$raw"
+}
+
 cmd_front() {
     local sub="${1:-status}"
     [ $# -gt 0 ] && shift
@@ -23868,6 +23955,7 @@ cmd_front() {
     case "$sub" in
         help|--help|-h) _front_usage; return 0 ;;
         passthrough) _front_passthrough "$@"; return ;;
+        http) _front_http "$@"; return ;;
     esac
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -34054,6 +34142,12 @@ if not d.get("running"):
 if d.get("running"):
     public_url = d.get("public_url") or "(assigned by server)"
     print(f"  Public URL: {public_url}")
+    # 0.46.8 (PB-6): does the relay pass the visitor address yet?
+    vi = d.get("visitorIps") or {}
+    if vi.get("words"):
+        print("  " + vi["words"])
+        if vi.get("relayAsClient"):
+            print("    a relay named its own address " + str(vi["relayAsClient"]) + " times (never counted as a visitor)")
     if d.get("local_port"):
         lp = d["local_port"]
         print(f"  Local port: {lp}")
@@ -46346,6 +46440,9 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   import { fromEnv } from '@k2/server'
   const k2 = fromEnv()          // K2_GATEWAY_URL, K2_PASS_FILE, K2_APP_ID
   const s = await k2.login({ username, password })   // App pass on; a guest: s.pass
+  // Pass the visitor too, so failed logins limit that visitor, not all your
+  // guests: clientIp: req.headers['x-k2-client-ip'] (without the SDK, send
+  // X-K2-Client-IP on the login). No such header: leave it out.
   if ('mustChangePassword' in s) send the browser to s.changeUrl // someone else set it
   await k2.asGuest(s.pass).thread.send({ addr, text }) // as that guest
   await k2.withGuest(s.pass, () => handler(req))  // calls in it act as the guest

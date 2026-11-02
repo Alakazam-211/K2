@@ -314,7 +314,88 @@ describe('DomainsSection — custom App names', () => {
   })
 })
 
+// 0.46.8 (custom domains Path B, PB-10): the badge, the record table, the
+// 20-name meter, the upgrade link.
+describe('DomainsSection — custom App names through K2 Connect', () => {
+  const pathB = (over: Record<string, unknown>) => ({
+    available: true,
+    why: null,
+    meter: '3 of 20 names through K2\'s relays',
+    upgrade: null,
+    ...over,
+  })
+  const row = (app: Record<string, unknown>): DomainRow => ({
+    ...BYO,
+    apex: 'agentnsi.com',
+    names: [
+      {
+        hostname: 'nsi.agentnsi.com',
+        role: 'app:agentnsi',
+        cert: { state: 'missing' },
+        app: { app: 'agentnsi', state: 'waiting_dns', live: false, notServedYet: true, words: 'not served yet: waiting for the DNS records', ...app },
+      },
+    ],
+  } as DomainRow)
+
+  it('shows the badge, the CNAME and TXT, and the meter when Path B is open', async () => {
+    listRows = [row({
+      recordsPath: 'connect',
+      records: [
+        { type: 'CNAME', name: 'nsi.agentnsi.com', value: 'agentnsi.box.k2.dev' },
+        { type: 'TXT', name: '_k2-domain.nsi.agentnsi.com', value: 'k2-verify=t' },
+      ],
+      pathB: pathB({}),
+    })]
+    render(<DomainsSection />)
+    expect((await screen.findByTestId('app-path-b-nsi.agentnsi.com')).textContent).toBe('Through K2 Connect (Pro)')
+    expect(screen.getByTestId('app-record-CNAME').textContent).toContain('agentnsi.box.k2.dev')
+    expect(screen.getByTestId('app-record-TXT').textContent).toContain('"k2-verify=t"')
+    expect(screen.getByTestId('app-path-b-meter-nsi.agentnsi.com').textContent).toContain('3 of 20')
+  })
+
+  it('says why and links the upgrade when the box is not on Pro; no badge on Path A', async () => {
+    listRows = [row({
+      recordsPath: 'direct',
+      records: [{ type: 'A', name: 'nsi.agentnsi.com', value: '203.0.113.10' }],
+      pathB: pathB({ available: false, why: 'needs K2 Connect Pro', upgrade: 'https://k2.dev/dashboard' }),
+    })]
+    render(<DomainsSection />)
+    const link = await screen.findByTestId('app-path-b-upgrade-nsi.agentnsi.com')
+    expect(link.getAttribute('href')).toBe('https://k2.dev/dashboard')
+    expect(screen.queryByTestId('app-path-b-nsi.agentnsi.com')).toBeNull()
+    expect(screen.getByTestId('app-record-A').textContent).toContain('203.0.113.10')
+  })
+
+  it('a live name K2 Connect routes keeps its badge', async () => {
+    listRows = [row({ state: 'live', live: true, notServedYet: false, viaRelay: true, recordsPath: 'connect' })]
+    render(<DomainsSection />)
+    await screen.findByTestId('app-path-b-nsi.agentnsi.com')
+    expect(screen.queryByTestId('app-record-CNAME')).toBeNull()
+  })
+})
+
 describe('Firewall panel (0.46.6)', () => {
+  it('the :80 switch shows with the front and POSTs /cli/front/http (0.46.8)', async () => {
+    firewallGet = {
+      status: 200,
+      body: {
+        ok: true,
+        view: { hash: 'h', public: [{ port: 80, proto: 'tcp', source: 'front80', allowFrom: ['any'], why: 'the :80 front' }], knownNotPublic: [], box: { label: 'box', behindNat: false }, upstream: { managedBy: 'owner', applied: null } },
+        ssh: { port: 22, allowFrom: [] },
+        applies: 'x',
+        guard: { settings: { enabled: true, connsPerIp: 64, writesPerMin: 120 }, counters: { perIpRefused: 0, guardLimited: 0 } },
+        front: { enabled: true, http: { on: true, serving: true } },
+      },
+    }
+    postHandler = () => ({ status: 200, body: { ok: true } })
+    render(<DomainsSection />)
+    const row = await screen.findByTestId('fw-http')
+    expect(row.textContent).toContain('on')
+    expect(within(screen.getByTestId('fw-row-80-tcp')).getByText('K2: the :80 front')).toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: 'Turn off' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.path === '/cli/front/http')?.body).toEqual({ on: false }))
+  })
+
   const STATUS = {
     ok: true,
     view: {

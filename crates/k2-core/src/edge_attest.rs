@@ -63,6 +63,9 @@ pub const NONCE_CAPACITY: usize = 16_384;
 
 /// Baked first-party PUBLIC keys (safe to commit). Rotation = add the new
 /// kid here (release), switch the edge, remove the old kid next release.
+/// The relays' login signer for `*.app.k2.dev` off Cloudflare joins here when
+/// K2 Web has its kid (custom domains PB-A11, KW-B5; that cut-over is not in
+/// 0.46.8); until then `~/.k2/edge-keys.json` can carry it.
 pub const BAKED_KEYS: &[(&str, &str)] = &[
     (
         "k2-edge-app-2026-09",
@@ -666,6 +669,28 @@ mod tests {
                 "must reject {c:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_relay_signed_login_verifies_through_the_override_and_a_wrong_sub_does_not() {
+        // PB-A11: a relay's login signer (a new kid beside the Worker's).
+        crate::tunnel::test_support::with_temp_home(|| {
+            let signer = EdgeSigner::generate("k2-edge-relay-test").unwrap();
+            let body = br#"{"username":"a","password":"b"}"#;
+            let t = now();
+            let h = signer.header("POST", "/cli/auth/login", SUB, t, &random_nonce(), "203.0.113.9", body);
+            assert_eq!(
+                verify(Some(&h), "POST", "/cli/auth/login", body, SUB, t),
+                Err(AttestError::UnknownKid),
+                "an unknown signer is refused until it is trusted"
+            );
+            signer.install_trust_file().unwrap();
+            let att = verify(Some(&h), "POST", "/cli/auth/login", body, SUB, t).expect("trusted");
+            assert_eq!(att.kid, "k2-edge-relay-test");
+            // Minted for another box: never verifies here.
+            let other = signer.header("POST", "/cli/auth/login", "someone-else", t, &random_nonce(), "-", body);
+            assert!(verify(Some(&other), "POST", "/cli/auth/login", body, SUB, t).is_err());
+        });
     }
 
     #[test]

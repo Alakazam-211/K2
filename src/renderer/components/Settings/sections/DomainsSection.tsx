@@ -25,6 +25,17 @@ export type AppNameStatus = {
   warning?: string
   error?: string
   txt?: { type: string; name: string; value: string }
+  /** 0.46.8 (Path B): K2 Connect routes this name to this server. */
+  viaRelay?: boolean
+  /** The DNS to set, for the path in `recordsPath`. */
+  records?: { type: string; name: string; value: string; note?: string }[]
+  recordsPath?: 'direct' | 'connect'
+  pathB?: {
+    available: boolean
+    why?: string | null
+    meter: string
+    upgrade?: string | null
+  }
 }
 
 type DomainNameRow = {
@@ -544,13 +555,51 @@ export function DomainsSection(): React.JSX.Element {
                         {appStateLabel(n.app)}
                       </span>
                     )}
+                    {n.app && (n.app.viaRelay || (n.app.notServedYet && n.app.recordsPath === 'connect')) && (
+                      <span
+                        data-testid={`app-path-b-${n.hostname}`}
+                        className="ml-2 px-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-muted)]"
+                      >
+                        Through K2 Connect (Pro)
+                      </span>
+                    )}
                     {n.app && n.app.notServedYet && (
                       <span className="block mt-0.5 text-[10px] text-[var(--color-text-muted)] whitespace-normal">
                         {n.app.words}
                         {n.app.lastError ? ` — ${n.app.lastError}` : ''}
-                        {n.app.txt && (
+                        {n.app.records && n.app.records.length > 0 ? (
+                          n.app.records.map((r) => (
+                            <span key={`${r.type} ${r.name}`} className="block font-mono" data-testid={`app-record-${r.type}`}>
+                              {r.type} {r.name} {r.type === 'TXT' ? `"${r.value}"` : r.value} (DNS-only)
+                            </span>
+                          ))
+                        ) : n.app.txt ? (
                           <span className="block font-mono">
                             TXT {n.app.txt.name} &quot;{n.app.txt.value}&quot; (DNS-only)
+                          </span>
+                        ) : null}
+                        {n.app.pathB?.available && (
+                          <span className="block" data-testid={`app-path-b-meter-${n.hostname}`}>
+                            {n.app.pathB.meter}
+                          </span>
+                        )}
+                        {n.app.pathB && !n.app.pathB.available && n.app.pathB.why && (
+                          <span className="block">
+                            Through K2 Connect: {n.app.pathB.why}
+                            {n.app.pathB.upgrade && (
+                              <>
+                                {' '}
+                                <a
+                                  href={n.app.pathB.upgrade}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  data-testid={`app-path-b-upgrade-${n.hostname}`}
+                                  className="text-[var(--color-accent)]"
+                                >
+                                  Upgrade
+                                </a>
+                              </>
+                            )}
                           </span>
                         )}
                       </span>
@@ -734,6 +783,8 @@ export type FirewallStatus = {
     settings: { enabled: boolean; connsPerIp: number; writesPerMin: number }
     counters: { perIpRefused: number; guardLimited: number }
   }
+  /** 0.46.8: the :443 front and the :80 front's switch. */
+  front?: { enabled: boolean; http?: { on: boolean; serving: boolean } }
 }
 
 /** Plain words for a row's source (K2-owned rows say which feature). */
@@ -743,6 +794,8 @@ export function firewallSourceLabel(source: string): string {
       return 'SSH'
     case 'front443':
       return 'K2: the :443 front'
+    case 'front80':
+      return 'K2: the :80 front'
     case 'skin-direct':
       return 'K2: Skin Direct'
     case 'hostmail':
@@ -814,7 +867,7 @@ export function FirewallPanel(): React.JSX.Element {
       {error && <p className="text-[10px] text-red-400 mb-2">{error}</p>}
       {st?.view.box.behindNat && (
         <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
-          This server is on a home or office connection: your own domains use K2 Connect (Pro, coming in 0.46.7).
+          This server is on a home or office connection: your own domains use K2 Connect (Pro).
         </p>
       )}
       <div className="border border-[var(--color-border)]">
@@ -899,6 +952,22 @@ export function FirewallPanel(): React.JSX.Element {
           Add
         </button>
       </div>
+      {st?.front?.enabled && st.front.http && (
+        <div className="mt-2 flex items-center gap-2" data-testid="fw-http">
+          <span className="text-[10px] flex-1">
+            Redirect http:// to https on port 80: {st.front.http.on ? 'on' : 'off'}
+            {st.front.http.on && !st.front.http.serving ? ' (not holding port 80 yet)' : ''}
+          </span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void act('/cli/front/http', { on: !(st.front?.http?.on && st.front.http.serving) })}
+            className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+          >
+            {st.front.http.on && st.front.http.serving ? 'Turn off' : 'Turn on'}
+          </button>
+        </div>
+      )}
       {st && (
         <p className="mt-2 text-[10px] text-[var(--color-text-muted)]" data-testid="fw-guard">
           App guard {st.guard.settings.enabled ? 'on' : 'off'}: {st.guard.settings.connsPerIp} connections and{' '}

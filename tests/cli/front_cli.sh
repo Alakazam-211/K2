@@ -54,6 +54,7 @@ STATUS = {
                     "closed": {"unknownSni": 2, "noSni": 0}},
     "routes": [{"host": "turn-box.k2.dev", "kind": "turn", "backend": "127.0.0.1:5349", "proxyV2": True}],
     "caddy": None, "helper": None,
+    "http": {"on": True, "serving": False, "next": "k2 front http on installs it (the daemon restarts once)"},
 }
 
 class H(BaseHTTPRequestHandler):
@@ -75,6 +76,10 @@ class H(BaseHTTPRequestHandler):
         if mode == "agent":
             return self._send(403, {"ok": False, "error": {"code": "owner_only", "hint": "The owner runs: k2 front enable [--mail]"},
                                     "permission": {"requestable": False, "where": "the owner or an admin does this"}})
+        if path == "/cli/front/http":
+            on = json.loads(body or "{}").get("on")
+            return self._send(200, {"ok": True, "on": on, "httpServing": False, "restarting": bool(on),
+                                    "next": "K2 will restart its daemon once to take port 80" if on else "port 80 is free"})
         if path == "/cli/front/status":
             return self._send(200, STATUS)
         if path == "/cli/front/enable":
@@ -142,6 +147,29 @@ run front disable
 assert_eq "disable: exit 0" "$rc" "0"
 assert_eq "disable: POST" "$(last_request)" 'POST /cli/front/disable {}'
 assert_contains "disable: warning shown" "$out" "warning    : Stalwart is still on 127.0.0.1:8443"
+
+echo "== the :80 front (0.46.8) =="
+: >"$LOG_FILE"
+run front http on
+assert_eq "http on: exit 0" "$rc" "0"
+assert_contains "http on: posts" "$(cat "$LOG_FILE")" 'POST /cli/front/http {"on":true}'
+assert_contains "http on: says on" "$out" ":80 front  : on"
+assert_contains "http on: the restart" "$out" "restart its daemon once to take port 80"
+run front http off
+assert_contains "http off: posts" "$(cat "$LOG_FILE")" 'POST /cli/front/http {"on":false}'
+assert_contains "http off: says off" "$out" ":80 front  : off"
+run front http
+assert_eq "http alone: usage exit 2" "$rc" "2"
+run front http sideways
+assert_eq "http bad word: usage exit 2" "$rc" "2"
+run front status
+assert_contains "status: :80 line" "$out" ":80        : on"
+assert_contains "status: how to install" "$out" "k2 front http on installs it"
+echo agent >"$MODE_FILE"
+run front http off
+assert_eq "http agent: exit 3" "$rc" "3"
+assert_contains "http agent: no card" "$err" "It can't be requested."
+echo ok >"$MODE_FILE"
 
 echo "== refusals and bad usage =="
 echo refused >"$MODE_FILE"

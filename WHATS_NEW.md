@@ -12,6 +12,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
 - **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
 
+### Your own domain on an App
+- **Your App's own domain can now go through K2 Connect (Pro).** Point the name at K2's relays with a CNAME to `<app>.<box>.k2.dev` (ALIAS or CNAME flattening at an apex), add the TXT record K2 shows, and the relay passes the encrypted connection down the tunnel to your server. No sudo, nothing on your server's port 443, and your server's address stays hidden, so it works behind a router, on a Mac or Windows computer, and where another web server already holds port 443. An agent with "Build and run Apps" on can run `k2 app domain add` for its own App from start to finish once the domain is attached to the server. Up to 20 names per server. Each name that joins or leaves restarts the tunnel for a few seconds. Serving a name from your server's own address stays as it was, and DNS decides which way a name goes. This opens as K2's relays turn it on.
+- **People who type `http://` reach your site.** K2's front now also holds port 80 when it is free and sends visitors of the names it serves to `https://`. Turn it off with `k2 front http off`. A server that already has the front on gets it with `k2 front http on`.
+- **Limits per visitor now cover the K2 Connect tunnel.** One visitor's open connections and writes to an App are capped, and failed App logins can be limited per visitor when the App passes `X-K2-Client-IP` on its link. These apply once the relay passes visitor addresses; `k2 tunnel status` says whether it does yet. Until then nobody is limited together with anybody else.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

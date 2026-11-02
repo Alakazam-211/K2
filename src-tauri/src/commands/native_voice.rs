@@ -43,3 +43,15 @@ pub fn leave_on_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg(not(feature = "native-voice"))]
 pub fn leave_on_quit<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
+
+#[cfg(all(test, not(feature = "native-voice")))]
+mod tests {
+    use super::*;
+
+    /// Without the feature the renderer stays on the seat path, and nothing else
+    /// of native voice is in the build.
+    #[test]
+    fn a_build_without_the_feature_says_so() {
+        assert_eq!(voice_native_status(), NativeVoiceStatus { available: false, call: None });
+    }
+}

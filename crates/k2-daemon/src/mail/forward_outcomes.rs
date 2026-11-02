@@ -35,12 +35,19 @@
 //! **Pauses** (each one through [`forward_sync::pause`], so the mailbox's
 //! Sieve goes keep-only at once, and each with a notice):
 //!
-//! - `dest_gone`: [`store::DEST_GONE_IN_A_ROW`] "doesn't exist" refusals in
-//!   a row (a delivery breaks the run);
-//! - `refused`: more than [`store::REFUSED_PCT`]% of the forwards refused
-//!   for policy or spam, with at least [`store::REFUSED_MIN`] forwards;
-//! - `daily_cap`: [`store::DAILY_CAP`] forwards (the hourly caps are the
-//!   mail server's throttles, [`crate::mail::defaults::forward_throttles`]);
+//! - `dest_gone`, per destination: [`store::DEST_GONE_IN_A_ROW`] "doesn't
+//!   exist" refusals in a row (a delivery breaks the run), or those refusals
+//!   over Email Notifications' hard-bounce rate
+//!   ([`k2_core::email_outcomes::trips`]: over 5% of at least 50);
+//! - `refused`, per destination: more than [`store::REFUSED_PCT`]% of the
+//!   forwards refused for policy or spam, with at least
+//!   [`store::REFUSED_MIN`] forwards. There is no spam-complaint signal for
+//!   forwarded mail: a provider's complaint report doesn't reach K2 (it never
+//!   reads a mailbox), so these refusals and the stop link stand in for it;
+//! - `daily_cap`, per mailbox: [`store::DAILY_CAP`] copies across all its
+//!   destinations pause all its outside forwards (the hourly caps are the
+//!   mail server's throttles, [`crate::mail::defaults::forward_throttles`],
+//!   and count each destination's copy too: each is its own queued message);
 //! - `box_brake`: the whole box's outside forwards refused more than
 //!   [`store::BRAKE_PCT`]% with at least [`store::BRAKE_MIN`] forwards:
 //!   every active outside forward pauses and the owner gets one notice.
@@ -243,6 +250,9 @@ pub fn refusal(details: &str) -> (&'static str, Status) {
         match st.enhanced {
             Some((5, 1, _)) | Some((5, 2, 1)) => store::O_REFUSED_USER,
             Some((5, 7, _)) => store::O_REFUSED_POLICY,
+            // Stalwart's own "Mailbox not found" for a domain it hosts is
+            // 5.5.0: a generic code, so the text decides.
+            Some((5, 5, 0)) => refusal_from_text(&message_text(details)),
             Some(_) => store::O_FAILED,
             None => refusal_from_text(&message_text(details)),
         }
@@ -269,7 +279,7 @@ pub fn classify(e: &HookEvent) -> Option<(&'static str, Option<String>)> {
 /// Why one forward's numbers pause it, if they do. `in_a_row`: its
 /// "doesn't exist" refusals since the last delivery.
 pub fn forward_trip(c: &Counts, in_a_row: i64) -> Option<&'static str> {
-    if in_a_row >= store::DEST_GONE_IN_A_ROW {
+    if in_a_row >= store::DEST_GONE_IN_A_ROW || k2_core::email_outcomes::trips(c.queued, c.refused_user, 0).is_some() {
         return Some(store::P_DEST_GONE);
     }
     if c.queued >= store::REFUSED_MIN && c.refused_policy * 100 > store::REFUSED_PCT * c.queued {
@@ -431,7 +441,7 @@ pub fn evaluate(forward_id: &str, now: i64) -> Option<&'static str> {
 }
 
 fn evaluate_locked(forward_id: &str, now: i64) -> Option<&'static str> {
-    let (f, c, in_a_row, since) = {
+    let (f, c, in_a_row, since, copies, siblings) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let f = store::get(&conn, forward_id).ok().flatten()?;
@@ -441,14 +451,30 @@ fn evaluate_locked(forward_id: &str, now: i64) -> Option<&'static str> {
         let since = window_start(now, started_at(&conn, forward_id).ok()?);
         let c = store::counts(&conn, forward_id, since).ok()?;
         let in_a_row = store::user_refusals_in_a_row(&conn, forward_id, since).ok()?;
-        (f, c, in_a_row, since)
+        // The daily cap is the mailbox's: every destination's copies count.
+        let copies = store::mailbox_queued(&conn, &f.address_id, since).ok()?;
+        let siblings: Vec<Forward> = store::live_rows(&conn, &f.address_id)
+            .ok()?
+            .into_iter()
+            .filter(|o| o.id != f.id && o.is_external() && o.is_active())
+            .collect();
+        (f, c, in_a_row, since, copies, siblings)
     };
-    let reason = forward_trip(&c, in_a_row)?;
+    let reason = forward_trip(&c, in_a_row).or((copies >= store::DAILY_CAP).then_some(store::P_DAILY_CAP))?;
     let detail = json!({
-        "queued": c.queued, "delivered": c.delivered, "refusedUser": c.refused_user,
-        "refusedPolicy": c.refused_policy, "failed": c.failed, "inARow": in_a_row, "since": since,
+        "queued": c.queued, "delivered": c.delivered, "refusedUser": c.refused_user, "refusedPolicy": c.refused_policy,
+        "failed": c.failed, "inARow": in_a_row, "since": since, "mailboxCopies": copies,
     });
-    pause_and_tell(&f, reason, detail, Some(notice_for(&f, reason, &c, in_a_row)));
+    let mut note = notice_for(&f, reason, &Counts { queued: if reason == store::P_DAILY_CAP { copies } else { c.queued }, ..c }, in_a_row);
+    if reason == store::P_DAILY_CAP && !siblings.is_empty() {
+        note.1 = format!("{} (This limit is the mailbox's, so forwarding to all its outside addresses is paused.)", note.1);
+    }
+    pause_and_tell(&f, reason, detail.clone(), Some(note));
+    if reason == store::P_DAILY_CAP {
+        for o in &siblings {
+            pause_and_tell(o, reason, detail.clone(), None);
+        }
+    }
     Some(reason)
 }
 
@@ -484,14 +510,14 @@ fn evaluate_box_locked(now: i64) -> Vec<String> {
         k2_core::log_debug!("{P} box brake: {} of {} outside forwards refused in 24 h; {} paused", c.refused(), c.queued, paused.len());
         if first_trip {
             let n = paused.len();
-            notice(
+            super::forward_verify::tell_owner(
                 "Forwarding to outside addresses is paused on this server",
                 &format!(
                     "Receiving servers refused {} of the {} messages this server forwarded to outside addresses in the last 24 hours \
                      (more than {}%). To protect this server's mail reputation, K2 paused all {n} outside forward{}. \
                      New mail stays in each mailbox; nothing is lost.\n\n\
                      Only the owner or an Admin can resume them. See which ones: k2 hostmail forward list --paused. \
-                     Resume one: k2 hostmail forward resume <address>. Check what was refused first: \
+                     Resume one: k2 hostmail forward resume <mailbox>. Check what was refused first: \
                      the bounce reports are in each mailbox.",
                     c.refused(),
                     c.queued,
@@ -529,7 +555,7 @@ fn pause_and_tell(f: &Forward, reason: &'static str, detail: serde_json::Value, 
                 store::person_principal(&conn, &f.address_id).ok().flatten()
             };
             let extra: Vec<String> = person.into_iter().filter(|p| p != k2_core::notify_prefs::OWNER).collect();
-            notice(&title, &body, &extra);
+            super::forward_verify::tell_owner(&title, &body, &extra);
         }
     }
     moved
@@ -539,15 +565,20 @@ fn pause_and_tell(f: &Forward, reason: &'static str, detail: serde_json::Value, 
 pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64) -> (String, String) {
     let (addr, dest) = (&f.address, &f.dest);
     let resume = format!(
-        "Resume it when that's fixed: k2 hostmail forward resume {addr} (the mailbox's person can use k2 mail forward resume). \
-         Or forward somewhere else: k2 hostmail forward set {addr} --to <address>. Or stop forwarding: k2 hostmail forward unset {addr}."
+        "Resume it when that's fixed: k2 hostmail forward resume {addr} --to {dest} (the mailbox's person can use k2 mail forward resume). \
+         Or stop forwarding there: k2 hostmail forward rm {addr} --to {dest}."
     );
     let stays = format!("New mail stays in {addr}; nothing is lost.");
     let title = format!("Forwarding from {addr} is paused");
     let body = match reason {
-        r if r == store::P_DEST_GONE => format!(
+        r if r == store::P_DEST_GONE && in_a_row >= store::DEST_GONE_IN_A_ROW => format!(
             "K2 paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled, \
              {in_a_row} times in a row. {stays}\n\nCheck the address with whoever owns it. {resume}"
+        ),
+        r if r == store::P_DEST_GONE => format!(
+            "K2 paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled \
+             for {} of the {} messages forwarded in the last 24 hours. {stays}\n\nCheck the address with whoever owns it. {resume}",
+            c.refused_user, c.queued
         ),
         r if r == store::P_REFUSED => format!(
             "K2 paused forwarding from {addr} to {dest}: the receiving server refused {} of the {} messages forwarded in the \

@@ -22,9 +22,11 @@
 //!    does not touch (live-verified).
 //! 2. **Server-wide:** `x:SieveUserInterpreter.disableCapabilities` gets
 //!    `enotify` ([`DISABLED_CAPABILITIES`]) + one `ReloadSettings`. K2
-//!    never uses `notify`. `maxRedirects` is NEVER touched: `0` would
-//!    silently drop K2's own forwards, which are user-script redirects
-//!    too (FW-A26).
+//!    never uses `notify`. This pass NEVER touches `maxRedirects`: `0`
+//!    would silently drop K2's own forwards, which are user-script
+//!    redirects too (FW-A26). `forward_sync` raises it (never lowers it)
+//!    for a mailbox with several destinations; a mailbox user can't write
+//!    a script, so only K2's scripts use the room.
 //! 3. **Leftover scripts.** The permission blocks new writes but leaves
 //!    what a user already wrote running. The reconcile lists every
 //!    script on every K2-minted mailbox and keeps exactly K2's two
@@ -1559,7 +1561,7 @@ mod tests {
         ] {
             let s = sieve_user::UserSieve {
                 ooo: ooo.clone(),
-                forward: fwd.map(|(d, k)| sieve_user::ForwardBlock { dest: d.to_string(), keep: k, guard: None }),
+                forward: fwd.map(|(d, k)| sieve_user::ForwardBlock { dest: d.to_string(), keep: k, guard: None, ..Default::default() }),
             };
             let src = sieve_user::compose(&s).expect("script");
             let (owner, targets) = classify("k2", &src, &hosted);
@@ -1588,6 +1590,7 @@ mod tests {
                         dest: "me@outside.test".to_string(),
                         keep,
                         guard: Some(sieve_user::ForwardGuard { host: "mail.example.test".to_string() }),
+                        ..Default::default()
                     }),
                 };
                 let src = sieve_user::compose(&s).expect("script");
@@ -1818,7 +1821,7 @@ mod tests {
     fn k2_forward_src() -> String {
         sieve_user::compose(&sieve_user::UserSieve {
             ooo: None,
-            forward: Some(sieve_user::ForwardBlock { dest: "carol@example.test".into(), keep: true, guard: None }),
+            forward: Some(sieve_user::ForwardBlock { dest: "carol@example.test".into(), keep: true, guard: None, ..Default::default() }),
         })
         .expect("script")
     }
@@ -2103,6 +2106,7 @@ mod tests {
                 dest: "carol@example.test".into(),
                 keep: true,
                 guard: None,
+                ..Default::default()
             }),
         )
         .expect("K2 forward write");

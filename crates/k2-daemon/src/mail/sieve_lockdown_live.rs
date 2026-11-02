@@ -464,6 +464,7 @@ fn live_sieve_lockdown_probe() {
         dest: format!("carol@{DOMAIN}"),
         keep: true,
         guard: None,
+        ..Default::default()
     })) {
         Ok(_) => rep.check("6 K2 `k2` forward write (service key)", true, "alice → carol"),
         Err(e) => rep.check("6 K2 `k2` forward write (service key)", false, e),
@@ -760,6 +761,7 @@ fn live_forward_gap_probe() {
         dest: format!("hank@{DOMAIN}"),
         keep: true,
         guard: None,
+        ..Default::default()
     }))
     .expect("K2 forward gina → hank");
     let inj = "back\"; redirect \"inj@outside.test\"; #";

@@ -1,10 +1,11 @@
 // Settings → Email Hosting → a mailbox → Forwarding
 // (prd-hostmail-external-forwarding-v1 §4.2, FW4).
 //
-// One mailbox's forward: destination, keep a copy, state, the confirm
-// link's state and expiry, the last 24 hours, the audit events, and the
-// gestures (set / change, pause, resume, remove). It only calls the routes
-// (`mail-forward-api.ts`); every rule lives in the daemon.
+// One mailbox's forwards, one row per address: destination, keep a copy,
+// state, whether K2 could email the address its stop link, the last 24
+// hours, and the row's gestures (pause, resume, remove); then the mailbox's
+// audit events and a form to add an address (or change the only one). It only
+// calls the routes (`mail-forward-api.ts`); every rule lives in the daemon.
 //
 // WHO IS LOOKING decides the door, and the daemon decides who that is: the
 // staff route (`/cli/mail/forward`, owner / Admin) first; when it refuses,
@@ -59,7 +60,7 @@ function Chip({ text, tone }: { text: string; tone: 'ok' | 'warn' | 'error' | 'i
 
 function stateTone(f: Forward): 'ok' | 'warn' | 'error' | 'info' {
   if (f.state === 'active') return 'ok'
-  if (f.state === 'pending_verify') return f.verify?.state === 'expired' ? 'warn' : 'info'
+  if (f.state === 'pending_verify') return f.notice === 'stale' ? 'warn' : 'info'
   if (f.state === 'paused') return f.pauseReason === 'manual' ? 'warn' : 'error'
   return 'info'
 }
@@ -118,11 +119,125 @@ function SetForm({
         Keep a copy in this mailbox
       </label>
       <p className={`text-[10px] ${muted}`}>
-        An outside address gets a confirm link first; forwarding starts when it’s clicked (the link works for 24
-        hours). Spam, mail failing DMARC and bounces always stay here.
+        This starts at once. An outside address isn’t asked: K2 emails it who set this up, with a link to stop it,
+        and the owner is told. Spam, mail failing DMARC and bounces always stay here.
         {keep === undefined && ' A mailbox on this server keeps no copy unless you tick the box.'}
       </p>
     </form>
+  )
+}
+
+/** One address this mailbox forwards to, with its own state and gestures. */
+function ForwardRow({
+  f,
+  door,
+  canMutate,
+  busy,
+  onResume,
+  onPause,
+  onRemove,
+  onChange,
+}: {
+  f: Forward
+  door: ForwardViewer
+  canMutate: boolean
+  busy: boolean
+  onResume: () => void
+  onPause: () => void
+  onRemove: () => void
+  /** Offered only when this is the mailbox's one address. */
+  onChange?: () => void
+}): React.JSX.Element {
+  const rule = f.state === 'paused' ? resumeRule(door, f.pauseReason) : null
+  const counts = f.last24h
+  const showCounts = f.kind === 'external' || !!(counts && (counts.forwarded || counts.refused))
+  return (
+    <div className="space-y-2 min-w-0" data-testid="forward-row">
+      <div className="flex items-center gap-2 min-w-0 flex-wrap">
+        <span className={`text-[11px] ${muted}`}>To</span>
+        <span className="text-xs font-mono text-[var(--color-text-primary)] truncate" data-testid="forward-dest">
+          {f.to}
+        </span>
+        <Chip text={f.kind === 'external' ? 'Outside' : 'This server'} tone="muted" />
+        <Chip text={stateLabel(f)} tone={stateTone(f)} />
+        <span className={`text-[10px] ${muted}`}>{f.keep ? 'Keeps a copy here' : 'No copy kept here'}</span>
+      </div>
+
+      {f.cantArrive && (
+        <Callout tone="error" data-testid="forward-cant-arrive">
+          {f.cantArrive}
+        </Callout>
+      )}
+
+      {f.noticeWords && (
+        <Callout tone={f.notice === 'due' ? 'info' : 'warn'} data-testid="forward-notice">
+          {f.noticeWords}
+        </Callout>
+      )}
+
+      {f.state === 'paused' && (
+        <Callout tone={f.pauseReason === 'manual' ? 'warn' : 'error'} data-testid="forward-paused">
+          Paused{f.pausedAt ? ` ${fmt(f.pausedAt)}` : ''}: {f.pauseWords ?? f.pauseReason}. New mail stays in this
+          mailbox.{rule?.why ? ` ${rule.why}` : ''}
+        </Callout>
+      )}
+
+      {f.state === 'active' && f.kind === 'external' && f.notice === 'sent' && f.noticeAt && (
+        <p className={`text-[10px] ${muted}`}>K2 emailed this address a link to stop it {fmt(f.noticeAt)}.</p>
+      )}
+
+      {showCounts && counts && (
+        <dl className="grid grid-cols-3 gap-2 text-[11px]" data-testid="forward-counts">
+          {(
+            [
+              ['Forwarded', counts.forwarded],
+              ['Delivered', counts.delivered],
+              ['Refused', counts.refused],
+            ] as const
+          ).map(([label, n]) => (
+            <div key={label} className="min-w-0">
+              <dt className={`text-[10px] ${muted}`}>{label} · 24 h</dt>
+              <dd
+                className={`font-mono ${
+                  label === 'Refused' && n > 0 ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-primary)]'
+                }`}
+              >
+                {n ?? 0}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {canMutate && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {f.state === 'paused' && rule?.can && (
+            <Button variant="accent" disabled={busy} onClick={onResume}>
+              Resume
+            </Button>
+          )}
+          {f.state === 'active' && (
+            <Button variant="quiet" disabled={busy} onClick={onPause}>
+              Pause
+            </Button>
+          )}
+          {onChange && (
+            <Button variant="quiet" disabled={busy} onClick={onChange}>
+              Change…
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            disabled={busy}
+            className="text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-soft)]"
+            onClick={onRemove}
+          >
+            Remove
+          </Button>
+        </div>
+      )}
+      {f.setBy && <p className={`text-[10px] ${muted}`}>Set by {f.setBy} · {fmt(f.createdAt)}</p>}
+    </div>
   )
 }
 
@@ -143,6 +258,7 @@ export function MailboxForwardingPanel({
   const [denied, setDenied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [adding, setAdding] = useState(false)
   const [showEvents, setShowEvents] = useState(false)
   const [revision, setRevision] = useState(0)
   const reload = useCallback(() => setRevision((r) => r + 1), [])
@@ -203,22 +319,19 @@ export function MailboxForwardingPanel({
     [reload],
   )
 
-  const f = data?.forward ?? null
+  const rows: Forward[] = data?.forwards ?? (data?.forward ? [data.forward] : [])
   const door: ForwardViewer = viewer ?? 'staff'
 
   const onSet = useCallback(
-    async (to: string, keep: boolean | undefined): Promise<void> => {
+    async (to: string, keep: boolean | undefined, also: boolean): Promise<void> => {
       setBusy(true)
       try {
-        const r = await api.set(door, address, to, keep)
+        const r = also ? await api.add(door, address, to, keep) : await api.set(door, address, to, keep)
         const toast = useToastStore.getState()
-        if (r.state === 'pending_verify') {
-          toast.addToast(`A confirm link was sent to ${r.to}; the forward starts once it’s clicked.`, 'info')
-        } else {
-          toast.addToast(`${address} now forwards to ${r.to}.`, 'success')
-        }
+        toast.addToast(r.message ?? `${address} now forwards to ${r.to}.`, 'success')
         if (r.note) toast.addToast(r.note, 'info')
         setEditing(false)
+        setAdding(false)
         reload()
       } catch (e) {
         useToastStore.getState().addToast(mailErrorMessage(e), 'error')
@@ -229,17 +342,19 @@ export function MailboxForwardingPanel({
     [api, door, address, reload],
   )
 
-  const onRemove = useCallback(async (): Promise<void> => {
-    if (!f) return
-    const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Stop forwarding ${address}?`,
-      message: `New mail stays in ${address} and no longer goes to ${f.to}. You can set a forward again later (an outside address confirms again).`,
-      confirmLabel: 'Remove forward',
-      destructive: true,
-    })
-    if (!ok) return
-    await act(() => api.unset(door, address), 'Forward removed.')
-  }, [f, address, act, api, door])
+  const onRemove = useCallback(
+    async (f: Forward, only: boolean): Promise<void> => {
+      const ok = await useConfirmDialogStore.getState().confirm({
+        title: `Stop forwarding ${address} to ${f.to}?`,
+        message: `New mail no longer goes to ${f.to}. You can add it again later (an outside address gets a new email saying so).`,
+        confirmLabel: 'Remove forward',
+        destructive: true,
+      })
+      if (!ok) return
+      await act(() => (only ? api.unset(door, address) : api.rm(door, address, f.to)), 'Forward removed.')
+    },
+    [address, act, api, door],
+  )
 
   if (denied) {
     return (
@@ -255,9 +370,7 @@ export function MailboxForwardingPanel({
     return <p className={`text-[11px] ${muted}`}>Loading forwarding…</p>
   }
 
-  const rule = f && f.state === 'paused' ? resumeRule(door, f.pauseReason) : null
-  const counts = f?.last24h
-  const showCounts = !!f && (f.kind === 'external' || !!(counts && (counts.forwarded || counts.refused)))
+  const max = data.maxDestinations ?? 5
   const events = data.events ?? []
 
   return (
@@ -267,107 +380,57 @@ export function MailboxForwardingPanel({
         {door === 'person' && <span className={`text-[10px] ${muted}`}>your mailbox</span>}
       </div>
 
-      {!f ? (
+      {rows.length === 0 ? (
         canMutate ? (
           <>
             <p className={`text-[11px] ${muted}`}>Not forwarded. New mail stays in this mailbox.</p>
-            <SetForm initialTo="" initialKeep={undefined} busy={busy} onSubmit={(to, keep) => void onSet(to, keep)} />
+            <SetForm initialTo="" initialKeep={undefined} busy={busy} onSubmit={(to, keep) => void onSet(to, keep, false)} />
           </>
         ) : (
           <p className={`text-[11px] ${muted}`}>Not forwarded.</p>
         )
       ) : (
         <>
-          <div className="flex items-center gap-2 min-w-0 flex-wrap">
-            <span className={`text-[11px] ${muted}`}>To</span>
-            <span className="text-xs font-mono text-[var(--color-text-primary)] truncate" data-testid="forward-dest">
-              {f.to}
-            </span>
-            <Chip text={f.kind === 'external' ? 'Outside' : 'This server'} tone="muted" />
-            <Chip text={stateLabel(f)} tone={stateTone(f)} />
-            <span className={`text-[10px] ${muted}`}>{f.keep ? 'Keeps a copy here' : 'No copy kept here'}</span>
-          </div>
-
-          {f.state === 'pending_verify' &&
-            (f.verify?.state === 'expired' ? (
-              <Callout tone="warn">The confirm link to {f.to} expired. Set the forward again to send a new one.</Callout>
-            ) : (
-              <Callout tone="info" data-testid="forward-pending">
-                A confirm link was sent to {f.to}; the forward starts once it’s clicked
-                {f.verify?.expiresAt ? ` (the link expires ${fmt(f.verify.expiresAt)})` : ''}.
-              </Callout>
-            ))}
-
-          {f.state === 'paused' && (
-            <Callout tone={f.pauseReason === 'manual' ? 'warn' : 'error'} data-testid="forward-paused">
-              Paused{f.pausedAt ? ` ${fmt(f.pausedAt)}` : ''}: {f.pauseWords ?? f.pauseReason}. New mail stays in this
-              mailbox.{rule?.why ? ` ${rule.why}` : ''}
-            </Callout>
-          )}
-
-          {f.state === 'active' && f.kind === 'external' && f.verify?.verifiedAt && (
-            <p className={`text-[10px] ${muted}`}>Confirmed by the destination {fmt(f.verify.verifiedAt)}.</p>
-          )}
-
-          {showCounts && counts && (
-            <dl className="grid grid-cols-3 gap-2 text-[11px]" data-testid="forward-counts">
-              {(
-                [
-                  ['Forwarded', counts.forwarded],
-                  ['Delivered', counts.delivered],
-                  ['Refused', counts.refused],
-                ] as const
-              ).map(([label, n]) => (
-                <div key={label} className="min-w-0">
-                  <dt className={`text-[10px] ${muted}`}>{label} · 24 h</dt>
-                  <dd
-                    className={`font-mono ${
-                      label === 'Refused' && n > 0 ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-primary)]'
-                    }`}
-                  >
-                    {n ?? 0}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
-
+          {rows.map((f, i) => (
+            <div key={f.id} className={i > 0 ? 'pt-2 border-t border-[var(--color-border)]' : undefined}>
+              <ForwardRow
+                f={f}
+                door={door}
+                canMutate={canMutate && !editing}
+                busy={busy}
+                onResume={() => void act(() => api.resume(door, address, f.to), 'Forward resumed.')}
+                onPause={() => void act(() => api.pause(door, address, f.to), 'Forward paused.')}
+                onRemove={() => void onRemove(f, rows.length === 1)}
+                onChange={rows.length === 1 ? () => setEditing(true) : undefined}
+              />
+            </div>
+          ))}
           {editing ? (
             <SetForm
-              initialTo={f.to}
-              initialKeep={f.keep}
+              initialTo={rows.length === 1 ? rows[0].to : ''}
+              initialKeep={rows[0].keep}
               busy={busy}
-              onSubmit={(to, keep) => void onSet(to, keep)}
-              onCancel={() => setEditing(false)}
+              onSubmit={(to, keep) => void onSet(to, keep, adding)}
+              onCancel={() => {
+                setEditing(false)
+                setAdding(false)
+              }}
             />
           ) : (
-            canMutate && (
-              <div className="flex items-center gap-2 flex-wrap">
-                {f.state === 'paused' && rule?.can && (
-                  <Button variant="accent" disabled={busy} onClick={() => void act(() => api.resume(door, address), 'Forward resumed.')}>
-                    Resume
-                  </Button>
-                )}
-                {f.state === 'active' && (
-                  <Button variant="quiet" disabled={busy} onClick={() => void act(() => api.pause(door, address), 'Forward paused.')}>
-                    Pause
-                  </Button>
-                )}
-                <Button variant="quiet" disabled={busy} onClick={() => setEditing(true)}>
-                  {f.state === 'paused' && f.pauseReason === 'revoked' ? 'Set again…' : 'Change…'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={busy}
-                  className="text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-soft)]"
-                  onClick={() => void onRemove()}
-                >
-                  Remove
-                </Button>
-              </div>
+            canMutate &&
+            rows.length < max && (
+              <Button
+                variant="quiet"
+                disabled={busy}
+                onClick={() => {
+                  setAdding(true)
+                  setEditing(true)
+                }}
+              >
+                Add another address…
+              </Button>
             )
           )}
-          {f.setBy && <p className={`text-[10px] ${muted}`}>Set by {f.setBy} · {fmt(f.createdAt)}</p>}
         </>
       )}
 

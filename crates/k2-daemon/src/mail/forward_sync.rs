@@ -1,16 +1,28 @@
 //! Hosted mail forwards: rows → Sieve (prd-hostmail-external-forwarding-v1
 //! §3.2, §3.4; vs-live FW-A5, FW-A12, FW-A20, FW-A26).
 //!
-//! The `mail_forwards` row is the truth (`k2_core::mail_forward`). This
+//! The `mail_forwards` rows are the truth (`k2_core::mail_forward`). This
 //! module writes the mailbox's one K2 Sieve script (`k2`, shared with the
-//! out-of-office block, `sieve_user`) FROM the live row, never the other
+//! out-of-office block, `sieve_user`) FROM its live rows, never the other
 //! way:
 //!
-//! - an `active` same-box forward → a plain `redirect` (as before);
-//! - an `active` outside forward → the guarded block ([`ForwardGuard`]:
-//!   bounces, loop marker, spam and DMARC failures stay home);
+//! - an `active` same-box row → a plain `redirect` (as before);
+//! - an `active` outside row → a `redirect` behind the guard
+//!   ([`ForwardGuard`]: bounces, loop marker, spam and DMARC failures stay
+//!   home);
 //! - anything else (`pending_verify`, `paused`, `removed`, no row) → no
-//!   forward block. Mail simply stays in the mailbox (keep-only).
+//!   redirect for that row. With none left, mail simply stays in the mailbox.
+//!
+//! **Several destinations.** Stalwart's Sieve runs one `redirect` per
+//! destination and queues each as its own message (own queue id, same
+//! envelope sender), so the caps and the delivery outcomes count every copy.
+//! But its user-script limit defaults to `maxRedirects: 1` and a `redirect`
+//! over the limit is **silently skipped**, so before K2 writes a script with
+//! more than one it raises the limit server-wide ([`SieveIo::ensure_redirects`],
+//! [`REDIRECT_LIMIT`]; never lowers it). If that fails the old script stays
+//! and the change reports as deferred: K2 never writes a script that would
+//! quietly drop a destination. Mailbox users can't write Sieve (the
+//! lockdown), so only K2's own scripts use the room.
 //!
 //! **When:** right after every change (the route waits for it), at daemon
 //! start (after the Sieve lockdown; it also imports same-box forwards that
@@ -73,12 +85,30 @@ pub struct Current {
     pub legacy_src: Option<String>,
 }
 
+/// The most `redirect`s one script may run: one per destination.
+pub const REDIRECT_LIMIT: u64 = store::MAX_DESTINATIONS as u64;
+/// The most messages one script may send: a `vacation` reply counts too.
+pub const OUT_MESSAGE_LIMIT: u64 = REDIRECT_LIMIT + 1;
+
+/// The interpreter limits to write, or `None` when they're already high
+/// enough. Never lowers what an operator set; absent means Stalwart's default
+/// (`maxRedirects` 1, `maxOutMessages` 3).
+pub fn plan_redirect_limits(redirects: Option<u64>, out_messages: Option<u64>) -> Option<(u64, u64)> {
+    let (r, o) = (redirects.unwrap_or(1), out_messages.unwrap_or(3));
+    (r < REDIRECT_LIMIT || o < OUT_MESSAGE_LIMIT).then_some((r.max(REDIRECT_LIMIT), o.max(OUT_MESSAGE_LIMIT)))
+}
+
+/// Limits saved, reload not yet confirmed: the next call reloads again.
+static RELOAD_OWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Read and write a mailbox's K2 script (Stalwart; a fake in tests).
 pub trait SieveIo {
     fn read(&self, account_id: &str) -> Result<Current, String>;
     fn write(&self, account_id: &str, current: &Current, next: &UserSieve) -> Result<(), String>;
     /// Write a source K2 didn't compose (someone's rules, less an outbound action).
     fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String>;
+    /// Make sure a script may run [`REDIRECT_LIMIT`] redirects, loaded and live.
+    fn ensure_redirects(&self) -> Result<(), String>;
 }
 
 impl SieveIo for StalwartClient {
@@ -100,6 +130,19 @@ impl SieveIo for StalwartClient {
     }
     fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String> {
         sieve_user::save_user_source(self, account_id, &current.scripts, source)
+    }
+    fn ensure_redirects(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        let (redirects, out) = self.sieve_user_interpreter_limits()?;
+        if let Some((r, o)) = plan_redirect_limits(redirects, out) {
+            self.sieve_user_interpreter_set_limits(r, o)?;
+            RELOAD_OWED.store(true, Ordering::SeqCst);
+        }
+        if RELOAD_OWED.load(Ordering::SeqCst) {
+            self.action_reload_settings()?;
+            RELOAD_OWED.store(false, Ordering::SeqCst);
+        }
+        Ok(())
     }
 }
 
@@ -265,20 +308,35 @@ pub fn hold_reason(f: &Forward, mb: &Mailbox, ctx: &Ctx, verified_ok: bool) -> O
     None
 }
 
-/// The forward block the live row asks for (`None`: no forward).
-pub fn desired_block(f: Option<&Forward>, ctx: &Ctx) -> Option<ForwardBlock> {
-    let f = f.filter(|f| f.is_active())?;
-    if !f.is_external() {
-        return Some(ForwardBlock::internal(f.dest.clone(), f.keep));
+/// The forward block the live rows ask for (`None`: no forward). `outside`:
+/// may outside destinations be written at all (the mail server's version);
+/// without a valid mail host name they aren't either (fail closed).
+///
+/// A copy stays in the mailbox when any active row keeps one: it never loses
+/// mail to a row that said no-keep.
+pub fn desired_block(rows: &[Forward], ctx: &Ctx, outside: bool) -> Option<ForwardBlock> {
+    let active: Vec<&Forward> = rows.iter().filter(|f| f.is_active()).collect();
+    let keep = active.iter().any(|f| f.keep);
+    let same_box: Vec<String> = active.iter().filter(|f| !f.is_external()).map(|f| f.dest.clone()).collect();
+    let host = ctx.host.as_deref().filter(|h| outside && guard_host_ok(h));
+    let others: Vec<String> = if host.is_some() { active.iter().filter(|f| f.is_external()).map(|f| f.dest.clone()).collect() } else { Vec::new() };
+    let mut others = others.into_iter();
+    match (others.next(), host) {
+        (Some(dest), Some(host)) => {
+            Some(ForwardBlock { dest, keep, guard: Some(ForwardGuard { host: host.to_string() }), more: others.collect(), same_box })
+        }
+        _ => {
+            let mut inside = same_box.into_iter();
+            let dest = inside.next()?;
+            Some(ForwardBlock { dest, keep, guard: None, more: inside.collect(), same_box: Vec::new() })
+        }
     }
-    let host = ctx.host.as_deref().filter(|h| guard_host_ok(h))?;
-    Some(ForwardBlock { dest: f.dest.clone(), keep: f.keep, guard: Some(ForwardGuard { host: host.to_string() }) })
 }
 
 /// The full script K2 wants: the current out-of-office block kept, the
-/// forward block from the row.
-pub fn desired(current: &Current, f: Option<&Forward>, ctx: &Ctx) -> UserSieve {
-    UserSieve { ooo: current.sieve.ooo.clone(), forward: desired_block(f, ctx) }
+/// forward block from the rows.
+pub fn desired(current: &Current, rows: &[Forward], ctx: &Ctx, outside: bool) -> UserSieve {
+    UserSieve { ooo: current.sieve.ooo.clone(), forward: desired_block(rows, ctx, outside) }
 }
 
 /// Does the mailbox's Sieve already say exactly `want`?
@@ -366,13 +424,13 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
     let live = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::live_for_address(&conn, address_id)?
+        store::live_rows(&conn, address_id)?
     };
-    let live = match live {
-        // A retired mailbox forwards nothing: its row goes too.
-        Some(f) if !mb.active => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
+    // A retired mailbox forwards nothing: its rows go too.
+    if !mb.active {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for f in &live {
             store::transition(
                 &conn,
                 &f.id,
@@ -381,32 +439,38 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
                 ctx.now,
             )
             .map_err(|e| e.to_string())?;
-            return Ok(out);
         }
-        Some(f) => {
-            let (f, held) = apply_holds(f, &mb, ctx)?;
-            out.held = held;
-            Some(f)
-        }
-        None => None,
-    };
-    if !mb.active {
         return Ok(out);
+    }
+    let mut rows = Vec::with_capacity(live.len());
+    for f in live {
+        let (f, held) = apply_holds(f, &mb, ctx)?;
+        if held.is_some() {
+            out.held = held;
+        }
+        rows.push(f);
     }
     let Some(account) = mb.account_id.as_deref() else {
         return Err(format!("mail forwards: mailbox {address_id} has no mail-server account"));
     };
     let current = io.read(account)?;
-    let mut want = desired(&current, live.as_ref(), ctx);
     // Fail closed on a mail server older than the one outside forwards are
-    // proven on (or an unknown one): no outside forward block.
-    if want.forward.as_ref().is_some_and(|f| f.guard.is_some()) && !outside_forward_supported() {
-        want.forward = None;
+    // proven on (or an unknown one): no outside redirect.
+    let outside_ok = outside_forward_supported();
+    if !outside_ok && rows.iter().any(|f| f.is_active() && f.is_external()) {
         k2_core::log_debug!("{P} WARN mailbox {address_id}: outside forward not written: {UPGRADE_HINT}");
     }
-    out.blocked = live.as_ref().is_some_and(|f| f.is_active()) && want.forward.is_none();
+    let want = desired(&current, &rows, ctx, outside_ok);
+    let written = want.forward.as_ref().map_or(0, ForwardBlock::redirects);
+    let active = rows.iter().filter(|f| f.is_active()).count();
+    out.blocked = written < active;
     if out.blocked {
-        k2_core::log_debug!("{P} WARN forward {} is active but not written (mail host name or mail server version)", live.as_ref().map(|f| f.id.as_str()).unwrap_or(""));
+        k2_core::log_debug!("{P} WARN mailbox {address_id}: {} active forward(s) not written (mail host name or mail server version)", active - written);
+    }
+    // Before the in-sync check: a script that's right on paper still drops
+    // destinations if the mail server's limit went back down.
+    if written > 1 {
+        io.ensure_redirects()?;
     }
     if in_sync(&current, &want) {
         return Ok(out);
@@ -418,7 +482,7 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
         let had = current.sieve.forward.is_some();
         let wants = want.forward.is_some();
         k2_core::log_debug!("{P} drift on mailbox {address_id}: restored (had forward: {had}, wants forward: {wants})");
-        if let Some(f) = &live {
+        if let Some(f) = rows.first() {
             let db = k2_core::db::shared();
             let conn = db.lock();
             store::record_event(&conn, &f.id, store::E_DRIFT, ACTOR_K2, &json!({ "hadForward": had, "wantsForward": wants }), ctx.now)?;
@@ -526,13 +590,10 @@ pub fn patch_ooo(address_id: &str, ooo: Option<sieve_user::OooBlock>) -> Result<
         let live = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            store::live_for_address(&conn, address_id)?
+            store::live_rows(&conn, address_id)?
         };
         let current = io.read(account)?;
-        let mut want = desired(&current, live.as_ref(), &ctx);
-        if want.forward.as_ref().is_some_and(|f| f.guard.is_some()) && !outside_forward_supported() {
-            want.forward = None;
-        }
+        let mut want = desired(&current, &live, &ctx, outside_forward_supported());
         want.ooo = ooo;
         if !in_sync(&current, &want) {
             io.write(account, &current, &want)?;
@@ -589,6 +650,8 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
         }
     }
     strip_unbacked(io, ctx, &unread, &mut r);
+    // Rows that can't arrive are listed for the owner, never silently changed.
+    super::forward_verify::note_cant_arrive(ctx.host.as_deref(), ctx.now);
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = store::purge(&conn, ctx.now) {
@@ -625,7 +688,7 @@ pub(crate) fn plan_strip(current: &Current, address: &str, is_here: &dyn Fn(&str
     let legacy_own = legacy.is_none_or(|src| own(sieve_user::LEGACY_FORWARD_NAME, src));
     let without_forward = || StripPlan::Compose(UserSieve { ooo: current.sieve.ooo.clone(), forward: None });
     if k2_own && legacy_own {
-        let same_box = current.sieve.forward.as_ref().filter(|f| f.guard.is_none() && is_here(&f.dest) && !f.dest.eq_ignore_ascii_case(address));
+        let same_box = current.sieve.forward.as_ref().filter(|f| f.guard.is_none() && f.redirects() == 1 && is_here(&f.dest) && !f.dest.eq_ignore_ascii_case(address));
         return same_box.map_or_else(without_forward, |f| StripPlan::Import(f.clone()));
     }
     let legacy_changes = legacy.is_some_and(|src| remove_outbound(src, is_here) != src);
@@ -1052,6 +1115,13 @@ fn run_live() {
         // and every 10 minutes while the import is owed.
         for minute in 0..60 {
             std::thread::sleep(Duration::from_secs(if first { 10 } else { 60 }));
+            // Each minute: rows from before opt-out turning on, paced, and
+            // failed notice emails due another try.
+            let ready = super::defaults::gate(super::supervisor::current_status().as_deref(), super::supervisor::enable_completed()).is_none()
+                && !super::supervisor::enable_running().load(Ordering::SeqCst);
+            if ready && !first {
+                super::forward_verify::minute_pass(now());
+            }
             let air = k2_core::airgap::enabled();
             if NUDGE.swap(false, Ordering::SeqCst) || air != last_air || first || (import_owed && minute >= 9) {
                 last_air = air;

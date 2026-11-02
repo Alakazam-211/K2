@@ -34,6 +34,17 @@ loopback SMTP sink this script runs: an `x:MtaRoute` relay sends every
       receiver sends none), which is what K2 classifies user vs policy
       refusals on. Also recorded (INFO): whether `delivery.rcpt-to-rejected`
       carries it (Stalwart 0.16.25: only the basic code and the text)
+  X11 several destinations (Rosson 2026-11-02), K2's golden with three outside
+      redirects: on Stalwart's default limit (maxRedirects 1) only the first
+      goes and the rest are silently skipped, which is why K2 raises it first;
+      after x:SieveUserInterpreter/set + ReloadSettings all three go, each its
+      own queued message with its own queue id and one recipient, each with
+      the marker and the mailbox as MAIL FROM, and the mailbox keeps one copy.
+      Same-box redirects run before the guard, and the OOO reply fits too
+  X12 what a redirect to one of the server's own domains does: it never goes
+      to the "outside" route whatever the MX says (Stalwart's default route is
+      is_local_domain → local), recorded as a check because K2's "a hosted
+      domain whose MX points elsewhere counts as outside" relies on knowing it
 
 "Ham" is a message another mailbox on the box sends (authenticated, so the
 spam filter leaves it alone); mail injected from "outside" on the sandbox's
@@ -655,6 +666,69 @@ def main():
             esc_in = want.split(": ")[1] in str(rd.get("details", "")) and want != "Enhanced code: 0.0.0"
             info(f"X10 {step}: delivery.rcpt-to-rejected carries code {rd.get('code')!r}; enhanced status in its details: {esc_in}",
                  json.dumps(rd)[:400])
+    # ── X11 several destinations ────────────────────────────────────
+    n, a = put_script(alice, golden("external-many-keep.sieve", "me@outside.test", args.host))
+    check("X11 the three-destination script is written", n == "SieveScript/set" and not a.get("notUpdated") and not a.get("notCreated"), f"{n} {json.dumps(a)[:200]}")
+    def limits():
+        n, g = admin.call("x:SieveUserInterpreter/get", {"ids": ["singleton"], "properties": ["maxRedirects", "maxOutMessages"]})
+        row = (g.get("list") or [{}])[0]
+        return row.get("maxRedirects"), row.get("maxOutMessages")
+    before = limits()
+    info("X11 the interpreter's limits as shipped", json.dumps(before))
+    mid = f"x11a-{tag}"
+    ham(mid)
+    got = wait_for(lambda: sink.with_id(mid))
+    time.sleep(4)
+    got = sink.with_id(mid)
+    check("X11 on the shipped limit only the first redirect goes", [m["rcpt"] for m in got] == [["me@outside.test"]], json.dumps([m["rcpt"] for m in got]))
+    check("X11 and the mailbox keeps its copy", kept_eventually(mid), "")
+    n, a = admin.call("x:SieveUserInterpreter/set", {"update": {"singleton": {"maxRedirects": 5, "maxOutMessages": 6}}})
+    check("X11 K2's limits are accepted", n == "x:SieveUserInterpreter/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:300]}")
+    admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
+    time.sleep(2)
+    info("X11 the interpreter's limits now", json.dumps(limits()))
+    mid = f"x11b-{tag}"
+    Hook.events.clear()
+    ham(mid)
+    got = wait_for(lambda: len(sink.with_id(mid)) >= 3 and sink.with_id(mid))
+    time.sleep(3)
+    got = sink.with_id(mid) if got else []
+    rcpts = sorted(r for m in got for r in m["rcpt"])
+    check("X11 after the reload all three go", rcpts == ["me@outside.test", "three@outside.test", "two@outside.test"], json.dumps(rcpts))
+    check("X11 each is its own message with one recipient", all(len(m["rcpt"]) == 1 for m in got) and len(got) == 3, json.dumps([m["rcpt"] for m in got]))
+    check("X11 each has the mailbox as MAIL FROM", all((m["from"] or "").lower() == alice_addr.lower() for m in got), json.dumps([m["from"] for m in got]))
+    check("X11 each carries the marker once", all(m["data"].count("X-K2-Forwarded:") == 1 for m in got), "")
+    check("X11 the mailbox keeps one copy", kept_eventually(mid) and kept(mid) == 1, f"kept {kept(mid)}")
+    queued = [Hook.queued_to(d) for d in ("me@outside.test", "two@outside.test", "three@outside.test")]
+    qids = [str((e.get("data") or {}).get("queueId")) for e in queued if e]
+    check("X11 each has its own queue id (the caps and outcomes count every copy)", len(set(qids)) == 3, json.dumps(qids))
+    # Mixed: same-box first, the guard, then outside; with an OOO reply on top.
+    mixed = golden("mixed-many-nokeep-ooo.sieve", "me@outside.test", args.host).replace("team@brand.test", bob_addr)
+    n, a = put_script(alice, mixed)
+    check("X11 the mixed script (OOO, same-box, guard, outside) is written", n == "SieveScript/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")
+    mid = f"x11c-{tag}"
+    ham(mid)
+    got = wait_for(lambda: len(sink.with_id(mid)) >= 3 and sink.with_id(mid))
+    time.sleep(3)
+    got = sink.with_id(mid) if got else []
+    rcpts = sorted(r for m in got for r in m["rcpt"])
+    check("X11 mixed: every outside destination gets it, even with the OOO reply", rcpts == ["me@outside.test", "three@outside.test", "two@outside.test"], json.dumps(rcpts))
+    check("X11 mixed: no copy kept", kept(mid) == 0, f"kept {kept(mid)}")
+
+    # ── X12 a redirect to one of this server's own domains ──────────
+    n, a = put_script(alice, f'require ["copy"];\n# k2-forward\nredirect :copy "ghost-{tag}@{domain}";\nredirect :copy "{bob_addr}";\n')
+    check("X12 the script is written", n == "SieveScript/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")
+    mid = f"x12-{tag}"
+    Hook.events.clear()
+    ham(mid)
+    time.sleep(6)
+    check("X12 mail for this server's own domain never reaches the outside route", not [m for m in sink.with_id(mid) if any(domain in r for r in m["rcpt"])], json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
+    check("X12 a mailbox here gets its copy", bool(wait_for(lambda: kept(mid, bob) >= 1, 20)) and kept(mid, bob) >= 1, f"bob has {kept(mid, bob)}")
+    with Hook.lock:
+        info("X12 what happened to the address with no mailbox", json.dumps([(e.get("type"), (e.get("data") or {}).get("to"), str((e.get("data") or {}).get("details", ""))[:160]) for e in Hook.events])[:1200])
+    put_script(alice, "keep;\r\n")
+    admin.call("x:SieveUserInterpreter/set", {"update": {"singleton": {"maxRedirects": before[0] if before[0] is not None else 1, "maxOutMessages": before[1] if before[1] is not None else 3}}})
+
     if wid:
         admin.call("x:WebHook/set", {"destroy": [wid]})
     srv.shutdown()

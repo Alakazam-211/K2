@@ -1,39 +1,66 @@
 //! Hosted mail forwards: the routes (prd-hostmail-external-forwarding-v1
-//! §3.3, §4.1; vs-live FW-A7–FW-A10, FW-A12; Rosson's ruling 2026-10-30).
+//! §3.3, §4.1; vs-live FW-A7–FW-A10, FW-A12; Rosson's rulings 2026-10-30 and
+//! 2026-11-02).
 //!
 //! ```text
-//! GET  /cli/mail/forward?address=          show one mailbox's forward      owner, Admin, mail-manage agent
-//! POST /cli/mail/forward {address,to,keep?} set (same box or outside)       owner, Admin, mail-manage agent
-//! POST /cli/mail/forward/unset {address}    remove                          owner, Admin, mail-manage agent
-//! POST /cli/mail/forward/pause {address}    pause (keep-only)               owner, Admin, mail-manage agent
-//! POST /cli/mail/forward/resume {address}   resume a paused forward         owner, Admin; agents: own pauses only
-//! GET  /cli/mail/forwards[?state=]          every forward on the box        owner, Admin
+//! GET  /cli/mail/forward?address=          show one mailbox's forwards     owner, Admin, mail-manage agent
+//! POST /cli/mail/forward {address,to,keep?,restartStopped?}
+//!                                          set: exactly these destinations owner, Admin, mail-manage agent
+//! POST /cli/mail/forward/add {address,to,keep?,restartStopped?}
+//!                                          add, leaving the others alone   owner, Admin, mail-manage agent
+//! POST /cli/mail/forward/rm {address,to}   remove these, leave the others  owner, Admin, mail-manage agent
+//! POST /cli/mail/forward/unset {address}   remove them all                 owner, Admin, mail-manage agent
+//! POST /cli/mail/forward/pause {address,to?}   pause one, or all           owner, Admin, mail-manage agent
+//! POST /cli/mail/forward/resume {address,to?}  resume one, or all          owner, Admin; agents: own pauses only
+//! GET  /cli/mail/forwards[?state=]         every forward on the box        owner, Admin
+//! POST /cli/mail/config/forward-new-per-day {perDay}
+//!                                          the box's daily cap on new outside addresses  the owner only
 //! POST /cli/mail/address/person-link {address, person|null}
-//!                                           which box login owns a mailbox  owner, Admin
-//! GET|POST /cli/mail/self/forward[...]      the same verbs for the mailbox's own person (a box login linked
-//!                                           to it, or the owner); never an agent
+//!                                          which box login owns a mailbox  owner, Admin
+//! GET|POST /cli/mail/self/forward[...]     the same verbs for the mailbox's own person (a box login linked
+//!                                          to it, or the owner); never an agent
 //! ```
 //!
-//! **The row is the truth** (`k2_core::mail_forward`); every change writes
-//! the Sieve right away through `forward_sync` (and the hourly reconcile
-//! repairs anything that drifted).
+//! `to` is one address or a list. **The rows are the truth**
+//! (`k2_core::mail_forward`); every change writes the Sieve right away
+//! through `forward_sync` (and the hourly reconcile repairs anything that
+//! drifted).
 //!
-//! **Same box vs outside.** A destination that is an active mailbox here
-//! is a same-box forward (active at once, as before). Any other address
-//! on one of this box's domains is refused. Anything else is an outside
-//! forward: it starts `pending_verify` and K2 mails the destination a
-//! confirm link (`forward_verify`); nothing is forwarded until its owner
-//! presses Confirm. Outside forwards keep a local copy by default.
+//! **Same box vs outside** ([`classify_dest`]). A destination is same-box
+//! when it is an active mailbox here and its domain's MX doesn't point
+//! elsewhere. An active mailbox here whose domain's MX points elsewhere counts
+//! as outside (told, guarded), though its mail still lands in that mailbox.
+//! Any other address on one of this box's domains is refused: the mail server
+//! delivers its own domains itself, whatever their MX says (probe X12), so that
+//! mail would bounce here and never reach another provider. Anything else is
+//! outside. Rows from before this that can't arrive keep running as they are
+//! (bounces pause them) and are listed for the owner
+//! (`forward_verify::note_cant_arrive`).
+//!
+//! **Opt-out** (Rosson 2026-11-02). Every forward goes active at once. An
+//! outside address first gets one email saying so, with a stop link
+//! ([`tells_destination`] is the one place that decides;
+//! `forward_verify::tell_destination` sends it). A failed email is shown and
+//! retried and doesn't block. A destination that pressed Stop stays out until
+//! the owner or an Admin chooses it again (`restartStopped`). Limits, because
+//! nobody has to agree first: [`store::NEW_OUTSIDE_PER_DAY`] new outside
+//! addresses per box per day (the owner, and only the owner, can change that,
+//! up to [`store::NEW_OUTSIDE_PER_DAY_MAX`]; an agent must not be able to
+//! loosen its own limit), [`store::MAX_DESTINATIONS`] per mailbox, and the
+//! owner hears about every outside change at once. Past
+//! [`store::NOTICES_BURST_PER_HOUR`] notices in an hour a new outside forward
+//! waits its turn (`forward_verify`, "Pacing"). Outside forwards keep a local
+//! copy by default.
 //!
 //! **Who** (Rosson 2026-10-30): the owner, an Admin, the mailbox's person,
 //! and any agent with mail-manage on ("Allow agents to manage hosted mail
 //! on this host") can set, change and remove forwards, outside ones
-//! included, with no per-forward owner OK. What still applies: the
-//! destination's confirm link, the caps, the auto-pause, and the loop,
-//! spam and DMARC stops. Resuming after an automatic pause (the
-//! destination refusing, the box brake) is a person's call (owner, Admin,
-//! the mailbox's person); a stopped destination (it pressed Stop) can't be
-//! resumed at all, only set again (a new confirm).
+//! included, with no per-forward owner OK. What still applies: the stop
+//! link, the caps, the auto-pause, and the loop, spam and DMARC stops.
+//! Resuming after an automatic pause (the destination refusing, the box
+//! brake) is a person's call (owner, Admin, the mailbox's person); a stopped
+//! destination can't be resumed at all, only chosen again by the owner or an
+//! Admin.
 
 use std::collections::HashMap;
 
@@ -44,27 +71,36 @@ use serde_json::{json, Value as J};
 use crate::cli_response::CliResponse;
 use crate::email_notify::{self, fail, respond, Fail, R};
 use crate::mail::forward_sync::{self, ChangeError};
-use crate::mail::forward_verify::{self, Started};
+use crate::mail::forward_verify::{self, OutsideChange, Told};
 use crate::mail::hostmail_auth::authorize_mailbox;
 
 pub const FORWARD_PATH: &str = "/cli/mail/forward";
+pub const ADD_PATH: &str = "/cli/mail/forward/add";
+pub const RM_PATH: &str = "/cli/mail/forward/rm";
 pub const UNSET_PATH: &str = "/cli/mail/forward/unset";
 pub const PAUSE_PATH: &str = "/cli/mail/forward/pause";
 pub const RESUME_PATH: &str = "/cli/mail/forward/resume";
 pub const LIST_PATH: &str = "/cli/mail/forwards";
+pub const CAP_PATH: &str = "/cli/mail/config/forward-new-per-day";
 pub const PERSON_LINK_PATH: &str = "/cli/mail/address/person-link";
 pub const SELF_PATH: &str = "/cli/mail/self/forward";
+pub const SELF_ADD_PATH: &str = "/cli/mail/self/forward/add";
+pub const SELF_RM_PATH: &str = "/cli/mail/self/forward/rm";
 pub const SELF_UNSET_PATH: &str = "/cli/mail/self/forward/unset";
 pub const SELF_PAUSE_PATH: &str = "/cli/mail/self/forward/pause";
 pub const SELF_RESUME_PATH: &str = "/cli/mail/self/forward/resume";
 
 /// The person routes (the dispatcher resolves the person from the token).
 pub fn is_self_route(p: &str) -> bool {
-    matches!(p, SELF_PATH | SELF_UNSET_PATH | SELF_PAUSE_PATH | SELF_RESUME_PATH)
+    matches!(p, SELF_PATH | SELF_ADD_PATH | SELF_RM_PATH | SELF_UNSET_PATH | SELF_PAUSE_PATH | SELF_RESUME_PATH)
 }
 
 /// How many audit rows `show` returns.
 const EVENTS_SHOWN: usize = 50;
+
+/// One forward change at a time: the box's daily count of new outside
+/// addresses is checked and spent as one step, across the notice emails.
+static ADDS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ── the caller ──────────────────────────────────────────────────────
 
@@ -107,13 +143,23 @@ impl Caller {
         }
     }
 
+    /// May this caller override a destination's Stop? The owner or an Admin,
+    /// choosing to; never an agent, and not a mailbox's person.
+    fn may_restart(&self) -> bool {
+        match self {
+            Caller::Owner => true,
+            Caller::Person { key } => key == k2_core::notify_prefs::OWNER,
+            Caller::Agent { .. } => false,
+        }
+    }
+
     /// May this caller resume a forward paused for `reason`?
     pub fn may_resume(&self, reason: &str) -> Result<(), Fail> {
         if reason == store::P_REVOKED {
             return Err(fail(
                 409,
                 "destination_stopped",
-                "the destination pressed Stop in K2's email, so this forward can't be resumed; set it again to send a new confirm link",
+                "that address pressed Stop in K2's email, so this forward can't be resumed; only the owner or an Admin can choose it again (k2 hostmail forward add <mailbox> --to <address> --restart-stopped)",
             ));
         }
         if store::auto_lifts(reason) {
@@ -248,11 +294,73 @@ fn hosted_domain(domain: &str) -> bool {
         .unwrap_or(true) // fail closed: an unreadable store refuses outside forwards
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_MX: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>> = std::cell::RefCell::new(Default::default());
+}
+
+/// Tests: `domain`'s MX hosts (default: no records).
+#[cfg(test)]
+pub(crate) fn set_test_mx(domain: &str, hosts: &[&str]) {
+    TEST_MX.with(|m| m.borrow_mut().insert(domain.to_string(), hosts.iter().map(|h| h.to_string()).collect()));
+}
+
+/// `domain`'s MX hosts. `None`: no answer (no records, or DNS failed).
+fn mx_hosts(domain: &str) -> Option<Vec<String>> {
+    #[cfg(test)]
+    {
+        TEST_MX.with(|m| m.borrow().get(domain).cloned())
+    }
+    #[cfg(not(test))]
+    {
+        use crate::mail::dns_verify::DnsResolver;
+        let resolver = crate::mail::dns_verify::SystemResolver::new().ok()?;
+        let hosts = resolver.mx(domain).ok()?;
+        Some(hosts.into_iter().map(|h| h.exchange).collect())
+    }
+}
+
+/// Does `domain`'s MX positively point away from this box? No MX, a failed
+/// lookup, air-gap or no mail host name answer no: K2 only counts a hosted
+/// domain as outside on a real answer, and mail to a mailbox on this box
+/// stays on this box either way.
+fn mx_points_elsewhere(domain: &str) -> bool {
+    if email_notify::airgap_blocks() {
+        return false;
+    }
+    let Some(host) = forward_sync::ctx().host else { return false };
+    match mx_hosts(domain) {
+        Some(hosts) if !hosts.is_empty() => !hosts.iter().any(|h| crate::mail::dns_verify::host_eq(h, &host)),
+        _ => false,
+    }
+}
+
 /// The kind of destination `dest` is for `mailbox` (FW-A10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dest {
     Internal(String),
     External(String),
+}
+
+impl Dest {
+    pub fn address(&self) -> &str {
+        match self {
+            Dest::Internal(d) | Dest::External(d) => d,
+        }
+    }
+    fn kind(&self) -> &'static str {
+        match self {
+            Dest::Internal(_) => store::KIND_INTERNAL,
+            Dest::External(_) => store::KIND_EXTERNAL,
+        }
+    }
+}
+
+/// The one place that decides what a new destination goes through before
+/// mail flows there. Today (Rosson 2026-11-02): an outside address is told,
+/// with a stop link; a same-box one isn't. Nothing asks for a confirm.
+pub fn tells_destination(dest: &Dest) -> bool {
+    matches!(dest, Dest::External(_))
 }
 
 /// Classify and check a destination.
@@ -262,16 +370,19 @@ pub fn classify_dest(mailbox: &str, raw: &str) -> R<Dest> {
     if dest.eq_ignore_ascii_case(mailbox) {
         return Err(fail(400, "usage", "a mailbox can't forward to itself"));
     }
-    if crate::mail::hostmail_auth::require_active_mint(&dest).is_ok() {
-        return Ok(Dest::Internal(dest));
-    }
     let domain = dest.rsplit_once('@').map(|(_, d)| d).unwrap_or_default();
-    if hosted_domain(domain) {
+    let minted = crate::mail::hostmail_auth::require_active_mint(&dest).is_ok();
+    if !minted && hosted_domain(domain) {
         return Err(fail(
             400,
             "usage",
-            format!("'{dest}' is on one of this server's own domains but is not a minted mailbox on this host; forward to a mailbox here (or create it first)"),
+            format!(
+                "'{dest}' is not a minted mailbox on this host, and this server hosts {domain}, so mail to it would stay on this server and never reach another provider, whatever the domain's MX says. Create the mailbox here, or forward to an address on a domain this server doesn't host"
+            ),
         ));
+    }
+    if minted && !mx_points_elsewhere(domain) {
+        return Ok(Dest::Internal(dest));
     }
     if email_notify::fence::reserved(&dest) {
         return Err(fail(409, "sender_address", "that is one of this server's notification senders; give an address a person reads"));
@@ -279,11 +390,56 @@ pub fn classify_dest(mailbox: &str, raw: &str) -> R<Dest> {
     Ok(Dest::External(dest))
 }
 
+/// `to`: one address or a list, classified, each once (first spelling wins).
+fn dests_from(row: &MailAddress, v: &J) -> R<Vec<Dest>> {
+    let raw: Vec<&str> = match v.get("to") {
+        Some(J::String(t)) if !t.trim().is_empty() => vec![t.trim()],
+        Some(J::Array(a)) if !a.is_empty() => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a {
+                out.push(x.as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| fail(400, "usage", "'to' lists addresses"))?);
+            }
+            out
+        }
+        _ => return Err(fail(400, "usage", "missing 'to': the destination (a mailbox here, or an outside address)")),
+    };
+    let mut out: Vec<Dest> = Vec::with_capacity(raw.len());
+    for t in raw {
+        let d = classify_dest(&row.address, t)?;
+        if !out.iter().any(|o| o.address() == d.address()) {
+            out.push(d);
+        }
+    }
+    Ok(out)
+}
+
+/// `to` as plain addresses, for the verbs on existing rows.
+fn addresses_from(v: &J) -> R<Option<Vec<String>>> {
+    let norm = k2_core::email_verify::normalize_address;
+    match v.get("to") {
+        None | Some(J::Null) => Ok(None),
+        Some(J::String(t)) if !t.trim().is_empty() => Ok(Some(vec![norm(t)])),
+        Some(J::Array(a)) if !a.is_empty() => {
+            a.iter().map(|x| x.as_str().map(norm).ok_or_else(|| fail(400, "usage", "'to' lists addresses"))).collect::<R<Vec<_>>>().map(Some)
+        }
+        _ => Err(fail(400, "usage", "'to' is an address or a list of addresses")),
+    }
+}
+
 // ── views ───────────────────────────────────────────────────────────
+
+/// `show`'s and `list`'s words for a row whose mail can't arrive.
+fn cant_arrive_words(f: &Forward) -> String {
+    format!(
+        "mail to {} can't arrive: this server hosts its domain and has no such mailbox, so it bounces here and never reaches another provider. Remove it (k2 hostmail forward rm {} --to {}) or create the mailbox",
+        f.dest, f.address, f.dest
+    )
+}
 
 /// One forward as the CLI and Settings see it.
 pub fn forward_json(f: &Forward, now: i64) -> J {
-    let (verify, counts) = {
+    let host = forward_sync::ctx().host;
+    let (verify, counts, cant_arrive) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let verify = f
@@ -299,7 +455,7 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
                 })
             });
         let counts = store::counts(&conn, &f.id, now - store::WINDOW_SECS).unwrap_or_default();
-        (verify, counts)
+        (verify, counts, store::dest_cant_arrive(&conn, &f.dest, host.as_deref()))
     };
     json!({
         "id": f.id,
@@ -316,6 +472,11 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
         "activatedAt": f.activated_at,
         "pausedAt": f.paused_at,
         "verify": verify,
+        // What K2 told an outside address (`sent` | `failed` | `due` | `stale`).
+        "notice": f.notice_state,
+        "noticeAt": f.notice_at,
+        "noticeWords": f.notice_state.as_deref().and_then(notice_words),
+        "cantArrive": cant_arrive.then(|| cant_arrive_words(f)),
         "last24h": {
             "forwarded": counts.queued,
             "delivered": counts.delivered,
@@ -326,57 +487,63 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
     })
 }
 
+/// `show`'s words for what K2 told an outside address, when they matter.
+fn notice_words(state: &str) -> Option<String> {
+    match state {
+        store::N_FAILED => Some("K2 couldn't email this address its stop link yet, so it can't stop this itself; K2 tries again hourly".to_string()),
+        store::N_DUE => Some("not on yet: K2 is pacing its emails, so it will email this address and then turn this on, within minutes or a few hours if many are waiting".to_string()),
+        store::N_STALE => Some(format!(
+            "not on: it was waiting for a confirm and was set more than {} days ago, so K2 didn't turn it on. It sends nothing. To turn it on, set it again",
+            store::LEGACY_ON_WINDOW_SECS / 86_400
+        )),
+        _ => None,
+    }
+}
+
 fn show(row: &MailAddress) -> R<J> {
     let now = now();
-    let (live, events) = db(|c| Ok((store::live_for_address(c, &row.id)?, store::events_for_address(c, &row.id, EVENTS_SHOWN)?)))?;
-    let fwd = live.as_ref().map(|f| forward_json(f, now));
+    let (live, events) = db(|c| Ok((store::live_rows(c, &row.id)?, store::events_for_address(c, &row.id, EVENTS_SHOWN)?)))?;
+    let first_active = live.iter().find(|f| f.is_active());
+    let fwd = first_active.or(live.first()).map(|f| forward_json(f, now));
     Ok(json!({
         "ok": true,
         "address": row.address,
         // The pre-0.46.7 shape, kept for older CLIs: only an active
         // forward is a forward.
-        "to": live.as_ref().filter(|f| f.is_active()).map(|f| f.dest.clone()),
-        "keep": live.as_ref().is_some_and(|f| f.is_active() && f.keep),
+        "to": first_active.map(|f| f.dest.clone()),
+        "keep": live.iter().any(|f| f.is_active() && f.keep),
+        // The shape before several destinations: the first one.
         "forward": fwd,
+        "forwards": live.iter().map(|f| forward_json(f, now)).collect::<Vec<_>>(),
+        "maxDestinations": store::MAX_DESTINATIONS,
         "events": events,
     }))
 }
 
 // ── the verbs (shared by the admin and person routes) ───────────────
 
-fn set(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
-    let to = s(v, "to").ok_or_else(|| fail(400, "usage", "missing 'to': the destination address"))?;
-    let keep = keep_field(v)?;
-    let now = now();
-    match classify_dest(&row.address, to)? {
-        Dest::Internal(dest) => {
-            let keep = keep.unwrap_or(false);
-            let actor = caller.actor();
-            let r = forward_sync::change_and_sync(&row.id, |c, now| {
-                store::create(
-                    c,
-                    &store::NewForward {
-                        address_id: &row.id,
-                        address: &row.address,
-                        dest: &dest,
-                        dest_kind: store::KIND_INTERNAL,
-                        keep,
-                        set_by: &actor,
-                        state: store::ST_ACTIVE,
-                        verified_address_id: None,
-                    },
-                    now,
-                )
-                .map_err(store::TransitionError::Db)
-            });
-            let (f, note) = changed(r)?;
-            Ok(json!({ "ok": true, "address": row.address, "to": f.dest, "keep": f.keep, "kind": f.dest_kind, "state": f.state, "note": note }))
-        }
-        Dest::External(dest) => set_external(row, caller, &dest, keep.unwrap_or(true), now),
+/// `set` (exactly these destinations) or `add` (these as well).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Set,
+    Add,
+}
+
+/// Can this live row stand for `dest`, as it is? An outside row waiting on an
+/// old confirm or stopped can't, and a same-box row only while active.
+fn row_stands(f: &Forward, dest: &Dest) -> bool {
+    if f.dest != dest.address() || f.dest_kind != dest.kind() {
+        return false;
+    }
+    if f.is_external() {
+        // A row waiting its turn stands too: its notice is on the way.
+        (f.state != store::ST_PENDING_VERIFY || f.notice_state.as_deref() == Some(store::N_DUE)) && f.pause_reason.as_deref() != Some(store::P_REVOKED)
+    } else {
+        f.is_active()
     }
 }
 
-fn set_external(row: &MailAddress, caller: &Caller, dest: &str, keep: bool, now: i64) -> R<J> {
+fn refuse_outside_now(row: &MailAddress) -> R<()> {
     if email_notify::airgap_blocks() {
         return Err(fail(409, "air_gap", "air-gap is on: nothing leaves this server, so it can't forward outside"));
     }
@@ -391,101 +558,360 @@ fn set_external(row: &MailAddress, caller: &Caller, dest: &str, keep: bool, now:
             format!("{}'s domain is receive-only, so its mail can't be forwarded outside (Settings → Email → Sending)", row.address),
         ));
     }
+    Ok(())
+}
+
+fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
+    let dests = dests_from(row, v)?;
+    let keep = keep_field(v)?;
+    let restart = v.get("restartStopped").and_then(J::as_bool).unwrap_or(false);
     let actor = caller.actor();
-    // Same destination already live: only the keep setting can change.
-    if let Some(f) = db(|c| store::live_for_address(c, &row.id))?.filter(|f| f.is_external() && f.dest == dest && f.state != store::ST_PENDING_VERIFY && f.pause_reason.as_deref() != Some(store::P_REVOKED)) {
-        let r = forward_sync::change_and_sync(&row.id, |c, now| {
-            store::set_keep(c, &f.id, keep, &actor, now).map_err(store::TransitionError::Db)?;
-            store::get(c, &f.id).map_err(store::TransitionError::Db)?.ok_or(store::TransitionError::NotFound)
-        });
-        let (f, note) = changed(r)?;
-        return Ok(json!({ "ok": true, "address": row.address, "to": f.dest, "keep": f.keep, "kind": f.dest_kind, "state": f.state, "note": note }));
+    let _adds = ADDS.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now();
+    let live = db(|c| store::live_rows(c, &row.id))?;
+    let outside: Vec<&str> = dests.iter().filter(|d| tells_destination(d)).map(Dest::address).collect();
+
+    // Every refusal comes first: nothing has changed, and nobody was mailed.
+    if !outside.is_empty() {
+        refuse_outside_now(row)?;
     }
-    let started = forward_verify::start(&row.address, row.stalwart_account_id.as_deref(), dest, &caller.asker(), now)?;
-    let (state, sent_via) = match &started {
-        Started::AlreadyVerified(_) => (store::ST_ACTIVE, None),
-        Started::Sent { via, .. } => (store::ST_PENDING_VERIFY, Some(*via)),
-    };
-    let verified_id = started.verified_row().id.clone();
-    let r = forward_sync::change_and_sync(&row.id, |c, now| {
-        let f = store::create(
-            c,
-            &store::NewForward {
-                address_id: &row.id,
-                address: &row.address,
-                dest,
-                dest_kind: store::KIND_EXTERNAL,
-                keep,
-                set_by: &actor,
-                state,
-                verified_address_id: Some(&verified_id),
-            },
-            now,
-        )
-        .map_err(store::TransitionError::Db)?;
-        if let Some(via) = sent_via {
-            store::record_event(c, &f.id, store::E_VERIFY_SENT, &actor, &json!({ "via": via }), now).map_err(store::TransitionError::Db)?;
+    let stopped: Vec<String> = db(|c| Ok(outside.iter().filter(|d| k2_core::email_verify::is_stopped(c, &row.address, d)).map(|d| d.to_string()).collect()))?;
+    if let Some(d) = stopped.first() {
+        if !restart {
+            return Err(fail(
+                409,
+                "destination_stopped",
+                if caller.may_restart() {
+                    format!("{d} pressed Stop in K2's email, so K2 won't forward to it. To override that, add --restart-stopped; ask them first")
+                } else {
+                    format!("{d} pressed Stop in K2's email, so K2 won't forward to it. Only the owner or an Admin can choose it again")
+                },
+            ));
         }
-        Ok(f)
-    });
-    let (f, note) = changed(r)?;
-    let pending = f.state == store::ST_PENDING_VERIFY;
-    if !pending {
-        forward_verify::notice_activated(&f);
+        if !caller.may_restart() {
+            return Err(fail(403, "owner_only", format!("{d} pressed Stop in K2's email; only the owner or an Admin can choose it again")));
+        }
     }
+    let stays = |f: &Forward| dests.iter().any(|d| d.address() == f.dest);
+    let others_left = if mode == Mode::Add { live.iter().filter(|f| !stays(f)).count() } else { 0 };
+    if others_left + dests.len() > store::MAX_DESTINATIONS {
+        return Err(fail(
+            409,
+            "too_many_destinations",
+            format!(
+                "a mailbox forwards to at most {} addresses, and this would make {} for {}. Remove one first: k2 hostmail forward rm {} --to <address>",
+                store::MAX_DESTINATIONS,
+                others_left + dests.len(),
+                row.address,
+                row.address
+            ),
+        ));
+    }
+    let fresh: Vec<&Dest> = dests.iter().filter(|d| !live.iter().any(|f| row_stands(f, d))).collect();
+    let fresh_outside = fresh.iter().filter(|d| tells_destination(d)).count() as i64;
+    if fresh_outside > 0 {
+        let (used, cap) = db(|c| Ok((store::new_outside_since(c, now - store::WINDOW_SECS)?, store::new_outside_cap(c)?)))?;
+        if used + fresh_outside > cap {
+            let mut f = fail(
+                429,
+                "new_outside_limit",
+                format!(
+                    "this server adds at most {cap} new outside addresses a day, and {used} went on in the last 24 hours. Nothing changed; try later, or forward to a mailbox on this server. Only the owner can change the limit: k2 hostmail config --forward-new-per-day <n>"
+                ),
+            );
+            f.retry_after_ms = Some(3_600_000);
+            return Err(f);
+        }
+    }
+
+    // `set` declares the whole list, with each kind's default; `add` joins
+    // what's there, keeping its setting unless this is the first outside one.
+    let keep = keep.unwrap_or_else(|| match mode {
+        Mode::Set => !outside.is_empty(),
+        Mode::Add => live.iter().any(|f| f.keep) || (!outside.is_empty() && !live.iter().any(Forward::is_external)),
+    });
+
+    // Tell each new outside address BEFORE its redirect exists. Past the
+    // hour's burst, or with others already waiting, it waits its turn.
+    let (sent_this_hour, waiting) = db(|c| Ok((store::notices_since(c, now - 3600)?, store::due_waiting(c)?)))?;
+    let mut room = if waiting > 0 { 0 } else { (store::NOTICES_BURST_PER_HOUR - sent_this_hour).max(0) };
+    let asker = caller.asker();
+    let mut told: Vec<(String, Told)> = Vec::new();
+    let mut queued: Vec<String> = Vec::new();
+    for d in fresh.iter().filter(|d| tells_destination(d)) {
+        // A restart is a person's explicit choice, and goes now.
+        if room <= 0 && !stopped.iter().any(|s| s == d.address()) {
+            queued.push(d.address().to_string());
+            continue;
+        }
+        room -= 1;
+        told.push((d.address().to_string(), forward_verify::tell_destination(&row.address, row.stalwart_account_id.as_deref(), d.address(), &asker, now)?));
+    }
+
+    // One change, one Sieve write.
+    let mut change = OutsideChange::default();
+    let r = forward_sync::change_and_sync(&row.id, |c, now| {
+        let dbe = store::TransitionError::Db;
+        let actor_ref = &actor;
+        let change_ref = &mut change;
+        let mut newest: Option<Forward> = None;
+        // After the change an outside row (even one just retired) tells
+        // `after_change` the webhook may need to follow.
+        let mut retired_outside: Option<String> = None;
+        if mode == Mode::Set {
+            for f in live.iter().filter(|f| !dests.iter().any(|d| d.address() == f.dest)) {
+                store::retire(c, f, actor_ref, now).map_err(dbe)?;
+                if f.is_external() {
+                    change_ref.removed.push(f.dest.clone());
+                    retired_outside = Some(f.id.clone());
+                }
+            }
+        }
+        for d in fresh.iter() {
+            let t = told.iter().find(|(a, _)| a == d.address()).map(|(_, t)| t);
+            let waits = queued.iter().any(|q| q == d.address());
+            let f = store::add(
+                c,
+                &store::NewForward {
+                    address_id: &row.id,
+                    address: &row.address,
+                    dest: d.address(),
+                    dest_kind: d.kind(),
+                    keep,
+                    set_by: actor_ref,
+                    state: if waits { store::ST_PENDING_VERIFY } else { store::ST_ACTIVE },
+                    verified_address_id: t.map(|t| t.verified_id.as_str()),
+                },
+                now,
+            )
+            .map_err(dbe)?;
+            if waits {
+                store::set_notice(c, &f.id, store::N_DUE, now).map_err(dbe)?;
+                change_ref.queued.push(f.dest.clone());
+            }
+            if let Some(t) = t {
+                t.record(c, &f.id, actor_ref, now).map_err(dbe)?;
+                if t.via.is_none() {
+                    change_ref.not_told.push(f.dest.clone());
+                }
+                if stopped.iter().any(|s| s == d.address()) {
+                    store::record_event(c, &f.id, store::E_RESTARTED, actor_ref, &json!({}), now).map_err(dbe)?;
+                    change_ref.restarted.push(f.dest.clone());
+                } else {
+                    change_ref.added.push(f.dest.clone());
+                }
+            }
+            newest = Some(f);
+        }
+        let mut keep_moved = false;
+        for f in store::live_rows(c, &row.id).map_err(dbe)? {
+            keep_moved |= store::set_keep(c, &f.id, keep, actor_ref, now).map_err(dbe)? && f.is_external();
+            if newest.as_ref().is_none_or(|n| !n.is_external()) {
+                newest = Some(f);
+            }
+        }
+        if keep_moved {
+            change_ref.keep = Some(keep);
+        }
+        if newest.as_ref().is_none_or(|n| !n.is_external()) {
+            if let Some(id) = retired_outside {
+                newest = store::get(c, &id).map_err(dbe)?;
+            }
+        }
+        newest.ok_or(store::TransitionError::NotFound)
+    });
+    let (_, note) = changed(r)?;
+    forward_verify::tell_owner_changed(&row.address, &actor, &change);
+
+    // The answer: one entry per destination asked for. The top-level fields
+    // are the first one's, the shape from before several destinations.
+    let rows = db(|c| store::live_rows(c, &row.id))?;
+    let mut answers = Vec::with_capacity(dests.len());
+    for d in &dests {
+        let f = rows.iter().find(|f| f.dest == d.address()).ok_or_else(|| email_notify::db_fail(format!("the row for {} is gone", d.address())))?;
+        let t = told.iter().find(|(a, _)| a == d.address()).map(|(_, t)| t);
+        let message = match t {
+            Some(Told { via: Some(_), .. }) => Some(format!("Forwarding to {} is on. K2 emailed {} to say so, with a link to stop it.", f.dest, f.dest)),
+            Some(Told { error, .. }) => Some(format!(
+                "Forwarding to {} is on, but K2 couldn't email {} its stop link yet ({}). K2 tries again hourly; forward list shows it.",
+                f.dest,
+                f.dest,
+                error.as_deref().unwrap_or("the mail server refused")
+            )),
+            None if queued.iter().any(|q| q == &f.dest) => Some(format!(
+                "Forwarding to {} isn't on yet. K2 is pacing its emails, so it will email {} first and then turn this on, within minutes or a few hours if many are waiting.",
+                f.dest, f.dest
+            )),
+            None => None,
+        };
+        // A mailbox here whose domain's MX points elsewhere: Stalwart delivers
+        // its own domains itself, whatever their MX says.
+        let local = d.kind() == store::KIND_EXTERNAL && t.is_some() && hosted_domain(d.address().rsplit_once('@').map_or("", |(_, x)| x));
+        answers.push(json!({
+            "to": f.dest,
+            "kind": f.dest_kind,
+            "keep": f.keep,
+            "state": f.state,
+            "new": t.is_some() || fresh.iter().any(|n| n.address() == f.dest),
+            "notice": t.map(Told::notice_state),
+            "sentVia": t.and_then(|t| t.via),
+            "message": message,
+            "note": local.then(|| format!("{}'s domain's MX points elsewhere, but this server hosts that domain, so this mail goes to the mailbox on this server, not to the other provider", f.dest)),
+        }));
+    }
+    let first = answers.first().cloned().unwrap_or(J::Null);
+    let note = note.or_else(|| first["note"].as_str().map(str::to_string));
     Ok(json!({
         "ok": true,
-        "accepted": pending,
         "address": row.address,
-        "to": f.dest,
-        "keep": f.keep,
-        "kind": f.dest_kind,
-        "state": f.state,
-        "sentVia": sent_via,
-        "message": if pending {
-            format!("We emailed {} a confirm link. Forwarding starts when they click it (the link works for 24 hours).", f.dest)
-        } else {
-            format!("{} already confirmed it wants this mail; forwarding is on.", f.dest)
-        },
+        "to": first["to"],
+        "keep": first["keep"],
+        "kind": first["kind"],
+        "state": first["state"],
+        "sentVia": first["sentVia"],
+        "message": first["message"],
+        "note": note,
+        "destinations": answers,
+    }))
+}
+
+fn live_or_404(row: &MailAddress) -> R<Vec<Forward>> {
+    let live = db(|c| store::live_rows(c, &row.id))?;
+    if live.is_empty() {
+        return Err(fail(404, "not_found", format!("{} has no forward", row.address)));
+    }
+    Ok(live)
+}
+
+/// The rows `to` names (each must be live), or every live row.
+fn targets(row: &MailAddress, v: &J) -> R<Vec<Forward>> {
+    let live = live_or_404(row)?;
+    let Some(want) = addresses_from(v)? else { return Ok(live) };
+    let mut out = Vec::with_capacity(want.len());
+    for w in &want {
+        let f = live
+            .iter()
+            .find(|f| f.dest == *w)
+            .ok_or_else(|| fail(404, "not_found", format!("{} doesn't forward to {w}", row.address)))?;
+        if !out.iter().any(|o: &Forward| o.id == f.id) {
+            out.push(f.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Remove `rows` in one change.
+fn remove_rows(row: &MailAddress, caller: &Caller, rows: &[Forward]) -> R<(Forward, Option<String>)> {
+    let actor = caller.actor();
+    let (first, actor_ref) = (rows.first().cloned().ok_or_else(|| fail(404, "not_found", "no such forward"))?, &actor);
+    let r = forward_sync::change_and_sync(&row.id, |c, now| {
+        let mut last = first;
+        for f in rows {
+            let done = store::transition(c, &f.id, store::ST_REMOVED, &store::Change { actor: actor_ref, ..Default::default() }, now)?;
+            if done.is_external() || !last.is_external() {
+                last = done;
+            }
+        }
+        Ok(last)
+    });
+    let out = changed(r)?;
+    let removed: Vec<String> = rows.iter().filter(|f| f.is_external()).map(|f| f.dest.clone()).collect();
+    forward_verify::tell_owner_changed(&row.address, &actor, &OutsideChange { removed, ..Default::default() });
+    Ok(out)
+}
+
+fn rm(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
+    if addresses_from(v)?.is_none() {
+        return Err(fail(400, "usage", "missing 'to': which destination to remove (k2 hostmail forward unset removes them all)"));
+    }
+    let rows = targets(row, v)?;
+    let (_, note) = remove_rows(row, caller, &rows)?;
+    let left = db(|c| store::live_rows(c, &row.id))?;
+    Ok(json!({
+        "ok": true,
+        "address": row.address,
+        "removed": rows.iter().map(|f| f.dest.clone()).collect::<Vec<_>>(),
+        "remaining": left.iter().map(|f| f.dest.clone()).collect::<Vec<_>>(),
         "note": note,
     }))
 }
 
-fn live_or_404(row: &MailAddress) -> R<Forward> {
-    db(|c| store::live_for_address(c, &row.id))?.ok_or_else(|| fail(404, "not_found", format!("{} has no forward", row.address)))
-}
-
 fn unset(row: &MailAddress, caller: &Caller) -> R<J> {
-    let f = match db(|c| store::live_for_address(c, &row.id))? {
-        Some(f) => f,
+    let live = db(|c| store::live_rows(c, &row.id))?;
+    if live.is_empty() {
         // Nothing to remove: still make sure no forward block is left.
-        None => {
-            let note = forward_sync::sync_mailbox(&row.id, forward_sync::Why::Change).err().map(|e| email_notify::send::mask_addresses(&e));
-            return Ok(json!({ "ok": true, "address": row.address, "to": J::Null, "removed": false, "note": note }));
+        let note = forward_sync::sync_mailbox(&row.id, forward_sync::Why::Change).err().map(|e| email_notify::send::mask_addresses(&e));
+        return Ok(json!({ "ok": true, "address": row.address, "to": J::Null, "removed": false, "note": note }));
+    }
+    let (f, note) = remove_rows(row, caller, &live)?;
+    Ok(json!({ "ok": true, "address": row.address, "to": J::Null, "removed": true, "id": f.id, "count": live.len(), "note": note }))
+}
+
+/// One row, the shape from before several destinations; several, a list and
+/// what was left alone.
+fn state_answer(row: &MailAddress, rows: &[Forward], skipped: Vec<J>, note: Option<String>) -> J {
+    let first = rows.first();
+    json!({
+        "ok": true,
+        "address": row.address,
+        "to": first.map(|f| f.dest.clone()),
+        "state": first.map(|f| f.state.clone()),
+        "pauseReason": first.and_then(|f| f.pause_reason.clone()),
+        "forwards": rows.iter().map(|f| json!({ "to": f.dest, "state": f.state, "pauseReason": f.pause_reason })).collect::<Vec<_>>(),
+        "skipped": skipped,
+        "note": note,
+    })
+}
+
+fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
+    let rows = targets(row, v)?;
+    let mut done = Vec::with_capacity(rows.len());
+    let mut skipped = Vec::new();
+    let mut note = None;
+    let one = rows.len() == 1;
+    for f in rows {
+        if f.state == store::ST_PAUSED {
+            done.push(f);
+            continue;
         }
-    };
-    let actor = caller.actor();
-    let (f, note) = changed(forward_sync::transition_and_sync(&f.id, store::ST_REMOVED, &store::Change { actor: &actor, ..Default::default() }))?;
-    Ok(json!({ "ok": true, "address": row.address, "to": J::Null, "removed": true, "id": f.id, "note": note }))
+        if f.state == store::ST_PENDING_VERIFY && !one {
+            skipped.push(json!({ "to": f.dest, "why": "it isn't on, so there's nothing to pause" }));
+            continue;
+        }
+        let (f, n) = changed(forward_sync::pause(&f.id, store::P_MANUAL, &caller.actor(), None))?;
+        note = note.or(n);
+        done.push(f);
+    }
+    Ok(state_answer(row, &done, skipped, note))
 }
 
-fn pause(row: &MailAddress, caller: &Caller) -> R<J> {
-    let f = live_or_404(row)?;
-    if f.state == store::ST_PAUSED {
-        return Ok(json!({ "ok": true, "address": row.address, "state": f.state, "pauseReason": f.pause_reason }));
+fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
+    let rows = targets(row, v)?;
+    let one = rows.len() == 1;
+    let mut done = Vec::with_capacity(rows.len());
+    let mut skipped = Vec::new();
+    let mut refused: Option<Fail> = None;
+    let mut note = None;
+    for f in rows {
+        if f.state != store::ST_PAUSED {
+            if one {
+                return Err(fail(409, "bad_state", format!("the forward is {}, not paused", f.state)));
+            }
+            continue;
+        }
+        if let Err(no) = caller.may_resume(f.pause_reason.as_deref().unwrap_or("")) {
+            skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
+            refused = refused.or(Some(no));
+            continue;
+        }
+        let (f, n) = changed(forward_sync::resume(&f.id, &caller.actor()))?;
+        note = note.or(n);
+        done.push(f);
     }
-    let (f, note) = changed(forward_sync::pause(&f.id, store::P_MANUAL, &caller.actor(), None))?;
-    Ok(json!({ "ok": true, "address": row.address, "state": f.state, "pauseReason": f.pause_reason, "note": note }))
-}
-
-fn resume(row: &MailAddress, caller: &Caller) -> R<J> {
-    let f = live_or_404(row)?;
-    if f.state != store::ST_PAUSED {
-        return Err(fail(409, "bad_state", format!("the forward is {}, not paused", f.state)));
+    if done.is_empty() {
+        return Err(refused.unwrap_or_else(|| fail(409, "bad_state", format!("no forward of {} is paused", row.address))));
     }
-    caller.may_resume(f.pause_reason.as_deref().unwrap_or(""))?;
-    let (f, note) = changed(forward_sync::resume(&f.id, &caller.actor()))?;
-    Ok(json!({ "ok": true, "address": row.address, "state": f.state, "pauseReason": f.pause_reason, "note": note }))
+    Ok(state_answer(row, &done, skipped, note))
 }
 
 // ── the admin routes (/cli/mail/forward*) ───────────────────────────
@@ -501,15 +927,37 @@ pub fn handle_forward_get(params: &HashMap<String, String>) -> CliResponse {
     respond(mailbox_from(&json!({ "address": address })).and_then(|row| show(&row)))
 }
 
-/// POST `/cli/mail/forward` `{address, to, keep?}`.
+/// `to` before the mailbox: a bad call is a usage error, not a 404.
+fn require_to(v: &J) -> R<()> {
+    if addresses_from(v)?.is_none() {
+        return Err(fail(400, "usage", "missing 'to': the destination (a mailbox here, or an outside address)"));
+    }
+    Ok(())
+}
+
+/// POST `/cli/mail/forward` `{address, to, keep?, restartStopped?}`: exactly
+/// these destinations.
 pub fn handle_forward_set(body: &[u8]) -> CliResponse {
     respond(body_json(body).and_then(|v| {
-        if s(&v, "to").is_none() {
-            return Err(fail(400, "usage", "missing 'to': the destination (a mailbox here, or an outside address)"));
-        }
+        require_to(&v)?;
         let row = mailbox_from(&v)?;
-        set(&row, &Caller::of_request(), &v)
+        set_or_add(&row, &Caller::of_request(), &v, Mode::Set)
     }))
+}
+
+/// POST `/cli/mail/forward/add` `{address, to, keep?, restartStopped?}`:
+/// these as well, the others untouched.
+pub fn handle_forward_add(body: &[u8]) -> CliResponse {
+    respond(body_json(body).and_then(|v| {
+        require_to(&v)?;
+        let row = mailbox_from(&v)?;
+        set_or_add(&row, &Caller::of_request(), &v, Mode::Add)
+    }))
+}
+
+/// POST `/cli/mail/forward/rm` `{address, to}`: these gone, the others untouched.
+pub fn handle_forward_rm(body: &[u8]) -> CliResponse {
+    respond(body_json(body).and_then(|v| rm(&mailbox_from(&v)?, &Caller::of_request(), &v)))
 }
 
 /// POST `/cli/mail/forward/unset` `{address}`.
@@ -517,14 +965,48 @@ pub fn handle_forward_unset(body: &[u8]) -> CliResponse {
     respond(body_json(body).and_then(|v| unset(&mailbox_from(&v)?, &Caller::of_request())))
 }
 
-/// POST `/cli/mail/forward/pause` `{address}`.
+/// POST `/cli/mail/forward/pause` `{address, to?}`.
 pub fn handle_forward_pause(body: &[u8]) -> CliResponse {
-    respond(body_json(body).and_then(|v| pause(&mailbox_from(&v)?, &Caller::of_request())))
+    respond(body_json(body).and_then(|v| pause(&mailbox_from(&v)?, &Caller::of_request(), &v)))
 }
 
-/// POST `/cli/mail/forward/resume` `{address}`.
+/// POST `/cli/mail/forward/resume` `{address, to?}`.
 pub fn handle_forward_resume(body: &[u8]) -> CliResponse {
-    respond(body_json(body).and_then(|v| resume(&mailbox_from(&v)?, &Caller::of_request())))
+    respond(body_json(body).and_then(|v| resume(&mailbox_from(&v)?, &Caller::of_request(), &v)))
+}
+
+/// POST `/cli/mail/config/forward-new-per-day` `{perDay}`: how many new
+/// outside addresses this box may add a day. The owner only: the route's
+/// floor refuses an Admin login, the mail surface refuses a passport (and an
+/// agent gets "It can't be requested."), and this refuses a passport again.
+/// An agent must never be able to loosen this limit. Lowering it counts too.
+pub fn handle_forward_cap(body: &[u8]) -> CliResponse {
+    if crate::caller_workspace::request_principal().is_some() {
+        return email_notify::fail_response(&fail(403, "owner_only", "only the owner changes how many new outside addresses this server may add a day"));
+    }
+    respond(body_json(body).and_then(|v| {
+        let n = v
+            .get("perDay")
+            .and_then(J::as_i64)
+            .ok_or_else(|| fail(400, "usage", "send {perDay}: how many new outside addresses a day, a whole number"))?;
+        if !(0..=store::NEW_OUTSIDE_PER_DAY_MAX).contains(&n) {
+            return Err(fail(
+                400,
+                "usage",
+                format!("--forward-new-per-day can be at most {}, and {n} is out of range. Nothing changed", store::NEW_OUTSIDE_PER_DAY_MAX),
+            ));
+        }
+        if !db(|c| store::set_new_outside_cap(c, n))? {
+            return Err(fail(409, "not_ready", "this server has no mail server yet (k2 hostmail enable)"));
+        }
+        email_notify::audit_line("mail-forward-cap", "owner", &format!("new_outside_per_day={n}"));
+        Ok(json!({
+            "ok": true,
+            "perDay": n,
+            "default": store::NEW_OUTSIDE_PER_DAY,
+            "max": store::NEW_OUTSIDE_PER_DAY_MAX,
+        }))
+    }))
 }
 
 /// GET `/cli/mail/forwards[?state=paused|active|pending_verify][&kind=external]`
@@ -624,10 +1106,12 @@ pub fn self_route(is_post: bool, path: &str, body: &[u8], person: &str, params: 
     respond(body_json(body).and_then(|v| {
         let row = person_mailbox(person, s(&v, "address"))?;
         match path {
-            SELF_PATH => set(&row, &caller, &v),
+            SELF_PATH => set_or_add(&row, &caller, &v, Mode::Set),
+            SELF_ADD_PATH => set_or_add(&row, &caller, &v, Mode::Add),
+            SELF_RM_PATH => rm(&row, &caller, &v),
             SELF_UNSET_PATH => unset(&row, &caller),
-            SELF_PAUSE_PATH => pause(&row, &caller),
-            SELF_RESUME_PATH => resume(&row, &caller),
+            SELF_PAUSE_PATH => pause(&row, &caller, &v),
+            SELF_RESUME_PATH => resume(&row, &caller, &v),
             _ => Err(fail(404, "not_found", "no such route")),
         }
     }))

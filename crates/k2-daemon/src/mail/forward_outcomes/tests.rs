@@ -118,6 +118,9 @@ fn the_dsn_details_carry_the_enhanced_status_and_classify_user_vs_policy() {
     assert_eq!(r("Unexpected response for DATA: Code: 554, Enhanced code: 5.7.26, Message: DMARC"), store::O_REFUSED_POLICY);
     // A full mailbox, a bad message: refused, but neither gone nor policy.
     assert_eq!(r("Unexpected response for DATA: Code: 552, Enhanced code: 5.2.2, Message: over quota"), store::O_FAILED);
+    // Stalwart's own refusal for a domain it hosts (seen live, probe X12).
+    assert_eq!(r("Unexpected response for RCPT TO:<x@o.test>: Code: 550, Enhanced code: 5.5.0, Message: Mailbox not found."), store::O_REFUSED_USER);
+    assert_eq!(r("Unexpected response for DATA: Code: 550, Enhanced code: 5.5.0, Message: syntax"), store::O_FAILED);
     // No enhanced code (0.0.0): the text decides; policy words win.
     assert_eq!(parse_status("Code: 550, Enhanced code: 0.0.0, Message: x").enhanced, None);
     assert_eq!(r("Unexpected response for RCPT TO:<x@o.test>: Code: 550, Enhanced code: 0.0.0, Message: User unknown"), store::O_REFUSED_USER);
@@ -160,6 +163,11 @@ fn the_trip_rules_match_the_prd() {
     assert_eq!(forward_trip(&c(10, 0, 0, 9), 0), None, "failures aren't policy refusals");
     assert_eq!(forward_trip(&c(500, 0, 0, 0), 0), Some(store::P_DAILY_CAP));
     assert_eq!(forward_trip(&c(499, 0, 0, 0), 0), None);
+    // Email Notifications' hard-bounce rate, per destination: over 5% of at
+    // least 50, even with deliveries breaking up the run.
+    assert_eq!(forward_trip(&c(50, 3, 0, 0), 1), Some(store::P_DEST_GONE), "6% of 50");
+    assert_eq!(forward_trip(&c(50, 2, 0, 0), 1), None, "4% of 50");
+    assert_eq!(forward_trip(&c(49, 3, 0, 0), 1), None, "under 50");
     assert!(brake_trip(&c(50, 2, 2, 2)), "12% of 50");
     assert!(!brake_trip(&c(50, 5, 0, 0)), "exactly 10%");
     assert!(!brake_trip(&c(49, 10, 10, 10)), "under 50");
@@ -488,4 +496,116 @@ fn the_two_throttles_match_the_probe_file_and_are_written_once() {
     assert_eq!(objs[0]["id"], "mine");
     assert_eq!(objs[0]["rate"]["count"], 5, "untouched");
     assert_eq!(objs[1]["rate"]["count"], store::HOURLY_CAP);
+}
+
+// ── several destinations: every copy counts ─────────────────────────
+
+fn add_active(addr: &str, dest: &str, at: i64) -> Forward {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let aid: String = conn.query_row("SELECT id FROM mail_addresses WHERE address = ?1", rusqlite::params![addr], |r| r.get(0)).expect("mailbox");
+    drop(conn);
+    let v = verified_row(addr, dest);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let f = store::add(
+        &conn,
+        &store::NewForward { address_id: &aid, address: addr, dest, dest_kind: store::KIND_EXTERNAL, keep: true, set_by: "owner", state: store::ST_ACTIVE, verified_address_id: Some(&v) },
+        at,
+    )
+    .expect("add");
+    drop(conn);
+    forward_sync::sync_mailbox(&aid, forward_sync::Why::Change).expect("sync");
+    f
+}
+
+/// Each redirect is its own queue id, and the webhook joins it to its own
+/// destination.
+#[test]
+fn each_copy_joins_its_own_destination() {
+    let (_g, _io) = setup();
+    let t = now();
+    let addr = "two@brand.test";
+    let a = active(addr, "a@outside.test", t - 100);
+    let b = add_active(addr, "b@outside.test", t - 100);
+    let batch = events(json!([queued(1, addr, "a@outside.test"), queued(2, addr, "b@outside.test"), delivered(1, "a@outside.test"),
+        perm_fail(2, addr, "b@outside.test", 550, "5.1.1", "no such user")]));
+    let got = apply(&batch, t);
+    assert_eq!((got.linked, got.recorded), (2, 4), "{got:?}");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (ca, cb) = (store::counts(&conn, &a.id, 0).expect("a"), store::counts(&conn, &b.id, 0).expect("b"));
+    assert_eq!((ca.queued, ca.delivered, ca.refused_user), (1, 1, 0));
+    assert_eq!((cb.queued, cb.delivered, cb.refused_user), (1, 0, 1));
+}
+
+/// Refusals are per destination: three gone refusals from one pause that one,
+/// and the other keeps forwarding.
+#[test]
+fn a_destination_refusing_pauses_only_that_destination() {
+    let (_g, io) = setup();
+    let t = now();
+    let addr = "split@brand.test";
+    let good = active(addr, "good@outside.test", t - 100);
+    let bad = add_active(addr, "bad@outside.test", t - 100);
+    assert_eq!(io.forward("acc-split").expect("both").more, vec!["bad@outside.test".to_string()]);
+    for (i, q) in [11u64, 12, 13].iter().enumerate() {
+        let batch = events(json!([queued(*q, addr, "bad@outside.test"), perm_fail(*q, addr, "bad@outside.test", 550, "5.1.1", "no such user")]));
+        let got = apply(&batch, t + i as i64);
+        assert_eq!(got.paused.len(), usize::from(i == 2), "{got:?}");
+    }
+    assert_eq!(row(&bad.id).pause_reason.as_deref(), Some(store::P_DEST_GONE));
+    assert_eq!(row(&good.id).state, store::ST_ACTIVE, "the other destination is untouched");
+    let fwd = io.forward("acc-split").expect("still forwarding");
+    assert_eq!((fwd.dest.as_str(), fwd.more.len()), ("good@outside.test", 0));
+    let n = take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("bad@outside.test") && n[0].1.contains("--to bad@outside.test"), "{}", n[0].1);
+}
+
+/// The daily cap is the mailbox's and counts every outgoing copy: two
+/// destinations reach it at half the mail, and both pause, with one notice.
+#[test]
+fn the_daily_cap_counts_every_copy_across_destinations() {
+    let (_g, io) = setup();
+    let t = now();
+    let addr = "cap@brand.test";
+    let a = active(addr, "a@outside.test", t - 1000);
+    let b = add_active(addr, "b@outside.test", t - 1000);
+    seed_queued(&a, 1000, 250, t - 900);
+    seed_queued(&b, 2000, 249, t - 900);
+    assert_eq!(evaluate(&a.id, t), None, "499 copies");
+    assert_eq!(row(&b.id).state, store::ST_ACTIVE);
+    seed_queued(&b, 3000, 1, t - 800);
+    assert_eq!(evaluate(&b.id, t), Some(store::P_DAILY_CAP), "500 copies, though neither row alone is near 500");
+    assert_eq!(row(&a.id).pause_reason.as_deref(), Some(store::P_DAILY_CAP), "the whole mailbox stops");
+    assert_eq!(row(&b.id).pause_reason.as_deref(), Some(store::P_DAILY_CAP));
+    assert_eq!(io.forward("acc-cap"), None);
+    let n = take_notices();
+    assert_eq!(n.len(), 1, "one notice for the mailbox: {n:?}");
+    assert!(n[0].1.contains("forwarded 500 messages") && n[0].1.contains("all its outside addresses"), "{}", n[0].1);
+    // A resumed row counts from its resume; the cap doesn't refire on old copies.
+    forward_sync::resume(&a.id, "owner").expect("resume");
+    assert_eq!(evaluate(&a.id, t + 1), None);
+    assert_eq!(row(&b.id).state, store::ST_PAUSED, "resuming one leaves the other");
+}
+
+/// The box brake still counts every copy from every destination.
+#[test]
+fn the_brake_counts_each_destination_s_refusals() {
+    let (_g, _io) = setup();
+    let t = now();
+    let addr = "brk@brand.test";
+    let a = active(addr, "a@outside.test", t - 1000);
+    let b = add_active(addr, "b@outside.test", t - 1000);
+    seed_queued(&a, 5000, 25, t - 900);
+    seed_queued(&b, 6000, 25, t - 900);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for i in 0..6u64 {
+        store::record_outcome(&conn, &b.id, Some(&(6000 + i).to_string()), store::O_FAILED, None, t - 800).expect("outcome");
+    }
+    drop(conn);
+    let paused = evaluate_box(t);
+    assert_eq!(paused.len(), 2, "6 of 50 copies refused, split across destinations: {paused:?}");
 }

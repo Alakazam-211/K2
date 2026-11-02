@@ -133,6 +133,11 @@ const FIREWALL_WHERE: &str =
 /// K2's front on :443 (`k2 front`): the owner, an Admin or a shell tab.
 const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over SSH or in a K2 shell tab";
 
+/// The box's daily cap on new outside forward addresses: the owner's alone.
+/// An agent must not be able to loosen its own limit, so mail.manage (the
+/// `/cli/mail/` row) is not the answer here.
+const FORWARD_CAP_WHERE: &str = "the owner does this, with k2 hostmail config --forward-new-per-day <n>";
+
 /// Sew's home client (AG-21): the owner's alone, never an agent's; an
 /// App's App-only mark off: the owner or an admin.
 const HOME_CLIENT_WHERE: &str = "the server's owner does this, with k2 hostchat home client from a terminal outside K2 or in a K2 shell tab";
@@ -696,6 +701,7 @@ pub(crate) const ROWS: &[Row] = &[
         params: &[("message", &[ParamFrom::Body("/id"), ParamFrom::Query("id")])],
         ..row(ask("mail.approve", Floor::Admin), code(403, "owner_only"), "/cli/mail/approvals/approve", POST)
     },
+    row(Target::Cannot { r#where: FORWARD_CAP_WHERE }, code(403, "owner_only"), "/cli/mail/config/forward-new-per-day", POST),
     // ── database ───────────────────────────────────────────────────────
     Row {
         fixed: &[("level", "write")],
@@ -1597,6 +1603,8 @@ mod tests {
             ("GET", "/cli/front/status", FRONT_WHERE),
             ("POST", "/cli/front/disable", FRONT_WHERE),
             ("POST", "/cli/front/passthrough/add", FIREWALL_WHERE),
+            // An agent can't raise the forward cap, mail.manage or not.
+            ("POST", "/cli/mail/config/forward-new-per-day", FORWARD_CAP_WHERE),
         ] {
             let p = teach_of(403, method, path, &[], None, json!({"error":{"code":"owner_only"},"ok":false})).unwrap();
             assert_eq!(p["requestable"], false, "{path}: {p}");

@@ -1270,13 +1270,14 @@ exit: 0
     },
     {
       "name": "mail forward",
-      "usage": "k2 mail forward set --to <dest> [--keep|--no-keep] | show | unset | pause | resume [--address <addr>] [--json]",
-      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to another address; same rules as k2 hostmail forward (outside: confirm link first, keeps a copy unless --no-keep). The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that clicked Stop (set again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
+      "usage": "k2 mail forward set --to <dest> [--to <dest>…] [--keep|--no-keep] | add --to <dest> [--to <dest>…] [--keep|--no-keep] | rm --to <dest> [--to <dest>…] | show | unset | pause [--to <dest>] | resume [--to <dest>] [--address <addr>] [--json]",
+      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to up to 5 addresses; same rules as k2 hostmail forward (outside: on at once, the address gets an email with a stop link; keeps a copy unless --no-keep). set replaces the whole list, add and rm leave the others alone. The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that pressed Stop (only the owner or an Admin can choose it again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
       "args": [],
       "flags": [
-        {"name": "--to", "arg": "dest", "description": "set: the destination address."},
-        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox."},
-        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy."},
+        {"name": "--to", "arg": "dest", "description": "The destination address; repeat for several. pause and resume: only this one."},
+        {"name": "--keep", "arg": null, "description": "set, add: keep a copy in the mailbox (one setting per mailbox)."},
+        {"name": "--no-keep", "arg": null, "description": "set, add: don't keep a copy."},
+        {"name": "--restart-stopped", "arg": null, "description": "set, add: the owner only: send to an address that pressed Stop anyway."},
         {"name": "--address", "arg": "addr", "description": "Which linked mailbox (when more than one)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -1541,13 +1542,14 @@ exit: 0
     },
     {
       "name": "hostmail forward",
-      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] | show <addr> | unset <addr> | pause <addr> | resume <addr> | list [--paused|--active|--pending] [--external] [--json]",
-      "description": "Forward a hosted mailbox to one address: a mailbox on this server (active at once, no copy unless --keep) or an outside address (K2 emails it a confirm link; set answers state pending_verify and forwarding starts when the link is clicked, 24 h; keeps a copy unless --no-keep). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server (mail waits in the queue); 500/day per mailbox pauses it (daily_cap). Pause reasons (show gives them with words, the confirm-link state, last-24h counts and events): manual, dest_gone, refused, daily_cap, revoked (destination clicked Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only; revoked: set again (a new confirm link). list: owner/Admin. A person's own mailbox: k2 mail forward.",
+      "usage": "k2 hostmail forward set <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | add <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | rm <addr> --to <dest> [--to <dest>…] | show <addr> | unset <addr> | pause <addr> [--to <dest>] | resume <addr> [--to <dest>] | list [--paused|--active|--pending] [--external] [--json]",
+      "description": "Forward a hosted mailbox to up to 5 addresses: a mailbox on this server (no copy unless --keep) or an outside address (keeps a copy unless --no-keep). Every forward goes on at once. An outside address isn't asked: K2 emails it first, saying who set it, with a stop link that needs no login and never expires, and tells the owner (Inbox, plus email if the owner has a notice address). set replaces the whole list; add and rm leave the others alone. Refused: an address on one of this server's own domains with no mailbox here, because that mail would bounce here and never reach another provider whatever the MX says; over 5 per mailbox (too_many_destinations); over 20 new outside addresses a day on this server, a number only the owner can change with k2 hostmail config --forward-new-per-day (new_outside_limit); an address that pressed Stop (destination_stopped: the owner or an Admin can override with --restart-stopped; agents never). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server, counting every copy (mail waits in the queue); 500 copies/day per mailbox pauses all its outside forwards (daily_cap). Pause reasons (show gives them with words, per destination, with the notice state, last-24h counts and events): manual, dest_gone (3 no-such-user refusals in a row, or over 5% of at least 50), refused (over 20% refused as spam or by policy, of at least 10), daily_cap, revoked (destination pressed Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/add/rm/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only. list: owner/Admin; it shows notices that failed and old forwards K2 left off. A person's own mailbox: k2 mail forward.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
-        {"name": "--to", "arg": "dest", "description": "set: a mailbox on this server, or an outside address (confirm link first)."},
-        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox (default for outside destinations)."},
-        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy (default for same-box destinations)."},
+        {"name": "--to", "arg": "dest", "description": "The destination address; repeat for several. pause and resume: only this one (default: all)."},
+        {"name": "--keep", "arg": null, "description": "set, add: keep a copy in the mailbox (one setting per mailbox; default: outside yes, same box no)."},
+        {"name": "--no-keep", "arg": null, "description": "set, add: don't keep a copy."},
+        {"name": "--restart-stopped", "arg": null, "description": "set, add: owner or Admin only: send to an address that pressed Stop anyway. Ask them first."},
         {"name": "--paused", "arg": null, "description": "list: paused forwards only (also --active, --pending)."},
         {"name": "--external", "arg": null, "description": "list: outside destinations only."},
         {"name": "--json", "arg": null, "description": "JSON output."}

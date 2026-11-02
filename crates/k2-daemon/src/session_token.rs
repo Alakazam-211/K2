@@ -2429,6 +2429,8 @@ mod tests {
             "/cli/mail/sieve-audit",
             // 0.46.7: a person's own forward routes.
             "/cli/mail/self/forward",
+            "/cli/mail/self/forward/add",
+            "/cli/mail/self/forward/rm",
             "/cli/mail/self/forward/unset",
             // 0.46.7: the Live editor's socket and probe (people only).
             "/cli/docs/live",

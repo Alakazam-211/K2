@@ -17,6 +17,7 @@
 //! | POST /cli/mail/server/upgrade     | mail/routes_server.rs   |
 //! | GET  /cli/mail/config             | mail/routes_server.rs   |
 //! | POST /cli/mail/config/set         | mail/routes_server.rs   |
+//! | POST /cli/mail/config/forward-new-per-day | mail/forward.rs |
 //! | GET  /cli/mail/doctor             | mail/routes_server.rs   |
 //! | POST /cli/mail/doctor (run, S6)   | mail/routes_server.rs   |
 //! | POST /cli/mail/domain/add         | mail/routes_domains.rs  |
@@ -73,6 +74,8 @@
 //! | POST /cli/mail/alias/remove       | mail/alias.rs          |
 //! | GET  /cli/mail/forward            | mail/forward.rs        |
 //! | POST /cli/mail/forward            | mail/forward.rs        |
+//! | POST /cli/mail/forward/add        | mail/forward.rs        |
+//! | POST /cli/mail/forward/rm         | mail/forward.rs        |
 //! | POST /cli/mail/forward/unset      | mail/forward.rs        |
 //! | POST /cli/mail/forward/pause      | mail/forward.rs        |
 //! | POST /cli/mail/forward/resume     | mail/forward.rs        |
@@ -292,6 +295,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/server/uninstall"
         | "/cli/mail/server/upgrade"
         | "/cli/mail/config/set"
+        | "/cli/mail/config/forward-new-per-day"
         | "/cli/mail/domain/add"
         | "/cli/mail/domain/remove"
         | "/cli/mail/domain/check"
@@ -330,6 +334,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/import"
         | "/cli/mail/cert/renew"
         | "/cli/mail/alias/remove"
+        | "/cli/mail/forward/add"
+        | "/cli/mail/forward/rm"
         | "/cli/mail/forward/unset"
         | "/cli/mail/forward/pause"
         | "/cli/mail/forward/resume"
@@ -393,6 +399,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         // Calendars S1: explicit Stalwart upgrade (owner/admin; never M5).
         "/cli/mail/server/upgrade" => routes_server::handle_server_upgrade(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),
+        "/cli/mail/config/forward-new-per-day" => crate::mail::forward::handle_forward_cap(body),
         "/cli/mail/doctor" => routes_server::handle_doctor_run(body),
         "/cli/mail/domain/add" => routes_domains::handle_domain_add(body),
         "/cli/mail/domain/remove" => routes_domains::handle_domain_remove(body),
@@ -441,6 +448,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/alias" => crate::mail::alias::handle_alias_add(body),
         "/cli/mail/alias/remove" => crate::mail::alias::handle_alias_remove(body),
         "/cli/mail/forward" => crate::mail::forward::handle_forward_set(body),
+        "/cli/mail/forward/add" => crate::mail::forward::handle_forward_add(body),
+        "/cli/mail/forward/rm" => crate::mail::forward::handle_forward_rm(body),
         "/cli/mail/forward/unset" => crate::mail::forward::handle_forward_unset(body),
         "/cli/mail/forward/pause" => crate::mail::forward::handle_forward_pause(body),
         "/cli/mail/forward/resume" => crate::mail::forward::handle_forward_resume(body),
@@ -658,6 +667,8 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/alias"
             | "/cli/mail/alias/remove"
             | "/cli/mail/forward"
+            | "/cli/mail/forward/add"
+            | "/cli/mail/forward/rm"
             | "/cli/mail/forward/unset"
             | "/cli/mail/forward/pause"
             | "/cli/mail/forward/resume"
@@ -1074,6 +1085,8 @@ mod tests {
             "/cli/mail/alias",
             "/cli/mail/alias/remove",
             "/cli/mail/forward",
+            "/cli/mail/forward/add",
+            "/cli/mail/forward/rm",
             "/cli/mail/forward/unset",
             "/cli/mail/ooo",
             "/cli/mail/ooo/unset",
@@ -1714,6 +1727,8 @@ mod tests {
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/alias/remove",
+            "/cli/mail/forward/add",
+            "/cli/mail/forward/rm",
             "/cli/mail/forward/unset",
             "/cli/mail/ooo/unset",
             "/cli/mail/footer/unset",
@@ -1823,6 +1838,8 @@ mod tests {
             "/cli/mail/alias",
             "/cli/mail/alias/remove",
             "/cli/mail/forward",
+            "/cli/mail/forward/add",
+            "/cli/mail/forward/rm",
             "/cli/mail/forward/unset",
         ] {
             let r = dispatch_post(post_path, b"{}");

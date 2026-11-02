@@ -1,6 +1,6 @@
-//! The forward routes end to end against fakes: the mail engine (confirm
-//! mails), a fake Sieve (forward_sync) and the verify pages. No mail
-//! server, no real mail.
+//! The forward routes end to end against fakes: the mail engine (notice
+//! mails), a fake Sieve (forward_sync) and the verify and stop pages. No
+//! mail server, no real mail.
 
 use std::collections::HashMap;
 
@@ -49,6 +49,8 @@ fn post(path: &str, v: J) -> (u16, J) {
     let b = v.to_string();
     let r = match path {
         FORWARD_PATH => handle_forward_set(b.as_bytes()),
+        ADD_PATH => handle_forward_add(b.as_bytes()),
+        RM_PATH => handle_forward_rm(b.as_bytes()),
         UNSET_PATH => handle_forward_unset(b.as_bytes()),
         PAUSE_PATH => handle_forward_pause(b.as_bytes()),
         RESUME_PATH => handle_forward_resume(b.as_bytes()),
@@ -79,70 +81,840 @@ fn last_token(t: &T, prefix: &str) -> String {
     text[at..].chars().take(prefix.len() + 43).collect()
 }
 
-/// The safety core: nothing is written to the mailbox's Sieve until the
-/// destination POSTs Confirm; a link scanner's GET confirms nothing.
+fn sent(t: &T) -> usize {
+    t.f.engine.sent.lock().unwrap().len()
+}
+
+fn forwards() -> Vec<J> {
+    show()["forwards"].as_array().expect("forwards").clone()
+}
+
+fn one<'a>(rows: &'a [J], to: &str) -> &'a J {
+    rows.iter().find(|f| f["to"] == to).unwrap_or_else(|| panic!("no row for {to} in {rows:?}"))
+}
+
+/// Opt-out: active at once, with one notice saying so, and no confirm step.
 #[test]
-fn an_outside_forward_waits_for_the_confirm_post() {
+fn an_outside_forward_goes_on_at_once_with_one_notice_and_no_confirm() {
     let t = t("fwout");
     let sys = system_sender_on();
+    let _ = crate::mail::forward_outcomes::take_notices();
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "Me@Outside.test" }));
-    assert_eq!((st, v["state"].clone(), v["keep"].clone()), (202, json!("pending_verify"), json!(true)), "{v}");
-    assert!(v["message"].as_str().unwrap_or("").contains("confirm link"), "{v}");
-    assert_eq!(t.io.forward(ACC), None, "nothing forwarded before the confirm");
-    let mail = t.f.engine.sent.lock().unwrap().last().cloned().expect("confirm mail");
+    assert_eq!((st, v["state"].clone(), v["keep"].clone()), (200, json!("active"), json!(true)), "{v}");
+    assert!(v["message"].as_str().unwrap_or("").contains("with a link to stop it"), "{v}");
+    let fwd = t.io.forward(ACC).expect("forward written");
+    assert_eq!((fwd.dest.as_str(), fwd.keep, fwd.guard.map(|g| g.host)), (OUT, true, Some(HOST.to_string())));
+    // One mail: the notice.
+    assert_eq!(sent(&t), 1);
+    let mail = t.f.engine.sent.lock().unwrap().last().cloned().expect("notice");
     assert_eq!((mail.from.as_str(), mail.rcpt.clone()), (sys.address.as_str(), vec![OUT.to_string()]));
     let text = mail.email.to_string();
     assert!(text.contains(&format!("copies of the mail that arrives at {MB}")), "{text}");
-    let tok = last_token(&t, "k2ev_");
-    // A GET (link scanner) confirms nothing.
-    let p = vpages::page_get(VERIFY_PATH, &format!("t={tok}"));
-    assert!(p.status.starts_with("200"), "{p:?}");
-    assert_eq!(t.io.forward(ACC), None);
-    assert_eq!(show()["forward"]["state"], "pending_verify");
-    // The POST confirms: the guarded block is written.
-    let p = vpages::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
-    assert!(p.html.contains("Confirmed"), "{p:?}");
-    let fwd = t.io.forward(ACC).expect("forward written");
-    assert_eq!((fwd.dest.as_str(), fwd.keep, fwd.guard.map(|g| g.host)), (OUT, true, Some(HOST.to_string())));
+    assert!(text.contains("The owner of"), "who set it: {text}");
+    assert!(text.contains("k2es_"), "a stop link: {text}");
+    assert!(!text.contains("k2ev_"), "no confirm link: {text}");
     let s = show();
-    assert_eq!((s["forward"]["state"].clone(), s["to"].clone(), s["forward"]["verify"]["state"].clone()), (json!("active"), json!(OUT), json!("verified")), "{s}");
+    assert_eq!((s["forward"]["state"].clone(), s["to"].clone(), s["forward"]["notice"].clone()), (json!("active"), json!(OUT), json!("sent")), "{s}");
     let events: Vec<&str> = s["events"].as_array().expect("events").iter().rev().filter_map(|e| e["event"].as_str()).collect();
-    assert_eq!(events, vec!["set", "verify_sent", "verified", "activated"], "{s}");
+    assert_eq!(events, vec!["set", "activated", "notice_sent"], "{s}");
+    assert_eq!(s["events"][0]["actor"], "owner", "audited with who: {s}");
+    // The owner heard, naming the mailbox, the address and who set it.
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains(MB) && n[0].1.contains(OUT) && n[0].1.contains("the owner or an Admin"), "{}", n[0].1);
+    // Setting it again changes nothing and mails nobody.
+    let (st, _) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, sent(&t), forwards().len()), (200, 1, 1));
 }
 
+/// The notice goes out before the Sieve is written, and a Sieve that can't be
+/// written doesn't lose it.
 #[test]
-fn the_stop_link_pauses_for_good_and_only_a_new_set_brings_it_back() {
+fn the_notice_goes_out_before_the_redirect_exists() {
+    let t = t("fworder");
+    system_sender_on();
+    *t.io.fail.borrow_mut() = true;
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(sent(&t), 1, "the notice is out");
+    assert_eq!(t.io.src(ACC), None, "the redirect isn't");
+    assert!(v["note"].as_str().unwrap_or("").contains("within the hour"), "{v}");
+}
+
+/// A failed notice doesn't block the forward; it shows, and K2 tries again.
+#[test]
+fn a_failed_notice_shows_and_is_retried_hourly_without_blocking() {
+    let t = t("fwfail");
+    system_sender_on();
+    *t.f.engine.fail_submit.lock().unwrap() = Some("the mail server is down".to_string());
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    assert!(v["message"].as_str().unwrap_or("").contains("couldn't email"), "{v}");
+    assert!(t.io.forward(ACC).is_some(), "the forward isn't blocked");
+    assert_eq!(v["destinations"][0]["notice"], "failed", "{v}");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n[0].1.contains("K2 couldn't email") && !n[0].1.contains("K2 emailed"), "the owner isn't told it went: {n:?}");
+    let list = body(&handle_forwards_list(&HashMap::new()));
+    assert_eq!(list["forwards"][0]["notice"], "failed", "forward list shows it: {list}");
+    assert!(list["forwards"][0]["noticeWords"].as_str().unwrap_or("").contains("stop link"), "{list}");
+    *t.f.engine.fail_submit.lock().unwrap() = None;
+    let at = email_notify::now();
+    assert_eq!(forward_verify::minute_pass(at).retried, 0, "not within the hour");
+    assert_eq!(forward_verify::minute_pass(at + store::NOTICE_RETRY_SECS).retried, 1);
+    assert_eq!(show()["forward"]["notice"], "sent");
+    assert!(t.f.engine.sent.lock().unwrap().last().expect("mail").email.to_string().contains("k2es_"));
+    assert_eq!(forward_verify::minute_pass(at + 2 * store::NOTICE_RETRY_SECS).retried, 0, "told once");
+}
+
+/// A suppressed address gets no mail, and K2 doesn't record that it was told.
+#[test]
+fn a_suppressed_address_is_not_recorded_as_told() {
+    let t = t("fwsupp");
+    system_sender_on();
+    let n = sent(&t);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::email_outcomes::suppress(&conn, OUT, k2_core::email_outcomes::SCOPE_BOX, "", k2_core::email_outcomes::R_HARD, "dsn", email_notify::now()).expect("suppress");
+    }
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, v["destinations"][0]["notice"].clone()), (200, json!("failed")), "{v}");
+    assert!(v["message"].as_str().unwrap_or("").contains("bounced or complained"), "{v}");
+    assert_eq!(sent(&t), n, "nothing went");
+}
+
+/// A GET never stops (mail scanners); only the POST does, one destination,
+/// and the owner hears. Stopped stays stopped.
+#[test]
+fn the_stop_button_is_a_post_and_stopped_means_stopped() {
     let t = t("fwstop");
     system_sender_on();
     post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
-    let tok = last_token(&t, "k2ev_");
     let stop = last_token(&t, "k2es_");
-    vpages::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
-    assert!(t.io.forward(ACC).is_some());
-    let p = vpages::page_post(STOP_PATH, &format!("t={stop}"), b"List-Unsubscribe=One-Click");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let p = vpages::page_get(STOP_PATH, &format!("t={stop}"));
+    assert!(p.status.starts_with("200") && p.html.contains("<form method=\"post\"") && p.html.contains("<button"), "{p:?}");
+    assert_eq!(p.html.matches("<button").count(), 1, "one button");
+    assert!(t.io.forward(ACC).is_some(), "a GET stops nothing");
+    assert_eq!(show()["forward"]["state"], "active");
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    let p = vpages::page_post(STOP_PATH, "", format!("t={stop}").as_bytes());
     assert!(p.html.contains("Stopped"), "{p:?}");
     assert_eq!(t.io.forward(ACC), None, "stopped = keep-only");
     let s = show();
     assert_eq!((s["forward"]["state"].clone(), s["forward"]["pauseReason"].clone()), (json!("paused"), json!("revoked")), "{s}");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].0.contains(OUT) && n[0].0.contains(MB) && n[0].1.contains("--restart-stopped"), "{n:?}");
+    // Nobody resumes it, not even the owner.
     let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
-    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "even the owner: {v}");
-    // A new set sends a new confirm.
-    let n = t.f.engine.sent.lock().unwrap().len();
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "{v}");
+    // set and add don't restart it, for anyone, and mail nobody.
+    let n = sent(&t);
+    for path in [FORWARD_PATH, ADD_PATH] {
+        let (st, v) = post(path, json!({ "address": MB, "to": OUT }));
+        assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "{path}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap_or("").contains("--restart-stopped"), "{v}");
+    }
+    assert_eq!(sent(&t), n);
+    assert_eq!(t.io.forward(ACC), None);
+    // Removing the row doesn't forget the stop.
+    post(UNSET_PATH, json!({ "address": MB }));
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
-    assert_eq!((st, v["state"].clone()), (202, json!("pending_verify")), "{v}");
-    assert_eq!(t.f.engine.sent.lock().unwrap().len(), n + 1);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "a removed row's stop still holds: {v}");
+    // An agent can't override it, flag or no flag.
+    let (st, v) = as_agent("ws-fw", || post(FORWARD_PATH, json!({ "address": MB, "to": OUT, "restartStopped": true })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    assert_eq!(t.io.forward(ACC), None);
+    // The owner, explicitly: it comes back with a new notice, audited.
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT, "restartStopped": true }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    assert!(t.io.forward(ACC).is_some());
+    assert_eq!(sent(&t), n + 1);
+    assert!(show()["events"].as_array().expect("events").iter().any(|e| e["event"] == "restarted"));
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n[0].1.contains("after the address pressed Stop"), "{n:?}");
+    // And the very first link still stops it.
+    vpages::page_post(STOP_PATH, "", format!("t={stop}").as_bytes());
+    assert_eq!(t.io.forward(ACC), None, "a stop link works for good");
 }
 
-/// FW-A16: no system sender → the confirm comes from the mailbox itself,
+/// The owner's notice also goes by email when the owner has a confirmed
+/// notice address.
+#[test]
+fn the_owner_also_gets_email_when_they_have_a_notice_address() {
+    let t = t("fwowner");
+    system_sender_on();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let i = k2_core::email_verify::issue(&conn, k2_core::email_verify::PURPOSE_PERSON_NOTICE, "owner", "boss@elsewhere.test", "owner", 1).expect("issue");
+        k2_core::email_verify::confirm(&conn, &i.token, 2).expect("confirm");
+    }
+    let (st, _) = as_agent("ws-fw", || post(FORWARD_PATH, json!({ "address": MB, "to": OUT })));
+    assert_eq!(st, 200);
+    let mails = t.f.engine.sent.lock().unwrap().clone();
+    assert_eq!(mails.len(), 2, "the address's notice and the owner's");
+    assert_eq!(mails[0].rcpt, vec![OUT.to_string()]);
+    assert_eq!(mails[1].rcpt, vec!["boss@elsewhere.test".to_string()]);
+    let text = mails[1].email.to_string();
+    assert!(text.contains(MB) && text.contains(OUT) && text.contains("the AI agent"), "names mailbox, address, who: {text}");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n.iter().any(|(_, b, _)| b.contains("the AI agent")), "and the Inbox: {n:?}");
+}
+
+/// Several destinations: each its own state and stop link.
+#[test]
+fn several_destinations_stand_alone() {
+    let t = t("fwmany");
+    system_sender_on();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": ["a@outside.test", "b@outside.test", "A@Outside.Test"] }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["destinations"].as_array().map(Vec::len), Some(2), "named twice, one row: {v}");
+    assert_eq!(sent(&t), 2, "one notice each");
+    let stop_b = last_token(&t, "k2es_");
+    let fwd = t.io.forward(ACC).expect("written");
+    assert_eq!((fwd.dest.as_str(), fwd.more.clone()), ("a@outside.test", vec!["b@outside.test".to_string()]));
+    assert_eq!(*t.io.limit_calls.borrow(), 1, "the mail server's limit was raised first");
+    // The stop link stops its own destination only.
+    vpages::page_post(STOP_PATH, "", format!("t={stop_b}").as_bytes());
+    let rows = forwards();
+    assert_eq!((one(&rows, "a@outside.test")["state"].clone(), one(&rows, "b@outside.test")["pauseReason"].clone()), (json!("active"), json!("revoked")), "{rows:?}");
+    let fwd = t.io.forward(ACC).expect("a still forwards");
+    assert_eq!((fwd.dest.as_str(), fwd.more.len()), ("a@outside.test", 0));
+    // set replaces the list; a stopped one in it refuses the whole call.
+    let n = sent(&t);
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": ["c@outside.test", "b@outside.test"] }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "{v}");
+    assert_eq!(sent(&t), n, "nobody was mailed");
+    assert_eq!(forwards().len(), 2, "nothing changed");
+}
+
+#[test]
+fn add_and_rm_touch_only_what_they_name() {
+    let t = t("fwaddrm");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": "a@outside.test" }));
+    seed_mailbox("team@notify.brand.test", "direct");
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "b@outside.test" }));
+    assert_eq!((st, v["state"].clone(), v["to"].clone()), (200, json!("active"), json!("b@outside.test")), "{v}");
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!((st, v["kind"].clone()), (200, json!("internal")), "{v}");
+    assert_eq!(sent(&t), 2, "a same-box destination gets no notice");
+    let fwd = t.io.forward(ACC).expect("written");
+    assert_eq!(fwd.same_box, vec!["team@notify.brand.test".to_string()]);
+    assert_eq!(fwd.more, vec!["b@outside.test".to_string()]);
+    let id_a = one(&forwards(), "a@outside.test")["id"].clone();
+    // Adding one already there: same row, no second notice.
+    let (st, _) = post(ADD_PATH, json!({ "address": MB, "to": "a@outside.test" }));
+    assert_eq!((st, sent(&t), one(&forwards(), "a@outside.test")["id"].clone()), (200, 2, id_a.clone()));
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let (st, v) = post(RM_PATH, json!({ "address": MB, "to": "b@outside.test" }));
+    assert_eq!((st, v["removed"].clone(), v["remaining"].as_array().map(Vec::len)), (200, json!(["b@outside.test"]), Some(2)), "{v}");
+    assert!(crate::mail::forward_outcomes::take_notices()[0].1.contains("No longer forwarding to: b@outside.test"));
+    let rows = forwards();
+    assert_eq!(one(&rows, "a@outside.test")["id"], id_a, "the others are untouched");
+    assert!(!t.io.src(ACC).expect("script").contains("b@outside.test"));
+    // rm of one that isn't there, or with no `to`, changes nothing.
+    let (st, v) = post(RM_PATH, json!({ "address": MB, "to": ["a@outside.test", "nope@outside.test"] }));
+    assert_eq!((st, v["error"]["code"].clone()), (404, json!("not_found")), "{v}");
+    assert_eq!(forwards().len(), 2);
+    let (st, _) = post(RM_PATH, json!({ "address": MB }));
+    assert_eq!(st, 400);
+    // A single-destination set still replaces everything.
+    let (st, _) = post(FORWARD_PATH, json!({ "address": MB, "to": "a@outside.test" }));
+    assert_eq!(st, 200);
+    assert_eq!(forwards().len(), 1);
+    assert_eq!(forwards()[0]["id"], id_a, "the one it names keeps its row");
+    // unset takes them all.
+    post(ADD_PATH, json!({ "address": MB, "to": "b@outside.test" }));
+    let (st, v) = post(UNSET_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["count"].clone()), (200, json!(2)), "{v}");
+    assert_eq!(t.io.forward(ACC), None);
+}
+
+#[test]
+fn pause_and_resume_take_one_destination_or_all() {
+    let t = t("fwpause");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": ["a@outside.test", "b@outside.test"] }));
+    let (st, v) = post(PAUSE_PATH, json!({ "address": MB, "to": "b@outside.test" }));
+    assert_eq!((st, v["state"].clone(), v["pauseReason"].clone()), (200, json!("paused"), json!("manual")), "{v}");
+    assert_eq!(t.io.forward(ACC).expect("a").more.len(), 0);
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB, "to": "b@outside.test" }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    let (st, v) = post(PAUSE_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["forwards"].as_array().map(Vec::len)), (200, Some(2)), "{v}");
+    assert_eq!(t.io.forward(ACC), None);
+    // Resume with no --to: what this caller may, and it says what it left.
+    let id_b = one(&forwards(), "b@outside.test")["id"].as_str().expect("id").to_string();
+    crate::mail::forward_sync::pause(&id_b, store::P_DEST_GONE, "k2", None).expect("reason");
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["forwards"][0]["to"].clone(), v["skipped"][0]["to"].clone()), (200, json!("a@outside.test"), json!("b@outside.test")), "{v}");
+    assert_eq!(v["skipped"][0]["code"], "owner_only", "{v}");
+    let (st, _) = post(PAUSE_PATH, json!({ "address": MB, "to": "nope@outside.test" }));
+    assert_eq!(st, 404);
+}
+
+#[test]
+fn the_destination_cap_refuses_clearly() {
+    let t = t("fwcap");
+    system_sender_on();
+    let many: Vec<String> = (0..store::MAX_DESTINATIONS + 1).map(|i| format!("d{i}@outside.test")).collect();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("at most {}", store::MAX_DESTINATIONS)), "{v}");
+    assert_eq!((sent(&t), forwards().len()), (0, 0), "nobody mailed, nothing changed");
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many[..store::MAX_DESTINATIONS].to_vec() }));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "one-more@outside.test" }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("forward rm"), "{v}");
+    assert_eq!(forwards().len(), store::MAX_DESTINATIONS);
+    // set may swap the whole list at the cap.
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "only@outside.test" }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(forwards().len(), 1);
+}
+
+/// The box's daily limit on new outside addresses: refused clearly, across
+/// mailboxes; a same-box destination and an address already on don't count.
+#[test]
+fn new_outside_addresses_are_capped_per_box_per_day() {
+    let t = t("fwday");
+    system_sender_on();
+    // Across mailboxes: five destinations each, up to the day's limit.
+    let mut added = 0;
+    for m in 0.. {
+        let mailbox = format!("day{m}@notify.brand.test");
+        seed_mailbox(&mailbox, "direct");
+        for d in 0..store::MAX_DESTINATIONS {
+            if added < store::NEW_OUTSIDE_PER_DAY {
+                let (st, v) = post(ADD_PATH, json!({ "address": mailbox, "to": format!("d{d}@outside.test") }));
+                assert_eq!(st, 200, "{added}: {v}");
+                added += 1;
+            }
+        }
+        if added >= store::NEW_OUTSIDE_PER_DAY {
+            break;
+        }
+    }
+    let n = sent(&t);
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "too-many@outside.test" }));
+    assert_eq!((st, v["error"]["code"].clone()), (429, json!("new_outside_limit")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("at most {} new outside addresses a day", store::NEW_OUTSIDE_PER_DAY)), "{v}");
+    assert_eq!(sent(&t), n, "nobody was mailed");
+    // A list that would cross it refuses whole.
+    assert_eq!(forwards().iter().filter(|f| f["to"] == "too-many@outside.test").count(), 0);
+    // A same-box destination still works, and so does keeping one already on.
+    seed_mailbox("team@notify.brand.test", "direct");
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!(st, 200, "{v}");
+    // Past the window it opens again.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE mail_forward_events SET at = at - 90000", []).expect("age");
+    }
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "too-many@outside.test" }));
+    assert_eq!(st, 200, "{v}");
+}
+
+fn seed_server() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO mail_server (id, status, pinned_version, hostname, updated_at) VALUES (1, 'running', '0.16.25', 'mail.brand.test', 1)",
+        [],
+    )
+    .expect("server");
+}
+
+fn set_cap(n: i64) -> (u16, J) {
+    let r = handle_forward_cap(json!({ "perDay": n }).to_string().as_bytes());
+    (status(&r), body(&r))
+}
+
+/// `n` new outside addresses on fresh mailboxes (five each), from `from`.
+fn add_many(from: i64, n: i64) -> Vec<(u16, J)> {
+    (from..from + n)
+        .map(|i| {
+            let mailbox = format!("bulk{}@notify.brand.test", i / store::MAX_DESTINATIONS as i64);
+            let known = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                crate::mail::addresses::load_address(&conn, &mailbox).is_some()
+            };
+            if !known {
+                seed_mailbox(&mailbox, "direct");
+            }
+            post(ADD_PATH, json!({ "address": mailbox, "to": format!("d{i}@outside.test") }))
+        })
+        .collect()
+}
+
+/// The owner may set it: the default holds until they do, a raised cap lets
+/// more through, and the ceiling refuses with a clear line.
+#[test]
+fn the_daily_cap_is_the_owner_s_to_raise_and_has_a_ceiling() {
+    let _t = t("fwcapset");
+    system_sender_on();
+    seed_server();
+    // The default.
+    let got = add_many(0, store::NEW_OUTSIDE_PER_DAY);
+    assert!(got.iter().all(|(st, _)| *st == 200), "{got:?}");
+    let (st, v) = add_many(store::NEW_OUTSIDE_PER_DAY, 1).pop().expect("one");
+    assert_eq!((st, v["error"]["code"].clone()), (429, json!("new_outside_limit")), "the default holds: {v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("--forward-new-per-day"), "{v}");
+    // Above the ceiling: refused, nothing changed.
+    let (st, v) = set_cap(store::NEW_OUTSIDE_PER_DAY_MAX + 1);
+    assert_eq!((st, v["error"]["code"].clone()), (400, json!("usage")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("at most {}", store::NEW_OUTSIDE_PER_DAY_MAX)), "{v}");
+    let (st, _) = set_cap(-1);
+    assert_eq!(st, 400);
+    let (st, v) = add_many(store::NEW_OUTSIDE_PER_DAY, 1).pop().expect("one");
+    assert_eq!(st, 429, "still the default: {v}");
+    // Raised.
+    let (st, v) = set_cap(25);
+    assert_eq!((st, v["perDay"].clone(), v["default"].clone()), (200, json!(25), json!(store::NEW_OUTSIDE_PER_DAY)), "{v}");
+    let got = add_many(store::NEW_OUTSIDE_PER_DAY + 1, 5);
+    assert!(got.iter().all(|(st, _)| *st == 200), "{got:?}");
+    let (st, v) = add_many(store::NEW_OUTSIDE_PER_DAY + 6, 1).pop().expect("one");
+    assert_eq!(st, 429, "the new number holds: {v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("at most 25"), "{v}");
+    // config shows it, and the per-mailbox limit hasn't moved.
+    let cfg: J = serde_json::from_str(&crate::mail::routes_server::handle_config_get(&HashMap::new()).body).expect("json");
+    assert_eq!(cfg["forwarding"]["newOutsidePerDay"], 25, "{cfg}");
+    assert_eq!(cfg["forwarding"]["maxDestinationsPerMailbox"], 5, "{cfg}");
+    let many: Vec<String> = (0..6).map(|i| format!("x{i}@outside.test")).collect();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
+}
+
+/// An agent can't loosen its own limit, with mail-manage or without: the
+/// handler refuses it, the route's floor is the owner's (not an Admin's), and
+/// the refusal isn't answered by asking for mail.manage.
+#[test]
+fn an_agent_can_t_raise_the_daily_cap() {
+    let _t = t("fwcapagent");
+    seed_server();
+    let r = as_agent("ws-fw", || handle_forward_cap(json!({ "perDay": 1000 }).to_string().as_bytes()));
+    assert_eq!(status(&r), 403, "{}", r.body);
+    assert_eq!(body(&r)["error"]["code"], "owner_only");
+    let cap = db(|c| store::new_outside_cap(c)).ok().expect("cap");
+    assert_eq!(cap, store::NEW_OUTSIDE_PER_DAY, "unchanged");
+    // A mail-manage passport at the extra gate: refused, whatever its toggle.
+    let principal = crate::session_token::HookPrincipal { workspace_uuid: "ws-fw".into(), agent_address: "agent".into() };
+    assert!(crate::mail_routes::mail_manage_authorized(CAP_PATH, false, Some(&principal)).is_err());
+    assert!(!crate::mail_routes::is_mail_manage_surface(CAP_PATH), "mail-manage doesn't open it");
+    // The owner's floor: an Admin login doesn't pass.
+    let row = crate::routes::route_policy::lookup(CAP_PATH).expect("in the table");
+    assert!(row.post.is_some_and(|m| !m.admits(k2_core::connect_users::Role::Admin) && m.admits(k2_core::connect_users::Role::Owner)), "{row:?}");
+    // GET is refused.
+    assert_eq!(crate::mail_routes::dispatch(CAP_PATH, &HashMap::new()).expect("claimed").status, "405 Method Not Allowed");
+}
+
+/// The guards hold at a raised cap: every address gets its notice with a stop
+/// link, the owner hears, stop works, and refusals still pause.
+#[test]
+fn the_guards_fire_at_a_raised_cap() {
+    let t = t("fwcapguard");
+    system_sender_on();
+    seed_server();
+    let (st, _) = set_cap(store::NEW_OUTSIDE_PER_DAY_MAX);
+    assert_eq!(st, 200);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let total = store::NEW_OUTSIDE_PER_DAY + 5;
+    let got = add_many(0, total);
+    assert!(got.iter().all(|(st, v)| *st == 200 && v["state"] == "active"), "{got:?}");
+    let mails = t.f.engine.sent.lock().unwrap().clone();
+    assert_eq!(mails.len() as i64, total, "one notice each");
+    assert!(mails.iter().all(|m| m.email.to_string().contains("k2es_")), "each with a stop link");
+    // The owner hears the first few one by one; the rest wait for the summary.
+    assert_eq!(crate::mail::forward_outcomes::take_notices().len() as i64, store::OWNER_NOTES_PER_HOUR);
+    // The last address presses Stop; K2 stops, and the summary names it.
+    let stop = last_token(&t, "k2es_");
+    vpages::page_post(STOP_PATH, "", format!("t={stop}").as_bytes());
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "rolled");
+    forward_verify::flush_owner_summary(email_notify::now() + store::OWNER_SUMMARY_SECS);
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "one summary: {n:?}");
+    let want = total - store::OWNER_NOTES_PER_HOUR + 1;
+    assert!(n[0].0.contains(&want.to_string()) && n[0].1.contains(&format!("{want} more changes")), "the count: {n:?}");
+    assert!(n[0].1.contains(&format!("d{}@outside.test pressed Stop", total - 1)), "the stop by name: {}", n[0].1);
+    assert!(n[0].1.contains("k2 hostmail forward list"), "how to list them: {}", n[0].1);
+    // Every change still has its audit line, rolled up or not.
+    let audit = k2_core::auth_audit::read_all().expect("audit");
+    let lines = audit.iter().filter(|e| e.to_string().contains("mail-forward-changed") && e.to_string().contains("bulk")).count() as i64;
+    assert!(lines >= total, "{lines} audit lines for {total} changes");
+    // Three no-such-user refusals pause that destination.
+    let (mailbox, dest) = ("bulk0@notify.brand.test", "d0@outside.test");
+    let at = email_notify::now();
+    let batch: Vec<J> = (1..=3u64)
+        .flat_map(|q| {
+            [
+                json!({"id": format!("q{q}"), "type": "queue.autogenerated-queued", "data": {"queueId": q, "from": mailbox, "to": [dest]}}),
+                json!({"id": format!("p{q}"), "type": "delivery.dsn-perm-fail", "data": {"queueId": q, "to": dest, "details": "Code: 550, Enhanced code: 5.1.1, Message: no such user"}}),
+            ]
+        })
+        .collect();
+    let events = crate::email_notify::webhook::parse_events(json!({ "events": batch }).to_string().as_bytes()).expect("events");
+    let applied = crate::mail::forward_outcomes::apply(&events, at);
+    assert_eq!(applied.paused.len(), 1, "{applied:?}");
+    let live = db(|c| store::live_for_pair(c, mailbox, dest)).ok().flatten().expect("row");
+    assert_eq!(live.pause_reason.as_deref(), Some(store::P_DEST_GONE));
+    assert_eq!(crate::mail::forward_outcomes::take_notices().len(), 1, "the owner hears");
+}
+
+/// Past the hour's burst a new outside forward waits its turn: not on, no
+/// mail, nothing written; the pass emails it first, then turns it on, at the
+/// pace. It counts against the cap, and asking again doesn't queue it twice.
+#[test]
+fn past_the_burst_new_forwards_wait_their_turn_with_the_notice_first() {
+    let t = t("fwpace");
+    system_sender_on();
+    seed_server();
+    set_cap(store::NEW_OUTSIDE_PER_DAY_MAX);
+    let burst = store::NOTICES_BURST_PER_HOUR;
+    let got = add_many(0, burst);
+    assert!(got.iter().all(|(st, v)| *st == 200 && v["state"] == "active"), "{got:?}");
+    assert_eq!(sent(&t) as i64, burst);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    // The next ones wait.
+    let got = add_many(burst, 3);
+    assert!(got.iter().all(|(st, v)| *st == 200 && v["state"] == "pending_verify"), "{got:?}");
+    assert!(got[0].1["message"].as_str().unwrap_or("").contains("isn't on yet"), "{:?}", got[0].1);
+    assert_eq!(sent(&t) as i64, burst, "no mail yet");
+    let waiting_mailbox = got[0].1["address"].as_str().expect("address").to_string();
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "these are past the hour's first few");
+    // Nothing goes there yet.
+    assert!(!t.io.src(&format!("acc-{}", waiting_mailbox.split('@').next().expect("local"))).unwrap_or_default().contains(&format!("d{burst}@outside.test")));
+    // They count against the cap, and asking again doesn't queue a second row.
+    let used = db(|c| store::new_outside_since(c, 0)).ok().expect("count");
+    assert_eq!(used, burst + 3);
+    let (st, v) = post(ADD_PATH, json!({ "address": waiting_mailbox, "to": format!("d{burst}@outside.test") }));
+    assert_eq!((st, v["state"].clone()), (200, json!("pending_verify")), "{v}");
+    assert_eq!(db(|c| store::new_outside_since(c, 0)).ok().expect("count"), burst + 3);
+    // listed in words.
+    let only_waiting: HashMap<String, String> = [("state".to_string(), "pending_verify".to_string())].into();
+    let list = body(&handle_forwards_list(&only_waiting));
+    assert!(list["forwards"][0]["noticeWords"].as_str().unwrap_or("").contains("pacing"), "{list}");
+    // The pass, at the pace: the notice first, then on.
+    let now = email_notify::now();
+    let pass = forward_verify::minute_pass(now);
+    assert_eq!(pass.turned_on, store::NOTICES_PER_PASS, "{pass:?}");
+    assert_eq!(sent(&t) as i64, burst + store::NOTICES_PER_PASS as i64);
+    let pass = forward_verify::minute_pass(now + 60);
+    assert_eq!(pass.turned_on, 1, "{pass:?}");
+    assert_eq!(db(|c| store::due_waiting(c)).ok().expect("waiting"), 0);
+    let row = db(|c| store::live_for_pair(c, &waiting_mailbox, &format!("d{burst}@outside.test"))).ok().flatten().expect("row");
+    assert_eq!((row.state.as_str(), row.notice_state.as_deref()), (store::ST_ACTIVE, Some(store::N_SENT)));
+    let events = db(|c| store::events_for_address(c, &row.address_id, 50)).ok().expect("events");
+    assert!(!events.iter().any(|e| e.event == store::E_LEGACY_ON), "not a row from before opt-out");
+    assert_eq!(db(|c| store::new_outside_since(c, 0)).ok().expect("count"), burst + 3, "still counted");
+    // While the hour's notices stay spent, the next one waits too.
+    let got = add_many(burst + 3, 1);
+    assert_eq!(got[0].1["state"], "pending_verify", "the hour's burst is still spent");
+}
+
+/// The hour's first few owner notices say a queued address isn't told yet.
+#[test]
+fn the_owner_is_told_a_queued_address_isn_t_on_yet() {
+    let t = t("fwpacenote");
+    system_sender_on();
+    seed_server();
+    set_cap(store::NEW_OUTSIDE_PER_DAY_MAX);
+    // The hour's emails are spent, but not the owner's notes.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for i in 0..store::NOTICES_BURST_PER_HOUR {
+            store::record_event(&conn, &format!("old{i}"), store::E_NOTICE_SENT, "k2", &json!({}), email_notify::now()).expect("event");
+        }
+    }
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, v["state"].clone()), (200, json!("pending_verify")), "{v}");
+    assert_eq!(sent(&t), 0);
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n[0].1.contains("K2 is pacing") && !n[0].1.contains("K2 emailed"), "{n:?}");
+}
+
+/// A row from before this that can't arrive isn't changed: the owner is told
+/// once, `forward list` names it, and it runs on until its bounces pause it.
+#[test]
+fn a_row_that_can_t_arrive_is_listed_not_changed() {
+    let t = t("fwcant");
+    system_sender_on();
+    // Set when the domain wasn't this box's; K2 hosts it now.
+    post(FORWARD_PATH, json!({ "address": MB, "to": "bob@later.test" }));
+    assert_eq!(forwards()[0]["cantArrive"], J::Null);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO mail_domains (id, domain, send_mode, status, created_at) VALUES ('later', 'later.test', 'direct', 'verified', 1)", []).expect("domain");
+    }
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(r.failed, 0, "{r:?}");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains(&format!("{MB} to bob@later.test")) && n[0].1.contains("k2 hostmail forward list"), "{}", n[0].1);
+    // Not changed: still active, still written.
+    let row = forwards()[0].clone();
+    assert_eq!(row["state"], "active", "{row}");
+    assert!(t.io.src(ACC).expect("script").contains("bob@later.test"));
+    assert!(row["cantArrive"].as_str().unwrap_or("").contains("can't arrive"), "{row}");
+    let list = body(&handle_forwards_list(&HashMap::new()));
+    assert!(list["forwards"][0]["cantArrive"].as_str().unwrap_or("").contains("forward rm"), "{list}");
+    // Told once.
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    // A new add of such an address is refused.
+    let (st, _) = post(ADD_PATH, json!({ "address": MB, "to": "other@later.test" }));
+    assert_eq!(st, 400);
+}
+
+/// FW-A16: no system sender → the notice comes from the mailbox itself,
 /// by delegation, with no stored copy.
 #[test]
-fn with_no_system_sender_the_confirm_comes_from_the_mailbox() {
+fn with_no_system_sender_the_notice_comes_from_the_mailbox() {
     let t = t("fwself");
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT, "keep": false }));
-    assert_eq!((st, v["sentVia"].clone(), v["keep"].clone()), (202, json!("mailbox"), json!(false)), "{v}");
-    let mail = t.f.engine.sent.lock().unwrap().last().cloned().expect("confirm mail");
+    assert_eq!((st, v["sentVia"].clone(), v["keep"].clone()), (200, json!("mailbox"), json!(false)), "{v}");
+    let mail = t.f.engine.sent.lock().unwrap().last().cloned().expect("notice");
     assert_eq!((mail.account.as_str(), mail.from.as_str(), mail.destroy), (ACC, MB, true));
     assert_eq!(mail.rcpt, vec![OUT.to_string()]);
+}
+
+/// Rosson 2026-11-02: only a domain's MX pointing elsewhere makes one of this
+/// box's own addresses outside.
+#[test]
+fn a_hosted_domain_whose_mx_points_elsewhere_counts_as_outside() {
+    let t = t("fwmx");
+    system_sender_on();
+    seed_mailbox("team@notify.brand.test", "direct");
+    // No MX answer, or the MX is this box: same-box, no notice, no guard.
+    let (_, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!(v["kind"], "internal", "{v}");
+    set_test_mx("notify.brand.test", &[&format!("{HOST}.")]);
+    let (_, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!(v["kind"], "internal", "the box's own MX, trailing dot and all: {v}");
+    assert_eq!(sent(&t), 0);
+    // One of several MX hosts being this box still counts as here.
+    set_test_mx("notify.brand.test", &["mx.elsewhere.test", HOST]);
+    let (_, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!(v["kind"], "internal", "{v}");
+    // The MX points elsewhere: outside, with a notice, the guard and a note.
+    set_test_mx("notify.brand.test", &["mx.elsewhere.test"]);
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!((st, v["kind"].clone(), v["state"].clone()), (200, json!("external"), json!("active")), "{v}");
+    assert_eq!(sent(&t), 1, "told");
+    assert!(t.io.forward(ACC).expect("written").guard.is_some());
+    assert!(v["note"].as_str().unwrap_or("").contains("goes to the mailbox on this server, not to the other provider"), "{v}");
+    // An address with no mailbox here: refused, MX or no MX, because the mail
+    // server delivers its own domains itself and it would bounce (probe X12).
+    let n = sent(&t);
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "ghost@notify.brand.test" }));
+    assert_eq!((st, v["error"]["code"].clone()), (400, json!("usage")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or("").to_string();
+    assert!(hint.contains("this server hosts notify.brand.test") && hint.contains("never reach another provider"), "{hint}");
+    assert_eq!((sent(&t), forwards().len()), (n, 1), "nobody mailed, nothing changed");
+    // Air-gap: no lookup, and K2 won't guess.
+    crate::push_routes::set_test_airgap(true);
+    let (st, v) = post(UNSET_PATH, json!({ "address": MB }));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    crate::push_routes::set_test_airgap(false);
+    assert_eq!((st, v["kind"].clone()), (200, json!("internal")), "{v}");
+}
+
+fn seed_pending(mailbox: &str, dest: &str, age_secs: i64, by: &str) -> (String, k2_core::email_verify::Issued) {
+    let at = email_notify::now() - age_secs;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let aid = format!("ma-{mailbox}");
+    let i = k2_core::email_verify::issue(&conn, k2_core::email_verify::PURPOSE_FORWARD, mailbox, dest, by, at).expect("issue");
+    let f = store::add(
+        &conn,
+        &store::NewForward {
+            address_id: &aid,
+            address: mailbox,
+            dest,
+            dest_kind: store::KIND_EXTERNAL,
+            keep: true,
+            set_by: by,
+            state: store::ST_PENDING_VERIFY,
+            verified_address_id: Some(&i.row.id),
+        },
+        at,
+    )
+    .expect("row");
+    (f.id, i)
+}
+
+/// On update: a row set within the window goes on with its notice, an old one
+/// stays off and is listed, the owner gets one notice, and neither counts
+/// against the daily cap.
+#[test]
+fn rows_from_before_opt_out_go_on_when_recent_and_stay_off_when_old() {
+    let t = t("fwlegacy");
+    system_sender_on();
+    let (fresh, _) = seed_pending(MB, "fresh@outside.test", 6 * 86_400, "owner");
+    let (old, _) = seed_pending(MB, "old@outside.test", store::LEGACY_ON_WINDOW_SECS + 60, "owner");
+    assert_eq!(t.io.forward(ACC), None);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let now = email_notify::now();
+    let pass = forward_verify::minute_pass(now);
+    assert_eq!((pass.turned_on, pass.left_off), (1, 1), "{pass:?}");
+    let rows = forwards();
+    let (f, o) = (one(&rows, "fresh@outside.test"), one(&rows, "old@outside.test"));
+    assert_eq!((f["state"].clone(), f["notice"].clone()), (json!("active"), json!("sent")), "{f}");
+    assert_eq!((o["state"].clone(), o["notice"].clone()), (json!("pending_verify"), json!("stale")), "{o}");
+    assert!(o["noticeWords"].as_str().unwrap_or("").contains("set it again"), "{o}");
+    // Only the recent one is written and told.
+    let src = t.io.src(ACC).expect("script");
+    assert!(src.contains("fresh@outside.test") && !src.contains("old@outside.test"), "{src}");
+    assert_eq!(sent(&t), 1);
+    assert_eq!(t.f.engine.sent.lock().unwrap()[0].rcpt, vec!["fresh@outside.test".to_string()]);
+    // One notice for the owner, naming both.
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("fresh@outside.test") && n[0].1.contains("old@outside.test") && n[0].1.contains("because they're old"), "{}", n[0].1);
+    // A later pass changes nothing, says nothing, and the old one stays off.
+    assert_eq!(forward_verify::minute_pass(now + 60), forward_verify::Pass::default());
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    assert_eq!(one(&forwards(), "old@outside.test")["state"], "pending_verify");
+    assert_eq!(sent(&t), 1);
+    // Neither counted against the cap.
+    let db_count = db(|c| store::new_outside_since(c, 0)).ok().expect("count");
+    assert_eq!(db_count, 0);
+    // The event says what happened to the row.
+    let (ids, _) = (fresh, old);
+    assert!(show()["events"].as_array().expect("events").iter().any(|e| e["event"] == "legacy_on" && e["forwardId"] == json!(ids)));
+    // Setting the old one again turns it on, as a new add.
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "old@outside.test" }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    assert_eq!(sent(&t), 2);
+}
+
+/// Many rows: paced, no stall, no burst, and past the daily cap.
+#[test]
+fn a_box_with_many_waiting_rows_turns_them_on_paced() {
+    let t = t("fwpaced");
+    system_sender_on();
+    // Before this release a mailbox had one forward, so one row each.
+    let total = store::NEW_OUTSIDE_PER_DAY as usize + 3;
+    // Oldest first, spread over hours: confirm mails were limited per hour.
+    for m in (0..total).rev() {
+        let mailbox = format!("m{m}@notify.brand.test");
+        seed_mailbox(&mailbox, "direct");
+        seed_pending(&mailbox, OUT, 3600 + 2 * 3600 * (m as i64 / 5), "owner");
+    }
+    let now = email_notify::now();
+    let mut on = 0;
+    let mut passes = 0;
+    while on < total {
+        let before = sent(&t);
+        let pass = forward_verify::minute_pass(now + passes * 60);
+        assert_eq!(pass.turned_on, (total - on).min(store::NOTICES_PER_PASS), "paced: {pass:?}");
+        assert_eq!(sent(&t) - before, pass.turned_on, "one notice each");
+        on += pass.turned_on;
+        passes += 1;
+        assert!(passes < 100, "stalled");
+    }
+    assert_eq!(on, total, "past the {}-a-day cap", store::NEW_OUTSIDE_PER_DAY);
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "they didn't spend the day's cap: {v}");
+}
+
+/// A stopped address is never turned on; air-gap holds everything back.
+#[test]
+fn a_stopped_row_stays_off_and_air_gap_holds_the_pass() {
+    let t = t("fwlegstop");
+    system_sender_on();
+    let (id, i) = seed_pending(MB, OUT, 3600, "owner");
+    crate::push_routes::set_test_airgap(true);
+    assert_eq!(forward_verify::minute_pass(email_notify::now()), forward_verify::Pass::default());
+    crate::push_routes::set_test_airgap(false);
+    assert_eq!(sent(&t), 0);
+    // The old email's stop link, pressed before K2 got to it.
+    vpages::page_post(STOP_PATH, "", format!("t={}", i.stop).as_bytes());
+    assert_eq!(forward_verify::minute_pass(email_notify::now()).turned_on, 0);
+    assert_eq!(sent(&t), 0, "no notice to someone who stopped");
+    assert_eq!(t.io.forward(ACC), None);
+    let row = db(|c| store::get(c, &id)).ok().flatten().expect("row");
+    assert_eq!(row.state, store::ST_REMOVED);
+}
+
+/// A confirm link from before opt-out: says what's happening, confirms
+/// nothing, and offers Stop. Only the POST with Stop stops.
+#[test]
+fn an_old_confirm_link_says_it_s_on_and_offers_stop() {
+    let t = t("fwoldlink");
+    system_sender_on();
+    let (_, i) = seed_pending(MB, OUT, 3600, "owner");
+    forward_verify::minute_pass(email_notify::now());
+    let q = format!("t={}", i.token);
+    let p = vpages::page_get(VERIFY_PATH, &q);
+    assert!(p.status.starts_with("200") && p.html.contains("is sending") && p.html.contains("<button"), "{p:?}");
+    assert!(p.html.contains("value=\"stop\""), "{p:?}");
+    assert!(!p.html.contains("Confirm</button>"), "nothing to confirm: {p:?}");
+    assert!(t.io.forward(ACC).is_some());
+    // An old open page posting the confirm: same page, nothing changes.
+    let p = vpages::page_post(VERIFY_PATH, "", q.as_bytes());
+    assert!(p.html.contains("is sending"), "{p:?}");
+    assert!(t.io.forward(ACC).is_some());
+    // Stop from it.
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let p = vpages::page_post(VERIFY_PATH, "", format!("{q}&do=stop").as_bytes());
+    assert!(p.html.contains("Stopped"), "{p:?}");
+    assert_eq!(t.io.forward(ACC), None);
+    assert_eq!(crate::mail::forward_outcomes::take_notices().len(), 1, "the owner hears");
+    let (st, _) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 409, "stopped means stopped");
+    // A link K2 can't place says what to do.
+    let p = vpages::page_get(VERIFY_PATH, &format!("t=k2ev_{}", "a".repeat(43)));
+    assert!(p.status.starts_with("404") && p.html.contains("no longer asks for a confirm"), "{p:?}");
+}
+
+/// A stop link whose request had expired before opt-out still offers Stop, and
+/// the press counts.
+#[test]
+fn an_expired_request_s_stop_link_still_records_the_stop() {
+    let t = t("fwexpired");
+    system_sender_on();
+    let i = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let i = k2_core::email_verify::issue(&conn, k2_core::email_verify::PURPOSE_FORWARD, MB, OUT, "owner", email_notify::now() - 2 * k2_core::email_verify::LINK_SECS).expect("issue");
+        k2_core::email_verify::expire_due(&conn, email_notify::now()).expect("expire");
+        i
+    };
+    let q = format!("t={}", i.stop);
+    let p = vpages::page_get(STOP_PATH, &q);
+    assert!(p.html.contains("<button"), "offers Stop: {p:?}");
+    vpages::page_post(STOP_PATH, "", q.as_bytes());
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "{v}");
+    assert_eq!(sent(&t), 0);
+}
+
+/// A person notice address keeps its confirm: the POST confirms, with no Stop form.
+#[test]
+fn a_person_notice_address_still_confirms() {
+    let _t = t("fwpersonconfirm");
+    let i = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::email_verify::issue(&conn, k2_core::email_verify::PURPOSE_PERSON_NOTICE, "owner", OUT, "owner", email_notify::now()).expect("issue")
+    };
+    let q = format!("t={}", i.token);
+    let p = vpages::page_get(VERIFY_PATH, &q);
+    assert!(p.html.contains("Confirm</button>"), "{p:?}");
+    let p = vpages::page_post(VERIFY_PATH, "", q.as_bytes());
+    assert!(p.html.contains("Confirmed"), "{p:?}");
 }
 
 #[test]
@@ -181,29 +953,32 @@ fn a_same_box_forward_is_active_at_once_without_a_guard() {
     assert_eq!((st, v["state"].clone(), v["kind"].clone()), (200, json!("active"), json!("internal")), "{v}");
     let fwd = t.io.forward(ACC).expect("written");
     assert_eq!((fwd.dest.as_str(), fwd.guard.is_none()), ("team@notify.brand.test", true));
-    assert!(t.f.engine.sent.lock().unwrap().is_empty(), "no confirm mail for a same-box forward");
+    assert!(t.f.engine.sent.lock().unwrap().is_empty(), "no notice mail for a same-box forward");
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "nor an owner notice");
     let (st, v) = post(UNSET_PATH, json!({ "address": MB }));
     assert_eq!((st, v["removed"].clone()), (200, json!(true)), "{v}");
     assert_eq!(t.io.forward(ACC), None);
 }
 
 /// Rosson 2026-10-30: a mail-manage agent sets an outside forward end to
-/// end (no owner card); the confirm link still applies. It can't resume
-/// an automatic pause.
+/// end (no owner card). It can't resume an automatic pause. The address's
+/// notice says an agent set it, and the owner hears.
 #[test]
 fn a_mail_manage_agent_manages_outside_forwards_but_not_auto_pauses() {
     let t = t("fwagent");
     system_sender_on();
     // The mailbox is minted by `ws-fw` (seed_mailbox), so the agent of
     // that workspace may manage it (authorize_mailbox: minting workspace).
+    let _ = crate::mail::forward_outcomes::take_notices();
     let (st, v) = as_agent("ws-fw", || post(FORWARD_PATH, json!({ "address": MB, "to": OUT })));
-    assert_eq!((st, v["state"].clone()), (202, json!("pending_verify")), "{v}");
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
     let text = t.f.engine.sent.lock().unwrap().last().expect("mail").email.to_string();
-    assert!(text.contains("The AI agent"), "the confirm says an agent asked: {text}");
-    assert_eq!(t.io.forward(ACC), None, "still waits for the confirm");
-    let tok = last_token(&t, "k2ev_");
-    vpages::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
+    assert!(text.contains("The AI agent"), "the notice says an agent set it: {text}");
     assert!(t.io.forward(ACC).is_some());
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n[0].1.contains("the AI agent"), "{n:?}");
+    let ev = show()["events"].clone();
+    assert!(ev.as_array().expect("events").iter().any(|e| e["event"] == "set" && e["actor"].as_str().unwrap_or("").starts_with("agent:")), "{ev}");
     let id = show()["forward"]["id"].as_str().expect("id").to_string();
     // K2 pauses it (the destination refused) → the agent can't resume.
     crate::mail::forward_sync::pause(&id, store::P_DEST_GONE, "k2", None).expect("pause");
@@ -243,13 +1018,21 @@ fn a_person_acts_only_on_a_mailbox_linked_to_them() {
     let (st, v) = post(PERSON_LINK_PATH, json!({ "address": MB, "person": "owner" }));
     assert_eq!((st, v["person"].clone()), (200, json!("owner")), "{v}");
     let (st, v) = call("owner", true, SELF_PATH, json!({ "to": OUT }));
-    assert_eq!((st, v["state"].clone()), (202, json!("pending_verify")), "{v}");
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
     let (st, v) = call("owner", false, SELF_PATH, json!({}));
     assert_eq!((st, v["forward"]["to"].clone()), (200, json!(OUT)), "{v}");
     // Someone else's mailbox: refused.
     seed_mailbox("other@notify.brand.test", "direct");
     let (st, v) = call("owner", true, SELF_PATH, json!({ "address": "other@notify.brand.test", "to": OUT }));
     assert_eq!((st, v["error"]["code"].clone()), (403, json!("forbidden")), "{v}");
+    let (st, v) = call("owner", true, SELF_ADD_PATH, json!({ "to": "b@outside.test" }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    let (st, v) = call("owner", true, SELF_RM_PATH, json!({ "to": "b@outside.test" }));
+    assert_eq!((st, v["removed"].clone()), (200, json!(["b@outside.test"])), "{v}");
+    for p in [SELF_ADD_PATH, SELF_RM_PATH] {
+        assert!(is_self_route(p));
+        assert_eq!(call("owner", false, p, json!({})).0, 405, "{p}");
+    }
     let (st, _) = call("owner", true, SELF_UNSET_PATH, json!({}));
     assert_eq!(st, 200);
     assert_eq!(t.io.forward(ACC), None);
@@ -266,7 +1049,7 @@ fn the_list_and_a_get_on_a_mutation() {
     let params: HashMap<String, String> = [("state".to_string(), "paused".to_string())].into();
     assert_eq!(body(&handle_forwards_list(&params))["forwards"].as_array().map(Vec::len), Some(0));
     // GET on every mutation is 405 (the mail_routes guard).
-    for p in [UNSET_PATH, PAUSE_PATH, RESUME_PATH, PERSON_LINK_PATH] {
+    for p in [ADD_PATH, RM_PATH, UNSET_PATH, PAUSE_PATH, RESUME_PATH, PERSON_LINK_PATH] {
         let r = crate::mail_routes::dispatch(p, &HashMap::new()).expect("claimed");
         assert_eq!(r.status, "405 Method Not Allowed", "{p}: {}", r.body);
     }
@@ -296,7 +1079,7 @@ fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
         let (st, body) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
         assert_eq!((st, body["error"]["code"].clone()), (409, json!("upgrade_required")), "{v:?}: {body}");
         assert!(body["error"]["hint"].as_str().unwrap_or("").contains("k2 hostmail upgrade"), "{body}");
-        assert_eq!(t.f.engine.sent.lock().unwrap().len(), n, "no confirm mail on {v:?}");
+        assert_eq!(t.f.engine.sent.lock().unwrap().len(), n, "no notice mail on {v:?}");
     }
     seed_mailbox("team@notify.brand.test", "direct");
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
@@ -304,11 +1087,9 @@ fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
     assert!(t.io.forward(ACC).is_some());
     crate::mail::forward_sync::set_test_version(Some(Some("0.16.25".to_string())));
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
-    assert_eq!(st, 202, "the pinned version: {v}");
-    // Confirmed, then the box's mail server reads as older: show says it is
-    // held for the upgrade (not active), and resume refuses (it lifts itself).
-    let tok = last_token(&t, "k2ev_");
-    vpages::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
+    assert_eq!(st, 200, "the pinned version: {v}");
+    // On, then the box's mail server reads as older: show says it is held
+    // for the upgrade (not active), and resume refuses (it lifts itself).
     assert_eq!(show()["forward"]["state"], "active");
     crate::mail::forward_sync::set_test_version(Some(Some("0.16.10".to_string())));
     crate::mail::forward_sync::sync_mailbox(&format!("ma-{MB}"), crate::mail::forward_sync::Why::Periodic).expect("sync");

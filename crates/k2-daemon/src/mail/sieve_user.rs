@@ -36,19 +36,44 @@ pub struct OooBlock {
     pub from: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A mailbox's forward block. One destination writes exactly the bytes it
+/// always did. Several are one `redirect` each (Stalwart queues each as its
+/// own message; `forward_sync::REDIRECT_LIMIT` is why that works):
+///
+/// ```text
+/// # k2-forward
+/// redirect "same-box@…";       same_box: no guard, as a same-box forward has
+/// if … { keep; stop; }         the guard (bounces, loops, spam, DMARC)
+/// addheader "X-K2-Forwarded" …
+/// redirect "outside-1@…";      dest
+/// redirect "outside-2@…";      more
+/// ```
+///
+/// `keep` covers the whole block: mixing `redirect` with `redirect :copy`
+/// would drop the local copy (one bare `redirect` cancels the implicit keep).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ForwardBlock {
     pub dest: String,
     pub keep: bool,
     /// An outside destination's safety steps (`None`: a same-box forward,
     /// written exactly as before).
     pub guard: Option<ForwardGuard>,
+    /// More destinations treated the way `dest` is.
+    pub more: Vec<String>,
+    /// Same-box destinations written before the guard (only with a guard;
+    /// with no guard they are `dest` and `more`).
+    pub same_box: Vec<String>,
 }
 
 impl ForwardBlock {
     /// A same-box forward (no guard).
     pub fn internal(dest: impl Into<String>, keep: bool) -> Self {
-        ForwardBlock { dest: dest.into(), keep, guard: None }
+        ForwardBlock { dest: dest.into(), keep, ..Default::default() }
+    }
+
+    /// How many `redirect`s this block writes.
+    pub fn redirects(&self) -> usize {
+        1 + self.more.len() + self.same_box.len()
     }
 }
 
@@ -242,12 +267,23 @@ fn compose_ooo(ooo: &OooBlock) -> String {
 }
 
 fn compose_forward(fwd: &ForwardBlock) -> String {
-    let dest = sieve_quoted(&fwd.dest);
-    let redirect = if fwd.keep { format!("redirect :copy {dest};\n") } else { format!("redirect {dest};\n") };
-    let Some(g) = &fwd.guard else { return redirect };
+    let redirect = |dest: &str| {
+        let dest = sieve_quoted(dest);
+        if fwd.keep { format!("redirect :copy {dest};\n") } else { format!("redirect {dest};\n") }
+    };
+    let mut out = String::new();
+    let Some(g) = &fwd.guard else {
+        out.push_str(&redirect(&fwd.dest));
+        for d in &fwd.more {
+            out.push_str(&redirect(d));
+        }
+        return out;
+    };
+    for d in &fwd.same_box {
+        out.push_str(&redirect(d));
+    }
     let host = sieve_quoted(&g.host);
     let home = "{\nkeep;\nstop;\n}\n";
-    let mut out = String::new();
     out.push_str(&format!("if envelope :is \"from\" \"\" {home}"));
     out.push_str(&format!("if header :contains \"{LOOP_HEADER}\" {host} {home}"));
     out.push_str(&format!(
@@ -255,7 +291,10 @@ fn compose_forward(fwd: &ForwardBlock) -> String {
     ));
     out.push_str(&format!("if header :matches \"Authentication-Results\" {} {home}", sieve_quoted(&format!("{};*dmarc=fail*", g.host))));
     out.push_str(&format!("addheader \"{LOOP_HEADER}\" {host};\n"));
-    out.push_str(&redirect);
+    out.push_str(&redirect(&fwd.dest));
+    for d in &fwd.more {
+        out.push_str(&redirect(d));
+    }
     out
 }
 
@@ -348,10 +387,22 @@ fn parse_forward_block(code: &str) -> Option<ForwardBlock> {
 fn parse_forward_region(region: &str) -> Option<ForwardBlock> {
     let region = region.to_string();
     let keep = region.contains("redirect :copy") || region.contains("redirect :copy\n");
-    let dest = extract_redirect_dest(&region)?;
     let guard = extract_quoted_after(&region, &format!("header :contains \"{LOOP_HEADER}\""))
         .map(|host| ForwardGuard { host });
-    Some(ForwardBlock { dest, keep, guard })
+    // Redirects before the guard's first test are the same-box ones.
+    let guard_at = guard.as_ref().and_then(|_| region.find("if envelope"));
+    let mut same_box = Vec::new();
+    let mut rest = Vec::new();
+    for (at, dest) in extract_redirect_dests(&region) {
+        if guard_at.is_some_and(|g| at < g) {
+            same_box.push(dest);
+        } else {
+            rest.push(dest);
+        }
+    }
+    let mut rest = rest.into_iter();
+    let dest = rest.next()?;
+    Some(ForwardBlock { dest, keep, guard, more: rest.collect(), same_box })
 }
 
 fn marked_region(source: &str, start: &str, other: &str) -> Option<String> {
@@ -419,12 +470,20 @@ fn extract_until(s: &str) -> Option<String> {
     extract_quoted(&s[i + key.len()..]).filter(|d| parse_until_date(d).is_ok())
 }
 
-fn extract_redirect_dest(s: &str) -> Option<String> {
-    let i = s.find("redirect")?;
-    let rest = &s[i + "redirect".len()..];
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix(":copy").unwrap_or(rest).trim_start();
-    extract_quoted(rest)
+/// Every `redirect "…"` in `s`, with where it starts.
+fn extract_redirect_dests(s: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = s[from..].find("redirect") {
+        let at = from + i;
+        from = at + "redirect".len();
+        let rest = s[from..].trim_start();
+        let rest = rest.strip_prefix(":copy").unwrap_or(rest).trim_start();
+        if let Some(dest) = extract_quoted(rest) {
+            out.push((at, dest));
+        }
+    }
+    out
 }
 
 pub fn apply_patch(current: UserSieve, patch: SievePatch) -> UserSieve {
@@ -539,6 +598,7 @@ mod tests {
                 dest: "dest@domain.test".to_string(),
                 keep: false,
                 guard: None,
+                ..Default::default()
             }),
         };
         let src = compose(&s).expect("script");
@@ -568,6 +628,7 @@ mod tests {
                 dest: "dest@domain.test".to_string(),
                 keep: true,
                 guard: None,
+                ..Default::default()
             }),
         };
         let src = compose(&s).expect("script");
@@ -592,6 +653,7 @@ mod tests {
                 dest: "dest@domain.test".to_string(),
                 keep: false,
                 guard: None,
+                ..Default::default()
             }),
         );
         let src = compose(&s).expect("both");
@@ -609,6 +671,7 @@ mod tests {
                 dest: "dest@domain.test".to_string(),
                 keep: false,
                 guard: None,
+                ..Default::default()
             }),
         };
         let next = apply_patch(s, SievePatch::UnsetOoo);
@@ -632,6 +695,7 @@ mod tests {
                 dest: "dest@domain.test".to_string(),
                 keep: true,
                 guard: None,
+                ..Default::default()
             }),
         };
         let next = apply_patch(s, SievePatch::UnsetForward);
@@ -653,6 +717,7 @@ mod tests {
                 dest: "d@x.test".to_string(),
                 keep: false,
                 guard: None,
+                ..Default::default()
             }),
         };
         let s = apply_patch(s, SievePatch::UnsetOoo);
@@ -700,6 +765,7 @@ mod tests {
                 dest: "c@d.test".to_string(),
                 keep: false,
                 guard: None,
+                ..Default::default()
             }),
         };
         let src = compose(&s).unwrap();
@@ -715,6 +781,7 @@ mod tests {
                 dest: "keep@x.test".to_string(),
                 keep: true,
                 guard: None,
+                ..Default::default()
             })
         );
         // Unmarked in a `k2` script, the same text isn't K2's forward.
@@ -774,6 +841,7 @@ mod tests {
             dest: "me@outside.test".to_string(),
             keep,
             guard: Some(ForwardGuard { host: "mail.brand.test".to_string() }),
+            ..Default::default()
         }
     }
 
@@ -828,6 +896,64 @@ mod tests {
                 let src = compose(&s).expect("script");
                 assert_eq!(parse(&src), s, "{src}");
                 assert_eq!(compose(&parse(&src)).as_deref(), Some(src.as_str()));
+            }
+        }
+    }
+
+    // ── several destinations ─────────────────────────────────────────
+
+    const GOLDEN_EXTERNAL_MANY: &str = include_str!("../../../../tests/mail/forward-goldens/external-many-keep.sieve");
+    const GOLDEN_MIXED_MANY: &str = include_str!("../../../../tests/mail/forward-goldens/mixed-many-nokeep-ooo.sieve");
+
+    fn many(keep: bool) -> ForwardBlock {
+        ForwardBlock { more: vec!["two@outside.test".to_string(), "three@outside.test".to_string()], ..outside(keep) }
+    }
+
+    #[test]
+    fn golden_several_outside_destinations_share_one_guard() {
+        let src = compose(&UserSieve { ooo: None, forward: Some(many(true)) }).expect("script");
+        assert_eq!(src, GOLDEN_EXTERNAL_MANY);
+        assert_eq!(src.matches("addheader").count(), 1, "one marker for every copy: {src}");
+        assert_eq!(src.matches("redirect :copy").count(), 3, "{src}");
+        assert_eq!(src.matches("if envelope").count(), 1, "one guard: {src}");
+        let last_guard = src.find("addheader").expect("marker");
+        assert!(src.find("redirect").expect("redirect") > last_guard, "every outside redirect is behind the guard: {src}");
+    }
+
+    #[test]
+    fn golden_same_box_destinations_come_before_the_guard() {
+        let mut o = ooo("Away until Monday.");
+        o.from = "sales@brand.test".to_string();
+        let fwd = ForwardBlock { same_box: vec!["team@brand.test".to_string()], ..many(false) };
+        assert_eq!(fwd.redirects(), 4);
+        let src = compose(&UserSieve { ooo: Some(o), forward: Some(fwd) }).expect("script");
+        assert_eq!(src, GOLDEN_MIXED_MANY);
+        let team = src.find("redirect \"team@brand.test\"").expect("team");
+        assert!(team < src.find("if envelope").expect("guard"), "{src}");
+        assert!(src.find("vacation").expect("vacation") < team, "vacation first: {src}");
+        assert!(!src.contains(":copy"), "no-keep: {src}");
+    }
+
+    #[test]
+    fn several_destinations_keep_or_not_as_one_and_round_trip() {
+        for keep in [true, false] {
+            for with_ooo in [false, true] {
+                let forms = [
+                    many(keep),
+                    ForwardBlock { same_box: vec!["team@brand.test".to_string(), "ops@brand.test".to_string()], ..many(keep) },
+                    ForwardBlock { more: vec!["ops@brand.test".to_string()], ..ForwardBlock::internal("team@brand.test", keep) },
+                ];
+                for fwd in forms {
+                    let s = UserSieve { ooo: with_ooo.then(|| ooo("x")), forward: Some(fwd) };
+                    let src = compose(&s).expect("script");
+                    assert_eq!(parse(&src), s, "{src}");
+                    assert_eq!(compose(&parse(&src)).as_deref(), Some(src.as_str()));
+                    // Never a mix: one bare redirect would cancel the kept copy.
+                    let bare = src.matches("redirect \"").count();
+                    let copies = src.matches("redirect :copy").count();
+                    assert!(bare == 0 || copies == 0, "{src}");
+                    assert_eq!(copies > 0, keep, "{src}");
+                }
             }
         }
     }

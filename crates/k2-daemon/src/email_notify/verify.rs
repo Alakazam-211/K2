@@ -31,10 +31,13 @@
 //!   passports.
 //!
 //! A mailbox forward (the forwarding PRD) uses the same store with purpose
-//! `forward`; Rosson 2026-10-28: on a box with no system sender its
-//! confirm may come from the mailbox itself. That path is
-//! `mail::forward_verify`; a confirm or a stop of a `forward` row calls
-//! its hooks (after this module lets go of the db).
+//! `forward`, and is opt-out (Rosson 2026-11-02): K2 tells the address with
+//! one notice and a stop link, and asks nothing. That path is
+//! `mail::forward_verify`; a stop of a `forward` row calls its hook (after
+//! this module lets go of the db). A forward's confirm link from before
+//! opt-out still answers `/cli/email/verify`: the page says what's happening,
+//! with a Stop button (only the POST stops). Person notice addresses keep
+//! their confirm, unchanged.
 
 use std::collections::HashMap;
 
@@ -93,6 +96,20 @@ pub fn compose_verify(box_label: &str, asker: &str, why: &str, address: &str, co
          If you didn't expect this, ignore this email: nothing else is sent here unless the address is confirmed.\n\
          To stop K2 from emailing this address for this request, open:\n{stop_url}\n\n\
          K2 on {box_label}\n"
+    );
+    super::send::Composed { subject: subject.chars().filter(|c| !c.is_control()).take(180).collect(), text, html: None }
+}
+
+/// The "you've been added" mail to an outside forward address (fixed K2
+/// text; the same wording rules as the confirm mail).
+pub fn compose_forward_notice(box_label: &str, asker: &str, mailbox: &str, address: &str, stop_url: &str) -> super::send::Composed {
+    let subject = format!("Mail from {mailbox} is being forwarded to you (K2 on {box_label})");
+    let text = format!(
+        "{asker} told K2 to send {why} to this address ({address}). This has started, and you may get those copies from now on.\n\n\
+         If you don't want them, open this link and press Stop. It needs no login and works at any time:\n{stop_url}\n\n\
+         Once you press Stop, K2 sends nothing more here for {mailbox}.\n\n\
+         K2 on {box_label}\n",
+        why = why(store::PURPOSE_FORWARD, mailbox)
     );
     super::send::Composed { subject: subject.chars().filter(|c| !c.is_control()).take(180).collect(), text, html: None }
 }
@@ -334,6 +351,35 @@ fn form(action: &str, token: &str, button: &str) -> String {
     )
 }
 
+/// A forward's confirm link from before opt-out: what's happening, and a Stop
+/// button that posts back here.
+fn forward_old_link_page(conn: &rusqlite::Connection, v: &store::Verified, token: &str, box_label: &str) -> Page {
+    let on = k2_core::mail_forward::live_for_pair(conn, &v.subject_ref, &v.address).ok().flatten().is_some_and(|f| f.is_active());
+    let what = if on {
+        format!("K2 on {} is sending {} to <strong>{}</strong>.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
+    } else {
+        format!("K2 on {} is set up to send {} to <strong>{}</strong>, and isn't sending them right now.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
+    };
+    let stop = format!(
+        r#"<form method="post" action="{}"><input type="hidden" name="t" value="{}"><input type="hidden" name="do" value="stop"><button type="submit">Stop these emails</button></form>"#,
+        esc(VERIFY_PATH),
+        esc(token)
+    );
+    Page {
+        status: "200 OK",
+        html: html("Forwarding", &format!("<h1>You don't need to confirm anything</h1><p>{what}</p><p>If you don't want them, press Stop. It works at any time.</p>{stop}")),
+    }
+}
+
+/// Does this POST ask a forward's old link to stop (`do=stop`)?
+fn asks_stop(query: &str, body: &[u8]) -> bool {
+    query.split('&').chain(std::str::from_utf8(body).unwrap_or("").split('&')).any(|p| p.trim() == "do=stop")
+}
+
+/// The confirm page's words for a link K2 can't place.
+const VERIFY_GONE: &str = "It was already used, it expired (links work for 24 hours), or it was replaced by a newer one. \
+     If it was about mail forwarded to you: K2 no longer asks for a confirm, and the stop link in the same email still works.";
+
 fn gone(status: &'static str, what: &str) -> Page {
     Page { status, html: html("Link not valid", &format!("<h1>This link doesn't work any more</h1><p>{}</p>", esc(what))) }
 }
@@ -362,7 +408,9 @@ pub fn page_get(path: &str, query: &str) -> Page {
     let db = k2_core::db::shared();
     let conn = db.lock();
     match path {
-        VERIFY_PATH => match store::peek(&conn, &token, now) {
+        VERIFY_PATH => match store::peek_any(&conn, &token).ok().flatten().filter(|v| v.purpose == store::PURPOSE_FORWARD) {
+            Some(v) => forward_old_link_page(&conn, &v, &token, &box_label),
+            None => match store::peek(&conn, &token, now) {
             Ok(Some(v)) => Page {
                 status: "200 OK",
                 html: html(
@@ -377,11 +425,18 @@ pub fn page_get(path: &str, query: &str) -> Page {
                     ),
                 ),
             },
-            Ok(None) => gone("404 Not Found", "It was already used, it expired (links work for 24 hours), or it was replaced by a newer one."),
+            Ok(None) => gone("404 Not Found", VERIFY_GONE),
             Err(_) => gone("500 Internal Server Error", "K2 couldn't read its records. Try again later."),
+            },
         },
         _ => match store::peek_stop(&conn, &token) {
-            Ok(Some(v)) if v.state == store::ST_PENDING || v.state == store::ST_VERIFIED => Page {
+            // A forward's old link with no live row (an expired request) can
+            // still record the press, so the address stays out.
+            Ok(Some(v))
+                if v.state == store::ST_PENDING
+                    || v.state == store::ST_VERIFIED
+                    || (v.purpose == store::PURPOSE_FORWARD && v.revoked_by.as_deref() != Some(store::BY_RECIPIENT)) =>
+            Page {
                 status: "200 OK",
                 html: html(
                     "Stop these emails",
@@ -406,27 +461,48 @@ pub fn page_get(path: &str, query: &str) -> Page {
 
 /// `POST /cli/email/verify` and `POST /cli/email/stop`.
 pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
-    let mut hook: Option<(bool, store::Verified)> = None;
-    let page = page_post_inner(path, query, body, &mut hook);
+    let mut stopped: Option<store::Verified> = None;
+    let page = page_post_inner(path, query, body, &mut stopped);
     // A mailbox forward follows its address (outside the db lock).
-    match hook {
-        Some((true, v)) if v.purpose == store::PURPOSE_FORWARD => crate::mail::forward_verify::on_confirmed(&v),
-        Some((false, v)) if v.purpose == store::PURPOSE_FORWARD => crate::mail::forward_verify::on_stopped(&v),
-        _ => {}
+    if let Some(v) = stopped.filter(|v| v.purpose == store::PURPOSE_FORWARD) {
+        crate::mail::forward_verify::on_stopped(&v);
     }
     page
 }
 
-fn page_post_inner(path: &str, query: &str, body: &[u8], hook: &mut Option<(bool, store::Verified)>) -> Page {
+fn stopped_page(v: &store::Verified) -> Page {
+    Page {
+        status: "200 OK",
+        html: html("Stopped", &format!("<h1>Stopped</h1><p>K2 sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
+    }
+}
+
+fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<store::Verified>) -> Page {
     let now = super::now();
     let token = token_from(query, body).unwrap_or_default();
     let db = k2_core::db::shared();
     let conn = db.lock();
     match path {
+        // A forward's confirm link from before opt-out: nothing to confirm.
+        // Only `do=stop` changes anything.
+        VERIFY_PATH if store::peek_any(&conn, &token).ok().flatten().is_some_and(|v| v.purpose == store::PURPOSE_FORWARD) => {
+            let Ok(Some(v)) = store::peek_any(&conn, &token) else {
+                return gone("500 Internal Server Error", "K2 couldn't read its records. Try again later.");
+            };
+            if asks_stop(query, body) {
+                if store::revoke(&conn, &v.id, store::BY_RECIPIENT, now).is_err() {
+                    return gone("500 Internal Server Error", "K2 couldn't save this. Try again later.");
+                }
+                super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                let page = stopped_page(&v);
+                *stopped = Some(v);
+                return page;
+            }
+            forward_old_link_page(&conn, &v, &token, &crate::app_user_invites::box_label())
+        }
         VERIFY_PATH => match store::confirm(&conn, &token, now) {
             Ok(v) => {
                 super::audit_line("email-verify-confirmed", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
-                *hook = Some((true, v.clone()));
                 Page {
                     status: "200 OK",
                     html: html(
@@ -446,11 +522,9 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], hook: &mut Option<(bool
         _ => match store::stop(&conn, &token, now) {
             Ok(Some(v)) => {
                 super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
-                *hook = Some((false, v.clone()));
-                Page {
-                    status: "200 OK",
-                    html: html("Stopped", &format!("<h1>Stopped</h1><p>K2 sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
-                }
+                let page = stopped_page(&v);
+                *stopped = Some(v);
+                page
             }
             Ok(None) => gone("404 Not Found", "K2 doesn't know this stop link."),
             Err(_) => gone("500 Internal Server Error", "K2 couldn't save this. Try again later."),

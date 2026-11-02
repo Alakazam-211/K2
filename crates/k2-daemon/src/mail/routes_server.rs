@@ -806,6 +806,16 @@ fn doc_error_response(err: DocError) -> CliResponse {
 /// workspace → the shared 404.
 pub fn handle_config_get(params: &HashMap<String, String>) -> CliResponse {
     let mut v = config::config_json();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        v["forwarding"] = serde_json::json!({
+            "newOutsidePerDay": k2_core::mail_forward::new_outside_cap(&conn).unwrap_or(k2_core::mail_forward::NEW_OUTSIDE_PER_DAY),
+            "default": k2_core::mail_forward::NEW_OUTSIDE_PER_DAY,
+            "max": k2_core::mail_forward::NEW_OUTSIDE_PER_DAY_MAX,
+            "maxDestinationsPerMailbox": k2_core::mail_forward::MAX_DESTINATIONS,
+        });
+    }
     let ws = crate::cli::str_param(params, "workspace");
     let ws = ws.trim();
     if !ws.is_empty() {

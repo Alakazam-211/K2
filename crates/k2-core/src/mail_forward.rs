@@ -1,15 +1,16 @@
-//! Hosted mail forwards: the k2.db store (migration 0256,
+//! Hosted mail forwards: the k2.db store (migrations 0256, 0260,
 //! prd-hostmail-external-forwarding-v1 §3.2, §3.6, §3.7; vs-live FW-A5,
-//! FW-A6, FW-A8).
+//! FW-A6, FW-A8; Rosson 2026-11-02: several destinations, opt-out).
 //!
-//! One row per forward; at most one live (not `removed`) row per mailbox.
-//! The daemon writes the mailbox's Sieve from the live row
-//! (`mail::forward_sync`); nothing here talks to the mail server.
+//! One row per (mailbox, destination); at most one live (not `removed`) row
+//! per pair and [`MAX_DESTINATIONS`] per mailbox. The daemon writes the
+//! mailbox's Sieve from its live rows (`mail::forward_sync`); nothing here
+//! talks to the mail server.
 //!
 //! ```text
-//!   set (outside) ──► pending_verify ──(confirm link)──► active ◄──(resume)── paused
-//!   set (same box) ─────────────────────────────────────► active ──(pause)───► paused
-//!   any live state ──(unset / replaced / revoked before confirm)──► removed
+//!   set (same box or outside) ──► active ◄──(resume)── paused ◄──(pause)── active
+//!   any live state ──(unset / rm / replaced)──► removed
+//!   pending_verify (only from before opt-out) ──► active | removed
 //! ```
 //!
 //! [`transition`] is the only way a row changes state, and it refuses any
@@ -71,6 +72,26 @@ pub const E_REPLACED: &str = "replaced";
 pub const E_DRIFT: &str = "drift";
 pub const E_IMPORTED: &str = "imported";
 pub const E_KEEP: &str = "keep_changed";
+/// The "you've been added" email went out (`detail.via`).
+pub const E_NOTICE_SENT: &str = "notice_sent";
+/// It didn't; the forward runs anyway and K2 tries again hourly.
+pub const E_NOTICE_FAILED: &str = "notice_failed";
+/// The owner or an Admin chose a destination again after it pressed Stop.
+pub const E_RESTARTED: &str = "restarted";
+/// K2 told the owner this row's mail can't arrive (once).
+pub const E_CANT_ARRIVE: &str = "cant_arrive";
+/// A row from before opt-out was recent enough to go active on update.
+pub const E_LEGACY_DUE: &str = "legacy_due";
+/// That row went active (not a new address).
+pub const E_LEGACY_ON: &str = "legacy_on";
+/// A row from before opt-out was too old to go active: it stays off.
+pub const E_LEGACY_STALE: &str = "legacy_stale";
+
+// ── what K2 told an outside address (`notice_state`) ────────────────
+pub const N_SENT: &str = "sent";
+pub const N_FAILED: &str = "failed";
+pub const N_DUE: &str = "due";
+pub const N_STALE: &str = "stale";
 
 // ── outcomes (`mail_forward_outcomes.kind`) ─────────────────────────
 pub const O_QUEUED: &str = "queued";
@@ -92,11 +113,43 @@ pub const REFUSED_PCT: i64 = 20;
 pub const REFUSED_MIN: i64 = 10;
 pub const BRAKE_PCT: i64 = 10;
 pub const BRAKE_MIN: i64 = 50;
+/// Destinations one mailbox may forward to (live rows of any state). The
+/// mail server's redirect limit is raised to match
+/// (`forward_sync::REDIRECT_LIMIT`).
+pub const MAX_DESTINATIONS: usize = 5;
+/// New outside addresses per box per trailing 24 h, across every mailbox and
+/// caller, unless the owner set another number ([`new_outside_cap`]). There is
+/// no confirm step, so this is what bounds how many strangers a careless or
+/// hijacked caller can start mailing.
+pub const NEW_OUTSIDE_PER_DAY: i64 = 20;
+/// The most the owner can set it to.
+pub const NEW_OUTSIDE_PER_DAY_MAX: i64 = 1000;
+/// Notice emails sent as a forward is added, per box per trailing hour. Past
+/// this a new outside forward waits its turn (`due`).
+pub const NOTICES_BURST_PER_HOUR: i64 = 60;
+/// On the update to opt-out, a `pending_verify` row set within this long goes
+/// active. Older ones stay off until someone sets them again.
+pub const LEGACY_ON_WINDOW_SECS: i64 = 7 * 86_400;
+/// Notice emails sent per pass (one pass a minute): rows waiting their turn go
+/// on at this pace, each with its notice first, so a box with many doesn't
+/// burst or stall part way. With [`NOTICES_BURST_PER_HOUR`] that's at most 180
+/// an hour: the notices share K2's system mail budget (200 an hour,
+/// `email_notify::budget`) with password resets, and they go to strangers, so
+/// a sudden thousand would hurt the box's mail reputation.
+pub const NOTICES_PER_PASS: usize = 2;
+/// Owner notices about outside forwards sent one by one per trailing hour.
+/// The rest roll into one hourly summary, so a bulk add isn't 300 notes.
+pub const OWNER_NOTES_PER_HOUR: i64 = 5;
+/// A rolled-up change waits at most this long for its summary.
+pub const OWNER_SUMMARY_SECS: i64 = 3600;
+/// How long before K2 tries a failed notice email again.
+pub const NOTICE_RETRY_SECS: i64 = 3600;
 
 /// Retention.
 pub const EVENTS_KEEP_SECS: i64 = 365 * 86_400;
 pub const QUEUE_KEEP_SECS: i64 = 7 * 86_400;
 pub const OUTCOMES_KEEP_SECS: i64 = 30 * 86_400;
+pub const OWNER_NOTES_KEEP_SECS: i64 = 30 * 86_400;
 
 fn err(what: &str) -> impl Fn(rusqlite::Error) -> String + '_ {
     move |e| format!("mail forwards {what}: {e}")
@@ -124,6 +177,10 @@ pub struct Forward {
     pub activated_at: Option<i64>,
     pub paused_at: Option<i64>,
     pub removed_at: Option<i64>,
+    /// What K2 told an outside address: [`N_SENT`], [`N_FAILED`], [`N_DUE`],
+    /// [`N_STALE`]; `None` for same-box forwards and older confirmed ones.
+    pub notice_state: Option<String>,
+    pub notice_at: Option<i64>,
 }
 
 impl Forward {
@@ -139,7 +196,7 @@ impl Forward {
 }
 
 const COLS: &str = "id, address_id, address, dest, dest_kind, verified_address_id, keep, state, set_by, pause_reason, \
-                    created_at, updated_at, activated_at, paused_at, removed_at";
+                    created_at, updated_at, activated_at, paused_at, removed_at, notice_state, notice_at";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
     Ok(Forward {
@@ -158,6 +215,8 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
         activated_at: r.get(12)?,
         paused_at: r.get(13)?,
         removed_at: r.get(14)?,
+        notice_state: r.get(15)?,
+        notice_at: r.get(16)?,
     })
 }
 
@@ -171,15 +230,31 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<Forward>, String> {
         .map_err(err("get"))
 }
 
-/// The mailbox's live (not removed) forward.
+/// The mailbox's live (not removed) forwards, oldest first (the order the
+/// Sieve lists them in, so a rewrite is byte-stable).
+pub fn live_rows(conn: &Connection, address_id: &str) -> Result<Vec<Forward>, String> {
+    let mut st = conn
+        .prepare(&format!("SELECT {COLS} FROM mail_forwards WHERE address_id = ?1 AND state <> 'removed' ORDER BY created_at, rowid"))
+        .map_err(err("live"))?;
+    let rows = st.query_map(params![address_id], row).map_err(err("live"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(err("live"))
+}
+
+/// The mailbox's oldest live forward (a mailbox with one destination: its
+/// forward).
 pub fn live_for_address(conn: &Connection, address_id: &str) -> Result<Option<Forward>, String> {
+    Ok(live_rows(conn, address_id)?.into_iter().next())
+}
+
+/// The live row of (mailbox address, destination), if any.
+pub fn live_for_pair(conn: &Connection, address: &str, dest: &str) -> Result<Option<Forward>, String> {
     conn.query_row(
-        &format!("SELECT {COLS} FROM mail_forwards WHERE address_id = ?1 AND state <> 'removed'"),
-        params![address_id],
+        &format!("SELECT {COLS} FROM mail_forwards WHERE address = ?1 AND dest = ?2 AND state <> 'removed'"),
+        params![address, dest],
         row,
     )
     .optional()
-    .map_err(err("live"))
+    .map_err(err("pair"))
 }
 
 /// The newest row of the mailbox (live or removed), for the panel.
@@ -274,10 +349,49 @@ pub struct NewForward<'a> {
     pub verified_address_id: Option<&'a str>,
 }
 
-/// Insert a new forward. Any live row of the same mailbox is retired
-/// first (`removed`, event [`E_REPLACED`]). One [`E_SET`] event (and
-/// [`E_ACTIVATED`] when it starts active).
+/// A live row is replaced or dropped from a `set`'s list (event [`E_REPLACED`]).
+pub fn retire(conn: &Connection, old: &Forward, actor: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE mail_forwards SET state = 'removed', pause_reason = NULL, removed_at = ?2, updated_at = ?2 WHERE id = ?1",
+        params![old.id, now],
+    )
+    .map_err(err("replace"))?;
+    record_event(conn, &old.id, E_REPLACED, actor, &serde_json::json!({ "from": old.state }), now)
+}
+
+/// Insert a forward as the mailbox's only one: every other live row of the
+/// mailbox is retired first (`removed`, event [`E_REPLACED`]). One [`E_SET`]
+/// event (and [`E_ACTIVATED`] when it starts active).
 pub fn create(conn: &Connection, n: &NewForward<'_>, now: i64) -> Result<Forward, String> {
+    check_new(n)?;
+    let tx = conn.unchecked_transaction().map_err(err("create"))?;
+    for old in live_rows(&tx, n.address_id)? {
+        retire(&tx, &old, n.set_by, now)?;
+    }
+    let f = insert_new(&tx, n, now)?;
+    tx.commit().map_err(err("create"))?;
+    Ok(f)
+}
+
+/// Add a destination beside the mailbox's others. A live row of the same
+/// destination is retired first; [`MAX_DESTINATIONS`] holds.
+pub fn add(conn: &Connection, n: &NewForward<'_>, now: i64) -> Result<Forward, String> {
+    check_new(n)?;
+    let tx = conn.unchecked_transaction().map_err(err("add"))?;
+    let live = live_rows(&tx, n.address_id)?;
+    let (same, others): (Vec<_>, Vec<_>) = live.into_iter().partition(|f| f.dest == n.dest);
+    if others.len() >= MAX_DESTINATIONS {
+        return Err(format!("mail forwards: a mailbox forwards to at most {MAX_DESTINATIONS} addresses"));
+    }
+    for old in &same {
+        retire(&tx, old, n.set_by, now)?;
+    }
+    let f = insert_new(&tx, n, now)?;
+    tx.commit().map_err(err("add"))?;
+    Ok(f)
+}
+
+fn check_new(n: &NewForward<'_>) -> Result<(), String> {
     if n.dest_kind != KIND_INTERNAL && n.dest_kind != KIND_EXTERNAL {
         return Err(format!("mail forwards: unknown destination kind '{}'", n.dest_kind));
     }
@@ -285,17 +399,12 @@ pub fn create(conn: &Connection, n: &NewForward<'_>, now: i64) -> Result<Forward
         return Err(format!("mail forwards: a new forward can't start '{}'", n.state));
     }
     if n.dest_kind == KIND_EXTERNAL && n.state == ST_ACTIVE && n.verified_address_id.is_none() {
-        return Err("mail forwards: an outside destination starts active only when verified".to_string());
+        return Err("mail forwards: an outside destination starts active only with its stop-link row".to_string());
     }
-    let tx = conn.unchecked_transaction().map_err(err("create"))?;
-    if let Some(old) = live_for_address(&tx, n.address_id)? {
-        tx.execute(
-            "UPDATE mail_forwards SET state = 'removed', pause_reason = NULL, removed_at = ?2, updated_at = ?2 WHERE id = ?1",
-            params![old.id, now],
-        )
-        .map_err(err("replace"))?;
-        record_event(&tx, &old.id, E_REPLACED, n.set_by, &serde_json::json!({ "from": old.state }), now)?;
-    }
+    Ok(())
+}
+
+fn insert_new(tx: &Connection, n: &NewForward<'_>, now: i64) -> Result<Forward, String> {
     let id = new_id();
     let activated = (n.state == ST_ACTIVE).then_some(now);
     tx.execute(
@@ -316,12 +425,121 @@ pub fn create(conn: &Connection, n: &NewForward<'_>, now: i64) -> Result<Forward
         ],
     )
     .map_err(err("create"))?;
-    record_event(&tx, &id, E_SET, n.set_by, &serde_json::json!({ "kind": n.dest_kind, "keep": n.keep, "state": n.state }), now)?;
+    record_event(tx, &id, E_SET, n.set_by, &serde_json::json!({ "kind": n.dest_kind, "keep": n.keep, "state": n.state }), now)?;
     if n.state == ST_ACTIVE {
-        record_event(&tx, &id, E_ACTIVATED, n.set_by, &serde_json::json!({}), now)?;
+        record_event(tx, &id, E_ACTIVATED, n.set_by, &serde_json::json!({}), now)?;
     }
-    tx.commit().map_err(err("create"))?;
-    get(conn, &id)?.ok_or_else(|| "mail forwards: the new row vanished".to_string())
+    get(tx, &id)?.ok_or_else(|| "mail forwards: the new row vanished".to_string())
+}
+
+/// New outside addresses added on this box since `since` (every mailbox).
+/// Rows from before opt-out turning on and imported rows aren't new
+/// addresses. A row removed and added again counts again: each add mails a
+/// stranger a notice.
+pub fn new_outside_since(conn: &Connection, since: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_forward_events e JOIN mail_forwards f ON f.id = e.forward_id \
+         WHERE e.event = 'set' AND f.dest_kind = 'external' AND e.at >= ?1 \
+         AND NOT EXISTS (SELECT 1 FROM mail_forward_events x WHERE x.forward_id = e.forward_id \
+         AND x.event IN ('legacy_due', 'legacy_stale', 'imported'))",
+        params![since],
+        |r| r.get(0),
+    )
+    .map_err(err("new outside"))
+}
+
+/// How many new outside addresses this box may add a day: what the owner set
+/// (`mail_server.forward_new_per_day`), or [`NEW_OUTSIDE_PER_DAY`].
+pub fn new_outside_cap(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("SELECT forward_new_per_day FROM mail_server WHERE id = 1", [], |r| r.get::<_, Option<i64>>(0))
+        .optional()
+        .map(|v| v.flatten().unwrap_or(NEW_OUTSIDE_PER_DAY))
+        .map_err(err("new outside cap"))
+}
+
+/// Set it. `Ok(false)`: no mail server here yet.
+pub fn set_new_outside_cap(conn: &Connection, per_day: i64) -> Result<bool, String> {
+    let n = conn
+        .execute("UPDATE mail_server SET forward_new_per_day = ?1 WHERE id = 1", params![per_day])
+        .map_err(err("new outside cap"))?;
+    Ok(n == 1)
+}
+
+/// Notice emails K2 tried since `since` (sent or failed).
+pub fn notices_since(conn: &Connection, since: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_forward_events WHERE event IN ('notice_sent', 'notice_failed') AND at >= ?1",
+        params![since],
+        |r| r.get(0),
+    )
+    .map_err(err("notices"))
+}
+
+/// Rows waiting their turn.
+pub fn due_waiting(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("SELECT COUNT(*) FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due'", [], |r| r.get(0))
+        .map_err(err("waiting"))
+}
+
+/// Has this row an event from before opt-out's sort (`legacy_due`)?
+pub fn is_legacy_due(conn: &Connection, id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM mail_forward_events WHERE forward_id = ?1 AND event = 'legacy_due')",
+        params![id],
+        |r| r.get(0),
+    )
+    .map_err(err("legacy"))
+}
+
+/// Record what K2 told an outside address.
+pub fn set_notice(conn: &Connection, id: &str, state: &str, now: i64) -> Result<(), String> {
+    conn.execute("UPDATE mail_forwards SET notice_state = ?2, notice_at = ?3 WHERE id = ?1", params![id, state, now])
+        .map_err(err("notice"))?;
+    Ok(())
+}
+
+/// Sort the rows from before opt-out that K2 hasn't looked at yet: set within
+/// [`LEGACY_ON_WINDOW_SECS`] → [`N_DUE`] (go active, paced); older →
+/// [`N_STALE`] (stay off). Returns the rows this call sorted: (due, stale).
+pub fn legacy_sort(conn: &Connection, now: i64) -> Result<(Vec<Forward>, Vec<Forward>), String> {
+    let mut st = conn
+        .prepare(&format!("SELECT {COLS} FROM mail_forwards WHERE state = 'pending_verify' AND notice_state IS NULL ORDER BY created_at, rowid"))
+        .map_err(err("legacy"))?;
+    let rows = st.query_map([], row).map_err(err("legacy"))?.collect::<Result<Vec<_>, _>>().map_err(err("legacy"))?;
+    let (mut due, mut stale) = (Vec::new(), Vec::new());
+    for f in rows {
+        if f.created_at >= now - LEGACY_ON_WINDOW_SECS {
+            set_notice(conn, &f.id, N_DUE, now)?;
+            record_event(conn, &f.id, E_LEGACY_DUE, "k2", &serde_json::json!({}), now)?;
+            due.push(f);
+        } else {
+            set_notice(conn, &f.id, N_STALE, now)?;
+            record_event(conn, &f.id, E_LEGACY_STALE, "k2", &serde_json::json!({}), now)?;
+            stale.push(f);
+        }
+    }
+    Ok((due, stale))
+}
+
+/// The next rows waiting their turn, oldest first.
+pub fn legacy_due(conn: &Connection, limit: usize) -> Result<Vec<Forward>, String> {
+    let mut st = conn
+        .prepare(&format!("SELECT {COLS} FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due' ORDER BY created_at, rowid LIMIT ?1"))
+        .map_err(err("legacy due"))?;
+    let rows = st.query_map(params![limit as i64], row).map_err(err("legacy due"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(err("legacy due"))
+}
+
+/// Active outside forwards whose notice failed at least [`NOTICE_RETRY_SECS`] ago.
+pub fn failed_notices(conn: &Connection, now: i64, limit: usize) -> Result<Vec<Forward>, String> {
+    let mut st = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM mail_forwards WHERE state = 'active' AND dest_kind = 'external' AND notice_state = 'failed' \
+             AND COALESCE(notice_at, 0) <= ?1 ORDER BY notice_at, rowid LIMIT ?2"
+        ))
+        .map_err(err("failed notices"))?;
+    let rows = st.query_map(params![now - NOTICE_RETRY_SECS, limit as i64], row).map_err(err("failed notices"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(err("failed notices"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +775,18 @@ pub fn counts(conn: &Connection, forward_id: &str, since: i64) -> Result<Counts,
     counts_where(conn, "forward_id = ?1 AND at >= ?2", &[&forward_id, &since])
 }
 
+/// Copies the mailbox handed to the mail server since `since`, across all its
+/// destinations (the daily cap counts every outgoing copy).
+pub fn mailbox_queued(conn: &Connection, address_id: &str, since: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_forward_outcomes o JOIN mail_forwards f ON f.id = o.forward_id \
+         WHERE f.address_id = ?1 AND o.kind = 'queued' AND o.at >= ?2",
+        params![address_id, since],
+        |r| r.get(0),
+    )
+    .map_err(err("mailbox count"))
+}
+
 /// Every forward's outcomes since `since` (the box brake).
 pub fn box_counts(conn: &Connection, since: i64) -> Result<Counts, String> {
     counts_where(conn, "at >= ?1", &[&since])
@@ -582,8 +812,90 @@ pub fn user_refusals_in_a_row(conn: &Connection, forward_id: &str, since: i64) -
     Ok(n)
 }
 
+/// `mail_forward_owner_notes.kind`.
+pub const OWNER_CHANGE: &str = "change";
+pub const OWNER_STOP: &str = "stop";
+
+// ── a destination that can't arrive ─────────────────────────────────
+
+/// Mail to `dest` can't arrive: this box hosts its domain (a `mail_domains`
+/// row, or the mail host name `host`) but has no such active mailbox. The mail
+/// server delivers its own domains itself, whatever their MX says (probe X12),
+/// so that mail bounces here and never reaches another provider. Fail closed
+/// reads as "can arrive": this only ever adds a warning.
+pub fn dest_cant_arrive(conn: &Connection, dest: &str, host: Option<&str>) -> bool {
+    let Some((_, domain)) = dest.rsplit_once('@') else { return false };
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    let hosted = host.is_some_and(|h| h == domain)
+        || conn
+            .query_row("SELECT COUNT(*) FROM mail_domains WHERE lower(domain) = ?1", params![domain], |r| r.get::<_, i64>(0))
+            .is_ok_and(|n| n > 0);
+    if !hosted {
+        return false;
+    }
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_addresses WHERE lower(address) = ?1 AND status = 'active'",
+        params![dest.to_ascii_lowercase()],
+        |r| r.get::<_, i64>(0),
+    )
+    .is_ok_and(|n| n == 0)
+}
+
+/// Live rows whose mail can't arrive that the owner hasn't been told about.
+pub fn cant_arrive_unnoted(conn: &Connection, host: Option<&str>) -> Result<Vec<Forward>, String> {
+    let mut st = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM mail_forwards f WHERE state <> 'removed' \
+             AND NOT EXISTS (SELECT 1 FROM mail_forward_events e WHERE e.forward_id = f.id AND e.event = 'cant_arrive') \
+             ORDER BY address, created_at, rowid"
+        ))
+        .map_err(err("cant arrive"))?;
+    let rows = st.query_map([], row).map_err(err("cant arrive"))?.collect::<Result<Vec<_>, _>>().map_err(err("cant arrive"))?;
+    Ok(rows.into_iter().filter(|f| dest_cant_arrive(conn, &f.dest, host)).collect())
+}
+
+// ── what the owner hears ────────────────────────────────────────────
+
+/// Note a change for the owner. `Ok(true)`: tell them now (the hour's first
+/// few). `Ok(false)`: it waits for the summary.
+pub fn owner_note(conn: &Connection, kind: &str, line: &str, now: i64) -> Result<bool, String> {
+    let told: i64 = conn
+        .query_row("SELECT COUNT(*) FROM mail_forward_owner_notes WHERE rolled = 0 AND at > ?1", params![now - 3600], |r| r.get(0))
+        .map_err(err("owner note"))?;
+    let tell_now = told < OWNER_NOTES_PER_HOUR;
+    conn.execute(
+        "INSERT INTO mail_forward_owner_notes (at, kind, line, rolled, told_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![now, kind, line, !tell_now as i64, tell_now.then_some(now)],
+    )
+    .map_err(err("owner note"))?;
+    Ok(tell_now)
+}
+
+/// The waiting changes, once the oldest has waited its time: `(kind, line)`,
+/// oldest first, marked told. Empty: nothing due yet.
+pub fn owner_summary_due(conn: &Connection, now: i64) -> Result<Vec<(String, String)>, String> {
+    let oldest: Option<i64> = conn
+        .query_row("SELECT MIN(at) FROM mail_forward_owner_notes WHERE told_at IS NULL", [], |r| r.get(0))
+        .map_err(err("owner summary"))?;
+    if oldest.is_none_or(|o| o > now - OWNER_SUMMARY_SECS) {
+        return Ok(Vec::new());
+    }
+    let mut st = conn
+        .prepare("SELECT kind, line FROM mail_forward_owner_notes WHERE told_at IS NULL ORDER BY at, id")
+        .map_err(err("owner summary"))?;
+    let rows = st
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(err("owner summary"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err("owner summary"))?;
+    conn.execute("UPDATE mail_forward_owner_notes SET told_at = ?1 WHERE told_at IS NULL", params![now]).map_err(err("owner summary"))?;
+    Ok(rows)
+}
+
 /// Drop rows past their keep time.
 pub fn purge(conn: &Connection, now: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM mail_forward_owner_notes WHERE told_at IS NOT NULL AND at < ?1", params![now - OWNER_NOTES_KEEP_SECS])
+        .map_err(err("purge"))?;
     conn.execute("DELETE FROM mail_forward_queue WHERE at < ?1", params![now - QUEUE_KEEP_SECS]).map_err(err("purge"))?;
     conn.execute("DELETE FROM mail_forward_outcomes WHERE at < ?1", params![now - OUTCOMES_KEEP_SECS]).map_err(err("purge"))?;
     conn.execute("DELETE FROM mail_forward_events WHERE at < ?1", params![now - EVENTS_KEEP_SECS]).map_err(err("purge"))?;
@@ -699,19 +1011,186 @@ mod tests {
     }
 
     #[test]
-    fn one_live_row_per_mailbox_and_set_replaces() {
+    fn create_replaces_every_live_row_and_add_keeps_the_others() {
         let c = conn();
         let aid = mailbox(&c, "b@brand.test");
         let a = create(&c, &ext(&aid, "b@brand.test", "one@outside.test"), 1).unwrap();
-        let b = create(&c, &ext(&aid, "b@brand.test", "two@outside.test"), 2).unwrap();
-        assert_eq!(get(&c, &a.id).unwrap().unwrap().state, ST_REMOVED);
-        assert_eq!(live_for_address(&c, &aid).unwrap().unwrap().id, b.id);
+        let b = add(&c, &ext(&aid, "b@brand.test", "two@outside.test"), 2).unwrap();
+        let live: Vec<String> = live_rows(&c, &aid).unwrap().into_iter().map(|f| f.dest).collect();
+        assert_eq!(live, vec!["one@outside.test", "two@outside.test"], "oldest first");
+        assert_eq!(get(&c, &a.id).unwrap().unwrap().state, ST_PENDING_VERIFY, "add leaves the first alone");
+        // The same destination twice: one live row (the index refuses a second).
         let dup = c.execute(
             "INSERT INTO mail_forwards (id, address_id, address, dest, dest_kind, keep, state, set_by, created_at, updated_at) \
-             VALUES ('y', ?1, 'b@brand.test', 'z@brand.test', 'internal', 1, 'active', 'owner', 1, 1)",
+             VALUES ('y', ?1, 'b@brand.test', 'two@outside.test', 'external', 1, 'pending_verify', 'owner', 1, 1)",
             params![aid],
         );
-        assert!(dup.is_err(), "a second live row is refused by the index");
+        assert!(dup.is_err(), "the index refuses a second live row of one destination");
+        let again = add(&c, &ext(&aid, "b@brand.test", "two@outside.test"), 3).unwrap();
+        assert_eq!(get(&c, &b.id).unwrap().unwrap().state, ST_REMOVED, "add retires the same destination's old row");
+        assert_eq!(live_rows(&c, &aid).unwrap().len(), 2);
+        assert_eq!(live_for_pair(&c, "b@brand.test", "two@outside.test").unwrap().unwrap().id, again.id);
+        // create leaves exactly one.
+        let d = create(&c, &ext(&aid, "b@brand.test", "three@outside.test"), 4).unwrap();
+        assert_eq!(live_rows(&c, &aid).unwrap().into_iter().map(|f| f.id).collect::<Vec<_>>(), vec![d.id]);
+    }
+
+    #[test]
+    fn add_holds_the_destination_cap_and_a_row_from_before_0260_is_unchanged() {
+        let c = conn();
+        let aid = mailbox(&c, "cap@brand.test");
+        for i in 0..MAX_DESTINATIONS {
+            add(&c, &ext(&aid, "cap@brand.test", &format!("d{i}@outside.test")), i as i64).unwrap();
+        }
+        let e = add(&c, &ext(&aid, "cap@brand.test", "one-more@outside.test"), 10).unwrap_err();
+        assert!(e.contains(&format!("at most {MAX_DESTINATIONS}")), "{e}");
+        assert_eq!(live_rows(&c, &aid).unwrap().len(), MAX_DESTINATIONS, "the refused add changed nothing");
+        // Re-adding one already there isn't over the cap.
+        add(&c, &ext(&aid, "cap@brand.test", "d0@outside.test"), 11).unwrap();
+        // A row written the way 0256 wrote it reads back with no notice state.
+        let bid = mailbox(&c, "old@brand.test");
+        c.execute(
+            "INSERT INTO mail_forwards (id, address_id, address, dest, dest_kind, verified_address_id, keep, state, set_by, created_at, updated_at, activated_at) \
+             VALUES ('old', ?1, 'old@brand.test', 'me@outside.test', 'external', 'v', 0, 'active', 'owner', 5, 5, 5)",
+            params![bid],
+        )
+        .unwrap();
+        let f = live_for_address(&c, &bid).unwrap().unwrap();
+        assert_eq!((f.state.as_str(), f.keep, f.notice_state, f.notice_at), (ST_ACTIVE, false, None, None));
+    }
+
+    #[test]
+    fn new_outside_counts_adds_but_not_rows_from_before_opt_out_or_same_box_ones() {
+        let c = conn();
+        let aid = mailbox(&c, "n@brand.test");
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 0);
+        let mut n = ext(&aid, "n@brand.test", "a@outside.test");
+        n.state = ST_ACTIVE;
+        n.verified_address_id = Some("v");
+        let a = add(&c, &n, 10).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 1);
+        assert_eq!(new_outside_since(&c, 11).unwrap(), 0, "outside the window");
+        let mut same = ext(&aid, "n@brand.test", "team@brand.test");
+        same.state = ST_ACTIVE;
+        same.dest_kind = KIND_INTERNAL;
+        same.verified_address_id = None;
+        add(&c, &same, 10).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 1, "same-box isn't counted");
+        // Removed and added again counts again.
+        transition(&c, &a.id, ST_REMOVED, &actor(), 12).unwrap();
+        add(&c, &n, 13).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 2);
+        // A row from before opt-out, sorted due, doesn't count, before or after it turns on.
+        let lid = mailbox(&c, "l@brand.test");
+        let l = add(&c, &ext(&lid, "l@brand.test", "z@outside.test"), 20).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 3, "unsorted yet");
+        let (due, stale) = legacy_sort(&c, 30).unwrap();
+        assert_eq!((due.len(), stale.len()), (1, 0));
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 2);
+        record_event(&c, &l.id, E_LEGACY_ON, "k2", &serde_json::json!({}), 31).unwrap();
+        set_notice(&c, &l.id, N_SENT, 31).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 2);
+        // A new row waiting its turn does count: it's a new address.
+        let qid = mailbox(&c, "q@brand.test");
+        let q = add(&c, &ext(&qid, "q@brand.test", "w@outside.test"), 40).unwrap();
+        set_notice(&c, &q.id, N_DUE, 40).unwrap();
+        assert_eq!(new_outside_since(&c, 0).unwrap(), 3);
+        assert_eq!(due_waiting(&c).unwrap(), 1);
+    }
+
+    #[test]
+    fn rows_from_before_opt_out_sort_by_age_once() {
+        let c = conn();
+        let now = 100 * 86_400;
+        let fresh_id = mailbox(&c, "f@brand.test");
+        let edge_id = mailbox(&c, "e@brand.test");
+        let old_id = mailbox(&c, "o@brand.test");
+        let fresh = create(&c, &ext(&fresh_id, "f@brand.test", "a@outside.test"), now - 86_400).unwrap();
+        let edge = create(&c, &ext(&edge_id, "e@brand.test", "a@outside.test"), now - LEGACY_ON_WINDOW_SECS).unwrap();
+        let old = create(&c, &ext(&old_id, "o@brand.test", "a@outside.test"), now - LEGACY_ON_WINDOW_SECS - 1).unwrap();
+        let (due, stale) = legacy_sort(&c, now).unwrap();
+        assert_eq!(due.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), vec![edge.id.as_str(), fresh.id.as_str()], "oldest first");
+        assert_eq!(stale.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), vec![old.id.as_str()]);
+        let again = legacy_sort(&c, now + 1).unwrap();
+        assert!(again.0.is_empty() && again.1.is_empty(), "sorted once");
+        assert_eq!(legacy_due(&c, 1).unwrap().len(), 1, "paced by the limit");
+        assert_eq!(get(&c, &old.id).unwrap().unwrap().state, ST_PENDING_VERIFY, "stays off");
+    }
+
+    #[test]
+    fn the_cap_is_the_default_until_the_owner_sets_it() {
+        let c = conn();
+        assert_eq!(new_outside_cap(&c).unwrap(), NEW_OUTSIDE_PER_DAY, "no mail server row");
+        assert!(!set_new_outside_cap(&c, 50).unwrap(), "nothing to set on");
+        c.execute("INSERT INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).unwrap();
+        assert_eq!(new_outside_cap(&c).unwrap(), NEW_OUTSIDE_PER_DAY, "unset");
+        assert!(set_new_outside_cap(&c, 300).unwrap());
+        assert_eq!(new_outside_cap(&c).unwrap(), 300);
+        assert!(MAX_DESTINATIONS == 5, "the per-mailbox limit doesn't move with it");
+    }
+
+    #[test]
+    fn the_owner_hears_the_first_few_then_one_summary() {
+        let c = conn();
+        let t = 100_000;
+        for i in 0..OWNER_NOTES_PER_HOUR {
+            assert!(owner_note(&c, "change", &format!("c{i}"), t + i).unwrap(), "{i}");
+        }
+        assert!(!owner_note(&c, "change", "rolled-1", t + 10).unwrap());
+        assert!(!owner_note(&c, "stop", "rolled-2", t + 11).unwrap(), "a stop rolls too, and is in the summary");
+        assert!(owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS - 1).unwrap().is_empty(), "not an hour yet");
+        let got = owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS).unwrap();
+        assert_eq!(got, vec![("change".to_string(), "rolled-1".to_string()), ("stop".to_string(), "rolled-2".to_string())]);
+        assert!(owner_summary_due(&c, t + 20 + OWNER_SUMMARY_SECS).unwrap().is_empty(), "told once");
+        // An hour on, the next few go one by one again.
+        assert!(owner_note(&c, "change", "later", t + 5 + 3600).unwrap());
+        purge(&c, t + OWNER_NOTES_KEEP_SECS + 4000).unwrap();
+        let left: i64 = c.query_row("SELECT COUNT(*) FROM mail_forward_owner_notes", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "purged");
+    }
+
+    #[test]
+    fn a_destination_on_a_hosted_domain_with_no_mailbox_can_t_arrive() {
+        let c = conn();
+        c.execute("INSERT INTO mail_domains (id, domain, send_mode, status, created_at) VALUES ('d', 'Brand.Test', 'direct', 'verified', 1)", []).unwrap();
+        let aid = mailbox(&c, "real@brand.test");
+        assert!(dest_cant_arrive(&c, "ghost@brand.test", None));
+        assert!(!dest_cant_arrive(&c, "real@brand.test", None), "a mailbox here");
+        assert!(!dest_cant_arrive(&c, "me@outside.test", None));
+        assert!(dest_cant_arrive(&c, "x@mail.host.test", Some("mail.host.test")), "the mail host name");
+        let f = add(&c, &ext(&aid, "real@brand.test", "ghost@brand.test"), 1).unwrap();
+        add(&c, &ext(&aid, "real@brand.test", "me@outside.test"), 1).unwrap();
+        let rows = cant_arrive_unnoted(&c, None).unwrap();
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![f.id.as_str()]);
+        record_event(&c, &f.id, E_CANT_ARRIVE, "k2", &serde_json::json!({}), 2).unwrap();
+        assert!(cant_arrive_unnoted(&c, None).unwrap().is_empty(), "told once");
+        // A mailbox retired later makes a same-box row one of these.
+        let bid = mailbox(&c, "b@brand.test");
+        let mut same = ext(&bid, "b@brand.test", "real@brand.test");
+        same.dest_kind = KIND_INTERNAL;
+        same.state = ST_ACTIVE;
+        let g = add(&c, &same, 3).unwrap();
+        c.execute("UPDATE mail_addresses SET status = 'retired' WHERE address = 'real@brand.test'", []).unwrap();
+        assert_eq!(cant_arrive_unnoted(&c, None).unwrap().into_iter().map(|r| r.id).collect::<Vec<_>>(), vec![g.id]);
+    }
+
+    #[test]
+    fn the_notice_pace_stays_under_the_system_mail_budget() {
+        // 200 an hour is email_notify::budget::SYSTEM_HOURLY (daemon crate).
+        assert!(NOTICES_BURST_PER_HOUR + 60 * NOTICES_PER_PASS as i64 <= 180, "leaves room for password resets");
+    }
+
+    #[test]
+    fn the_mailbox_count_adds_up_every_destination() {
+        let c = conn();
+        let aid = mailbox(&c, "m@brand.test");
+        let a = add(&c, &ext(&aid, "m@brand.test", "a@outside.test"), 1).unwrap();
+        let b = add(&c, &ext(&aid, "m@brand.test", "b@outside.test"), 1).unwrap();
+        record_outcome(&c, &a.id, Some("1"), O_QUEUED, None, 5).unwrap();
+        record_outcome(&c, &b.id, Some("2"), O_QUEUED, None, 5).unwrap();
+        record_outcome(&c, &b.id, Some("2"), O_DELIVERED, None, 6).unwrap();
+        assert_eq!(mailbox_queued(&c, &aid, 0).unwrap(), 2);
+        assert_eq!(mailbox_queued(&c, &aid, 6).unwrap(), 0);
     }
 
     #[test]

@@ -19,6 +19,12 @@
 //!   with [`revoke`].
 //! - **Limits**: [`MAX_PENDING_PER_SUBJECT`] pending per (purpose, subject),
 //!   [`MAX_MAILS_PER_HOUR`] verify mails per box per hour.
+//! - **Mailbox forwards are opt-out** (Rosson 2026-11-02): no confirm. A
+//!   `forward` row starts `verified` ([`open_for_notice`]; `verified_at` is
+//!   when K2 told the address) and exists to carry its stop links. A stop
+//!   lasts: [`is_stopped`] answers until someone chooses the address again,
+//!   no `forward` row is ever purged, and an old stop link finds the pair's
+//!   newest row. `person_notice` keeps its confirm, unchanged.
 //!
 //! Nothing here logs an address.
 
@@ -281,6 +287,67 @@ pub fn mint_stop(conn: &Connection, address_id: &str, now: i64) -> Result<String
     Ok(stop)
 }
 
+/// Open a mailbox forward's address with no confirm (opt-out): reuse its
+/// live row, turn a request still pending from before opt-out `verified`
+/// (its confirm link stays readable: [`peek_any`]), or make a new row. Gives
+/// a new stop token for the notice email. Earlier stop tokens keep working.
+pub fn open_for_notice(conn: &Connection, subject_ref: &str, address: &str, requested_by: &str, now: i64) -> Result<(Verified, String), String> {
+    let subject_ref = subject_ref.trim();
+    if subject_ref.is_empty() {
+        return Err("no subject".to_string());
+    }
+    let address = normalize_address(address);
+    let live = live_for(conn, PURPOSE_FORWARD, subject_ref, now)?;
+    let id = match live.into_iter().find(|v| v.address == address) {
+        Some(v) if v.is_verified() => v.id,
+        Some(v) => {
+            conn.execute(
+                "UPDATE email_verified_addresses SET state = 'verified', verified_at = ?2 WHERE id = ?1 AND state = 'pending'",
+                params![v.id, now],
+            )
+            .map_err(err("open"))?;
+            v.id
+        }
+        None => {
+            let id = format!("eva_{}", random_b64(12)?);
+            conn.execute(
+                "INSERT INTO email_verified_addresses (id, address, purpose, subject_ref, requested_by, state, created_at, expires_at, verified_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'verified', ?6, ?6, ?6)",
+                params![id, address, PURPOSE_FORWARD, subject_ref, requested_by, now],
+            )
+            .map_err(err("open"))?;
+            id
+        }
+    };
+    let stop = mint_stop(conn, &id, now)?;
+    let row = get(conn, &id)?.ok_or_else(|| "the new row is gone".to_string())?;
+    Ok((row, stop))
+}
+
+/// Did `address` press Stop for this mailbox, with nobody choosing it again
+/// since? (The stop revokes the pair's one live row; choosing it again makes
+/// a new live row.) Fail closed: an unreadable store answers yes.
+pub fn is_stopped(conn: &Connection, subject_ref: &str, address: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM email_verified_addresses WHERE purpose = ?1 AND subject_ref = ?2 AND address = ?3 AND revoked_by = ?4) \
+         AND NOT EXISTS (SELECT 1 FROM email_verified_addresses WHERE purpose = ?1 AND subject_ref = ?2 AND address = ?3 AND state IN ('pending', 'verified'))",
+        params![PURPOSE_FORWARD, subject_ref.trim(), normalize_address(address), BY_RECIPIENT],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(true)
+}
+
+/// The row a confirm token names, in any state (the page for a forward's
+/// old confirm link; read-only).
+pub fn peek_any(conn: &Connection, token: &str) -> Result<Option<Verified>, String> {
+    if !token_shape_ok(token, CONFIRM_PREFIX) {
+        return Ok(None);
+    }
+    conn.query_row(&format!("SELECT {COLS} FROM email_verified_addresses WHERE token_sha256 = ?1"), params![sha256_hex(token)], row)
+        .optional()
+        .map_err(err("peek"))
+}
+
 /// The pending row a confirm token names (read-only; for the page).
 pub fn peek(conn: &Connection, token: &str, now: i64) -> Result<Option<Verified>, String> {
     if !token_shape_ok(token, CONFIRM_PREFIX) {
@@ -345,17 +412,37 @@ pub fn peek_stop(conn: &Connection, stop: &str) -> Result<Option<Verified>, Stri
     if !token_shape_ok(stop, STOP_PREFIX) {
         return Ok(None);
     }
-    conn.query_row(
-        &format!(
-            "SELECT {} FROM email_verified_addresses a JOIN email_verified_stops s ON s.address_id = a.id \
-             WHERE s.stop_sha256 = ?1",
-            COLS.split(", ").map(|c| format!("a.{c}")).collect::<Vec<_>>().join(", ")
-        ),
-        params![sha256_hex(stop)],
-        row,
-    )
-    .optional()
-    .map_err(err("peek stop"))
+    let named = conn
+        .query_row(
+            &format!(
+                "SELECT {} FROM email_verified_addresses a JOIN email_verified_stops s ON s.address_id = a.id \
+                 WHERE s.stop_sha256 = ?1",
+                COLS.split(", ").map(|c| format!("a.{c}")).collect::<Vec<_>>().join(", ")
+            ),
+            params![sha256_hex(stop)],
+            row,
+        )
+        .optional()
+        .map_err(err("peek stop"))?;
+    let Some(v) = named else { return Ok(None) };
+    // A forward's stop link works for good: an old one (its row expired, or
+    // the address was chosen again after an earlier stop) stops the pair's
+    // live row. Other purposes keep the row the token names.
+    if v.purpose == PURPOSE_FORWARD && v.state != ST_PENDING && v.state != ST_VERIFIED {
+        let live = conn
+            .query_row(
+                &format!(
+                    "SELECT {COLS} FROM email_verified_addresses WHERE purpose = ?1 AND subject_ref = ?2 AND address = ?3 \
+                     AND state IN ('pending', 'verified')"
+                ),
+                params![v.purpose, v.subject_ref, v.address],
+                row,
+            )
+            .optional()
+            .map_err(err("peek stop"))?;
+        return Ok(Some(live.unwrap_or(v)));
+    }
+    Ok(Some(v))
 }
 
 /// Take a stop token: the address is revoked (pending or verified).
@@ -364,6 +451,14 @@ pub fn stop(conn: &Connection, stop: &str, now: i64) -> Result<Option<Verified>,
     let Some(v) = peek_stop(conn, stop)? else { return Ok(None) };
     if v.state == ST_PENDING || v.state == ST_VERIFIED {
         revoke(conn, &v.id, BY_RECIPIENT, now)?;
+    } else if v.purpose == PURPOSE_FORWARD && v.revoked_by.as_deref() != Some(BY_RECIPIENT) {
+        // An old link of an address with no live row (an expired request):
+        // the press still counts, so the address stays out.
+        conn.execute(
+            "UPDATE email_verified_addresses SET state = 'revoked', token_sha256 = NULL, verified_at = NULL, revoked_at = ?2, revoked_by = ?3 WHERE id = ?1",
+            params![v.id, now, BY_RECIPIENT],
+        )
+        .map_err(err("stop"))?;
     }
     get(conn, &v.id)
 }
@@ -381,16 +476,17 @@ pub fn revoke(conn: &Connection, id: &str, by: &str, now: i64) -> Result<bool, S
 }
 
 /// Forget dead rows (revoked or expired) older than `days`; their stop
-/// tokens go with them.
+/// tokens go with them. Never a mailbox forward's: its stop link and its
+/// stop last for good.
 pub fn purge_dead(conn: &Connection, older_than: i64) -> Result<usize, String> {
     conn.execute(
         "DELETE FROM email_verified_stops WHERE address_id IN (SELECT id FROM email_verified_addresses \
-         WHERE state IN ('revoked', 'expired') AND COALESCE(revoked_at, expires_at) < ?1)",
+         WHERE purpose <> 'forward' AND state IN ('revoked', 'expired') AND COALESCE(revoked_at, expires_at) < ?1)",
         params![older_than],
     )
     .map_err(err("purge stops"))?;
     conn.execute(
-        "DELETE FROM email_verified_addresses WHERE state IN ('revoked', 'expired') AND COALESCE(revoked_at, expires_at) < ?1",
+        "DELETE FROM email_verified_addresses WHERE purpose <> 'forward' AND state IN ('revoked', 'expired') AND COALESCE(revoked_at, expires_at) < ?1",
         params![older_than],
     )
     .map_err(err("purge"))
@@ -497,5 +593,79 @@ mod tests {
         assert!(!token_shape_ok(&format!("k2es_{}", "a".repeat(43)), CONFIRM_PREFIX));
         assert!(token_shape_ok(&format!("k2ev_{}", "a-_9".repeat(10) + "abc"), CONFIRM_PREFIX));
         assert!(!valid_purpose("anything"));
+    }
+
+    // ── mailbox forwards: opt-out (Rosson 2026-11-02) ────────────────
+
+    const MB: &str = "sales@brand.test";
+    const DEST: &str = "me@outside.test";
+
+    #[test]
+    fn a_forward_address_opens_with_no_confirm_and_a_working_stop() {
+        let c = conn();
+        let (v, stop) = open_for_notice(&c, MB, " Me@Outside.Test ", "owner", 100).expect("open");
+        assert_eq!((v.state.as_str(), v.address.as_str(), v.verified_at), (ST_VERIFIED, DEST, Some(100)));
+        assert!(token_shape_ok(&stop, STOP_PREFIX));
+        assert!(!is_stopped(&c, MB, DEST));
+        // Opening again reuses the row and gives another stop token; both work.
+        let (again, stop2) = open_for_notice(&c, MB, DEST, "owner", 110).expect("again");
+        assert_eq!(again.id, v.id);
+        assert_ne!(stop, stop2);
+        assert_eq!(peek_stop(&c, &stop).expect("peek").expect("row").id, v.id);
+        let done = super::stop(&c, &stop, 120).expect("stop").expect("row");
+        assert_eq!((done.state.as_str(), done.revoked_by.as_deref()), (ST_REVOKED, Some(BY_RECIPIENT)));
+        assert!(is_stopped(&c, MB, DEST));
+        assert_eq!(super::stop(&c, &stop2, 130).expect("second").expect("row").id, v.id, "a second press answers the same row");
+    }
+
+    #[test]
+    fn a_stop_lasts_past_the_purge_and_an_old_link_stops_a_chosen_again_address() {
+        let c = conn();
+        let (v, old_stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        super::stop(&c, &old_stop, 120).expect("stop");
+        assert_eq!(purge_dead(&c, 10_000_000).expect("purge"), 0, "a forward's stop is never forgotten");
+        assert!(is_stopped(&c, MB, DEST));
+        assert!(peek_stop(&c, &old_stop).expect("peek").is_some(), "the old link still answers");
+        // Someone chooses it again: a new row, no longer stopped.
+        let (again, _) = open_for_notice(&c, MB, DEST, "owner", 200).expect("again");
+        assert_ne!(again.id, v.id);
+        assert!(!is_stopped(&c, MB, DEST));
+        // The first notice's link stops the new row.
+        let done = super::stop(&c, &old_stop, 300).expect("stop").expect("row");
+        assert_eq!(done.id, again.id);
+        assert!(is_stopped(&c, MB, DEST));
+    }
+
+    #[test]
+    fn a_stop_is_per_mailbox_and_a_person_notice_still_purges() {
+        let c = conn();
+        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        super::stop(&c, &stop, 110).expect("stop");
+        assert!(!is_stopped(&c, "other@brand.test", DEST), "another mailbox's forward isn't stopped");
+        let i = issue(&c, PURPOSE_PERSON_NOTICE, "owner", DEST, "owner", 100).expect("issue");
+        revoke(&c, &i.row.id, "owner", 110).expect("revoke");
+        assert_eq!(purge_dead(&c, 10_000).expect("purge"), 1, "person notices purge as before");
+    }
+
+    #[test]
+    fn a_request_pending_from_before_opt_out_opens_and_its_old_link_reads() {
+        let c = conn();
+        let i = issue(&c, PURPOSE_FORWARD, MB, DEST, "owner", 1000).expect("issue");
+        let (v, stop) = open_for_notice(&c, MB, DEST, "owner", 1100).expect("open");
+        assert_eq!((v.id.as_str(), v.state.as_str()), (i.row.id.as_str(), ST_VERIFIED));
+        assert_eq!(peek_any(&c, &i.token).expect("peek").expect("row").id, v.id, "the old link still names the row");
+        assert!(peek(&c, &i.token, 1100).expect("peek").is_none(), "it isn't a confirm any more");
+        assert_eq!(super::stop(&c, &i.stop, 1200).expect("old stop").expect("row").id, v.id);
+        assert!(is_stopped(&c, MB, DEST));
+        drop(stop);
+    }
+
+    #[test]
+    fn a_person_notice_keeps_its_confirm() {
+        let c = conn();
+        let i = issue(&c, PURPOSE_PERSON_NOTICE, "owner", DEST, "owner", 1000).expect("issue");
+        assert_eq!(i.row.state, ST_PENDING);
+        let done = confirm(&c, &i.token, 1001).expect("confirm");
+        assert_eq!(done.state, ST_VERIFIED);
     }
 }

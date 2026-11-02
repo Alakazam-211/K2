@@ -3043,6 +3043,38 @@ impl StalwartClient {
         )
     }
 
+    /// Several forward destinations: the user-script interpreter's
+    /// `(maxRedirects, maxOutMessages)`. Absent = Stalwart's default.
+    pub fn sieve_user_interpreter_limits(&self) -> Result<(Option<u64>, Option<u64>), String> {
+        let resp = self.registry_call(
+            "x:SieveUserInterpreter/get",
+            serde_json::json!({
+                "ids": [SIEVE_USER_INTERPRETER_SINGLETON_ID],
+                "properties": ["maxRedirects", "maxOutMessages"],
+            }),
+        )?;
+        let row = resp
+            .get("list")
+            .and_then(|v| v.as_array())
+            .and_then(|l| l.first())
+            .ok_or_else(|| "x:SieveUserInterpreter/get: reply has no singleton".to_string())?;
+        Ok((row.get("maxRedirects").and_then(|v| v.as_u64()), row.get("maxOutMessages").and_then(|v| v.as_u64())))
+    }
+
+    /// Several forward destinations: write the interpreter's limits. Applies
+    /// on the next `ReloadSettings`.
+    pub fn sieve_user_interpreter_set_limits(&self, max_redirects: u64, max_out_messages: u64) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:SieveUserInterpreter/set",
+            serde_json::json!({
+                "update": {
+                    SIEVE_USER_INTERPRETER_SINGLETON_ID: { "maxRedirects": max_redirects, "maxOutMessages": max_out_messages }
+                }
+            }),
+        )?;
+        parse_set_updated("x:SieveUserInterpreter/set", SIEVE_USER_INTERPRETER_SINGLETON_ID, &resp)
+    }
+
     /// Trusted DATA-stage system scripts (`x:SieveSystemScript`).
     pub fn system_scripts_list(&self) -> Result<Vec<SystemScriptInfo>, String> {
         let resp = self.registry_call("x:SieveSystemScript/get", serde_json::json!({}))?;

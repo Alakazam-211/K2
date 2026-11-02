@@ -1,7 +1,7 @@
 // Settings → Email Hosting → a mailbox → Forwarding
 // (prd-hostmail-external-forwarding-v1 §4.2, FW4). Typed bindings for the
 // daemon's forward routes (crates/k2-daemon/src/mail/forward.rs). Every rule
-// (who may set, resume, the confirm link, caps, auto-pause) lives in the
+// (who may set, resume, the stop link, caps, auto-pause) lives in the
 // daemon; this file only calls the routes.
 //
 //   staff  = /cli/mail/forward*       owner, Admin (and mail-manage agents)
@@ -60,6 +60,13 @@ export interface Forward {
   activatedAt: number | null
   pausedAt: number | null
   verify: ForwardVerify | null
+  /** What K2 told an outside address: `sent` | `failed` | `due` | `stale`. */
+  notice?: string | null
+  noticeAt?: number | null
+  /** The daemon's words, when the notice matters to the viewer. */
+  noticeWords?: string | null
+  /** Why mail to this address can't arrive (the daemon's words), if it can't. */
+  cantArrive?: string | null
   last24h: ForwardCounts
 }
 
@@ -78,11 +85,15 @@ export interface ForwardEvent {
 export interface ForwardShow {
   ok: boolean
   address: string
+  /** The first destination (the shape from before several). */
   forward: Forward | null
+  /** Every destination, oldest first. */
+  forwards?: Forward[]
+  maxDestinations?: number
   events: ForwardEvent[]
 }
 
-/** POST set: 202 `pending_verify` (outside) or 200 `active`. */
+/** POST set / add: on at once; the fields are the first destination's. */
 export interface ForwardSetResult {
   ok: boolean
   address: string
@@ -120,14 +131,24 @@ export function forwardApiOn(scope: ServerScope = primaryScope()) {
       if (keep !== undefined) body.keep = keep
       return daemonCliPost<ForwardSetResult>(scope, base(viewer), body)
     },
+    /** One more destination; the others stay as they are. */
+    add(viewer: ForwardViewer, address: string, to: string, keep: boolean | undefined): Promise<ForwardSetResult> {
+      const body: Record<string, unknown> = { address, to }
+      if (keep !== undefined) body.keep = keep
+      return daemonCliPost<ForwardSetResult>(scope, `${base(viewer)}/add`, body)
+    },
+    /** One destination gone; the others stay as they are. */
+    rm(viewer: ForwardViewer, address: string, to: string): Promise<ForwardChangeResult> {
+      return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/rm`, { address, to })
+    },
     unset(viewer: ForwardViewer, address: string): Promise<ForwardChangeResult> {
       return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/unset`, { address })
     },
-    pause(viewer: ForwardViewer, address: string): Promise<ForwardChangeResult> {
-      return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/pause`, { address })
+    pause(viewer: ForwardViewer, address: string, to?: string): Promise<ForwardChangeResult> {
+      return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/pause`, to ? { address, to } : { address })
     },
-    resume(viewer: ForwardViewer, address: string): Promise<ForwardChangeResult> {
-      return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/resume`, { address })
+    resume(viewer: ForwardViewer, address: string, to?: string): Promise<ForwardChangeResult> {
+      return daemonCliPost<ForwardChangeResult>(scope, `${base(viewer)}/resume`, to ? { address, to } : { address })
     },
   }
 }
@@ -146,7 +167,7 @@ export function isStaffRefusal(err: unknown): boolean {
  *  (the daemon still decides). Staff here = owner or Admin. */
 export function resumeRule(viewer: ForwardViewer, reason: string | null): { can: boolean; why: string | null } {
   if (reason === 'revoked') {
-    return { can: false, why: 'The destination clicked Stop. Set the forward again to send a new confirm link.' }
+    return { can: false, why: 'The address pressed Stop, so K2 won’t send there. Only the owner or an Admin can choose it again, and should ask them first (k2 hostmail forward add --restart-stopped).' }
   }
   if (reason === 'upgrade_required') {
     return { can: false, why: 'Not forwarding: the mail server needs upgrading (k2 hostmail upgrade). It resumes by itself after the upgrade.' }
@@ -167,6 +188,13 @@ export function eventWords(e: ForwardEvent): string {
     verify_sent: 'Confirm link sent',
     verified: 'Destination confirmed',
     activated: 'Forwarding on',
+    notice_sent: 'Told the address, with a stop link',
+    notice_failed: 'Couldn’t email the address its stop link',
+    restarted: 'Chosen again after the address pressed Stop',
+    legacy_on: 'Turned on (K2 stopped asking for a confirm)',
+    legacy_stale: 'Left off (too old to turn on)',
+    legacy_due: 'Turning on (K2 stopped asking for a confirm)',
+    cant_arrive: 'Owner told its mail can’t arrive',
     paused: 'Paused',
     resumed: 'Resumed',
     removed: 'Removed',
@@ -182,7 +210,7 @@ export function eventWords(e: ForwardEvent): string {
 
 /** The state chip's label. */
 export function stateLabel(f: Forward): string {
-  if (f.state === 'pending_verify') return f.verify?.state === 'expired' ? 'Link expired' : 'Waiting for confirm'
+  if (f.state === 'pending_verify') return f.notice === 'stale' ? 'Off: too old' : 'Turning on'
   if (f.state === 'active') return 'On'
   if (f.state === 'paused') return 'Paused'
   return f.state

@@ -21,6 +21,9 @@ pub(crate) struct FakeSieve {
     pub source_fail: RefCell<bool>,
     pub writes: RefCell<usize>,
     pub fail: RefCell<bool>,
+    /// How many times K2 raised the redirect limit, and whether it can.
+    pub limit_calls: RefCell<usize>,
+    pub limit_fail: RefCell<bool>,
 }
 
 impl FakeSieve {
@@ -66,6 +69,13 @@ impl SieveIo for FakeSieve {
         *self.writes.borrow_mut() += 1;
         self.put(account_id, source);
         self.legacy.borrow_mut().remove(account_id);
+        Ok(())
+    }
+    fn ensure_redirects(&self) -> Result<(), String> {
+        if *self.limit_fail.borrow() {
+            return Err("fake: the redirect limit can't be raised".into());
+        }
+        *self.limit_calls.borrow_mut() += 1;
         Ok(())
     }
 }
@@ -374,4 +384,135 @@ fn an_older_mail_server_gets_no_outside_block() {
     assert_eq!(s.held.as_deref(), Some(""), "lifted: {s:?}");
     assert_eq!(row().state, store::ST_ACTIVE);
     assert!(io.forward("acc-old").is_some_and(|f| f.guard.is_some()));
+}
+
+// ── several destinations ────────────────────────────────────────────
+
+fn add_row(aid: &str, addr: &str, dest: &str, kind: &str, state: &str, verified: Option<&str>, keep: bool) -> Forward {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::add(
+        &conn,
+        &store::NewForward { address_id: aid, address: addr, dest, dest_kind: kind, keep, set_by: "owner", state, verified_address_id: verified },
+        now(),
+    )
+    .expect("add")
+}
+
+#[test]
+fn stalwart_s_default_limit_is_raised_only_when_low_and_never_lowered() {
+    assert_eq!(REDIRECT_LIMIT, store::MAX_DESTINATIONS as u64);
+    assert_eq!(OUT_MESSAGE_LIMIT, REDIRECT_LIMIT + 1, "a vacation reply counts as an out message too");
+    // Absent: Stalwart's user-script defaults (1 and 3).
+    assert_eq!(plan_redirect_limits(None, None), Some((REDIRECT_LIMIT, OUT_MESSAGE_LIMIT)));
+    assert_eq!(plan_redirect_limits(Some(1), Some(3)), Some((REDIRECT_LIMIT, OUT_MESSAGE_LIMIT)));
+    assert_eq!(plan_redirect_limits(Some(REDIRECT_LIMIT), Some(OUT_MESSAGE_LIMIT)), None, "already high enough: no write, no reload");
+    assert_eq!(plan_redirect_limits(Some(50), Some(2)), Some((50, OUT_MESSAGE_LIMIT)), "an operator's higher value stays");
+    assert_eq!(plan_redirect_limits(Some(50), Some(60)), None);
+}
+
+#[test]
+fn each_active_destination_gets_a_redirect_and_a_waiting_or_paused_one_gets_none() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("many@brand.test", "direct");
+    let (a, b) = (verified_row("many@brand.test", "a@outside.test"), verified_row("many@brand.test", "b@outside.test"));
+    add_row(&aid, "many@brand.test", "a@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&a), true);
+    let fb = add_row(&aid, "many@brand.test", "b@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&b), true);
+    add_row(&aid, "many@brand.test", "waiting@outside.test", store::KIND_EXTERNAL, store::ST_PENDING_VERIFY, None, true);
+    add_row(&aid, "many@brand.test", "team@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, true);
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    let fwd = io.forward("acc-many").expect("written");
+    assert_eq!(fwd.dest, "a@outside.test");
+    assert_eq!(fwd.more, vec!["b@outside.test".to_string()]);
+    assert_eq!(fwd.same_box, vec!["team@brand.test".to_string()]);
+    assert!(fwd.guard.is_some());
+    let src = io.src("acc-many").expect("script");
+    assert!(!src.contains("waiting@outside.test"), "an address that isn't on gets nothing: {src}");
+    assert_eq!(*io.limit_calls.borrow(), 1, "several redirects: the limit is checked first");
+    // Pausing one leaves the others written.
+    pause(&fb.id, store::P_DEST_GONE, "k2", None).expect("pause");
+    let fwd = io.forward("acc-many").expect("written");
+    assert_eq!((fwd.dest.as_str(), fwd.more.len(), fwd.same_box.len()), ("a@outside.test", 0, 1));
+    // A rewrite is byte-stable: the reconcile finds nothing.
+    let writes = *io.writes.borrow();
+    let r = reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!((r.drift, *io.writes.borrow()), (0, writes), "{r:?}");
+}
+
+/// Stalwart silently skips a redirect over its limit, so K2 never writes a
+/// script it can't run: the old script stands and the change reads deferred.
+#[test]
+fn when_the_limit_can_t_be_raised_the_old_script_stands() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("lim@brand.test", "direct");
+    let a = verified_row("lim@brand.test", "a@outside.test");
+    add_row(&aid, "lim@brand.test", "a@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&a), true);
+    sync_mailbox(&aid, Why::Change).expect("one destination needs no limit");
+    assert_eq!(*io.limit_calls.borrow(), 0, "one redirect never touches the server's limit");
+    let good = io.src("acc-lim").expect("script");
+    *io.limit_fail.borrow_mut() = true;
+    let b = verified_row("lim@brand.test", "b@outside.test");
+    add_row(&aid, "lim@brand.test", "b@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&b), true);
+    let e = sync_mailbox(&aid, Why::Change).expect_err("deferred");
+    assert!(e.contains("redirect limit"), "{e}");
+    assert_eq!(io.src("acc-lim").as_deref(), Some(good.as_str()), "untouched: the first destination keeps forwarding");
+    *io.limit_fail.borrow_mut() = false;
+    reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!(io.forward("acc-lim").expect("written").more, vec!["b@outside.test".to_string()], "the reconcile finishes it");
+}
+
+#[test]
+fn a_copy_stays_if_any_active_row_keeps_one() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("k@brand.test", "direct");
+    add_row(&aid, "k@brand.test", "t1@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, false);
+    add_row(&aid, "k@brand.test", "t2@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, false);
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    assert!(!io.forward("acc-k").expect("written").keep);
+    add_row(&aid, "k@brand.test", "t3@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, true);
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    let src = io.src("acc-k").expect("script");
+    assert_eq!(src.matches("redirect :copy").count(), 3, "all copies or none: {src}");
+    assert!(!src.contains("redirect \""), "{src}");
+}
+
+/// No mail host name, or a mail server too old: the outside rows aren't
+/// written, the same-box ones still are, and the sync says so.
+#[test]
+fn outside_rows_fail_closed_without_touching_same_box_ones() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("mix@brand.test", "direct");
+    let a = verified_row("mix@brand.test", "a@outside.test");
+    add_row(&aid, "mix@brand.test", "a@outside.test", store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&a), true);
+    add_row(&aid, "mix@brand.test", "team@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, true);
+    set_test_ctx(Some(Ctx { host: None, airgap: false, now: 0 }));
+    let s = sync_mailbox(&aid, Why::Change).expect("sync");
+    assert!(s.blocked, "{s:?}");
+    let fwd = io.forward("acc-mix").expect("the same-box one");
+    assert_eq!((fwd.dest.as_str(), fwd.guard.is_none(), fwd.more.len()), ("team@brand.test", true, 0));
+    assert!(!io.src("acc-mix").expect("script").contains("a@outside.test"));
+}
+
+#[test]
+fn a_retired_mailbox_drops_all_its_rows() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("gone@brand.test", "direct");
+    add_row(&aid, "gone@brand.test", "t1@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, true);
+    add_row(&aid, "gone@brand.test", "t2@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None, true);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE mail_addresses SET status = 'retired' WHERE id = ?1", params![aid]).expect("retire");
+    }
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert!(store::live_rows(&conn, &aid).expect("live").is_empty());
+    drop(conn);
+    drop(io);
 }

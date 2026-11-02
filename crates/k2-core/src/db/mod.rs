@@ -1763,6 +1763,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // renumber freely on a slip (and edit the migration-order tests).
         // The store is `crate::domains` (`AppDomain`).
         ("0259_custom_domain_relay", include_str!("../../drizzle_sql/0259_custom_domain_relay.sql")),
+        // 0260 — several destinations per hosted mailbox, and opt-out outside
+        // forwards (Rosson 2026-11-02; 0.46.8): one live `mail_forwards` row
+        // per (mailbox, destination), plus `notice_state`, `notice_at`. New
+        // index + ADD COLUMN only; renumber freely on a slip (and edit the
+        // migration-order tests). The store is `crate::mail_forward`.
+        ("0260_mail_forward_destinations", include_str!("../../drizzle_sql/0260_mail_forward_destinations.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2426,7 +2432,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0259_custom_domain_relay",
+            last_name, "0260_mail_forward_destinations",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2546,6 +2552,7 @@ mod tests {
                 "0258_client_msg_ids",
                 // 0.46.8: custom domains through K2's relays (Path B).
                 "0259_custom_domain_relay",
+                "0260_mail_forward_destinations",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2673,6 +2680,7 @@ mod tests {
                 "0258_client_msg_ids",
                 // 0.46.8: custom domains through K2's relays (Path B).
                 "0259_custom_domain_relay",
+                "0260_mail_forward_destinations",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2900,7 +2908,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0259_custom_domain_relay", "0259 (0.46.8) runs last");
+        assert_eq!(top, "0260_mail_forward_destinations", "0260 (0.46.8) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2946,9 +2954,10 @@ mod tests {
                 "0256_mail_forwards",
                 "0257_stash_sync",
                 "0258_client_msg_ids",
-                "0259_custom_domain_relay"
+                "0259_custom_domain_relay",
+                "0260_mail_forward_destinations"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258 and 0259)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259 and 0260)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3790,7 +3799,11 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0259 (custom domains Path B, 0.46.8) is the newest: its record
+            // 0260 (forward destinations, 0.46.8) is the newest: its record
+            // goes (its indexes are IF NOT EXISTS; its column re-adds are
+            // skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0260_mail_forward_destinations'", []).unwrap();
+            // 0259 (custom domains Path B, 0.46.8) came before it: its record
             // goes (its column re-adds are skipped as duplicates).
             conn.execute("DELETE FROM _migrations WHERE name = '0259_custom_domain_relay'", []).unwrap();
             // 0258 (project chat client keys, 0.46.8) came before it: its

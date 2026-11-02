@@ -38,6 +38,11 @@
 //!   most [`REGISTERS_PER_HOUR`] registers per pass an hour.
 //! - Unregister answers `{ok, removed}` the same for a miss and for someone
 //!   else's device (no oracle). A push token is never in an answer.
+//! - **Server only (0.46.8, `k2 app push set --register server`):** an App
+//!   may take `push.register` and `push.viewing` only through its own link,
+//!   so a phone can't call K2 directly: `403 push_server_only` elsewhere.
+//!   Off by default. Phone pairing's push step is refused the same way (the
+//!   sign-in itself goes on).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -356,6 +361,11 @@ impl Accepted for CliResponse {
 /// The pass routes (the dispatcher resolved `pass`; `link_app` is the
 /// request's link App, if it came in on one).
 pub fn handle_pass(path: &str, pass: &SkinPass, link_app: Option<&str>, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    // Only a guest's own pass is told about the door; anyone else gets the
+    // handler's usual guest_required.
+    if matches!((path, is_post), (REGISTER, true) | (VIEWING, true)) && link_app.is_none() && guest(pass).is_ok() && server_only(pass) {
+        return push_server_only();
+    }
     match (path, is_post) {
         (REGISTER, true) => handle_register(pass, body),
         (UNREGISTER, true) => handle_unregister(pass, body),
@@ -367,6 +377,21 @@ pub fn handle_pass(path: &str, pass: &SkinPass, link_app: Option<&str>, is_post:
         (VIEWING, true) => handle_viewing(pass, body),
         _ => CliResponse::method_not_allowed(),
     }
+}
+
+/// Does this pass's App take `push.register` and `push.viewing` only from
+/// its own server? A store error is `true`: the setting exists to close a
+/// door, so it stays closed rather than guessing.
+pub fn server_only(pass: &SkinPass) -> bool {
+    store::config(&pass.app).map(|c| c.server_only).unwrap_or(true)
+}
+
+fn push_server_only() -> CliResponse {
+    refusal(
+        "403 Forbidden",
+        "push_server_only",
+        "this App takes push.register and push.viewing only from its own server: send the device token to your App's server, and it calls K2 as that person (k2.asGuest(pass).push.register); the App's owner or agent can change this with k2 app push set <app> --register any",
+    )
 }
 
 /// A credential that isn't a pass at all (the owner token, an API key, a

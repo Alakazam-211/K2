@@ -188,6 +188,8 @@ export const CATALOG_ERROR_CODES = [
   'wallet_off',
   // A custom App's push notifications (0.46.4, prd-custom-app-push-v1).
   'push_off',
+  // 0.46.8 (k2 app push set --register server).
+  'push_server_only',
   'not_for_host',
   'channel_unavailable',
   'push_devices_full',

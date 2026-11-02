@@ -111,6 +111,43 @@ fn register_answers_the_device_never_the_token() {
     assert_ne!(e["who"], who);
 }
 
+/// 0.46.8 `--register server`: a phone can't register or say what it is
+/// viewing directly; the App's server, on its link, still can.
+#[test]
+fn server_only_refuses_a_direct_call_and_takes_the_link() {
+    let f = fx("door");
+    turn_on(&f.app);
+    let dana = pass_for("dana", &f.app);
+    let body = reg_body("d-door").to_string();
+    let call = |path: &str, link: Option<&str>, b: &str| {
+        let r = handle_pass(path, &dana, link, true, b.as_bytes(), &HashMap::new());
+        (r.status.split_whitespace().next().unwrap().parse::<u16>().unwrap(), serde_json::from_str::<J>(&r.body).unwrap())
+    };
+    let (st, v) = call(REGISTER, None, &body);
+    assert_eq!(st, 200, "off by default: {v}");
+
+    store::set_switches(&f.app, store::Switches { server_only: Some(true), ..Default::default() }, "owner").expect("on");
+    let (st, v) = call(REGISTER, None, &body);
+    assert_eq!((st, v["error"]["code"].as_str()), (403, Some("push_server_only")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("--register any"), "{v}");
+    let (st, v) = call(VIEWING, None, r#"{"conversation":"c","visible":true}"#);
+    assert_eq!((st, v["error"]["code"].as_str()), (403, Some("push_server_only")), "{v}");
+    let (st, v) = call(REGISTER, Some(&f.app), &body);
+    assert_eq!(st, 200, "the App's own link: {v}");
+
+    // Reading and removing its own device stay open: the door is on what a
+    // phone may add.
+    let (st, v) = call(UNREGISTER, None, r#"{"deviceId":"d-door"}"#);
+    assert_eq!(st, 200, "{v}");
+
+    // Per App, and back.
+    let eli = pass_for("eli", &f.other_app);
+    assert!(!server_only(&eli), "another App is untouched");
+    store::set_switches(&f.app, store::Switches { server_only: Some(false), ..Default::default() }, "owner").expect("off");
+    let (st, v) = call(REGISTER, None, &body);
+    assert_eq!(st, 200, "{v}");
+}
+
 #[test]
 fn only_a_guest_session_pass_registers() {
     let f = fx("who");

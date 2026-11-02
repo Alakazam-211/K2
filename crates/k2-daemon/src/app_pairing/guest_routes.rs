@@ -513,6 +513,9 @@ fn register_push(d: &app_login::DeviceSession, device: &app_login::Device, mut p
         Err(_) => return refused("usage"),
     };
     let Some(pass) = skin::resolve_skin_token(&d.session.raw) else { return refused("failed") };
+    if crate::app_push::guest_routes::server_only(&pass) {
+        return refused("push_server_only");
+    }
     match crate::app_push::guest_routes::register_parsed(&pass, &reg) {
         Ok(v) => json!({ "registered": true, "id": v["id"], "who": v["who"], "configured": v["configured"] }),
         Err(e) => refused(&error_code(&e.body).unwrap_or_else(|| "failed".into())),

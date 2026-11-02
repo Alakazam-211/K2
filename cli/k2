@@ -14779,8 +14779,14 @@ agent and other Apps can use the keys, never read them.
                                        approving push:send in a deploy); off is
                                        the owner's, an Admin's or the App agent's.
   k2 app push set <app> [--agent-replies on|off] [--previews on|off]
-                 [--max-devices N]     Agent-reply pushes (off by default) and
+                 [--max-devices N] [--register server|any]
+                                       Agent-reply pushes (off by default) and
                                        their previews; the device ceiling (owner).
+                                       --register server: only your App's own
+                                       server may call push.register and
+                                       push.viewing, never a phone calling K2
+                                       directly (push_server_only; pairing's
+                                       push step too). Default any.
   k2 app push send <app> (--to <user> [--to <user>…] | --room <room>)
                  --title T --body B [--data key=value]… [--topic t]
                  [--collapse-id c] [--thread-id t] [--sound s] [--badge n]
@@ -14823,6 +14829,8 @@ if v.get("credError"):
     print("  last key refusal: %s" % v["credError"])
 d = v.get("devices") or {}
 print("  devices:  %s for %s people (apns %s, fcm %s; sandbox %s)" % (d.get("total", 0), d.get("guests", 0), d.get("apns", 0), d.get("fcm", 0), d.get("sandbox", 0)))
+if v.get("serverOnly"):
+    print("  devices register only through the App's own server (k2 app push set <app> --register any to change)")
 print("  agent replies %s, previews %s, at most %s devices" % ("on" if v.get("agentReplies") else "off", "on" if v.get("previews") else "off", v.get("maxDevices")))
 for s in v.get("set") or []:
     print("  set: " + s)
@@ -15017,25 +15025,27 @@ cmd_app_push_onoff() {
 }
 
 cmd_app_push_set() {
-    local app="" replies="" previews="" maxd="" json_out=0
+    local app="" replies="" previews="" maxd="" register="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --agent-replies) replies="${2:-}"; shift 2 ;;
             --previews) previews="${2:-}"; shift 2 ;;
             --max-devices) maxd="${2:-}"; shift 2 ;;
+            --register) register="${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    local usage="usage: k2 app push set <app> [--agent-replies on|off] [--previews on|off] [--max-devices N]"
+    local usage="usage: k2 app push set <app> [--agent-replies on|off] [--previews on|off] [--max-devices N] [--register server|any]"
     [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
-    local r_b="" p_b=""
+    local r_b="" p_b="" s_b=""
+    case "$register" in server) s_b=1 ;; any) s_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$replies" in on) r_b=1 ;; off) r_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$previews" in on) p_b=1 ;; off) p_b=0 ;; "") ;; *) echo "$usage" >&2; exit 2 ;; esac
     case "$maxd" in ""|*[!0-9]*) [ -z "$maxd" ] || { echo "$usage" >&2; exit 2; } ;; esac
-    { [ -z "$r_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ]; } && { echo "$usage" >&2; exit 2; }
-    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd")"
+    { [ -z "$r_b" ] && [ -z "$p_b" ] && [ -z "$maxd" ] && [ -z "$s_b" ]; } && { echo "$usage" >&2; exit 2; }
+    _app_push_on_post "$(_compute_json K2_CJ_app="$app" K2_CJ_agentReplies_b="$r_b" K2_CJ_previews_b="$p_b" K2_CJ_maxDevices_n="$maxd" K2_CJ_serverOnly_b="$s_b")"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | _app_push_status_print
 }
@@ -49542,6 +49552,8 @@ LIMITS (an hour)
 
 REFUSALS
   push_off (not approved or turned off)  push_not_configured (no key)
+  push_server_only (this App set k2 app push set <app> --register server:
+  the phone sends its token to your server, and your server registers it)
   not_for_host  guest_required (register is a guest's own pass)  token_in_use
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)

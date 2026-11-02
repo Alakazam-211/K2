@@ -92,7 +92,13 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             updated_by TEXT
          );",
     )
-    .map_err(|e| format!("skin.db app push: {e}"))
+    .map_err(|e| format!("skin.db app push: {e}"))?;
+    // 0.46.8: only the App's own server registers (additive at open).
+    if !super::column_exists(conn, "app_push_config", "server_only")? {
+        conn.execute("ALTER TABLE app_push_config ADD COLUMN server_only INTEGER NOT NULL DEFAULT 0", [])
+            .map_err(|e| format!("skin.db app_push_config.server_only: {e}"))?;
+    }
+    Ok(())
 }
 
 // ── validation ───────────────────────────────────────────────────────
@@ -853,6 +859,9 @@ pub struct PushConfig {
     pub previews: bool,
     /// The owner's device ceiling; `None` = [`DEFAULT_MAX_DEVICES_PER_APP`].
     pub max_devices: Option<i64>,
+    /// `push.register` and `push.viewing` only through the App's own link
+    /// (its server), never a phone calling K2 directly. Default off.
+    pub server_only: bool,
     pub apns: Option<ApnsMeta>,
     pub fcm: Option<FcmMeta>,
     /// The last credential refusal, a reason code only.
@@ -887,7 +896,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
             "SELECT enabled, owner_on, agent_replies, previews, max_devices,
                     apns_key_id, apns_team_id, apns_bundle_id, apns_key_fpr, apns_set_at,
                     fcm_project_id, fcm_client_email, fcm_key_fpr, fcm_set_at,
-                    cred_error, cred_error_at, updated_at, updated_by, apns_ok_at, fcm_ok_at
+                    cred_error, cred_error_at, updated_at, updated_by, apns_ok_at, fcm_ok_at, server_only
                FROM app_push_config WHERE app_id = ?1",
             params![app],
             |r| {
@@ -919,6 +928,7 @@ fn config_conn(conn: &Connection, app: &str) -> Result<PushConfig, String> {
                     agent_replies: r.get::<_, i64>(2)? != 0,
                     previews: r.get::<_, i64>(3)? != 0,
                     max_devices: r.get(4)?,
+                    server_only: r.get::<_, i64>(20)? != 0,
                     apns,
                     fcm,
                     cred_error: r.get(14)?,
@@ -972,6 +982,7 @@ pub struct Switches {
     pub owner_on: Option<bool>,
     pub agent_replies: Option<bool>,
     pub previews: Option<bool>,
+    pub server_only: Option<bool>,
 }
 
 /// Write switches; returns the settings after.
@@ -985,7 +996,7 @@ pub fn set_switches(app: &str, s: Switches, actor: &str) -> Result<PushConfig, S
         ensure_row(&tx, &app, actor)?;
         let cur = config_conn(&tx, &app)?;
         tx.execute(
-            "UPDATE app_push_config SET enabled = ?2, owner_on = ?3, agent_replies = ?4, previews = ?5, updated_at = ?6, updated_by = ?7
+            "UPDATE app_push_config SET enabled = ?2, owner_on = ?3, agent_replies = ?4, previews = ?5, server_only = ?8, updated_at = ?6, updated_by = ?7
               WHERE app_id = ?1",
             params![
                 app,
@@ -994,7 +1005,8 @@ pub fn set_switches(app: &str, s: Switches, actor: &str) -> Result<PushConfig, S
                 s.agent_replies.unwrap_or(cur.agent_replies) as i64,
                 s.previews.unwrap_or(cur.previews) as i64,
                 now_secs(),
-                actor
+                actor,
+                s.server_only.unwrap_or(cur.server_only) as i64
             ],
         )
         .map_err(|e| format!("push config write: {e}"))?;

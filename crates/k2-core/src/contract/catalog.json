@@ -10057,6 +10057,7 @@
         "additionalProperties": false
       },
       "errors": [
+        "push_server_only",
         "pass_required",
         "pass_invalid",
         "pass_wrong_link",
@@ -10475,6 +10476,7 @@
         "additionalProperties": false
       },
       "errors": [
+        "push_server_only",
         "pass_required",
         "pass_invalid",
         "pass_wrong_link",

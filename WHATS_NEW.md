@@ -25,7 +25,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
 
 ### Apps
-- **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used one. Lowering it signs nobody out until their next new device.
+- **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used ones until it fits. Lowering it signs nobody out until their next new device.
 - **K2 is ready to tell Sew every live host of an App,** so calls can work on all of them. It starts once Sew supports it; until then calls work on the App's primary host (`k2 app domain primary <app> <host>`).
 - **A Tauri shell over a server App you already run:** `k2 app init --template tauri --app <app>` wires the updater to that App's host, with the download host as a second endpoint, and writes no web manifest.
 - **`k2 app init --template tauri --voice` adds the mic and camera keys for calls** on macOS and iOS, and prints the Android lines.

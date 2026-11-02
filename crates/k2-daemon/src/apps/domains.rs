@@ -963,6 +963,16 @@ mod custom_tests {
     /// PRD test 6: a custom name equal to the mail host is refused at bind,
     /// naming its use; a k2.dev name is never custom; an unattached zone
     /// and another workspace's App name are refused.
+    /// A neutral App on its own apex, for the 0.46.8 tests below.
+    fn setup_shop() {
+        runtime_app("ws-shop", "shop");
+        build_switch("ws-shop", true);
+        flow::set_test_box_ips(Some(vec!["203.0.113.10".parse().unwrap()]));
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, "shop.example", None, false).unwrap();
+    }
+
     /// 0.46.8: a name that turns live after `k2 app links set` answers the
     /// link files at once (it used to wait for the next deploy); removed,
     /// it stops.
@@ -971,21 +981,21 @@ mod custom_tests {
         use k2_core::skin::app_pairing as pairing;
         let _db = k2_core::db::scoped_for_test();
         let _home = crate::test_support::TempHome::new();
-        setup();
-        let me = agent("ws-nsi");
-        let host = "links.agentnsi.com";
+        setup_shop();
+        let me = agent("ws-shop");
+        let host = "links.shop.example";
         let service = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::deploy::store::get_app(&conn, "agentnsi").unwrap().expect("the App").service_id
+            k2_core::deploy::store::get_app(&conn, "shop").unwrap().expect("the App").service_id
         };
         let input = pairing::LinksInput { ios: vec!["TEAMID1234.com.you.app".into()], android: vec![], paths: vec![], drop: vec![] };
         pairing::set_links(&service, &input, "test", 1).expect("set links");
         crate::app_pairing::refresh_links(&service);
-        let hosts = || crate::app_pairing::links::get_files("agentnsi").expect("link files").hosts.clone();
+        let hosts = || crate::app_pairing::links::get_files("shop").expect("link files").hosts.clone();
         assert!(!hosts().iter().any(|h| h == host), "not bound yet: {:?}", hosts());
 
-        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": host })).unwrap();
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": host })).unwrap();
         assert!(!hosts().iter().any(|h| h == host), "bound, not live: {:?}", hosts());
 
         // Proven with a usable certificate: live, and a link host now.
@@ -994,15 +1004,15 @@ mod custom_tests {
         let txt = v["custom"]["records"].as_array().unwrap().iter().find(|r| r["type"] == "TXT").unwrap().clone();
         flow::set_test_lookup(Some(Box::new(Proven(txt["value"].as_str().unwrap().to_string()))));
         let _ = k2_core::tool_hook::take_reconcile_request();
-        let v = post(&me, "/cli/app/domain/check", json!({ "app": "agentnsi", "host": host })).unwrap();
+        let v = post(&me, "/cli/app/domain/check", json!({ "app": "shop", "host": host })).unwrap();
         assert_eq!(v["custom"]["state"], "live", "{v}");
         assert!(hosts().iter().any(|h| h == host), "live: a link host at once: {:?}", hosts());
         assert!(k2_core::tool_hook::take_reconcile_request(), "Sew's origins follow now too");
 
-        let _ = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": host })).unwrap();
+        let _ = post(&me, "/cli/app/domain/rm", json!({ "app": "shop", "label": host })).unwrap();
         assert!(!hosts().iter().any(|h| h == host), "removed: {:?}", hosts());
         flow::set_test_lookup(None);
-        crate::app_pairing::links::set_files("agentnsi", None);
+        crate::app_pairing::links::set_files("shop", None);
     }
 
     /// 0.46.8: Sew's origin stays the one primary; the list carries every
@@ -1011,30 +1021,30 @@ mod custom_tests {
     fn sews_origin_list_is_every_live_host_primary_first() {
         let _db = k2_core::db::scoped_for_test();
         let _home = crate::test_support::TempHome::new();
-        setup();
-        let (a, b, waiting) = ("a.agentnsi.com", "b.agentnsi.com", "wait.agentnsi.com");
+        setup_shop();
+        let (a, b, waiting) = ("a.shop.example", "b.shop.example", "wait.shop.example");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             for h in [a, b, waiting] {
-                k2_core::domains::upsert_name(&conn, h, "agentnsi.com", "app:agentnsi").unwrap();
+                k2_core::domains::upsert_name(&conn, h, "shop.example", "app:shop").unwrap();
             }
             for h in [a, b] {
                 k2_core::domains::set_app_state(&conn, h, k2_core::domains::STATE_LIVE, None).unwrap();
             }
-            k2_core::domains::set_primary(&conn, "agentnsi", b).unwrap();
+            k2_core::domains::set_primary(&conn, "shop", b).unwrap();
         }
         let service = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::deploy::store::get_app(&conn, "agentnsi").unwrap().expect("the App").service_id
+            k2_core::deploy::store::get_app(&conn, "shop").unwrap().expect("the App").service_id
         };
-        let list = crate::sew::home::signalling_origins(&service, "agentnsi");
-        assert_eq!(list.first().map(String::as_str), Some("wss://b.agentnsi.com"), "primary first: {list:?}");
-        assert!(list.iter().any(|o| o == "wss://a.agentnsi.com"), "{list:?}");
+        let list = crate::sew::home::signalling_origins(&service, "shop");
+        assert_eq!(list.first().map(String::as_str), Some("wss://b.shop.example"), "primary first: {list:?}");
+        assert!(list.iter().any(|o| o == "wss://a.shop.example"), "{list:?}");
         assert!(!list.iter().any(|o| o.contains("wait.")), "not live, not an origin: {list:?}");
         assert!(list.iter().all(|o| k2_core::tool_hook::home::is_sew_origin(o)), "each one Sew takes: {list:?}");
-        assert_eq!(crate::sew::home::signalling_origin(&service, "agentnsi").as_deref(), list.first().map(String::as_str), "the one origin is the list's first");
+        assert_eq!(crate::sew::home::signalling_origin(&service, "shop").as_deref(), list.first().map(String::as_str), "the one origin is the list's first");
     }
 
     #[test]

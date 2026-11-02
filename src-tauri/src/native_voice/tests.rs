@@ -90,7 +90,6 @@ fn daemon_answer() -> Value {
             "token": MEDIA_TOKEN,
             "expires_at": "2026-11-02T12:02:00.000Z",
             "room": "r_fakeroomfakeroomfakeroomfa",
-            "media": { "relay_only": true },
             "state": {
                 "member_id": "48831765147549699",
                 "channel_id": "48831765147549698",

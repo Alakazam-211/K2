@@ -536,6 +536,25 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     onError: onNativeError,
   }
 
+  /** Attaching again (the headset button came back): events were missed, so a
+   *  call this window still shows takes its truth from the engine. */
+  const reconcileNativeCall = async (n: NativeVoiceEngine): Promise<void> => {
+    const c = store.getState().call
+    if (!c || nativeJoining) return
+    const snap = await n.snapshot()
+    const s = snap.state.state
+    if (s === 'connecting' || s === 'connected' || s === 'reconnecting') {
+      nativePeople = snap.participants
+      onNativeState(snap.state)
+      drawNativeParticipants()
+      return
+    }
+    callGen += 1
+    clearNativeCall()
+    store.setState({ call: null })
+    void refreshRooms(c.hostKey)
+  }
+
   /** Load the native engine once and attach this window to it. */
   const loadNativeEngine = (): Promise<NativeVoiceEngine | null> => {
     if (nativeLoad) return nativeLoad
@@ -546,6 +565,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       native = n
       nativeAttached = true
       store.setState({ engineKind: 'native' })
+      await reconcileNativeCall(n)
       await adoptNativeCall()
       return n
     })().catch((err: unknown) => {
@@ -560,8 +580,14 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const failNativeJoin = (gen: number, err: unknown, room: VoiceRoom, label: string, hostKey: string): void => {
     if (gen !== callGen) return
     const e = err instanceof NativeVoiceError ? err : new NativeVoiceError('failed', err instanceof Error ? err.message : String(err))
-    // Our own leave cancelled it: nothing to say.
-    if (e.code === 'left') return
+    // A leave from another window cancelled it (our own leave moved `callGen`).
+    if (e.code === 'left') {
+      callGen += 1
+      clearNativeCall()
+      store.setState({ call: null })
+      void refreshRooms(hostKey)
+      return
+    }
     if (e.code === 'already_in_call') {
       // Another window got there first: show that call.
       store.setState({ call: null })

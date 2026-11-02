@@ -104,9 +104,9 @@ fn check_microphone() -> bool { true }
 /// preflight (prd-k2-voice-rooms-v1 §14.6): only macOS has a prompt to wait for.
 /// On Windows and Linux the engine reports a refusal itself, as `mic_denied`.
 #[tauri::command]
+#[allow(deprecated)]
 pub fn permissions_microphone_state() -> &'static str {
     #[cfg(target_os = "macos")]
-    #[allow(deprecated)]
     {
         use objc::runtime::Class;
         use objc::{msg_send, sel, sel_impl};

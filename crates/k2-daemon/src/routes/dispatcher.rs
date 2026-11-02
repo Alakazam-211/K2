@@ -1502,9 +1502,11 @@ async fn handle_one_request(
     // on an App's link.
     if ingress != Ingress::App && crate::voice::sew_lane::is_lane(path_and_query) {
         let head_len = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
-        let head = req.to_string();
         match head_len {
-            Some(len) => crate::voice::sew_lane::serve(&mut *stream, &head[..len.min(head.len())], len).await,
+            Some(len) => {
+                let head = String::from_utf8_lossy(&buf[..len]).into_owned();
+                crate::voice::sew_lane::serve(&mut *stream, &head, len).await
+            }
             None => {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(&mut *stream, "400 Bad Request", "application/json", r#"{"error":"incomplete request head"}"#).await;

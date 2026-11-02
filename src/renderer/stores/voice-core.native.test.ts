@@ -216,6 +216,29 @@ describe('native join', () => {
     expect(s.ctl.store.getState().notice?.text).toBe('Sign in to sewlab again to join.')
   })
 
+  it("another window's leave cancelled this join: the call goes, quietly", async () => {
+    const s = setup({ plugin: { joinError: { code: 'left', detail: null } } })
+    await s.ctl.join(SEW, room1)
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toBeNull()
+  })
+
+  it('attaching again: a call the engine no longer has goes away', async () => {
+    const s = setup()
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    s.plugin.call = { target: 'host-1', room: 'room-1' }
+    const stop = s.ctl.start()
+    await settle()
+    expect(s.ctl.store.getState().call?.callId).toBe('r_x')
+    stop()
+    s.plugin.state = { state: 'ended', reason: 'network', participants: [], call_id: null }
+    s.plugin.call = null
+    const stop2 = s.ctl.start()
+    await settle()
+    expect(s.ctl.store.getState().call).toBeNull()
+    stop2()
+  })
+
   it('another window joined first: show that call, no error', async () => {
     const s = setup({ plugin: { joinError: { code: 'already_in_call', detail: null }, state: { state: 'connected', participants: [], call_id: 'r_y' }, call: { target: 'host-1', room: 'room-2' } } })
     await s.ctl.join(SEW, room1)

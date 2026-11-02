@@ -125,7 +125,8 @@ fn wants_upgrade(head: &str) -> bool {
 fn upstream_head(method: &str, target: &str, host: &str, bearer: &str, head: &str, body_len: Option<usize>, ws: bool) -> String {
     let mut out = format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {bearer}\r\n");
     for name in if ws { FORWARD_WS } else { FORWARD_HTTP } {
-        if let Some(v) = header(head, name) {
+        // A control character in a value is never ours to pass on.
+        if let Some(v) = header(head, name).filter(|v| !v.chars().any(char::is_control)) {
             out.push_str(&format!("{name}: {v}\r\n"));
         }
     }
@@ -277,8 +278,9 @@ async fn serve_to<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, head: &str,
                 return answer(client, "413 Payload Too Large", "too_large", "request body too large", None).await;
             }
             let mut body = vec![0u8; body_len];
-            if client.read_exact(&mut body).await.is_err() {
-                return;
+            match tokio::time::timeout(HTTP_TIMEOUT, client.read_exact(&mut body)).await {
+                Ok(Ok(_)) => {}
+                _ => return,
             }
             let out = upstream_head(method, &up_target, sew_addr, bearer, head, Some(body_len), false);
             relay_http(client, sew_addr, out.as_bytes(), &body).await;

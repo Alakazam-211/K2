@@ -194,7 +194,7 @@ async fn admin_space_box_users_levels_room_one_and_the_default_space() {
     let sp = space(&env);
     // The create, word for word (§6.6 2.2 SW-1).
     let create = env.sew.posts().into_iter().find(|c| c.path == sew_wire::MGMT_SPACES_CREATE).expect("a create");
-    assert_eq!(create.body, serde_json::json!({"slug": "k5-admin", "name": "K2", "owner": "k2:server", "governance": "server"}));
+    assert_eq!(create.body, serde_json::json!({"slug": "k5-admin", "name": "K5 Space", "owner": "k2:server", "governance": "server"}));
     assert_eq!(create.actor.as_deref(), Some(admin_space::ACTOR));
     // Box users only, at their levels; the disabled login stays out.
     let s = env.sew.space(&sp).unwrap();
@@ -369,8 +369,8 @@ async fn an_existing_server_space_is_read_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_replayed_create_with_created_false_is_success() {
     let env = setup(&SEW_070, true, Hosting::Ok).await;
-    // An earlier K2 made it under the name this box sends ("K2").
-    env.sew.add_server_space_named("7778", Some("K2"));
+    // An earlier K2 made it under the name this box sends ("K5 Space").
+    env.sew.add_server_space_named("7778", Some("K5 Space"));
     settle(&env).await;
     assert_eq!(hook::admin_space_id().unwrap().as_deref(), Some("7778"));
     assert_eq!(env.sew.server_space_id().as_deref(), Some("7778"), "no second Space");

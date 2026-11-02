@@ -298,6 +298,7 @@
     {"code": "person_pass_required", "doc": "Wallet verbs need an App user's own login session pass. Connect logins, the owner token, agent passports and an App's own pass have no wallet."},
     {"code": "wallet_off", "doc": "This App doesn't use personal wallets; its owner turns them on."},
     {"code": "push_off", "doc": "This App doesn't send notifications: its owner turns them on (approving push:send, or k2 app push on)."},
+    {"code": "push_server_only", "doc": "This App takes push.register and push.viewing only from its own server; send the device token there, and the server registers it."},
     {"code": "not_for_host", "doc": "Push and phone pairing are for a published App's own users, never the box login (host)."},
     {"code": "channel_unavailable", "doc": "K2 Companion can't receive this App's notifications yet; register the App's own phone app (channel app)."},
     {"code": "push_devices_full", "doc": "This App holds as many push devices as its owner allows."},

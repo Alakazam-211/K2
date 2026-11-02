@@ -1,0 +1,63 @@
+$ k2 study board
+exit: 0
+--- stdout
+k2 study board — working on the Board Garden's boards
+
+WHAT IT IS
+  The Board Garden is a whiteboard your human keeps in a Garden: stickies,
+  shapes, connectors, frames, cards, tables, mind maps, comments, images and
+  pen. Its boards live in the Garden's data on this computer (the widget
+  k2:board). You change them with k2 board, which checks every write against
+  Board's rules. Never write board keys with raw k2 store: a raw put skips the
+  rules (ids, who-made-it stamps, z order, the cascade below) and can leave
+  arrows pointing at nothing.
+
+GETTING ACCESS
+  You see nothing until your human grants you a board. The board's For agents
+  panel shows the exact line; it looks like
+    k2 zen data grant k2:board --agent <you> --level write --prefix board/<id>/
+  A read grant lets you list, read, search, log and export. Board is a Beta
+  core: while it's off every command answers core_off (exit 3). Ask your
+  human (k2 thread); never try to turn it on yourself.
+
+FIRST STEPS
+  k2 board boards                       which boards you can reach
+  k2 board list --board <id>            what's on one (back to front)
+  k2 board fields sticky                a type's fields and defaults
+  k2 board add sticky --text "Idea" --x 100 --y 80 --color pink
+  k2 board read <id>                    read back what you wrote
+
+THE RULES (k2 board applies them; know them so nothing surprises you)
+  - Delete takes what hangs off the object: connectors attached to it, its
+    mind-map children (and theirs) and comments pinned to it. The answer
+    lists every id deleted.
+  - update changes only the fields you name. Lists and maps (checks,
+    reactions, votes, connector ends, crop) are sent whole.
+  - Nothing is cut: text over its limit, a list over its cap or a bad value
+    is refused (too_long, too_many, bad_field, exit 2) and nothing is written.
+    An apply is all or nothing.
+  - A locked object refuses changes (exit 5) except unlock, votes and
+    reactions; ask your human before unlocking.
+  - People are stable keys: you are agent:<your handle>; your human is
+    person:owner. Never write a display name into createdBy, reactions or
+    votes.
+  - Images: put the file first (k2 store blob put <file> --widget k2:board),
+    then k2 board add image --src k2blob:sha256-… . data: URLs are refused.
+
+MANY CHANGES AT ONCE
+  k2 board apply plan.json --board <id>, where plan.json is
+    {"ops":[{"op":"add","obj":{"id":"start","type":"shape","shape":"flow-start","text":"Start"}},
+            {"op":"add","obj":{"id":"next","type":"shape","text":"Next","y":200}},
+            {"op":"add","obj":{"type":"connector","from":"start","to":"next"}}]}
+  Ids you give in an apply are labels for that call; the answer maps each
+  label to the board id it got.
+
+TEMPLATES
+  k2 board templates; k2 board template retro --x 0 --y 1200 puts a whole
+  layout on the board (frame, columns, starter notes).
+
+SAY WHAT YOU DID
+  Your human sees your changes live and the log names you (k2 board log).
+  Tell them in the Board's Chat what you changed and why.
+--- stderr
+--- requests

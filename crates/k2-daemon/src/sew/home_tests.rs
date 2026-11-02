@@ -53,7 +53,7 @@ fn the_owner_sets_the_home_client_and_an_app_only_mark() {
     assert_eq!(v["changed"], json!(false), "the same value again changes nothing");
     let (st, v) = call(&Who::Owner, HOME_APP, json!({"app": f.jobs, "hidden": true}));
     assert_eq!(st, 200, "{v}");
-    assert_eq!(v["apps"], json!([{"app": f.jobs, "name": "jobs", "hiddenFromHome": true, "origin": null, "delivered": false, "updatedBy": Who::Owner.label()}]));
+    assert_eq!(v["apps"], json!([{"app": f.jobs, "name": "jobs", "hiddenFromHome": true, "origin": null, "origins": null, "delivered": false, "updatedBy": Who::Owner.label()}]));
     assert_eq!(v["sew"]["homeClient"], json!(true), "the flag noted above: the sweep owes the App's settings");
     // Clearing the home client.
     let (_, v) = call(&Who::Owner, HOME_CLIENT, json!({"app": null}));

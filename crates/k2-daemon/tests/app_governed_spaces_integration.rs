@@ -244,6 +244,10 @@ async fn the_app_reads_its_own_space_and_channel_ids_after_the_sync() {
     let env = setup(&[governed_flag(), "space_unbind"]).await;
     let _ = bound_space(&env).await;
     let spaces = hook::spaces_of_app(APP).expect("app spaces");
+    assert_eq!((spaces.len(), spaces[0].governed, spaces[0].channels.len()), (1, false, 0), "bound, Sew governs: nothing made yet: {spaces:?}");
+    assert!(hook::set_space_governance(APP, SPACE, "app", "owner-token").expect("switch"));
+    settle(&env).await;
+    let spaces = hook::spaces_of_app(APP).expect("app spaces");
     assert_eq!(spaces.len(), 1, "{spaces:?}");
     assert_eq!((spaces[0].space_id.as_str(), spaces[0].governed), (SPACE, true), "{spaces:?}");
     assert!(!spaces[0].channels.is_empty(), "{spaces:?}");

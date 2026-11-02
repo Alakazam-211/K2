@@ -11,6 +11,7 @@ import { TopBarFollowRoomContext } from './top-bar-scope'
 import TopBarPipe from './TopBarPipe'
 import ZenTopBarToggle from './ZenTopBarToggle'
 import AdminProfileButton from './AdminProfileButton'
+import { isWebClient } from '@/lib/is-web'
 
 /** True when this page passed drawer or close controls after the last pipe. */
 export function hasTopBarPageToggles(children: ReactNode): boolean {
@@ -57,13 +58,11 @@ export default function TopBarUtilities({
       <ModeToggle />
       {pageToggles ? <TopBarPipe /> : null}
       {children}
-      {zenAvailable() ? (
-        <>
-          <TopBarPipe />
-          <ZenTopBarToggle />
-          <AdminProfileButton />
-        </>
-      ) : null}
+      {zenAvailable() || isWebClient() ? <TopBarPipe /> : null}
+      {zenAvailable() ? <ZenTopBarToggle /> : null}
+      {/* The person's own details on this server: the web client too, where
+          Zen isn't. Still not in Focus or ticket windows. */}
+      {zenAvailable() || isWebClient() ? <AdminProfileButton /> : null}
     </div>
     </TopBarFollowRoomContext.Provider>
   )

@@ -294,6 +294,19 @@ describe('the Admin profile button in the top bar', () => {
     render(<TopBarUtilities />)
     expect(document.querySelector('[data-admin-profile]')).toBeNull()
   })
+
+  it('is in the web client too, where Zen is not', () => {
+    h.label = 'focus-abc'
+    __resetZenAvailableForTests()
+    vi.stubEnv('VITE_WEB', 'true')
+    try {
+      render(<TopBarUtilities />)
+      expect(document.querySelector('[data-zen-enter]')).toBeNull()
+      expect(document.querySelector('[data-admin-profile]')).not.toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
 
 describe('the Admin profile modal: open and close', () => {

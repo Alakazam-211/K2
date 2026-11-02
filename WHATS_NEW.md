@@ -17,6 +17,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **People who type `http://` reach your site.** K2's front now also holds port 80 when it is free and sends visitors of the names it serves to `https://`. Turn it off with `k2 front http off`. A server that already has the front on gets it with `k2 front http on`.
 - **Limits per visitor now cover the K2 Connect tunnel.** One visitor's open connections and writes to an App are capped, and failed App logins can be limited per visitor when the App passes `X-K2-Client-IP` on its link. These apply once the relay passes visitor addresses; `k2 tunnel status` says whether it does yet. Until then nobody is limited together with anybody else.
 
+### Web client
+- **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

@@ -372,6 +372,18 @@ fn push_rides_the_redeem_and_its_refusal_never_fails_the_pairing() {
     let (st, r, _) = redeem_call(json!({"code": v["code"], "app": f.app, "device": device("ph3"), "push": p2}), PHONE, &main_port());
     assert_eq!(st, 200);
     assert_eq!(r["push"], json!({"registered": false, "code": "usage"}));
+    // 0.46.8 `--register server`: the phone signs in, its push step is
+    // refused on the main port and taken on the App's own link.
+    skin::app_push::set_switches(&f.app, skin::app_push::Switches { server_only: Some(true), ..Default::default() }, "owner").expect("server only");
+    let (_, v) = start_call(&pass, json!({}));
+    let (st, r, _) = redeem_call(json!({"code": v["code"], "app": f.app, "device": device("ph4"), "push": push}), PHONE, &main_port());
+    assert_eq!(st, 200, "the sign-in goes on: {r}");
+    assert_eq!(r["push"], json!({"registered": false, "code": "push_server_only"}), "{r}");
+    assert!(!skin::app_push::devices_for_app(&f.app, None).expect("push rows").iter().any(|d| d.device_id == "ph4"), "not registered");
+    let link = Ctx { link_app: Some(f.app.clone()), ip: "-".into() };
+    let (_, v) = start_call(&pass, json!({}));
+    let (st, r, _) = redeem_call(json!({"code": v["code"], "device": device("ph5"), "push": push}), PHONE, &link);
+    assert_eq!((st, r["push"]["registered"].clone()), (200, json!(true)), "{r}");
 }
 
 #[test]

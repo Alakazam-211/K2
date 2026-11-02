@@ -494,7 +494,7 @@ fn redeem(
     out["roomAccess"] = json!(d.session.meta.room_access);
     out["via"] = json!(app_login::VIA_PAIRING);
     if let Some(push) = push {
-        out["push"] = register_push(&d, &device, push);
+        out["push"] = register_push(&d, &device, push, ctx.link_app.is_some());
     }
     first_pairing_note(&app);
     Ok(out)
@@ -502,7 +502,7 @@ fn redeem(
 
 /// CP21: push in the same step, after the pairing committed (V15), with
 /// push's own rules. Never fails the pairing.
-fn register_push(d: &app_login::DeviceSession, device: &app_login::Device, mut push: Value) -> Value {
+fn register_push(d: &app_login::DeviceSession, device: &app_login::Device, mut push: Value, on_link: bool) -> Value {
     let refused = |code: &str| json!({ "registered": false, "code": code });
     if push.get("deviceId").and_then(Value::as_str).is_some_and(|x| x.trim() != device.id) {
         return refused("usage");
@@ -513,7 +513,7 @@ fn register_push(d: &app_login::DeviceSession, device: &app_login::Device, mut p
         Err(_) => return refused("usage"),
     };
     let Some(pass) = skin::resolve_skin_token(&d.session.raw) else { return refused("failed") };
-    if crate::app_push::guest_routes::server_only(&pass) {
+    if !on_link && crate::app_push::guest_routes::server_only(&pass) {
         return refused("push_server_only");
     }
     match crate::app_push::guest_routes::register_parsed(&pass, &reg) {

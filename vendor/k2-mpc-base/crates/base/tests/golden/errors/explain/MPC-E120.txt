@@ -2,6 +2,7 @@ MPC-E120 tool_unsupported (sessions and edits)
 exit:     2
 message:  {flag}: not supported ({hint})
 next:     That verb, flag or syntax is outside the supported subset; nothing is approximated. Use what the hint says, or see capabilities for each verb's flags. Nothing was applied.
+step:     capabilities; why: That verb, flag or syntax is outside the supported subset; use what the hint says, or look up each verb's flags.
 rule:     K-PAR-7
 verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "{flag}: not supported ({hint})",
   "next": "That verb, flag or syntax is outside the supported subset; nothing is approximated. Use what the hint says, or see capabilities for each verb's flags. Nothing was applied.",
+  "next_step": {
+    "verb": "capabilities",
+    "args": [],
+    "why": "That verb, flag or syntax is outside the supported subset; use what the hint says, or look up each verb's flags."
+  },
   "rule": "K-PAR-7",
   "verbs": ["@run_tool"],
   "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],

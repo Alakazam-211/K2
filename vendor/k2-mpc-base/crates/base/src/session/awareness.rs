@@ -841,7 +841,8 @@ impl Overwrite {
                 f,
                 " Version {v} holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since."
             )?,
-            (None, Some(r)) if self.withheld => write!(
+            // no history: who can help, once (a cut note's last sentence says it instead)
+            (None, Some(r)) if self.withheld || self.not_shown == 0 => write!(
                 f,
                 " Someone with history access can restore it from version {r}."
             )?,

@@ -2,6 +2,7 @@ MPC-E130 held_backlog (sessions and edits)
 exit:     2
 message:  held: approvals_backlog
 next:     Too many of your changes made for a person are waiting for their approval, so new ones are held (nothing applied). This is refused for now, not for good: don't retry in a loop. Ask the person to approve or decline the pending changes (log --pending lists them), then run the verb again.
+step:     log --pending; why: Too many of your changes wait for a person's approval, so new ones are held for now; ask that person to settle the pending ones, then run the verb again. Don't retry in a loop.
 rule:     K-HIST-23, K-ID-10
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "held: approvals_backlog",
   "next": "Too many of your changes made for a person are waiting for their approval, so new ones are held (nothing applied). This is refused for now, not for good: don't retry in a loop. Ask the person to approve or decline the pending changes (log --pending lists them), then run the verb again.",
+  "next_step": {
+    "verb": "log --pending",
+    "args": [],
+    "why": "Too many of your changes wait for a person's approval, so new ones are held for now; ask that person to settle the pending ones, then run the verb again. Don't retry in a loop."
+  },
   "rule": "K-HIST-23, K-ID-10",
   "verbs": ["@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],

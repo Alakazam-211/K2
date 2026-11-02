@@ -41,6 +41,9 @@
 # CMIN_SECS (600: minimizing the corpus), JOB_SECS (the job's timeout, default SECS + 1200:
 # each target's record and archive come right after fuzzing; tmin and cmin only in the time
 # left before it, less 4 minutes, so a late crash is never lost), RSS_MB (2048), MAX_LEN (4096), TIMEOUT_S (30: one input).
+# FUZZ_WITH ("dir[@rev] …", FUZZ_SHIP=repo only): sibling repos the runner ships too
+# (`--with dir@sha`; dir relative to the workspace, FUZZ_WS, default the repo's parent):
+# a pack whose Cargo.toml takes the kit by path (`../k2-mpc-base/crates/base`).
 set -eu
 REPO=$1; REV=$2; OUT=$3; CORPUS=$4; SECS=$5; shift 5
 TARGETS="$*"
@@ -60,6 +63,16 @@ if [ "$SHIP" = repo ]; then
   rmdir "$OUT/s/src"
   printf -- '--sha\n%s\n' "$SHA_FULL" > "$OUT/sha-args"
   printf '%s\n' "$REPO" > "$OUT/run-from"
+  # sibling repos the fuzzed repo's path dependencies need (a pack: the kit beside it), each
+  # shipped by the runner at a commit (`--with DIR@SHA`, DIR relative to the workspace)
+  WS=${FUZZ_WS:-$(dirname "$REPO")}
+  for w in ${FUZZ_WITH:-}; do
+    wd=${w%@*}; wr=main; case $w in *@*) wr=${w#*@} ;; esac
+    ws=$(git -C "$WS/$wd" rev-parse "$wr^{commit}") \
+      || { echo "bundle.sh: FUZZ_WITH $w: no commit $wr in $WS/$wd" >&2; exit 2; }
+    printf -- '--with\n%s@%s\n' "$wd" "$ws" >> "$OUT/sha-args"
+    echo "bundle: with $wd at $(echo "$ws" | cut -c1-12)"
+  done
 elif git -C "$REPO" cat-file -e "$REV:vendor/yrs/VENDORED" 2>/dev/null; then
   KIT=1
   members=$(git -C "$REPO" ls-tree -r --name-only "$REV" crates/base/src \

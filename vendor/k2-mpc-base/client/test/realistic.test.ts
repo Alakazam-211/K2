@@ -132,7 +132,9 @@ function indexOf(t: string, byte: number): number {
   return i;
 }
 
-describe("realistic typing", () => {
+// Long by design (randomised runs, 3-20 s on a build node). vitest 2 never timed out a synchronous
+// test; vitest 3 and later apply the 5 s default to them too, so these suites name their own limit.
+describe("realistic typing", { timeout: 60_000 }, () => {
   it("three people at their carets in 2–20 KB docs: converge, and few changes bounce", () => {
     let typed = 0;
     let rejected = 0;

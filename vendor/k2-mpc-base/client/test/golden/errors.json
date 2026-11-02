@@ -4,6 +4,11 @@
     "exit": 1,
     "message": "your write overlaps changes made since version 1: 1 region(s) at line 5; nothing applied",
     "next": "Someone else changed the same lines after the version you read (or added lines at the same place), so nothing was applied; a write never merges inside a line. Run cat to read the current text (the message and details.current give its version), make your change again on that text, and write it with write --base <that version>. Or change only the lines you need with replace --lines or patch, each with --if-version <that version> (they take --if-version, not --base). details.conflicts has each region's your_lines (in your text), current_lines (in the current text), base, ours and theirs.",
+    "next_step": {
+      "verb": "cat",
+      "args": [],
+      "why": "Someone else changed the same lines since your base; read the current text, redo your change on it, then write it against that version."
+    },
     "rule": "K-BR-2, K-BR-3 (O1–O5)",
     "details": {
       "base": 1,
@@ -39,6 +44,11 @@
     "exit": 8,
     "message": "base version 1 is unknown or no longer cached; nothing applied",
     "next": "The version you wrote against is too old to merge from (or was never read). Never retry the same request: read the doc again (cat), redo your change on what you read, and write with that version as --base.",
+    "next_step": {
+      "verb": "cat",
+      "args": [],
+      "why": "The version you wrote against is too old to merge from; read the doc again, redo your change, and write against the version you read. Never retry the same request."
+    },
     "rule": "K-BR-4, K-EXIT-1",
     "details": {
       "base": 1,
@@ -50,6 +60,11 @@
     "exit": 2,
     "message": "bad position: Byte(39) is not in \"source\"",
     "next": "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.",
+    "next_step": {
+      "verb": "wc",
+      "args": ["-l"],
+      "why": "A line or position is outside the doc; read its length and pass lines inside it."
+    },
     "rule": "K-PRES-6",
     "details": {}
   },
@@ -81,6 +96,11 @@
     "exit": 0,
     "message": "nothing to undo: your undo history was lost when the doc reloaded",
     "next": "Undo history lives in memory and was dropped when the doc unloaded or the daemon restarted. Your changes are still in the log: find one with log --by <you> and reverse it with revert <change>.",
+    "next_step": {
+      "verb": "log",
+      "args": [],
+      "why": "Undo history was lost when the doc reloaded, but your changes are still in the log; find yours and revert it."
+    },
     "rule": "U6, U18, K-HIST-17",
     "details": {}
   }

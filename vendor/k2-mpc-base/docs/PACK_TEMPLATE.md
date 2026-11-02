@@ -8,6 +8,7 @@ A type pack makes one file type multiplayer on this kit. It is its own repo, che
 | **Schema** | Roots on the kit's primitives (`Schema`, `Kind`) | A `Doc` builds from it |
 | **Codec** | File bytes <-> doc state, with limits and decline rules | **Fidelity:** a corpus round-trips byte-exact through doc + store; a small edit changes only what it edits |
 | **Verb map + parity list** | `docs/PARITY.md`: every person action -> a verb -> kit API, or N/A with a reason; the same list as data in the crate | `tests/agent_parity.rs`: `k2_mpc_base::parity::check` over every row |
+| **ID table** | `Pack::ids()`: every native ID kind its codec and own verbs read, as data (class, scope, the verbs that accept it; K-ID-13), and `docs/IDS.md` generated from it with `k2_mpc_base::ids::markdown` (the kit's own kinds: the kit's `docs/IDS.md`) | `ids::check` against `Registry::for_pack`; `docs/IDS.md` equals the generated text; **ID churn:** `ids::churn::judge` (feature `test-support`) over the corpus, zero churn (K-COD-10) |
 | **Editor binding** | Built on the kit's JS client and binding adapters | — |
 
 ## The parity list and the pack's own verbs

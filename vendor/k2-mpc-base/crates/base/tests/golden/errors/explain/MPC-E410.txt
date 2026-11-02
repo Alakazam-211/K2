@@ -2,6 +2,7 @@ MPC-E410 disk (disk and outside edits)
 exit:     1
 message:  disk: {reason}
 next:     Reading or writing the file failed. Nothing is lost: the doc keeps its changes and write-back retries. Check the disk (space, permissions), then flush.
+step:     flush; why: Reading or writing the file failed, but the doc keeps its changes; check the disk's space and permissions, then write it back.
 rule:     K-DISK-2, K-DISK-10
 verbs:    flush; mv; a host call (no verb)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "disk: {reason}",
   "next": "Reading or writing the file failed. Nothing is lost: the doc keeps its changes and write-back retries. Check the disk (space, permissions), then flush.",
+  "next_step": {
+    "verb": "flush",
+    "args": [],
+    "why": "Reading or writing the file failed, but the doc keeps its changes; check the disk's space and permissions, then write it back."
+  },
   "rule": "K-DISK-2, K-DISK-10",
   "verbs": ["flush", "mv", "(host)"],
   "returned_by": ["flush", "mv"],

@@ -125,6 +125,17 @@ fn backup_refused(suffix: &str) -> ToolError {
 }
 
 impl Sed {
+    /// The first line-number address in the script (`3d`, `2,4s/a/b/`), if any: a position
+    /// (K-ADDR-3). Patterns, `$` and `+N` (relative to a match) are not.
+    pub(crate) fn line_address(&self) -> Option<usize> {
+        self.cmds.iter().find_map(|c| match (c.a1, c.a2) {
+            (Some(Addr::Line(n)), _) | (_, Some(Addr2::At(Addr::Line(n)))) => Some(n),
+            _ => None,
+        })
+    }
+}
+
+impl Sed {
     pub(crate) fn parse(args: &[String]) -> Result<Self, ToolError> {
         // BSD `-i ''` (an empty suffix as its own argument) and `-i .bak`.
         let mut v: Vec<String> = Vec::with_capacity(args.len());

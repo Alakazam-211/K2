@@ -50,6 +50,7 @@ impl Refusal for SessionError {
             .with("need", need_word(*need)),
             S::NotJoined { conn } => rep(&r::NOT_JOINED, msg).with("conn", conn.to_string()),
             S::Watching { max } => rep(&r::WATCHING, msg).with("max", *max as u64),
+            S::BaseExpired { base } => rep(&r::BASE_EXPIRED, msg).with("base", *base),
             S::Stale { expected, actual } => rep(&r::STALE, msg)
                 .with("expected", *expected)
                 .with("actual", *actual),
@@ -67,6 +68,16 @@ impl Refusal for SessionError {
             S::PackMismatch { stored, pack } => rep(&r::PACK_MISMATCH, msg)
                 .with("stored", stored)
                 .with("pack", pack),
+            S::EngineMismatch {
+                stored,
+                stored_format,
+                engine,
+                engine_format,
+            } => rep(&r::ENGINE_MISMATCH, msg)
+                .with("stored", stored)
+                .with("stored_format", *stored_format)
+                .with("engine", engine)
+                .with("engine_format", *engine_format),
             S::BadParticipant(_) => rep(&r::BAD_PARTICIPANT, msg),
             S::BadPosition(_) => rep(&r::BAD_POSITION, msg),
             S::BadEdit(_) => rep(&r::BAD_EDIT, msg),
@@ -216,10 +227,22 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
         S::Db(_) => rep(&r::STORE_FAILED, msg),
         S::Newer { found } => rep(&r::STORE_NEWER, msg)
             .with("found", *found)
+            .with("max", crate::store::STORE_FORMAT_READ),
+        S::RewriteNewer { found } => rep(&r::STORE_NEWER, msg)
+            .with("found", *found)
             .with("max", crate::store::STORE_FORMAT),
+        S::ForeignEngine {
+            stored,
+            stored_format,
+        } => rep(&r::ENGINE_MISMATCH, msg)
+            .with("stored", stored)
+            .with("stored_format", *stored_format)
+            .with("engine", crate::engine::ENGINE_NAME)
+            .with("engine_format", crate::engine::ENGINE_FORMAT),
         S::NewerData { table } => rep(&r::STORE_NEWER, msg).with("table", table.as_str()),
         S::MarksLost(d) => rep(&r::BASE_EXPIRED, msg).with("doc", *d),
         S::Corrupt(what) => rep(&r::STORE_CORRUPT, msg).with("what", *what),
+        S::ClockOverflow(clock) => rep(&r::STORE_FAILED, msg).with("clock", *clock),
         S::NoDoc(d) => rep(&r::STORE_NO_DOC, msg).with("doc", *d),
         S::KeyTaken(k) => rep(&r::PATH_TAKEN, msg).with(
             "key",
@@ -374,6 +397,7 @@ impl Refusal for ToolError {
             ToolError::Refused { what, .. } => rep(&r::TOOL_REFUSED, msg).with("what", what),
             ToolError::Usage(_) => rep(&r::TOOL_USAGE, msg),
             ToolError::Limit(_) => rep(&r::TOOL_LIMIT, msg),
+            ToolError::Address(r) => (**r).clone(),
         }
     }
 }

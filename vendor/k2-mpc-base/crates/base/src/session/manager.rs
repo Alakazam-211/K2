@@ -789,6 +789,9 @@ impl SessionManager {
         let id = store
             .find(key)?
             .ok_or_else(|| SessionError::NotFound(key.clone()))?;
+        // a doc another engine wrote is refused, as on open (MPC-E520), before anything
+        // closes; the store checks again in its transaction (v0.10.1)
+        DocStore::check_owned(&store.meta(id)?).map_err(engine_refusal)?;
         pool.parked.remove(key);
         if let Some(s) = pool.sessions.remove(key) {
             s.close_deleted();
@@ -796,7 +799,9 @@ impl SessionManager {
         if let Some(s) = pool.blob_sessions.remove(key) {
             s.close_deleted();
         }
-        store.delete_doc(id, self.host.now_ms())?;
+        store
+            .delete_doc(id, self.host.now_ms())
+            .map_err(engine_refusal)?;
         Ok(())
     }
 
@@ -808,6 +813,9 @@ impl SessionManager {
     pub fn delete_space(&self, space: &str) -> Result<Vec<DocKey>> {
         let mut pool = self.pool()?;
         let store = pool.store.clone().ok_or(SessionError::Released)?;
+        // a space holding a doc another engine wrote is refused whole (MPC-E520), before
+        // anything closes; the store checks again in its transaction (v0.10.1)
+        store.check_space_owned(space).map_err(engine_refusal)?;
         let in_space = |k: &DocKey| k.space == space;
         pool.parked.retain(|k, _| !in_space(k));
         let text: Vec<DocKey> = pool
@@ -832,7 +840,9 @@ impl SessionManager {
                 s.close_deleted();
             }
         }
-        Ok(store.delete_space(space, self.host.now_ms())?)
+        store
+            .delete_space(space, self.host.now_ms())
+            .map_err(engine_refusal)
     }
 
     /// Close idle connections in every loaded session ([`Session::expire_idle`]).
@@ -1086,5 +1096,22 @@ fn hard_linked(p: &Probe) -> Result<()> {
             ),
         })),
         _ => Ok(()),
+    }
+}
+
+/// A store's refusal of another engine's doc ([`StoreError::ForeignEngine`]) as the
+/// session's, the error opening it gives ([`SessionError::EngineMismatch`], `MPC-E520`).
+fn engine_refusal(e: crate::store::StoreError) -> SessionError {
+    match e {
+        crate::store::StoreError::ForeignEngine {
+            stored,
+            stored_format,
+        } => SessionError::EngineMismatch {
+            stored,
+            stored_format,
+            engine: crate::engine::ENGINE_NAME.to_owned(),
+            engine_format: crate::engine::ENGINE_FORMAT,
+        },
+        e => SessionError::Store(e),
     }
 }

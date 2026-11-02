@@ -49,7 +49,8 @@ root name that is empty, repeated, or holds `/`.
 - Every edit names the participant (client ID). Attribution can't be forged.
 - Every kind supports versions (whole-doc checkpoints), restore as a forward change, and blame
   at its natural grain.
-- Positions never cross the public API as engine offsets. List elements are named by keys
+- Positions never cross the public API as engine offsets (except the test-only
+  `CharBlame.clock`, feature `conformance`; `docs/POSITIONS.md`). List elements are named by keys
   the caller chooses (they live in the values, so they survive an engine switch), and writes
   by opaque `WriteId`s.
 - Every change reports what it did, op by op (`Doc::edit_applied`, the applied stream): for

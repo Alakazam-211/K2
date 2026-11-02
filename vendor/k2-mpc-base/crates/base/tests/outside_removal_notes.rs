@@ -939,7 +939,11 @@ fn an_author_without_history_is_named_no_version_and_gets_the_text() {
     assert_eq!(o.yours, "sam's line\n");
     assert_eq!(
         notes.to_string().trim_end(),
-        "note: An outside save may have removed your text (L2). It read \"sam's line\\n\"."
+        format!(
+            "note: An outside save may have removed your text (L2). Someone with history access \
+             can restore it from version {}. It read \"sam's line\\n\".",
+            o.restore_from.expect("for telling someone with history")
+        )
     );
     f.paste(sam, &o.yours);
     assert!(f.text(sam).contains("sam's line\n"));

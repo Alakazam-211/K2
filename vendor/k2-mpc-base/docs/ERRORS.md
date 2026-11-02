@@ -8,11 +8,12 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 ```json
 {"id": "MPC-E110", "exit": 1, "message": "doc changed since 12 (now 14)",
- "next": "Someone changed the doc after …", "rule": "A14 (--if-version), K-T0-5",
- "details": {"expected": 12, "actual": 14}}
+ "next": "Someone changed the doc after …",
+ "next_step": {"verb": "cat", "args": [], "why": "Someone changed the doc …"},
+ "rule": "A14 (--if-version), K-T0-5", "details": {"expected": 12, "actual": 14}}
 ```
 
-`details` is structured (numbers, values, lists, objects), never prose. `explain <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit codes:
+`details` is structured (numbers, values, lists, objects), never prose. `next_step` is `next` as data: `verb` a kit verb, `args` its arguments, one token each (`{key}`: the refusal's `details.key`), and `why` in prose; it has no host syntax, so a host renders it in its own (K-PAR-10). It is left out when there is nothing to run (wait, ask a person, report it, use ordinary file tools). `explain <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit codes:
 
 | Exit | Name | Meaning |
 |---|---|---|
@@ -32,6 +33,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 | Id | Name | Exit | Rule | Verbs | Status |
 |---|---|---|---|---|---|
+| `MPC-E000` | `not_applied` | 1 | client/WIRE.md (a lost reply) | `(sync)` | live |
 | `MPC-E001` | `export_unsupported` | 2 | X-ERR-1 | `(host)` | live |
 | `MPC-E002` | `export_declined` | 2 | X-ERR-1 | `(host)` | live |
 | `MPC-E003` | `export_limit` | 2 | X-LIM-1 | `(host)` | live |
@@ -39,6 +41,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E005` | `export_decode` | 1 | X-ERR-1 | `(host)` | live |
 | `MPC-E006` | `export_io` | 1 | X-ERR-1 | `(host)` | live |
 | `MPC-E007` | `export_internal` | 1 | X-FUZZ-1 | `(host)` | live |
+
+### MPC-E000 `not_applied`
+
+- **Message:** `the change wasn't applied (its reply was lost)`
+- **Next:** The connection dropped before the host answered this change, and the doc's record doesn't list it, so the client kept its text out of the doc and handed it back (a rejection). Re-apply it (the client checks the record first and re-applies only a change that never landed), or dismiss it. Nothing else changed.
+- **Rule:** client/WIRE.md (a lost reply)
+- **Exit:** 1
+- **Reached by:** the JS client: a change whose reply was lost, settled by a since reply
 
 ### MPC-E001 `export_unsupported`
 
@@ -65,6 +75,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `export cancelled`
 - **Next:** The export was cancelled before it finished; nothing was placed. Run it again if you still want the file.
+- **Next step:** `export`. The export was cancelled before it finished and nothing was placed; run it again if you still want the file.
 - **Rule:** X-CAN-1
 - **Exit:** 1
 
@@ -72,6 +83,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `could not read the source`
 - **Next:** The source version couldn't be read in its format (damaged, or a variant the exporter doesn't read). Nothing was written. Export as-is to get the bytes, or try another version.
+- **Next step:** `export` with `--to` `as-is`. The source couldn't be read in its format; export it as it is to get the bytes, or try another version.
 - **Rule:** X-ERR-1
 - **Exit:** 1
 
@@ -104,7 +116,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E109` | `pack_mismatch` | 4 | K-FMT-2 | `*` | live |
 | `MPC-E110` | `stale` | 1 | A14 (--if-version), K-T0-5 | `@change`, `write` | live |
 | `MPC-E111` | `write_conflict` | 1 | K-BR-2, K-BR-3 (O1–O5) | `write` | live |
-| `MPC-E112` | `base_expired` | 8 | K-BR-4, K-EXIT-1 | `write` | live |
+| `MPC-E112` | `base_expired` | 8 | K-BR-4, K-EXIT-1 | `write`, `@pack` | live |
 | `MPC-E113` | `bad_edit` | 2 | K-SCH-2 | `@change` | live |
 | `MPC-E114` | `bad_position` | 2 | K-PRES-6 | `cursor`, `view`, `claim`, `blame` | live |
 | `MPC-E115` | `bad_participant` | 2 | K-PRES-9 | `(host)` | live |
@@ -136,6 +148,10 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E154` | `malformed_doc` | 2 | K-SEC-5 | `*` | live |
 | `MPC-E160` | `unknown_error_id` | 4 | the catalog (docs/ERRORS.md) | `explain` | live |
 | `MPC-E161` | `engine_unlisted` | 2 | the MPCE seam (stable codes) | `*` | reserved |
+| `MPC-E170` | `ambiguous_address` | 2 | K-ADDR-2, K-EXIT-1 | `@pack` | live |
+| `MPC-E171` | `positional_needs_version` | 2 | K-ADDR-3 | `@change` | live |
+| `MPC-E172` | `address_not_found` | 4 | K-READ-1, K-READ-3 | `@pack` | reserved |
+| `MPC-E173` | `stale_cursor` | 1 | K-READ-2 | `@pack` | reserved |
 
 ### MPC-E101 `forbidden_read`
 
@@ -155,6 +171,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `refused: needs History rights`
 - **Next:** Reading history (log, diff --version, show --version, blame, versions, someone else's approvals) needs the history right, which you don't have. Don't retry: work from the live text (cat), or ask the doc's owner for history access.
+- **Next step:** `cat`. Reading history needs a right you don't have; work from the live text instead, or ask the doc's owner for history access.
 - **Rule:** K-PERM-9
 - **Exit:** 3
 
@@ -162,6 +179,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `refused: needs Approver rights`
 - **Next:** Only the person a change was made for can approve or decline it; an agent never can, even the one that made it. Ask that person to run approve or decline (list the pending changes with log --pending). Don't retry.
+- **Next step:** `log --pending`. Only the person a change was made for can approve or decline it; list the pending changes and ask that person.
 - **Rule:** K-ID-11
 - **Exit:** 3
 
@@ -169,6 +187,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `refused: needs AuthorOrOwner rights`
 - **Next:** Only the change's author, the person it was made for, or an owner can revert it. Don't retry: ask one of them, or undo your own changes with undo.
+- **Next step:** `undo`. Only the change's author, the person it was made for or an owner can revert it; undo your own changes instead, or ask one of them.
 - **Rule:** K-HIST-19
 - **Exit:** 3
 
@@ -176,6 +195,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `refused: needs Owner rights`
 - **Next:** Only an owner of the doc can do this (break someone else's lease, purge). Don't retry: ask an owner. To wait for a lease instead, retry after it expires (status shows the holder and expiry).
+- **Next step:** `status`. Only an owner can do this; ask one, or see who holds the lease and until when, and retry after it expires.
 - **Rule:** K-PURGE-1, K-T0-2
 - **Exit:** 3
 
@@ -183,6 +203,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{conn} has not joined this doc`
 - **Next:** Your connection left the doc (it was idle, kicked, or the doc reloaded). Run the verb again: any verb joins the doc first. Nothing was applied.
+- **Next step:** `open`. Your connection left the doc; join it again, then run your verb. Nothing was applied.
 - **Rule:** K-PRES-1
 - **Exit:** 2
 
@@ -204,6 +225,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `doc changed since {expected} (now {actual})`
 - **Next:** Someone changed the doc after the version you named, so nothing was applied. Read it again (cat prints the version), redo your change on what you read, and pass the new version with --if-version (a blob write: the new base).
+- **Next step:** `cat`. Someone changed the doc after the version you named; read it again, redo your change on what you read, and guard it with the new version.
 - **Rule:** A14 (--if-version), K-T0-5
 - **Exit:** 1
 
@@ -211,6 +233,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `your write touches lines someone else changed since version {base}: {count} region(s), your {lines} (now {lines} of version {current}); nothing applied. To retry: read the current text again (cat; it is version {current}), redo your change on it, then write --base {current}`
 - **Next:** Someone else changed the same lines after the version you read (or added lines at the same place), so nothing was applied; a write never merges inside a line. Run cat to read the current text (the message and details.current give its version), make your change again on that text, and write it with write --base <that version>. Or change only the lines you need with replace --lines or patch, each with --if-version <that version> (they take --if-version, not --base). details.conflicts has each region's your_lines (in your text), current_lines (in the current text), base, ours and theirs.
+- **Next step:** `cat`. Someone else changed the same lines since your base; read the current text, redo your change on it, then write it against that version.
 - **Rule:** K-BR-2, K-BR-3 (O1–O5)
 - **Exit:** 1
 
@@ -218,6 +241,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `base version {base} is unknown or no longer cached; nothing applied`
 - **Next:** The version you wrote against is too old to merge from (or was never read). Never retry the same request: read the doc again (cat), redo your change on what you read, and write with that version as --base.
+- **Next step:** `cat`. The version you wrote against is too old to merge from; read the doc again, redo your change, and write against the version you read. Never retry the same request.
 - **Rule:** K-BR-4, K-EXIT-1
 - **Exit:** 8
 
@@ -232,6 +256,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad position: {reason}`
 - **Next:** A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.
+- **Next step:** `wc` with `-l`. A line or position is outside the doc; read its length and pass lines inside it.
 - **Rule:** K-PRES-6
 - **Exit:** 2
 
@@ -246,6 +271,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{flag}: not supported ({hint})`
 - **Next:** That verb, flag or syntax is outside the supported subset; nothing is approximated. Use what the hint says, or see capabilities for each verb's flags. Nothing was applied.
+- **Next step:** `capabilities`. That verb, flag or syntax is outside the supported subset; use what the hint says, or look up each verb's flags.
 - **Rule:** K-PAR-7
 - **Exit:** 2
 
@@ -267,6 +293,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{failed} out of {hunks} hunk(s) FAILED; nothing applied`
 - **Next:** The patch doesn't fit the live text (others changed those lines, or it was made against another version). Nothing was applied: patches are all or nothing. stdout shows each failed hunk beside the live lines. Read the text again and make a new patch, or apply the rest with --partial.
+- **Next step:** `cat` with `-n`. The patch doesn't fit the live text, so nothing was applied; read the text again and make a new patch, or apply only the hunks that fit.
 - **Rule:** K-PAR-8
 - **Exit:** 1
 
@@ -274,6 +301,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)`
 - **Next:** --partial applied the hunks that fit; the failed ones (on stdout) were not applied. Read the lines they were for and make those changes again on the live text.
+- **Next step:** `cat` with `-n`. The hunks that fit were applied and the failed ones were not; read the lines they were for and make those changes again on the live text.
 - **Rule:** K-PAR-8, K-BR-9
 - **Exit:** 1
 
@@ -281,6 +309,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `replace: --old matches nothing in {doc}; nothing applied`
 - **Next:** The exact text in --old isn't in the doc (it matches byte for byte, with \n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.
+- **Next step:** `cat` with `-n`. The exact old text isn't in the doc; read the lines again and copy the text byte for byte.
 - **Rule:** A12 (exact replace)
 - **Exit:** 1
 
@@ -288,6 +317,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `replace: --old matches {matches} times in {doc}; nothing applied`
 - **Next:** --old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.
+- **Next step:** `cat` with `-n`. The old text matches more than once; add surrounding text until it matches once, or replace every match.
 - **Rule:** A12 (exact replace)
 - **Exit:** 1
 
@@ -295,6 +325,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{verb}: nothing applied`
 - **Next:** The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.
+- **Next step:** `cat`. The file type's own verb found nothing to change; check its target and run it again.
 - **Rule:** A6 (pack verbs)
 - **Exit:** 1
 
@@ -302,6 +333,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `held: approvals_backlog`
 - **Next:** Too many of your changes made for a person are waiting for their approval, so new ones are held (nothing applied). This is refused for now, not for good: don't retry in a loop. Ask the person to approve or decline the pending changes (log --pending lists them), then run the verb again.
+- **Next step:** `log --pending`. Too many of your changes wait for a person's approval, so new ones are held for now; ask that person to settle the pending ones, then run the verb again. Don't retry in a loop.
 - **Rule:** K-HIST-23, K-ID-10
 - **Exit:** 2
 
@@ -309,6 +341,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `change {seq} has no approval (it wasn't made on anyone's behalf)`
 - **Next:** That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, or doesn't exist). List the pending ones with log --pending and use one of those.
+- **Next step:** `log --pending`. That change isn't waiting for anyone's approval; list the pending ones and use one of those.
 - **Rule:** K-ID-11
 - **Exit:** 4
 
@@ -316,6 +349,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad approval: {reason}`
 - **Next:** An approval is settled once: pending → approved or declined. This one is already settled (the message says how). To reverse a declined change, use revert or restore --version.
+- **Next step:** `log --pending` with `--all`. That approval is already settled; list the settled ones to see how, and revert or restore to reverse a declined change.
 - **Rule:** K-ID-11
 - **Exit:** 2
 
@@ -394,6 +428,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `root {root} is {actual}, not {wanted}`
 - **Next:** The edit treats a part of the doc as the wrong kind (text vs table...). Use the verbs for that kind (capabilities lists them).
+- **Next step:** `capabilities`. The edit treats a part of the doc as the wrong kind; use the verbs for that kind.
 - **Rule:** K-SCH-2
 - **Exit:** 2
 - **Reached by:** a pack with a non-text root
@@ -441,6 +476,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no error id {id}`
 - **Next:** That id isn't in this build's catalog. Run explain with no id to list every id, or check the id you copied (MPC-E and three digits).
+- **Next step:** `explain`. That id isn't in this build's catalog; list every id, or check the one you copied.
 - **Rule:** the catalog (docs/ERRORS.md)
 - **Exit:** 4
 
@@ -451,6 +487,36 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** the MPCE seam (stable codes)
 - **Exit:** 2
 - **Status:** reserved for the native engine (MPCE ranges at G2-core); nothing returns it yet
+
+### MPC-E170 `ambiguous_address`
+
+- **Message:** `{given} names more than one {what}`
+- **Next:** The address you gave names more than one thing (a name or a value two of them share), so nothing was read or applied; the kit never picks the first one. details.candidates lists each one's own address (its key or ID) and where it is now: run the verb again with the address of the one you mean.
+- **Rule:** K-ADDR-2, K-EXIT-1
+- **Exit:** 2
+
+### MPC-E171 `positional_needs_version`
+
+- **Message:** `{address} is a position; an agent's edit by position names the version it read`
+- **Next:** Positions (#N, LN, line numbers, the Nth match) move when others edit, so an agent's edit that uses one must say which version it counted them in. Nothing was applied. Read the doc again (the read prints its version) and run the edit with --if-version <that version> (a grid edit: --base <that version>), or name the thing by its key.
+- **Rule:** K-ADDR-3
+- **Exit:** 2
+
+### MPC-E172 `address_not_found`
+
+- **Message:** `{count} of the addresses name nothing in version {version}`
+- **Next:** Some of the addresses you asked for name nothing in this version. The output still lists every address, with null for each missing one; details.missing gives each missing address with what does exist there (candidates, its parent's children). Check them against outline, or ask for one of the candidates.
+- **Rule:** K-READ-1, K-READ-3
+- **Exit:** 4
+- **Status:** reserved for the node verb (K-READ-1); nothing returns it yet
+
+### MPC-E173 `stale_cursor`
+
+- **Message:** `the cursor is for another version, doc or call; nothing was read`
+- **Next:** A cursor continues one read of one doc at one version with the same arguments. The doc changed since (or the cursor is from another doc, or the arguments differ), so nothing was read. Read again without --cursor and page on with the cursor that read returns.
+- **Rule:** K-READ-2
+- **Exit:** 1
+- **Status:** reserved for read budgets and cursors (K-READ-2); nothing returns it yet
 
 ## 2xx: history and undo
 
@@ -468,6 +534,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `step {step} conflicts in {count} region(s) at {where}; nothing applied`
 - **Next:** Someone else changed text your change touched, so undoing it whole would overwrite their work. Nothing was applied. Either run undo --partial (undoes the regions nobody touched and reports the rest; revert --partial for revert), or read the lines in details.conflicts (cat -n) and fix them by hand with replace.
+- **Next step:** `undo --partial`. Undoing the change whole would overwrite others' work; undo only the regions nobody touched, or fix the conflicting lines by hand.
 - **Rule:** U13, U11, hist.undo_atomic
 - **Exit:** 1
 
@@ -475,6 +542,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `every region of the top step conflicts ({count} at {where}); nothing applied`
 - **Next:** Others changed every region of your newest change, so nothing could be undone and it stays on top of your undo history. Fix those lines by hand (replace --lines), then skip the step with undo --drop to reach older ones.
+- **Next step:** `undo --drop`. Others changed every region of your newest change; fix those lines by hand, then skip the step to reach older ones.
 - **Rule:** U14, U15, hist.undo_partial
 - **Exit:** 1
 
@@ -482,6 +550,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `undid {steps} step(s); {skipped} region(s) were left alone because others changed them: {where}`
 - **Next:** The regions nobody touched were undone; the ones listed were not (others changed them). Read those lines (cat -n) and decide by hand: replace --lines to finish them, or leave them.
+- **Next step:** `cat` with `-n`. The regions others changed were left alone; read those lines and finish them by hand, or leave them.
 - **Rule:** U14, hist.undo_partial
 - **Exit:** 1
 
@@ -489,6 +558,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `change {seq} is too old to revert (revert_too_old); use restore --version`
 - **Next:** The change is outside the revert window. Never retry the same request. Find a version from before it (log) and restore --version that version, or edit the text by hand.
+- **Next step:** `log`. The change is outside the revert window; find a version from before it and restore that version. Never retry the same request.
 - **Rule:** K-HIST-23, K-EXIT-1
 - **Exit:** 8
 
@@ -496,6 +566,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no change or version {seq} in this doc`
 - **Next:** There's no change or version by that number. List them with log (changes and versions, newest first) and use one it prints.
+- **Next step:** `log`. There's no change or version by that number; list them and use one shown.
 - **Rule:** K-HIST-19, K-HIST-9
 - **Exit:** 4
 
@@ -503,6 +574,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `nothing to undo: your undo history was lost when the doc reloaded`
 - **Next:** Undo history lives in memory and was dropped when the doc unloaded or the daemon restarted. Your changes are still in the log: find one with log --by <you> and reverse it with revert <change>.
+- **Next step:** `log`. Undo history was lost when the doc reloaded, but your changes are still in the log; find yours and revert it.
 - **Rule:** U6, U18, K-HIST-17
 - **Exit:** 0
 
@@ -510,6 +582,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `nothing to undo: a purge cleared the undo history`
 - **Next:** An owner purged content from this doc, which clears every undo history. Reverse a change with revert <change> (log lists them), or edit the text by hand.
+- **Next step:** `log`. A purge cleared every undo history; find the change in the log and revert it, or edit the text by hand.
 - **Rule:** U19, K-PURGE-4
 - **Exit:** 0
 
@@ -527,6 +600,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{lines} claimed by {name} ({by}); {remaining_ms} ms left`
 - **Next:** Someone else is working on those lines right now (a live claim). Nothing was applied. Wait and retry after details.remaining_ms, or work on other lines; activity and who show who is where.
+- **Next step:** `activity`. Someone else holds a live claim on those lines; see who is where, then wait for the time left and retry, or work on other lines.
 - **Rule:** A13 (claims), K-PRES-12
 - **Exit:** 5
 
@@ -534,6 +608,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no live claim {claim}`
 - **Next:** That claim already ended (it expired, or your edit ended it), or you hold none. Take a new one with claim --lines a,b if you still need it.
+- **Next step:** `claim`. That claim already ended, or you hold none; take a new one if you still need it.
 - **Rule:** A13 (claims)
 - **Exit:** 4
 
@@ -541,6 +616,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)`
 - **Next:** Others are waiting for your claim, so it can't be extended. Finish your edit before it ends (details.remaining_ms), or release it with claim --release.
+- **Next step:** `claim --release` with `--id` `{claim}`. Others are waiting for your claim, so it can't be extended; finish your edit before it ends, or release it.
 - **Rule:** A13 (claims)
 - **Exit:** 2
 
@@ -548,6 +624,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad claim: {reason}`
 - **Next:** The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.
+- **Next step:** `claim --release`. The claim call isn't valid as given; fix its arguments, or release all of your claims.
 - **Rule:** A13 (claims)
 - **Exit:** 2
 
@@ -555,6 +632,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `watching: the doc has its {max} participants; read-only until the host lets you in`
 - **Next:** This doc already has as many participants as it allows, so you joined as a watcher: you can read it and follow changes, but not edit or show presence. This is refused for now, not for good: don't retry in a loop. When someone leaves, the host can let you in; until then, read.
+- **Next step:** `cat`. The doc has all the participants it allows, so you joined as a watcher; read it until the host lets you in, and don't retry in a loop.
 - **Rule:** K11 (participants_max)
 - **Exit:** 3
 
@@ -605,6 +683,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `live editing is off: {reason} (declined)`
 - **Next:** The file changed on disk into something that can't be a live doc (the reason says what), so live editing stopped. Reads still work. Edit the file with ordinary tools, or fix what the reason names; it goes live again when it decodes.
+- **Next step:** `cat`. The file changed on disk into something that can't be live; reads still work, and it goes live again once it decodes.
 - **Rule:** K-DISK-8
 - **Exit:** 4
 
@@ -628,6 +707,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `disk: {reason}`
 - **Next:** Reading or writing the file failed. Nothing is lost: the doc keeps its changes and write-back retries. Check the disk (space, permissions), then flush.
+- **Next step:** `flush`. Reading or writing the file failed, but the doc keeps its changes; check the disk's space and permissions, then write it back.
 - **Rule:** K-DISK-2, K-DISK-10
 - **Exit:** 1
 - **Reached by:** an I/O failure
@@ -669,6 +749,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E517` | `pack_error` | 1 | K-COD-2 | `*` | live |
 | `MPC-E518` | `quarantined` | 3 | K-SEC-5 | `*` | live |
 | `MPC-E519` | `closed` | 1 | K-OFF-2 | `*` | live |
+| `MPC-E520` | `engine_mismatch` | 6 | K-FMT-2, K-FMT-4 | `*` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -745,6 +826,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no doc {doc}`
 - **Next:** The stored doc is gone (deleted meanwhile). Open the path again.
+- **Next step:** `open`. The stored doc was deleted meanwhile; open the path again.
 - **Rule:** K-EXIT-1
 - **Exit:** 4
 - **Reached by:** a doc deleted between calls
@@ -753,6 +835,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no version {version} for doc {doc}`
 - **Next:** There's no such version. List versions with log and use one it prints.
+- **Next step:** `log`. There's no such version; list the versions and use one shown.
 - **Rule:** K-HIST-9
 - **Exit:** 4
 
@@ -760,6 +843,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no approval for change {seq} of doc {doc}`
 - **Next:** That change has no approval record. List pending ones with log --pending.
+- **Next step:** `log --pending`. That change has no approval record; list the pending ones.
 - **Rule:** K-ID-11
 - **Exit:** 4
 - **Reached by:** an approval record removed between calls
@@ -768,6 +852,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `session unloaded; open the doc again`
 - **Next:** The doc was unloaded while you held it (idle, or memory pressure). Run the verb again: it reopens the doc. Nothing was applied.
+- **Next step:** `open`. The doc was unloaded while you held it; open it again, then run your verb. Nothing was applied.
 - **Rule:** K-PERF-7
 - **Exit:** 1
 
@@ -790,6 +875,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `the doc was deleted`
 - **Next:** The doc was deleted while you were working on it. Nothing was applied. Check whether the file should exist; open it again to start a new doc.
+- **Next step:** `open`. The doc was deleted while you worked on it; check whether the file should exist, and open it again to start a new doc.
 - **Rule:** K-PURGE-8
 - **Exit:** 4
 
@@ -816,6 +902,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** K-OFF-2
 - **Exit:** 1
 
+### MPC-E520 `engine_mismatch`
+
+- **Message:** `this doc was written by engine {stored} (format {stored_format}); this kit runs engine {engine} (format {engine_format})`
+- **Next:** The stored doc was written by another engine than this build runs (a build on another engine, or one rolled back from it), so it was not loaded. Nothing changed. Open it with a build that runs that engine, or ask the host's operator to migrate it; don't retry.
+- **Rule:** K-FMT-2, K-FMT-4
+- **Exit:** 6
+- **Reached by:** a doc stored by a build on another engine
+
 ## 6xx: erasure
 
 | Id | Name | Exit | Rule | Verbs | Status |
@@ -827,6 +921,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `version {version} of doc {doc} is its current content`
 - **Next:** The current version of a file can't be purged. Write or restore another version first, then purge this one.
+- **Next step:** `restore`. A file's current version can't be purged; write or restore another version first, then purge this one.
 - **Rule:** K-T0-9, K-PURGE-1
 - **Exit:** 2
 
@@ -834,6 +929,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `version {version} of doc {doc} was purged`
 - **Next:** An owner purged that version; its content is gone for good. Pick another version (log).
+- **Next step:** `log`. That version was purged for good; pick another version.
 - **Rule:** K-PURGE-4
 - **Exit:** 4
 
@@ -856,6 +952,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `leased by {name} ({holder}) until {expires_ms}`
 - **Next:** Someone else holds the file's lease (a lock while they change it). Nothing was written. Retry after it expires (details.expires_ms, host clock), or ask them to release it; only an owner can break it (lease --break).
+- **Next step:** `status`. Someone else holds the file's lease; see who holds it and until when, then retry after it expires or ask them to release it.
 - **Rule:** K-T0-2
 - **Exit:** 5
 
@@ -863,6 +960,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no lease held`
 - **Next:** You hold no lease to renew (it expired, or the daemon restarted). Take a new one with lease.
+- **Next step:** `lease`. You hold no lease to renew; take a new one.
 - **Rule:** K-T0-7
 - **Exit:** 2
 
@@ -877,6 +975,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no blob {blob} in this space`
 - **Next:** The bytes of that version are gone (collected, or the space was purged). Pick another version (log).
+- **Next step:** `log`. The bytes of that version are gone; pick another version.
 - **Rule:** K-T0-1
 - **Exit:** 4
 - **Reached by:** a blob file collected under a live version
@@ -885,6 +984,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `blob {blob} is damaged (its bytes don't match its id)`
 - **Next:** The stored bytes of that version are damaged and are never served. Pick another version (log), and report it.
+- **Next step:** `log`. The stored bytes of that version are damaged and never served; pick another version, and report it.
 - **Rule:** K-T0-4
 - **Exit:** 1
 - **Reached by:** damaged blob bytes on disk
@@ -924,6 +1024,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no blob {blob}`
 - **Next:** The blob store has no record of those bytes. Pick another version (log).
+- **Next step:** `log`. The blob store has no record of those bytes; pick another version.
 - **Rule:** K-T0-1
 - **Exit:** 4
 - **Reached by:** a blob index row removed under a version
@@ -944,6 +1045,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `an agent's grid edit needs a base: read first and pass --base`
 - **Next:** Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.
+- **Next step:** `cat`. Agents edit tables against what they read; read the table first, then run the edit again against the version it printed.
 - **Rule:** K-BR-12
 - **Exit:** 2
 
@@ -951,6 +1053,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted``
 - **Next:** The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
+- **Next step:** `rows drop-deleted`. The table is at its size limit; remove rows or columns first, or have an owner free the space deleted rows still hold.
 - **Rule:** K-CSV-7 (KC4)
 - **Exit:** 2
 
@@ -958,6 +1061,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{count} element(s) changed since your base: {where}`
 - **Next:** Someone changed the same cells or rows after the version you read. Nothing was applied. Read again, redo your change on the new values, and pass the new --base.
+- **Next step:** `cat`. Someone changed the same cells or rows since your base; read again, redo your change on the new values, and pass the new base.
 - **Rule:** K-BR-12 (KC7)
 - **Exit:** 1
 
@@ -965,6 +1069,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `op {op} on root {root}: {problem}`
 - **Next:** One of the edit's row, column or cell operations can't apply (an unknown or reused key, a move next to itself, dropping a live element); nothing of the change was applied. List the rows or columns again (row list, col list) and use the keys shown.
+- **Next step:** `row list`. An operation names an unknown or reused key; list the rows or columns again and use the keys shown.
 - **Rule:** K-SCH-2 (C1)
 - **Exit:** 2
 
@@ -972,6 +1077,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `{verb}: {line}`
 - **Next:** The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).
+- **Next step:** `row list`. The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first.
 - **Rule:** CSV contract §3.3 (C1)
 - **Exit:** 4
 
@@ -979,6 +1085,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `the columns have names that would appear as a header line; clear them or add a row first`
 - **Next:** The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.
+- **Next step:** `col rename`. The columns still hold names that would be written as a header line; clear them or add a row first, then switch.
 - **Rule:** CSV contract §1.4 (C1)
 - **Exit:** 2
 
@@ -986,6 +1093,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `header on: the only row is a blank line, and a blank header line with nothing after it isn't written (the file would change); add a non-blank row first`
 - **Next:** The table's only row is blank: as the header it would be a blank header line with nothing after it, which isn't written, so the file would change. Nothing was applied. Add a row with values first (row insert), then switch the header on.
+- **Next step:** `row insert`. A blank only row can't be written as the header; add a row with values first, then switch the header on.
 - **Rule:** CSV contract §1.4 (C1)
 - **Exit:** 2
 
@@ -1010,6 +1118,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `limit: {reason}`
 - **Next:** The call would go over a bound (output size, pattern size or work). Nothing was applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller edits.
+- **Next step:** `head`. The call would pass a bound; narrow it: fewer lines, a simpler pattern, smaller edits.
 - **Rule:** K-PAR-7, K-SEC-4
 - **Exit:** 2
 
@@ -1017,6 +1126,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad claim: this doc has {count} live claims (the most)`
 - **Next:** This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.
+- **Next step:** `activity`. This doc has all the live claims it allows; wait for some to end, or edit without a claim.
 - **Rule:** A13 (claims_max)
 - **Exit:** 2
 
@@ -1024,6 +1134,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad claim: you hold {count} claims here (the most); release one`
 - **Next:** You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.
+- **Next step:** `claim --release`. You hold all the claims you may on this doc; release one you no longer need, then claim again.
 - **Rule:** A13 (claims_per_participant)
 - **Exit:** 2
 
@@ -1031,6 +1142,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `bad claim: {count} already waiting for {claim}`
 - **Next:** That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.
+- **Next step:** `activity`. That claim already has as many waiters as it allows; see where others are working and work elsewhere, or retry after it ends.
 - **Rule:** A13 (claim_waiters_max)
 - **Exit:** 2
 
@@ -1038,4 +1150,5 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 Reserved for the engine, which allocates its ranges (decode, admission and security, schema, history, store) at G2-core. Its codes cross the seam as these strings, never as enum ordinals; a code this build doesn't list is reported as `MPC-E161` with `details.code`.
 
-None yet.
+- `MPCE-E199` `ref_not_in_past`
+- `MPCE-E980` `change_too_large`

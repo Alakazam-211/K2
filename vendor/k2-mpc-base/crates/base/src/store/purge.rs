@@ -235,6 +235,8 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         let m = docs.get(id)?.ok_or(StoreError::NoDoc(id))?;
         dec_meta(m.value())?
     };
+    // another engine's doc: its rows aren't all this build's to reach (v0.10.1)
+    DocStore::check_owned(&meta)?;
     // the log: metadata only from here on
     {
         let mut t = w.open_table(UPDATES)?;
@@ -395,7 +397,7 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
             if !changed {
                 continue;
             }
-            let nb = enc_record(&rec);
+            let nb = enc_record(&rec)?;
             let (old, new) = (b.len() as u64, nb.len() as u64);
             rt.insert((id, seq), nb.as_slice())?;
             let at = it

@@ -402,22 +402,25 @@ pub fn merge3_outside_text(
 
 /// The planted merge faults ([`crate::differential::MergeMutant`]): (the outside save's
 /// whole-row loop over the live side's columns, the both-changed test by cell over the live
-/// side's columns, `write --base` conflicting on a byte-neutral live switch). Without the
-/// `differential` feature there is no hook: all are `false`.
+/// side's columns, `write --base` conflicting on a byte-neutral live switch, the keyed merge
+/// taking ours' value over one, the keyed outside save not reporting its override of one).
+/// Without the `differential` feature there is no hook: all are `false`.
 #[cfg(any(test, feature = "differential"))]
-fn planted() -> (bool, bool, bool) {
+fn planted() -> (bool, bool, bool, bool, bool) {
     use crate::differential::{merge_mutant, MergeMutant};
     let m = merge_mutant();
     (
         m == Some(MergeMutant::OutsideWholeRowLiveCols),
         m == Some(MergeMutant::ByCellLiveCols),
         m == Some(MergeMutant::WriteBaseNeutralConflicts),
+        m == Some(MergeMutant::KeyedMergeNeutralSwitch),
+        m == Some(MergeMutant::KeyedOutsideNeutralSwitch),
     )
 }
 
 #[cfg(not(any(test, feature = "differential")))]
-fn planted() -> (bool, bool, bool) {
-    (false, false, false)
+fn planted() -> (bool, bool, bool, bool, bool) {
+    (false, false, false, false, false)
 }
 
 fn merge3_with(
@@ -427,7 +430,13 @@ fn merge3_with(
     file_wins: bool,
     exact: Option<&HashSet<Key>>,
 ) -> Result<Merge, TableError> {
-    let (planted_whole_row, planted_by_cell, planted_neutral_conflicts) = planted();
+    let (
+        planted_whole_row,
+        planted_by_cell,
+        planted_neutral_conflicts,
+        planted_keyed_neutral,
+        planted_keyed_outside,
+    ) = planted();
     let (ours, rekeyed) = rekey(base, ours, theirs);
     let ours = &ours;
     let mut w = theirs.clone();
@@ -839,15 +848,33 @@ fn merge3_with(
                 ch.cell(&mut w, r, c, v.as_deref());
                 continue;
             }
-            // an outside save over a live switch between empty and absent that is no live edit
-            // of the cell (`neutral_live`): the file's value, no override
             // `write --base` over a live switch between empty and absent that is no live edit of
-            // the cell (`neutral_live`): the text's value, no conflict
-            Some(_) if !file_wins && !planted_neutral_conflicts && neutral_live(r, c) => {
+            // the cell (`neutral_live`): the text's value, no conflict. Through a text only: a
+            // text can't tell an empty field from an absent cell, so it never saw that switch.
+            // By key (`merge3`) the switch is theirs' write (a clear is a set to `""`), and ours
+            // setting the cell too is a `cell` conflict, never theirs' write overwritten
+            Some(_)
+                if !file_wins
+                    // (xxxviii), planted: the keyed merge too
+                    && (exact.is_some() || planted_keyed_neutral)
+                    && !planted_neutral_conflicts
+                    && neutral_live(r, c) =>
+            {
                 ch.cell(&mut w, r, c, v.as_deref());
                 continue;
             }
-            Some(_) if file_wins && (neutral_live(r, c) || file_renders_live(r, c)) => {
+            // an outside save through a text (`merge3_outside_text`) over a live switch between
+            // empty and absent that is no live edit of the cell (`neutral_live`), or a live value
+            // the file's row renders anyway (`file_renders_live`): the file's value, no override.
+            // Through a text only: a text can't tell an empty field from an absent cell. By key
+            // (`merge3_outside`) the switch is the live side's write (a clear is a set to `""`),
+            // and the file setting the cell too is an overridden `cell`, reported
+            Some(_)
+                if file_wins
+                    // (xxxix), planted: the keyed outside save too
+                    && (exact.is_some() || planted_keyed_outside)
+                    && (neutral_live(r, c) || file_renders_live(r, c)) =>
+            {
                 ch.cell(&mut w, r, c, v.as_deref());
                 continue;
             }

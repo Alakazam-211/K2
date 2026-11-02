@@ -2,6 +2,7 @@ MPC-E602 purged_version (erasure)
 exit:     4
 message:  version {version} of doc {doc} was purged
 next:     An owner purged that version; its content is gone for good. Pick another version (log).
+step:     log; why: That version was purged for good; pick another version.
 rule:     K-PURGE-4
 verbs:    show --version; restore
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "version {version} of doc {doc} was purged",
   "next": "An owner purged that version; its content is gone for good. Pick another version (log).",
+  "next_step": {
+    "verb": "log",
+    "args": [],
+    "why": "That version was purged for good; pick another version."
+  },
   "rule": "K-PURGE-4",
   "verbs": ["show --version", "restore"],
   "returned_by": ["show --version", "restore"],

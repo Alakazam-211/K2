@@ -2,6 +2,7 @@ MPC-E902 tool_limit (limits)
 exit:     2
 message:  limit: {reason}
 next:     The call would go over a bound (output size, pattern size or work). Nothing was applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller edits.
+step:     head; why: The call would pass a bound; narrow it: fewer lines, a simpler pattern, smaller edits.
 rule:     K-PAR-7, K-SEC-4
 verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "limit: {reason}",
   "next": "The call would go over a bound (output size, pattern size or work). Nothing was applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller edits.",
+  "next_step": {
+    "verb": "head",
+    "args": [],
+    "why": "The call would pass a bound; narrow it: fewer lines, a simpler pattern, smaller edits."
+  },
   "rule": "K-PAR-7, K-SEC-4",
   "verbs": ["@run_tool"],
   "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],

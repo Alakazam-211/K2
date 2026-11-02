@@ -846,7 +846,7 @@ fn hunk_at(s: &Session, c: ConnId, start: usize, end: usize, insert: &str) -> u6
 
 /// The live elements as `(pid, client, clock, root pid)`; with feature `conformance` only.
 #[cfg(feature = "conformance")]
-fn elements(s: &Session) -> Vec<(Option<String>, u64, u32, Option<String>)> {
+fn elements(s: &Session) -> Vec<(Option<String>, u64, u64, Option<String>)> {
     s.char_blame(ROOT)
         .unwrap()
         .into_iter()

@@ -21,15 +21,32 @@ export interface ChangeEvent {
   hunks: Hunk[];
   at_ms: number;
   on_behalf_of?: string | null;
+  /** What kind of change it is (the kit's `ChangeKind`, kit v0.10.1; absent from an older
+   * host). An undo and a redo say so here. */
+  kind?: "edit" | "undo" | "redo" | "revert" | "restore" | "external" | "import";
 }
 
-/** A refusal (the kit's `ErrorReport` JSON: `{id, exit, message, next, rule, details}`). */
+/** What to run next, as data (the kit's `NextStep`, K-PAR-10): a kit verb by its registry
+ * name, its arguments one argv token each (`{key}` stands for the refusal's `details.key`),
+ * and why, in prose. No host syntax: the host (or its UI) renders it in its own. */
+export interface NextStep {
+  verb: string;
+  args: string[];
+  why: string;
+}
+
+/** A refusal (the kit's `ErrorReport` JSON: `{id, exit, message, next, next_step, rule,
+ * details}`). `next_step` is absent when there is nothing to run, and from an older host
+ * (before kit v0.10.1). */
 export interface ErrorReport {
   /** Stable id, e.g. `MPC-E111`. */
   id: string;
   message: string;
   exit?: number;
+  /** What to do next, in prose for people. */
   next?: string;
+  /** `next` as data ([NextStep]); absent when there is nothing to run. */
+  next_step?: NextStep;
   rule?: string;
   details?: Record<string, unknown>;
 }
@@ -299,7 +316,8 @@ export interface Transport {
 export interface CloseEvent {
   reason: CloseReason;
   /** Whether reconnecting can help (`network`, `cut_off`: yes; the others: no). It must agree
-   * with `canRetry(reason)`; the live editor goes by `canRetry` and reports a disagreement. */
+   * with `canRetry(reason)`; the host's retry loop goes by `canRetry`, never this flag
+   * (HOST.md). */
   retry: boolean;
   /** The `closed` frame's `code`, when there was one. */
   code?: string;
@@ -323,12 +341,14 @@ export interface ConnectOptions {
 }
 
 /**
- * The transport a host implements for a live editor component: `Transport`, plus one
- * connection attempt and its end. The component owns the retry loop (back off, then
- * `connect({resume: live.version})`, then `live.reconnected(welcome)`).
+ * The transport a host implements for its live editor: `Transport`, plus one connection attempt
+ * and its end. One object for the editor's whole life, across reconnects: frame and close
+ * listeners outlive connections; `connect` while open replaces the connection; `send` while
+ * no connection is open drops the frame (never buffers it). The host's retry loop backs off,
+ * then `connect({resume: live.version, prev})`, then `live.reconnected(welcome)` (HOST.md).
  */
 export interface LiveTransport extends Transport {
-  /** One attempt: open the socket, authenticate (the host's; the component never sees a
+  /** One attempt: open the socket, authenticate (the host's; the library never sees a
    * token), join, and resolve with the `welcome` frame. `resume`: the version the client has;
    * the host then sends no `text`. Rejects (with a `CloseEvent`) when the attempt fails. */
   connect(opts: ConnectOptions): Promise<Welcome>;

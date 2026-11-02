@@ -1,31 +1,29 @@
-// @vitest-environment jsdom
 // The caret's re-send after remote changes (client 0.11.1): a host that drops a `cursor` frame
 // unless its version is the one that socket was last sent, and that forwards whatever is queued
 // before it compares (the fake host's opt-in caret route, `FakeServer.caretRoute`), would leave
 // an idle person's caret unseen while others type. The client re-sends its caret at each new
 // version, mapped as CodeMirror maps a selection, at most once per 250 ms with a trailing send.
+// The scenarios run on DOM-free hosts (`live-host.ts`): what a host would draw is `carets()`.
 
 import { ChangeSet, EditorSelection } from "@codemirror/state";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "./jsdom-shims";
-import { mountLiveEditor, type LiveEditorHandle } from "../src/editor/mount";
 import type { Hunk } from "../src/hunk";
 import { CARET_RESEND_MS, LiveText, setDefaultLiveTimers, type LiveTimers } from "../src/live";
 import type { ChangeEvent, ClientFrame, ServerFrame, Transport } from "../src/wire";
 import { FakeLiveHost, microtasks, netTimers, settle, type FakeLiveTransport } from "./fake-live";
 import { FakeServer, Net, rng } from "./fake-server";
+import { TestHost } from "./live-host";
 
 const NAMES = { p1: "Ada", p2: "Bo" };
 const TEXT = "the quick brown fox jumps over the lazy dog\n";
 /** Where A puts its caret (characters = bytes: the text is ASCII). */
 const CARET = 20;
 
-const mounted: LiveEditorHandle[] = [];
+const mounted: TestHost[] = [];
 
 afterEach(() => {
   for (const h of mounted.splice(0)) h.destroy();
   setDefaultLiveTimers(null);
-  document.body.replaceChildren();
 });
 
 function setup(handles: string[], opts: { olderHost?: boolean } = {}) {
@@ -35,13 +33,11 @@ function setup(handles: string[], opts: { olderHost?: boolean } = {}) {
   const r = rng(5);
   const host = new FakeLiveHost(net, server, () => 2);
   setDefaultLiveTimers(netTimers(net, r.next)); // the replicas' throttle on the fake clock
-  const eds: LiveEditorHandle[] = [];
+  const eds: TestHost[] = [];
   const ts: FakeLiveTransport[] = [];
   for (const who of handles) {
-    const el = document.createElement("div");
-    document.body.append(el);
     const t = host.transport(who);
-    const h = mountLiveEditor(el, { transport: t, mode: "plain", timers: netTimers(net, r.next), reconnect: { minMs: 5, maxMs: 40 } });
+    const h = new TestHost(t, { timers: netTimers(net, r.next), reconnect: { minMs: 5, maxMs: 40 } });
     mounted.push(h);
     eds.push(h);
     ts.push(t);
@@ -49,19 +45,22 @@ function setup(handles: string[], opts: { olderHost?: boolean } = {}) {
   return { net, server, eds, ts };
 }
 
-const doc = (h: LiveEditorHandle) => h.view.state.doc.toString();
-const type = (h: LiveEditorHandle, pos: number, s: string) =>
-  h.view.dispatch({ changes: { from: pos, insert: s }, selection: { anchor: pos + s.length }, userEvent: "input.type" });
+const doc = (h: TestHost) => h.text;
+/** Typing: the edit, then the caret after it (as an editor moves it). */
+const type = (h: TestHost, pos: number, s: string) => h.type([{ start: pos, end: pos, insert: s }]);
+/** The person puts the caret at `at` (a host editor's selection change). */
+const moveCaret = (h: TestHost, at: number) => h.live!.setCursor(at, at);
+/** The replica's own caret (what the host's editor shows as its selection). */
+const ownCaret = (h: TestHost) => (h.live as unknown as { cursor: { head: number } | null }).cursor?.head ?? null;
 const cursors = (t: FakeLiveTransport) => t.sent.filter((f): f is Extract<ClientFrame, { type: "cursor" }> => f.type === "cursor");
 
-/** Where `name`'s caret is drawn in `h` (a character offset), or `null` when it isn't. */
-function caretOf(h: LiveEditorHandle, name: string): number | null {
-  const all = [...h.view.dom.querySelectorAll(".cm-mpc-caret")] as HTMLElement[];
-  const el = all.find((e) => e.querySelector(".cm-mpc-caret-name")?.textContent === name);
-  return el ? h.view.posAtDOM(el) : null;
+/** Where `name`'s caret is in `h`'s `carets()` (what a host draws), or `null` when it isn't. */
+function caretOf(h: TestHost, name: string): number | null {
+  const c = h.live?.carets().find((x) => x.name === name);
+  return c ? c.head : null;
 }
-const caretsNamed = (h: LiveEditorHandle, name: string) =>
-  [...h.view.dom.querySelectorAll(".cm-mpc-caret-name")].filter((e) => e.textContent === name).length;
+const caretsNamed = (h: TestHost, name: string) => (h.live?.carets() ?? []).filter((c) => c.name === name).length;
+const caretCount = (h: TestHost) => h.live?.carets().length ?? 0;
 
 /** Step the fake network until `cond` holds. */
 async function until(net: Net, cond: () => boolean, max = 10_000) {
@@ -99,31 +98,23 @@ function ticks(net: Net, server: FakeServer, end: number, every = 20) {
 
 /**
  * The planted fault: no re-send after remote changes. A caret frame goes only when the person
- * moves the caret (or after their own edit): the remote path sends nothing, and the editor's
- * echo of the caret the replica moved isn't sent either.
+ * moves the caret (or after their own edit): the remote path sends nothing.
  */
 async function withoutRemoteResend<T>(f: () => Promise<T>): Promise<T> {
-  type Inner = { resendCursor(): void; cursor: { anchor: number; head: number } | null };
-  const proto = LiveText.prototype as unknown as Inner & { setCursor(a: number, h: number): void };
-  const setCursor = proto.setCursor;
+  const proto = LiveText.prototype as unknown as { resendCursor(): void };
   const resend = vi.spyOn(proto, "resendCursor").mockImplementation(() => {});
-  const echo = vi.spyOn(proto, "setCursor").mockImplementation(function (this: Inner, a: number, h: number) {
-    if (this.cursor && this.cursor.anchor === a && this.cursor.head === h) return;
-    setCursor.call(this, a, h);
-  });
   try {
     return await f();
   } finally {
     resend.mockRestore();
-    echo.mockRestore();
   }
 }
 
 /**
  * A puts its caret down while the host still holds one of B's changes for it (its frame is
  * read behind and dropped), then stays idle while B types a key every 50 at the start of the
- * line, before A's caret. Fails loudly unless A's caret is drawn in B's editor while B types,
- * stays drawn from then on at A's real position, and every frame A sent was mapped (one per
+ * line, before A's caret. Fails loudly unless A's caret is in B's `carets()` while B types,
+ * stays there from then on at A's real position, and every frame A sent was mapped (one per
  * version, at the caret's place in that version's text).
  */
 async function idleCaretWhileOtherTypes(keys = 20) {
@@ -136,7 +127,7 @@ async function idleCaretWhileOtherTypes(keys = 20) {
   type(B, 0, "x");
   await until(net, () => server.version === 1);
   const t0 = net.now;
-  A.view.dispatch({ selection: { anchor: CARET } });
+  moveCaret(A, CARET);
   await until(net, () => server.caretDropped === 1);
   server.setLag(ts[0].conn!, false);
   expect(server.caretAccepted, "the caret frame was read behind and dropped").toBe(0);
@@ -147,9 +138,9 @@ async function idleCaretWhileOtherTypes(keys = 20) {
     const at = caretOf(B, "Ada");
     if (at !== null && seen.at === null) seen.at = net.now;
     if (seen.at === null) return;
-    expect(at, `A's caret left B's editor at ${net.now}`).not.toBeNull();
+    expect(at, `A's caret left B's carets() at ${net.now}`).not.toBeNull();
     // B types only at 0: A's caret is at its first place plus every x in B's text
-    expect(at, `A's caret drawn at the wrong place at ${net.now}`).toBe(CARET + doc(B).length - TEXT.length);
+    expect(at, `A's caret at the wrong place at ${net.now}`).toBe(CARET + doc(B).length - TEXT.length);
   };
   for (let k = 0; k < keys; k++) {
     await runTo(net, t0 + 20 + 50 * k, check);
@@ -157,14 +148,14 @@ async function idleCaretWhileOtherTypes(keys = 20) {
   }
   await runTo(net, typingEnds, check);
   const firstSeen = seen.at;
-  expect(firstSeen, "A's caret never showed in B's editor while B typed").not.toBeNull();
+  expect(firstSeen, "A's caret never showed in B's carets() while B typed").not.toBeNull();
   // everything lands; the last push
   await settle(net, check);
   server.caretTick();
   await settle(net, check);
   expect(doc(A)).toBe(doc(B));
-  expect(caretOf(B, "Ada")).toBe(A.view.state.selection.main.head);
-  // A's frames: one per version (the editor's echo of the mapped caret sends nothing), each at
+  expect(caretOf(B, "Ada")).toBe(ownCaret(A));
+  // A's frames: one per version, each at
   // the caret's place in that version's text (version v has v x's before it)
   const sent = cursors(ts[0]);
   const versions = sent.map((f) => f.version);
@@ -176,7 +167,7 @@ async function idleCaretWhileOtherTypes(keys = 20) {
 }
 
 describe("the caret's re-send after remote changes", () => {
-  it("an idle person's dropped caret shows in the typist's editor and stays, at its real place (fails with the re-send planted out)", async () => {
+  it("an idle person's dropped caret shows in the typist's carets() and stays, at its real place (fails with the re-send planted out)", async () => {
     const s = await idleCaretWhileOtherTypes();
     expect(s.firstSeen).toBeLessThan(s.typingEnds);
     console.log(`caret re-send: ${s.frames} frames from A, host dropped ${s.dropped}, accepted ${s.accepted}; seen ${s.firstSeen - s.t0} after A's first frame`);
@@ -199,39 +190,38 @@ describe("the caret's re-send after remote changes", () => {
     const { net, server, eds } = setup(["p1", "p1", "p2"], { olderHost: true });
     const [A1, A2, B] = eds;
     await settle(net);
-    A2.view.dispatch({ selection: { anchor: 10 } });
+    moveCaret(A2, 10);
     await settle(net);
     server.caretTick();
     await settle(net);
     expect(caretsNamed(B, "Ada"), "one row per person").toBe(1);
     expect(caretOf(B, "Ada")).toBe(10);
-    expect(A1.view.dom.querySelectorAll(".cm-mpc-caret").length, "the other device's caret is not drawn (today)").toBe(0);
+    expect(caretCount(A1), "the other device's caret is not listed (today)").toBe(0);
     // the first device's caret, once it has one, is the person's row: the second's is shown nowhere
-    A1.view.dispatch({ selection: { anchor: 30 } });
+    moveCaret(A1, 30);
     await settle(net);
     server.caretTick();
     await settle(net);
     expect(caretsNamed(B, "Ada")).toBe(1);
     expect(caretOf(B, "Ada")).toBe(30);
-    expect(A2.view.dom.querySelectorAll(".cm-mpc-caret").length).toBe(0);
-    expect(A1.view.dom.querySelectorAll(".cm-mpc-caret").length).toBe(0);
+    expect(caretCount(A2)).toBe(0);
+    expect(caretCount(A1)).toBe(0);
   });
 
   it("per-connection carets (kit v0.10.1): the same person on two devices sees the other device's caret", async () => {
     // A current host: a `Device` per connection and `client` on `cursor` events. Each device
-    // shows the other's caret (drawn here by the kit's own editor, named as the person), never
-    // its own; another person sees both.
+    // lists the other's caret (named as the person), never its own; another person sees both.
     const { net, server, eds } = setup(["p1", "p1", "p2"]);
     const [A1, A2, B] = eds;
     await settle(net);
-    A2.view.dispatch({ selection: { anchor: 10 } });
+    moveCaret(A2, 10);
     await settle(net);
     server.caretTick();
     await settle(net);
     expect(caretOf(A1, "Ada"), "the other device's caret, in the first").toBe(10);
-    expect(A2.view.dom.querySelectorAll(".cm-mpc-caret").length, "its own caret is not drawn").toBe(0);
+    expect(caretCount(A2), "its own caret is not listed").toBe(0);
     expect(caretOf(B, "Ada")).toBe(10);
-    A1.view.dispatch({ selection: { anchor: 30 } });
+    moveCaret(A1, 30);
     await settle(net);
     server.caretTick();
     await settle(net);

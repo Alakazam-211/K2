@@ -103,7 +103,9 @@ function run(
   return { typed, rejected, refused: server.refused };
 }
 
-describe("three clients converge", () => {
+// Long by design (randomised runs, 3-20 s on a build node). vitest 2 never timed out a synchronous
+// test; vitest 3 and later apply the 5 s default to them too, so these suites name their own limit.
+describe("three clients converge", { timeout: 60_000 }, () => {
   it("over 1,200 random runs, and nothing typed is lost", () => {
     let typed = 0;
     let rejected = 0;

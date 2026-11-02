@@ -9,7 +9,8 @@
 //! - **Engine-neutral versions.** A version stores each root's plain content (text for text
 //!   roots), not engine state, so versions survive an engine change.
 //! - **Format stamps.** The store has a format number, and each doc records its pack,
-//!   engine and engine-format, so a later release can re-encode on upgrade.
+//!   engine and engine-format, so a later release can re-encode on upgrade. A session
+//!   refuses to load a doc another engine wrote (v0.10.1, `SessionError::EngineMismatch`).
 //! - **Erasure.** Records can hold redactions instead of content (format 3); a purge redacts
 //!   a doc in one transaction (`DocStore::purge_doc`, for sessions), then
 //!   [`DocStore::rewrite_file`] leaves no byte of it in the file, which
@@ -116,7 +117,22 @@ use enc::{R, W};
 ///   behind where v0.9.7 drops them (a doc delete, records leaving the window), and its
 ///   `rewrite_file`, and so a purge, refuses the table before changing anything
 ///   ([`StoreError::NewerData`], `MPC-E502`; never a silent drop).
+/// - 7: **forward-declared, never written by this build** (v0.10.1): the native engine's
+///   store (its docs stamped by the native engine; tables this build doesn't know). This
+///   build reads a format-7 store ([`STORE_FORMAT_READ`]) and serves the Yrs docs in it, but
+///   never changes what it can't read: opening one writes nothing (no upgrade, no sweep, no
+///   pending rewrite finished: the file's bytes stay as they are), a rewrite and so a purge
+///   are refused ([`StoreError::RewriteNewer`], `MPC-E502`), and a doc another engine stamped
+///   is refused on open, delete and purge (`MPC-E520`).
+///
+/// [`STORE_FORMAT`] is the highest format this build **writes** (stamps); it reads up to
+/// [`STORE_FORMAT_READ`] and refuses a store above that ([`StoreError::Newer`]).
 pub const STORE_FORMAT: u64 = 6;
+
+/// The highest store format this build **reads** (v0.10.1): one past what it writes
+/// ([`STORE_FORMAT`]), so the release before the native switch opens the switch's stores
+/// (K-FMT-10's N−1 read) without writing their format.
+pub const STORE_FORMAT_READ: u64 = 7;
 
 /// The format of a store without structured docs: a new store starts here, an older one is
 /// stamped here when opened, and both stay here until their first structured doc.
@@ -130,6 +146,9 @@ pub type VersionId = u64;
 const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
 /// `meta` key: an open's sweep removed rows and the file is still to be rewritten (v0.9.7).
 const REWRITE_PENDING: &str = "rewrite_pending";
+/// `meta` key: the open-time sweep of `authored` ran on this store (v0.10.1); later opens
+/// skip it. Older kits read `meta` by key and copy it whole on a rewrite.
+const AUTHORED_SWEPT: &str = "authored_swept";
 const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
 const PATHS: TableDefinition<&str, u64> = TableDefinition::new("paths");
 const SNAPSHOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("snapshots");
@@ -299,8 +318,28 @@ impl DocRows {
 pub enum StoreError {
     #[error("store: {0}")]
     Db(String),
-    #[error("store is format {found}; this build reads up to {STORE_FORMAT}")]
+    #[error("store is format {found}; this build reads up to {STORE_FORMAT_READ}")]
     Newer { found: u64 },
+    /// A store of a format this build reads but doesn't write (above [`STORE_FORMAT`]; the
+    /// native engine's, format 7) can't be rewritten here: a rewrite would copy tables it
+    /// doesn't know, or drop them. So [`DocStore::rewrite_file`], a purge (which rewrites the
+    /// file), and an open that finds a rewrite a newer build left pending are refused before
+    /// anything changes (v0.10.1). `MPC-E502` `store_newer`. Exit 6.
+    #[error(
+        "store is format {found}; this build reads it but rewrites only up to format \
+         {STORE_FORMAT}: use the newer build"
+    )]
+    RewriteNewer { found: u64 },
+    /// A doc another engine wrote (its stamp is one this build's engine doesn't read, and
+    /// not a tier-0 doc's): its rows can't all be known here, so deleting or purging it is
+    /// refused, nothing changed (v0.10.1). `MPC-E520` `engine_mismatch`, as on open. Exit 6.
+    #[error(
+        "this doc was written by engine {stored} (format {stored_format}); this kit runs \
+         engine {} (format {})",
+        crate::engine::ENGINE_NAME,
+        crate::engine::ENGINE_FORMAT
+    )]
+    ForeignEngine { stored: String, stored_format: u32 },
     /// A structured doc's row marks can't be read (`row_marks` is missing): a base can't be
     /// vouched for, so a keyed write naming one is refused as expired (fail closed).
     #[error("doc {0}: the row marks are missing; read the doc again and retry")]
@@ -313,6 +352,13 @@ pub enum StoreError {
     NewerData { table: String },
     #[error("store record is damaged: {0}")]
     Corrupt(&'static str),
+    /// A revert record's root run holds a units or clock value over `u32::MAX`, which its
+    /// stored layout (u32, unchanged since format 5) can't hold: the change is refused at
+    /// encode, before anything is written, never stored truncated (v0.10.1, P2). A Yrs doc
+    /// never reaches it (Yrs clocks are u32). In the error registry this is `MPC-E501`
+    /// `store_failed`. Exit 6.
+    #[error("store: refused at encode: revert record clock {0} is over u32")]
+    ClockOverflow(u64),
     #[error("no doc {0}")]
     NoDoc(DocId),
     #[error("path already has a doc: {0:?}")]
@@ -460,7 +506,10 @@ pub struct DocMeta {
     pub key: DocKey,
     /// The pack's schema name (e.g. "markdown").
     pub pack: String,
-    /// Engine identity and its encoding version, e.g. "yrs-0.28" / 2 (v2 updates).
+    /// Engine identity and its encoding version, e.g. "yrs-0.28" / 2 (v2 updates). A session
+    /// loads the doc only when the engine's family (the name up to its first `-`) and the
+    /// format are its own, or the name is empty (unstamped); otherwise
+    /// `SessionError::EngineMismatch` (v0.10.1).
     pub engine: String,
     pub engine_format: u32,
     /// The pack codec's own settings for this file (e.g. BOM and line endings), opaque here.
@@ -1053,6 +1102,16 @@ impl DocStore {
         // a rewrite a crash interrupted left its temp file: the store itself is whole
         let _ = std::fs::remove_file(rewrite::temp_path(&path));
         let db = Database::create(&path)?;
+        // a store a newer build stamped (format 7, the native engine's): read as it is, never
+        // upgraded, swept or rewritten here; opening it writes nothing
+        if let Some(f) = Self::format_of(&db)? {
+            if f > STORE_FORMAT_READ {
+                return Err(StoreError::Newer { found: f });
+            }
+            if f > STORE_FORMAT {
+                return Self::open_newer(db, path, f);
+            }
+        }
         let w = db.begin_write()?;
         {
             let mut meta = w.open_table(META)?;
@@ -1061,6 +1120,8 @@ impl DocStore {
                 None => {
                     meta.insert("store_format", STORE_FORMAT_BASE)?;
                 }
+                Some(f) if f > STORE_FORMAT_READ => return Err(StoreError::Newer { found: f }),
+                // a format this build reads but doesn't write: handled above, read-only
                 Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
                 // 1 -> 2 -> 3: nothing to rewrite (older records still decode); new tables
                 // below. 3 -> 4: the blob approvals, backfilled below. 4 -> 5: the
@@ -1087,9 +1148,14 @@ impl DocStore {
                 blob::backfill_approvals(&w)?;
             }
             // what a kit <= v0.9.6 left in the authored table (v0.9.7, no format bump): the
-            // file is rewritten below, here or at the next open if this one fails there
-            if history::sweep_authored(&w)? {
-                meta.insert(REWRITE_PENDING, 1)?;
+            // file is rewritten below, here or at the next open if this one fails there. Once
+            // per store (v0.10.1): it reads every row, and no shipped release ran a kit
+            // <= v0.9.6, so the marker is set in this transaction whatever the sweep found
+            if meta.get(AUTHORED_SWEPT)?.is_none() {
+                if history::sweep_authored(&w)? {
+                    meta.insert(REWRITE_PENDING, 1)?;
+                }
+                meta.insert(AUTHORED_SWEPT, 1)?;
             }
         }
         w.commit()?;
@@ -1101,6 +1167,51 @@ impl DocStore {
         };
         s.finish_pending_rewrite()?;
         Ok(s)
+    }
+
+    /// [`StoreError::ForeignEngine`] unless this build may change doc `meta`'s rows: a
+    /// tier-0 doc or one its engine reads ([`crate::engine::owns_stamp`]). Delete and purge
+    /// check it in their own transaction (v0.10.1).
+    pub(crate) fn check_owned(meta: &DocMeta) -> Result<(), StoreError> {
+        if crate::engine::owns_stamp(&meta.engine, meta.engine_format) {
+            return Ok(());
+        }
+        Err(StoreError::ForeignEngine {
+            stored: meta.engine.clone(),
+            stored_format: meta.engine_format,
+        })
+    }
+
+    /// The format stamp of an open database, read without writing (`None`: a new store).
+    fn format_of(db: &Database) -> Result<Option<u64>, StoreError> {
+        let r = db.begin_read()?;
+        let meta = match r.open_table(META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let f = meta.get("store_format")?.map(|v| v.value());
+        Ok(f)
+    }
+
+    /// Open a store of a format this build reads but doesn't write (`found`, above
+    /// [`STORE_FORMAT`]): read-only at open. No table is created, nothing is swept, and a
+    /// rewrite a newer build left pending isn't finished here: the open is refused
+    /// ([`StoreError::RewriteNewer`]) and the file is left as it is.
+    fn open_newer(db: Database, path: PathBuf, found: u64) -> Result<Self, StoreError> {
+        {
+            let r = db.begin_read()?;
+            let meta = r.open_table(META)?;
+            if meta.get(REWRITE_PENDING)?.is_some() {
+                return Err(StoreError::RewriteNewer { found });
+            }
+        }
+        Ok(Self {
+            db: RwLock::new(db),
+            path,
+            #[cfg(any(feature = "conformance", feature = "differential"))]
+            unsynced: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     /// The rewrite an open's sweep asked for ([`REWRITE_PENDING`]), so no freed page keeps

@@ -10,9 +10,15 @@
 // `M2_BENCH_GATE=1` runs only the M2 targets and exits 1 if one is missed (the gate runs it,
 // pinned to one core): p95 per acknowledged keystroke under 1 ms at 1 MB and under 2 ms at 4 MB
 // (ASCII and CJK/emoji, typing at the end, the middle and the start), and a `since` reply of 500
-// events under 100 ms at 1 MB. It also prints the editor binding's keystroke (the byte index).
+// events under 100 ms at 1 MB. (The editor binding's byte-index lines left with the editor.)
 // Every gate line carries the node's load; a missed target is re-run once and fails only if the
 // re-run misses too (`BENCH RETRY` marks a pass on the re-run). Limits never change with load.
+// Before each attempt the gate waits for a quiet machine (`BENCH LOADED`): when other work used
+// more than half the core the bench is pinned to (`M2_BENCH_CORE_BUSY_MAX`, default 0.5, sampled
+// from /proc/stat), or the 1-minute load is above half the machine's CPUs (`M2_BENCH_LOAD_MAX`),
+// it re-checks every 15 s for up to `M2_BENCH_LOADED_WAIT_S` (default 300) seconds. A target that
+// never got a quiet machine ends `LOADED`, not as a miss: the run then prints `BENCH GATE LOADED`
+// and exits 3 (a miss exits 1 and wins over loaded).
 //
 // What it measures, for documents of 10 KB to 4 MB (UTF-8), ASCII and CJK/emoji:
 // - local typing at the end, the middle and the start, each keystroke acknowledged before the
@@ -22,14 +28,13 @@
 // - a `since` reply of 500 events;
 // - the primitives each of those calls (where the time goes), a CPU profile of the 1 MB runs,
 //   and GC count and time per scenario;
-// - two bench-only models of the fixes (CodeMirror's `Text` with the byte index; a flat string
-//   with a chunked UTF-8 index), as floors, not designs.
+// - a bench-only model of a fix (a flat string with a chunked UTF-8 index), as a floor, not a
+//   design.
 
 import { Session } from "node:inspector";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import { PerformanceObserver } from "node:perf_hooks";
-import { ChangeSet, Text } from "@codemirror/state";
-import { ByteIndex } from "../../src/editor/bytes";
 import { apply, byteToIndex, compose, utf8Len, validate, type Hunk } from "../../src/hunk";
 import { LiveText } from "../../src/live";
 import { Rope } from "../../src/rope";
@@ -323,58 +328,6 @@ function primitives(doc: string, reps: number): string[] {
   return out;
 }
 
-/** Bench-only model of "keep CodeMirror's Text as the store": a keystroke is a `Text.replace`
- * plus the byte index's update and one lookup. */
-function cmModel(doc: string, n: number): number[] {
-  let text = Text.of(doc.split("\n"));
-  let idx = ByteIndex.of(text);
-  let pos = text.length >> 1;
-  const xs: number[] = [];
-  for (let i = 0; i < 30 + n; i++) {
-    const t0 = now();
-    const cs = ChangeSet.of({ from: pos, insert: "x" }, text.length);
-    const next = cs.apply(text);
-    idx = idx.update(text, next, cs);
-    text = next;
-    idx.byteAt(text, pos + 1);
-    const t1 = now();
-    pos += 1;
-    if (i >= 30) xs.push(t1 - t0);
-  }
-  return xs;
-}
-
-/**
- * A keystroke during an IME composition while remote changes are held: the binding maps the
- * keystroke over the held changes and needs byte offsets in the held document (the editor's
- * plus the held changes). `incremental`: the held document's byte index kept up to date (M2);
- * else one built afresh per keystroke (before M2).
- */
-function imeModel(doc: string, n: number, incremental: boolean): number[] {
-  let editor = Text.of(doc.split("\n"));
-  let held = ChangeSet.of({ from: 0, insert: "R" }, editor.length);
-  let shadow = held.apply(editor);
-  let idx = ByteIndex.of(shadow);
-  let pos = editor.length >> 1;
-  const xs: number[] = [];
-  for (let i = 0; i < 20 + n; i++) {
-    const t0 = now();
-    const tr = ChangeSet.of({ from: pos, insert: "x" }, editor.length);
-    const mine = tr.map(held);
-    const at = incremental ? idx : ByteIndex.of(shadow);
-    mine.iterChanges((fromA) => void at.byteAt(shadow, fromA));
-    const next = mine.apply(shadow);
-    if (incremental) idx = idx.update(shadow, next, mine);
-    shadow = next;
-    held = held.map(tr, true);
-    editor = tr.apply(editor);
-    const t1 = now();
-    pos += 1;
-    if (i >= 20) xs.push(t1 - t0);
-  }
-  return xs;
-}
-
 /** Bench-only model of "a flat string with a chunked UTF-8 index": a keystroke is the string
  * splice (flattened by the next read), one chunk re-measured, and the later chunks' byte starts
  * shifted. */
@@ -484,9 +437,7 @@ async function main() {
       }
       console.log(`BENCH prims ${tag}: ${primitives(doc, big ? 20 : 100).join(" | ")}`);
       {
-        const cm = await measured(() => cmModel(doc, keys));
         const ch = await measured(() => chunkModel(doc, keys));
-        console.log(`BENCH model-cmtext ${tag}: ${fmt(cm.v)} | ${cm.gc}`);
         console.log(`BENCH model-chunked ${tag}: ${fmt(ch.v)} | ${ch.gc}`);
       }
       if (bytes === 1_000_000) {
@@ -502,6 +453,71 @@ async function main() {
 /** The node's load (1, 5 and 15 minutes) and CPU count, for every gate line. */
 const load = () => `load ${os.loadavg().map((x) => x.toFixed(2)).join("/")} on ${os.cpus().length} CPUs`;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The one core this process is pinned to (`taskset -c N`), or null when it may run on several. */
+function pinnedCore(): number | null {
+  try {
+    const m = readFileSync("/proc/self/status", "utf8").match(/^Cpus_allowed_list:\s*(\S+)/m);
+    return m && /^\d+$/.test(m[1]) ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Busy and total jiffies of one core, from /proc/stat (null where there is none). */
+function coreTimes(core: number): { busy: number; total: number } | null {
+  try {
+    const line = readFileSync("/proc/stat", "utf8").split("\n").find((l) => l.startsWith(`cpu${core} `));
+    if (!line) return null;
+    const v = line.trim().split(/\s+/).slice(1).map(Number);
+    const total = v.reduce((a, b) => a + b, 0);
+    return { busy: total - (v[3] ?? 0) - (v[4] ?? 0), total };
+  } catch {
+    return null;
+  }
+}
+
+/** The share of `core` other work used over `ms`; this process sleeps meanwhile, so it is all theirs. */
+async function coreBusy(core: number, ms: number): Promise<number | null> {
+  const a = coreTimes(core);
+  await sleep(ms);
+  const b = coreTimes(core);
+  if (!a || !b || b.total <= a.total) return null;
+  return (b.busy - a.busy) / (b.total - a.total);
+}
+
+const CORE_BUSY_MAX = Number(process.env.M2_BENCH_CORE_BUSY_MAX ?? 0.5);
+const LOAD_MAX = Number(process.env.M2_BENCH_LOAD_MAX ?? os.cpus().length / 2);
+const LOADED_WAIT_MS = Number(process.env.M2_BENCH_LOADED_WAIT_S ?? 300) * 1000;
+
+/**
+ * Wait for a quiet machine before measuring `what`: the pinned core no more than `CORE_BUSY_MAX`
+ * busy with other work, and the 1-minute load no more than `LOAD_MAX`. Logs `BENCH LOADED` on each
+ * busy check; true once quiet, false if it stayed busy past `LOADED_WAIT_MS`.
+ */
+async function quiet(what: string): Promise<boolean> {
+  const core = pinnedCore();
+  const start = Date.now();
+  for (;;) {
+    const busy = core === null ? null : await coreBusy(core, 2000);
+    const l1 = os.loadavg()[0];
+    const coreOk = busy === null || busy <= CORE_BUSY_MAX;
+    const loadOk = l1 <= LOAD_MAX;
+    if (coreOk && loadOk) return true;
+    const why = [coreOk ? null : `cpu${core} ${(busy! * 100).toFixed(0)}% busy (max ${(CORE_BUSY_MAX * 100).toFixed(0)}%)`, loadOk ? null : `1-minute load ${l1.toFixed(2)} (max ${LOAD_MAX})`]
+      .filter(Boolean)
+      .join(", ");
+    const waited = Date.now() - start;
+    if (waited >= LOADED_WAIT_MS) {
+      console.log(`BENCH LOADED ${what}: still busy after ${(waited / 1000).toFixed(0)} s: ${why} | ${load()}`);
+      return false;
+    }
+    console.log(`BENCH LOADED ${what}: ${why}; waiting | ${load()}`);
+    await sleep(Math.min(15_000, Math.max(0, LOADED_WAIT_MS - waited)));
+  }
+}
+
 /**
  * The M2 targets: each measured, compared and printed with the node's load. A miss is re-run once
  * and fails only if the re-run misses too; a re-run that passes prints `BENCH RETRY`, so a busy
@@ -510,12 +526,19 @@ const load = () => `load ${os.loadavg().map((x) => x.toFixed(2)).join("/")} on $
 async function gate() {
   console.log(`BENCH env: node ${process.version}, ${os.cpus().length} CPUs (${os.cpus()[0]?.model ?? "?"}), ${os.platform()} ${os.arch()}`);
   console.log(`BENCH load at start: ${load()}`);
+  console.log(`BENCH quiet rule: pinned core ${pinnedCore() ?? "none"} busy <= ${CORE_BUSY_MAX}, 1-minute load <= ${LOAD_MAX}, waiting up to ${LOADED_WAIT_MS / 1000} s`);
   typing(makeDoc(10_000, "ascii"), "middle", 200, true); // warm the JIT
   remoteBurst(makeDoc(10_000, "cjk"), 200, true);
   const misses: string[] = [];
+  const loaded: string[] = [];
   const target = async (what: string, limit: number, run: () => Promise<number>) => {
     const tries: Array<{ got: number; before: string; after: string }> = [];
     for (let attempt = 1; attempt <= 2; attempt++) {
+      if (!(await quiet(what))) {
+        console.log(`BENCH GATE ${what}${attempt > 1 ? " (re-run)" : ""}: LOADED (not measured)`);
+        loaded.push(what);
+        return;
+      }
       const before = load();
       const got = await run();
       const after = load();
@@ -539,11 +562,6 @@ async function gate() {
       console.log(`BENCH info typing-queued ${label} ${kind} middle: applyLocal ${fmt(q.v.local)} | ${q.gc} | ${load()}`);
       const rb = await measured(() => remoteBurst(doc, 300, true));
       console.log(`BENCH info remote-burst ${label} ${kind} +pending: per change ${fmt(rb.v)} | ${rb.gc} | ${load()}`);
-      const cm = await measured(() => cmModel(doc, 300));
-      console.log(`BENCH info binding keystroke (CodeMirror Text + byte index) ${label} ${kind}: ${fmt(cm.v)} | ${load()}`);
-      const imeOld = await measured(() => imeModel(doc, 100, false));
-      const imeNew = await measured(() => imeModel(doc, 300, true));
-      console.log(`BENCH info keystroke during a composition, remote changes held ${label} ${kind}: incremental index ${fmt(imeNew.v)} (re-indexed per keystroke, before M2: ${fmt(imeOld.v)}) | ${load()}`);
       if (bytes === 1_000_000) {
         await target(`since-500 total (worst of 5) ${label} ${kind}`, 100, async () => {
           const xs: number[] = [];
@@ -554,9 +572,12 @@ async function gate() {
     }
   }
   console.log(`BENCH load at end: ${load()}`);
-  console.log(misses.length ? `BENCH GATE FAIL: ${misses.join("; ")}` : "BENCH GATE PASS");
+  if (misses.length) console.log(`BENCH GATE FAIL: ${misses.join("; ")}`);
+  if (loaded.length) console.log(`BENCH GATE LOADED: ${loaded.join("; ")} (the machine stayed busy; not a miss)`);
+  if (!misses.length && !loaded.length) console.log("BENCH GATE PASS");
   obs.disconnect();
   if (misses.length) process.exit(1);
+  if (loaded.length) process.exit(3);
 }
 
 /** `M2_BENCH_SINCE=1`: the 500-event \`since\` at 1 MB alone: 20 runs (p50, p95, max) and a CPU

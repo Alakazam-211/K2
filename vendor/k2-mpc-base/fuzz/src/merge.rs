@@ -16,7 +16,8 @@
 //!   order (at one point: insertions before replacements, theirs' insertion before ours);
 //!   its hunks are valid on theirs and give its text.
 //! - **conflicts** are disjoint, in order, inside the base, on char boundaries, with
-//!   `base_text` the base's bytes and sane line numbers.
+//!   `base_text` the base's bytes and sane line numbers (the closed texts' numbering: a
+//!   conflict that inserts after an unterminated last line is reported as line N+1).
 //! - **hunk-set merge:** `merge3_hunks` on write --base's sides (`merge::write_base_sides`:
 //!   whole lines on the closed texts, v0.9.7.1) is `merge3_window` on the closed texts (the
 //!   window then decides the final "\n").
@@ -175,7 +176,18 @@ fn check_shape(base: &str, theirs: &str, m: &Merge) {
                     "conflict off a char boundary: {c:?}"
                 );
                 assert_eq!(c.base_text, &base[r.clone()], "conflict base_text");
-                let line = base[..r.start].matches('\n').count() + 1;
+                // Line numbers are the closed texts' (`merge::closed`): a conflict that inserts
+                // after an unterminated last line is reported as line N+1, where its new line
+                // lands, as for a closed base. Conflict ranges start at line starts of the
+                // closed base, so in an open, non-empty base a range starting at `base.len()`
+                // can only be the clamp of one starting at the closed base's end; every other
+                // start is counted on the base's own text.
+                let open = !base.is_empty() && !base.ends_with('\n');
+                let line = if open && r.start == base.len() {
+                    merge::closed(base).matches('\n').count() + 1
+                } else {
+                    base[..r.start].matches('\n').count() + 1
+                };
                 assert_eq!(c.lines.0, line, "conflict start line: {c:?}");
                 assert!(c.lines.0 <= c.lines.1, "conflict lines: {c:?}");
                 if let Some(e) = prev_end {
@@ -239,5 +251,33 @@ fn check_whole_lines(base: &str, ours: &str, theirs: &str, result: &str) {
             known.contains(&key(l)),
             "a clean merge holds a line no one wrote: {l:?} in {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The oracle passes on insertion conflicts at the end of a base, open or closed: a
+    /// window not at the end of the text (`merge3_window(.., false)`) reports them as line
+    /// N+1 (here 2), and `check` runs every merge on the same three texts.
+    #[test]
+    fn insertion_conflicts_after_the_last_line_are_line_n_plus_1() {
+        for (base, ours, theirs) in [
+            ("a", "a\nx", "a\ny"),
+            ("a", "a\nx\n", "a\ny\n"),
+            ("a", "a\nx\n", "a\ny"),
+            ("a", "a\nx", "a\ny\n"),
+            ("a\n", "a\nx\n", "a\ny\n"),
+        ] {
+            let m = merge::merge3_window(base, ours, theirs, false);
+            let Merge::Conflicts(cs) = &m else {
+                panic!("{base:?} {ours:?} {theirs:?}: expected a conflict, got {m:?}")
+            };
+            assert_eq!(cs.len(), 1, "{cs:?}");
+            assert_eq!(cs[0].lines, (2, 2), "{cs:?}");
+            check_shape(base, theirs, &m);
+            check(base, ours, theirs);
+        }
     }
 }

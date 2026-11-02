@@ -2,6 +2,7 @@ MPC-E903 claims_doc_cap (limits)
 exit:     2
 message:  bad claim: this doc has {count} live claims (the most)
 next:     This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.
+step:     activity; why: This doc has all the live claims it allows; wait for some to end, or edit without a claim.
 rule:     A13 (claims_max)
 verbs:    claim
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "bad claim: this doc has {count} live claims (the most)",
   "next": "This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.",
+  "next_step": {
+    "verb": "activity",
+    "args": [],
+    "why": "This doc has all the live claims it allows; wait for some to end, or edit without a claim."
+  },
   "rule": "A13 (claims_max)",
   "verbs": ["claim"],
   "returned_by": ["claim"],

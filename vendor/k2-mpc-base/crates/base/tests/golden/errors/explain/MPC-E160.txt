@@ -2,6 +2,7 @@ MPC-E160 unknown_error_id (sessions and edits)
 exit:     4
 message:  no error id {id}
 next:     That id isn't in this build's catalog. Run explain with no id to list every id, or check the id you copied (MPC-E and three digits).
+step:     explain; why: That id isn't in this build's catalog; list every id, or check the one you copied.
 rule:     the catalog (docs/ERRORS.md)
 verbs:    explain
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "no error id {id}",
   "next": "That id isn't in this build's catalog. Run explain with no id to list every id, or check the id you copied (MPC-E and three digits).",
+  "next_step": {
+    "verb": "explain",
+    "args": [],
+    "why": "That id isn't in this build's catalog; list every id, or check the one you copied."
+  },
   "rule": "the catalog (docs/ERRORS.md)",
   "verbs": ["explain"],
   "returned_by": [],

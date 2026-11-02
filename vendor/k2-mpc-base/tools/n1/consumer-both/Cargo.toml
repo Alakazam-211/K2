@@ -1,0 +1,11 @@
+[package]
+name = "n1-consumer-both"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+k2-mpc-base = { path = "../kit/crates/base" }

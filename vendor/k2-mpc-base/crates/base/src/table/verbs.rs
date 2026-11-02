@@ -3,23 +3,28 @@
 //! as a [`crate::session::View`] ([`VerbCtx`]) and returns its edits by key; the pack's codec
 //! is reached only through the context (a pasted block, rendered lines).
 //!
-//! **Addressing** (§1.7), resolved when the verb runs, against the live table:
-//! - rows: a key (`r17`: follows moves and sorts), `#N` (the Nth live row), `LN` (the row
-//!   rendered line N belongs to), or `--where COL=VALUE` (the one live row whose cell in COL
-//!   is VALUE);
-//! - columns: a key (`c3`), `#N`, a header name (`email`), or forced: `key:c3` / `name:c3`.
-//!   A bare word that is a known column key is the key; otherwise a name.
+//! **Addressing** (§1.7), in the kit's one grammar ([`crate::addr`]), resolved when the verb
+//! runs, against the live table:
+//! - rows: a key (`r17`, or `@k:r17` / `key:r17`: follows moves and sorts), `#N` (the Nth live
+//!   row), `LN` (the row rendered line N belongs to), or `--where COL=VALUE` (the one live row
+//!   whose cell in COL is VALUE);
+//! - columns: a key (`c3`), `#N`, a header name (`email`), or forced: `@k:c3` / `key:c3` /
+//!   `name:c3`. A bare word that is a known column key is the key; otherwise a name. A bare
+//!   number is a key or a name, never a position (`#N` is).
 //!
 //! **Exits** (§3.3): an unknown or deleted element, `#N` past the end, a `--where` with no
 //! match, a sort column that doesn't exist: **4** (nothing applies). An ambiguous name or
-//! `--where` (it lists the keys), more values than columns, a bad value (NUL, over 64 KiB),
-//! renaming with the header off, a bad flag: **2**. `--if-version`, `--base` and the claim
+//! `--where`: **2**, `MPC-E170 ambiguous_address`, the line listing the keys and
+//! `details.candidates` each one's `@k:` address and `#N` (K-ADDR-2; never the first match).
+//! More values than columns, a bad value (NUL, over 64 KiB), renaming with the header off, a
+//! bad flag: **2**. `--if-version`, `--base` and the claim
 //! policy are the kit's (taken out of the arguments before these see them).
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use super::{LineOwner, SortKey, Table, TableError, ROWS};
+use super::{Axis, LineOwner, SortKey, Table, TableError, ROWS};
+use crate::addr::{self, Addr, Forms, Unique};
 use crate::doc::Edit;
 use crate::elem::{Anchor, ElemState, Facet, Key};
 use crate::parity::PersonAction as P;
@@ -44,49 +49,56 @@ pub const VERBS: &[PackVerb] = &[
         &[P::Type, P::TypeOver, P::FindReplace],
         EDIT_EXITS,
         cell_set,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "cells set",
         "cells set --from R,C (stdin: a block in the doc's dialect; rows past the end are added)",
         &[P::Paste],
         EDIT_EXITS,
         cells_set,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "cells clear",
         "cells clear --from R,C --to R,C",
         &[P::Delete],
         EDIT_EXITS,
         cells_clear,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "row insert",
         "row insert (--at #N | --after R | --before R | --start | --end) [--values a,b,... | stdin] (prints its key)",
         &[P::RowInsert],
         EDIT_EXITS,
         row_insert,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "row move",
         "row move --row R (--after R2 | --before R2 | --to #N | --start | --end)",
         &[P::RowMove],
         EDIT_EXITS,
         row_move,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "row delete",
         "row delete --row R",
         &[P::RowDelete, P::Delete],
         EDIT_EXITS,
         row_delete,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "row restore",
         "row restore --row R",
         &[P::RestoreElement],
         EDIT_EXITS,
         row_restore,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_read(
         "row list",
         "row list [--cols C,...] [--where C=V] [-n N]",
@@ -100,35 +112,40 @@ pub const VERBS: &[PackVerb] = &[
         &[P::ColInsert],
         EDIT_EXITS,
         col_insert,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "col move",
         "col move --col C (--after C2 | --before C2 | --to #N | --start | --end)",
         &[P::ColMove],
         EDIT_EXITS,
         col_move,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "col delete",
         "col delete --col C",
         &[P::ColDelete],
         EDIT_EXITS,
         col_delete,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "col restore",
         "col restore --col C",
         &[P::RestoreElement],
         EDIT_EXITS,
         col_restore,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "col rename",
         "col rename --col C --name NAME",
         &[P::ColRename],
         EDIT_EXITS,
         col_rename,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_read("col list", "col list", &[P::ReadAll], READ_EXITS, col_list),
     PackVerb::structured_edit(
         "sort",
@@ -136,14 +153,16 @@ pub const VERBS: &[PackVerb] = &[
         &[P::Sort],
         EDIT_EXITS,
         sort,
-    ),
+    )
+    .positional(positional),
     PackVerb::structured_edit(
         "header",
         "header on|off",
         &[P::ColRename],
         EDIT_EXITS,
         header,
-    ),
+    )
+    .positional(positional),
 ];
 
 // ---------- addressing ----------
@@ -179,6 +198,9 @@ pub struct Refusal {
     deleted: Option<(&'static str, Key)>,
     /// Its own error id, when it has one (a refusal with one is reported, not a usage error).
     entry: Option<&'static crate::errors::ErrorEntry>,
+    /// A refusal with its own report and details (an ambiguous address, `MPC-E170`): exit 2,
+    /// returned as [`ToolError::Address`].
+    report: Option<Box<crate::errors::ErrorReport>>,
 }
 
 fn refusal(exit: u8, message: impl Into<String>) -> Refusal {
@@ -187,6 +209,31 @@ fn refusal(exit: u8, message: impl Into<String>) -> Refusal {
         message: message.into(),
         deleted: None,
         entry: None,
+        report: None,
+    }
+}
+
+/// An ambiguous name or `--where` (K-ADDR-2): exit 2 with the keys listed, and each match's
+/// `@k:` address and `#N` among the live elements in `details.candidates`.
+fn ambiguous(what: &str, given: &str, axis: &Axis, many: &[Key], message: String) -> Refusal {
+    let candidates: Vec<addr::Candidate> = many
+        .iter()
+        .map(|k| {
+            let c = addr::Candidate::new(Addr::Key(k.to_string()).to_string());
+            match axis.live().position(|x| x == k) {
+                Some(i) => c.at(format!("#{}", i + 1)),
+                None => c,
+            }
+        })
+        .collect();
+    Refusal {
+        report: Some(Box::new(addr::ambiguous(
+            message.clone(),
+            what,
+            given,
+            &candidates,
+        ))),
+        ..refusal(2, message)
     }
 }
 
@@ -224,37 +271,42 @@ fn key_of(s: &str) -> Result<Key, ToolError> {
     Key::new(s).map_err(|e| ToolError::usage(format!("not a key: {s:?} ({e})")))
 }
 
-/// A row address: `#N`, `LN`, or a key.
-pub fn parse_row(s: &str) -> Result<RowAt, ToolError> {
-    if let Some(n) = s.strip_prefix('#') {
-        return Ok(RowAt::Nth(number(n, "#N")?));
-    }
-    if let Some(n) = s
-        .strip_prefix('L')
-        .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))
-    {
-        if !n.is_empty() {
-            return Ok(RowAt::Line(number(n, "LN")?));
-        }
-    }
-    Ok(RowAt::Key(key_of(s)?))
+/// The forms a row address takes ([`crate::addr`]): keys, `#N` and `LN`; no native IDs.
+const ROW_FORMS: Forms = Forms::none().nth().line();
+/// The forms a column address takes: keys, `#N`, names; no lines, no native IDs (a header
+/// named `@timestamp` or `L3` is a name).
+const COL_FORMS: Forms = Forms::none().nth();
+
+fn addr_err(e: crate::addr::AddrError) -> ToolError {
+    ToolError::usage(e.to_string())
 }
 
-/// A column address: `#N`, `key:K`, `name:N`, or a bare word.
+/// A row address: `#N`, `LN`, or a key (`r17`, `@k:r17`, `key:r17`).
+pub fn parse_row(s: &str) -> Result<RowAt, ToolError> {
+    match addr::parse(s, ROW_FORMS).map_err(addr_err)? {
+        Addr::Nth(n) => Ok(RowAt::Nth(n)),
+        Addr::Line(n) => Ok(RowAt::Line(n)),
+        Addr::Key(k) => Ok(RowAt::Key(key_of(&k)?)),
+        Addr::Name(_) => Err(ToolError::usage(format!(
+            "rows have no names: {s:?} (a row is a key, #N or LN)"
+        ))),
+        Addr::Word(w) => Ok(RowAt::Key(key_of(&w)?)),
+        Addr::Native(_) => unreachable!("rows read no native ids"),
+    }
+}
+
+/// A column address: `#N`, `@k:K` / `key:K`, `name:N`, or a bare word.
 pub fn parse_col(s: &str) -> Result<ColAt, ToolError> {
-    if let Some(n) = s.strip_prefix('#') {
-        return Ok(ColAt::Nth(number(n, "#N")?));
-    }
-    if let Some(k) = s.strip_prefix("key:") {
-        return Ok(ColAt::Key(key_of(k)?));
-    }
-    if let Some(n) = s.strip_prefix("name:") {
-        return Ok(ColAt::Name(n.to_owned()));
-    }
     if s.is_empty() {
         return Err(ToolError::usage("an empty column"));
     }
-    Ok(ColAt::Word(s.to_owned()))
+    match addr::parse(s, COL_FORMS).map_err(addr_err)? {
+        Addr::Nth(n) => Ok(ColAt::Nth(n)),
+        Addr::Key(k) => Ok(ColAt::Key(key_of(&k)?)),
+        Addr::Name(n) => Ok(ColAt::Name(n)),
+        Addr::Word(w) => Ok(ColAt::Word(w)),
+        Addr::Line(_) | Addr::Native(_) => unreachable!("columns read no lines or native ids"),
+    }
 }
 
 /// `--where COL=VALUE`.
@@ -294,17 +346,17 @@ fn by_key(t: &Table, root: &'static str, k: &Key, want: Want) -> Result<Key, Ref
     }
 }
 
-/// `col` in `t`.
-fn resolve_col(t: &Table, col: &ColAt, want: Want) -> Result<Key, Refusal> {
+/// `col` in `t` (`pos`: where `#N` counts, K-ADDR-3).
+fn resolve_col(t: &Table, col: &ColAt, want: Want, pos: &Pos<'_, '_>) -> Result<Key, Refusal> {
     match col {
         ColAt::Key(k) => by_key(t, super::COLS, k, want),
-        ColAt::Nth(n) => match t.cols.live().nth(n - 1) {
-            Some(k) => Ok(k.clone()),
+        ColAt::Nth(n) => match pos.table(t).cols.live().nth(n - 1) {
+            Some(k) => pos.live(t, super::COLS, k, want),
             None => refuse(
                 4,
                 format!(
                     "there is no column #{n} ({} live columns)",
-                    t.cols.live_len()
+                    pos.table(t).cols.live_len()
                 ),
             ),
         },
@@ -328,40 +380,41 @@ fn by_name(t: &Table, name: &str) -> Result<Key, Refusal> {
         .into_iter()
         .filter(|k| t.cols.is_live(k))
         .collect();
-    match live.as_slice() {
-        [] => refuse(4, format!("no column named {name:?}")),
-        [k] => Ok(k.clone()),
-        many => refuse(
-            2,
+    match addr::unique(live) {
+        Unique::None => refuse(4, format!("no column named {name:?}")),
+        Unique::One(k) => Ok(k),
+        Unique::Many(many) => Err(ambiguous(
+            "column",
+            name,
+            &t.cols,
+            &many,
             format!(
                 "{} columns are named {name:?}: {} (name one by key)",
                 many.len(),
-                keys_text(many)
+                keys_text(&many)
             ),
-        ),
+        )),
     }
 }
 
-/// `row` in `t` (`lines`: the rendered lines' owners, for `LN`).
-fn resolve_row(
-    t: &Table,
-    row: &RowAt,
-    want: Want,
-    lines: &dyn Fn() -> Option<super::LineMap>,
-) -> Result<Key, Refusal> {
+/// `row` in `t` (`pos`: where `#N` and `LN` count, K-ADDR-3).
+fn resolve_row(t: &Table, row: &RowAt, want: Want, pos: &Pos<'_, '_>) -> Result<Key, Refusal> {
     match row {
         RowAt::Key(k) => by_key(t, ROWS, k, want),
-        RowAt::Nth(n) => match t.rows.live().nth(n - 1) {
-            Some(k) => Ok(k.clone()),
+        RowAt::Nth(n) => match pos.table(t).rows.live().nth(n - 1) {
+            Some(k) => pos.live(t, ROWS, k, want),
             None => refuse(
                 4,
-                format!("there is no row #{n} ({} live rows)", t.rows.live_len()),
+                format!(
+                    "there is no row #{n} ({} live rows)",
+                    pos.table(t).rows.live_len()
+                ),
             ),
         },
         RowAt::Line(n) => {
-            let map = lines().unwrap_or_else(|| t.line_map());
+            let map = pos.line_map(t);
             match map.owner(*n) {
-                Some(LineOwner::Row(k)) => Ok(k.clone()),
+                Some(LineOwner::Row(k)) => pos.live(t, ROWS, k, want),
                 Some(LineOwner::Header) => refuse(4, format!("line {n} is the header, not a row")),
                 Some(LineOwner::Preamble) => refuse(
                     4,
@@ -374,24 +427,27 @@ fn resolve_row(
             }
         }
         RowAt::Where(col, value) => {
-            let c = resolve_col(t, col, Want::Live)?;
+            let c = resolve_col(t, col, Want::Live, pos)?;
             let hits: Vec<Key> = t
                 .rows
                 .live()
                 .filter(|r| t.cell(r, &c).unwrap_or("") == value)
                 .cloned()
                 .collect();
-            match hits.as_slice() {
-                [] => refuse(4, format!("no row where {c} is {value:?}")),
-                [k] => Ok(k.clone()),
-                many => refuse(
-                    2,
+            match addr::unique(hits) {
+                Unique::None => refuse(4, format!("no row where {c} is {value:?}")),
+                Unique::One(k) => Ok(k),
+                Unique::Many(many) => Err(ambiguous(
+                    "row",
+                    &format!("{c}={value}"),
+                    &t.rows,
+                    &many,
                     format!(
                         "{} rows where {c} is {value:?}: {} (name one by key)",
                         many.len(),
-                        keys_text(many)
+                        keys_text(&many)
                     ),
-                ),
+                )),
             }
         }
     }
@@ -491,11 +547,14 @@ fn place<A>(
     })
 }
 
-/// A place as an anchor in `live` (the axis's live keys, the moving element left out).
+/// A place as an anchor in `live` (the axis's live keys where `#N` counts, the moving
+/// element left out); `check` is what the Nth key must pass in the live table (K-ADDR-3: when
+/// `#N` counted in the `--base` version, that element must still be live).
 fn anchor_of<A>(
     p: &Place<A>,
     live: &[Key],
     resolve: impl Fn(&A) -> Result<Key, Refusal>,
+    check: impl Fn(&Key) -> Result<Key, Refusal>,
 ) -> Result<Anchor, Refusal> {
     Ok(match p {
         Place::Start => Anchor::Start,
@@ -503,7 +562,7 @@ fn anchor_of<A>(
         Place::After(a) => Anchor::After(resolve(a)?),
         Place::Before(a) => Anchor::Before(resolve(a)?),
         Place::Nth(n) => match live.get(n - 1) {
-            Some(k) => Anchor::Before(k.clone()),
+            Some(k) => Anchor::Before(check(k)?),
             None => Anchor::End,
         },
     })
@@ -524,6 +583,9 @@ fn run(f: impl FnOnce(&VerbCtx<'_>, &mut Table) -> Work + 'static) -> StructEdit
             .map_err(|e| ToolError::usage(e.to_string()))?;
         match f(ctx, &mut t) {
             Ok((edits, out)) => Ok(StructOutput::new(edits, out.into_bytes(), 0)),
+            Err(Refusal {
+                report: Some(rep), ..
+            }) => Err(ToolError::address(*rep)),
             Err(r) if r.exit == 2 && r.entry.is_none() => Err(ToolError::usage(r.message)),
             Err(r) => {
                 let mut o = StructOutput::new(
@@ -558,6 +620,9 @@ fn run_read(
                     None => o,
                 })
             }
+            Err(Refusal {
+                report: Some(rep), ..
+            }) => Err(ToolError::address(*rep)),
             Err(r) if r.exit == 2 && r.entry.is_none() => Err(ToolError::usage(r.message)),
             Err(r) => Ok(StructOutput::new(
                 Vec::new(),
@@ -583,8 +648,75 @@ fn table_err(e: TableError) -> Refusal {
     }
 }
 
-fn lines_of<'c>(ctx: &'c VerbCtx<'_>) -> impl Fn() -> Option<super::LineMap> + 'c {
-    move || ctx.line_map()
+/// Where a verb's positional addresses count (K-ADDR-3, R-1): an edit's `--base` version
+/// when the kit gives it ([`VerbCtx::positions_view`]), else the live table. Keys and names
+/// always resolve in the live table; an element `#N` or `LN` names at the base must still be
+/// live (or known, for restore) there.
+struct Pos<'c, 'a> {
+    ctx: &'c VerbCtx<'a>,
+    /// The base version's table, when positions count there.
+    base: Option<Table>,
+}
+
+impl Pos<'_, '_> {
+    /// The table positions count in.
+    fn table<'t>(&'t self, live: &'t Table) -> &'t Table {
+        self.base.as_ref().unwrap_or(live)
+    }
+
+    /// The rendered lines `LN` counts in.
+    fn line_map(&self, live: &Table) -> super::LineMap {
+        self.ctx
+            .positions_line_map()
+            .unwrap_or_else(|| self.table(live).line_map())
+    }
+
+    /// `k`, found by position, as the live table has it: itself at live; at a base, checked
+    /// as a key is.
+    fn live(&self, t: &Table, root: &'static str, k: &Key, want: Want) -> Result<Key, Refusal> {
+        if self.base.is_some() {
+            by_key(t, root, k, want)
+        } else {
+            Ok(k.clone())
+        }
+    }
+}
+
+fn lines_of<'c, 'a>(ctx: &'c VerbCtx<'a>) -> Result<Pos<'c, 'a>, Refusal> {
+    let base = match ctx.positions_at() {
+        Some(v) => Some(v.table().map_err(|e| refusal(2, e.to_string()))?),
+        None => None,
+    };
+    Ok(Pos { ctx, base })
+}
+
+/// A grid verb's positional address (K-ADDR-3; [`PackVerb::positional`]): the first `#N`
+/// or `LN` among its address flags' values (a cell's `R,C` and `--where`'s column
+/// included), as given.
+fn positional(args: &[String]) -> Option<String> {
+    const FLAGS: &[&str] = &[
+        "--row", "--col", "--from", "--to", "--at", "--after", "--before", "--by", "--then",
+        "--where",
+    ];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if !FLAGS.contains(&a.as_str()) {
+            continue;
+        }
+        let Some(v) = it.next() else { break };
+        let addr = if a == "--where" {
+            v.split_once('=').map_or(v.as_str(), |(c, _)| c)
+        } else {
+            v.as_str()
+        };
+        if addr
+            .split(',')
+            .any(|x| addr::parse(x, ROW_FORMS).is_ok_and(|p| p.is_positional()))
+        {
+            return Some(format!("{a} {v}"));
+        }
+    }
+    None
 }
 
 /// A value from `--value`, else stdin (as given: no trailing newline is added or removed
@@ -608,9 +740,9 @@ fn cell_get(args: &[String]) -> Result<StructEdit, ToolError> {
         has(args, "--json"),
     );
     Ok(run_read(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::Live, &lines)?;
-        let c = resolve_col(t, &col, Want::Live)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
         let v = t.cell(&r, &c).unwrap_or("");
         let out = if json {
             // the doc's version (a `--base` for the next write) and the cell's last write,
@@ -666,9 +798,9 @@ fn cell_set(args: &[String]) -> Result<StructEdit, ToolError> {
         value_arg(args),
     );
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::Live, &lines)?;
-        let c = resolve_col(t, &col, Want::Live)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
         let v = match value {
             Some(v) => v,
             None => stdin_value(ctx.stdin())?,
@@ -681,9 +813,9 @@ fn cells_set(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--from"], &[])?;
     let (row, col) = cell_arg(&need(args, "--from")?)?;
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::Live, &lines)?;
-        let c = resolve_col(t, &col, Want::Live)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
         let block: Vec<Vec<String>> = ctx
             .decode_block(ctx.stdin())
             .map_err(|e| refusal(2, e.to_string()))?
@@ -707,14 +839,14 @@ fn cells_clear(args: &[String]) -> Result<StructEdit, ToolError> {
         cell_arg(&need(args, "--to")?)?,
     );
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let (ra, ca) = (
             resolve_row(t, &a.0, Want::Live, &lines)?,
-            resolve_col(t, &a.1, Want::Live)?,
+            resolve_col(t, &a.1, Want::Live, &lines)?,
         );
         let (rb, cb) = (
             resolve_row(t, &b.0, Want::Live, &lines)?,
-            resolve_col(t, &b.1, Want::Live)?,
+            resolve_col(t, &b.1, Want::Live, &lines)?,
         );
         Ok((
             t.clear_block((&ra, &ca), (&rb, &cb)).map_err(table_err)?,
@@ -732,9 +864,14 @@ fn row_insert(args: &[String]) -> Result<StructEdit, ToolError> {
     let at = place(args, "--at", parse_row)?;
     let values = flag(args, "--values");
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
-        let live = t.live_rows();
-        let anchor = anchor_of(&at, &live, |r| resolve_row(t, r, Want::Live, &lines))?;
+        let lines = lines_of(ctx)?;
+        let live = lines.table(t).live_rows();
+        let anchor = anchor_of(
+            &at,
+            &live,
+            |r| resolve_row(t, r, Want::Live, &lines),
+            |k| lines.live(t, ROWS, k, Want::Live),
+        )?;
         let vals: Vec<String> = match values {
             Some(v) => v.split(',').map(str::to_owned).collect(),
             None if ctx.stdin().is_empty() => Vec::new(),
@@ -763,11 +900,21 @@ fn row_move(args: &[String]) -> Result<StructEdit, ToolError> {
     )?;
     let (row, to) = (row_arg(args)?, place(args, "--to", parse_row)?);
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::Live, &lines)?;
         // `--to #N`: the Nth among the others (it lands there)
-        let others: Vec<Key> = t.live_rows().into_iter().filter(|k| *k != r).collect();
-        let anchor = anchor_of(&to, &others, |x| resolve_row(t, x, Want::Live, &lines))?;
+        let others: Vec<Key> = lines
+            .table(t)
+            .live_rows()
+            .into_iter()
+            .filter(|k| *k != r)
+            .collect();
+        let anchor = anchor_of(
+            &to,
+            &others,
+            |x| resolve_row(t, x, Want::Live, &lines),
+            |k| lines.live(t, ROWS, k, Want::Live),
+        )?;
         Ok((t.move_row(&r, anchor).map_err(table_err)?, String::new()))
     }))
 }
@@ -776,7 +923,7 @@ fn row_delete(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--row", "--where"], &[])?;
     let row = row_arg(args)?;
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::Live, &lines)?;
         Ok((t.delete_row(&r).map_err(table_err)?, String::new()))
     }))
@@ -786,7 +933,7 @@ fn row_restore(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--row"], &[])?;
     let row = parse_row(&need(args, "--row")?)?;
     Ok(run(move |ctx, t| {
-        let lines = lines_of(ctx);
+        let lines = lines_of(ctx)?;
         let r = resolve_row(t, &row, Want::AnyKnown, &lines)?;
         if t.rows.is_live(&r) {
             return Ok((
@@ -806,15 +953,16 @@ fn row_list(args: &[String]) -> Result<StructEdit, ToolError> {
     let wh = flag(args, "--where").map(|w| parse_where(&w)).transpose()?;
     let limit = flag(args, "-n").map(|n| number(&n, "-n")).transpose()?;
     Ok(run_read(move |ctx, t| {
+        let lines = lines_of(ctx)?;
         let cols: Vec<Key> = match &cols {
             Some(cs) => cs
                 .iter()
-                .map(|c| resolve_col(t, c, Want::Live))
+                .map(|c| resolve_col(t, c, Want::Live, &lines))
                 .collect::<Result<_, _>>()?,
             None => t.live_cols(),
         };
         let filter: Option<(Key, String)> = match &wh {
-            Some(RowAt::Where(c, v)) => Some((resolve_col(t, c, Want::Live)?, v.clone())),
+            Some(RowAt::Where(c, v)) => Some((resolve_col(t, c, Want::Live, &lines)?, v.clone())),
             _ => None,
         };
         let map = ctx.line_map().unwrap_or_else(|| t.line_map());
@@ -923,9 +1071,15 @@ fn col_insert(args: &[String]) -> Result<StructEdit, ToolError> {
         &["--start", "--end"],
     )?;
     let (at, name) = (place(args, "--at", parse_col)?, flag(args, "--name"));
-    Ok(run(move |_, t| {
-        let live = t.live_cols();
-        let anchor = anchor_of(&at, &live, |c| resolve_col(t, c, Want::Live))?;
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
+        let live = lines.table(t).live_cols();
+        let anchor = anchor_of(
+            &at,
+            &live,
+            |c| resolve_col(t, c, Want::Live, &lines),
+            |k| lines.live(t, super::COLS, k, Want::Live),
+        )?;
         let (k, edits) = t.insert_col(anchor, name.as_deref()).map_err(table_err)?;
         Ok((edits, format!("{k}\n")))
     }))
@@ -941,10 +1095,21 @@ fn col_move(args: &[String]) -> Result<StructEdit, ToolError> {
         parse_col(&need(args, "--col")?)?,
         place(args, "--to", parse_col)?,
     );
-    Ok(run(move |_, t| {
-        let c = resolve_col(t, &col, Want::Live)?;
-        let others: Vec<Key> = t.live_cols().into_iter().filter(|k| *k != c).collect();
-        let anchor = anchor_of(&to, &others, |x| resolve_col(t, x, Want::Live))?;
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
+        let others: Vec<Key> = lines
+            .table(t)
+            .live_cols()
+            .into_iter()
+            .filter(|k| *k != c)
+            .collect();
+        let anchor = anchor_of(
+            &to,
+            &others,
+            |x| resolve_col(t, x, Want::Live, &lines),
+            |k| lines.live(t, super::COLS, k, Want::Live),
+        )?;
         Ok((t.move_col(&c, anchor).map_err(table_err)?, String::new()))
     }))
 }
@@ -952,8 +1117,9 @@ fn col_move(args: &[String]) -> Result<StructEdit, ToolError> {
 fn col_delete(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--col"], &[])?;
     let col = parse_col(&need(args, "--col")?)?;
-    Ok(run(move |_, t| {
-        let c = resolve_col(t, &col, Want::Live)?;
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
         Ok((t.delete_col(&c).map_err(table_err)?, String::new()))
     }))
 }
@@ -961,8 +1127,9 @@ fn col_delete(args: &[String]) -> Result<StructEdit, ToolError> {
 fn col_restore(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--col"], &[])?;
     let col = parse_col(&need(args, "--col")?)?;
-    Ok(run(move |_, t| {
-        let c = resolve_col(t, &col, Want::AnyKnown)?;
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
+        let c = resolve_col(t, &col, Want::AnyKnown, &lines)?;
         if t.cols.is_live(&c) {
             return Ok((
                 Vec::new(),
@@ -976,14 +1143,15 @@ fn col_restore(args: &[String]) -> Result<StructEdit, ToolError> {
 fn col_rename(args: &[String]) -> Result<StructEdit, ToolError> {
     known(args, &["--col", "--name"], &[])?;
     let (col, name) = (parse_col(&need(args, "--col")?)?, need(args, "--name")?);
-    Ok(run(move |_, t| {
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
         if !t.header {
             return refuse(
                 2,
                 "the header is off: columns have no names (header on first)",
             );
         }
-        let c = resolve_col(t, &col, Want::Live)?;
+        let c = resolve_col(t, &col, Want::Live, &lines)?;
         Ok((t.rename_col(&c, &name).map_err(table_err)?, String::new()))
     }))
 }
@@ -1036,10 +1204,11 @@ fn sort_keys(args: &[String]) -> Result<Vec<(ColAt, bool, bool)>, ToolError> {
 
 fn sort(args: &[String]) -> Result<StructEdit, ToolError> {
     let keys = sort_keys(args)?;
-    Ok(run(move |_, t| {
+    Ok(run(move |ctx, t| {
+        let lines = lines_of(ctx)?;
         let mut by = Vec::with_capacity(keys.len());
         for (c, desc, numeric) in &keys {
-            let mut k = SortKey::by(resolve_col(t, c, Want::Live)?);
+            let mut k = SortKey::by(resolve_col(t, c, Want::Live, &lines)?);
             k.desc = *desc;
             k.numeric = *numeric;
             by.push(k);

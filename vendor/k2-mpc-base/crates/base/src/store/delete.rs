@@ -28,7 +28,10 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
     let key = {
         let docs = w.open_table(DOCS)?;
         let m = docs.get(id)?.ok_or(StoreError::NoDoc(id))?;
-        dec_meta(m.value())?.key
+        let meta = dec_meta(m.value())?;
+        // another engine's doc may hold rows this build doesn't know: refuse, nothing erased
+        DocStore::check_owned(&meta)?;
+        meta.key
     };
     {
         let mut paths = w.open_table(PATHS)?;
@@ -61,6 +64,29 @@ impl DocStore {
         let key = delete_in(&w, id, now_ms)?;
         w.commit()?;
         Ok(key)
+    }
+
+    /// [`StoreError::ForeignEngine`] if a doc in `space` was written by another engine
+    /// ([`DocStore::check_owned`]): what [`DocStore::delete_space`] would refuse, checked
+    /// first and read-only, so a caller can refuse before closing anything (v0.10.1).
+    pub(crate) fn check_space_owned(&self, space: &str) -> Result<(), StoreError> {
+        let r = self.begin_read()?;
+        let prefix = format!("{space}\u{0}");
+        let paths = r.open_table(PATHS)?;
+        let docs = r.open_table(DOCS)?;
+        for kv in paths.range(prefix.as_str()..)? {
+            let (k, v) = kv?;
+            if !k.value().starts_with(&prefix) {
+                break;
+            }
+            if let Some(m) = docs.get(v.value())? {
+                let meta = dec_meta(m.value())?;
+                if meta.key.space == space {
+                    DocStore::check_owned(&meta)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Delete every doc in `space`, as [`DocStore::delete_doc`] does, in **one** durable

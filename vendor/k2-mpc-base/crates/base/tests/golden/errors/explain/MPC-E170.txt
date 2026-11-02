@@ -1,0 +1,21 @@
+MPC-E170 ambiguous_address (sessions and edits)
+exit:     2
+message:  {given} names more than one {what}
+next:     The address you gave names more than one thing (a name or a value two of them share), so nothing was read or applied; the kit never picks the first one. details.candidates lists each one's own address (its key or ID) and where it is now: run the verb again with the address of the one you mean.
+rule:     K-ADDR-2, K-EXIT-1
+verbs:    a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E170",
+  "name": "ambiguous_address",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{given} names more than one {what}",
+  "next": "The address you gave names more than one thing (a name or a value two of them share), so nothing was read or applied; the kit never picks the first one. details.candidates lists each one's own address (its key or ID) and where it is now: run the verb again with the address of the one you mean.",
+  "rule": "K-ADDR-2, K-EXIT-1",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

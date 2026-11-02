@@ -18,8 +18,10 @@
 
 /// (rule id, why [`crate::Doc`]'s engine deviates). Empty for a conforming engine.
 ///
-/// Twelve entries today. Text: the two YATA orders, two delivery rules where yrs identifies
-/// and checks content by (client, clock) only, and `undo --steps N` committed as N batches.
+/// Sixteen entries today. Text: the two YATA orders, three delivery rules, `core.authorship`,
+/// `core.steady_plain`, a change
+/// record without the author's kind (`prov.record`), and `undo --steps N` committed as N
+/// batches.
 /// Structured kinds (CSV seam design §5.3): concurrent register writes ordered by client ID
 /// (`mlist.move_lww`, `map.lww`, `table.cell_lww`), a set surviving a concurrent delete
 /// (`map.delete_vs_set`), overwrite stubs (`map.steady_bounded`), YATA's order of list slots
@@ -51,10 +53,28 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
          parent.",
     ),
     (
+        "core.refused_no_trace",
+        "Hardening; pinned on Yrs. A host calling Doc::apply_client_update directly must reload \
+         on Pending; a session does it itself.",
+    ),
+    (
         "core.no_equivocation",
-        "yrs identifies content by (client, clock) only: a known ID with different content \
-         is skipped as already known, silently (the first content stays), not refused and \
-         reported. The native engine keeps a keyed digest per run (E-CORE-4).",
+        "Pinned on Yrs. The native engine conforms (E-CORE-4).",
+    ),
+    (
+        "core.authorship",
+        "Hardening; pinned on Yrs. The native engine conforms (E-CORE-5).",
+    ),
+    (
+        "core.steady_plain",
+        "Pinned on Yrs: E-TEXT-13's budget is the native engine's target.",
+    ),
+    (
+        "prov.record",
+        "the kit's change record (`ChangeInfo`, one per change: the author's pid, on whose \
+         behalf, host time, the change's kind and surface) doesn't say whether the author \
+         is a person or an agent: the host knows that from the pid. Interface r1.7's typed \
+         core carries it (review C9).",
     ),
     (
         "hist.undo_atomic",
@@ -135,7 +155,7 @@ pub mod replica {
 
     /// Everything `doc` has past `version` (a state `doc` has seen, as from [`state`]), as
     /// one update: the inserts past each client's clock, plus every delete `doc` knows.
-    pub fn events_since(doc: &Doc, version: &[(ClientId, u32)]) -> Result<Vec<u8>, DocError> {
+    pub fn events_since(doc: &Doc, version: &[(ClientId, u64)]) -> Result<Vec<u8>, DocError> {
         doc.events_since(version)
     }
 
@@ -148,9 +168,10 @@ pub mod replica {
     }
 
     /// Text root `root`'s live text as runs `(bytes, client, clock)`: the client that
-    /// inserted each run and the clock of its first character (clocks count UTF-16 code
-    /// units), in order, covering the text exactly (what the kit's blame reads).
-    pub fn blame(doc: &Doc, root: &str) -> Result<Vec<(usize, ClientId, u32)>, DocError> {
+    /// inserted each run and the clock of its first character (in the engine's units:
+    /// UTF-16 code units on Yrs), in order, covering the text exactly (what the kit's blame
+    /// reads).
+    pub fn blame(doc: &Doc, root: &str) -> Result<Vec<(usize, ClientId, u64)>, DocError> {
         Ok(doc
             .blame_runs(root)?
             .into_iter()
@@ -183,10 +204,55 @@ pub mod replica {
         to.sync_from_local(from)
     }
 
+    /// Check an update from [`events_since`] (made by another of this kit's docs in this
+    /// process) as if it came from a connection that owns client `allowed`, without applying
+    /// it: the kit's own client check, the same code as `Doc::check_client_update` (which
+    /// exists only with `untrusted-wire`), not a copy of it. New content only from
+    /// `allowed` ([`DocError::ForeignClient`] otherwise); `inserts_from` lists the clients
+    /// with new content. For `core.authorship`; nothing from outside is decoded.
+    pub fn check_from(
+        doc: &Doc,
+        update: &[u8],
+        allowed: ClientId,
+    ) -> Result<crate::UpdateInfo, DocError> {
+        doc.client_checked(update, allowed)
+    }
+
+    /// [`check_from`], then apply: the same code as `Doc::apply_client_update`. Nothing is
+    /// applied unless every check passed.
+    pub fn deliver_from(
+        doc: &mut Doc,
+        update: &[u8],
+        allowed: ClientId,
+    ) -> Result<crate::UpdateInfo, DocError> {
+        doc.client_applied(update, allowed)
+    }
+
     /// What `doc` has, as sorted `(client, clock)` pairs: equal on replicas that hold the
-    /// same inserts. Comparable across replicas of one engine only.
-    pub fn state(doc: &Doc) -> Vec<(ClientId, u32)> {
+    /// same inserts (the native engine: the same events, deletes included). Comparable
+    /// across replicas of one engine only.
+    pub fn state(doc: &Doc) -> Vec<(ClientId, u64)> {
         doc.state_clocks()
+    }
+
+    /// `doc` loaded from what it keeps at rest (a steady state, `core.steady_plain`): on Yrs
+    /// its encoded state, on the native engine its records.
+    pub fn reloaded(doc: &Doc) -> Result<Doc, DocError> {
+        doc.reloaded()
+    }
+
+    /// Hardening (test-only): on a doc on the native engine, the next apply after a passed
+    /// check (a delivery, a client's update) errs after the engine applied it, as an engine
+    /// error would: the doc must drop its replica and reopen it from its records, with
+    /// nothing of that apply left. `false` on a doc on Yrs (no such hook there).
+    pub fn fail_next_apply(doc: &mut Doc) -> bool {
+        doc.fail_next_apply()
+    }
+
+    /// How many times a native doc's replica was reopened after an apply error; `None` on
+    /// Yrs.
+    pub fn reopens(doc: &Doc) -> Option<u32> {
+        doc.reopens()
     }
 
     /// How many runs of the engine's ID index the current places of `keys` (in this order)

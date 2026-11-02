@@ -9,6 +9,9 @@
 //   event before V, skips the one at V (the edit itself, answered by `ack`), then sends the
 //   `ack`; nothing applied: every queued event, then the `ack` at the version unchanged;
 // - undo and redo come back as `change` to everyone, the undoer included, then `undone`;
+// - every change event says its `kind` (kit v0.10.1): `edit` for an edit (a client's, or one
+//   made on the server: `serverEdit`), `undo` / `redo` for those; `emitKind = false` leaves it
+//   out, as a host on an older kit does;
 // - a reconnect (`FakeLive.connect`) is a new connection with a new client ID, same pid;
 // - no frame over `frameMax` is sent or accepted (WIRE.md, "Frame cap").
 
@@ -140,6 +143,7 @@ interface Applied {
   hunks: Hunk[];
   /** For undo: the text before. */
   before: string;
+  kind: "edit" | "undo" | "redo";
 }
 
 interface Conn {
@@ -192,6 +196,8 @@ export class FakeServer {
   readonly appliedAt = new Map<string, number>();
   /** Each connection's participant, kept after the connection goes. */
   private handles = new Map<number, string>();
+  /** Change events carry `kind` (a kit v0.10.1 host); `false`: none, as an older kit. */
+  emitKind = true;
   /**
    * Opt-in (`null`: off, as every test before it): route `cursor` frames to roster events as a
    * real host does, with a real host's quirk planted. A frame is accepted only when its
@@ -465,6 +471,7 @@ export class FakeServer {
       hunks: a.hunks,
       at_ms: this.net.now,
       on_behalf_of: null,
+      ...(this.emitKind ? { kind: a.kind } : {}),
     };
   }
 
@@ -479,7 +486,7 @@ export class FakeServer {
 
   /** Apply a change and queue its event to every connection; writers that don't lag drain at
    * once, except `editor`'s (its edit's reply drains it). */
-  private commit(conn: number, hunks: Hunk[], editor: number | null): number {
+  private commit(conn: number, hunks: Hunk[], editor: number | null, kind: Applied["kind"] = "edit"): number {
     const before = this.text;
     this.text = apply(before, hunks);
     this.version++;
@@ -491,6 +498,7 @@ export class FakeServer {
       client: by?.client ?? 0,
       hunks,
       before,
+      kind,
     };
     this.log.push(a);
     const ev = this.event(a);
@@ -606,7 +614,7 @@ export class FakeServer {
           return this.send(conn, { type: "refused", op: f.op, error: { id: "MPC-E201", message: "can't undo" } });
         }
         // the undo comes back to the undoer as a `change` too: never filtered by client ID
-        const v = this.commit(conn, r.ok, null);
+        const v = this.commit(conn, r.ok, null, "undo");
         this.drain(conn);
         return this.send(conn, { type: "undone", op: f.op, steps: 1, version: v });
       }

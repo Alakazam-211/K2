@@ -1,0 +1,21 @@
+MPC-E520 engine_mismatch (store)
+exit:     6
+message:  this doc was written by engine {stored} (format {stored_format}); this kit runs engine {engine} (format {engine_format})
+next:     The stored doc was written by another engine than this build runs (a build on another engine, or one rolled back from it), so it was not loaded. Nothing changed. Open it with a build that runs that engine, or ask the host's operator to migrate it; don't retry.
+rule:     K-FMT-2, K-FMT-4
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E520",
+  "name": "engine_mismatch",
+  "area": "store",
+  "exit": 6,
+  "message": "this doc was written by engine {stored} (format {stored_format}); this kit runs engine {engine} (format {engine_format})",
+  "next": "The stored doc was written by another engine than this build runs (a build on another engine, or one rolled back from it), so it was not loaded. Nothing changed. Open it with a build that runs that engine, or ask the host's operator to migrate it; don't retry.",
+  "rule": "K-FMT-2, K-FMT-4",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

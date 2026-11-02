@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.10.0+3"
+version = "0.10.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -24,7 +24,8 @@ conformance = []
 # soak's shadow mode). Off by default; no host enables it.
 differential = []
 # Test-only helpers for packs' own tests (`k2_mpc_base::session::test_support`: an import's
-# edits, to build in-memory docs as a session does). Off by default; no host enables it.
+# edits, to build in-memory docs as a session does; `k2_mpc_base::ids::churn`: the ID-churn
+# judge, K-COD-10). Off by default; no host enables it.
 test-support = []
 # Test-only: plant a bug in the engine's position index (the vendored Yrs's feature of the
 # same name), to prove the kit reports what the index's shadow check finds (v0.9.7). Never in

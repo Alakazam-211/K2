@@ -49,7 +49,7 @@ export interface ChangeInfo {
   hunks: Hunk[];
   /** Who made it; `null` for the client's own edits and for a rejected change leaving. */
   by: Handle | null;
-  /** The client's own `applyLocal` (already in the editor). */
+  /** The client's own `applyLocal` (already in the host's editor). */
   local: boolean;
 }
 
@@ -71,8 +71,8 @@ export interface Rejection {
   /**
    * For a change whose reply was lost (`MPC-E000`): the version it was refused at, the client
    * ID of the connection it went out on, and whether an undo or redo was unanswered on that
-   * connection when it went (its change would carry the same ID). `presence` and `onLanded`
-   * read them.
+   * connection when it went (its change would carry the same ID: a kit v0.10.1 host says which
+   * is which with `ChangeEvent.kind`; an older one can't). `presence` and `onLanded` read them.
    */
   asOf?: { version: number; client: number | undefined; undoInFlight: boolean };
 }
@@ -276,8 +276,9 @@ export class LiveText {
   private watching = 0;
   private clientId: number | undefined;
   private readonly selfHandle: Handle | undefined;
-  /** The server's changes, with the client ID each came from (own acks included). */
-  private history: Array<{ version: number; hunks: Hunk[]; client: number | undefined }> = [];
+  /** The server's changes, with the client ID each came from (own acks included) and its
+   * `kind` when the host sent one (kit v0.10.1; own acks have none). */
+  private history: Array<{ version: number; hunks: Hunk[]; client: number | undefined; kind?: ChangeEvent["kind"] }> = [];
   /** The history holds every change after this version. */
   private historyFrom = 0;
   /**
@@ -529,24 +530,53 @@ export class LiveText {
 
   /**
    * Whether a rejected change whose reply was lost (`asOf`) has landed, by the server's own
-   * record, not by its text: `present` when a change from the client ID it went out on, at a
-   * version after the one it was refused at, is in the history (that ID had at most this one
-   * edit in flight: rule 0; an earlier, acknowledged edit from it doesn't count); `absent` when
-   * none is, and the history covers every version since; `unknown` when it doesn't (a reset,
-   * or past its length), when an undo or redo was unanswered on that connection (its change
-   * would carry the same ID), or for any other rejection. Client IDs are never reused on a doc
-   * (the kit draws 53 random bits and skips any the doc has used; an ID that joined and never
-   * wrote could come again after an unload, at odds of 2^-53, which is accepted).
+   * record, not by its text. The changes that count are those from the client ID it went out
+   * on, at versions after the one it was refused at (that ID had at most this one edit in
+   * flight: rule 0; edits kept since went out under the new ID; an earlier, acknowledged edit
+   * from it doesn't count). `unknown` when the history doesn't cover every version since (a
+   * reset, or past its length), and for any other rejection. Otherwise, when every one of
+   * those changes has a `kind` (kit v0.10.1): `present` when one is an `edit` (the change
+   * itself); `absent` when none is (an `undo` or `redo` from that ID is the undo that was
+   * unanswered on that connection, not the change); `unknown` when one has any other kind (a
+   * revert, restore, outside save or import never comes under a client's own ID: nothing is
+   * concluded). When one has no `kind` (an older kit), as before kinds: `present` when there is
+   * any such change, `unknown` instead when an undo or redo was unanswered on that connection
+   * (its change would carry the same ID, and nothing tells the two apart); `absent` when there
+   * is none. Client IDs are never reused on a doc (the kit draws 53 random bits and skips any
+   * the doc has used; an ID that joined and never wrote could come again after an unload, at
+   * odds of 2^-53, which is accepted).
    */
   presence(id: number): Presence {
     const r = this._rejected.find((x) => x.id === id) ?? [...this.lost.values()].find((l) => l.rejection.id === id)?.rejection;
     const a = r?.asOf;
     if (!a || a.client === undefined) return "unknown";
     if (a.version < this.historyFrom) return "unknown";
-    const from = a.client;
-    const landed = this.history.some((h) => h.version > a.version && h.client === from);
-    if (landed) return a.undoInFlight ? "unknown" : "present";
-    return "absent";
+    return this.landing(a.version, a.client, a.undoInFlight);
+  }
+
+  /** `presence`'s verdict from the history (its reach checked by the caller): the changes from
+   * `client` after `version`, by their kinds. */
+  private landing(version: number, client: number, undoInFlight: boolean): Presence {
+    const ks = this.history.filter((h) => h.version > version && h.client === client).map((h) => this.kindOf(h.kind));
+    if (ks.length === 0) return "absent";
+    // an older kit (no kind on one of them): the rule before kinds, exactly
+    if (ks.includes("none")) return undoInFlight ? "unknown" : "present";
+    // a revert, restore, outside save or import under a client's own ID shouldn't happen: one
+    // that does is not read as the edit, nor as not the edit (conservative)
+    if (ks.includes("other")) return "unknown";
+    return ks.includes("edit") ? "present" : "absent";
+  }
+
+  /**
+   * How a change from a lost change's client ID counts for its landing, by its `kind`: `edit`
+   * (the lost change: rule 0), `undo` (an undo or redo: not the change), `other` (any other
+   * kind: never under a client's own ID; nothing concluded), `none` (no kind: an older kit).
+   */
+  private kindOf(kind: ChangeEvent["kind"] | null | undefined): "edit" | "undo" | "other" | "none" {
+    if (kind === undefined || kind === null) return "none";
+    if (kind === "edit") return "edit";
+    if (kind === "undo" || kind === "redo") return "undo";
+    return "other";
   }
 
   /**
@@ -1218,14 +1248,14 @@ export class LiveText {
     if (at === "seen") return; // this root's event at that version is in already
     if (at === "gap") return this.askSince();
     if (ev.root !== this.root) {
-      this.advance(ev.version, ev.root, [], ev.client);
+      this.advance(ev.version, ev.root, [], ev.client, ev.kind);
       this.resendCursor(); // the version moved: a caret sent at the last one is behind
       return;
     }
     const bad = this.serverText.validate(ev.hunks);
     if (bad) return this.diverged(`an incoming change doesn't fit (${bad.kind})`);
     const hs = coalesce(ev.hunks);
-    this.advance(ev.version, ev.root, hs, ev.client);
+    this.advance(ev.version, ev.root, hs, ev.client, ev.kind);
     const old = this.serverText;
     this.serverText = old.apply(hs);
     this.recarry(hs, this.serverText, [], ev.pid);
@@ -1237,13 +1267,25 @@ export class LiveText {
   /**
    * A change from the client ID a lost change went out on, after it was refused: that change
    * landing (the ID had at most that edit in flight). Open, it leaves `rejected` (`onLanded`);
-   * re-applied, its text may be in twice (`onDuplicateRisk`). With an undo or redo unanswered
-   * on that connection, the change may be the undo's: nothing is concluded (`presence` says
+   * re-applied, its text may be in twice (`onDuplicateRisk`). With a `kind` (kit v0.10.1), only
+   * an `edit` is the change, and only when `presence` would say `present` (an `undo` or `redo`
+   * is the unanswered undo's, and the change stays watched; any other kind, or an earlier
+   * change from that ID without a kind, concludes nothing). Without a `kind` (an older kit), as
+   * before kinds: any change is the lost one, unless an undo or redo was unanswered on that
+   * connection (the change may be the undo's: nothing is concluded, `presence` says
    * `unknown`).
    */
   private checkLanded(ev: ChangeEvent): void {
     const l = this.lost.get(ev.client);
-    if (!l || l.rejection.asOf!.undoInFlight || ev.version <= l.rejection.asOf!.version) return;
+    if (!l) return;
+    const a = l.rejection.asOf!;
+    if (ev.version <= a.version) return;
+    const k = this.kindOf(ev.kind);
+    if (k === "none") {
+      if (a.undoInFlight) return;
+    } else if (k !== "edit" || a.version < this.historyFrom || this.landing(a.version, ev.client, a.undoInFlight) !== "present") {
+      return;
+    }
     this.lost.delete(ev.client);
     if (typeof l.state === "object") {
       this.emit("duplicateRisk", { rejection: l.rejection, landed: ev.version, reapplied: l.state.reapplied });
@@ -1580,18 +1622,18 @@ export class LiveText {
   /** `root`'s change at `version` (`placeOf`: `next` or `same`) is applied: the version, the
    * roots seen at it, and the history (one entry per version: this root's hunks, `[]` until
    * they come). */
-  private advance(version: number, root: string, hunks: Hunk[], client: number | undefined): void {
+  private advance(version: number, root: string, hunks: Hunk[], client: number | undefined, kind?: ChangeEvent["kind"]): void {
     if (version !== this._version) {
       this._version = version;
       this.seenAt = new Set([root]);
-      this.pushHistory(version, hunks, client);
+      this.pushHistory(version, hunks, client, kind);
       return;
     }
     if (this.seenAt !== "all") this.seenAt.add(root);
     const last = this.history[this.history.length - 1];
     if (last && last.version === version) {
       if (root === this.root) last.hunks = hunks;
-    } else this.pushHistory(version, hunks, client);
+    } else this.pushHistory(version, hunks, client, kind);
   }
 
   private forget(id: number): void {
@@ -1600,8 +1642,8 @@ export class LiveText {
     this.reloadMade.delete(id);
   }
 
-  private pushHistory(version: number, hunks: Hunk[], client: number | undefined): void {
-    this.history.push({ version, hunks, client });
+  private pushHistory(version: number, hunks: Hunk[], client: number | undefined, kind: ChangeEvent["kind"]): void {
+    this.history.push(kind === undefined ? { version, hunks, client } : { version, hunks, client, kind });
     if (this.history.length > HISTORY) {
       this.history.splice(0, this.history.length - HISTORY);
       this.historyFrom = this.history[0].version - 1;
@@ -1703,6 +1745,6 @@ const isLow = (c: number) => c >= 0xdc00 && c < 0xe000;
 
 const sameHunk = (a: Hunk, b: Hunk) => a.start === b.start && a.end === b.end && a.insert === b.insert;
 
-/** A rejected change whose reply was lost, with a record to check (as the editor's
- * `mayHaveApplied`). */
+/** A rejected change whose reply was lost, with a record to check (what a host shows as
+ * "may have applied": Re-apply checks `presence` first, HOST.md). */
 const mayHaveApplied = (r: Rejection) => r.error?.id === ERR.NOT_APPLIED && r.asOf !== undefined;

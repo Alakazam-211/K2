@@ -112,7 +112,7 @@ pub struct Knobs {
 }
 
 /// A kit element: (text root, client, clock).
-pub type KitId = (usize, u64, u32);
+pub type KitId = (usize, u64, u64);
 
 /// One live character on the kit (char blame, feature `conformance`).
 #[derive(Debug, Clone)]

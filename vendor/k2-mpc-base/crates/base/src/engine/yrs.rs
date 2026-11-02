@@ -23,11 +23,14 @@ use yrs::{
 use yrs::{Assoc, IndexedSequence, StickyIndex};
 
 use super::structured::{self, ListRefs, Order};
-use super::{BlameRun, EngineCheck, EngineDoc, SESSION_CLIENT};
+use super::{BlameRun, EngineCheck, EngineDoc, IdOrder, Made, Units, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
 use crate::elem::{Edited, ElemState, Facet, Key, Value, WriteId};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::Hunk;
+
+/// Yrs's element units: its clocks count UTF-16 code units.
+const YRS_UNITS: Units = Units::Utf16;
 
 pub(crate) struct YrsDoc {
     // handles drop before their Doc (fields drop in declaration order; rule 8)
@@ -403,23 +406,24 @@ fn to_utf16(text: &str, hunks: &[Hunk]) -> Vec<(u32, u32)> {
 /// The first engine clock of each hunk's inserted text when `client`, whose clock is
 /// `clock_before`, applies `edits` (canonical hunks) through [`EngineDoc::edit_as`]: per
 /// edit, per hunk **in hunk order**, the clock its insertion starts at (for a hunk that
-/// inserts nothing, the clock it would have started at). Clocks count UTF-16 code units.
+/// inserts nothing, the clock it would have started at). Clocks are in the engine's units
+/// ([`super::Units`]: UTF-16 code units here).
 ///
 /// This is this adapter's own order, and only its: `edit_as` applies the roots in edit order
 /// and each root's hunks **back to front**, and every non-empty insertion takes the next
 /// consecutive clocks (deletions take none). The kit names the elements a change inserts by
 /// it (undo spec U23: provenance of restored text), so a test cross-checks it against
 /// [`EngineDoc::blame_runs`].
-pub(crate) fn insert_clocks(clock_before: u32, edits: &[Edit]) -> Vec<Vec<u32>> {
+pub(crate) fn insert_clocks(clock_before: u64, edits: &[Edit]) -> Vec<Vec<u64>> {
     let mut next = clock_before;
     edits
         .iter()
         .map(|e| match e {
             Edit::Text { hunks, .. } => {
-                let mut out = vec![0u32; hunks.len()];
+                let mut out = vec![0u64; hunks.len()];
                 for (k, h) in hunks.iter().enumerate().rev() {
                     out[k] = next;
-                    next += h.insert.encode_utf16().count() as u32;
+                    next += YRS_UNITS.of(&h.insert);
                 }
                 out
             }
@@ -1043,7 +1047,10 @@ impl YrsDoc {
     /// Check (as [`EngineDoc::check_update`]) and apply an update from a connection that owns
     /// client `allowed`, decoded once ([`decode_accepted`]): nothing is applied unless every
     /// check passed.
-    #[cfg_attr(not(feature = "untrusted-wire"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(feature = "untrusted-wire", feature = "conformance")),
+        allow(dead_code)
+    )]
     pub(crate) fn apply_client(
         &mut self,
         update: &[u8],
@@ -1158,7 +1165,10 @@ impl YrsDoc {
     pub(crate) fn same_content(&self, other: &YrsDoc) -> bool {
         self.same_state_vector(other)
             && self.merged_deleted_ranges() == other.merged_deleted_ranges()
-            && self.texts.keys().all(|r| self.text(r) == other.text(r))
+            && self
+                .texts
+                .keys()
+                .all(|r| matches!((self.text(r), other.text(r)), (Ok(a), Ok(b)) if a == b))
     }
 
     /// Whether this doc holds updates it couldn't integrate (missing dependencies: yrs's
@@ -1269,113 +1279,9 @@ impl YrsDoc {
     }
 }
 
-impl EngineDoc for YrsDoc {
-    fn new(schema: &Schema) -> Self {
-        let doc = new_doc(SESSION_CLIENT);
-        let positions = Arc::new(Mutex::new(Vec::new()));
-        let checks = Checks::new();
-        watch_positions(&doc, &positions, checks.position_every);
-        let texts = roots(&doc, schema);
-        let lists = list_roots(&doc, schema);
-        let maps = map_roots(&doc, schema);
-        Self {
-            doc,
-            texts,
-            lists,
-            maps,
-            orders: Mutex::new(HashMap::new()),
-            poisoned: false,
-            text_cache: Mutex::new(HashMap::new()),
-            checks,
-            positions,
-            pending: None,
-        }
-    }
-
-    fn load(schema: &Schema, state: &[u8]) -> Result<Self, DocError> {
-        let e = Self::new(schema);
-        guarded(|| {
-            let u = Update::decode_v2(state).map_err(|err| DocError::Load(err.to_string()))?;
-            stored_accepted(&u)?;
-            e.doc
-                .transact_mut()
-                .apply_update(u)
-                .map_err(|err| DocError::Load(err.to_string()))
-        })?;
-        if e.has_pending() {
-            return Err(DocError::Load(
-                "stored state has unresolved dependencies".into(),
-            ));
-        }
-        Ok(e)
-    }
-
-    fn text(&self, root: &str) -> String {
-        let (name, t) = self.texts.get_key_value(root).expect("a schema root");
-        if self.checks.cache_off {
-            return t.get_string(&self.doc.transact());
-        }
-        let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());
-        cache
-            .entry(*name)
-            .or_insert_with(|| t.get_string(&self.doc.transact()))
-            .clone()
-    }
-
-    fn state_vector(&self) -> Vec<u8> {
-        self.doc.transact().state_vector().encode_v1()
-    }
-
-    fn encode_state(&self) -> Result<Vec<u8>, DocError> {
-        self.usable()?;
-        self.encode_v2()
-    }
-
-    fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError> {
-        if !state_vector_well_formed(remote_sv) {
-            return Err(DocError::Decode("malformed state vector".into()));
-        }
-        self.usable()?;
-        guarded(|| {
-            let sv =
-                StateVector::decode_v1(remote_sv).map_err(|e| DocError::Decode(e.to_string()))?;
-            Ok(self.doc.transact().encode_state_as_update_v1(&sv))
-        })
-    }
-
-    /// The client-ID rule for an update from the connection that owns client `allowed`:
-    ///
-    /// - **New content** (blocks past what this doc has) may come only from `allowed`.
-    /// - Blocks from **other clients** are accepted only when **already known**: for each
-    ///   such client, the update's upper clock is at most this doc's state for it (every
-    ///   block lies within what the doc has). Real Yjs clients send these: a client that
-    ///   went offline holding another client's update as pending includes it in its resync.
-    ///   Applying them is a no-op (blocks are identified by client and clock, and yrs skips
-    ///   what it already has), so even forged content under a known ID changes nothing.
-    /// - A block from another client one clock past this doc's state is `ForeignClient`.
-    /// - The update must not skip ahead of the doc for any client (`MissingDeps`).
-    ///
-    /// `inserts_from` lists only clients with genuinely new insertions (at most `allowed`).
-    fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError> {
-        let u = decode_client(update)?;
-        self.check_decoded(&u, allowed)
-    }
-
-    /// Apply a kit-made update. A decode error changes nothing. Anything after decoding
-    /// that goes wrong (an apply error, a panic, or unresolved dependencies left pending)
-    /// **poisons** the doc: from then on it refuses to encode or edit (`Pending`), and its
-    /// owner must reload it from the store.
-    fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError> {
-        if self.poisoned {
-            return Err(DocError::Pending);
-        }
-        let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
-        // the store-load scan: the store's log is replayed through here
-        stored_accepted(&u)?;
-        self.apply_decoded(u)
-    }
-
-    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
+impl YrsDoc {
+    /// [`EngineDoc::edit_as`]'s change, made (its clocks are [`insert_clocks`]'s).
+    fn edit_edited(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
         self.usable()?;
         prof!("engine.edit_as");
         // the canary (v0.9.3): a sampled edit first checks the text cache its positions are
@@ -1386,19 +1292,16 @@ impl EngineDoc for YrsDoc {
         }
         // Positions are computed against the session's current text, before the replica exists.
         let mut before: Vec<String> = Vec::with_capacity(edits.len());
-        let plans: Vec<TextPlan> = edits
-            .iter()
-            .filter_map(|e| match e {
-                Edit::Text { root, hunks } => {
-                    prof!("engine.positions");
-                    let cur = self.text(root);
-                    let pos = to_utf16(&cur, hunks);
-                    before.push(cur);
-                    Some((root.as_str(), hunks.as_slice(), pos))
-                }
-                Edit::List { .. } | Edit::Map { .. } => None,
-            })
-            .collect();
+        let mut plans: Vec<TextPlan> = Vec::with_capacity(edits.len());
+        for e in edits {
+            if let Edit::Text { root, hunks } = e {
+                prof!("engine.positions");
+                let cur = self.text(root)?;
+                let pos = to_utf16(&cur, hunks);
+                before.push(cur);
+                plans.push((root.as_str(), hunks.as_slice(), pos));
+            }
+        }
         let any_text = plans.iter().any(|(_, h, _)| !h.is_empty());
         // Structured ops are checked and resolved against the doc too (the applied stream
         // comes from here), and only then written.
@@ -1487,6 +1390,126 @@ impl EngineDoc for YrsDoc {
             applied,
         })
     }
+}
+
+impl EngineDoc for YrsDoc {
+    fn new(schema: &Schema) -> Result<Self, DocError> {
+        let doc = new_doc(SESSION_CLIENT);
+        let positions = Arc::new(Mutex::new(Vec::new()));
+        let checks = Checks::new();
+        watch_positions(&doc, &positions, checks.position_every);
+        let texts = roots(&doc, schema);
+        let lists = list_roots(&doc, schema);
+        let maps = map_roots(&doc, schema);
+        Ok(Self {
+            doc,
+            texts,
+            lists,
+            maps,
+            orders: Mutex::new(HashMap::new()),
+            poisoned: false,
+            text_cache: Mutex::new(HashMap::new()),
+            checks,
+            positions,
+            pending: None,
+        })
+    }
+
+    fn load(schema: &Schema, state: &[u8]) -> Result<Self, DocError> {
+        let e = Self::new(schema)?;
+        guarded(|| {
+            let u = Update::decode_v2(state).map_err(|err| DocError::Load(err.to_string()))?;
+            stored_accepted(&u)?;
+            e.doc
+                .transact_mut()
+                .apply_update(u)
+                .map_err(|err| DocError::Load(err.to_string()))
+        })?;
+        if e.has_pending() {
+            return Err(DocError::Load(
+                "stored state has unresolved dependencies".into(),
+            ));
+        }
+        Ok(e)
+    }
+
+    fn text(&self, root: &str) -> Result<String, DocError> {
+        let (name, t) = self
+            .texts
+            .get_key_value(root)
+            .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")))?;
+        if self.checks.cache_off {
+            return Ok(t.get_string(&self.doc.transact()));
+        }
+        let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(cache
+            .entry(*name)
+            .or_insert_with(|| t.get_string(&self.doc.transact()))
+            .clone())
+    }
+
+    fn state_vector(&self) -> Vec<u8> {
+        self.doc.transact().state_vector().encode_v1()
+    }
+
+    fn encode_state(&self) -> Result<Vec<u8>, DocError> {
+        self.usable()?;
+        self.encode_v2()
+    }
+
+    fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError> {
+        if !state_vector_well_formed(remote_sv) {
+            return Err(DocError::Decode("malformed state vector".into()));
+        }
+        self.usable()?;
+        guarded(|| {
+            let sv =
+                StateVector::decode_v1(remote_sv).map_err(|e| DocError::Decode(e.to_string()))?;
+            Ok(self.doc.transact().encode_state_as_update_v1(&sv))
+        })
+    }
+
+    /// The client-ID rule for an update from the connection that owns client `allowed`:
+    ///
+    /// - **New content** (blocks past what this doc has) may come only from `allowed`.
+    /// - Blocks from **other clients** are accepted only when **already known**: for each
+    ///   such client, the update's upper clock is at most this doc's state for it (every
+    ///   block lies within what the doc has). Real Yjs clients send these: a client that
+    ///   went offline holding another client's update as pending includes it in its resync.
+    ///   Applying them is a no-op (blocks are identified by client and clock, and yrs skips
+    ///   what it already has), so even forged content under a known ID changes nothing.
+    /// - A block from another client one clock past this doc's state is `ForeignClient`.
+    /// - The update must not skip ahead of the doc for any client (`MissingDeps`).
+    ///
+    /// `inserts_from` lists only clients with genuinely new insertions (at most `allowed`).
+    fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError> {
+        let u = decode_client(update)?;
+        self.check_decoded(&u, allowed)
+    }
+
+    /// Apply a kit-made update. A decode error changes nothing. Anything after decoding
+    /// that goes wrong (an apply error, a panic, or unresolved dependencies left pending)
+    /// **poisons** the doc: from then on it refuses to encode or edit (`Pending`), and its
+    /// owner must reload it from the store.
+    fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError> {
+        if self.poisoned {
+            return Err(DocError::Pending);
+        }
+        let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
+        // the store-load scan: the store's log is replayed through here
+        stored_accepted(&u)?;
+        self.apply_decoded(u)
+    }
+
+    fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Made, DocError> {
+        // the adapter's own order (`insert_clocks`): the clocks it gives each hunk
+        let clock = self.clock_of(client);
+        let edited = self.edit_edited(client, edits)?;
+        Ok(Made {
+            edited,
+            firsts: insert_clocks(clock, edits),
+        })
+    }
 
     fn list(&self, root: &str) -> Result<Vec<(Key, Value)>, DocError> {
         let o = self.order(root)?;
@@ -1536,8 +1559,21 @@ impl EngineDoc for YrsDoc {
     /// `client`'s entry of the state vector (0 for a client the doc has never seen), read
     /// alone (v0.9.8: building the whole vector was O(clients), and the session reads it at
     /// least twice per edit).
-    fn clock_of(&self, client: ClientId) -> u32 {
-        self.doc.transact().client_state(&ClientID::new(client))
+    fn clock_of(&self, client: ClientId) -> u64 {
+        u64::from(self.doc.transact().client_state(&ClientID::new(client)))
+    }
+
+    fn units(&self) -> Units {
+        YRS_UNITS
+    }
+
+    fn id_order(&self) -> IdOrder {
+        IdOrder::Yrs
+    }
+
+    /// Yrs clocks are u32.
+    fn max_clock(&self) -> u64 {
+        u64::from(u32::MAX)
     }
 
     /// `diff_range(now, empty)` (proven in D0, Q5): with the empty snapshot as the low end,
@@ -1554,7 +1590,7 @@ impl EngineDoc for YrsDoc {
             let diffs = t.diff_range(&mut txn, Some(&now), Some(&Snapshot::default()), |c| c);
             let mut out: Vec<BlameRun> = Vec::with_capacity(diffs.len());
             // the clock just past the last run (its first clock plus its UTF-16 length)
-            let mut end = 0u32;
+            let mut end = 0u64;
             for d in diffs {
                 let (Out::Any(Any::String(s)), Some(y)) = (&d.insert, &d.ychange) else {
                     return Err(DocError::Apply("blame: a run that is not text".into()));
@@ -1562,8 +1598,8 @@ impl EngineDoc for YrsDoc {
                 if y.kind != YChangeKind::Added {
                     return Err(DocError::Apply("blame: a run that is not live".into()));
                 }
-                let len16 = s.encode_utf16().count() as u32;
-                let (client, clock) = (y.id.client.get(), y.id.clock);
+                let len16 = YRS_UNITS.of(s);
+                let (client, clock) = (y.id.client.get(), u64::from(y.id.clock));
                 // adjacent items of one client with consecutive clocks are one run
                 match out.last_mut() {
                     Some(last) if last.client == client && clock == end => {
@@ -1667,7 +1703,7 @@ mod tests {
         const EVERY: u64 = 2;
         const SCALE: u64 = 50;
         let (append, run) = (canary_append, canary_run);
-        let mut y = YrsDoc::new(&S);
+        let mut y = YrsDoc::new(&S).unwrap();
         y.set_check_every(EVERY as u32);
         y.set_check_scale(SCALE);
 
@@ -1759,7 +1795,7 @@ mod tests {
 
         const EVERY: u32 = 2;
         const SCALE: u64 = 50;
-        let mut y = YrsDoc::new(&S);
+        let mut y = YrsDoc::new(&S).unwrap();
         // 20x the scale: an interval of 40 edits, growing to about 50 over the run
         assert_eq!(canary_append(&mut y, &"a".repeat(1000)), None);
         let (mut sampled, mut edits, mut expected) = (0u64, 0u64, 0f64);
@@ -1789,7 +1825,7 @@ mod tests {
     /// sampled the edit.
     fn canary_append(y: &mut YrsDoc, s: &str) -> Option<u64> {
         let units = history_units(&y.doc);
-        let at = y.text("source").len();
+        let at = y.text("source").unwrap().len();
         let e = [Edit::Text {
             root: "source".into(),
             hunks: vec![Hunk {
@@ -1809,22 +1845,33 @@ mod tests {
             .collect()
     }
 
+    /// P14: the seam's `new` and `text` return `Result`; a text root the doc doesn't hold
+    /// is an error.
+    #[test]
+    fn text_of_an_unknown_root_is_an_error() {
+        let y = YrsDoc::new(&S).unwrap();
+        assert_eq!(y.text("source").unwrap(), "");
+        assert!(matches!(y.text("nope"), Err(DocError::Malformed(_))));
+        assert!(matches!(y.text(""), Err(DocError::Malformed(_))));
+    }
+
     #[test]
     fn clock_of_is_the_state_vector_entry() {
-        let sv_entry = |y: &YrsDoc, c: u64| y.doc.transact().state_vector().get(&ClientID::new(c));
+        let sv_entry =
+            |y: &YrsDoc, c: u64| u64::from(y.doc.transact().state_vector().get(&ClientID::new(c)));
         let check = |y: &YrsDoc, clients: &[u64]| {
             for &c in clients {
                 assert_eq!(y.clock_of(c), sv_entry(y, c), "client {c}");
             }
         };
-        let mut y = YrsDoc::new(&S);
+        let mut y = YrsDoc::new(&S).unwrap();
         // a doc with nothing yet, and clients it has never seen
         check(&y, &[2, 7, 1_000, MAX_CLIENT_ID]);
         assert_eq!(y.clock_of(7), 0);
         // edits (inserts and deletes) by many clients, one of them many times
         for i in 0..200u64 {
             let c = 2 + i % 37;
-            let text = y.text("source");
+            let text = y.text("source").unwrap();
             // ASCII text: every byte offset is a character boundary
             let at = (i as usize * 7) % (text.len() + 1);
             let mut hunks = vec![crate::text::diff::Hunk {
@@ -1951,6 +1998,47 @@ mod tests {
             e.check_client_update(&second, 200),
             Err(DocError::MissingDeps { client: 200, .. })
         ));
+    }
+
+    /// The conformance suite's hook (`conformance::replica::{check_from, deliver_from}`) is
+    /// the client check itself, not a copy: on every outcome (accepted, another client's
+    /// content, missing dependencies, a bad client ID) it answers as `check_client_update`
+    /// and `apply_client_update` do, and leaves the doc in the same state.
+    #[cfg(feature = "conformance")]
+    #[test]
+    fn conformance_hook_is_the_client_check() {
+        use crate::conformance::replica;
+        let mut e = Doc::new(S).unwrap();
+        e.replace_text_as(7, "source", "owned by 7\n").unwrap();
+        let ins = typed(&client_doc(100, &e), "hi ");
+        let forged = typed(&client_doc(7, &e), "forged ");
+        let g = client_doc(200, &e);
+        let _first = typed(&g, "one ");
+        let second = typed(&g, "two ");
+        let copy = |d: &Doc| Doc::load(S, &d.encode_state().unwrap()).unwrap();
+        let cases = [
+            (&ins, 100, "accepted"),
+            (&forged, 100, "another client's content"),
+            (&second, 200, "missing dependencies"),
+            (&ins, 0, "a bad client ID"),
+            (&ins, SESSION_CLIENT, "the session's client"),
+        ];
+        let mut outcomes = Vec::new();
+        for (u, who, what) in cases {
+            let checked = e.check_client_update(u, who);
+            assert_eq!(replica::check_from(&e, u, who), checked, "check: {what}");
+            let (mut a, mut b) = (copy(&e), copy(&e));
+            let applied = b.apply_client_update(u, who);
+            assert_eq!(
+                replica::deliver_from(&mut a, u, who),
+                applied,
+                "apply: {what}"
+            );
+            assert_eq!(a.encode_state(), b.encode_state(), "state: {what}");
+            outcomes.push(checked.is_ok());
+        }
+        // the cases cover both outcomes
+        assert_eq!(outcomes, [true, false, false, false, false]);
     }
 
     /// An update from yrs client `c` (a transaction inserting `text` at 0).
@@ -2139,7 +2227,7 @@ mod tests {
         d.replace_text_as(9, "source", "x\n").unwrap();
         assert_eq!(d.apply_trusted(&u2), Err(DocError::Pending));
         // at the engine: the update stays pending, and the raw encode is contained
-        let mut y = YrsDoc::new(&S);
+        let mut y = YrsDoc::new(&S).unwrap();
         assert_eq!(y.apply_trusted(&u2), Err(DocError::Pending));
         assert!(y.has_pending() && y.poisoned);
         let raw = y.encode_v2();
@@ -2286,13 +2374,13 @@ mod tests {
             let text = d.text(root).unwrap();
             let runs = d.blame_runs(root).unwrap();
             // each live byte offset's (client, clock)
-            let mut at: Vec<(usize, u64, u32)> = Vec::new();
+            let mut at: Vec<(usize, u64, u64)> = Vec::new();
             let mut b = 0;
             for r in &runs {
                 let mut c = r.clock;
                 for (i, ch) in text[b..b + r.bytes].char_indices() {
                     at.push((b + i, r.client, c));
-                    c += ch.len_utf16() as u32;
+                    c += ch.len_utf16() as u64;
                 }
                 b += r.bytes;
             }
@@ -2303,9 +2391,9 @@ mod tests {
                 for (i, ch) in hk.insert.char_indices() {
                     let got = at.iter().find(|x| x.0 == s + i).unwrap();
                     assert_eq!((got.1, got.2), (600, c), "{root}: {hk:?} char {i}");
-                    c += ch.len_utf16() as u32;
+                    c += ch.len_utf16() as u64;
                 }
-                total += hk.insert.encode_utf16().count() as u32;
+                total += hk.insert.encode_utf16().count() as u64;
                 delta += hk.insert.len() as isize - (hk.end - hk.start) as isize;
             }
         }
@@ -2445,7 +2533,7 @@ mod root_handles {
         }
         // every doc the module makes keeps root handles only
         for schema in [&S, &G] {
-            let d = YrsDoc::new(schema);
+            let d = YrsDoc::new(schema).unwrap();
             assert!(all_roots(&d));
             let state = d.encode_v2().unwrap();
             let l = YrsDoc::load(schema, &state).unwrap();
@@ -2453,6 +2541,7 @@ mod root_handles {
             let t = l.twin().unwrap();
             assert!(all_roots(&t));
         }
-        assert!(!YrsDoc::new(&G).lists.is_empty() && !YrsDoc::new(&G).maps.is_empty());
+        let g = YrsDoc::new(&G).unwrap();
+        assert!(!g.lists.is_empty() && !g.maps.is_empty());
     }
 }

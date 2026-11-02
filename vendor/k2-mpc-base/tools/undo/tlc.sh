@@ -1,5 +1,5 @@
-# TLC helpers for the undo model (sourced by a commands file, in spec/quint). Needs one prior
-# `quint verify ... --backend=tlc` run, which downloads Apalache (it bundles TLC).
+# TLC helpers for the undo model (sourced by a commands file, in spec/quint). Needs Apalache (it
+# bundles TLC), which the export check fetched (tools/undo/job.sh, `need_apalache`).
 # The job's Quint export guard must have passed first (tools/undo/job.sh, v0.9.3).
 [ "${QUINT_EXPORT_CHECKED:-}" = 1 ] || { echo "=== tlc.sh: the Quint export check has not passed; no TLC run" >&2; exit 1; }
 APA_JAR=$(ls ~/.quint/apalache-dist-*/apalache/lib/apalache.jar | head -1)
@@ -8,7 +8,8 @@ APA_JAR=$(ls ~/.quint/apalache-dist-*/apalache/lib/apalache.jar | head -1)
 # transpile failed at random ("error:" with nothing after it), so the job runs its own.
 port_open() { bash -c "exec 3<>/dev/tcp/127.0.0.1/${QJ_APA_PORT:-8822}" 2>/dev/null; }
 apa_up() {
-  # a server quint started (the warm-up's) may still be closing: wait for the port
+  # a server quint started (the export check's, or a compile's) may still be closing: wait
+  # for the port
   i=0; while port_open && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
   # the Jackson limits agent (tools/quint-jvm; tools/undo/job.sh builds it and exports
   # APA_JAVA_OPTS): the IR travels as one JSON string, past Jackson's 20,000,000 default

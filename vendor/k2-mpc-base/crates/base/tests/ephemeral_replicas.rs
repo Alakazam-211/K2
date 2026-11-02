@@ -64,7 +64,7 @@ fn agent_edits_keep_no_replica() {
     let mut session = Doc::new(S).unwrap();
     session.replace_text_as(2, ROOT, &base).unwrap();
 
-    // 64 different agents each make one edit, as `k2 doc sed -i` would.
+    // 64 different agents each make one edit, as a host's `sed -i` verb would.
     for agent in 0..64u64 {
         let cur = session.text(ROOT).unwrap();
         let new = cur.replacen(

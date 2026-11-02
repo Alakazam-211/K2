@@ -16,8 +16,10 @@
 //!   applied nothing: [`crate::tools::ToolOutput::refusal`]).
 //! - **[`ErrorReport`]**: what a host prints. [`ErrorReport::plain`] is today's wording with
 //!   the id appended, `message (MPC-E301)`; [`ErrorReport::to_json`] is the stable object
-//!   `{"id", "exit", "message", "next", "rule", "details"}`, `details` structured (never
-//!   prose).
+//!   `{"id", "exit", "message", "next", "next_step", "rule", "details"}`, `details`
+//!   structured (never prose), `next_step` the prose `next` as data ([`NextStep`]: a kit
+//!   verb, its arguments, why; no host syntax, K-PAR-10), absent when there is nothing to
+//!   run.
 //! - **`explain` and `capabilities`** ([`run_meta`]): verbs that print an entry, or what this
 //!   build can do (verbs, flags, parity rows, the ids each verb can return, the limits in
 //!   effect, the kit version), as text or JSON. Both are generated from the registries.
@@ -50,7 +52,8 @@ pub const ENGINE_PREFIX: &str = "MPCE-E";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Area {
-    /// 0xx: exports (a host's export of a doc's version, [`crate::export`]).
+    /// 0xx: the JS client's own `MPC-E000` (a change whose reply was lost), then exports (a
+    /// host's export of a doc's version, [`crate::export`]) from 001.
     Export,
     /// 1xx: joining, rights, edits, `write --base`, approvals, the text tools, the sync wire.
     Session,
@@ -149,6 +152,34 @@ pub enum Reach {
     Indirect(&'static str),
 }
 
+/// **What to run next, as data** (K-PAR-10): the registry's `next` as a kit verb, its
+/// arguments and a reason, with no host syntax. A host renders it in its own (its command
+/// name, the doc path, its quoting); the prose [`ErrorEntry::next`] stays beside it. An
+/// entry with nothing to run (wait, ask a person, report it, use ordinary file tools) has
+/// none ([`ErrorEntry::step`] is `None`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextStep {
+    /// A kit verb by its registry name (`undo`, `row list`, `claim --release`).
+    pub verb: &'static str,
+    /// The arguments after the verb (and after the doc path a host puts first), one argv
+    /// token each, flags included. A token `{key}` stands for the refusal's `details.key`,
+    /// which the host fills in; any other token is literal.
+    pub args: &'static [&'static str],
+    /// Why, in plain prose that names no command line.
+    pub why: &'static str,
+}
+
+impl NextStep {
+    /// The step as one JSON object: `{"verb": "...", "args": [...], "why": "..."}`.
+    pub fn to_value(&self) -> Value {
+        Value::obj([
+            ("verb", Value::from(self.verb)),
+            ("args", Value::list(self.args.iter().copied())),
+            ("why", Value::from(self.why)),
+        ])
+    }
+}
+
 /// One refusal: the registry's row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorEntry {
@@ -161,8 +192,11 @@ pub struct ErrorEntry {
     pub exit: u8,
     /// One line, with `{key}` for the report's details.
     pub message: &'static str,
-    /// What to do next.
+    /// What to do next, in prose.
     pub next: &'static str,
+    /// What to do next, as data ([`NextStep`], K-PAR-10); `None` when there is nothing to
+    /// run.
+    pub step: Option<NextStep>,
     /// The rule it enforces: requirement ids (`K-…`), undo spec rules (`U…`), conformance
     /// rules (`hist.…`), amendments (`A13`: `docs/SESSIONS.md`).
     pub rule: &'static str,
@@ -194,10 +228,25 @@ impl ErrorEntry {
             exit,
             message,
             next,
+            step: None,
             rule,
             verbs,
             status: Status::Live,
             reach: Reach::Verb,
+        }
+    }
+
+    /// The entry's [`NextStep`]: `verb` a kit verb's registry name, `args` argv tokens
+    /// (`{key}`: the refusal's `details.key`), `why` prose.
+    pub(crate) const fn step(
+        self,
+        verb: &'static str,
+        args: &'static [&'static str],
+        why: &'static str,
+    ) -> Self {
+        ErrorEntry {
+            step: Some(NextStep { verb, args, why }),
+            ..self
         }
     }
 
@@ -345,6 +394,11 @@ impl ErrorReport {
     pub fn next(&self) -> &'static str {
         self.entry.next
     }
+    /// The registry's next step as data (K-PAR-10), `None` when there is nothing to run: on
+    /// every surface the same ([`ErrorReport::with_next`] changes only the prose).
+    pub fn next_step(&self) -> Option<NextStep> {
+        self.entry.step
+    }
     pub fn rule(&self) -> &'static str {
         self.entry.rule
     }
@@ -361,8 +415,9 @@ impl ErrorReport {
         format!("{} ({})", self.message, self.entry.id)
     }
 
-    /// The stable JSON object, one line: `{"id", "exit", "message", "next", "rule",
-    /// "details"}`.
+    /// The stable JSON object, one line: `{"id", "exit", "message", "next", "next_step",
+    /// "rule", "details"}` (`next_step`: [`NextStep::to_value`], K-PAR-10; left out when the
+    /// entry has none).
     pub fn to_json(&self) -> String {
         self.to_value().to_json()
     }
@@ -372,22 +427,26 @@ impl ErrorReport {
     }
 
     fn value_with_next(&self, next: &str) -> Value {
-        Value::obj([
+        let mut o = vec![
             ("id", Value::from(self.entry.id)),
             ("exit", Value::from(self.entry.exit)),
             ("message", Value::from(self.message.as_str())),
             ("next", Value::from(next)),
-            ("rule", Value::from(self.entry.rule)),
-            (
-                "details",
-                Value::Obj(
-                    self.details
-                        .iter()
-                        .map(|(k, v)| ((*k).to_owned(), v.clone()))
-                        .collect(),
-                ),
+        ];
+        if let Some(st) = self.entry.step {
+            o.push(("next_step", st.to_value()));
+        }
+        o.push(("rule", Value::from(self.entry.rule)));
+        o.push((
+            "details",
+            Value::Obj(
+                self.details
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                    .collect(),
             ),
-        ])
+        ));
+        Value::obj(o)
     }
 }
 

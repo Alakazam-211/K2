@@ -1,6 +1,6 @@
 // Hunks over text, in UTF-8 byte offsets (as the kit's `text::diff::Hunk`), and the UTF-8
 // helpers they need. JS strings are UTF-16; offsets are converted only at the edges (the
-// CodeMirror binding), never on the wire.
+// host's editor, and the UTF-16 data in presence.ts), never on the wire.
 
 /** Replace `old[start..end]` (UTF-8 byte offsets, on character boundaries) with `insert`. */
 export interface Hunk {

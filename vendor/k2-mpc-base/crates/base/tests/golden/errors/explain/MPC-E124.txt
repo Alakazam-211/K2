@@ -2,6 +2,7 @@ MPC-E124 patch_rejects (sessions and edits)
 exit:     1
 message:  {failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)
 next:     --partial applied the hunks that fit; the failed ones (on stdout) were not applied. Read the lines they were for and make those changes again on the live text.
+step:     cat; args: -n; why: The hunks that fit were applied and the failed ones were not; read the lines they were for and make those changes again on the live text.
 rule:     K-PAR-8, K-BR-9
 verbs:    patch; apply
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "{failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)",
   "next": "--partial applied the hunks that fit; the failed ones (on stdout) were not applied. Read the lines they were for and make those changes again on the live text.",
+  "next_step": {
+    "verb": "cat",
+    "args": ["-n"],
+    "why": "The hunks that fit were applied and the failed ones were not; read the lines they were for and make those changes again on the live text."
+  },
   "rule": "K-PAR-8, K-BR-9",
   "verbs": ["patch", "apply"],
   "returned_by": ["patch", "apply"],

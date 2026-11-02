@@ -30,7 +30,7 @@ impl Host for H {
 }
 
 const ROOT: &str = TextFilePack::ROOT;
-type Root = (u64, u32);
+type Root = (u64, u64);
 
 struct Doc {
     dir: std::path::PathBuf,

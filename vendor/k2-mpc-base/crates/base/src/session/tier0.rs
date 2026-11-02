@@ -597,7 +597,7 @@ impl BlobSession {
         let meta = DocMeta {
             key: key.clone(),
             pack: BLOB_DOC_PACK.to_owned(),
-            engine: "none".to_owned(),
+            engine: crate::engine::NO_ENGINE.to_owned(),
             engine_format: 0,
             codec: Vec::new(),
             created_ms: now,
@@ -796,6 +796,7 @@ impl BlobSession {
                     conn: m.conn,
                     client: 0,
                     version: st.vid,
+                    replaced: None,
                 });
             }
         }
@@ -816,6 +817,7 @@ impl BlobSession {
             conn,
             client: 0,
             version: st.vid,
+            replaced: None,
         })
     }
 

@@ -18,9 +18,9 @@
 //! `PROPTEST_CASES` scales it (256 by default; run more on a compute node). Each property
 //! prints a `RUNREC` line with its case count and wall time (`table_pt_<name>`).
 
-use k2_mpc_base::elem::{Anchor, ListOp};
+use k2_mpc_base::elem::{Anchor, ListOp, MapOp};
 use k2_mpc_base::table::{
-    self, merge3, reconcile, ConflictRule, Field, Record, Region, Shape, SortKey, Table,
+    self, merge3, reconcile, ConflictRule, Field, Held, Record, Region, Shape, SortKey, Table,
 };
 use k2_mpc_base::{Doc, Edit, Key, Schema};
 use proptest::prelude::*;
@@ -55,6 +55,25 @@ fn seeded(cases: u32, name: &str) -> proptest::test_runner::Config {
     c.rng_seed = proptest::test_runner::RngSeed::Fixed(seed);
     c.source_file = Some(file!());
     c
+}
+
+/// `MPC_MERGE_MUTANT` runs `f` with a merge fault planted on this thread
+/// (`k2_mpc_base::differential::MergeMutant`, the `differential` feature, on for these tests), so
+/// the keyed merges' tests can be shown to catch it: `keyed-merge-neutral-switch` is mutant
+/// (xxxviii), `keyed-outside-neutral-switch` is (xxxix). Unset, `f` runs as is. Any other value
+/// panics.
+fn under_merge_mutant<R>(f: impl FnOnce() -> R) -> R {
+    use k2_mpc_base::differential::{with_merge_mutant, MergeMutant};
+    match std::env::var("MPC_MERGE_MUTANT").as_deref() {
+        Ok("keyed-merge-neutral-switch") => {
+            with_merge_mutant(MergeMutant::KeyedMergeNeutralSwitch, f)
+        }
+        Ok("keyed-outside-neutral-switch") => {
+            with_merge_mutant(MergeMutant::KeyedOutsideNeutralSwitch, f)
+        }
+        Ok(other) => panic!("MPC_MERGE_MUTANT={other}: not a merge mutant this suite plants"),
+        Err(_) => f(),
+    }
 }
 
 /// The case count: `PROPTEST_CASES` (proptest's own default config reads it; 256 if unset).
@@ -404,6 +423,10 @@ fn reconcile_of_a_rendering() {
 
 #[test]
 fn merge3_properties() {
+    under_merge_mutant(merge3_properties_run);
+}
+
+fn merge3_properties_run() {
     let start = std::time::Instant::now();
     proptest!(seeded(cases(), "merge3_properties"), |(
             records in records_strategy(),
@@ -500,6 +523,298 @@ fn merge3_properties() {
             }
     });
     runrec("merge3_properties", start);
+}
+
+/// `merge3_properties`' shrunk case of seed 683950541548579763 (v0.10.0), by key: base row r1
+/// has a present cell (c3, set to `""`), so it renders every column and its absent c2 reads as
+/// an empty field; theirs clears c2 (absent to `""`: the same bytes) and ours sets it to `"a"`.
+/// By key a clear is a write (K-CSV-10a), so both set r1/c2: one `cell` conflict, theirs' `""`
+/// stands. (The row delete, ours' insert and theirs' move are the shrunk case's; they only shape
+/// which rows the random ops picked.)
+#[test]
+fn merge3_a_live_clear_of_an_absent_cell_ours_set_is_a_cell_conflict() {
+    let k = |s: &str| Key::new(s).unwrap();
+    let recs = vec![
+        vec![],
+        vec![],
+        vec![],
+        vec![Field::new(""), Field::new(""), Field::new("")],
+    ];
+    let (mut b, _) = Table::import(&recs, true, Shape::detect(&recs)).unwrap();
+    assert_eq!(b.live_rows(), [k("r1"), k("r2"), k("r3")]);
+    assert_eq!(b.live_cols(), [k("c1"), k("c2"), k("c3")]);
+    // setup: DelRow(1), Set(2, 2, 0)
+    b.delete_row(&k("r2")).unwrap();
+    b.set_cell(&k("r1"), &k("c3"), "").unwrap();
+    assert_eq!(b.cell(&k("r1"), &k("c2")), None, "r1/c2 absent in base");
+    // ours: InsRow(69, 0, 0), Set(15, 1, 1)
+    let mut o = b.clone();
+    let (r4, _) = o.insert_row(Anchor::End, &[]).unwrap();
+    o.set_cell(&k("r1"), &k("c2"), "a").unwrap();
+    // theirs: MoveRow(1, 175, 0), Clear(7, 7)
+    let mut t = b.clone();
+    t.next_row += 1000;
+    t.next_col += 1000;
+    t.move_row(&k("r3"), Anchor::Before(k("r1"))).unwrap();
+    t.clear_cell(&k("r1"), &k("c2")).unwrap();
+    assert_eq!(t.cell(&k("r1"), &k("c2")), Some(""));
+
+    let m = under_merge_mutant(|| merge3(&b, &o, &t)).unwrap();
+    let cell = Region::Cell {
+        row: k("r1"),
+        col: k("c2"),
+    };
+    let at: Vec<(ConflictRule, &Region)> = m.conflicts.iter().map(|c| (c.rule, &c.at)).collect();
+    assert_eq!(at, [(ConflictRule::Cell, &cell)], "both set r1/c2: {m:?}");
+    let mut r = t.clone();
+    r.apply(&m.edits).unwrap();
+    assert_eq!(r.cell(&k("r1"), &k("c2")), Some(""), "theirs' r1/c2 lost");
+    // the clean part still lands: ours' new row, at the end
+    assert_eq!(r.live_rows(), [k("r3"), k("r1"), r4]);
+}
+
+/// A keyed side's cell made absent: a raw keyed cell delete (`Edit::Map`, no verb makes one;
+/// a clear is a set to `""`), so the switches between empty and absent go both ways.
+fn unset(t: &mut Table, row: &Key, col: &Key) {
+    let ops = vec![MapOp::Delete {
+        key: table::cell_key(row, col),
+    }];
+    t.apply(&[Edit::Map {
+        root: table::CELLS.into(),
+        ops,
+    }])
+    .expect("a cell delete applies");
+}
+
+/// `merge3_outside`'s rule (its doc comment, contract §2.9.1): "Where both sides changed one
+/// element, the file's side (`ours` …) wins, and the overlap is reported in
+/// [`Merge::conflicts`] as **overridden**, not left out: `cell`, `name`, `quoting`: the file's
+/// value is set". By key a switch between absent and `""` is a write of the cell (a clear is a
+/// set to `""`, K-CSV-10a), even where the row renders the same bytes either way: the
+/// byte-neutral rule is a text's (a text can't tell an empty field from an absent cell). So:
+/// base r1 renders every column (rect, `x,y` and an inserted, absent c3); theirs switches
+/// r1/c3 (absent to `""`, and the reverse); ours (the file) sets it to `"a"`: the file's `"a"`,
+/// and one overridden `cell` at r1/c3 holding all three values.
+#[test]
+fn merge3_outside_over_a_live_byte_neutral_switch_reports_the_override() {
+    let k = |s: &str| Key::new(s).unwrap();
+    let held = |v: Option<&str>| Held::Value(v.map(str::to_owned));
+    let recs = vec![vec![Field::new("x"), Field::new("y")]];
+    for absent_in_base in [true, false] {
+        let (mut b, _) = Table::import(&recs, false, Shape::detect(&recs)).unwrap();
+        let (c3, _) = b.insert_col(Anchor::End, None).unwrap();
+        let (r1, at) = (
+            k("r1"),
+            Region::Cell {
+                row: k("r1"),
+                col: c3.clone(),
+            },
+        );
+        if !absent_in_base {
+            b.clear_cell(&r1, &c3).unwrap();
+        }
+        let mut t = b.clone();
+        t.next_row += 1000;
+        t.next_col += 1000;
+        if absent_in_base {
+            t.clear_cell(&r1, &c3).unwrap();
+        } else {
+            unset(&mut t, &r1, &c3);
+        }
+        // the switch is byte-neutral: the live row renders as base's
+        assert_eq!(t.render(), b.render(), "a byte-neutral switch");
+        assert_ne!(t.cell(&r1, &c3), b.cell(&r1, &c3), "theirs switched r1/c3");
+        let mut o = b.clone();
+        o.set_cell(&r1, &c3, "a").unwrap();
+
+        let m = under_merge_mutant(|| table::merge3_outside(&b, &o, &t)).unwrap();
+        let rules: Vec<(ConflictRule, &Region)> =
+            m.conflicts.iter().map(|c| (c.rule, &c.at)).collect();
+        assert_eq!(
+            rules,
+            [(ConflictRule::Cell, &at)],
+            "absent in base {absent_in_base}: the file's override of r1/c3 not reported: {m:?}"
+        );
+        let c = &m.conflicts[0];
+        assert_eq!(c.base, held(b.cell(&r1, &c3)));
+        assert_eq!(c.ours, held(Some("a")));
+        assert_eq!(c.theirs, held(t.cell(&r1, &c3)));
+        let mut r = t.clone();
+        r.apply(&m.edits).unwrap();
+        assert_eq!(r.cell(&r1, &c3), Some("a"), "the file's value");
+    }
+}
+
+/// The other byte-neutral shape of an outside save (`file_renders_live` in the merge): base
+/// r1/c2 holds `"y"`; the file empties it one way (absent, or `""`) and the live side the other.
+/// Distinct from the test above: base's cell is not empty, so no base row switch is involved,
+/// and the file's row renders the same bytes with either value. By key both sides changed r1/c2
+/// to different values, so by the rule above: the file's value, and one overridden `cell`.
+#[test]
+fn merge3_outside_over_a_live_empty_the_file_emptied_otherwise_reports_the_override() {
+    let k = |s: &str| Key::new(s).unwrap();
+    let held = |v: Option<&str>| Held::Value(v.map(str::to_owned));
+    let recs = vec![vec![Field::new("x"), Field::new("y")]];
+    for file_absent in [true, false] {
+        let (b, _) = Table::import(&recs, false, Shape::detect(&recs)).unwrap();
+        let (r1, c2) = (k("r1"), k("c2"));
+        assert_eq!(b.cell(&r1, &c2), Some("y"));
+        let (mut o, mut t) = (b.clone(), b.clone());
+        t.next_row += 1000;
+        t.next_col += 1000;
+        if file_absent {
+            unset(&mut o, &r1, &c2);
+            t.clear_cell(&r1, &c2).unwrap();
+        } else {
+            o.clear_cell(&r1, &c2).unwrap();
+            unset(&mut t, &r1, &c2);
+        }
+        assert_eq!(
+            o.render(),
+            t.render(),
+            "the file's row renders the live value too"
+        );
+        assert_ne!(o.cell(&r1, &c2), t.cell(&r1, &c2));
+
+        let m = under_merge_mutant(|| table::merge3_outside(&b, &o, &t)).unwrap();
+        let at = Region::Cell {
+            row: r1.clone(),
+            col: c2.clone(),
+        };
+        let rules: Vec<(ConflictRule, &Region)> =
+            m.conflicts.iter().map(|c| (c.rule, &c.at)).collect();
+        assert_eq!(
+            rules,
+            [(ConflictRule::Cell, &at)],
+            "file absent {file_absent}: the file's override of r1/c2 not reported: {m:?}"
+        );
+        let c = &m.conflicts[0];
+        assert_eq!(c.base, held(Some("y")));
+        assert_eq!(c.ours, held(o.cell(&r1, &c2)));
+        assert_eq!(c.theirs, held(t.cell(&r1, &c2)));
+        let mut r = t.clone();
+        r.apply(&m.edits).unwrap();
+        assert_eq!(r.cell(&r1, &c2), o.cell(&r1, &c2), "the file's value");
+    }
+}
+
+/// One op of a keyed side in [`merge3_outside_properties`]: a grid op, or a present cell of a
+/// live row and column made absent ([`unset`]).
+#[derive(Debug, Clone)]
+enum KOp {
+    Grid(Op),
+    Unset(usize),
+}
+
+fn k_op() -> impl Strategy<Value = KOp> {
+    prop_oneof![
+        8 => op().prop_map(KOp::Grid),
+        1 => (0usize..64).prop_map(KOp::Unset),
+    ]
+}
+
+fn run_k(t: &mut Table, op: &KOp) {
+    match op {
+        KOp::Grid(x) => {
+            run(t, x);
+        }
+        KOp::Unset(i) => {
+            let present: Vec<(Key, Key)> = t
+                .cells
+                .keys()
+                .filter(|(r, c)| t.rows.is_live(r) && t.cols.is_live(c))
+                .cloned()
+                .collect();
+            if !present.is_empty() {
+                let (r, c) = present[i % present.len()].clone();
+                unset(t, &r, &c);
+            }
+        }
+    }
+}
+
+/// The keyed outside save (`merge3_outside`) against its rule (quoted on
+/// [`merge3_outside_over_a_live_byte_neutral_switch_reports_the_override`]), cell by cell over
+/// every cell any version holds, comparing values by key (absent and `""` differ):
+/// - a cell both sides changed holds the file's value;
+/// - a cell both sides changed to different values (a byte-neutral switch between absent and
+///   `""` included) is reported as exactly one overridden `cell`, holding base's, the file's and
+///   the live value; a cell only one side changed (or both to the same value) is not;
+/// - a cell the live side changed and the file didn't keeps the live value (nothing lost);
+/// - it is a pure function.
+#[test]
+fn merge3_outside_properties() {
+    under_merge_mutant(merge3_outside_properties_run);
+}
+
+fn merge3_outside_properties_run() {
+    let start = std::time::Instant::now();
+    proptest!(seeded(cases(), "merge3_outside_properties"), |(
+            records in records_strategy(),
+            header in any::<bool>(),
+            ragged in any::<bool>(),
+            setup in prop::collection::vec(k_op(), 0..8),
+            ours in prop::collection::vec(k_op(), 0..8),
+            theirs in prop::collection::vec(k_op(), 0..8),
+        )| {
+            let (mut b, _) = grid(&records, header, ragged, &[]);
+            for x in &setup {
+                run_k(&mut b, x);
+            }
+            let mut o = b.clone();
+            for x in &ours {
+                run_k(&mut o, x);
+            }
+            // theirs mints elsewhere, so no key of ours is re-minted
+            let mut t = b.clone();
+            t.next_row += 1000;
+            t.next_col += 1000;
+            for x in &theirs {
+                run_k(&mut t, x);
+            }
+
+            let m = table::merge3_outside(&b, &o, &t).unwrap();
+            prop_assert_eq!(&table::merge3_outside(&b, &o, &t).unwrap(), &m, "not a pure function");
+            let mut r = t.clone();
+            r.apply(&m.edits).unwrap();
+            let held = |v: Option<&str>| Held::Value(v.map(str::to_owned));
+            let every: std::collections::BTreeSet<&(Key, Key)> =
+                b.cells.keys().chain(o.cells.keys()).chain(t.cells.keys()).collect();
+            for (row, col) in every {
+                let (bv, ov, tv) = (b.cell(row, col), o.cell(row, col), t.cell(row, col));
+                let at = Region::Cell { row: row.clone(), col: col.clone() };
+                let reported: Vec<_> = m
+                    .conflicts
+                    .iter()
+                    .filter(|c| c.rule == ConflictRule::Cell && c.at == at)
+                    .collect();
+                let (o_changed, t_changed) = (ov != bv, tv != bv);
+                if o_changed && t_changed {
+                    prop_assert_eq!(r.cell(row, col), ov, "both changed {}/{}: not the file's value", row, col);
+                }
+                if o_changed && t_changed && ov != tv {
+                    prop_assert_eq!(
+                        reported.len(), 1,
+                        "both changed {}/{} (base {:?}, file {:?}, live {:?}): not reported once as overridden: {:?}",
+                        row, col, bv, ov, tv, m.conflicts
+                    );
+                    let c = reported[0];
+                    prop_assert_eq!(&c.base, &held(bv));
+                    prop_assert_eq!(&c.ours, &held(ov));
+                    prop_assert_eq!(&c.theirs, &held(tv));
+                } else {
+                    prop_assert!(
+                        reported.is_empty(),
+                        "{}/{} (base {:?}, file {:?}, live {:?}) reported as overridden",
+                        row, col, bv, ov, tv
+                    );
+                }
+                if t_changed && !o_changed {
+                    prop_assert_eq!(r.cell(row, col), tv, "the live {}/{} lost", row, col);
+                }
+            }
+    });
+    runrec("merge3_outside_properties", start);
 }
 
 /// One old row's fate in a combined outside save.

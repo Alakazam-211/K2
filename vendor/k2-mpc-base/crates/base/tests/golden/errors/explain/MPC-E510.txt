@@ -2,6 +2,7 @@ MPC-E510 store_no_doc (store)
 exit:     4
 message:  no doc {doc}
 next:     The stored doc is gone (deleted meanwhile). Open the path again.
+step:     open; why: The stored doc was deleted meanwhile; open the path again.
 rule:     K-EXIT-1
 verbs:    any verb on a doc
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "no doc {doc}",
   "next": "The stored doc is gone (deleted meanwhile). Open the path again.",
+  "next_step": {
+    "verb": "open",
+    "args": [],
+    "why": "The stored doc was deleted meanwhile; open the path again."
+  },
   "rule": "K-EXIT-1",
   "verbs": ["*"],
   "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],

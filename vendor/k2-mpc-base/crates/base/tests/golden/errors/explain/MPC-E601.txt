@@ -2,6 +2,7 @@ MPC-E601 purge_current_version (erasure)
 exit:     2
 message:  version {version} of doc {doc} is its current content
 next:     The current version of a file can't be purged. Write or restore another version first, then purge this one.
+step:     restore; why: A file's current version can't be purged; write or restore another version first, then purge this one.
 rule:     K-T0-9, K-PURGE-1
 verbs:    purge
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "version {version} of doc {doc} is its current content",
   "next": "The current version of a file can't be purged. Write or restore another version first, then purge this one.",
+  "next_step": {
+    "verb": "restore",
+    "args": [],
+    "why": "A file's current version can't be purged; write or restore another version first, then purge this one."
+  },
   "rule": "K-T0-9, K-PURGE-1",
   "verbs": ["purge"],
   "returned_by": [],

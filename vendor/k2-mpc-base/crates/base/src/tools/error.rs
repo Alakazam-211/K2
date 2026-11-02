@@ -49,6 +49,11 @@ pub enum ToolError {
     /// The call would exceed a bound (output size, regex size, work).
     #[error("limit: {0}")]
     Limit(String),
+    /// An address refused with its own id and details (`crate::addr`): an ambiguous name or
+    /// value (`MPC-E170`, `details.candidates`). Its message is the verb's own line. Made by
+    /// [`ToolError::address`], for exit-2 ids only.
+    #[error("{}", .0.message())]
+    Address(Box<crate::errors::ErrorReport>),
 }
 
 impl ToolError {
@@ -76,6 +81,18 @@ impl ToolError {
     /// [`ToolError::Usage`].
     pub fn usage(msg: impl Into<String>) -> Self {
         ToolError::Usage(msg.into())
+    }
+
+    /// [`ToolError::Address`]: `report` is an address refusal whose id exits 2
+    /// ([`crate::addr::ambiguous`]); any other id is a kit bug and panics.
+    pub fn address(report: crate::errors::ErrorReport) -> Self {
+        assert_eq!(
+            report.exit(),
+            exit::USAGE,
+            "{}: an address refusal through ToolError exits 2",
+            report.id()
+        );
+        ToolError::Address(Box::new(report))
     }
 }
 
@@ -141,7 +158,8 @@ pub fn session_exit(e: &SessionError) -> u8 {
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
         SessionError::Leased { .. } | SessionError::Claimed { .. } => exit::LEASED,
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
-        SessionError::RevertTooOld { .. } => exit::TOO_OLD,
+        SessionError::EngineMismatch { .. } => exit::STORE,
+        SessionError::RevertTooOld { .. } | SessionError::BaseExpired { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
         | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
@@ -171,8 +189,11 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         S::MarksLost(_) => exit::TOO_OLD,
         S::Db(_)
         | S::Newer { .. }
+        | S::RewriteNewer { .. }
+        | S::ForeignEngine { .. }
         | S::NewerData { .. }
         | S::Corrupt(_)
+        | S::ClockOverflow(_)
         | S::KeyTaken(_)
         | S::Locked
         | S::NamedVersion(..)
@@ -315,7 +336,13 @@ mod tests {
         let failures = [
             S::Db("disk full".into()),
             S::Newer { found: 9 },
+            S::RewriteNewer { found: 7 },
+            S::ForeignEngine {
+                stored: "mpce-0.1".into(),
+                stored_format: 1,
+            },
             S::Corrupt("log entry"),
+            S::ClockOverflow(1 << 32),
             S::KeyTaken(DocKey {
                 space: "s".into(),
                 path: "p".into(),

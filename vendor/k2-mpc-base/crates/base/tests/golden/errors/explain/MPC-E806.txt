@@ -2,6 +2,7 @@ MPC-E806 header_names_unrendered (structured and CSV)
 exit:     2
 message:  the columns have names that would appear as a header line; clear them or add a row first
 next:     The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.
+step:     col rename; why: The columns still hold names that would be written as a header line; clear them or add a row first, then switch.
 rule:     CSV contract §1.4 (C1)
 verbs:    a pack's own verbs
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "the columns have names that would appear as a header line; clear them or add a row first",
   "next": "The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.",
+  "next_step": {
+    "verb": "col rename",
+    "args": [],
+    "why": "The columns still hold names that would be written as a header line; clear them or add a row first, then switch."
+  },
   "rule": "CSV contract §1.4 (C1)",
   "verbs": ["@pack"],
   "returned_by": [],

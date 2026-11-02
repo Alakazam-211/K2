@@ -2,6 +2,7 @@ MPC-E125 replace_no_match (sessions and edits)
 exit:     1
 message:  replace: --old matches nothing in {doc}; nothing applied
 next:     The exact text in --old isn't in the doc (it matches byte for byte, with \n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.
+step:     cat; args: -n; why: The exact old text isn't in the doc; read the lines again and copy the text byte for byte.
 rule:     A12 (exact replace)
 verbs:    replace
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "replace: --old matches nothing in {doc}; nothing applied",
   "next": "The exact text in --old isn't in the doc (it matches byte for byte, with \\n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.",
+  "next_step": {
+    "verb": "cat",
+    "args": ["-n"],
+    "why": "The exact old text isn't in the doc; read the lines again and copy the text byte for byte."
+  },
   "rule": "A12 (exact replace)",
   "verbs": ["replace"],
   "returned_by": ["replace"],

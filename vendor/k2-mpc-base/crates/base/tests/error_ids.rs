@@ -545,7 +545,7 @@ fn walk() -> Seen {
     )); // E126
     seen.tool(s.run_tool(ed, ROOT, &argv(&["grep", "-E", "a{2000}"]), b"")); // E902
                                                                              // the meta verbs
-    let out = run_meta(&argv(&["explain", "MPC-E000"]), false, &[], &cfg).unwrap();
+    let out = run_meta(&argv(&["explain", "MPC-E999"]), false, &[], &cfg).unwrap();
     seen.report(out.refusal.unwrap(), out.exit); // E160
                                                  // a pack's own verb that applies nothing
     let p = f
@@ -875,6 +875,36 @@ fn walk() -> Seen {
         assert_eq!(o.exit, 0, "{a:?}: {o:?}");
     }
     seen.tool(s.run_tool(p, rows, &argv(&["header", "on"]), b"")); // E807
+
+    // an address that names two columns (K-ADDR-2)
+    let s = f
+        .mgr
+        .open(
+            Arc::new(grid_pack::GridLite),
+            &key("a.csv"),
+            Some(b"city,city\nOslo,x\n"),
+        )
+        .unwrap();
+    let p = f.person(&s, "ap", Rights::full());
+    seen.tool(s.run_tool(
+        p,
+        rows,
+        &argv(&["cell", "get", "--row", "#1", "--col", "city"]),
+        b"",
+    )); // E170
+
+    // an agent's edit by line with no version, where the host refuses it (K-ADDR-3)
+    let s = f.open("pos.md", b"a\nb\n");
+    let ag = f.agent(&s, "pa", Rights::editor());
+    let refuse = k2_mpc_base::tools::ToolOptions::new()
+        .positional(k2_mpc_base::tools::PositionalMode::Refuse);
+    seen.tool(s.run_tool_with(
+        ag,
+        ROOT,
+        &argv(&["replace", "--lines", "1,1"]),
+        b"z\n",
+        &refuse,
+    )); // E171
     seen
 }
 

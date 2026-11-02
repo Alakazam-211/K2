@@ -12,6 +12,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
 - **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
 
+### Live docs
+- **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.
+- **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

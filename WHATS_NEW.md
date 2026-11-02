@@ -8,21 +8,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### When you update
 - **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
 
-### Chat and voice (Sew)
-- **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
-- **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
+### Signing in
+- **A login someone else makes now starts with a temporary password.** When an owner or Admin adds a person who signs in to K2 itself, or resets their password, that person chooses their own at first sign-in. To keep the password you set, untick **Temporary password** in Settings or pass `--keep-password` to `k2 users add` or the new `k2 users set-password`.
+- **The agent list no longer comes up empty after a temporary password.** Signing in with one and choosing a new password left the list of agents empty until you relaunched K2.
 
 ### Your own domain on an App
 - **Your App's own domain can now go through K2 Connect (Pro).** Point the name at K2's relays with a CNAME to `<app>.<box>.k2.dev` (ALIAS or CNAME flattening at an apex), add the TXT record K2 shows, and the relay passes the encrypted connection down the tunnel to your server. No sudo, nothing on your server's port 443, and your server's address stays hidden, so it works behind a router, on a Mac or Windows computer, and where another web server already holds port 443. An agent with "Build and run Apps" on can run `k2 app domain add` for its own App from start to finish once the domain is attached to the server. Up to 20 names per server. Each name that joins or leaves restarts the tunnel for a few seconds. Serving a name from your server's own address stays as it was, and DNS decides which way a name goes. This opens as K2's relays turn it on.
 - **People who type `http://` reach your site.** K2's front now also holds port 80 when it is free and sends visitors of the names it serves to `https://`. Turn it off with `k2 front http off`. A server that already has the front on gets it with `k2 front http on`.
 - **Limits per visitor now cover the K2 Connect tunnel.** One visitor's open connections and writes to an App are capped, and failed App logins can be limited per visitor when the App passes `X-K2-Client-IP` on its link. These apply once the relay passes visitor addresses; `k2 tunnel status` says whether it does yet. Until then nobody is limited together with anybody else.
-
-### Web client
-- **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
-
-### Live docs
-- **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.
-- **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
 
 ### Apps
 - **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used ones until it fits. Lowering it signs nobody out until their next new device.
@@ -32,6 +25,35 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An App's server can ask K2 for its own chat Space and channel ids:** `k2.asApp().chat.space()`, feature key `app-chat-space-v1`.
 - **An App can take phone push registration only from its own server:** `k2 app push set <app> --register server`. Off by default.
 - **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
+
+### Chat and voice (Sew)
+- **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
+- **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
+- **An agent with Manage Chat / Voice Hosting on now gets its own chat account,** so it can create and run a Space without a second ask. An agent without the switch can ask for an account on a permission card.
+
+### Threads
+- **Posting to a Thread or project chat answers at once.** A post used to wait until its line was typed into the agent's terminal, up to 20 seconds with a sleeping agent. Now it answers once it is stored, and the agent gets it right after, in order.
+- **A Thread on another server opens faster.** It shows the last messages straight away while it loads, and starts loading when you hover its row.
+- **Links in chat have no copy button any more.** Right-click a link for **Copy link**.
+
+### Live docs
+- **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.
+- **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
+- **You can see your own carets from your other tabs and devices.** In the Live editor they are dashed, in your colour, and named "You · other tab".
+
+### Gardens
+- **Board Garden (Beta):** a whiteboard you and your agent share, beside your Conversation. Add it from New Garden, which turns on the Board core after one confirm; you can also turn it on in Settings → Cores. Agents work on it with `k2 board`, and `k2 study board` explains the rules.
+
+### Compute
+- **A workspace can have its own list of compute nodes:** `k2 compute allow-nodes <node>,<node>`. With a list, every job from that workspace goes only to those nodes, and naming another node is refused. An agent can narrow its own list; adding a node or clearing the list takes a person, and an agent can ask with a permission card.
+
+### Web client
+- **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
+
+### Fixes
+- **Mailed links reach your server.** Confirm and stop links for mailbox forwards and email notifications, and set-password links, could answer "Unknown subdomain", which left forwards waiting for confirmation. They now use your server's own address.
+- **Scrolling a remote Claude Code session is steadier,** because K2 now tells Claude Code it supports synchronized output.
+- **Claude Max 20x now shows as Ultra,** matching Anthropic's new name for the plan.
 
 ## 0.46.7 — Apps run their own chat
 

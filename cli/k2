@@ -21750,7 +21750,10 @@ WHERE IT GOES
                              (GET by default; k2 vault fetch --help)
                              file: $K2_SECRETS_DIR/NAME. env: $NAME (upper case,
                              - and . become _) in new sessions. You can read both.
-  --scope workspace|server|session  who keeps it (default workspace)
+  --scope workspace|server|session  who keeps it (default workspace). session: only
+                             the running K2 session that asks, with fetch or file
+                             (env never arrives). It ends if that session restarts,
+                             even with --resume; workspace survives that.
   --kind api_key|password|generic|…  what it is, so the card names it (default
                              api_key; password for a password)
   --ttl 24h                  session scope: how long it lasts

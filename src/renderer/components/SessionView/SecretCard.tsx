@@ -169,7 +169,7 @@ function sameInject(a: SecretInject | null, b: SecretInject | null): boolean {
 export const SECRET_SCOPE_WORDS: Record<SecretScope, string> = {
   workspace: 'this workspace',
   server: 'all your agents',
-  session: 'this chat only',
+  session: 'this session only',
 }
 
 /** The plain sentence: what the agent chose, as the person reads it.
@@ -420,7 +420,7 @@ export function SecretCard({
   const scopeLabel: Record<SecretScope, string> = {
     workspace: `${workspace} only`,
     server: 'all my agents',
-    session: 'this chat',
+    session: 'this session',
   }
   const deliveryLabel: Record<SecretDelivery, string> = {
     fetch: 'K2 adds it to calls',

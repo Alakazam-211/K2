@@ -3390,7 +3390,22 @@ impl LocalVault {
         let scope = match scope_word.as_str() {
             "workspace" if !guest => Scope::workspace(req.workspace_id.clone()),
             "server" if actor.is_admin_human() => Scope::server(),
-            "session" => Scope::session(req.conversation.clone()),
+            // The session that asked: its passport id is what spawn, resolve
+            // and list compare. Never the card's conversation: that is another
+            // id, and a secret kept under it reaches nobody.
+            "session" => match req.session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(sid) => Scope::session(sid),
+                None => {
+                    return Err(VaultError::conflict(
+                        "card_no_session",
+                        if guest {
+                            "No running session asked for this, so nothing could receive it. Nothing was saved. Ask the agent to ask again."
+                        } else {
+                            "No running session asked for this, so nothing could receive it. Nothing was saved. You can keep it for this workspace in the card's options, or have the agent ask from its session."
+                        },
+                    ))
+                }
+            },
             "server" => return Err(VaultError::forbidden("scope_not_allowed", "only an Owner or Admin can share with all agents")),
             _ => return Err(VaultError::forbidden("scope_not_allowed", "guests can only give a secret for this chat")),
         };
@@ -3405,6 +3420,14 @@ impl LocalVault {
             if hosts.is_empty() || hosts.iter().any(|h| h.contains("://*.")) {
                 return Err(VaultError::bad_request("guest_host_required", "add the exact site this key is for"));
             }
+        }
+        // Env and ssh keys reach new sessions only, and a new session is
+        // another session: kept for one session, they could never arrive.
+        if scope.kind == ScopeKind::Session && matches!(delivery, Delivery::Env | Delivery::Agent) {
+            return Err(VaultError::bad_request(
+                "session_env_unreachable",
+                "an environment variable reaches new sessions only, so one kept for this session alone would never arrive; use a file, or keep it for this workspace",
+            ));
         }
         if delivery == Delivery::Proxy {
             delivery = Delivery::Fetch;

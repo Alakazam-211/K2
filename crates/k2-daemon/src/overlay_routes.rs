@@ -2065,7 +2065,10 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
-    card_names(&vault, &resolved, name.trim(), &mut proposal);
+    // The hook token's session (set by the server): who asks, and who a
+    // session-scope secret is kept for.
+    let session_id = params.get("cell_session_id").cloned();
+    card_names(&vault, &resolved, session_id.as_deref(), name.trim(), &mut proposal);
     if let Some(r) = refuse_if_imported(&resolved, None) {
         return r;
     }
@@ -2073,6 +2076,11 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
     let from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
+    }
+    if proposal.scope.as_deref() == Some("session") {
+        if let Some(r) = session_card_refused_to_ask(session_id.as_deref(), proposal.delivery.as_deref()) {
+            return r;
+        }
     }
     // VS13: at most 3 pending secret cards per chat.
     match vault.pending_requests_in(&resolved.conversation_id) {
@@ -2091,7 +2099,6 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Some(Err(h)) => return usage(h),
         None => None,
     };
-    let session_id = params.get("cell_session_id").cloned();
     match create_secret_card(&vault, &resolved, &from, name.trim(), prompt.as_deref(), proposal, session_id, ttl_secs, false) {
         Err(e) => e,
         Ok(item) => {
@@ -2274,7 +2281,7 @@ pub(crate) fn post_clone_secret_card(
         inject,
         ..Default::default()
     };
-    card_names(&vault, &resolved, name, &mut proposal);
+    card_names(&vault, &resolved, None, name, &mut proposal);
     create_secret_card(&vault, &resolved, addr, name, Some(prompt), proposal, None, None, true)
         .map(|item| item.id)
         .map_err(|r| r.body)
@@ -2385,14 +2392,93 @@ fn card_inject_param(params: &HashMap<String, String>) -> Result<Option<k2_vault
 /// What the card shows by name: the env name an env delivery uses, and
 /// whether Save replaces a secret that already exists where the card
 /// proposes to keep it (SC-A16). Names only.
-fn card_names(vault: &k2_vault::LocalVault, resolved: &ResolvedOverlay, name: &str, proposal: &mut overlay::SecretProposal) {
+fn card_names(vault: &k2_vault::LocalVault, resolved: &ResolvedOverlay, session_id: Option<&str>, name: &str, proposal: &mut overlay::SecretProposal) {
     proposal.env_name = Some(k2_vault::delivery::default_env_name(name));
-    let scope = match proposal.scope.as_deref().unwrap_or("workspace") {
-        "server" => k2_vault::Scope::server(),
-        "session" => k2_vault::Scope::session(resolved.conversation_id.clone()),
+    let scope = match (proposal.scope.as_deref().unwrap_or("workspace"), session_id) {
+        ("server", _) => k2_vault::Scope::server(),
+        ("session", Some(sid)) => k2_vault::Scope::session(sid),
+        // Refused before it is posted: nothing to replace.
+        ("session", None) => return,
         _ => k2_vault::Scope::workspace(resolved.project_id.clone()),
     };
     proposal.replaces = vault.user_secret_exists(&scope, name);
+}
+
+/// `--scope session` is refused when nothing could ever receive it, so the
+/// agent hears when it asks, not after the person saved. A session secret
+/// is kept under the asking session's passport id ([`k2_vault::LocalVault::request_answer`]).
+fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>) -> Option<CliResponse> {
+    let refused = |code: &'static str, hint: &str| Some(error_json("400 Bad Request", code, hint));
+    let Some(sid) = session_id.filter(|s| crate::session_liveness::is_live(s)) else {
+        return refused(
+            "session_scope_needs_session",
+            "--scope session keeps a secret for the running K2 session that asks, and this call isn't from one; run it in that session, or use --scope workspace",
+        );
+    };
+    match delivery {
+        Some("env") => refused(
+            "session_env_unreachable",
+            "--delivery env reaches new sessions only, and a --scope session secret ends with its session, so it would never arrive; use --delivery file, or --scope workspace",
+        ),
+        Some("file") if crate::vault::spawn::kept_dir(sid).is_none() => refused(
+            "session_has_no_secrets_dir",
+            "this session has no $K2_SECRETS_DIR (it started before 0.46.5, runs sandboxed, or this machine has no memory-backed folder), so a file can't reach it; use --scope workspace (the file arrives when this session restarts), or --delivery fetch",
+        ),
+        _ => None,
+    }
+}
+
+/// Save on a card kept for the session that asked: refused while the card
+/// is still open when that session can't receive it. The value isn't kept;
+/// the person can keep it for the workspace instead.
+fn session_card_refused_to_save(req: &k2_vault::vault::SecretRequest, delivery: k2_vault::Delivery, guest: bool) -> Option<CliResponse> {
+    let sid = req.session_id.as_deref()?;
+    let can_receive = crate::session_liveness::is_live(sid)
+        && (delivery != k2_vault::Delivery::File || crate::vault::spawn::kept_dir(sid).is_some());
+    (!can_receive).then(|| {
+        error_json(
+            "409 Conflict",
+            "card_session_gone",
+            // A guest can't choose where it is kept: only what they can do.
+            if guest {
+                "The session that asked for this has ended, so it can't receive it. Nothing was saved. Ask the agent to ask again."
+            } else {
+                "The session that asked for this can't receive it: it has ended, or it can't hold files. Nothing was saved. You can keep it for this workspace in the card's options, or have the agent ask again."
+            },
+        )
+    })
+}
+
+/// What the agent hears about a file card, after Save: whether the file is
+/// in the asking session's `$K2_SECRETS_DIR` now, never a claim that it is
+/// when it isn't. `None`: no running session asked, or not a file. Other
+/// running sessions get theirs at once too.
+fn card_file_delivery(vault: &k2_vault::LocalVault, req: &k2_vault::vault::SecretRequest, m: &k2_vault::SecretMeta) -> Option<(bool, String)> {
+    if m.default_delivery != k2_vault::Delivery::File {
+        return None;
+    }
+    let top_up = req.session_id.as_deref().filter(|s| crate::session_liveness::is_live(s)).map(|sid| crate::vault::spawn::top_up(vault, sid, &req.workspace_id));
+    crate::vault::spawn::top_up_all(vault);
+    let t = top_up?;
+    let n = &m.name;
+    if t.delivered.iter().any(|f| f == n) {
+        return Some((true, format!(" Delivered: $K2_SECRETS_DIR/{n} is there now.")));
+    }
+    if t.present.iter().any(|f| f == n) {
+        return Some((
+            false,
+            format!(" NOT delivered: $K2_SECRETS_DIR/{n} already exists and K2 doesn't overwrite it, so it may hold an earlier value. k2 vault file --secret {n} gives you this one."),
+        ));
+    }
+    let (with_colon, with_how) = (format!("{n}:"), format!("{n} ("));
+    let why = t.restart.iter().chain(&t.skipped).find(|s| s.starts_with(&with_colon) || s.starts_with(&with_how));
+    Some((
+        false,
+        match why {
+            Some(why) => format!(" NOT delivered: {why}."),
+            None => format!(" NOT delivered: this session isn't granted {n}; ask the owner to share it with this workspace (k2 vault grant)."),
+        },
+    ))
 }
 
 /// A secret card in one line, for the agent that posted it: "K2 will send
@@ -2537,6 +2623,13 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         readable_disclosed: opt_param(params, "disclosed").is_some_and(|c| c == "1" || c == "true"),
         inject,
     };
+    let guest = matches!(actor, k2_vault::Actor::Guest { .. });
+    let scope_word = ans.scope.clone().unwrap_or_else(|| if guest { "session".into() } else { req.proposed_scope.clone() });
+    if req.status == "pending" && scope_word == "session" {
+        if let Some(r) = session_card_refused_to_save(&req, ans.delivery.unwrap_or(req.proposed_delivery), guest) {
+            return r;
+        }
+    }
     let result = match vault.request_answer(card_id, k2_vault::SecretBytes::from_string(value), &ans, &actor) {
         Ok(r) => r,
         Err(e) => {
@@ -2568,15 +2661,25 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         (true, Some(was)) => format!(" It replaced the earlier {} (that one was sent {was}).", m.name),
         (true, None) => format!(" It replaced the earlier {}.", m.name),
     };
+    let file_delivery = card_file_delivery(&vault, &req, m);
+    let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
+        " Kept for this running session only: it's gone if the session restarts, even with --resume. Ask with --scope workspace to keep it."
+    } else {
+        ""
+    };
+    let told = format!("{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only);
     let inject_line = format!(
-        "secret {} set → {} ({}{}{}). Use: {}{}",
+        "secret {} set → {} ({}{}{}). Use: {}{}{}{}",
         m.name,
         reference,
         m.default_delivery,
         sends,
         if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
-        crate::vault_routes::use_hint(m),
+        // The outcome is known: never "within a minute" beside it.
+        if file_delivery.is_some() { format!("k2 vault file --secret {} for a 0600 copy", m.name) } else { crate::vault_routes::use_hint(m) },
+        if replaced.is_empty() && !told.is_empty() { "." } else { "" },
         replaced,
+        told,
     );
     let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line, card_actor_author(params, session_author)) {
         Ok(cb) => cb,
@@ -2585,23 +2688,24 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     let from = card_actor_from(params, resolved, session_author);
     note_card_reader(params, session_author, &cb);
     fire_card_callbacks(resolved, &from, vec![cb.clone()], true);
-    CliResponse::ok_json(
-        serde_json::json!({
-            "ok": true,
-            "id": cb.doc_id,
-            "seq": cb.seq,
-            "kind": cb.doc.kind,
-            "status": "set",
-            "name": m.name,
-            "ref": reference,
-            "trimmed": result.trimmed,
-            "replaced": result.replaced,
-            "agentCanSee": m.agent_can_see(),
-            "conversation_id": resolved.conversation_id,
-            "addr": resolved.addr,
-        })
-        .to_string(),
-    )
+    let mut answer = serde_json::json!({
+        "ok": true,
+        "id": cb.doc_id,
+        "seq": cb.seq,
+        "kind": cb.doc.kind,
+        "status": "set",
+        "name": m.name,
+        "ref": reference,
+        "trimmed": result.trimmed,
+        "replaced": result.replaced,
+        "agentCanSee": m.agent_can_see(),
+        "conversation_id": resolved.conversation_id,
+        "addr": resolved.addr,
+    });
+    if let Some((delivered, _)) = &file_delivery {
+        answer["fileDelivered"] = serde_json::json!(delivered);
+    }
+    CliResponse::ok_json(answer.to_string())
 }
 
 fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
@@ -6722,9 +6826,12 @@ mod tests {
         let handle = format!("ovlgsec{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        // A guest's answer is kept for the running session that asked.
+        let asker = uuid::Uuid::new_v4().to_string();
+        crate::session_liveness::note_spawning(&asker);
         let posted = dispatch_post(
             "/cli/thread/secret",
-            &HashMap::new(),
+            &params_of(&[("cell_session_id", asker.as_str())]),
             serde_json::json!({ "addr": handle, "name": "GUEST_TOKEN", "for": "api.example.com", "from": "k2" })
                 .to_string()
                 .as_bytes(),

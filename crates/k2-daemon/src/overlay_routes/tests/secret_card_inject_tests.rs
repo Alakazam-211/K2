@@ -291,3 +291,178 @@ fn clone_leave_blank_cards_carry_the_sending() {
         .expect("card");
     assert_eq!(vault.request_get(&ovh).expect("request").inject, None, "a signer never rides a card");
 }
+
+const SESSION_PW: &str = "k2test-session-card-pw-71c3";
+
+/// A live agent session with its secrets dir, under a throwaway runtime dir.
+struct LiveSession {
+    sid: String,
+    dir: std::path::PathBuf,
+    _run: k2_core::test_env::EnvVar,
+    _t: k2_vault::fsutil::TestDir,
+}
+
+fn live_session(tag: &str, project_id: &str) -> LiveSession {
+    let t = k2_vault::fsutil::TestDir::new(tag);
+    let run = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+    let sid = uuid::Uuid::new_v4().to_string();
+    let dir = crate::vault::spawn::materialize(&mut HashMap::new(), project_id, &sid, false, &crate::vault::spawn::SpawnRefs::default())
+        .dir
+        .expect("a live session has a secrets dir");
+    LiveSession { sid, dir, _run: run, _t: t }
+}
+
+fn post_as(sid: &str, handle: &str, name: &str, scope: &str, delivery: &str) -> CliResponse {
+    post_json(
+        "/cli/thread/secret",
+        &params_of(&[("cell_session_id", sid)]),
+        serde_json::json!({ "addr": handle, "name": name, "scope": scope, "delivery": delivery, "from": "k2" }),
+    )
+}
+
+/// The field report: `k2 thread secret --scope session --delivery file`, Save,
+/// card "saved", and the asking session saw nothing in `$K2_SECRETS_DIR` or
+/// `k2 vault list`: the secret was bound to the Thread's conversation id, and
+/// every check compares the passport's session id.
+#[test]
+fn a_session_file_card_reaches_the_session_that_asked() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlss");
+    let s = live_session("sess-card", &project_id);
+    let posted = post_as(&s.sid, &handle, "SESSION_FILE", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert!(!set.body.contains(SESSION_PW));
+    let body = json_body(&set);
+    assert_eq!(body["ref"], format!("k2v://session/{}/SESSION_FILE", s.sid), "{body}");
+    assert_eq!(body["fileDelivered"], true, "{body}");
+    assert_eq!(std::fs::read(s.dir.join("SESSION_FILE")).expect("the file is there at once"), SESSION_PW.as_bytes());
+
+    // k2 vault list, and a bare NAME from that session.
+    let me = crate::vault::actor::VaultCaller {
+        actor: k2_vault::Actor::Agent(k2_vault::AgentActor { workspace_id: project_id.clone(), session_id: Some(s.sid.clone()), shell: false, vault_manage: false }),
+        channel: crate::vault::actor::Channel::Plain,
+        session_id: Some(s.sid.clone()),
+    };
+    let listed = vault.list(&k2_vault::ListFilter::default(), &me.actor).expect("list");
+    assert!(listed.iter().any(|m| m.name == "SESSION_FILE"), "k2 vault list shows it");
+    let file = crate::vault_routes::handle_on(
+        &vault,
+        crate::vault_use_routes::FILE,
+        Ok(me.clone()),
+        serde_json::json!({ "secret": "SESSION_FILE" }).to_string().as_bytes(),
+        &HashMap::new(),
+        "test",
+        None,
+    );
+    assert_eq!(file.status, "200 OK", "k2 vault file --secret finds its own session's secret: {}", file.body);
+
+    let injects = recorded_injects();
+    let line = injects.iter().find(|l| l.contains("secret SESSION_FILE set")).unwrap_or_else(|| panic!("{injects:?}"));
+    assert!(line.contains("Delivered: $K2_SECRETS_DIR/SESSION_FILE is there now."), "{line}");
+    assert!(line.contains("even with --resume"), "the agent hears it ends with the session: {line}");
+    assert!(injects.iter().all(|l| !l.contains(SESSION_PW)), "{injects:?}");
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// Asking is refused when nothing could receive it, so the agent hears at once.
+#[test]
+fn a_session_card_is_refused_when_nothing_could_receive_it() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlsr");
+    let s = live_session("sess-refuse", &project_id);
+
+    // Not from a session (an owner's terminal).
+    let r = post_json("/cli/thread/secret", &HashMap::new(), serde_json::json!({ "addr": handle, "name": "A", "scope": "session", "delivery": "file", "from": "k2" }));
+    assert_error_code(&r, "400 Bad Request", "session_scope_needs_session");
+    // A session K2 doesn't know is running (a job's passport).
+    assert_error_code(&post_as("job-r1", &handle, "A", "session", "file"), "400 Bad Request", "session_scope_needs_session");
+    // Env can't reach a running session, and a new one is another session.
+    let r = post_as(&s.sid, &handle, "A", "session", "env");
+    assert_error_code(&r, "400 Bad Request", "session_env_unreachable");
+    assert!(r.body.contains("--scope workspace"), "{}", r.body);
+    crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// The person is told before Save when the session that asked is gone: the
+/// value isn't kept, the card stays open, and saving for the workspace works.
+#[test]
+fn saving_for_a_session_that_ended_is_refused_and_the_card_stays_open() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlse");
+    let s = live_session("sess-ended", &project_id);
+    let posted = post_as(&s.sid, &handle, "ENDED_FILE", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    crate::vault::spawn::session_ended(&s.sid);
+
+    let r = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_error_code(&r, "409 Conflict", "card_session_gone");
+    assert!(!r.body.contains(SESSION_PW));
+    assert_eq!(card_doc(&handle, &id)["status"], "pending", "the card stays open");
+    assert!(!vault.user_secret_exists(&k2_vault::Scope::session(s.sid.clone()), "ENDED_FILE"), "nothing kept");
+
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({ "scope": "workspace" }));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert!(vault.user_secret_exists(&k2_vault::Scope::workspace(project_id), "ENDED_FILE"));
+}
+
+/// A guest can't choose where a secret is kept, so a refusal never sends them
+/// to that option. Nothing is kept and the card stays open.
+#[test]
+fn a_guests_refusal_only_says_what_a_guest_can_do() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlsg");
+    let as_guest = |id: &str| {
+        let mut pass = person_pass(&[project_id.clone()]);
+        pass.username = "gail".into();
+        with_request_skin(Some(pass), || {
+            post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "secret": SESSION_PW }))
+        })
+    };
+    let body = |name: &str| serde_json::json!({ "addr": handle, "name": name, "for": "api.example.com", "from": "k2" });
+    for (ended, params, code) in [
+        ("GUEST_ENDED", params_of(&[("cell_session_id", "gone-session")]), "card_session_gone"),
+        ("GUEST_NONE", HashMap::new(), "card_no_session"),
+    ] {
+        let posted = post_json("/cli/thread/secret", &params, body(ended));
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+        let r = as_guest(&id);
+        assert_error_code(&r, "409 Conflict", code);
+        assert!(r.body.contains("Ask the agent to ask again"), "{}", r.body);
+        assert!(!r.body.contains("workspace"), "a guest can't keep it for the workspace: {}", r.body);
+        assert!(!r.body.contains(SESSION_PW));
+        assert_eq!(vault.request_get(&id).expect("request").status, "pending", "the card stays open");
+    }
+}
+
+/// A card never claims a delivery that didn't happen: a file of that name is
+/// already in the folder, and K2 doesn't overwrite it.
+#[test]
+fn a_file_already_in_the_folder_is_not_claimed_as_delivered() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlsp");
+    let s = live_session("sess-present", &project_id);
+    std::fs::write(s.dir.join("STALE_FILE"), b"earlier").expect("earlier file");
+    let posted = post_as(&s.sid, &handle, "STALE_FILE", "workspace", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert_eq!(json_body(&set)["fileDelivered"], false, "{}", set.body);
+    assert_eq!(std::fs::read(s.dir.join("STALE_FILE")).expect("file"), b"earlier", "never overwritten");
+    let injects = recorded_injects();
+    let line = injects.iter().find(|l| l.contains("secret STALE_FILE set")).unwrap_or_else(|| panic!("{injects:?}"));
+    assert!(line.contains("NOT delivered: $K2_SECRETS_DIR/STALE_FILE already exists"), "{line}");
+    crate::vault::spawn::session_ended(&s.sid);
+}

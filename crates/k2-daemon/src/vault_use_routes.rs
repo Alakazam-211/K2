@@ -17,7 +17,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use k2_vault::fetch::MAX_INLINE_BODY;
 use k2_vault::hosts::{Origin, OriginPattern};
-use k2_vault::{Actor, LocalVault, Requester, Role, SecretStore, Use, VaultError};
+use k2_vault::{Actor, LocalVault, Namespace, Requester, Role, Scope, SecretStore, Selector, Use, VaultError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -150,6 +150,22 @@ pub fn jailed_path(workspace_root: &Path, rel: &str) -> Result<PathBuf, VaultErr
     Ok(parent.join(name))
 }
 
+/// The secret a bare NAME means for an agent's own use (fetch, file,
+/// env-file, which take no `--scope`): its session's own secret of that
+/// name, else what [`selector`] finds. A session-scope card tells the agent
+/// `k2 vault fetch --secret NAME`, so a bare name has to reach it.
+fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
+    let sel = selector(c, s)?;
+    let bare = s.scope.as_deref().is_none_or(str::is_empty) && s.workspace.is_none();
+    if let (true, Selector::Name { namespace: Namespace::User, name, .. }, Some(sid)) = (bare, &sel, c.session_id.as_deref()) {
+        let own = Scope::session(sid);
+        if vault.user_secret_exists(&own, name) {
+            return Ok(Selector::user(own, name.clone()));
+        }
+    }
+    Ok(sel)
+}
+
 fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let a = c.actor.agent().ok_or_else(|| {
         VaultError::forbidden("use_fetch_as_agent", "k2 vault fetch runs for an agent session; people call the site themselves")
@@ -169,7 +185,7 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
     let who = c.requester()?;
     let mut injections = vec![];
     for w in &wanted {
-        let sel = selector(c, &w.sel)?;
+        let sel = use_selector(vault, c, &w.sel)?;
         let r = vault.resolve(&sel, Use::Fetch(&origin), &who)?;
         let (dst, fmt) = r.inject.choose(w.dst.as_deref(), w.fmt.as_deref())?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);
@@ -312,7 +328,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let who = c.requester()?;
     let mut lines = String::new();
     for n in &b.secrets {
-        let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;
+        let sel = use_selector(vault, c, &Sel { name: Some(n.clone()), ..Default::default() })?;
         let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
         k2_vault::delivery::validate_env_file_value(r.value.expose())?;
         let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
@@ -497,7 +513,7 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     }
     let n = b.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("secret_required", "name the secret: --secret NAME"))?;
     let who = c.requester()?;
-    let sel = selector(c, &Sel { name: Some(n.to_string()), ..Default::default() })?;
+    let sel = use_selector(vault, c, &Sel { name: Some(n.to_string()), ..Default::default() })?;
     let r = vault.resolve(&sel, Use::File, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))?;
     let tag: String = r.meta.name.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')).take(40).collect();
     let file = format!("{}-{tag}", k2_vault::crypto::base62(16));

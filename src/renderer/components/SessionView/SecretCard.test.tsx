@@ -118,7 +118,7 @@ describe('SecretCard: the simple view', () => {
     cleanup()
     card({ delivery: 'fetch', scope: 'session', hosts: ['https://api.stripe.com:443', 'https://files.stripe.com:443'] }, async () => {})
     expect(plan()).toBe(
-      'K2 will add this to calls to api.stripe.com and files.stripe.com, for this chat only; sales never sees it.',
+      'K2 will add this to calls to api.stripe.com and files.stripe.com, for this session only; sales never sees it.',
     )
   })
 })
@@ -149,13 +149,13 @@ describe('SecretCard: Advanced', () => {
     fireEvent.click(screen.getByLabelText(/an environment variable sales can read/))
     expect(plan()).toBe('sales will get this as an environment variable it can read, for this workspace.')
     expect(screen.getByTestId('thread-secret-readable').textContent).toBe('sales can see this value')
-    fireEvent.click(screen.getByLabelText('this chat'))
-    expect(plan()).toBe('sales will get this as an environment variable it can read, for this chat only.')
+    fireEvent.click(screen.getByLabelText('this session'))
+    expect(plan()).toBe('sales will get this as an environment variable it can read, for this session only.')
     fireEvent.click(screen.getByLabelText(/K2 adds it to calls/))
     fireEvent.change(screen.getByTestId('thread-secret-site-input'), { target: { value: 'files.stripe.com' } })
     fireEvent.click(screen.getByTestId('thread-secret-site-add'))
     expect(plan()).toBe(
-      'K2 will add this to calls to api.stripe.com and files.stripe.com, for this chat only; sales never sees it.',
+      'K2 will add this to calls to api.stripe.com and files.stripe.com, for this session only; sales never sees it.',
     )
     paste(VALUE)
     fireEvent.click(screen.getByTestId('thread-secret-submit'))

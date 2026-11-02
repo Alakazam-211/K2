@@ -438,3 +438,65 @@ fn a_card_value_never_reaches_the_request_rows_or_audit() {
     let audit = format!("{:?}", v.audit(&AuditQuery::default(), &Actor::Owner).expect("audit"));
     assert!(!audit.contains(PW));
 }
+
+/// A session-scope card binds to the session that asked: the passport id
+/// spawn, resolve and list compare. The Thread's conversation id is another
+/// id, and a secret bound to it reached nobody while the card said saved.
+#[test]
+fn a_session_card_binds_to_the_session_that_asked() {
+    let t = TestDir::new("ci-session");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    let readable = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let mut c = card("card-sess-0123456789ab", "SESS_FILE", None);
+    c.proposed_scope = "session".into();
+    c.proposed_hosts = vec![];
+    c.proposed_delivery = Delivery::File;
+    v.request_create(c).expect("card");
+    let out = v.request_answer("card-sess-0123456789ab", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect("saved");
+    assert_eq!(out.meta.scope, Scope::session("sess-1"), "the asking session, not the conversation");
+    assert_eq!(out.reference, "k2v://session/sess-1/SESS_FILE");
+
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    let items = v.spawn_items(&me).expect("items");
+    assert_eq!(items.iter().map(|i| (i.name.as_str(), i.delivery)).collect::<Vec<_>>(), vec![("SESS_FILE", Delivery::File)]);
+    let r = v.resolve(&Selector::Id(out.meta.id.clone()), Use::File, &me).expect("resolve");
+    assert_eq!(r.value.expose(), PW.as_bytes());
+    let listed = v.list(&ListFilter::default(), &agent("ws1")).expect("list");
+    assert!(listed.iter().any(|m| m.name == "SESS_FILE"), "k2 vault list shows it to that session");
+
+    // Another session of the workspace, and a passport holding the chat's id
+    // as if it were a session, get nothing.
+    for other in ["sess-2", "conv-1"] {
+        let who = Requester::Session { workspace_id: "ws1".into(), session_id: Some(other.into()) };
+        assert!(v.spawn_items(&who).expect("items").is_empty(), "{other}");
+        assert!(v.resolve(&Selector::Id(out.meta.id.clone()), Use::File, &who).is_err(), "{other}");
+        let a = Actor::Agent(AgentActor { workspace_id: "ws1".into(), session_id: Some(other.into()), shell: false, vault_manage: false });
+        assert!(!v.list(&ListFilter::default(), &a).expect("list").iter().any(|m| m.name == "SESS_FILE"), "{other}");
+    }
+
+    // No session asked: nothing could receive it, so Save is refused and
+    // nothing is kept. The card can still be saved for the workspace.
+    let mut none = card("card-nosess-0123456789", "NO_SESS", None);
+    none.session_id = None;
+    none.proposed_scope = "session".into();
+    none.proposed_hosts = vec![];
+    none.proposed_delivery = Delivery::File;
+    v.request_create(none).expect("card");
+    let e = v.request_answer("card-nosess-0123456789", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).err().expect("refused");
+    assert_eq!(e.code, "card_no_session");
+    assert_eq!(v.request_get("card-nosess-0123456789").expect("request").status, "pending");
+    assert!(v.list(&ListFilter::default(), &Actor::Owner).expect("list").iter().all(|m| m.name != "NO_SESS"));
+    let ws = CardAnswer { scope: Some("workspace".into()), readable_disclosed: true, ..Default::default() };
+    v.request_answer("card-nosess-0123456789", SecretBytes::from_string(PW.to_string()), &ws, &Actor::Owner).expect("for the workspace");
+
+    // Env reaches new sessions only, and a session's secret ends with it.
+    let mut env = card("card-sessenv-012345678", "SESS_ENV", None);
+    env.proposed_scope = "session".into();
+    env.proposed_hosts = vec![];
+    env.proposed_delivery = Delivery::Env;
+    v.request_create(env).expect("card");
+    let e = v.request_answer("card-sessenv-012345678", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).err().expect("refused");
+    assert_eq!(e.code, "session_env_unreachable");
+    assert_eq!(v.request_get("card-sessenv-012345678").expect("request").status, "pending");
+}

@@ -52,6 +52,7 @@ pub mod client_ip_labels;
 pub mod config;
 pub mod connector;
 pub mod cp_proxy;
+pub mod custom_names;
 pub mod failover;
 pub(crate) mod frpc_proc;
 pub mod identity;

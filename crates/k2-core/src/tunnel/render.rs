@@ -38,6 +38,27 @@ use super::config::{RelayEndpoint, TunnelConfig};
 /// subdomain so a restart reuses the same name. Defaults to
 /// `k2so-<subdomain>` (or `k2so-daemon` when no subdomain is set).
 pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> String {
+    render_frpc_toml_with(cfg, local_port, e2e, &custom_for_render())
+}
+
+/// The Path B names a render carries. k2-core's own unit tests render none
+/// (they run in parallel with the list's own test, which changes it); the
+/// list is exercised through [`render_frpc_toml_with`].
+fn custom_for_render() -> Vec<String> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    super::custom_names::current()
+}
+
+/// [`render_frpc_toml`] with an explicit Path B name list (0.46.8, PB-2):
+/// with E2E on, a subdomain and at least one name, a second `https` proxy
+/// `k2-custom-<label>` carries `customDomains = [the names]` to the same
+/// `localPort` (the E2E listener, which serves those names), PROXY v2 on
+/// like the main proxy. frps registers only the names the control plane
+/// verified for this label. No names (or E2E off) renders no second proxy,
+/// byte-identical to before 0.46.8.
+pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, custom: &[String]) -> String {
     let sub = cfg.subdomain.trim();
     let proxy_name = if sub.is_empty() {
         "k2so-daemon".to_string()
@@ -97,6 +118,21 @@ pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> Strin
         out.push_str("transport.proxyProtocolVersion = \"v2\"\n");
     }
 
+    if e2e && !sub.is_empty() && !custom.is_empty() {
+        out.push('\n');
+        out.push_str("# Path B (0.46.8): this box's own domains through K2's relays. The relay\n");
+        out.push_str("# passes each TLS stream through by name; the daemon ends TLS with the\n");
+        out.push_str("# name's own certificate.\n");
+        out.push_str("[[proxies]]\n");
+        out.push_str(&format!("name = {}\n", toml_str(&format!("{}{sub}", super::custom_names::PROXY_PREFIX))));
+        out.push_str("type = \"https\"\n");
+        out.push_str("localIP = \"127.0.0.1\"\n");
+        out.push_str(&format!("localPort = {local_port}\n"));
+        let list: Vec<String> = custom.iter().map(|n| toml_str(n)).collect();
+        out.push_str(&format!("customDomains = [{}]\n", list.join(", ")));
+        out.push_str("transport.proxyProtocolVersion = \"v2\"\n");
+    }
+
     out
 }
 
@@ -114,10 +150,23 @@ pub fn render_frpc_toml_for_relay(
     local_port: u16,
     e2e: bool,
 ) -> String {
+    render_frpc_toml_for_relay_with(cfg, relay, local_port, e2e, &custom_for_render())
+}
+
+/// [`render_frpc_toml_for_relay`] with an explicit Path B name list: the
+/// custom proxy is in the shared body, so every relay's render carries it
+/// (vs-live PB-A4).
+pub fn render_frpc_toml_for_relay_with(
+    cfg: &TunnelConfig,
+    relay: &RelayEndpoint,
+    local_port: u16,
+    e2e: bool,
+    custom: &[String],
+) -> String {
     let mut c = cfg.clone();
     c.server_addr = relay.host.clone();
     c.server_port = relay.port;
-    render_frpc_toml(&c, local_port, e2e)
+    render_frpc_toml_with(&c, local_port, e2e, custom)
 }
 
 /// Minimal TOML basic-string escaping. frp config values (host, token,
@@ -373,5 +422,42 @@ mod tests {
             toml.contains(r#"token = "ab\"c\nname = \"evil""#),
             "token escaping failed — TOML injection possible\n{toml}"
         );
+    }
+
+    /// PB-2 / PRD test 4 / PB-A4: the custom proxy lists exactly the names
+    /// given, has PROXY v2 and the same localPort, rides every relay's
+    /// render byte for byte, and an empty list (or E2E off) renders none.
+    #[test]
+    fn the_custom_proxy_carries_the_path_b_names_in_every_relay_render() {
+        let cfg = sample();
+        let names = vec!["a.example.com".to_string(), "shop.example.com".to_string()];
+        let toml = render_frpc_toml_with(&cfg, 57839, true, &names);
+        let custom = toml.split("[[proxies]]").nth(2).expect("a second proxy");
+        assert!(custom.contains("name = \"k2-custom-rosson\""), "{toml}");
+        assert!(custom.contains("type = \"https\""), "{toml}");
+        assert!(custom.contains("localPort = 57839"), "same local port\n{toml}");
+        assert!(custom.contains("customDomains = [\"a.example.com\", \"shop.example.com\"]"), "{toml}");
+        assert!(custom.contains("transport.proxyProtocolVersion = \"v2\""), "{toml}");
+        assert!(!custom.contains("subdomain ="), "{toml}");
+        assert_eq!(toml.matches("[[proxies]]").count(), 2);
+        // No names, or E2E off: exactly today's render.
+        assert_eq!(render_frpc_toml_with(&cfg, 57839, true, &[]), render_frpc_toml(&cfg, 57839, true));
+        assert_eq!(render_frpc_toml_with(&cfg, 57839, false, &names), render_frpc_toml(&cfg, 57839, false));
+        // Every relay: only the server lines differ.
+        let a = RelayEndpoint { host: "relay-a.example".into(), port: 7000 };
+        let b = RelayEndpoint { host: "relay-b.example".into(), port: 7001 };
+        let strip = |t: &str| {
+            t.lines()
+                .filter(|l| !l.starts_with("serverAddr") && !l.starts_with("serverPort"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let ra = render_frpc_toml_for_relay_with(&cfg, &a, 57839, true, &names);
+        let rb = render_frpc_toml_for_relay_with(&cfg, &b, 57839, true, &names);
+        assert!(ra.contains("customDomains") && rb.contains("customDomains"));
+        assert_eq!(strip(&ra), strip(&rb), "byte-identical apart from the relay");
+        // A name can't break out of its string.
+        let evil = render_frpc_toml_with(&cfg, 1, true, &["x\"]\nname = \"evil".to_string()]);
+        assert!(evil.contains(r#"customDomains = ["x\"]\nname = \"evil"]"#), "{evil}");
     }
 }

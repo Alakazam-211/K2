@@ -1323,6 +1323,8 @@ pub fn start(
             old.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ")
         );
     }
+    // 0.46.8: the Path B name list this render carries (PB-2).
+    let names_gen = super::custom_names::generation();
     let rendered = render_frpc_toml_for_relay(&cfg, &dial.relays[0], resolved_local_port, e2e);
 
     // Runtime stage H (AR3/K37): adopt the frpc the previous daemon left
@@ -1478,6 +1480,7 @@ pub fn start(
         health.clone(),
         adopted,
     )?;
+    super::custom_names::note_rendered(names_gen);
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
     // lease on its own timer so it never lapses with the Settings panel
@@ -1974,6 +1977,11 @@ enum ChildOutcome {
     /// controlled move to the new primary ([`LiveList`]) — respawn at once,
     /// no failure counted, no backoff.
     ListMove(RelaySwitch),
+    /// 0.46.8 (Path B, PB-2): the custom names the second proxy carries
+    /// changed (and stayed put for `custom_names::SETTLE`); WE killed the
+    /// child so the respawn renders the new list. A few seconds' blip, no
+    /// failure counted, no backoff. Hitless reload is a follow-up.
+    CustomNamesChanged,
 }
 
 /// Shared per-child-run state for the MID-SESSION relay-death watchdog.
@@ -2040,6 +2048,9 @@ struct RunHealth<'a> {
     ensure_config: &'a dyn Fn(),
     came_up: bool,
     ticks: u32,
+    /// The Path B name list's generation this child was rendered with
+    /// (`custom_names`, 0.46.8): a newer list restarts it.
+    names_gen: u64,
 }
 
 impl RunHealth<'_> {
@@ -2150,6 +2161,13 @@ fn wait_for_exit(
                 child.kill_and_wait();
                 return ChildOutcome::WatchdogKill;
             }
+        }
+        // 0.46.8 (Path B): a changed custom-name list needs frpc to
+        // re-register its second proxy: one restart once the list settles.
+        if e2e && super::custom_names::restart_due(run.names_gen, Instant::now()) {
+            crate::log_debug!("[tunnel] Path B custom names changed — restarting frpc to carry them (a few seconds' blip)");
+            child.kill_and_wait();
+            return ChildOutcome::CustomNamesChanged;
         }
         // 0.46.6 (D7): follow a changed dial list without a restart.
         if let Some(sw) = live.poll(selector, publish, Instant::now()) {
@@ -2474,6 +2492,7 @@ fn spawn_supervised(
                             }
                         }
                         watch = new_watch();
+                        let names_gen = super::custom_names::generation();
                         match render_and_spawn(
                             &frpc_thread,
                             &cfg_thread,
@@ -2487,6 +2506,7 @@ fn spawn_supervised(
                             Ok((c, stop)) => {
                                 drop(slot);
                                 tail_stop = stop;
+                                super::custom_names::note_rendered(names_gen);
                                 c
                             }
                             Err(e) => {
@@ -2508,6 +2528,7 @@ fn spawn_supervised(
                     ensure_config: &ensure_config,
                     came_up: false,
                     ticks: 0,
+                    names_gen: super::custom_names::running_generation(),
                 };
                 let outcome = wait_for_exit(
                     &mut child,
@@ -2577,6 +2598,10 @@ fn spawn_supervised(
                         }
                         publish_relay(&selector);
                         super::relay_list::request_refresh("relay switch");
+                        backoff = initial_backoff;
+                    }
+                    ChildOutcome::CustomNamesChanged => {
+                        // The respawn below renders the current list.
                         backoff = initial_backoff;
                     }
                     ChildOutcome::ListMove(sw) => {

@@ -84,6 +84,18 @@ pub const APP_STATES: &[&str] =
 pub const PATH_DIRECT: &str = "direct";
 pub const PATH_CONNECT: &str = "connect";
 
+/// This box's claim on a Path B name at K2 Connect's control plane (0259,
+/// 0.46.8): claimed, waiting for the control plane's own TXT check.
+pub const RELAY_CLAIMED: &str = "claimed";
+/// The control plane verified the name for this box: the relay routes it.
+pub const RELAY_VERIFIED: &str = "verified";
+/// The control plane released it (7 days failing its re-check, or another
+/// account proved it): the relay no longer routes it here.
+pub const RELAY_RELEASED: &str = "released";
+/// The control plane refused the claim (`relay_error` says why).
+pub const RELAY_REFUSED: &str = "refused";
+pub const RELAY_STATES: &[&str] = &[RELAY_CLAIMED, RELAY_VERIFIED, RELAY_RELEASED, RELAY_REFUSED];
+
 /// The owner name of the TXT proof (§6).
 pub const VERIFY_LABEL: &str = "_k2-domain";
 
@@ -125,6 +137,15 @@ pub struct AppDomain {
     pub failing_since: Option<i64>,
     /// The apex row still exists (a dangling apex serves nothing).
     pub apex_attached: bool,
+    /// Path B (0259): this box's claim at the control plane (`None`: never
+    /// claimed). See [`RELAY_STATES`].
+    #[serde(default)]
+    pub relay_state: Option<String>,
+    /// The control plane's last refusal or release reason.
+    #[serde(default)]
+    pub relay_error: Option<String>,
+    #[serde(default)]
+    pub relay_checked_at: Option<i64>,
 }
 
 impl AppDomain {
@@ -141,6 +162,20 @@ impl AppDomain {
     pub fn is_origin(&self) -> bool {
         self.is_live() || self.is_external()
     }
+    /// Path B: DNS showed this box's k2.dev name at the last check.
+    pub fn is_connect(&self) -> bool {
+        self.path.as_deref() == Some(PATH_CONNECT)
+    }
+    /// Path B and the control plane verified it for this box: the relay
+    /// routes it here, so the tunnel's custom proxy carries it (`live` and
+    /// `issuing` names; the caller filters the state).
+    pub fn via_relay(&self) -> bool {
+        self.is_connect() && self.relay_state.as_deref() == Some(RELAY_VERIFIED)
+    }
+    /// Holds a place in the box's Path B cap (claimed or verified).
+    pub fn holds_relay_claim(&self) -> bool {
+        matches!(self.relay_state.as_deref(), Some(RELAY_CLAIMED) | Some(RELAY_VERIFIED))
+    }
     /// The TXT record to set: (name, value).
     pub fn txt(&self) -> (String, String) {
         (verify_txt_name(&self.hostname), verify_txt_value(&self.verify_token))
@@ -148,7 +183,8 @@ impl AppDomain {
 }
 
 const APP_DOMAIN_COLS: &str = "n.hostname, n.apex, n.role, n.state, n.verify_token, n.verified_at, n.checked_at, \
-     n.path, n.is_primary, n.last_error, n.failing_since, (b.apex IS NOT NULL)";
+     n.path, n.is_primary, n.last_error, n.failing_since, (b.apex IS NOT NULL), n.relay_state, n.relay_error, \
+     n.relay_checked_at";
 
 fn app_domain_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDomain> {
     let role: String = row.get(2)?;
@@ -165,6 +201,9 @@ fn app_domain_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDomain> {
         last_error: row.get(9)?,
         failing_since: row.get(10)?,
         apex_attached: row.get::<_, i64>(11)? != 0,
+        relay_state: row.get(12)?,
+        relay_error: row.get(13)?,
+        relay_checked_at: row.get(14)?,
     })
 }
 
@@ -275,6 +314,36 @@ pub fn set_app_external(conn: &Connection, hostname: &str, on: bool) -> rusqlite
         )?
     };
     Ok(n > 0)
+}
+
+/// Record this box's claim at the control plane on an `app:` hostname
+/// (Path B, 0259): `state` one of [`RELAY_STATES`] or `None` (no claim),
+/// `error` the control plane's words (`None` clears). Refuses an unknown
+/// state. Returns whether a row changed.
+pub fn set_relay_state(
+    conn: &Connection,
+    hostname: &str,
+    state: Option<&str>,
+    error: Option<&str>,
+    at: i64,
+) -> rusqlite::Result<bool> {
+    if let Some(st) = state {
+        if !RELAY_STATES.contains(&st) {
+            return Err(rusqlite::Error::InvalidParameterName(format!("unknown relay state '{st}'")));
+        }
+    }
+    let n = conn.execute(
+        "UPDATE domain_names SET relay_state = ?2, relay_error = ?3, relay_checked_at = ?4 \
+         WHERE hostname = ?1 AND role LIKE 'app:%'",
+        params![hostname, state, error, at],
+    )?;
+    Ok(n > 0)
+}
+
+/// How many names hold a place in this box's Path B cap (claimed or
+/// verified at the control plane).
+pub fn relay_claims(conn: &Connection) -> rusqlite::Result<usize> {
+    Ok(app_domains(conn)?.iter().filter(|d| d.holds_relay_claim()).count())
 }
 
 /// What one DNS check found, written in one statement.

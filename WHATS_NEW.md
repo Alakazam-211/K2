@@ -26,6 +26,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Apps
 - **An App can set how many devices one person keeps signed in:** `k2 app login settings <app> --max-devices 5` (1 to 20, default 20). Past it, a new device ends that person's least recently used one. Lowering it signs nobody out until their next new device.
+- **K2 is ready to tell Sew every live host of an App,** so calls can work on all of them. It starts once Sew supports it; until then calls work on the App's primary host (`k2 app domain primary <app> <host>`).
 - **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
 
 ## 0.46.7 — Apps run their own chat

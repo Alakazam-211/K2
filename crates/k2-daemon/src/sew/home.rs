@@ -12,7 +12,8 @@
 //! Feature flags, never versions (Sew 2026-10-28): the home client and
 //! the App-only mark go once Sew reports `home_client`; each chat App's
 //! signalling origin (`wss://<its public host>`, which voice for a custom
-//! App needs) once it reports `app_origin` ([`refresh_origins`] keeps it
+//! App needs) once it reports `app_origin`, and all of them once it reports
+//! `app_origins` ([`refresh_origins`] keeps them
 //! current from the App's bindings on every sweep).
 //!
 //! Gates: reads take any real credential; writes are POST-only, Admin
@@ -247,8 +248,20 @@ pub fn signalling_origin(service_id: &str, name: &str) -> Option<String> {
         .and_then(|o| o.strip_prefix("https://").map(|h| format!("wss://{h}")))
 }
 
+/// Every Sew signalling origin of an App, primary first: its live custom
+/// names, the `meet` label, its own label and the labels it took over (the
+/// hosts people reach it on; `K2_APP_ORIGINS` as `wss://`).
+pub fn signalling_origins(service_id: &str, name: &str) -> Vec<String> {
+    let origins = crate::apps::origins::for_service(service_id, name);
+    wss_origins(&crate::apps::origins::with_taken_labels(origins, &crate::apps::labels::taken(name)))
+}
+
+fn wss_origins(https: &[String]) -> Vec<String> {
+    https.iter().filter_map(|o| o.strip_prefix("https://").map(|h| format!("wss://{h}"))).collect()
+}
+
 /// The sweep's first settings step (blocking): record every chat App's
-/// current signalling origin and label, so a bound domain or a new Connect
+/// current signalling origins and label, so a bound domain or a new Connect
 /// subdomain reaches Sew. Errors are logged, never fatal to the sweep.
 pub fn refresh_origins() {
     let apps = match k2_core::tool_hook::chat_apps() {
@@ -272,6 +285,10 @@ pub fn refresh_origins() {
     if let Err(e) = k2_core::tool_hook::note_app_origins(&rows) {
         k2_core::log_debug!("[sew] App origins: {e}");
     }
+    let lists: Vec<(String, Vec<String>)> = rows.iter().map(|(id, _, name)| (id.clone(), signalling_origins(id, name))).collect();
+    if let Err(e) = k2_core::tool_hook::note_app_origin_lists(&lists) {
+        k2_core::log_debug!("[sew] App origin lists: {e}");
+    }
 }
 
 fn view() -> R<Value> {
@@ -291,6 +308,7 @@ fn view() -> R<Value> {
                 "name": r.body.get("display_name"),
                 "hiddenFromHome": r.body.get("hidden_from_home"),
                 "origin": r.body.get("origin"),
+                "origins": r.body.get("origins"),
                 "delivered": r.delivered,
                 "updatedBy": r.updated_by,
             }));
@@ -320,6 +338,7 @@ fn view() -> R<Value> {
             "homeClient": has(f::HOME_CLIENT),
             "homeClientOwnerApproval": has(f::HOME_CLIENT_OWNER_APPROVAL),
             "appOrigin": has(f::APP_ORIGIN),
+            "appOrigins": has(f::APP_ORIGINS),
             "k2ManagedAvatar": has(f::K2_MANAGED_AVATAR),
         },
         "note": if has(f::HOME_CLIENT) {

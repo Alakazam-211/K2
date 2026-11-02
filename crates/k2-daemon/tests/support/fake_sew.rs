@@ -27,7 +27,8 @@
 //!   without the flag refuses the field like an older Sew (400, recorded in
 //!   `bad_bodies`).
 //! - App settings (decision 13 + Sew 0.6.0 I7): `hidden_from_home`,
-//!   `display_name`, `origin`; with `app_governed_spaces` also `max_level`
+//!   `display_name`, `origin`; with `app_origins` (not in Sew 0.6.1) also
+//!   `origins`; with `app_governed_spaces` also `max_level`
 //!   (`member | moderator | admin`) and `uploads` (bool). `max_level` on the
 //!   home-client App → 409 `conflict` reason `home_client_cannot_govern`.
 //! - provision is DECLARATIVE (A8, live Sew): absent optional profile
@@ -1291,9 +1292,15 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
     if governed {
         known.extend(["max_level", "uploads"]);
     }
+    // Sew's request type denies unknown fields (sew-proto 0.6.1 has no
+    // `origins`): the field K2 asks Sew for goes only with its flag.
+    if s.features.iter().any(|f| f == "app_origins") {
+        known.push("origins");
+    }
     let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| known.contains(&k.as_str())));
     let ok_types = v.get("hidden_from_home").is_none_or(Value::is_boolean)
         && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(|o| o.starts_with("wss://")))
+        && v.get("origins").is_none_or(|l| l.as_array().is_some_and(|a| a.iter().all(|o| o.as_str().is_some_and(|o| o.starts_with("wss://")))))
         && v.get("max_level").is_none_or(|l| matches!(l.as_str(), Some("member" | "moderator" | "admin")))
         && v.get("uploads").is_none_or(Value::is_boolean);
     if app.is_empty() || !ok_keys || !ok_types {

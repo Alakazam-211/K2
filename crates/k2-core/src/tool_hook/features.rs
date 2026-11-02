@@ -28,6 +28,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 pub const APP_SCOPED_SESSIONS: &str = "app_scoped_sessions";
 pub const HOME_CLIENT: &str = "home_client";
 pub const APP_ORIGIN: &str = "app_origin";
+/// Not in Sew 0.6.1 (asked of Sew, 0.46.8): `origins` in the App settings,
+/// every public `wss://` origin of an App. Sew's request type denies unknown
+/// fields, so the list goes only once Sew reports this flag.
+pub const APP_ORIGINS: &str = "app_origins";
 pub const K2_MANAGED_AVATAR: &str = "k2_managed_avatar";
 pub const APP_CHANNEL_CREATE: &str = "app_channel_create";
 pub const SPACE_UNBIND: &str = "space_unbind";

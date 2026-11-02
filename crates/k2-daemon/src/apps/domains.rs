@@ -1005,6 +1005,38 @@ mod custom_tests {
         crate::app_pairing::links::set_files("agentnsi", None);
     }
 
+    /// 0.46.8: Sew's origin stays the one primary; the list carries every
+    /// live host, primary first, and a name that isn't live is in neither.
+    #[test]
+    fn sews_origin_list_is_every_live_host_primary_first() {
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        setup();
+        let (a, b, waiting) = ("a.agentnsi.com", "b.agentnsi.com", "wait.agentnsi.com");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for h in [a, b, waiting] {
+                k2_core::domains::upsert_name(&conn, h, "agentnsi.com", "app:agentnsi").unwrap();
+            }
+            for h in [a, b] {
+                k2_core::domains::set_app_state(&conn, h, k2_core::domains::STATE_LIVE, None).unwrap();
+            }
+            k2_core::domains::set_primary(&conn, "agentnsi", b).unwrap();
+        }
+        let service = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::deploy::store::get_app(&conn, "agentnsi").unwrap().expect("the App").service_id
+        };
+        let list = crate::sew::home::signalling_origins(&service, "agentnsi");
+        assert_eq!(list.first().map(String::as_str), Some("wss://b.agentnsi.com"), "primary first: {list:?}");
+        assert!(list.iter().any(|o| o == "wss://a.agentnsi.com"), "{list:?}");
+        assert!(!list.iter().any(|o| o.contains("wait.")), "not live, not an origin: {list:?}");
+        assert!(list.iter().all(|o| k2_core::tool_hook::home::is_sew_origin(o)), "each one Sew takes: {list:?}");
+        assert_eq!(crate::sew::home::signalling_origin(&service, "agentnsi").as_deref(), list.first().map(String::as_str), "the one origin is the list's first");
+    }
+
     #[test]
     fn conflicts_are_refused_at_bind() {
         let _db = k2_core::db::scoped_for_test();

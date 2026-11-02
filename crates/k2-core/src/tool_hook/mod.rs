@@ -1506,6 +1506,22 @@ pub fn note_app_origins(apps: &[(String, Option<String>, String)]) -> Result<usi
     })
 }
 
+/// Record every signalling origin of `apps` (`(service id, wss origins,
+/// primary first)`), beside [`note_app_origins`]'s one. Returns how many
+/// changed.
+pub fn note_app_origin_lists(apps: &[(String, Vec<String>)]) -> Result<usize, String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| {
+        let mut n = 0;
+        for (app, origins) in apps {
+            if home::set_app_origins(conn, app, origins, ACTOR_RECONCILE, now)? {
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+}
+
 /// The Apps the sweep keeps an origin for: those bound to a Sew Space,
 /// those with the owner's guests-chat grant, and those with settings.
 pub fn chat_apps() -> Result<Vec<String>, String> {

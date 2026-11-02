@@ -318,6 +318,55 @@ async fn home_settings_follow_sews_feature_flags_never_its_version() {
     env.sew.assert_clean();
 }
 
+/// 0.46.8: every live origin of an App reaches Sew, but only a Sew that
+/// reports `app_origins`. Sew 0.6.1 denies unknown fields, so sending it the
+/// list early would get the App's whole settings row refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_origin_goes_only_once_sew_takes_the_list() {
+    let env = setup().await;
+    // The pinned Sew's flags: origin yes, the list no. The fake refuses an
+    // unknown field the way Sew's request type does.
+    env.sew.set_features(&["app_origin", "home_client"]);
+    let jobs = uuid::Uuid::new_v4().to_string();
+    let list = vec!["wss://jobs.example.com".to_string(), "wss://jobs.box.k2.dev".to_string()];
+    hook::note_app_origins(&[(jobs.clone(), Some(list[0].clone()), "Jobs".into())]).unwrap();
+    assert_eq!(hook::note_app_origin_lists(&[(jobs.clone(), list.clone())]).unwrap(), 1);
+    assert_eq!(hook::note_app_origin_lists(&[(jobs.clone(), list.clone())]).unwrap(), 0, "the same list: no change");
+    worker::reconcile_once().await.expect("sweep on today's Sew");
+    drain(&env).await;
+    let held = env.sew.app_settings(&jobs).unwrap();
+    assert_eq!(held["origin"], serde_json::json!("wss://jobs.example.com"));
+    assert_eq!(held.get("origins"), None, "Sew 0.6.1 never sees the field: {held}");
+    assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered), "and nothing is blocked over it");
+    env.sew.assert_clean();
+
+    // The list changes on today's Sew: nothing to send.
+    let before = env.sew.posts().len();
+    hook::note_app_origin_lists(&[(jobs.clone(), vec![list[0].clone()])]).unwrap();
+    worker::reconcile_once().await.expect("sweep, list changed");
+    drain(&env).await;
+    assert_eq!(env.sew.posts().len(), before, "a list Sew can't take is no reason to send");
+
+    // Sew reports the flag: the list goes, primary first, with the origin.
+    hook::note_app_origin_lists(&[(jobs.clone(), list.clone())]).unwrap();
+    env.sew.set_features(&["app_origin", "app_origins", "home_client"]);
+    worker::reconcile_once().await.expect("sweep with app_origins");
+    drain(&env).await;
+    let held = env.sew.app_settings(&jobs).unwrap();
+    assert_eq!(held["origin"], serde_json::json!("wss://jobs.example.com"));
+    assert_eq!(held["origins"], serde_json::json!(list), "{}", env.sew.log());
+    assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered));
+
+    // No public URL any more: an empty list clears it, with the origin.
+    hook::note_app_origins(&[(jobs.clone(), None, "Jobs".into())]).unwrap();
+    hook::note_app_origin_lists(&[(jobs.clone(), Vec::new())]).unwrap();
+    worker::reconcile_once().await.expect("sweep, no URL");
+    drain(&env).await;
+    let held = env.sew.app_settings(&jobs).unwrap();
+    assert_eq!((held["origin"].clone(), held["origins"].clone()), (serde_json::Value::Null, serde_json::json!([])), "{held}");
+    env.sew.assert_clean();
+}
+
 /// App-governed Spaces S7 (AG-13c): an App that loses its public URL sends
 /// `origin: null`, so Sew drops the old one; a new URL goes again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

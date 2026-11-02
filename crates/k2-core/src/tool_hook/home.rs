@@ -19,7 +19,7 @@
 //! | Subject | Op | Sew call | Body (any subset per call) |
 //! |---|---|---|---|
 //! | `home-client` | `home_client` | `POST /mgmt/v1/home-client` | `{app_id: "<service id>" \| null}` |
-//! | `app:<id>` | `app_settings` | `POST /mgmt/v1/apps/{app_id}/settings` | `{hidden_from_home, display_name, origin, max_level, uploads}` |
+//! | `app:<id>` | `app_settings` | `POST /mgmt/v1/apps/{app_id}/settings` | `{hidden_from_home, display_name, origin, origins, max_level, uploads}` |
 //!
 //! **Feature flags, never versions** ([`super::features`]): the home
 //! client, `hidden_from_home` and `display_name` go only once Sew reports
@@ -28,6 +28,12 @@
 //! sweep plans exactly the fields Sew can take and sends again whenever
 //! that subset changes (a flag appeared, the owner changed a setting, the
 //! App's origin moved); a new install owes everything again.
+//!
+//! **Every origin (0.46.8):** `origin` is one host, the App's primary, so a
+//! person on any other host of the App gets a signalling URL on the wrong
+//! host. K2 keeps the whole list (`origins`, primary first) and sends it only
+//! once Sew reports `app_origins`. Sew 0.6.1 doesn't: its request type denies
+//! unknown fields, so until then only `origin` goes.
 //!
 //! **The chat key (App-governed Spaces S1, Sew 0.6.0 I7):** an App's
 //! `max_level` (`member | moderator | admin`) and `uploads` (bool) come
@@ -121,6 +127,34 @@ pub fn set_app_origin(conn: &Connection, app_id: &str, origin: Option<&str>, dis
     merge(conn, &subject, f, actor, now)
 }
 
+/// The most origins K2 sends Sew for one App, primary first.
+pub const APP_ORIGINS_MAX: usize = 32;
+
+/// Is `s` an origin Sew takes (`is_app_origin`, sew-proto 0.6.1):
+/// `wss://<host>[:port]`, lower case, no path? One odd name must not block
+/// the App's whole settings row.
+pub fn is_sew_origin(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("wss://").filter(|_| s.len() <= 255) else { return false };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (rest, None),
+    };
+    let label_ok = |l: &str| {
+        !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    let port_ok = port.is_none_or(|p| !p.starts_with('0') && p.parse::<u16>().is_ok_and(|n| n > 0));
+    host.len() <= 253 && host.split('.').all(label_ok) && port_ok
+}
+
+/// Record every public signalling origin of an App, primary first (none: no
+/// public URL). Merged into its row; [`sendable`] sends it once Sew reports
+/// `app_origins`. Names Sew would refuse are left out.
+pub fn set_app_origins(conn: &Connection, app_id: &str, origins: &[String], actor: &str, now: i64) -> Result<bool, String> {
+    let subject = format!("{APP_PREFIX}{app_id}");
+    let list: Vec<&String> = origins.iter().filter(|o| is_sew_origin(o)).take(APP_ORIGINS_MAX).collect();
+    merge(conn, &subject, obj(json!({ "origins": list })), actor, now)
+}
+
 /// Record `actor` as the setter of `subject`'s unchanged body.
 pub fn restamp(conn: &Connection, subject: &str, actor: &str, now: i64) -> Result<(), String> {
     conn.execute(
@@ -198,6 +232,12 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
             }
             if let Some(v) = body.get("display_name") {
                 out.insert("display_name".into(), v.clone());
+            }
+        }
+        // Never before the flag: Sew 0.6.1 refuses the whole body over it.
+        if has(features::APP_ORIGINS) {
+            if let Some(v) = body.get("origins").filter(|v| v.is_array()) {
+                out.insert("origins".into(), v.clone());
             }
         }
         if has(features::APP_GOVERNED_SPACES) {
@@ -346,6 +386,34 @@ mod tests {
         s.iter().map(|x| x.to_string()).collect()
     }
 
+    /// The same rule as sew-proto 0.6.1's `is_app_origin`, whose table this
+    /// is, so one odd name can't get the App's whole row refused.
+    #[test]
+    fn origins_are_checked_the_way_sew_checks_them() {
+        for ok in ["wss://jobs.example.com", "wss://localhost:7443", "wss://a-b.c1.example.com", "wss://x.y:65535"] {
+            assert!(is_sew_origin(ok), "{ok}");
+        }
+        let long = format!("wss://{}.com", "a".repeat(64));
+        for bad in [
+            "https://jobs.example.com",
+            "ws://jobs.example.com",
+            "wss://",
+            "wss://Jobs.example.com",
+            "wss://jobs.example.com/rtc",
+            "wss://jobs.example.com?x=1",
+            "wss://user@jobs.example.com",
+            "wss://-a.example.com",
+            "wss://a..example.com",
+            "wss://a_b.example.com",
+            "wss://a.example.com:0",
+            "wss://a.example.com:065",
+            "wss://a.example.com:65536",
+            long.as_str(),
+        ] {
+            assert!(!is_sew_origin(bad), "{bad}");
+        }
+    }
+
     #[test]
     fn only_the_fields_sews_flags_allow_are_sent() {
         let app = obj(json!({"hidden_from_home": true, "display_name": "Jobs", "origin": "wss://jobs.example.com"}));
@@ -363,6 +431,18 @@ mod tests {
             sendable("app:x", &no_origin, &f(&["app_origin"])),
             Some(json!({"display_name": "Jobs", "origin": null})),
             "a null origin clears in Sew"
+        );
+        // 0.46.8: the whole list waits for its own flag (Sew 0.6.1 reports
+        // app_origin and denies unknown fields).
+        let many = obj(json!({"display_name": "Jobs", "origin": "wss://a.example.com", "origins": ["wss://a.example.com", "wss://b.example.com"]}));
+        assert_eq!(
+            sendable("app:x", &many, &f(&["app_origin", "home_client"])),
+            Some(json!({"display_name": "Jobs", "origin": "wss://a.example.com"})),
+            "no origins field for a Sew that doesn't report app_origins"
+        );
+        assert_eq!(
+            sendable("app:x", &many, &f(&["app_origin", "app_origins"])),
+            Some(json!({"display_name": "Jobs", "origin": "wss://a.example.com", "origins": ["wss://a.example.com", "wss://b.example.com"]}))
         );
         let home = obj(json!({"app_id": null}));
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["app_origin"])), None);

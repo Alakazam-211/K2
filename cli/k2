@@ -10949,6 +10949,12 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
+CALLS WORK ON ONE HOST TODAY: Sew holds one origin per App, your primary
+(a custom name you mark with k2 app domain primary <app> <host> once it is
+live, else the App's label), and answers joins with that host. A person on
+another host of your App can't connect to it. If people use a custom name,
+mark it primary. Once Sew reports app_origins ("every App origin" in
+k2 hostchat home), K2 sends all your live hosts.
 
 YOUR SERVER (never the browser):
   chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,
@@ -65986,8 +65992,8 @@ Home client (each App session sees only its own App's Spaces once Sew has app_sc
                                                 tab); never an admin or an agent, even with Manage Chat / Voice Hosting
   k2 hostchat home app <app> --hidden on|off    "App-only": its Spaces never show in the home client
                                                 (on: Manage Chat / Voice Hosting; off: the owner or an admin, never an agent)
-          The human output says "app-scoped sessions yes|no", "app origin yes|no" (Sew's flags
-          app_scoped_sessions, app_origin): k2 study app-chat.
+          The human output says "app-scoped sessions yes|no", "app origin yes|no", "every App
+          origin yes|no" (Sew's flags app_scoped_sessions, app_origin, app_origins): k2 study app-chat.
 Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's published keys):
   k2 hostchat pass-keys [--json]                each key: kid, state (next, current, retiring), when
   k2 hostchat pass-keys rotate [--json]         switch to the next key now (it must have been published
@@ -66847,8 +66853,8 @@ if not v.get("ok", True):
     print(json.dumps(v)); sys.exit(0)
 sew = v.get("sew") or {}
 yn = lambda b: "yes" if b else "no"
-print("Sew flags:    app-scoped sessions %s · home client %s · app origin (voice for Apps) %s · K2-managed avatar %s" % (
-    yn(sew.get("appScopedSessions")), yn(sew.get("homeClient")), yn(sew.get("appOrigin")), yn(sew.get("k2ManagedAvatar"))))
+print("Sew flags:    app-scoped sessions %s · home client %s · app origin (voice for Apps) %s · every App origin %s · K2-managed avatar %s" % (
+    yn(sew.get("appScopedSessions")), yn(sew.get("homeClient")), yn(sew.get("appOrigin")), yn(sew.get("appOrigins")), yn(sew.get("k2ManagedAvatar"))))
 if not sew.get("appScopedSessions"):
     print("              not app-scoped yet: only the owner gives chat (k2 app user chat <user> member --app <app>),")
     print("              and an App can see all chat its people can")

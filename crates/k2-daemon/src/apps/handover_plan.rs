@@ -255,6 +255,17 @@ impl Plan {
                 "Guests: {moving} guest(s) keep their access and stay signed in. From now on they talk to {b}. Their conversations with {a} stay with {a}."
             ));
         }
+        // 0.46.8: the App's guests-rooms grant is the App's, not the agent's:
+        // the rooms the owner approved stay, and B hands them out the same.
+        if let Ok(Some(g)) = k2_core::skin::guest_rooms::get_grant(&self.app.service_id) {
+            let kept: Vec<String> = g.rooms.iter().filter(|r| **r != self.room_from).map(|r| ws_handle(r)).collect();
+            if !kept.is_empty() {
+                out.push(format!(
+                    "Rooms you approved for {app}'s guests ({}) stay with the App: {b} can hand them out as {a} could, and logins {b} sets up can use them. Take them back any time: k2 app grant {app} --kind guests-rooms --revoke.",
+                    kept.join(", ")
+                ));
+            }
+        }
         let retired = self.guests.iter().filter(|g| (g.class == sh::CLASS_GIVER_TIED || g.class == sh::CLASS_APP_KEY_TIED) && g.has_password).count();
         if retired > 0 {
             out.push(format!(

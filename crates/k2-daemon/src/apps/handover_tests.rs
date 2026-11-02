@@ -815,6 +815,62 @@ fn a_guest_a_set_up_is_retied_and_its_password_retired() {
     assert!(k2_core::skin::verify_principal_password("bea-t31", "new-from-b-2"));
 }
 
+/// 0.46.8 (Rosson 2026-11-02): the guests-rooms grant is the App's, so the
+/// rooms the owner approved carry to the new agent. The card says so, and
+/// `k2 app handover status --detail`'s row names the list and the card for
+/// A, B and the owner.
+#[test]
+fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
+    let f = fx("gr1");
+    k2_core::skin::guest_rooms::grant(&f.svc, &[f.c.clone()], "owner-token").unwrap();
+    // A login A's agent set up, in the App's room and the approved one.
+    let pid = guest("tia-gr1", &f.svc, &[&f.a, &f.c]);
+    k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
+    k2_core::skin::creators::tie(&pid, &f.a, "agent:gr1", k2_core::skin::ties::REASON_CREATED).unwrap();
+    let s = k2_core::skin::create_app_session_token("tia-gr1", &f.svc).unwrap();
+    let rooms = |raw: &str| {
+        let mut v: Vec<String> = k2_core::skin::resolve_skin_token(raw).expect("live").room_policy.into_keys().collect();
+        v.sort();
+        v
+    };
+    let mut before = vec![f.a.clone(), f.c.clone()];
+    before.sort();
+    assert_eq!(rooms(&s.raw), before);
+
+    let (_, v) = ask(&f);
+    let lines = v["plan"]["lines"].as_array().expect("lines");
+    let line = lines.iter().filter_map(|l| l.as_str()).find(|l| l.starts_with("Rooms you approved")).unwrap_or_else(|| panic!("the card says so: {v}"));
+    assert!(line.contains(&handle_of(&f.c)) && line.contains(&handle_of(&f.b)), "{line}");
+    let rid = req_id(&v);
+
+    // Before the approval: the row names the list and the card, to all three.
+    for who in [agent(&f.a), agent(&f.b), Who::Owner] {
+        let (st, s) = get("/cli/app/handover/status", &who, &[("app", &f.app)]);
+        assert_eq!(st, 200, "{s}");
+        let h = &s["handovers"][0];
+        assert_eq!(h["requestId"], json!(rid), "{who:?}: {h}");
+        assert!(h["plan"]["lines"].as_array().expect("lines").iter().any(|l| l.as_str().is_some_and(|l| l.starts_with("Rooms you approved"))), "{who:?}: {h}");
+        if who.passport().is_some() {
+            assert!(h["plan"]["to"].get("folder").is_none(), "an agent never reads B's folder here: {h}");
+        }
+    }
+    // Another agent reads nothing of it.
+    let (_, other) = get("/cli/app/handover/status", &agent(&f.c), &[("app", &f.app)]);
+    assert_eq!(other["handovers"], json!([]), "{other}");
+
+    let (st, v) = approve(&rid);
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+
+    // The grant is the App's: the room stays, the App's own moved to B.
+    let ceiling = k2_core::skin::guest_rooms::app_ceiling(&f.svc).unwrap().expect("the grant carried");
+    assert!(ceiling.contains(&f.c) && ceiling.contains(&f.b) && !ceiling.contains(&f.a), "{ceiling:?}");
+    // The login, re-tied to B, stays signed in with the same reach.
+    assert_eq!(tie_of(&pid).as_deref(), Some(f.b.as_str()));
+    let mut after = vec![f.b.clone(), f.c.clone()];
+    after.sort();
+    assert_eq!(rooms(&s.raw), after, "the approved room still works under B");
+}
+
 /// T3.2: a shared guest stays A's; the owner may take it over instead.
 #[test]
 fn a_shared_guest_stays_a_s_unless_the_owner_resets_it() {
@@ -910,13 +966,13 @@ fn the_ceiling_lets_a_tied_guest_through_the_commit_gap_only() {
     };
     let mut policy = k2_core::skin::RoomPolicy::new();
     policy.insert("ws-a".into(), vec!["thread:read".into()]);
-    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy.clone()), Err(ties::Denied), "no marker: refused in the gap");
+    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), &[], policy.clone()), Err(ties::Denied), "no marker: refused in the gap");
     {
         let _g = sh::begin_handing_over("svc-gap2", "ws-a", "ws-b");
-        assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy.clone()), Ok(policy.clone()), "inside while it hands over");
-        assert_eq!(ties::clamp(Some(&tie), "svc-else", Some("ws-b"), policy.clone()), Err(ties::Denied), "only this App");
+        assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), &[], policy.clone()), Ok(policy.clone()), "inside while it hands over");
+        assert_eq!(ties::clamp(Some(&tie), "svc-else", Some("ws-b"), &[], policy.clone()), Err(ties::Denied), "only this App");
     }
-    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), policy), Err(ties::Denied), "over when the guard drops");
+    assert_eq!(ties::clamp(Some(&tie), "svc-gap2", Some("ws-b"), &[], policy), Err(ties::Denied), "over when the guard drops");
 }
 
 // ── S4: secrets, the database, the re-key ────────────────────────────

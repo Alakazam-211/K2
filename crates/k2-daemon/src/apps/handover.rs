@@ -698,6 +698,8 @@ fn status_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "handovers": rows.iter().map(|r| {
             let mut v = row_json(r);
             v["inWindow"] = json!(r.in_window(now));
+            // An agent reads the card's list, as `plan` shows it to it.
+            scrub(who, &mut v);
             v
         }).collect::<Vec<_>>(),
     }))

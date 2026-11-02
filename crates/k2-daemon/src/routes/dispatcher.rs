@@ -1496,6 +1496,23 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
+    // Voice rooms §14.11: the native call engine's door to Sew. It carries a
+    // call credential, not a K2 login, so it answers before K2's login and
+    // method gates; its own allowlist and credential check run instead. Never
+    // on an App's link.
+    if ingress != Ingress::App && crate::voice::sew_lane::is_lane(path_and_query) {
+        let head_len = buf[..n].windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4);
+        let head = req.to_string();
+        match head_len {
+            Some(len) => crate::voice::sew_lane::serve(&mut *stream, &head[..len.min(head.len())], len).await,
+            None => {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(&mut *stream, "400 Bad Request", "application/json", r#"{"error":"incomplete request head"}"#).await;
+            }
+        }
+        return DispatchOutcome::Done;
+    }
+
     // Runtime S14: a request on an App's gateway link passes the link's
     // gate (Host, no cookies, the App-facing route table, this link's App
     // pass) before anything else routes it. Every request of the

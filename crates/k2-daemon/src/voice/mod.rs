@@ -19,6 +19,7 @@ pub mod bff;
 pub mod lane;
 pub mod occupancy;
 pub mod routes;
+pub mod sew_lane;
 
 #[cfg(test)]
 mod tests;

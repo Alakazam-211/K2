@@ -11,9 +11,19 @@
 //!
 //! - **The proof** (§6): `_k2-domain.<host> TXT "k2-verify=<token>"`
 //!   (per name, per box), AND every A/AAAA of the name is one of this
-//!   box's public addresses. A name resolving to Cloudflare's proxy is
-//!   called out ("DNS-only, grey cloud"). A CNAME to `<sub>.k2.dev` is
-//!   path (b), not served in this release (B5 + relay).
+//!   box's public addresses (path a, `direct`). A name resolving to
+//!   Cloudflare's proxy is called out ("DNS-only, grey cloud").
+//! - **Path B** (0.46.8, `connect`; prd-custom-domains-path-b-0467-v1
+//!   PB-3/PB-5): the name is a CNAME (a chain) to one of this box's k2.dev
+//!   names (the App's own `<app>.<box>.k2.dev`), or an ALIAS / flattened
+//!   apex whose addresses are all K2's relays. Then the box also needs K2
+//!   Connect Pro, a free place in the 20-name cap, and the control plane's
+//!   own verification (`relay_claims`): claim + verify → `issuing` (the
+//!   tunnel's custom proxy carries the name; TLS-ALPN-01 through the
+//!   relay) → `live`. For such a name the control plane decides routing:
+//!   the box's daily DNS check only informs the owner, and the control
+//!   plane's `released` moves it to `failing` (vs-live PB-A15). Which path
+//!   a name takes is decided by DNS alone (D4); the certificate is the same.
 //! - K2 plants the TXT itself when k2.dev hosts the zone (`dns_write`).
 //! - **No order before the proof** (`acme::app_name_may_issue`). The first
 //!   certificate is ordered when the check passes (DNS-01 on a K2-hosted
@@ -189,31 +199,121 @@ pub(crate) fn set_test_nat(v: Option<Option<bool>>) {
     TEST_NAT.with(|c| *c.borrow_mut() = v);
 }
 
-/// The Path B pointer for a box behind a router (PRD §7).
-pub const NAT_WORDING: &str = "This server is on a home or office connection. Pointing your domain here sends visitors \
-to your network directly and shows its address. Use K2 Connect instead (Pro, coming in 0.46.7): your domain points at \
-K2's relays and your address stays hidden.";
-/// The Path B pointer for a Mac or Windows computer (PRD §7).
-pub const DESKTOP_WORDING: &str = "Your own domain on this computer comes with K2 Connect in 0.46.7.";
+/// The Path B pointer for a box behind a router (PRD §7), when Path B is
+/// open to it.
+pub const NAT_WORDING: &str = "This server is on a home or office connection. Pointing your domain here would send \
+visitors to your network directly and show its address, so K2 uses K2 Connect: your domain points at K2's relays \
+(set the records below) and your address stays hidden.";
+/// What a Mac or Windows computer offers (PRD §7, vs-live PB-A16): Path B
+/// only (front443 is Linux-only).
+pub const DESKTOP_WORDING: &str = "On this computer your own domain goes through K2 Connect: it points at K2's \
+relays (set the records below). Nothing listens on this computer's port 443.";
 
-/// Pure: which path this box offers and what K2 says (PRD §7). `holder`:
-/// the :443 holder's JSON when the front is off (`front443::port443_holder`).
-pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: Option<&J>) -> J {
+/// Path B's facts for [`advice_for`] (PB-4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathB {
+    /// Behind K2 Connect with E2E (`Err`: what's missing).
+    pub ready: Result<(), String>,
+    /// On Pro (`Err`: can't tell right now).
+    pub pro: Result<bool, String>,
+    /// Names holding a place in the box's cap.
+    pub used: usize,
+}
+
+impl PathB {
+    /// Path B is open to this box now.
+    pub fn open(&self) -> bool {
+        self.ready.is_ok() && self.pro == Ok(true)
+    }
+    /// Why not, in plain words (`None` when open).
+    pub fn why_not(&self) -> Option<String> {
+        if let Err(w) = &self.ready {
+            return Some(w.clone());
+        }
+        match &self.pro {
+            Ok(true) => None,
+            Ok(false) => Some(super::relay_claims::not_pro_words()),
+            Err(w) => Some(w.clone()),
+        }
+    }
+    fn json(&self) -> J {
+        let cap = k2_core::tunnel::custom_names::MAX_PER_BOX;
+        json!({
+            "available": self.open(),
+            "connect": self.ready.is_ok(),
+            "pro": self.pro.as_ref().ok(),
+            "why": self.why_not(),
+            "used": self.used,
+            "cap": cap,
+            "meter": format!("{} of {cap} names through K2's relays", self.used),
+            "upgrade": (self.pro == Ok(false)).then_some(super::relay_claims::UPGRADE_URL),
+        })
+    }
+}
+
+/// Pure: which path this box offers and what K2 says (PRD §7; Path B
+/// PB-4, PB-A16). `holder`: the :443 holder's JSON when the front is off
+/// (`front443::port443_holder`). `path` is the one K2 recommends (`a` or
+/// `b`); `records` says how the records are shown (`shown`, `advanced`,
+/// `none`); `pathB` carries Path B's availability and the 20-name meter.
+pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: Option<&J>, b: &PathB) -> J {
+    let pb = b.json();
+    let open = b.open();
     if !linux {
-        return json!({"path": "b", "pathA": false, "records": "none", "message": DESKTOP_WORDING});
+        if open {
+            return json!({"path": "b", "pathA": false, "records": "shown", "message": DESKTOP_WORDING, "pathB": pb});
+        }
+        let why = b.why_not().unwrap_or_default();
+        return json!({
+            "path": "b",
+            "pathA": false,
+            "records": "none",
+            "message": format!("Your own domain on this computer goes through K2 Connect (Path B). {why}"),
+            "pathB": pb,
+        });
     }
     if nat == Some(true) {
+        if open {
+            return json!({"path": "b", "pathA": true, "behindNat": true, "records": "shown", "message": NAT_WORDING, "pathB": pb});
+        }
+        let why = b.why_not().unwrap_or_default();
         return json!({
             "path": "b",
             "pathA": true,
             "behindNat": true,
             "records": "advanced",
-            "message": NAT_WORDING,
+            "message": format!(
+                "This server is on a home or office connection. Pointing your domain here sends visitors to your network \
+                 directly and shows its address. K2 Connect keeps it hidden (Path B): {why}"
+            ),
             "advanced": "Advanced: I've forwarded port 443 to this server: use the records below.",
+            "pathB": pb,
         });
     }
     if !front_enabled {
-        if let Some(h) = holder.filter(|h| h["holder"] == "foreign") {
+        let foreign = holder.filter(|h| h["holder"] == "foreign");
+        if open {
+            let lead = match foreign {
+                Some(_) => "Another web server holds port 443 on this server.",
+                None => "K2's :443 front is off on this server.",
+            };
+            let mut v = json!({
+                "path": "b",
+                "pathA": true,
+                "behindNat": nat,
+                "records": "shown",
+                "message": format!(
+                    "{lead} Through K2 Connect (Pro) your domain points at K2's relays instead: no sudo, nothing on port \
+                     443 (set the records below). Path A (the owner runs k2 front enable) also works."
+                ),
+                "pathB": pb,
+            });
+            if let Some(h) = foreign {
+                v["port443"] = h.clone();
+            }
+            return v;
+        }
+        if let Some(h) = foreign {
             return json!({
                 "path": "a",
                 "pathA": true,
@@ -221,6 +321,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
                 "records": "shown",
                 "port443": h,
                 "message": h["message"],
+                "pathB": pb,
             });
         }
         return json!({
@@ -229,17 +330,31 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
             "behindNat": nat,
             "records": "shown",
             "message": "Turn on the :443 front first: the owner runs k2 front enable (an agent's request is held for the owner).",
+            "pathB": pb,
         });
     }
-    json!({"path": "a", "pathA": true, "behindNat": nat, "records": "shown", "message": J::Null})
+    json!({"path": "a", "pathA": true, "behindNat": nat, "records": "shown", "message": J::Null, "pathB": pb})
+}
+
+/// Path B's facts for this box now (the plan read is cached, PB-A5).
+pub fn path_b_now() -> PathB {
+    let used = k2_core::db::try_shared()
+        .map(|db| {
+            let conn = db.lock();
+            domains::relay_claims(&conn).unwrap_or(0)
+        })
+        .unwrap_or(0);
+    let ready = super::relay_claims::ready();
+    let pro = if ready.is_ok() { super::relay_claims::pro() } else { Ok(false) };
+    PathB { ready, pro, used }
 }
 
 /// [`advice_for`] for this box, cached 30 s (the :443 check may run
-/// `systemctl`).
+/// `systemctl`; the plan read may reach the control plane).
 pub fn setup_advice() -> J {
     // Tests: Linux wording, no :443 probe, no cache.
     #[cfg(test)]
-    return advice_for(true, behind_nat(), k2_core::front443::load().enabled, None);
+    return advice_for(true, behind_nat(), k2_core::front443::load().enabled, None, &path_b_now());
     #[cfg(not(test))]
     {
         static CACHE: OnceLock<Mutex<Option<(i64, J)>>> = OnceLock::new();
@@ -252,7 +367,7 @@ pub fn setup_advice() -> J {
         }
         let front_enabled = k2_core::front443::load().enabled;
         let holder = (cfg!(target_os = "linux") && !front_enabled).then(crate::front443::port443_holder);
-        let v = advice_for(cfg!(target_os = "linux"), behind_nat(), front_enabled, holder.as_ref());
+        let v = advice_for(cfg!(target_os = "linux"), behind_nat(), front_enabled, holder.as_ref(), &path_b_now());
         *g = Some((now(), v.clone()));
         v
     }
@@ -315,8 +430,41 @@ pub struct Outcome {
     pub seen: Vec<String>,
 }
 
-/// Check `d` against DNS (pure given `lk` and the box's addresses).
+/// This box's k2.dev name (`<sub>.k2.dev`), or `None` off K2 Connect.
+fn box_k2_name(sub: &str) -> Option<String> {
+    let sub = sub.trim().to_ascii_lowercase();
+    (!sub.is_empty()).then(|| format!("{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST))
+}
+
+/// `name` is this box's k2.dev name or a name under it.
+fn is_box_k2_name(name: &str, box_name: &str) -> bool {
+    let n = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    n == box_name || n.ends_with(&format!(".{box_name}"))
+}
+
+/// The k2.dev name a Path B record points at: the App's own
+/// `<app>.<box>.k2.dev` (K2 Web guidance, 11-01). `None` off K2 Connect.
+pub fn path_b_target(app: &str, sub: &str) -> Option<String> {
+    box_k2_name(sub).map(|b| format!("{}.{b}", app.trim().to_ascii_lowercase()))
+}
+
+/// Most CNAME hops followed.
+const MAX_CNAME_HOPS: usize = 8;
+
+/// Check `d` against DNS (pure given `lk` and the box's addresses), with
+/// K2's relay addresses as last resolved (`relay_addrs`).
 pub fn evaluate(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &str) -> Outcome {
+    evaluate_with(d, lk, box_ips, sub, &crate::relay_addrs::addrs())
+}
+
+/// [`evaluate`] with the relay addresses given (tests).
+///
+/// Path B (`connect`, PB-5): a CNAME chain (at most 8 hops) that reaches
+/// this box's k2.dev name or a name under it; or, with no CNAME (an ALIAS,
+/// ANAME or flattened apex), A/AAAA records that are all K2's relays or
+/// this box's k2.dev name's own addresses. A chain ending at another k2.dev
+/// name, or answers mixing the relays with anything else, is named.
+pub fn evaluate_with(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &str, relay_ips: &[IpAddr]) -> Outcome {
     let mut problems: Vec<String> = Vec::new();
     let (txt_name, txt_value) = d.txt();
     let txt_ok = match lk.txt(&txt_name) {
@@ -329,26 +477,91 @@ pub fn evaluate(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &str) -
     if !txt_ok && problems.is_empty() {
         problems.push(format!("TXT {txt_name} \"{txt_value}\" is not visible yet"));
     }
-    let connect = (!sub.is_empty()).then(|| format!("{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST));
-    if let (Some(c), Some(k)) = (lk.cname(&d.hostname), connect.as_ref()) {
-        if c == *k {
+    let box_name = box_k2_name(sub);
+    let target = path_b_target(&d.app, sub);
+    // Path B by CNAME: follow the chain.
+    let mut chain: Vec<String> = Vec::new();
+    let mut cur = d.hostname.clone();
+    while chain.len() < MAX_CNAME_HOPS {
+        let Some(c) = lk.cname(&cur) else { break };
+        let c = c.trim().trim_end_matches('.').to_ascii_lowercase();
+        chain.push(c.clone());
+        if box_name.as_deref().is_some_and(|b| is_box_k2_name(&c, b)) {
+            let ok = txt_ok;
+            return Outcome {
+                txt_ok,
+                here: true,
+                ok,
+                path: Some(domains::PATH_CONNECT),
+                reason: (!ok).then(|| problems.join("; ")),
+                seen: chain,
+            };
+        }
+        if c == k2_core::tunnel::config::SUBDOMAIN_HOST || c.ends_with(&format!(".{}", k2_core::tunnel::config::SUBDOMAIN_HOST)) {
             problems.push(format!(
-                "{} is a CNAME to {k} (through K2 Connect, path b): not served in this release; point an A record at this box",
-                d.hostname
+                "{} points at {c}, which isn't this server's K2 name: point it at {}",
+                d.hostname,
+                target.as_deref().unwrap_or("this server's <app>.<box>.k2.dev")
+            ));
+            return Outcome { txt_ok, here: false, ok: false, path: None, reason: Some(problems.join("; ")), seen: chain };
+        }
+        cur = c;
+    }
+    let mut here = false;
+    let mut seen: Vec<String> = Vec::new();
+    // Path B by ALIAS / flattening: every address is a relay (or this box's
+    // own k2.dev name's address, which is the relay it is on).
+    let relays: Vec<IpAddr> = {
+        let mut v: Vec<IpAddr> = relay_ips.to_vec();
+        if let Some(b) = box_name.as_deref() {
+            if let Ok(a) = lk.addrs(b) {
+                v.extend(a);
+            }
+        }
+        v
+    };
+    let answer = lk.addrs(&d.hostname);
+    match &answer {
+        Ok(addrs)
+            if !addrs.is_empty()
+                && box_name.is_some()
+                && addrs.iter().all(|a| relays.contains(a))
+                && !addrs.iter().all(|a| box_ips.contains(a)) =>
+        {
+            let ok = txt_ok;
+            return Outcome {
+                txt_ok,
+                here: true,
+                ok,
+                path: Some(domains::PATH_CONNECT),
+                reason: (!ok).then(|| problems.join("; ")),
+                seen: addrs.iter().map(IpAddr::to_string).collect(),
+            };
+        }
+        Ok(addrs)
+            if box_name.is_some()
+                && addrs.iter().any(|a| relays.contains(a) && !box_ips.contains(a))
+                && addrs.iter().any(|a| !relays.contains(a)) =>
+        {
+            let other: Vec<String> = addrs.iter().filter(|a| !relays.contains(a)).map(IpAddr::to_string).collect();
+            problems.push(format!(
+                "part of your DNS points elsewhere ({}): every record for {} must point at {}",
+                other.join(", "),
+                d.hostname,
+                target.as_deref().unwrap_or("K2")
             ));
             return Outcome {
                 txt_ok,
                 here: false,
                 ok: false,
-                path: Some(domains::PATH_CONNECT),
+                path: None,
                 reason: Some(problems.join("; ")),
-                seen: vec![c],
+                seen: addrs.iter().map(IpAddr::to_string).collect(),
             };
         }
+        _ => {}
     }
-    let mut here = false;
-    let mut seen: Vec<String> = Vec::new();
-    match lk.addrs(&d.hostname) {
+    match answer {
         Err(e) => problems.push(format!("the A/AAAA lookup failed ({e})")),
         Ok(addrs) if addrs.is_empty() => problems.push(format!("{} has no A/AAAA record yet", d.hostname)),
         Ok(addrs) => {
@@ -363,11 +576,12 @@ pub fn evaluate(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &str) -
                         d.hostname
                     ));
                 } else if !elsewhere.is_empty() {
-                    problems.push(format!(
-                        "DNS now points at {}, not this box ({})",
-                        elsewhere.join(", "),
-                        box_ips.iter().map(IpAddr::to_string).collect::<Vec<_>>().join(", ")
-                    ));
+                    // A Path B name is judged against its k2.dev name.
+                    let want = match target.as_deref().filter(|_| d.is_connect()) {
+                        Some(t) => t.to_string(),
+                        None => format!("this box ({})", box_ips.iter().map(IpAddr::to_string).collect::<Vec<_>>().join(", ")),
+                    };
+                    problems.push(format!("DNS now points at {}, not {want}", elsewhere.join(", ")));
                 } else {
                     here = true;
                 }
@@ -431,6 +645,23 @@ pub fn apply(d: &AppDomain, o: &Outcome, at: i64) -> Next {
         };
     }
     let reason = o.reason.clone().unwrap_or_else(|| "the check failed".into());
+    // PB-A15: a name K2 Connect routes here is the control plane's to
+    // fail; the box's own failed check only informs the owner (and never
+    // starts the 7-day run). Its `released` moves it (`relay_claims::sync`).
+    if d.via_relay() && matches!(d.state.as_str(), STATE_LIVE | STATE_ISSUING) {
+        let _ = domains::record_app_check(
+            &conn,
+            host,
+            &CheckRecord { checked_at: at, verified_at: None, path: o.path.map(str::to_string), failing_since: None },
+        );
+        let _ = domains::set_app_state(
+            &conn,
+            host,
+            &d.state,
+            Some(&format!("this server's own DNS check failed (K2 Connect still routes it; it decides): {reason}")),
+        );
+        return Next::Nothing;
+    }
     match d.state.as_str() {
         // The owner's explicit check of a grandfathered name: it stays
         // served by its own proxy (and an origin) until the proof passes.
@@ -504,7 +735,23 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
         let conn = db.lock();
         let _ = domains::set_app_state(&conn, host, STATE_VERIFYING, d.last_error.as_deref());
     }
-    let o = evaluate(&d, lk, &box_ips(), &crate::apps::origins::box_subdomain());
+    let mut o = evaluate(&d, lk, &box_ips(), &crate::apps::origins::box_subdomain());
+    // Path B (PB-3): DNS and the TXT pass on the box; the control plane
+    // decides whether its relays route the name here.
+    if o.ok && o.path == Some(domains::PATH_CONNECT) {
+        let step = super::relay_claims::with_api(|api| super::relay_claims::step(&d, api));
+        let words = match step {
+            super::relay_claims::Step::Verified => None,
+            super::relay_claims::Step::Waiting(w) => Some(format!("through K2 Connect: {w}")),
+            super::relay_claims::Step::Refused { words, .. } => Some(words),
+            super::relay_claims::Step::Unreachable(w) => Some(format!("K2 Connect didn't answer ({w}); K2 tries again")),
+        };
+        if let Some(w) = words {
+            o.ok = false;
+            o.reason = Some(w);
+        }
+    }
+    let d = get(host)?;
     match apply(&d, &o, now()) {
         Next::Issue => issue(host),
         Next::Reroute => crate::front443::rebuild_now(),
@@ -559,6 +806,17 @@ fn in_flight() -> &'static Mutex<std::collections::HashSet<String>> {
 /// next tick retries after the renewer's backoff).
 pub fn issue_blocking(host: &str) -> Result<(), String> {
     crate::front443::rebuild_now();
+    // Path B: the CA reaches the name through the relay, so the tunnel's
+    // custom proxy must carry it first (frpc restarts to take it).
+    if get(host).is_some_and(|d| d.via_relay()) {
+        crate::apps::custom_names::reload();
+        let g = k2_core::tunnel::custom_names::generation();
+        if !k2_core::tunnel::custom_names::wait_running(g, Duration::from_secs(45)) {
+            log_debug!("[apps/custom-domain] {host}: the tunnel hasn't restarted with it yet; ordering anyway");
+        }
+        // frpc logs in and registers its proxies a moment after it starts.
+        std::thread::sleep(Duration::from_secs(3));
+    }
     match crate::domains::acme::issue_attached(host) {
         Ok(_) => {
             {
@@ -627,6 +885,18 @@ pub fn tick(lk: &dyn Lookup, issue: &dyn Fn(&str)) -> usize {
     };
     let at = now();
     let mut checked = 0;
+    // PB-A15: the control plane's list, at most hourly: its `released`
+    // wins over a passing box check.
+    if rows.iter().any(AppDomain::holds_relay_claim) && relay_sync_due(at) {
+        match super::relay_claims::with_api(super::relay_claims::sync) {
+            Ok(released) if !released.is_empty() => {
+                log_debug!("[apps/custom-domain] K2 Connect released {}: no longer served", released.join(", "));
+                crate::front443::rebuild_now();
+            }
+            Ok(_) => {}
+            Err(e) => log_debug!("[apps/custom-domain] K2 Connect's list of this server's names: {e}"),
+        }
+    }
     for d in rows.into_iter().filter(|d| d.apex_attached).take(MAX_NAMES) {
         if due(&d, at) {
             checked += 1;
@@ -641,6 +911,20 @@ pub fn tick(lk: &dyn Lookup, issue: &dyn Fn(&str)) -> usize {
         }
     }
     checked
+}
+
+/// How often the box reads the control plane's list of its Path B names.
+const RELAY_SYNC_EVERY: i64 = 3600;
+
+/// Is the control plane's list due at `at`? (Marks it read.)
+fn relay_sync_due(at: i64) -> bool {
+    static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
+    if last != 0 && at - last < RELAY_SYNC_EVERY && !cfg!(test) {
+        return false;
+    }
+    LAST.store(at, std::sync::atomic::Ordering::Relaxed);
+    true
 }
 
 /// Boot: the re-check loop on one detached thread (first pass a minute
@@ -706,11 +990,9 @@ pub fn remove_txt(d: &AppDomain, binding: &k2_core::domains::DomainBinding) -> R
     Ok(n)
 }
 
-/// The DNS records the person sets for path (a): the A/AAAA at this box
-/// and the TXT proof (DNS-only).
-pub fn records_to_set(d: &AppDomain) -> Vec<J> {
-    // A Mac or Windows computer gets no Path A records (front443 is
-    // Linux-only; PRD §7).
+/// The DNS records for path (a): the A/AAAA at this box and the TXT proof
+/// (DNS-only). None on a Mac or Windows computer (front443 is Linux-only).
+pub fn records_direct(d: &AppDomain) -> Vec<J> {
     if !cfg!(target_os = "linux") && !cfg!(test) {
         return Vec::new();
     }
@@ -722,6 +1004,64 @@ pub fn records_to_set(d: &AppDomain) -> Vec<J> {
     }
     out.push(json!({ "type": "TXT", "name": txt_name, "value": txt_value }));
     out
+}
+
+/// The DNS records for Path B (PB-5; Rosson 2026-11-01): a CNAME to the
+/// App's own `<app>.<box>.k2.dev`, or at an apex (which can't hold a
+/// CNAME) an ALIAS / ANAME / flattened CNAME to it; and the TXT proof.
+/// Every line DNS-only. No `A` records at the relays: their addresses are
+/// not promised. Empty off K2 Connect.
+pub fn records_connect(d: &AppDomain, sub: &str) -> Vec<J> {
+    let Some(target) = path_b_target(&d.app, sub) else { return Vec::new() };
+    let (txt_name, txt_value) = d.txt();
+    let apex = d.hostname.eq_ignore_ascii_case(&d.apex);
+    let first = if apex {
+        json!({
+            "type": "ALIAS",
+            "name": d.hostname,
+            "value": target,
+            "note": "an apex can't hold a CNAME: use ALIAS, ANAME or CNAME flattening at your DNS host (Cloudflare, \
+                     DNSimple, Route 53 alias…), DNS-only (grey cloud). If your DNS host has none, use www and a redirect there",
+        })
+    } else {
+        json!({ "type": "CNAME", "name": d.hostname, "value": target, "note": "DNS-only (no proxy / grey cloud)" })
+    };
+    vec![first, json!({ "type": "TXT", "name": txt_name, "value": txt_value })]
+}
+
+/// The path whose records K2 shows for `d`: what DNS already shows, else
+/// the one this box recommends (`advice["path"]`, Path B only when open).
+pub fn shown_path(d: &AppDomain, advice: &J) -> &'static str {
+    if d.is_connect() {
+        return domains::PATH_CONNECT;
+    }
+    if d.path.as_deref() == Some(PATH_DIRECT) {
+        return PATH_DIRECT;
+    }
+    if advice["path"] == "b" && advice.pointer("/pathB/available") == Some(&J::Bool(true)) {
+        return domains::PATH_CONNECT;
+    }
+    if advice["pathA"] == false {
+        return domains::PATH_CONNECT;
+    }
+    PATH_DIRECT
+}
+
+/// The DNS records the person sets for `d` (the path [`shown_path`] picks).
+pub fn records_to_set(d: &AppDomain) -> Vec<J> {
+    records_for(d, &setup_advice())
+}
+
+/// [`records_to_set`] for a given piece of advice.
+pub fn records_for(d: &AppDomain, advice: &J) -> Vec<J> {
+    // Nothing this box can serve yet (a desktop without Path B).
+    if advice["records"] == "none" {
+        return Vec::new();
+    }
+    if shown_path(d, advice) == domains::PATH_CONNECT {
+        return records_connect(d, &crate::apps::origins::box_subdomain());
+    }
+    records_direct(d)
 }
 
 #[cfg(test)]

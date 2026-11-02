@@ -1107,6 +1107,13 @@ mod tests {
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/project-group/create", vec![], None, json!({"error":{"code":"agent_permission_off"},"ok":false}), "projects.manage"),
             (403, "POST", "/cli/app/exception", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
+            // Rosson 2026-11-01: custom domains (Path B too) fall under the
+            // broad App switch; there is no per-domain or web-server card.
+            (403, "POST", "/cli/app/domain/add", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
+            (403, "POST", "/cli/app/domain/check", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
+            (403, "POST", "/cli/app/domain/rm", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
+            (403, "POST", "/cli/app/domain/primary", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
+            (403, "POST", "/cli/app/domain/external", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
             (202, "POST", "/cli/app/build", vec![], None, json!({"status":"held","request":{"id":"w_1"}}), "apps.approve"),
             (202, "POST", "/cli/app/deploy", vec![], None, json!({"status":"held","request":{"id":"w_2"}}), "apps.approve"),
             (403, "POST", "/cli/sew/server/disable", vec![], None, json!({"error":{"code":"chat_manage_off"}}), "chat.manage"),

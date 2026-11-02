@@ -189,12 +189,16 @@ pub fn state_words(d: &AppDomain) -> String {
         return format!("not served yet: its apex {} is no longer attached (k2 domain add {})", d.apex, d.apex);
     }
     let words = match d.state.as_str() {
+        domains::STATE_LIVE if d.via_relay() => "live: this box serves it through K2 Connect (Path B)".to_string(),
         domains::STATE_LIVE => "live: this box serves it".to_string(),
         domains::STATE_EXTERNAL => {
             return "served by your own web server (not by K2's front); one of the App's origins".to_string()
         }
         domains::STATE_ISSUING => "not served yet: proven, getting its certificate".to_string(),
         domains::STATE_VERIFYING => "not served yet: checking the DNS records".to_string(),
+        domains::STATE_FAILING if d.relay_state.as_deref() == Some(domains::RELAY_RELEASED) => {
+            "not served (failing): K2 Connect stopped routing it".to_string()
+        }
         domains::STATE_FAILING => "not served (failing): the DNS records stopped pointing here".to_string(),
         _ => "not served yet: waiting for the DNS records".to_string(),
     };
@@ -230,9 +234,18 @@ pub fn status_json(d: &AppDomain, probe: bool) -> J {
         "path": d.path,
         "lastError": d.last_error,
         "failingSince": d.failing_since,
+        // 0.46.8 (Path B): this box's claim at K2 Connect.
+        "viaRelay": d.via_relay(),
+        "relay": { "state": d.relay_state, "error": d.relay_error, "checkedAt": d.relay_checked_at },
         "txt": { "type": "TXT", "name": txt_name, "value": txt_value },
         "appExists": !holders(&d.app).is_empty(),
     });
+    // 0.46.8 (PB-10): the records for the path K2 shows and Path B's meter
+    // (Settings → Domains reads these from `k2 domain list`).
+    let advice = super::custom_domain_flow::setup_advice();
+    v["records"] = J::Array(super::custom_domain_flow::records_for(d, &advice));
+    v["recordsPath"] = json!(super::custom_domain_flow::shown_path(d, &advice));
+    v["pathB"] = advice["pathB"].clone();
     if let Some(s) = served {
         v["served"] = json!(s.as_str());
         if live && s != ServedBy::ThisBox {

@@ -99,13 +99,28 @@ fn cd_refusal(r: super::custom_domains::Refusal) -> Refusal {
 
 /// One custom name's answer: its state, the DNS to set and the next step.
 fn custom_json(d: &k2_core::domains::AppDomain) -> J {
+    use super::custom_domain_flow as flow;
     let mut v = super::custom_domains::status_json(d, false);
     v["hostname"] = json!(d.hostname);
-    v["records"] = J::Array(super::custom_domain_flow::records_to_set(d));
-    v["next"] = json!(next_step(d));
     // 0.46.6 (PRD §7): which path this box offers; behind a router or on a
-    // desktop, the Path B pointer; a web server that isn't K2's on :443.
-    v["setup"] = super::custom_domain_flow::setup_advice();
+    // desktop, Path B; a web server that isn't K2's on :443. 0.46.8: Path
+    // B through K2 Connect (Pro) with its 20-name meter (`setup.pathB`).
+    let advice = flow::setup_advice();
+    let shown = flow::shown_path(d, &advice);
+    v["records"] = J::Array(flow::records_for(d, &advice));
+    v["recordsPath"] = json!(shown);
+    v["recordsByPath"] = json!({
+        "direct": flow::records_direct(d),
+        "connect": flow::records_connect(d, &super::origins::box_subdomain()),
+    });
+    // No records to show (a desktop without Path B): the setup line says
+    // what it needs; no DNS step to send anyone on.
+    v["next"] = if advice["records"] == "none" && d.state != k2_core::domains::STATE_LIVE {
+        json!(format!("No DNS to set yet. Once that's solved: k2 app domain add {} {} prints the records.", d.app, d.hostname))
+    } else {
+        json!(next_step(d, shown))
+    };
+    v["setup"] = advice;
     if let Some(h) = own_server_hint(d, k2_core::front443::load().enabled) {
         v["ownServer"] = json!(h);
     }
@@ -122,14 +137,21 @@ fn own_server_hint(d: &k2_core::domains::AppDomain, front_enabled: bool) -> Opti
     })
 }
 
-/// The next step in plain words, per state (PRD §9.1).
-fn next_step(d: &k2_core::domains::AppDomain) -> String {
+/// The next step in plain words, per state (PRD §9.1), for the path whose
+/// records are shown (`direct` or `connect`).
+fn next_step(d: &k2_core::domains::AppDomain, shown: &str) -> String {
     use k2_core::domains::*;
-    let front = if k2_core::front443::load().enabled {
+    let connect = shown == PATH_CONNECT;
+    let front = if connect || k2_core::front443::load().enabled {
         String::new()
     } else {
         " This box's :443 front is off: path (a) needs it (the owner runs k2 front enable).".to_string()
     };
+    if connect && d.state == STATE_ISSUING {
+        return "Proven, and K2 Connect routes it here; K2 is getting its certificate through the relay (TLS-ALPN-01). \
+                The tunnel restarts once to carry the name (a few seconds' blip)."
+            .to_string();
+    }
     match d.state.as_str() {
         STATE_LIVE => format!(
             "Served. Make it the App's primary origin with k2 app domain primary {} {} (then k2 app restart {}).",
@@ -207,7 +229,11 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
         return Err(no(
             "too_many_custom_domains",
             409,
-            format!("this box serves at most {} custom App names", super::custom_domain_flow::MAX_NAMES),
+            format!(
+                "this box serves at most {} custom App names on both paths together (at most {} of them through K2's relays)",
+                super::custom_domain_flow::MAX_NAMES,
+                k2_core::tunnel::custom_names::MAX_PER_BOX
+            ),
         ));
     }
     let Some(binding) = binding else {
@@ -352,6 +378,17 @@ fn set_external(who: &Who, app: &AppRow, d: &k2_core::domains::AppDomain, on: bo
 fn custom_rm(who: &Who, app: &AppRow, v: &J) -> R<J> {
     let host = host_arg(v)?;
     let d = app_domain_of(app, &host)?;
+    // Path B (PB-3): release at K2 Connect first (the relay stops routing
+    // it), then the tunnel's custom proxy and the local route drop it. A
+    // control plane that doesn't answer never blocks the removal: it frees
+    // the name after its own re-check fails.
+    let relay_note = match super::relay_claims::with_api(|api| super::relay_claims::release(&d, api)) {
+        Ok(true) => Some("released at K2 Connect; the tunnel restarts once to drop it (a few seconds' blip)".to_string()),
+        Ok(false) => None,
+        Err(e) => Some(format!(
+            "K2 Connect didn't confirm the release ({e}); it frees the name once its own re-check fails"
+        )),
+    };
     let binding = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -365,9 +402,16 @@ fn custom_rm(who: &Who, app: &AppRow, v: &J) -> R<J> {
         }
     }
     crate::front443::rebuild_now();
-    labels::audit(&app.app_id, "custom_domain_rm", &actor(who), json!({ "host": host }));
+    // No front443 here: the shared table (and the tunnel's list) still
+    // drops the name now.
+    super::custom_names::reload();
+    labels::audit(&app.app_id, "custom_domain_rm", &actor(who), json!({ "host": host, "relay": relay_note }));
     super::routes::mirror(&app.app_id);
-    Ok(json!({ "ok": true, "app": app.app_id, "removed": host, "note": "no longer served; restart the App so its origins drop it" }))
+    let mut note = "no longer served; restart the App so its origins drop it".to_string();
+    if let Some(r) = &relay_note {
+        note = format!("{note}. {r}");
+    }
+    Ok(json!({ "ok": true, "app": app.app_id, "removed": host, "relay": relay_note, "note": note }))
 }
 
 fn log_rm(host: &str, e: &str) {
@@ -385,7 +429,9 @@ fn custom_check(who: &Who, body: &[u8]) -> R<J> {
         return Err(no("airgap", 409, "air-gap is on: K2 makes no DNS checks"));
     }
     let (d, o) = super::custom_domain_flow::check_now(&host).ok_or_else(|| no(NOT_ATTACHED, 404, format!("{host} is gone")))?;
-    Ok(json!({ "ok": true, "app": app.app_id, "custom": custom_json(&d), "check": { "ok": o.ok, "txt": o.txt_ok, "pointsHere": o.here, "seen": o.seen, "reason": o.reason } }))
+    // A name that changed state is served (or dropped) at once.
+    super::custom_names::reload();
+    Ok(json!({ "ok": true, "app": app.app_id, "custom": custom_json(&d), "check": { "ok": o.ok, "txt": o.txt_ok, "pointsHere": o.here, "path": o.path, "seen": o.seen, "reason": o.reason } }))
 }
 
 /// POST `/cli/app/domain/primary {app, host}`: the name `K2_APP_ORIGIN`
@@ -464,6 +510,10 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         // set and the next step.
         "custom": custom.iter().map(custom_json).collect::<Vec<_>>(),
         "front443": k2_core::front443::load().enabled,
+        // 0.46.8: Path B on this box (Pro, behind K2 Connect) and the
+        // 20-name meter; the 100-name cap counts both paths (PB-A13).
+        "pathB": super::custom_domain_flow::setup_advice()["pathB"].clone(),
+        "maxCustomNames": super::custom_domain_flow::MAX_NAMES,
     }))
 }
 
@@ -760,6 +810,95 @@ mod custom_tests {
         assert!(!crate::apps::routes::is_post_route("/cli/app/domains"));
     }
 
+    /// Rosson 2026-11-01: for an agent without "Build and run Apps", every
+    /// custom-domain verb (Path B's too) is the one broad refusal,
+    /// `apps_manage_off`, which teaches `k2 permission request apps.build`:
+    /// never a per-domain or web-server card.
+    #[test]
+    fn an_agent_without_the_app_switch_gets_the_broad_refusal_on_every_verb() {
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        setup();
+        build_switch("ws-nsi", false);
+        let me = agent("ws-nsi");
+        for (path, body) in [
+            ("/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })),
+            ("/cli/app/domain/check", json!({ "app": "agentnsi", "host": HOST })),
+            ("/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })),
+            ("/cli/app/domain/primary", json!({ "app": "agentnsi", "host": HOST })),
+            ("/cli/app/domain/external", json!({ "app": "agentnsi", "host": HOST, "external": true })),
+        ] {
+            let e = post(&me, path, body).unwrap_err();
+            assert_eq!((e.code, e.status), (codes::APPS_MANAGE_OFF, 403), "{path}: {}", e.hint);
+            assert!(e.hint.contains("Build and run Apps"), "{path}: {}", e.hint);
+        }
+    }
+
+    /// PB-3: removing a Path B name releases it at K2 Connect first, then the
+    /// row goes. A control plane that doesn't answer never blocks the removal
+    /// and says so; a name with no claim never calls it.
+    #[test]
+    fn rm_releases_a_path_b_name_at_the_control_plane_first() {
+        use crate::apps::relay_claims::{self, ClaimAnswer, CpError, RelayApi};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Cp {
+            calls: RefCell<Vec<String>>,
+            down: bool,
+        }
+        impl RelayApi for Cp {
+            fn claim(&self, _: &str, _: &str) -> Result<ClaimAnswer, CpError> {
+                panic!("no claim on rm")
+            }
+            fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {
+                panic!("no verify on rm")
+            }
+            fn release(&self, h: &str) -> Result<(), CpError> {
+                self.calls.borrow_mut().push(h.to_string());
+                if self.down {
+                    return Err(CpError::Unreachable("HTTP 502".into()));
+                }
+                Ok(())
+            }
+            fn list(&self) -> Result<Vec<ClaimAnswer>, CpError> {
+                panic!("no list on rm")
+            }
+        }
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        setup();
+        let bind = |h: &str, relay: Option<&str>| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_name(&conn, h, "agentnsi.com", "app:agentnsi").unwrap();
+            k2_core::domains::set_relay_state(&conn, h, relay, None, 1).unwrap();
+        };
+        let me = agent("ws-nsi");
+
+        bind(HOST, Some(k2_core::domains::RELAY_VERIFIED));
+        let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: false });
+        relay_claims::set_test_api(Some(cp.clone()));
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        assert_eq!(*cp.calls.borrow(), vec![HOST.to_string()]);
+        assert!(v["relay"].as_str().unwrap().contains("released at K2 Connect"), "{v}");
+        assert!(v["note"].as_str().unwrap().contains("a few seconds' blip"), "{v}");
+
+        bind(HOST, Some(k2_core::domains::RELAY_CLAIMED));
+        let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: true });
+        relay_claims::set_test_api(Some(cp.clone()));
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        assert!(v["relay"].as_str().unwrap().contains("didn't confirm the release"), "{v}");
+        assert_eq!(v["removed"], HOST);
+
+        bind(HOST, None);
+        let cp = Rc::new(Cp { calls: RefCell::new(vec![]), down: false });
+        relay_claims::set_test_api(Some(cp.clone()));
+        let v = post(&me, "/cli/app/domain/rm", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        assert!(cp.calls.borrow().is_empty(), "no claim: nothing to release");
+        assert!(v["relay"].is_null(), "{v}");
+        relay_claims::set_test_api(None);
+    }
+
     /// The App's own agent binds, sees the DNS to set, checks (proof →
     /// issuing, one order), picks the primary and removes; another
     /// workspace's agent never sees the App.
@@ -1012,6 +1151,9 @@ mod custom_tests {
             last_error: None,
             failing_since: None,
             apex_attached: true,
+            relay_state: None,
+            relay_error: None,
+            relay_checked_at: None,
         };
         use k2_core::domains::*;
         for s in [STATE_WAITING_DNS, STATE_VERIFYING] {

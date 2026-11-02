@@ -96,6 +96,7 @@ WHAT GOES WRONG
   people make channels you didn't → lock the Space (chat-voice-rooms)
   joins work, no audio → 7881/tcp, 7882/udp, 5349/tcp blocked from outside
   431 on /rtc/v1 → K2's 64 KiB request-head limit: tell K2
+  calls fail on another host of the App, or in a Tauri window → k2 study tauri (10)
 
 NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents
 never join calls.

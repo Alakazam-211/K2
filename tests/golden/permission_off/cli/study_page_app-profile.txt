@@ -37,6 +37,21 @@ THE VERBS (k2.asGuest(pass).profile.* in the server SDK)
   A server signing someone in may pass clientLabel ("Chrome on Windows")
   in the guests.login body on the link; the main port reads User-Agent.
 
+DEVICES: ONE ID PER INSTALL
+  A login from an app (phone or desktop shell) passes device {id, name} in
+  guests.login. It gets its own pass and refresh token (k2 app
+  stay-signed-in). The id is made once per install and kept in the app's
+  own storage, never one per platform: a fixed id like "ios" makes each
+  phone replace the one before it. A login with no device is a plain 7-day
+  pass, uncounted, with no refresh token. A person keeps up to 20 devices
+  per App, or fewer if the App sets it (1 to 20):
+    k2 app login settings <app> --max-devices 5
+  K2 signs out another device only past that cap: a new device ends that
+  person's least recently used ones until it fits (reason device_limit).
+  Lowering the cap signs nobody out until their next new device; someone on
+  8 with a cap of 5 then goes down to 5. The owner, or the App's own agent
+  with the switch "…and manage them end to end" (k2 app access).
+
 WHO DECIDES (per App; both on by default)
   k2 app profile settings <app> [--names on|off] [--image on|off]
   The owner or an Admin. The App's own agent with "manage its Apps'

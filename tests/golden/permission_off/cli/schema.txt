@@ -2571,12 +2571,14 @@ exit: 0
     },
     {
       "name": "app init",
-      "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name>] [--dry-run] [--json]",
-      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders).",
+      "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name> | --app <app>] [--voice] [--dry-run] [--json]",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. With --app: a thin shell over an App already on this box (no web manifest; the updater on that App's host, then the download host). With --voice: the mic and camera keys. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, app, voice, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders and Apps).",
       "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
       "flags": [
         {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
         {"name": "--name", "arg": "name", "description": "The App name (default: the folder's name)."},
+        {"name": "--app", "arg": "app", "description": "tauri only: a thin shell over this App, already on this box, instead of a new <name>-web."},
+        {"name": "--voice", "arg": null, "description": "tauri only: the mic and camera keys for calls (macOS, iOS); the Android lines are printed."},
         {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
         {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
       ]
@@ -2736,7 +2738,7 @@ exit: 0
     },
     {
       "name": "app login settings",
-      "usage": "k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--default <field>] [--json]",
+      "usage": "k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] [--invite-subject <s>] [--invite-body-file <f>] [--reset-subject <s>] [--reset-body-file <f>] [--max-devices <n>] [--default <field>] [--json]",
       "description": "An App's invite and reset links: how long they live (15m to 30d; invites 72h and resets 24h by default), its own set-password page (else the box front door's /reset), and its own subject and body ({app} {name} {username} {sender} {expires}; K2 always adds the link and the safety line itself). The owner, or the App's own agent with \"...manage them end to end\". No flags: show them. Also: k2 app invite-settings.",
       "args": [{"name": "app", "required": true}],
       "flags": [
@@ -2747,8 +2749,9 @@ exit: 0
         {"name": "--invite-body-file", "arg": "file", "description": "The App's invite body (plain text)."},
         {"name": "--reset-subject", "arg": "text", "description": "The App's reset subject."},
         {"name": "--reset-body-file", "arg": "file", "description": "The App's reset body (plain text)."},
+        {"name": "--max-devices", "arg": "n", "description": "Devices one person may keep signed in to this App (1 to 20; default 20)."},
         {"name": "--default", "arg": "field", "description": "Put one field back to K2's (repeatable)."},
-        {"name": "--json", "arg": null, "description": "{ok, app, settings}."}
+        {"name": "--json", "arg": null, "description": "{ok, app, settings, maxDevices}."}
       ]
     },
     {

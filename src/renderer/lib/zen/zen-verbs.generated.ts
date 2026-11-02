@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 43
+export const ZEN_CATALOG_VERSION = 44
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,

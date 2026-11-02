@@ -66,6 +66,7 @@ LIMITS (an hour)
 
 REFUSALS
   push_off (not approved or turned off)  push_not_configured (no key)
+  push_server_only (--register server: the App's server registers the token)
   not_for_host  guest_required (register is a guest's own pass)  token_in_use
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)

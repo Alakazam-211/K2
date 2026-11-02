@@ -4,13 +4,42 @@ exit: 0
 k2 study tauri — the K2 side of a Tauri app, end to end
 
 THE SHAPE
-  A Tauri app is a desktop or phone shell around a web build. K2 runs the
-  parts around it: the web build (a static App), the app's own server (a
-  server App), its users, the update feed, its "open in app" links and push.
-  The phone and desktop apps talk only to the App's server; the App's server
-  talks to K2.
+  A Tauri app is a desktop or phone shell around a web page. Two ways:
+  - A thin shell over a live site: the window loads your server App's own
+    https page. No web build, no second App: THIN SHELL below.
+  - A bundled web build: a static App beside the App's server (1, 2 below).
+  Either way K2 runs the parts around it: its users, the update feed, its
+  "open in app" links and push. The usual shape: the phone and desktop apps
+  talk to the App's server, and the App's server talks to K2.
+  <box> on this page is this server's K2 Connect name (k2 connect status).
+  Sew is K2's chat and voice server. K2 Web is the team that runs k2.dev:
+  reach it through your K2 contact.
 
-START
+THIN SHELL OVER A LIVE SITE
+  For a server App already on this box (k2 app list). In the Tauri repo's root:
+    k2 app init --template tauri --app <app> --dry-run
+    k2 app init --template tauri --app <app>
+  It adds the updater to src-tauri/tauri.conf.json and writes no web
+  manifest. Point the window at the site: in tauri.conf.json,
+  app.windows[0].url = "https://<your App's host>/". Then:
+  - Origins: the page sends your site's own Origin, so K2 and Sew see a
+    browser, and there is nothing to allow. A bundled page
+    (tauri://localhost) is different: it needs bearer auth to your server.
+  - Feed and links live on the server App: K2 answers /_k2/updates/… and the
+    two link files for any App it fronts (it sits in front of the App: the
+    default; not with host.clientIp: false in the manifest), even while the
+    App is stopped. Below, use <app> wherever it says <name>-web or <name>-api
+    (7's upload route is in the node-api template, not your server: copy it
+    if you need it).
+  - Two endpoints: k2 app updates list <app> --json prints endpoints. --app
+    writes the App's own host first, then endpoints.fallback (the stable
+    channel's latest.json on K2's download host), which still answers when
+    your box is down. The box must be on K2 0.46.7 or newer.
+  - The download-host token (k2dl_…): see 3. Nothing pushes without it.
+  - A page on a remote URL calls a Tauri plugin only through a capability
+    naming that URL (remote.urls); or do it in the shell's Rust.
+
+START (A BUNDLED WEB BUILD)
   In the Tauri repo's root:
     k2 app init --template tauri --dry-run    see every file and change
     k2 app init --template tauri              write them (never overwrites)
@@ -54,13 +83,23 @@ START
 3. UPDATES (k2 app updates)
   Tauri's updater asks the App's own host for new versions:
     https://<name>-web.<box>.k2.dev/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
-  (<box>: this server's K2 Connect name.) init writes the stable channel;
-  for testers, build a copy with stable changed to beta in that endpoint.
-  The archives come from K2's download host, never from your box.
-  The updater's PUBLIC key goes in two places: tauri.conf.json
+  init writes the stable channel; for testers, build a copy with stable
+  changed to beta in each endpoint (the fallback has a latest.json per
+  channel too). The archives come from K2's download host, never from your
+  box. The feed only moves people already on your app: the first install
+  (a .dmg, an .msi…) is yours to hand out. npx tauri build makes the archives.
+  Make the updater's key once, on your own Mac:
+    npx tauri signer generate -w ~/.tauri/myapp.key
+  Its PUBLIC key goes in two places: tauri.conf.json
   plugins.updater.pubkey (the app checks updates with it) and K2 (K2 checks
   archives with it before anything is uploaded):
     k2 app updates key <name>-web --set "$(cat ~/.tauri/myapp.key.pub)"
+  The download host needs this App's own token (k2dl_…). K2 Web mints one per
+  App: ask K2 Web for it, naming the id that k2 app updates token <name>-web
+  prints with no flags. Keep it (never on the command line); until then, a
+  push stops with dl_token_missing:
+    k2 app updates token <name>-web --file <file>
+  Then push:
     k2 app updates push <name>-web --channel beta --version 1.5.0 \
         --artifact darwin-aarch64=out/MyApp.app.tar.gz \
         --artifact linux-x86_64=out/MyApp.AppImage
@@ -85,13 +124,21 @@ START
     one job on that Mac as a file (k2 compute run --secret NAME …; k2 study
     vault).
   K2's App records hold only the public key; a private key is refused.
+  Windows: K2 doesn't sign for Apps yet. Sign on your own machine (Azure
+  Artifact Signing or an OV certificate, from Tauri's
+  bundle.windows.signCommand or jsign). K2's feed checks only the updater
+  signature: an unsigned installer still updates, but Windows may warn or
+  block it, so sign before anyone outside your team installs.
 
 5. "OPEN IN APP" LINKS (k2 app links)
     k2 app links set <name>-web --ios TEAMID.com.you.app \
         --android com.you.app:AB:CD:… --path '/tickets/*' --path '/messages?addr=*'
   K2 serves /.well-known/apple-app-site-association and assetlinks.json on
-  the App's hosts, with or without phone pairing. In the app, list each host
-  exactly (applinks:<name>-web.<box>.k2.dev), never a wildcard. Each set
+  the App's hosts (static or server App), with or without phone pairing: its
+  labels (<app>.<box>.k2.dev) and each custom domain k2 app domains <app>
+  shows as live. In the app, list each host exactly
+  (applinks:<app>.<box>.k2.dev, applinks:app.you.com), never a wildcard. A
+  domain that goes live later answers by itself. Each set
   replaces the whole list: give every app and path again (an app left out
   is removed). One that leaves out a path already set is refused
   (link_path_dropped) unless --drop '<path>' names it as k2 app links shows
@@ -104,6 +151,12 @@ START
   server registers it with K2 as that person:
     await k2.asGuest(pass).push.register({ … })
   (pass = the person's session pass). Keys and sending: k2 study app-push.
+  Who holds the keys: the App's owner gives K2 their own APNs key and
+  Firebase account once, and the daemon on your box calls Apple and Google
+  itself; K2's Companion relay isn't on this path.
+  Desktop: K2 has no desktop push. Your server tells the running app over its
+  own socket, and the shell shows an OS notification. While a desktop has a
+  Thread open, your server sends push.viewing, so the phone stays quiet.
 
 7. BIG UPLOADS FROM THE PHONE
   Tauri's HTTP plugin holds a whole request body in memory (about 50 MB is
@@ -125,7 +178,37 @@ START
   bodyContains?}) are your own probes: run after each deploy and by
   k2 app status; they never block a deploy.
 
+9. LOGINS: ONE SIGN-IN PER DEVICE
+  From an app, your server passes device {id, name} in guests.login. One id
+  per install, kept in the app's storage, never one per platform. Each person
+  keeps up to 20 devices per App, or fewer if you set it (k2 app login
+  settings <app> --max-devices 5); K2 signs out another device only past
+  that cap, or when the same id signs in again. If a second device signs out
+  the first, check for a cap of 1 and a fixed id, then your own server.
+  More: k2 study app-profile.
+
+10. CALLS
+    k2 app init --template tauri [--app <app>] --voice
+  adds the mic and camera keys on macOS and iOS and prints the Android lines
+  (AndroidManifest; ask at run time there). Sew holds one origin per App today,
+  your primary: if the shell loads a custom name, mark it (k2 app domain
+  primary <app> <host>), or joins answer with another host (k2 study app-chat).
+  Where calls work (they are end-to-end encrypted):
+    Chrome, Edge, Chromium      yes (Sew tests these)
+    Safari 15.4+ (macOS, iOS)   yes, not tested by Sew yet; before 17.2 one quality layer
+    Firefox                     no: refused when joining an encrypted call
+    Tauri on macOS              expected on macOS 12+, not yet tested
+    Tauri on Windows            expected, not yet tested; Settings > Privacy >
+                                Microphone and Camera must allow desktop apps
+    Tauri on Linux              no: Ubuntu and Arch ship the webview without WebRTC;
+                                open the call in Chrome
+    Tauri on iOS                expected on iOS 15.4+, not yet tested
+    Tauri on Android            expected, not yet tested
+  Every webview also needs a persistent data folder (encryption keys live in
+  IndexedDB), audio that plays without a tap, and a connect-src covering your
+  /rtc/v1 and the voice kit's .wasm URL.
+
 MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
-k2 app init --help, k2 app links --help.
+k2 study app-profile, k2 app init --help, k2 app links --help.
 --- stderr
 --- requests

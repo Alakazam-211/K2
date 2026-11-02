@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 43.
+From K2's verb catalog, version 44.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -74,6 +74,7 @@ no cap (your own rooms)
   app.self                 GET  /cli/skin/self (server only)                  This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
   app.usage                GET  /cli/skin/usage (server only)                 This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
   chat.pass                POST /cli/sew/pass (server only)                   Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
+  chat.space               GET  /cli/sew/app/space (server only)              This App's own Sew Space id and its manifest channels with their Sew ids, read by the App's own pass (no cap). A stable shape: only additions under app-chat-space-v1.
 thread:read (Read the Thread)
   thread.page              GET  /cli/thread                                   A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back, afterSeq reads a delta (new, changed, removed).
   thread.latest            GET  /cli/thread/latest                            The newest Thread item per room, for list previews; a room the pass can't read is an item with error.

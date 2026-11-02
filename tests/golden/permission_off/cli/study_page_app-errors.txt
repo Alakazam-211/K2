@@ -350,6 +350,10 @@ PUSH (notifications to an App's users)
   push_not_configured (exit 3)
       fix: Add it: k2 app push setup <app> (--apns-key … or
       --fcm-service-account …). Check: k2 app push status <app>
+  push_server_only (exit 3)
+      fix: Send the device token to your App's server; it calls K2 as that
+      person (k2.asGuest(pass).push.register). To change it: k2 app push set
+      <app> --register any
   token_in_use (exit 3)
       fix: Sign them out first (the App calls push.unregister on sign-out),
       then register again.

@@ -126,6 +126,12 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
+CALLS WORK ON ONE HOST TODAY: Sew holds one origin per App, your primary
+(a custom name you mark with k2 app domain primary <app> <host> once it is
+live, else the App's label), and answers joins with that host. A person on
+another host of your App can't connect to it. If people use a custom name,
+mark it primary. Once Sew reports app_origins ("every App origin" in
+k2 hostchat home), K2 sends all your live hosts.
 
 YOUR SERVER (never the browser):
   chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,
@@ -133,6 +139,14 @@ YOUR SERVER (never the browser):
   chat.whois({memberIds})   POST /cli/sew/app/whois (≤100) → your users in
       full; anyone else only {memberId, kind, isThisAppUser: false}.
   guests.chat / guests.setChat  GET|POST /cli/skin/guests/chat (step 4).
+  chat.space()              GET /cli/sew/app/space: your own Space and channel
+      ids, so nothing is hard-coded. Your App's own pass, no cap.
+      → {spaceId, spaces: [{spaceId, governed, channels}], manifestChannels:
+      [{slug, name, type, private, spaceId, channelId}]}. spaceId is null
+      with no Space or several (then read spaces). A manifest channel's
+      channelId is null until K2's sync has Sew make it, in a Space your App
+      governs; k2 app chat <app> shows how far it got. A stable shape: only
+      additions under the feature app-chat-space-v1 in /boot-status.
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.

@@ -1,8 +1,8 @@
 {
   "name": "k2-mpc-client",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "MIT OR Apache-2.0",
-  "description": "Live text editing over the kit's hunk channel: a text replica, the kit's rebase rules, a CodeMirror 6 binding, and a mountable live editor.",
+  "description": "Live text editing over the kit's hunk channel, as a library: a text replica, the kit's rebase rules, the wire and transport contract, Re-apply, and presence and marks as data. No DOM; the host draws its own editor (HOST.md).",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
@@ -10,55 +10,38 @@
   "exports": {
     ".": "./src/index.ts",
     "./core": "./src/core.ts",
-    "./editor": "./src/editor/index.ts"
+    "./test": "./test/index.ts",
+    "./test/jsdom-shims": "./test/jsdom-shims.ts"
   },
   "files": [
     "src",
+    "test/index.ts",
+    "test/fake-live.ts",
+    "test/fake-server.ts",
+    "test/random-edits.ts",
+    "test/runrec.ts",
+    "test/jsdom-shims.ts",
+    "HOST.md",
     "WIRE.md",
     "EDITOR.md",
-    "CHANGELOG.md"
+    "PRESENCE.md",
+    "CHANGELOG.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
-  "sideEffects": false,
-  "peerDependencies": {
-    "@codemirror/commands": "^6.6.0",
-    "@codemirror/lang-markdown": "^6.2.0",
-    "@codemirror/language": "^6.10.0",
-    "@codemirror/state": "^6.4.0",
-    "@codemirror/view": "^6.27.0"
-  },
-  "peerDependenciesMeta": {
-    "@codemirror/commands": {
-      "optional": true
-    },
-    "@codemirror/lang-markdown": {
-      "optional": true
-    },
-    "@codemirror/language": {
-      "optional": true
-    },
-    "@codemirror/state": {
-      "optional": true
-    },
-    "@codemirror/view": {
-      "optional": true
-    }
-  },
+  "sideEffects": [
+    "./test/jsdom-shims.ts"
+  ],
   "devDependencies": {
-    "@codemirror/commands": "6.6.0",
-    "@codemirror/lang-markdown": "6.2.5",
-    "@codemirror/language": "6.10.2",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.15",
-    "@playwright/test": "1.47.2",
     "@types/node": "22.5.4",
-    "esbuild": "0.21.5",
-    "jsdom": "24.1.1",
+    "esbuild": "0.28.2",
     "typescript": "5.5.4",
-    "vitest": "2.0.5"
+    "vite": "6.4.5",
+    "vitest": "4.1.12"
   },
   "scripts": {
     "test": "vitest run",
-    "test:browser": "playwright test",
     "typecheck": "tsc --noEmit",
     "licences": "node scripts/check-licences.mjs"
   }

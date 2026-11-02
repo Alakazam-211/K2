@@ -26,7 +26,7 @@
 //! for each list root, all its slot inserts in op order, then its slot removals, then its
 //! register writes (each register written once per change, with its final value); then each
 //! map root's writes. Text roots are applied before all of them, as before, so text clocks
-//! ([`super::insert_clocks`]) don't move.
+//! ([`super::yrs::insert_clocks`]) don't move.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;

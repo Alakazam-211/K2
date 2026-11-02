@@ -18,6 +18,7 @@ import rosterEvents from "./golden/roster_events.json";
 import rosterEventsApp from "./golden/roster_events_app.json";
 import rosterEventsClosed from "./golden/roster_events_closed.json";
 import rosterEventsClosedApp from "./golden/roster_events_closed_app.json";
+import rosterEventsDevices from "./golden/roster_events_devices.json";
 import rosterEventsOverwritten from "./golden/roster_events_overwritten.json";
 import rosterEventsOverwrittenApp from "./golden/roster_events_overwritten_app.json";
 import rosterEventsOverwrittenGrid from "./golden/roster_events_overwritten_grid.json";
@@ -35,6 +36,7 @@ type W<T> = T extends string
 type ChangeGolden = { root: string; version: number; text: string; events: ChangeEvent[]; final_version: number; final_text: string };
 type RosterGolden = { self: string; events: RosterEvent[]; final: RosterEvent };
 type RosterStream = { self: string; events: RosterEvent[] };
+type DevicesGolden = RosterGolden & { client: number };
 type RollupGolden = { about: string; self: string; saves: number; pushed: number; tail: RosterEvent[]; final: RosterEvent };
 
 // one line a file, so tsc's error names the file whose values contradict the type
@@ -49,3 +51,4 @@ rosterEventsOverwritten satisfies W<RosterGolden>;
 rosterEventsOverwrittenApp satisfies W<RosterGolden>;
 rosterEventsOverwrittenGrid satisfies W<RosterGolden & { about: string }>;
 rosterEventsRollup satisfies W<RollupGolden>;
+rosterEventsDevices satisfies W<DevicesGolden>;

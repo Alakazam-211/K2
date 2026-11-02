@@ -47,7 +47,7 @@ export PATH=$ROOT/q/node_modules/.bin:$PATH
 # job's server, which fails with "Received RST_STREAM with code 0" when that job stops it. The
 # port comes from the job shell's PID, checked free (a listen probe through node), else
 # stepped; a shim first on PATH adds --server-endpoint to every quint compile and verify
-# (tlc.sh, the export check, lint.sh, the warm-ups), and the servers the job starts itself use
+# (tlc.sh, the export check, lint.sh, the IR-size compile), and the servers the job starts itself use
 # it too (QJ_APA_PORT; set it to choose one).
 qj_port_free() { node -e 'const s=require("net").createServer();s.once("error",()=>process.exit(1));s.listen(+process.argv[1],"127.0.0.1",()=>s.close(()=>process.exit(0)))' "$1" 2>/dev/null; }
 if [ -z "${QJ_APA_PORT:-}" ]; then
@@ -116,12 +116,23 @@ while :; do
     break
   fi
   [ $rc -eq 2 ] && [ $k -lt 3 ] || break
-  echo "=== quint export check: tool error (attempt $k of 3), retrying"; k=$((k + 1)); sleep 5
+  echo "=== quint export check: tool error (attempt $k of 3), retrying (the known random compile failure on a cold Apalache server)"; k=$((k + 1)); sleep 5
 done
 if [ -n "$EC_APA" ]; then kill $EC_APA 2>/dev/null; wait $EC_APA 2>/dev/null; fi
 set -e; echo "=== quint export check (undo.qnt): exit $rc, wall $(( $(date +%s) - s ))s"
 [ $rc -eq 0 ] || { echo "=== the Quint export guard stopped the job (export check)"; exit 1; }
 export QUINT_EXPORT_CHECKED=1
+# Apalache (it bundles TLC) is fetched by the export check's compile above. tools/undo/tlc.sh
+# runs its own server with it. A commands file calls this before sourcing tlc.sh; it stops the
+# job if Apalache isn't there. It replaces the old warm-up, a `quint verify` on quint's own
+# server (4 GiB, without the Jackson limits agent), which checked nothing and has exited 1 on
+# every job since v1.9 ("error: error" after SanyParser), its failure harmless but looking
+# like one.
+need_apalache() {
+  APA_JAR=$(ls ~/.quint/apalache-dist-*/apalache/lib/apalache.jar 2>/dev/null | head -1)
+  [ -n "$APA_JAR" ] || { echo "=== Apalache isn't in ~/.quint (the export check should have fetched it): no TLC run"; exit 1; }
+  echo "=== Apalache: $APA_JAR"
+}
 else
 cd "$ROOT"
 fi

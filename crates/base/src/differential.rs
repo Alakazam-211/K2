@@ -111,7 +111,9 @@ pub fn with_group_mutant<R>(mutant: GroupMutant, f: impl FnOnce() -> R) -> R {
 ///   `spec-undo`'s `traces` plants them by value);
 /// - the grid's text merge (`table::merge3_text` and the outside save), so the row-pairing
 ///   property and its named tests can show they catch each one (mutants (xxxii) to (xxxvii):
-///   contract §2.9.1, §3.4 and §4.3, spec S11/S13; selected in the tests by `MPC_MERGE_MUTANT`).
+///   contract §2.9.1, §3.4 and §4.3, spec S11/S13; selected in the tests by `MPC_MERGE_MUTANT`),
+///   and the keyed grid merges (`table::merge3` and `table::merge3_outside`, mutants (xxxviii)
+///   and (xxxix), caught by `tests/table.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MergeMutant {
@@ -139,6 +141,15 @@ pub enum MergeMutant {
     /// or never in it) is taken as a hidden write, as before the check: an orphan cell nobody
     /// can see, restore or sweep, reported with a restore that can't work.
     KeyedWriteUnderUnknownKey,
+    /// (xxxviii) The per-cell neutral rule of `write --base` reaches the keyed merge
+    /// (`table::merge3`, no text): theirs' clear of an absent cell in a row that renders every
+    /// column is overwritten by ours' value with no conflict, as in v0.10.0.
+    KeyedMergeNeutralSwitch,
+    /// (xxxix) The outside save's per-cell neutral rule (a byte-neutral live switch between empty
+    /// and absent, or a live value the file's row renders anyway) reaches the keyed
+    /// `table::merge3_outside` (no text): the file's value goes in with no overridden `cell`
+    /// reported, as in v0.10.0.
+    KeyedOutsideNeutralSwitch,
 }
 
 thread_local! {
@@ -186,7 +197,7 @@ pub enum Path {
 pub struct EditRecord {
     pub client: ClientId,
     /// The client's clock in the doc edited, before the edit.
-    pub clock_before: u32,
+    pub clock_before: u64,
     /// The update, or the error the path returned.
     pub update: Result<Vec<u8>, DocError>,
     /// The doc's full state after it (v2; `None` when the doc is poisoned).

@@ -2,6 +2,7 @@ MPC-E206 history_lost (history and undo)
 exit:     0
 message:  nothing to undo: your undo history was lost when the doc reloaded
 next:     Undo history lives in memory and was dropped when the doc unloaded or the daemon restarted. Your changes are still in the log: find one with log --by <you> and reverse it with revert <change>.
+step:     log; why: Undo history was lost when the doc reloaded, but your changes are still in the log; find yours and revert it.
 rule:     U6, U18, K-HIST-17
 verbs:    undo; redo; undo --partial; undo --drop
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 0,
   "message": "nothing to undo: your undo history was lost when the doc reloaded",
   "next": "Undo history lives in memory and was dropped when the doc unloaded or the daemon restarted. Your changes are still in the log: find one with log --by <you> and reverse it with revert <change>.",
+  "next_step": {
+    "verb": "log",
+    "args": [],
+    "why": "Undo history was lost when the doc reloaded, but your changes are still in the log; find yours and revert it."
+  },
   "rule": "U6, U18, K-HIST-17",
   "verbs": ["undo", "redo", "undo --partial", "undo --drop"],
   "returned_by": ["undo", "redo", "undo --drop", "undo --partial"],

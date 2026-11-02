@@ -74,7 +74,7 @@ usage:
 
 Others (people and agents) may be editing the same docs at the same time. Every refusal
 ends with its error id, e.g. `(MPC-E110)`; with --json it is one JSON object on stdout:
-{\"id\", \"exit\", \"message\", \"next\", \"rule\", \"details\"}.
+{\"id\", \"exit\", \"message\", \"next\", \"next_step\", \"rule\", \"details\"}.
 
 Common verbs: cat, grep, view --lines a,b, insert, append, replace, delete, patch,
 write --base V, undo, redo, log, approvals, who, status, claim. See capabilities.

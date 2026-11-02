@@ -1,0 +1,21 @@
+MPCE-E199 ref_not_in_past (sessions and edits)
+exit:     2
+message:  the engine refused the update: an op names an element outside its own causal past
+next:     The update depends on content it doesn't carry or the doc doesn't hold. Nothing was applied. The editor should resync.
+rule:     the MPCE seam (stable codes); E-CORE-3
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E199",
+  "name": "ref_not_in_past",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the engine refused the update: an op names an element outside its own causal past",
+  "next": "The update depends on content it doesn't carry or the doc doesn't hold. Nothing was applied. The editor should resync.",
+  "rule": "the MPCE seam (stable codes); E-CORE-3",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

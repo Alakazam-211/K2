@@ -1,10 +1,66 @@
 # Changelog
 
-## v0.10.0.3 (2026-11-01)
+## v0.10.2 (2026-11-02)
 
-v0.10.0.2 plus one fix to the kit's disk sync, and one new audit event. No change to the
-store format, the merge, the wire, the client or any dependency. The crate version is
-`0.10.0+3` (the git tag is v0.10.0.3); the client stays `0.11.0`.
+The first host release after v0.10.0.3: the v0.10.0.3 disk-replica fix (K-AUD-1, kept, not
+rolled back), the client as a library only, live presence as data, per-connection carets and
+the caret re-send. v0.10.1 was not released to hosts: what the docs mark "kit v0.10.1"
+(`client/WIRE.md`, `client/PRESENCE.md`) first ships here. **The timers from the unreleased
+v0.10.1 line are not in this release; they ship later after their overhead gate.** The crate
+version is `0.10.2`; the client's is `0.12.0`. Pairs with the paired markdown and text pack
+tags of this release.
+
+**This tag's tree doesn't include the vendored native engine** (`vendor/mpce-core`,
+`mpce-sync`, `mpce-codec`, `mpce-licences`, the `native` feature and the conformance crate,
+which needs it): the release commit is cut by `tools/public-cut.sh`, and
+`tools/check-public-cut.sh` blocks the tag if any of it is left, if the licence files are
+missing, or if a pinned regression test of the previous host tag is gone. Main keeps all of it.
+The cut drops the conformance crate whole, so this tag runs none of the engine-generic
+conformance suite (its Yrs columns included); main runs all of it.
+
+For a host, in short (details in the sections below):
+
+- **The client is a library; the host draws the editor.** The live editor component is gone
+  from `k2-mpc-client` (`client/src/editor/*`, `client/src/codemirror.ts`, the
+  `k2-mpc-client/editor` entry, the CodeMirror peer dependencies, the browser tests). What
+  stays is the library: `LiveText`, the wire and transport contract, Re-apply, presence and
+  marks. **`client/HOST.md`** (new) is the handover for a host that draws its own editor: the
+  calls an editor makes and the rules it must keep (no editor-side undo history: the server
+  owns undo; one transport object across reconnects; `connect()` while open replaces the
+  connection; frames are dropped, never buffered, while closed; one edit in flight).
+- **Presence and marks as data** (no DOM): `participants()` / `onParticipants(cb)` (one entry
+  per remote connection and per other connection of the same person; `colour` is the roster's
+  identity value for the host's own palette; offsets in UTF-16 of the current text) and
+  `marks()` / `onMarks(cb)` (each rejected change with its range, reason and actions), both
+  batched to one callback per frame; the scheduler is a `LiveOptions.schedule` option (a host
+  without frames can deliver at once). "Insert my text here" is library logic now:
+  `insertHerePreview(id)` and `insertHere(id)`. The person's own typing and caret moves don't
+  fire `onParticipants`.
+- **Per-connection carets:** the same person on two devices or tabs sees each other
+  connection's caret. The kit adds `RosterEntry::devices` (one `Device { client, cursor, label }`
+  per connection on text docs) and `client` on `RosterEvent::Cursor`; an older consumer that
+  ignores `client` still ends each flush on the person's caret. A host can label a connection
+  at join: `Session::join_with(participant, stay, &JoinOptions)` with `.label(..)`,
+  `.shared(..)` and `.replacing(prev)` (a replacing join's label is the one given at that
+  join); `join`, `join_shared` and `join_replacing` are unchanged. The client marks each caret
+  `isSelf` / `sameUser` / `client` / `label` and never returns the connection's own. Rust code
+  that builds `RosterEvent::Cursor` or matches it without `..` needs one more field.
+- **The caret re-send** (client 0.11.1, first released here): after remote changes the client
+  re-sends its caret mapped the way an editor maps its selection, once per version, throttled
+  (250 ms, with a trailing send), never while its own edit is in flight.
+- **New client exports:** `setDefaultLiveTimers` (the default clock of a `LiveText`, for tests;
+  not the timers above); `k2-mpc-client/test` (the test helpers a
+  host's editor tests use, each also at its old path) and `k2-mpc-client/test/jsdom-shims`.
+  `client/test/exports.test.ts` pins the exported names and the files a host build reads by
+  path, the wire goldens (`client/test/golden/*.json`) among them.
+- **`MPC-E000 not_applied`** is in the error registry (`explain MPC-E000` works): the client's
+  own id for a change whose reply was lost and that the record doesn't list.
+- **The native engine** stays on main only (feature `native`, test-only); it is not in this
+  tag's tree (see above). Yrs is the engine for hosts. The engine's error codes (`MPCE-E…`)
+  stay listed in `docs/ERRORS.md`: they name refusals, not engine source.
+- **Licence: MIT OR Apache-2.0** (as in kit tag v0.10.0.2), checked by `tools/oss-check.sh`.
+
+## v0.10.2: the disk replica after a restart (also in v0.10.0.3)
 
 - **The merge base is right after a restart (a lost-edit risk, K-AUD-1).** An outside save
   merged while the doc held changes not yet written back leaves the disk replica (the base the
@@ -32,18 +88,561 @@ store format, the merge, the wire, the client or any dependency. The crate versi
   `differential::with_reopen_step_by_version`) and sees the event fire once with K-AUD-1 clean
   after the repair, and with the fix sees no event.
 
-## v0.10.0.2 (2026-10-31)
+## v0.10.2: the conformance suite's engine half v2 rules
 
-v0.10.0.1 plus the licence: MIT OR Apache-2.0. No change to the kit's Rust library, store,
-merge or wire, to the client's code, or to any dependency. The crate version is `0.10.0+2`
-(the git tag is v0.10.0.2); the client stays `0.11.0`, as it stayed `0.9.7` through kit tags
-that didn't change it: only its `package.json` gains the `license` field.
+### The engine at mpce-g2a-m2.4.5 (test-only vendoring; feature `native`)
 
-- **Licence: MIT OR Apache-2.0**, as the engine: `LICENSE-MIT` and `LICENSE-APACHE` at the root,
-  `license` in every crate of ours (the workspace's three by `license.workspace`; `fuzz`, the D0
-  spike and the N−1 consumer in their own manifests) and in the client's `package.json` and its
-  lockfile's root entry (and the spike's). README and NOTICE.md say so; `vendor/` keeps its own
-  licences. No code change.
+- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.5` (`c184284`), by git
+  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+  Hardening, and a test-only feature. Native-only; in no K2 build. No new refusal code (the error
+  table is unchanged).
+
+### The engine at mpce-g2a-m2.4.4 (test-only vendoring; feature `native`)
+
+- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.4` (`40f7825`), by git
+  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+  Hardening. Native-only; in no K2 build. No new refusal code (the error table is unchanged).
+
+### The engine at mpce-g2a-m2.4.3 (test-only vendoring; feature `native`)
+
+- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.3` (`e68e1c2`), by git
+  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+  Hardening. No new refusal code and no public API change.
+
+### The engine at mpce-g2a-m2.4.2 (test-only vendoring; feature `native`)
+
+- **Re-vendored** (`vendor/README.md`): `mpce-core` at `mpce-g2a-m2.4.2` (`be31995`), by git
+  subtree, byte-for-byte (`mpce-sync` and `mpce-codec` are the same splits).
+  Hardening. No new refusal code (the error table is unchanged), no dependency or licence change.
+
+### The native engine at mpce-g2a-m2.4.1 (test-only vendoring; feature `native`)
+
+- **Re-vendored** (`vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
+  `mpce-g2a-m2.4.1` (`51577ad`: `mpce-g2a-m2.4`, `45ad5b6`, with comments changed only), by git
+  subtree, byte-for-byte; only mpce-core changed. Hardening, with two new refusal codes. No
+  dependency or licence change.
+- **Error table** (append-only): the engine's table lists its first two codes, `MPCE-E199` and
+  `MPCE-E980`; the native adapter names them. `docs/ERRORS.md` regenerated.
+
+### Hardening: a refused apply leaves no trace
+
+- **`core.refused_no_trace`** (new conformance rule; gate G2a, the native adapter; needs
+  Authorship and Canonical): after every refused delivery or client update, the replica's
+  text, version, encoded state vector and encoded state are equal to before, byte for byte,
+  and it takes valid batches after. Passes on the reference model and on the kit Doc on the
+  native engine; pinned on Yrs. `docs/CONFORMANCE.md` gains a "Hardening rules" table.
+- **The native adapter** (`engine/mpce.rs`, feature `native`; in no host build): hardening,
+  with tests.
+
+### The client: a library only (hosts own their editor UI)
+
+- **The live editor component is removed from the client** (`client/src/editor/*`,
+  `client/src/codemirror.ts`, the `k2-mpc-client/editor` export, the CodeMirror peer
+  dependencies, the Playwright browser tests). Hosts draw their own editor over the library:
+  **`client/HOST.md`** (new) has the calls an editor makes, the rules it keeps and the tests that
+  cover them. `client/EDITOR.md` is a pointer to it. The library is unchanged: `LiveText`, the
+  wire and transport contract, Re-apply, presence and marks as data.
+- **New client exports:** `setDefaultLiveTimers` (root and `core`); `k2-mpc-client/test`, the
+  test helpers a host's editor tests run on (each also at its old path), and
+  `k2-mpc-client/test/jsdom-shims`. `client/test/exports.test.ts` pins the names and the files a
+  host build reads by path (the wire goldens among them).
+- The editor's library coverage runs on a DOM-free test host (`client/test/live-host.ts`):
+  `live-convergence.test.ts` and the caret re-send scenarios. Details: `client/CHANGELOG.md`.
+
+### `MPC-E000 not_applied` in the error registry
+
+- **`MPC-E000` is registered** (`not_applied`, exit 1, `(sync)`, reached indirectly): the JS
+  client's own id for a change whose reply was lost and that a `since` reply doesn't list
+  (`client/src/wire.ts` `ERR.NOT_APPLIED`, `client/WIRE.md`). `explain MPC-E000` explains it;
+  `docs/ERRORS.md`, the explain and capabilities goldens and the registry snapshot are
+  regenerated. The id was never allocated (append only holds). The tests that used it as an
+  unknown id use `MPC-E999` now.
+
+### Licence: MIT OR Apache-2.0
+
+- **Licence: MIT OR Apache-2.0**, as the engine (also in kit tag v0.10.0.2): `LICENSE-MIT` and
+  `LICENSE-APACHE` at the root, `license` in every crate of ours (the workspace's three by
+  `license.workspace`; `fuzz`, the D0 spike and the N−1 consumers in their own manifests) and in
+  the client's `package.json` and its lockfile's root entry (and the spike's). README and
+  NOTICE.md say so; `vendor/` keeps its own licences. No code change.
+- **The licence is checked (K-OSS-3):** `tools/oss-check.sh` fails unless `LICENSE-MIT` and
+  `LICENSE-APACHE` are at the root (and are those licences), NOTICE.md is there, every crate of
+  ours says `license = "MIT OR Apache-2.0"` (directly or by the workspace) and `publish = false`,
+  every `package.json` of ours (and its lockfile's root entry) says the same licence, and a
+  package that lists a licence file in `files` has a byte-identical copy beside it. `vendor/`,
+  `node_modules/` and test corpus folders are skipped. `tools/test-oss-check.sh` plants each
+  failure (16 cases: a missing file, a wrong or missing field, a client copy that differs, and
+  the skipped folders). Both run in `scripts/check.sh` and the `evidence` part.
+- **The client package carries the licence files:** `client/LICENSE-MIT` and
+  `client/LICENSE-APACHE`, byte-identical to the root's (oss-check compares them), are in
+  `package.json`'s `files`, so `npm pack` includes them (npm packs only what is under the
+  package's folder).
+
+### Positions bound to a version, with one release of warnings (Wave 1a: K-ADDR-3, R-1, R-2)
+
+- **R-1, grids:** a grid edit's `#N` and `LN` count in its `--base` version (was: the live
+  table when the verb applied). A positional edit whose base the kit no longer holds is
+  refused, exit 8, `MPC-E112` (new `SessionError::BaseExpired`; `MPC-E112` now also lists
+  `@pack`). An element named by position at the base and deleted since: exit 4.
+- **R-2, text and pack verbs:** an agent's edit by line or range, a `sed -i` line address, or
+  a pack verb's declared positional address (new `PackVerb::positional`, for Markdown's
+  `--nth`) with no `--if-version` is checked by the new `ToolOptions::positional`
+  (`PositionalMode`). **This release: `Warn`** (`tools::POSITIONAL_DEFAULT`): it applies as
+  before and the new `ToolOutput::warnings` (`tools::Warnings`) carries one stderr `note:` line
+  (`tools::positional_note`). `Refuse`: `MPC-E171 positional_needs_version`, exit 2, nothing
+  applied (now live). **The next release flips the default to `Refuse`.** People's edits are
+  unchanged.
+
+### One address grammar and its error ids (Wave 1a: K-ADDR-1, K-ADDR-2)
+
+- **`addr`** (new module): the kit's one address grammar, `addr::parse(s, Forms)`: a scoped
+  native ID `@<kind>:<id>[/…]`, a minted key `@k:<key>` (or `key:<key>`), `#N`, `LN`, a forced
+  `name:<text>`, else a bare word (a key, else a unique name; **never a position**). `Forms`
+  says which forms a context has. `addr::unique` refuses two or more matches; `addr::ambiguous`
+  builds the refusal; `Candidate` is one match's most durable address and position.
+  `docs/SESSIONS.md`, "Addresses".
+- **New error ids** (append only; `registry.snapshot` grows by four lines): `MPC-E170
+  ambiguous_address` (exit 2, live), `MPC-E171 positional_needs_version` (exit 2, reserved
+  for K-ADDR-3; live with R-1/R-2 below), `MPC-E172 address_not_found` (exit 4, reserved for `node`, K-READ-1),
+  `MPC-E173 stale_cursor` (exit 1, reserved for K-READ-2's cursors). Exit 2 here is usage, not
+  held: a host prints no permission line for them.
+- **`ToolError::Address`** (new variant; `ToolError` is `#[non_exhaustive]`): an address
+  refused with its own report and details, exit 2, its message the verb's own line.
+- **The grid verbs** (`table::verbs`) parse their addresses through the grammar: rows and
+  columns also take `@k:<key>` (rows also `key:<key>`). An ambiguous column name or `--where`
+  still exits 2 with the same line, now as `MPC-E170` (was `MPC-E122 tool_usage`) with
+  `details.candidates` (each match's `@k:` address and `#N`). A bare word starting with `@`
+  is still a column name on a grid (no native IDs there).
+
+### Structured next steps (K-PAR-10): `next_step` beside `next`, additive
+
+- **New wire field, additive**: an error id gets a `next_step`, `{verb, args, why}`
+  (`errors::NextStep`; `ErrorEntry::step: Option<NextStep>`, `ErrorReport::next_step()`).
+  `verb` is always a kit verb by its registry name (`cat`, `undo --partial`, `row list`,
+  `explain`); `args` is an argv list with no host prefix and no doc path (`{key}` stands for
+  the refusal's `details.key`, which the host fills in); `why` is plain prose that names no
+  command line. An id with nothing to run (wait, ask a person, report it, use ordinary file
+  tools) has no `next_step`: the key is left out. 59 of the registry's 123 entries have one
+  (`errors/registry.rs`). Unit tests (`errors/tests.rs`) hold every entry to this: the step
+  is absent, or its verb is in the kit's verb registries with a reason; no host command
+  text appears in a message, `next`, `why` or argument; placeholders are plain detail keys.
+- **`next` is unchanged**: its prose is byte for byte as before, and no existing key changes
+  name, type or order. `ErrorReport::to_json` / `to_value` / `to_json_for` add `next_step`
+  right after `next` when the id has one: `{id, exit, message, next, next_step, rule,
+  details}`. `with_next(surface, …)` still overrides only the prose; `next_step` is the
+  registry's on every surface. `explain` prints a `step:` line after `next:`, `explain
+  --json` a `next_step`, and `docs/ERRORS.md` a **Next step** line, for each id that has
+  one; `capabilities` (`error_ids.json_shape`) lists `next_step`. The explain goldens,
+  `capabilities.json`, `docs/ERRORS.md` and the wire golden `client/test/golden/errors.json`
+  were re-blessed; the registry snapshot (ids, names, exits) and `capabilities.txt` are
+  unchanged.
+- **Client**: `ErrorReport.next_step?: NextStep` (`client/src/wire.ts`; `NextStep` exported,
+  `verb: string`), optional: absent for an id with nothing to run, and from a host built on
+  an older kit; `client/WIRE.md` updated.
+- **For a host**: K2 may render `next_step` in its own syntax (its command name, the doc path)
+  instead of `next`. `next` converts or retires only in a later release, and only after K2
+  renders `next_step`.
+
+### The position encoding, stated (K-ADDR-4)
+
+- **`capabilities` states how positions are counted**: a new top-level `positions` key in
+  `--json` (and a "Positions" section in the text form): `internal` and `wire` `utf8_bytes`
+  (the kit's API and the hunk channel), `line_col` (1-based lines; 1-based columns in Unicode
+  scalar values), `yjs_wire` `utf16_code_units` (inside the update bytes exchanged with Yjs
+  clients only; engine-internal units are not stated, as they differ between engines), every
+  unit with its base, and per verb served each flag that takes or prints a position with its
+  unit (`insert --at`: `line_col`; `head -c`: `file_bytes`, the file's bytes with BOM and
+  CRLF; `wc -m`: `file_chars`; grid `--row`: `grid_row`...). Nothing else in `capabilities`
+  changes.
+- **One table**: `parity::positions` (`VERB_POSITIONS`, `Unit`), public: the kit's verbs and the
+  grid verbs (`table::verbs::VERBS`), whose rows appear with a grid pack's registry.
+- **`docs/POSITIONS.md`**: surface, unit, base and where each is set, with file:line references.
+- **Tests** (`tests/positions.rs`, in base-a2): every verb whose usage names a position has a
+  row and every row's flags are in its usage; on `é中🎉` text and a BOM + CRLF file through
+  `run_tool`, `insert --at` and `--range` count an emoji as one column, `head -c`/`tail -c`/
+  `wc -c` count the file's bytes and `wc -m` its characters; byte offsets and `line:col`
+  round-trip; a Yrs client's insert at a UTF-16 index lands at the byte the CLI's `line:col`
+  names, and the kit's byte offset is the client's UTF-16 index. No behaviour changes.
+
+### The ID table and the ID-churn judge (K-ID-13, K-COD-10)
+
+- **`ids`** (new module, `crates/base/src/ids/mod.rs`): `IdKind { kind, example, class, scope,
+  accepted_by, note }` and `IdClass` (durable, file-local, unique-name, positional, session,
+  stamp; most durable first). `ids::KIT` lists every ID and address kind the kit's verbs take
+  or print: text lines and `L:C`, exact `--old` text, grid row and column keys, `#N`, `LN`,
+  header names, `--where`, versions, changes, participants and claim ids. `ids::markdown`
+  renders a table, `ids::check` holds one to a verb registry.
+- **`docs/IDS.md`** (new), generated by `ids::kit_markdown()`; `tests/ids.rs`
+  (`table_matches_docs`) holds the committed file to it and checks every verb a row names
+  (`MPC_BLESS=1` regenerates it).
+- **`Pack::ids()`** (new, default none: additive, no pack changes): a pack's own native ID
+  kinds, in the same form, for its `docs/IDS.md`.
+- **`ids::churn::judge`** (feature `test-support`): the ID-churn harness for packs' tests. Over
+  a corpus, a no-op save (decode, encode, read back) must give the file's bytes back and keep
+  every ID, and each one-unit edit (a verb's edits written back, or an outside save read
+  back) must keep the ID of every object it doesn't touch. Run on the text pack and the grid
+  test pack (zero churn); planted renumberings (a read-back that re-keys a row, a save that
+  renumbers a line's ID) fail it. **Not yet:** refusing such a write at run time (K-COD-10's
+  last sentence): it needs a pack hook and a new error id, so it waits for the first pack
+  whose file carries native IDs.
+
+### The sync layer at the engine tag mpce-g2a-m2.3 (hardening; the engine's licence)
+
+- **Re-vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
+  `mpce-g2a-m2.3` (`c958fc4`), by git subtree, byte-for-byte: hardening in mpce-core, no
+  public API change and no new refusal, so nothing in the conformance crate changes. No
+  dependency changed; the lockfile is unchanged.
+- **Licence**: the engine is now MIT OR Apache-2.0 (each manifest's `license` field). The
+  licence texts, at the engine repo's root, are copied byte-for-byte from the tag into
+  `vendor/mpce-licences/` (`LICENSE-MIT`, `LICENSE-APACHE`), outside the crate directories.
+  `scripts/check-licences.sh` still skips every `mpce-*` package by name (as "our own"), so
+  it doesn't check this field yet.
+
+### The sync layer at mpce-sync 0.1.1: the re-base epoch moves onto it
+
+- **Re-vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at
+  the hardening tag `mpce-g2a-m2.2` (`76cdaa7`; mpce-sync 0.1.1, first tagged
+  `mpce-sync-v0.1.1` at `2631272`), by git subtree, byte-for-byte. mpce-core's refusals gain
+  `MPCE-E196`; the suite's two matches on `Refusal` (in `sync.rs`, on
+  `SendLog`'s results) name only `FalseReceipt` and keep a catch-all, as `Refusal` is
+  `#[non_exhaustive]`. Their manifests
+  are standalone now, so the kit's stand-in `vendor/Cargo.toml` is gone. No new dependency
+  (`count-alloc` is only their dev-dependency and is not vendored); the lockfile is unchanged
+  but for mpce-sync's version.
+- **`sec.rebase_required` on mpce-sync's epoch**: `sync::SyncRebase` now takes `recvOp`'s
+  decision from `Tracker::route_op` (resend, equivocation, hold, inline; the fence
+  `u.ep < x.ep` inside it), the client's epoch from `Participant::ep` (raised by
+  `Tracker::on_rebase`, kept through reconnects) and the epoch a send carries from
+  `SendLog::send_in` / `epoch`. The host keeps what mpce-sync 0.1.1 leaves to it: the re-issue
+  over mpce-model's text and its ID map, the held queue (always empty), `route_op`'s inputs
+  (the update against the log, its dependency) and the typed frame.
+- **An overstated base**: a new step: an update whose base names a send never made is refused
+  as an implicit false receipt (`MPCE-E185`, `RebaseRefusal::FalseBase`). A base naming a send
+  that was made but whose content the update lacks is the engine's admission's (`MPCE-E182`,
+  mpce-core's graph), which this layer doesn't call: it waits for the kit on mpce-core.
+- **Negatives**: the no-fence negative is now mpce-sync's own planted
+  `TrackerMutant::NoEpochFence` (the host's `NoEpochFence` is gone); `EpochPerConnection` is a
+  host that makes each connection a new participant; `NoEpochBump` a host that appends a
+  re-base without `on_rebase`; new `TrustClaimedBase` (the base taken as claimed, not through
+  the send log). `IntegrateInline`, `NoDepMap`, `ForgetOnAck` and `ReadmitBelowS` as before.
+
+### The native engine behind a feature (C2 of the engine migration, in progress)
+
+- **Feature `native`, off by default and not for hosts until the switch (stage D).** It adds
+  the native engine (`mpce-core`, `mpce-codec`, vendored) behind the kit's engine seam. Until
+  C3, **sessions refuse to store a doc on it** (`Doc::check_storable`, at import and
+  promotion: it would be stamped as Yrs's). Without the feature nothing changes, and the
+  kit's normal dependency tree has no `mpce-*` crate: `tools/tests/wire-guard.sh` checks it,
+  in the repo and as a host builds it.
+- **Seam prep, the same on Yrs:** `Engine::yrs()` is an `Option`; provenance counts in the
+  doc's own units (`Prov` carries `Doc::units()`; the build-wide `UNITS` is gone); the edit
+  path reports each text hunk's first inserted clock as applied (`Made::firsts`) instead of
+  predicting it after the fact, and undo's planner, the one caller that needs IDs before
+  applying, uses the doc's `IdOrder` (a test checks both against blame).
+- **Hardening** in the native engine's adapter (client updates' rights and which ops a client
+  may send). Native-only; in no host build.
+- **Errors (P10):** a native refusal is `DocError::Engine { code, message, kit }`: the kit's
+  id with `details.engine_code` where the kit has the meaning, else `MPC-E161
+  engine_unlisted` with the code (no registry rows yet).
+- **The native conformance column** (`NativeText`, empty deviation list): the core rules,
+  `core.authorship` with no pin, and `core.sec`. `core.steady_plain` awaits the engine's
+  G2a M4 (E-TEXT-13); the suite measures and prints it every
+  run (`native::core_steady_plain_measured`) and gates on it once the column claims Steady.
+  Never a pin.
+
+### `sec.rebase_required`: the re-base epoch as the engine's model has it
+
+K2 Engine's answer: `spec/quint/client_protocol.qnt` (engine `a156fef`) is right, and the rule
+now follows it (on `sync::SyncRebase`; mpce-sync 0.1.0 has no epochs, so the epoch is the test
+host's until mpce-sync carries it):
+
+- **Every re-base raises the client's epoch by one** (`dRebase`, `ep: x.ep + 1`): the
+  pipelined update is re-based in epoch 2, not again in epoch 1.
+- **The fence** (`recvOp`, `u.ep < x.ep`), three new cases: (a) an old-epoch copy of an update
+  already in the log is ignored, never equivocation; (b) an old-epoch update not in the log is
+  held and re-based into a newer epoch; (c) the epoch survives a reconnect (A9, Addendum G1-3
+  (4)): a client whose frames were lost with its connection resends after the reconnect, and
+  its re-based updates are ignored while its offline one is re-based, in epoch 3.
+  `Rebase` gains `disconnect`, `reconnect` (the handshake: resends, then a catch-up) and
+  `insert_offline`. A known update with other content is equivocation (the model's
+  `sameContent`).
+- **Negatives**: `NoEpochFence` is now the model's `client-no-epoch-fence` (no fence: the
+  resend of a re-based update is reported as equivocation); new `EpochPerConnection` (the
+  model's `cp_lost_frame`); the old `NoEpochFence` (references to re-based events left
+  unmapped) is `NoDepMap`. Requirement: E-SEC-14, -16, -17 (amended G1-3), E-CORE-4.
+
+### The client protocol's rules on the engine's sync layer (mpce-sync 0.1.0, test-only)
+
+- **Vendored** (test-only, `vendor/README.md`): `mpce-sync`, `mpce-core` and `mpce-codec` at the
+  engine tag `mpce-sync-v0.1.0` (`a156fef`), by git subtree, byte-for-byte. Only
+  `k2-mpc-conformance` depends on them; the kit's build doesn't see them
+  (`cargo tree -p k2-mpc-base -e normal`: no `mpce-*`). New in the lockfile: `hmac` 0.12.1,
+  `sha2` 0.10.9 and their tree, all on the licence allow-list. `vendor/Cargo.toml` (ours)
+  carries the engine root's workspace fields the three crates inherit.
+- **`sec.false_receipt`** runs on mpce-sync's `SendLog` (`sync::SyncReceipts`): the refusal is
+  its `MPCE-E185` (`Refusal::FalseReceipt`), checked to record nothing, and a true report is
+  checked to resolve to the position the send carried.
+- **`sec.rebase_required`** runs on mpce-sync's `Tracker` (`sync::SyncRebase`): S, the joins,
+  the drop from S (a grace that ran out), the acks and the re-admission after them are the
+  tracker's, and an update integrates inline only when its base (an implicit report,
+  `SendLog::implicit`) is at or past S read before the step. The epoch and its fence, the
+  re-issue and the retry map are the host's in mpce-sync 0.1.0, so a test host over
+  mpce-model's text does them. The rule gains a third lagging client: one client's re-base
+  must not take S back and let the next one's update in inline.
+- **The matrix**: a layer column, "mpce-sync 0.1.0 (sync layer)", that runs the Protocol
+  rules only ("–" for the others; a layer needs no Text). On the kit (Yrs) the rules still
+  await the native engine; the reason names what the layer doesn't have.
+- **Negatives**: the re-base mutants (`IntegrateInline`, `NoEpochBump`, `NoEpochFence`,
+  `ForgetOnAck`; with the epoch fix below, also `EpochPerConnection` and `NoDepMap`) are in the
+  sync layer's host; mpce-sync's own planted `ReadmitBelowS` (its
+  `planted` feature, a dev-dependency of the suite's tests) fails the rule; the receipt
+  mutants stay on `seams::RefReceipts` (mpce-sync's receipt check has no planted variant).
+  `seams::RefRebase` is gone.
+
+### Eight new conformance rules (engine half v2, draft 2.1; review C-a)
+
+`docs/CONFORMANCE.md` lists each with its gate (the PRD's) and its delivery target (T = G2a M2,
+~11-18). Each has a planted negative that must fail it.
+
+- **`core.authorship`** (E-CORE-5, gate G2-core): the agents whose new events a batch carries,
+  reported before anything changes; a batch on agent A's connection may carry new events by A
+  only. Runs on both engines; on the kit it is the kit's own client check, through the
+  `conformance` feature's hooks `replica::check_from` / `replica::deliver_from`, which call
+  the same code as `Doc::check_client_update` / `apply_client_update` (one body, shared;
+  `untrusted-wire` stays off in the suite). Pinned on Yrs.
+  Mutants: `TipOnly`, `KnownAsNew`.
+- **`core.sec`** (E-CORE-1, G2-core): byte-identical canonical state whatever the delivery
+  order: 1,680 interleavings of a concurrent script and 100 causal orders of a seeded run.
+  Passes on both engines (the kit's `encode_state` included). Mutant: `ArrivalOrder`.
+- **`core.steady_plain`** (E-TEXT-13, G2a): a loaded fragmented doc against
+  1.2 × text + 24 B × index runs + 64 KiB, with the counting allocator. Pinned on Yrs; planted pair: plain text and index pass (198 KB), 16 B per
+  character fails (478 KB).
+- **`prov.record`** (E-PROV-1, G2a): one record per change, its author the agent that made it
+  (C20), on whose behalf, host time, and time never in a merge; on a kit session. Pinned on
+  the kit: its record has no person-or-agent kind (interface r1.7's typed core will).
+  Mutants: `BehalfAsAuthor`, `RecordPerHunk`.
+- **`perm.predicate_called`**, **`perm.refused_whole`** (E-PERM-1, -2; K-PERM-15; G2a):
+  awaiting the kit's write predicate (K-PERM-15) and the native engine's; they run on a test
+  seam, `seams::GatedYrs`. Six mutants.
+- **`sec.false_receipt`** (E-CLI-14), **`sec.rebase_required`** (E-SEC-14, -17), G2-core: not
+  applicable on Yrs (no stability frontier); awaiting the kit on the native engine's client
+  protocol; they run on the engine's sync layer, mpce-sync (below). Nine mutants.
+- The kit Doc's deviation list is fifteen entries (`core.authorship`, `core.steady_plain`,
+  `prov.record` added).
+- `tools/tests/wire-guard.sh` checks the hook can't leak: a host build without features has no
+  client API and no hook; with `conformance` alone it still has no client API, and the
+  feature builds without the wire cfg. A kit unit test,
+  `conformance_hook_is_the_client_check`, holds the hook's answers and resulting state equal
+  to the client API's on every outcome.
+
+## v0.10.2: C1, the seam prep for the native engine
+
+### N−1 both ways (tools/n1)
+
+`tools/n1/n1.sh layout-both <prev tag> <dir>` and `node-both <dir>` check N−1 in both
+directions between two builds that both read format 6:
+
+- Each build's `n1_producer` writes stores for the other build's consumer
+  (`tools/n1/consumer-both`). With `K2MB_N1_RESTORE`, the producer also reverts its revert, so
+  the stores hold provenance rows and a record with roots.
+- The consumer opens both stores, blames the restored line, reverts the other build's record,
+  then writes, restores and rewrites.
+- For a previous release without the env flag (v0.10.0), the layout adds the restore to its
+  copy of the producer.
+
+The existing `layout` and `node` modes (a previous release that refuses format 6) are
+unchanged.
+
+### Format 7 is read, never written: the downgrade guard for the native switch
+
+The native switch will write store format 7. This build already handles a format-7 store: it
+reads it, but never writes the format and never changes what it can't read.
+
+- **Read vs write formats.** `STORE_FORMAT` (6) is the highest format this build writes.
+  `STORE_FORMAT_READ` (7) is the highest it reads. Format 8 and later are refused as before
+  (`MPC-E502`); the message now reads "this build reads up to 7".
+- **Opening a format-7 store writes nothing.** There is no upgrade, no table creation and no
+  authored-hunks sweep, so the file's bytes are unchanged. A rewrite that a newer build left
+  pending is not finished here: the open is refused with the new
+  `StoreError::RewriteNewer { found }` (`MPC-E502`, exit 6), and the file is left as it is.
+- **No rewrite or purge of a format-7 store.** `rewrite_file` and `check_rewritable` refuse it
+  with `RewriteNewer` before anything changes. A purge checks `check_rewritable` first, so it
+  refuses the same way.
+- **Another engine's doc is refused on delete and purge.** `SessionManager::delete_doc` and
+  `delete_space` refuse a doc whose stamp this build doesn't read with `MPC-E520`, as on open.
+  A space holding such a doc is refused whole, before any session closes.
+  - The store's own `delete_doc`, `delete_space` and purge check again inside their
+    transaction, with the new `StoreError::ForeignEngine` (`MPC-E520`).
+  - Tier-0 docs (stamp `none`) and this engine's own docs pass (`engine::owns_stamp`).
+  - Otherwise a delete would erase only the rows this build knows and leave the native
+    engine's rows behind.
+- **The DocMeta v1 layout is frozen.** A golden record carrying a native stamp pins it, with a
+  strict decode, so this build can always read the stamp of a doc it can't load.
+- **Tests:**
+  - `tests/engine_stamp.rs` makes a format-7 store by hand. Its Yrs doc is served (read,
+    edited, blamed). Its native doc is refused with `MPC-E520` on open, `delete_doc` and
+    `delete_space`. A whole-store rewrite and a purge are refused with `MPC-E502`. The store's
+    bytes are unchanged after an open.
+  - A pending rewrite on a format-7 store fails the open and leaves the bytes as they were.
+    Format 8 is refused.
+  - Existing tests that pinned "format 7 is refused" now use format 8.
+
+### Engine units: u64 clocks and `units_of` (P2; no stored byte changes)
+
+Element IDs keep their `(client, clock)` shape, and **the clock is now a u64 in the engine's
+units**. `engine::Units` and `units_of` / `char_units` come from the engine, not from UTF-16.
+On Yrs the units are UTF-16 code units, as before. A native engine counts scalars. The
+widening goes through the engine seam (`BlameRun.clock`, `clock_of`, `insert_clocks`),
+`ElemId`, `IdRun`, `ClockSpan`, `ProvRow`, the revert record's `RootRuns`, and blame. Every
+UTF-16 count on a clock path now goes through `units_of`. `CharBlame.clock` and
+`root_clock` (feature `conformance`) and `differential::EditRecord.clock_before` are u64.
+
+**Stored bytes are unchanged; text stores stay at format 5.**
+- The change-clocks and provenance tables already stored u64; their reads no longer narrow
+  to u32.
+- A revert record's runs keep their u32 layout (records v2 and v3). The units and clock are
+  narrowed at encode, checked. A value over `u32::MAX` refuses the change with
+  `StoreError::ClockOverflow` (`MPC-E501` `store_failed`, exit 6) before anything is
+  written; it is never stored truncated.
+- Yrs clocks are u32, so a Yrs doc never reaches that refusal. The u64 record layout comes
+  with the native records (stage D).
+- `StoreError` gains `ClockOverflow(u64)`; it is `#[non_exhaustive]`.
+- **Reads keep v0.10.0's refusal.** A change-clocks or provenance row with a clock past the
+  doc's engine's (`EngineDoc::max_clock`; Yrs: `u32::MAX`) can only be damage. Blame,
+  revert, undo and the outside-save note read those rows and refuse it as
+  `StoreError::Corrupt` (`"change clocks"`, `"provenance row"`), as v0.10.0's narrowing
+  reads did. No kit clock is ever passed into Yrs: the engine is driven by text positions.
+
+**Tests:** `store::history` pins the stored bytes of a revert record with runs, a provenance
+row and a change-clocks value: they are the bytes v0.10.0's own encoders write. It also
+checks that a run over u32 is refused at encode, that a commit holding one writes nothing,
+and that clock spans and provenance past u32 round-trip under a u64 bound and are refused
+under Yrs's. `session::live::blame` plants such rows in a Yrs doc's store: blame and revert
+refuse them as `Corrupt`.
+
+### The seam's `new` and `text` return `Result` (P14)
+
+`EngineDoc::new` and `EngineDoc::text` are fallible, so an engine can refuse a schema it can't
+hold. A text root the doc doesn't hold is `DocError::Malformed`. `Doc::new` and `Doc::text` returned `Result` already; the public API is
+unchanged. `Doc` checks the root's kind first, so no caller of `Doc` reaches the new error.
+
+### `Doc` runs on an engine enum
+
+`Doc` holds `engine::Engine`, an enum with one variant per engine this build carries. Its only
+variant is `Yrs`. The seam's calls, and the checks and comparisons the kit runs on the engine,
+dispatch through it. A second engine is a second variant, and each `match` must then say what
+it does on that engine. The Yrs-only hooks of test, `differential` and `conformance` builds go
+through `Engine::yrs()`. No behaviour changes.
+
+### The engine stamp is checked on load
+
+**Fixed:** a stored doc's engine stamp (`DocMeta::engine` / `engine_format`) was written and
+never checked. A session now refuses a doc another engine, or another stored-state format,
+wrote, before reading any of it: `SessionError::EngineMismatch { stored, stored_format,
+engine, engine_format }`, **`MPC-E520 engine_mismatch`** (exit 6), "this doc was written by
+engine loro-1.0 (format 1); this kit runs engine yrs-0.28 (format 2)". Checked on every load
+from the store (`open`, `open_file`, the reopen after a promotion) and on the reload after a
+failed store write. The same engine is the same family (`yrs`, the name up to its first `-`)
+and format; the library version after the `-` doesn't count. An unstamped doc (an empty
+name; no store the kit wrote has one) loads as this engine's. Tier 0 reads no engine state:
+no stamp applies. No store format change; no new dependency (docs/SESSIONS.md, "The engine
+stamp").
+
+**Tests:** `tests/engine_stamp.rs` (another engine through `open` and `open_file`, another
+format, another library version, an unstamped doc); `engine::tests` (the rule); the error
+goldens and `docs/ERRORS.md` gain `MPC-E520`.
+
+## v0.10.2: the live editor's items
+
+- **A removed-text note tells a reader without history who can help, every time.** On a text
+  doc, a note for a reader without the history right (`version: null`, `restore_from` set) now
+  says "Someone with history access can restore it from version N." right after the place
+  (after "The text is no longer held here." when withheld), once: a cut note keeps its last
+  sentence ("N more characters not shown; someone with history access can restore it from
+  version N.") and adds nothing. Readers with history and roll-ups: unchanged. Only `message`
+  changes on the wire.
+- **`Session::set_cursor_at(conn, root, version, anchor, head)`**: a caret given in byte
+  offsets of the root's text at `version` (a live client's `cursor` frame) is mapped through
+  the changes since on that root and set, under one lock. Returns `CursorAtVersion::Set` or
+  `Dropped(CursorDrop::Ahead | PastWindow)` (nothing set; the host sends no reply). A host
+  passes the frame through instead of mapping it itself (`client/WIRE.md`, "Carets").
+- **`Session::join_replacing(participant, stay, prev)`**: a reconnect's join that also closes
+  the pid's connection holding client ID `prev`, as `leave` does, under the same lock (the pid
+  stays present: no participant `Left`). `Joined` gains `replaced: Option<ConnId>` (`None` from
+  `join` and `join_shared`). A `prev` held by no present connection, or by another pid's, is
+  ignored silently. The host no longer calls `leave` for `prev` itself (`client/WIRE.md`,
+  "Reconnecting").
+- **`ChangeEvent.kind`** (`ChangeKind`): every change event says what kind of change it is
+  (`edit`, `undo`, `redo`, `revert`, `restore`, `external`, `import`), live and from
+  `events_since` (read from the change records, so also after a restart); the App lens passes
+  it through. New `ChangeKind::as_str` gives the wire's name. Wire: `ChangeEvent` gains
+  `kind` (`client/WIRE.md`); the client's `ChangeEvent` type gains an optional `kind`. Golden
+  `change_events.json` and `change_events_app.json` re-blessed (each event gains `kind`).
+- **The client reads `kind`** (client `0.12.0`; `client/CHANGELOG.md`): with a v0.10.2
+  host an undo still in flight on a dropped connection no longer forces "check and retype".
+  A lost change is recognised only by an `edit`-kind change from its client ID; an `undo` or
+  `redo` from that ID is not it, so Re-apply places the change when nothing else came. Any
+  other kind under a client's own ID concludes nothing. With an older kit (no `kind`) the
+  client behaves as before.
+- **Correction to the v0.10.0.1 notes:** "undo and redo marked in a change's `via`" is
+  `kind`, as above; **`via` is unchanged**.
+
+**Fixed (grid merges)**
+
+- Grid: the keyed `table::merge3` reports a `cell` conflict again when the live side switched a
+  cell between absent and `""` byte-neutrally and ours set it (the per-cell neutral rule applies
+  to `write --base` through a text only); mutant (xxxviii).
+- Grid: the keyed `table::merge3_outside` reports the file's override of a byte-neutral live
+  switch between absent and `""` (or of a live empty value the file emptied the other way) as an
+  overridden `cell` (the neutral rule applies to an outside save through a text only; the
+  session's outside save, `merge3_outside_text`, is unchanged); mutant (xxxix).
+
+**Per-connection carets (the kit).** The same person on two devices or in two tabs now sees
+their other connection's caret, as Google Docs shows one login's other tabs. All additive: a
+host or client that ignores the new fields behaves exactly as before.
+
+- **`RosterEntry::devices`** (text docs): one `Device { client, cursor, label }` per
+  connection of the participant, in join order, each with its own caret. Roster rows stay one
+  per pid; `RosterEntry::cursor` is still the most active connection's caret. Empty on a grid
+  (grid carets, `RosterEntry::cell` / `RosterEvent::CellCursor`, stay per participant: out of
+  scope) and for tier 0.
+- **`RosterEvent::Cursor::client: Option<ClientId>`:** the connection whose caret moved. The
+  roster flush keeps what it told per (pid, connection), so each connection's caret change is
+  its own event (a connection that leaves with a caret: its `None`). **For a consumer that
+  ignores `client`** (one caret a person, the last event's): within a flush a participant's
+  events end with the one whose caret is `RosterEntry::cursor`, and when the last
+  per-connection event isn't that caret (a connection left or dropped its caret while another
+  still has one) one more `Cursor` follows with `client: None` and the participant's caret.
+  After every flush such a consumer holds exactly what it held before; a participant with one
+  connection gets exactly the events it got before, each with its `client`. A Rust consumer
+  that matches `RosterEvent::Cursor { who, cursor, version }` without `..` needs `..` (or
+  `client`); constructing the variant needs the field.
+- **Join labels:** `Session::join_with(p, stay, &JoinOptions)` (new; `join` and `join_shared`
+  are it with the defaults, their signatures unchanged). `JoinOptions::label("another tab")`
+  is kept on the connection and carried on its `Device::label`; control characters are
+  dropped, it is trimmed and cut at `DEVICE_LABEL_MAX` (64) characters, and an empty one is
+  none: a label never fails a join. It is the host's text, never doc text. A shared join with
+  a label relabels its connection.
+- join_with's JoinOptions gains .replacing(prev); a replacing join's label is the one given at
+  that join
+- **Wire goldens** (`client/test/golden/`): every text-doc member gains `devices` (a
+  `{client, cursor, label?}` a connection, client IDs fixed as before) and every `cursor`
+  event its `client`; nothing else changed. The file scenarios' client IDs are now fixed too
+  (the main scenario's numbers per pid), since their members carry them.
+  `roster_events_devices.json` (new): one person on three connections, two labelled.
+- **Tests:** `tests/roster.rs`: two connections of one pid each get their own device caret; a
+  move on connection 2 is `Cursor { client: Some(c2) }` alone; a consumer ignoring `client`
+  keeps the person's caret over 120 random moves, joins, leaves and edits; one connection is
+  unchanged; the label round-trips. `--features planted-device-bugs` (test-only: every
+  connection shows the most active one's caret, "first connection only") makes them fail.
+
+## client 0.11.1: the caret re-send (ships in v0.10.2; not released to hosts before)
+
+v0.10.0.1 plus the JS client 0.11.1: remote carets are re-sent after remote changes, mapped to
+the caret's place at the new version and throttled (at most one per 250 ms, a trailing one at
+the last version), so a caret frame a host dropped as behind no longer leaves an idle person
+unseen (`client/CHANGELOG.md`, 0.11.1). Client only: no change to the kit's Rust library,
+store, merge or wire.
 
 ## v0.10.0.1 (2026-10-31)
 

@@ -2,6 +2,7 @@ MPC-E004 export_cancelled (exports)
 exit:     1
 message:  export cancelled
 next:     The export was cancelled before it finished; nothing was placed. Run it again if you still want the file.
+step:     export; why: The export was cancelled before it finished and nothing was placed; run it again if you still want the file.
 rule:     X-CAN-1
 verbs:    a host call (no verb)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "export cancelled",
   "next": "The export was cancelled before it finished; nothing was placed. Run it again if you still want the file.",
+  "next_step": {
+    "verb": "export",
+    "args": [],
+    "why": "The export was cancelled before it finished and nothing was placed; run it again if you still want the file."
+  },
   "rule": "X-CAN-1",
   "verbs": ["(host)"],
   "returned_by": [],

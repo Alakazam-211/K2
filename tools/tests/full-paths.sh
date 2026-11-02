@@ -20,7 +20,7 @@ E="error_ids tools_session pack_verbs"
 # on main from exports P0; with k2.6.3's patch and the merged kit, base-a1 with them needed
 # 130,240 inline characters, over a job's 120,000; without them 96,728)
 D="disk if_version blame blame_incremental blame_cost position_index"
-case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, conformance, spec-undo, wire-guard or evidence} in
+case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wire-guard or evidence} in
   # base-a was one part until the v0.9.5 merge put it over a job's limit (INLINE 142,396):
   # base-a1 is the kit's unit tests (its proptest regressions) and doctests, base-a2 its
   # integration tests on the kit without its unit-test modules
@@ -33,7 +33,12 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, conformance, s
     # the JS client's shared vectors, which client_vectors.rs checks (v0.9.7)
     echo "$KIT_LIB" $T client/test/vectors ;;
   # the evidence notes and their run records, checked (Python only; no cargo)
-  evidence) echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" ;;
+  # oss-check (K-OSS-3) reads the licence files, NOTICE.md and every manifest of ours (not the
+  # lockfiles, which are large: in a bundle it checks package.json files without them)
+  evidence) echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" \
+      "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
+      "client/LICENSE-MIT client/LICENSE-APACHE" \
+      $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;
   # bundled with STRIP_DOCS=1 since v0.9.7 (the K5 run_tool test put it 600 characters
   # past a job's 120,000 inline; it runs no doctests; tools/README.md)
   # app_view's grid case uses the grid test pack (C1)
@@ -44,10 +49,6 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, conformance, s
   errors) echo "$KIT_LIB" $(for t in $E; do printf ' crates/base/tests/%s.rs' "$t"; done) crates/base/tests/golden/errors docs/ERRORS.md crates/base/examples crates/base/tests/grid_pack ;;
   # live_edit and its shared vectors since v0.9.8 (base-a2 was at a job's limit)
   base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/parity_grid.rs crates/base/tests/grid_pack crates/base/tests/erasure.rs crates/base/tests/fixtures crates/base/tests/live_edit.rs crates/base/tests/vectors/live_rebase.json" ;;
-  # without the kit's `differential` module (feature-gated; the suite never turns it on) and
-  # the reference model's binaries (never built as a dependency): v0.9.5, the part was one
-  # chunk over a job's limit (65), twice
-  conformance) echo "$(echo "$KIT_LIB" | tr ' ' '\n' | grep -vx crates/base/src/differential.rs | tr '\n' ' ')crates/conformance vendor/mpce-model/Cargo.toml $(git ls-files vendor/mpce-model/src | grep -v '^vendor/mpce-model/src/bin/' | tr '\n' ' ')docs/CONFORMANCE.md" ;;
   # spec/quint: only the file its tests read (v0.9.4: the whole folder put the part over a
   # job's limit, 65 chunks)
   # bundled with STRIP_DOCS=1 since v0.9.7 (D1 put it at 145,656 inline characters;

@@ -10,8 +10,7 @@
 #   PART=m  every mutant, TLC with one worker (a shortest counterexample) and the enumerator
 #   (unset: all three, which needs more than one 15-min job since v1.8)
 INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
-inst w 2 1 1 0 4 "0, 1, 1" true true none
-timed "warm-up (fetches Apalache)" q verify w.qnt --main=w --backend=tlc --invariant=inv
+need_apalache
 . "$ROOT/tools/undo/tlc.sh"
 # cmp NAME PIDS EVENTS UNDOS REVERTS MAXLEN "INIT" MULTI PURGE INITLETTERS SECONDS [RESTARTS]
 cmp() {

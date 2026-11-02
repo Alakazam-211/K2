@@ -149,7 +149,7 @@ impl Session {
                     && top.regions.len() == 1
                     && batch.regions.len() == 1 =>
             {
-                undo::compose_group(&top.regions[0], a, b, &batch.regions[0])
+                undo::compose_group(st.doc.units(), &top.regions[0], a, b, &batch.regions[0])
             }
             _ => None,
         };

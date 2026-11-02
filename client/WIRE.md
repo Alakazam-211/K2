@@ -2,10 +2,11 @@
 
 The frames a host carries between `LiveText` (this package) and the kit's session, for one
 text root of one doc. The host chooses the transport (a WebSocket, say) and implements
-`Transport` (`send`, `onFrame`), or `LiveTransport` for a live editor component that also
-reconnects; frames are JSON objects with a `type`. The types are in `src/wire.ts`; this is the
-spec. The kit's encodings are pinned by golden files (`test/golden/*.json`, written by
-`crates/base/tests/wire_golden.rs`; see [JSON encodings](#json-encodings)).
+`Transport` (`send`, `onFrame`), or `LiveTransport` when its editor also reconnects (the host
+draws its own editor over the library: [HOST.md](HOST.md)); frames are JSON objects with a
+`type`. The types are in `src/wire.ts`; this is the spec. The kit's encodings are pinned by
+golden files (`test/golden/*.json`, written by `crates/base/tests/wire_golden.rs`; see [JSON
+encodings](#json-encodings)).
 
 **Extra fields and error ids.**
 
@@ -22,7 +23,7 @@ spec. The kit's encodings are pinned by golden files (`test/golden/*.json`, writ
 The kit expects nothing first on the wire. Everything before the first frame is the host's:
 
 1. **Authenticate the socket.** How (a header, a cookie, a token checked before the upgrade)
-   is the host's choice. The component never sees the token, and the host keeps it out of its
+   is the host's choice. The client library never sees the token, and the host keeps it out of its
    logs. The host stamps the kit's `Participant` (pid, name, colour, kind) from the identity
    it resolved; the client never sends one.
 2. Open the doc and **join** (`Session::join(participant, Stay::Held)`: a tab never idles
@@ -57,7 +58,7 @@ interface Welcome {
 ## Units and ordering
 
 - **Offsets are UTF-8 byte offsets** on character boundaries, as in the kit. The client converts
-  to UTF-16 only for the editor (`src/codemirror.ts`).
+  to UTF-16 only at the edges: the host's editor, and the UTF-16 data in `src/presence.ts`.
 - **A hunk** is `{start, end, insert}` on the wire (an object, as the kit's `text::diff::Hunk`):
   replace bytes `start..end` with `insert`. The shared test vectors write hunks as
   `[start, end, insert]` arrays to keep the files small; that's the vectors' format only. A frame's hunks are canonical: sorted, non-overlapping, touching hunks
@@ -125,7 +126,8 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   client's text.
 - Frames with no reply (`cursor`, `visible`, `view`) are fire-and-forget: a refusal of one (a
   caret off a boundary, `MPC-E114`; a reader's caret, `MPC-E102`) is dropped by the host,
-  silently. The client re-sends its caret after its next change.
+  silently. The client re-sends its caret after any change that advances its version, its own
+  or a remote one, throttled ([Carets](#carets)).
 
 ## Host → client
 
@@ -143,17 +145,20 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
 | `error` | `error` | a client frame the host couldn't take that has no `op` to answer (over the cap, unreadable) |
 | `closed` | `reason`, `code?`, `path?`, `error?` | the last frame; then the host closes the socket ([Closing](#closing)) |
 
-- `event` is the kit's `ChangeEvent`: `{version, pid, client, via, root, hunks, at_ms,
-  on_behalf_of}` (`pid` and `on_behalf_of` are opaque handles for App viewers, K5).
+- `event` is the kit's `ChangeEvent`: `{version, pid, client, via, kind, root, hunks, at_ms,
+  on_behalf_of}` (`pid` and `on_behalf_of` are opaque handles for App viewers, K5; `kind`
+  since kit v0.10.1).
 - `error` is the kit's `ErrorReport` JSON (`ErrorReport::to_json`): `{id, exit, message,
-  next, rule, details}`. The ids the client acts on:
+  next, next_step, rule, details}`. `next_step` (kit v0.10.1, K-PAR-10) is `next` as data,
+  `{verb, args, why}`: `verb` a kit verb, `args` argv tokens (`{key}`: the refusal's
+  `details.key`), `why` prose; it has no host syntax, so a host renders it in its own. It is
+  absent when there is nothing to run, and from an older host. The ids the client acts on:
   - `MPC-E111` (`write_conflict`): the edit met competing text. The client takes the change out
     of its text and hands it to `onRejected` (the typed text, the hunks, the base, the region);
     `details.conflicts` is passed along.
   - `MPC-E112` (`base_expired`): `base` (or `since`'s version) is past the live window
     (1,000 changes, 4 MiB of events by default), or the changes since don't fit one frame. The
-    client hands everything pending to `onRejected` and emits `onReload`; the host (or the
-    component) calls `LiveText.reload()`, which sends `snapshot` and resets to the reply.
+    client hands everything pending to `onRejected` and emits `onReload`; the host (its editor) calls `LiveText.reload()`, which sends `snapshot` and resets to the reply.
   - `MPC-E113` (`bad_edit`): an `edit` frame over the cap ([Frame cap](#frame-cap)): as
     `MPC-E111`. The client makes this refusal itself before sending, so a host sees it only
     from another client.
@@ -175,6 +180,10 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   (`details.conflicts`); `onError`. The live wire offers neither `--partial` nor `--drop`.
 - `LiveText.undo()` / `redo()` return the op; a reply that never comes (the socket dropped) is
   forgotten on `reconnected`.
+- An undo's or redo's `change` says `kind: "undo"` / `"redo"` (kit v0.10.1). An undo still
+  unanswered when a connection drops can land late under that connection's client ID, as can
+  an edit whose reply was lost: the client tells them apart by `kind` (`HOST.md`,
+  presence first). From an older kit (no `kind`) it can't, and says "check and retype".
 
 ## Carets
 
@@ -193,10 +202,42 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   (past the window) or the frame's version is ahead of the doc's, drop the frame. Dropping
   any stale caret instead of mapping it is also correct (it only shows the caret a change
   late): the client re-sends its caret after its next change.
+- **The client re-sends its caret after any change that advances its version**, its own or a
+  remote one (a change to another root included), so a frame the host dropped as behind is
+  replaced at the new version even when the person is idle:
+  - after its own edit is acknowledged, at once (as before);
+  - after remote changes, at most once per 250 ms per connection (`LiveOptions.caretResendMs`),
+    with a trailing send so the last version always goes out;
+  - never while an edit of its own is in flight or queued (its ack sends it);
+  - at the caret's place in that version's text: the client moves the caret through every
+    change that isn't the person's own typing as CodeMirror moves a selection (an empty caret
+    stays before text inserted at it; a range doesn't grow), so an editor echoing the moved
+    caret back sends no second frame;
+  - deduplicated by `version:anchor:head`.
 - A refused caret (`MPC-E114` off a boundary, `MPC-E102` for a reader) gets no reply.
-- A versioned `set_cursor_at(conn, root, version, anchor, head)` that maps in the kit is
-  planned for kit v0.10.1; a host can then pass the frame through.
+- **Since kit v0.10.1 the kit does this mapping:** a host passes the frame through as
+  `set_cursor_at(conn, root, version, anchor, head)` (`session/live/at_base.rs`). It admits as
+  `set_cursor` does (a reader is refused), maps the offsets through the changes since `version`
+  on that root as above, and sets the caret, under one lock (no change lands between).
+  `CursorAtVersion::Set(cursor)` is the caret as set; `CursorAtVersion::Dropped(_)` (`Ahead`:
+  the frame's version is ahead of the doc's; `PastWindow`: the changes since can't be read)
+  means nothing was set and the host sends **no reply**, as for a frame it drops today. The
+  mapping by hand above stays correct for a host on an older kit.
 - Carets coming the other way carry their version: [JSON encodings](#json-encodings).
+- **Per-connection carets (kit v0.10.1, additive).** The same person on two devices or in two
+  tabs sees their other connection's caret, as one login's other tabs show in Google Docs.
+  The kit's roster rows stay one per participant; on a text doc each row gains `devices` (one
+  `{client, cursor, label?}` a connection, in join order), and each `cursor` event gains
+  `client`, the connection whose caret moved ([The roster](#the-roster)). `carets()` then
+  returns one caret a connection, another connection of this participant's own with
+  `sameUser: true`, and never this connection's own (`welcome.client`); with no `devices` (an
+  older host) it returns one caret a participant and skips its own, as before. The library
+  draws nothing and has no text for these: the host shows them.
+- **A connection's label** is the host's, given at join (`Session::join_with` with
+  `JoinOptions::label`: "another tab", "Chrome on Mac"); the kit cleans it (control characters
+  out, trimmed, at most 64 characters) and carries it on `Device.label` (the wire's `label`,
+  left out when there is none). It is never doc text.
+- **A connection's label arrives with the next roster snapshot** (`cursor` events carry none).
 
 ## Reconnecting
 
@@ -204,7 +245,7 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   client ID** (`welcome.client`); the pid is the same (an App viewer's handles too, while the
   doc stays loaded). The host calls `leave` for the old connection when its socket goes.
 - **The old connection goes first (the host's rule).** A reconnect carries `prev=<client ID>`,
-  the client ID of the client's previous connection (the last `welcome.client`; the component
+  the client ID of the client's previous connection (the last `welcome.client`; the host's editor
   sends it on every reconnect, `connect({resume, prev})`). Before it sends the new
   connection's `welcome`, or answers any `since` on it, the host marks that old connection
   dead and calls `leave(conn)` for it; every frame still arriving on the old socket is
@@ -218,20 +259,28 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   - Without `prev`, a second connection from the same login is a second tab: both stay live.
   - A half-open connection that no `prev` names ends at the host's keepalive timeout ([Keepalive
     and waking up](#keepalive-and-waking-up)).
-  - The kit's own join that replaces a connection is planned; until then the host does this
-    with `leave`.
-  - Because a host may get this wrong, the live editor marks an `MPC-E000` after a reconnect
-    as `mayHaveApplied`, recognises the late change by its client ID if it lands (`landed`),
-    and re-applies only when the record shows it absent (`EDITOR.md`, Rejections).
+  - **Since kit v0.10.1 the kit does the leave:** the host calls
+    `join_replacing(participant, stay, prev)` for the new connection instead of `join`, and the
+    kit closes the connection holding client ID `prev`, as `leave` does, in the same lock as
+    the join (`Joined.replaced` names it; the pid stays present, no `left`). The kit acts only
+    when that connection is the **same pid's** on this doc, and otherwise ignores `prev`
+    silently (`replaced: null`, that connection untouched). The host still checks the rest of
+    the rule above itself (the same login, the same root, this host) before passing `prev`,
+    still drops frames arriving on the old socket and closes it. On an older kit the host
+    calls `leave(conn)` itself.
+  - Because a host may get this wrong, the client keeps a record for an `MPC-E000` after a
+    reconnect (`Rejection.asOf`), recognises the late change by its client ID if it lands
+    (`onLanded`), and a host's Re-apply places it only when `presence` shows it absent
+    (`HOST.md`).
 - **Frames sent while disconnected are dropped, never replayed** on the next socket: the wire
   has no idempotency key, so a replayed `edit` could apply twice. `Transport.send` drops
   while no socket is open; it never buffers.
-- **Edits made while disconnected wait, unsent:** the component calls
+- **Edits made while disconnected wait, unsent:** the host's editor calls
   `LiveText.disconnected()` when the connection goes (`onClose`); `LiveText` then keeps new
   edits in its queue instead of handing them to the transport, and `reconnected` sends them on
   the new connection (with its client ID), after the `since`. An edit handed over before the
   close stays in flight, and the `since` settles it.
-- The component then calls **`LiveText.reconnected(welcome)`**:
+- The host's editor then calls **`LiveText.reconnected(welcome)`**:
   - the client ID becomes `welcome.client`; the edit in flight is still recognised under the
     ID it was sent with (`isOwn` takes either);
   - the caret (its dedupe cleared), `visible` and `view` are sent again;
@@ -277,13 +326,13 @@ retry, error?})`.
   answering a frame over the cap ([Frame cap](#frame-cap)). That is safe because the client
   never replays a frame: it reconnects, resyncs with `since`, and reports what didn't land.
 - A rights downgrade that keeps read arrives as a `rights` roster event for `self`, not a
-  close: the component goes read-only.
+  close: the host's editor goes read-only.
 
 ## Keepalive and waking up
 
 - **No app-level ping.** The host pings at the socket level (WebSocket ping frames, every
   20 s or so) and closes a connection whose subscriber lags (`closed {reason: "cut_off"}`).
-- **The component wakes and resyncs** when the page regains focus, comes back `online`, or
+- **The host's editor wakes and resyncs** when the page regains focus, comes back `online`, or
   becomes visible: if the socket is gone it reconnects; if not, it calls `resync()` (a
   laptop lid can stall a socket that never reported closing).
 - `visible {visible}` tells the kit whether the tab is in front (`set_visible`): a participant
@@ -312,7 +361,7 @@ a frame over it, and the host refuses one cleanly:
     client reloads;
   - `welcome` with `text`, or `snapshot`: the doc is too big for live editing over this host.
     The host sends `closed {reason: "declined", error}` with **`MPC-E401 declined_too_large`**
-    (`details: {limit: "frame", bytes, frame_max}`) and closes; no retry. The component shows the
+    (`details: {limit: "frame", bytes, frame_max}`) and closes; no retry. The host shows the
     file the ordinary way (read-only, or opened outside the live editor). Nothing is chunked:
     one frame per message keeps the client's state machine whole.
   - a `roster_event` snapshot carrying waiting notes: the host drops notes from the frame,
@@ -334,14 +383,20 @@ a frame over it, and the host refuses one cleanly:
 ## The roster
 
 - **A roster entry** is `{handle, name, colour, kind, role, away, cursor, rights}` (+ `self`
-  when the host marks it); `cursor` is `{root, anchor, head, version, anchor_lc, head_lc}` or
-  `null`. `self` marks this connection's own participant (or the client compares `handle` with
-  `LiveOptions.self`, i.e. `welcome.self`).
+  when the host marks it, + `devices` on a text doc from kit v0.10.1); `cursor` is `{root,
+  anchor, head, version, anchor_lc, head_lc}` or `null`, the participant's most active
+  connection's caret. `self` marks this connection's own participant (or the client compares
+  `handle` with `LiveOptions.self`, i.e. `welcome.self`).
+- **`devices`** (kit v0.10.1, additive: absent from an older host, on a grid, and for tier 0):
+  one `{client, cursor, label?}` per connection of the participant, in join order: `client`
+  its client ID (`welcome.client` on that connection), `cursor` its own caret or `null`,
+  `label` the host's label for it when there is one. A client knows its own connection by
+  `client` and hides only that one.
 - **A roster event** mirrors the kit's `RosterEvent`, tagged by `kind`: `snapshot {version,
   members, watching, overwritten?}` (always first; a later one replaces everything;
   `overwritten` only when this subscriber has waiting notes, [below](#the-overwritten-event)), `joined {who,
   participant: {name, colour, kind, via}, rights}`, `left {who, reason}`, `rights {who,
-  rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version}`,
+  rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version, client?}`,
   `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version}`,
   `claim_ended {who, claim, how, lines, version}`, `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
@@ -357,6 +412,15 @@ a frame over it, and the host refuses one cleanly:
 - **Members' order isn't significant.** The kit lists editors first, then viewers, then away
   (`Session::roster`); a client that folds the events may keep join order. Compare rosters as a
   set keyed by `handle`.
+- **`cursor`'s `client`** (kit v0.10.1, additive): the connection whose caret this is. The kit
+  sends one event per connection whose caret changed (a connection that left with a caret:
+  `cursor: null`), so a client keeps carets per `(who, client)`. **A client that ignores
+  `client`** and keeps one caret a participant (the last event's) stays right: within a flush
+  a participant's events end with the one whose caret is the participant's (`entry.cursor`),
+  and when the last per-connection event isn't that caret (a connection left, or dropped its
+  caret, while another still has one) the kit sends one more `cursor` **without `client`**
+  carrying the participant's caret. A participant with one connection gets the same events as
+  before, each with its `client`.
 - **A caret's `version`:** the doc version its offsets are in. The kit gives it beside the
   caret (`RosterEvent::Cursor.version`; a snapshot's carets are at the snapshot's `version`);
   the host puts it inside the caret object too. Without one, the client takes its own version
@@ -372,7 +436,7 @@ the kit's own final roster.
 
 | Value | Encoding |
 |---|---|
-| `ChangeEvent` | `{version, pid, client, via, root, hunks: [{start, end, insert}], at_ms, on_behalf_of}`; `on_behalf_of` is `null` when absent, never left out |
+| `ChangeEvent` | `{version, pid, client, via, kind, root, hunks: [{start, end, insert}], at_ms, on_behalf_of}`; `on_behalf_of` is `null` when absent, never left out; `kind` (kit v0.10.1) = `ChangeKind::as_str()`: `"edit"` \| `"undo"` \| `"redo"` \| `"revert"` \| `"restore"` \| `"external"` \| `"import"`, always present (a host on an older kit sends none) |
 | `client` | the 53-bit client ID as a JSON number (`MAX_CLIENT_ID` = 2^53 − 1 = `Number.MAX_SAFE_INTEGER`, exact in JS) |
 | strings | JSON escapes: `"` `\` and control characters escaped (`\n`, `\t`, `\r`, else `\u00XX`); everything else as UTF-8 |
 | `who`, `pid`, `handle`, `on_behalf_of` | `Who`'s `Display`: the pid for a person's or agent's connection; for an App viewer's (`ParticipantKind::App`), the opaque per-doc handle (`p1`, `p2`...), its own included. One lens per connection, as the kit applies it; the client treats them as opaque and compares them with `welcome.self` |
@@ -385,13 +449,14 @@ the kit's own final roster.
 | `claim` | `claim-N` (`ClaimId`'s `Display`) |
 | `lines` | `{root, first, last}`, 1-based, inclusive |
 | a caret (`CursorAt`) | `{root, anchor, head, version, anchor_lc, head_lc}`: `anchor`/`head` bytes at `version`; `anchor_lc`/`head_lc` the kit's `LineCol` as `"line:col"`, both 1-based, the column counted in characters (Unicode scalar values), for display only |
-| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights` |
-| `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, rule, details}`. Clients key on `id`; `message` and `next` are for people |
+| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None` |
+| `RosterEvent::Cursor` → `cursor` | `{kind: "cursor", who, cursor, version}`, then `client` (v0.10.1) only when the event's `client` is `Some`: the connection's client ID |
+| `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, next_step, rule, details}`, `next_step` = `{verb, args, why}`, absent when there is nothing to run (and before kit v0.10.1). Clients key on `id`; `message`, `next` and `next_step` are for people (a host renders `next_step` in its own syntax) |
 | `RosterEvent::Overwritten {to, overwrite}` → `overwritten` | `{kind: "overwritten", to, change, version, restore_from, source, rule, row, line, cells, more, not_shown, withheld, no_history, message}`, every field always present: `to` = `to` (`Who`'s `Display`, the subscriber's own, since the kit sends it only to its author's subscriptions); `change`, `source`, `rule`, `more`, `not_shown`, `withheld`, `no_history` = the `Overwrite`'s fields of those names; `version`, `restore_from`, `row`, `line` = the `Overwrite`'s `Option`s, `null` when `None`; `cells` (below); `message` = the `Overwrite`'s `Display` (`to_string()`), which holds the person's text |
 | `cells` | in order: first `{region, col, yours, file, cut}` from the `Overwrite`'s own top-level `region`, `col`, `yours`, `file`, `cut` (its first place), then one `{region, col, yours, file, cut}` per entry of `also` (an `OverwriteCell`, same fields), in `also`'s order. `col` is `null` when `None`. A roll-up (`rule: "rollup"`, `Overwrite::is_rollup`) has no place: `cells: []` (its `region` is empty; don't send it) |
 | `Snapshot.overwritten` | a bare `Vec<Overwrite>`, this subscriber's own waiting notes, with no `to`. The host encodes each entry as the live `overwritten` event above, adding `kind: "overwritten"` and `to` = the subscriber's own `who` (its pid, or for an App viewer its handle, as `welcome.self`), so every entry has the live event's shape. The field `overwritten` is present only when the vector isn't empty: a missing field means none |
 
-## The live transport (for a component)
+## The live transport (for a host's editor that reconnects)
 
 ```ts
 interface LiveTransport extends Transport {
@@ -404,11 +469,12 @@ interface LiveTransport extends Transport {
 - **One stable object** for the replica's life: `LiveText` subscribes to `onFrame` once; the
   transport swaps sockets inside it.
 - `connect` is one attempt (open, authenticate, join, `welcome`); it rejects with a close event
-  when refused (`declined`, `not_found`, `auth`...). The component owns the retry loop: back
-  off, `connect({resume: live.version})`, then `live.reconnected(welcome)`.
+  when refused (`declined`, `not_found`, `auth`...). The host's editor owns the retry loop:
+  back off, `connect({resume: live.version, prev})`, then `live.reconnected(welcome)`
+  (`HOST.md`).
 - **`connect()` while a connection is open replaces it:** the host closes the old socket (and
   leaves its connection: frames in flight on it are lost) and the attempt goes on as any
-  other; no `onClose` is reported for the old one. The live editor relies on it when a
+  other; no `onClose` is reported for the old one. A host's editor can rely on it when a
   `snapshot` is refused or not answered: it connects again without `resume`, and the welcome's
   `text` starts it again.
 - `send` **drops** while not open ([Reconnecting](#reconnecting)).
@@ -416,14 +482,10 @@ interface LiveTransport extends Transport {
   upgrade (say, an HTTP 401) as a plain failed dial, which reads as `network`. After a failed
   dial, a transport may make one cheap HTTP pre-check of the same route to tell `auth` (no
   retry) from `network`. Only after a failed dial, never on a timer.
-- **`MPC-EDITOR-HISTORY` (the live editor's, not a frame):** `mountLiveEditor` refuses to mount
-  (`LiveEditorError`, `code: "MPC-EDITOR-HISTORY"`) when the host's extensions include
-  CodeMirror's history, and reports one `error` event with that id when a reconfiguration adds
-  one. The server owns undo ([Undo and redo](#undo-and-redo)); a local history would undo
-  outside the shared order, and CodeMirror's history commands can't be intercepted (they
-  dispatch with `filter: false`). Leave `history()` and `historyKeymap` out: undo and redo are
-  the editor's own (`undo()` / `redo()` on its handle, `Mod-z`, `Mod-Shift-z`, `Mod-y`). See
-  `EDITOR.md`.
+- **No local undo history in the host's editor:** the server owns undo ([Undo and
+  redo](#undo-and-redo)); a local history would undo outside the shared order. Map the undo and
+  redo keys to `LiveText.undo()` / `redo()` (`HOST.md`). (`MPC-EDITOR-HISTORY` was the kit's
+  own editor component's refusal of a CodeMirror history, until v0.10.2.)
 - A `closed` frame is the transport's: it reports it through `onClose` (a host using the plain
   `Transport` may pass it on; `LiveText.onClosed` then reports it).
 
@@ -515,7 +577,7 @@ never coalesced. Every field is always present, on both kinds.
 - A local edit is never dropped silently: each is acknowledged (`onAck`) or rejected
   (`onRejected`), exactly once, across reconnects too. A rejected change keeps its typed text
   and a region that moves with later changes, so the host can show it and offer `reapply`.
-- Re-apply (`LiveText.placeRejection`, the editor's `reapply`) puts a rejected change back where
+- Re-apply (`LiveText.placeRejection`, `LiveText.reapply`) puts a rejected change back where
   the server would put it: its `edit` frame rebased from its base with the server's rule, sent as
   a fresh `edit` at the current version (no frame changed). Otherwise it refuses.
 - It never sends a frame over the cap.

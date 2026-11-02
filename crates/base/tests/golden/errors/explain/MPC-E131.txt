@@ -2,6 +2,7 @@ MPC-E131 no_approval (sessions and edits)
 exit:     4
 message:  change {seq} has no approval (it wasn't made on anyone's behalf)
 next:     That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, or doesn't exist). List the pending ones with log --pending and use one of those.
+step:     log --pending; why: That change isn't waiting for anyone's approval; list the pending ones and use one of those.
 rule:     K-ID-11
 verbs:    approve; decline
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "change {seq} has no approval (it wasn't made on anyone's behalf)",
   "next": "That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, or doesn't exist). List the pending ones with log --pending and use one of those.",
+  "next_step": {
+    "verb": "log --pending",
+    "args": [],
+    "why": "That change isn't waiting for anyone's approval; list the pending ones and use one of those."
+  },
   "rule": "K-ID-11",
   "verbs": ["approve", "decline"],
   "returned_by": ["approve", "decline"],

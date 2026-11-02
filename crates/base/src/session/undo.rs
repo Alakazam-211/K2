@@ -53,6 +53,7 @@ use super::foreign::{self, Shape};
 use super::position::{self, transform, Bias};
 use super::prov::{coalesce_with, ElemId, IdRun, Ids, Inserted, Prov};
 use crate::doc::Edit;
+use crate::engine::{IdOrder, Units};
 use crate::store::Seq;
 use crate::text::diff::{self, Hunk};
 use crate::text::merge::{self, Merge};
@@ -179,6 +180,7 @@ fn meets(a: &IdRun, b: &IdRun) -> bool {
 /// foreign. Returns theirs as canonical hunks on `after` (D2's form), the roots each one
 /// inserts, and which base elements counted.
 fn theirs_by_root(
+    u: Units,
     after: &str,
     base: &[ElemId],
     window: &str,
@@ -197,7 +199,7 @@ fn theirs_by_root(
     let mut flush = |upto: usize, text: &mut String, ids: &mut Vec<ElemId>, next: usize| {
         if upto > next || !text.is_empty() {
             let insert = std::mem::take(text);
-            roots.push(Ids::from_chars(&insert, ids));
+            roots.push(Ids::from_chars(u, &insert, ids));
             ids.clear();
             hunks.push(Hunk {
                 start: at_byte(next),
@@ -329,6 +331,7 @@ impl Region {
     /// says is live conflicts.
     fn revert(
         &self,
+        u: Units,
         live: &str,
         wroots: Option<&Ids>,
         live_root: &dyn Fn(&IdRun) -> bool,
@@ -361,9 +364,9 @@ impl Region {
             };
         };
         debug_assert_eq!(wroots.bytes(), theirs.len(), "the window's roots fit it");
-        let base = roots.after.chars(&self.after);
+        let base = roots.after.chars(u, &self.after);
         let (th, th_roots, counted) =
-            theirs_by_root(&self.after, &base, theirs, &wroots.chars(theirs));
+            theirs_by_root(u, &self.after, &base, theirs, &wroots.chars(u, theirs));
         // cross-check (debug): every base element the composition at element identity says
         // survives counts by root (a surviving element is its own base element, same root)
         #[cfg(debug_assertions)]
@@ -417,7 +420,7 @@ impl Region {
         let mut out = Vec::with_capacity(clean.hunks.len());
         let mut at = 0;
         for h in &clean.hunks {
-            out.push(all.slice(&joined, at, at + h.insert.len()));
+            out.push(all.slice(u, &joined, at, at + h.insert.len()));
             at += h.insert.len();
         }
         debug_assert_eq!(
@@ -595,7 +598,7 @@ pub(crate) fn revert_regions(
         // back the elements it deleted; a redacted hunk's text is blank (it conflicts as
         // erased), so its roots aren't aligned with anything and aren't kept
         let roots = h.roots.as_ref().filter(|_| !h.redacted).map(|x| {
-            let run = |r: &(u32, u32, u64, u32)| IdRun {
+            let run = |r: &(u32, u64, u64, u64)| IdRun {
                 bytes: r.0,
                 units: r.1,
                 start: ElemId::new(r.2, r.3),
@@ -681,7 +684,13 @@ impl Batch {
 /// U3 (b)), are on different roots, or either is not a plain change's region with known
 /// roots. The caller checks that nothing else touched `prev` since it was pushed (U3 (g)):
 /// its window must still be exactly its `after`.
-pub(crate) fn compose_group(prev: &Region, a: usize, b: usize, next: &Region) -> Option<Region> {
+pub(crate) fn compose_group(
+    u: Units,
+    prev: &Region,
+    a: usize,
+    b: usize,
+    next: &Region,
+) -> Option<Region> {
     let plain = |r: &Region| {
         !r.tainted
             && !r.erased
@@ -711,10 +720,10 @@ pub(crate) fn compose_group(prev: &Region, a: usize, b: usize, next: &Region) ->
     let lo = &next.before[..a.saturating_sub(c)];
     let hi = if d > b { &next.before[b - c..] } else { "" };
     let w = format!("{lo}{}{hi}", prev.after);
-    let mut wroots = nr.before.slice(&next.before, 0, lo.len());
+    let mut wroots = nr.before.slice(u, &next.before, 0, lo.len());
     wroots.extend(&pr.after);
     if d > b {
-        wroots.extend(&nr.before.slice(&next.before, b - c, next.before.len()));
+        wroots.extend(&nr.before.slice(u, &next.before, b - c, next.before.len()));
     }
     debug_assert_eq!(wroots.bytes(), w.len());
     let fwd = Hunk {
@@ -729,8 +738,8 @@ pub(crate) fn compose_group(prev: &Region, a: usize, b: usize, next: &Region) ->
     };
     let after = diff::apply(&w, std::slice::from_ref(&fwd));
     let before = diff::apply(&w, std::slice::from_ref(&back));
-    let after_roots = wroots.apply(&w, &[fwd], std::slice::from_ref(&nr.after));
-    let before_roots = wroots.apply(&w, &[back], std::slice::from_ref(&pr.before));
+    let after_roots = wroots.apply(u, &w, &[fwd], std::slice::from_ref(&nr.after));
+    let before_roots = wroots.apply(u, &w, &[back], std::slice::from_ref(&pr.before));
     Some(Region {
         root: next.root.clone(),
         start: s,
@@ -803,6 +812,7 @@ pub(crate) fn plan(
     texts: &[(&'static str, String)],
     prov: &Prov,
     next: ElemId,
+    order: IdOrder,
     mut batches: Vec<Batch>,
     mode: Mode,
 ) -> Plan {
@@ -816,6 +826,7 @@ pub(crate) fn plan(
         .map(|(r, t)| (*r, t.clone()))
         .collect();
     let mut sprov = prov.clone();
+    let u = prov.units();
     let mut clock = next.clock;
     let mut steps = Vec::with_capacity(batches.len());
     for k in 0..batches.len() {
@@ -835,6 +846,7 @@ pub(crate) fn plan(
                     .then(|| sprov.roots(&r.root, live, r.start, r.end));
             let live_root = |x: &IdRun| sprov.any_live(x) || planned.iter().any(|p| meets(p, x));
             let res = r.revert(
+                u,
                 live,
                 wroots.as_ref().filter(|_| r.roots.is_some()),
                 &live_root,
@@ -916,12 +928,12 @@ pub(crate) fn plan(
                 // its base's roots are the merged window's, before's the window's (v1.8)
                 let roots = match (wr, &m.roots) {
                     (Some(wr), Some(rs)) if known => Some(RegionRoots {
-                        after: wr.apply(theirs, &clean.hunks, rs),
+                        after: wr.apply(u, theirs, &clean.hunks, rs),
                         before: (*wr).clone(),
                         ours: clean
                             .hunks
                             .iter()
-                            .map(|h| wr.slice(theirs, h.start, h.end))
+                            .map(|h| wr.slice(u, theirs, h.start, h.end))
                             .collect(),
                     }),
                     _ => None,
@@ -964,25 +976,24 @@ pub(crate) fn plan(
                     hunks,
                 };
                 // the scratch map applies the step as the engine will: the undoer's next
-                // clocks, in the adapter's order (`insert_clocks`)
+                // clocks, in the engine's order (`IdOrder`: the one prediction left, checked
+                // against what the engine applies)
                 let Edit::Text { hunks, .. } = &edit else {
                     unreachable!("built just above")
                 };
-                let firsts =
-                    crate::engine::insert_clocks(clock, std::slice::from_ref(&edit)).remove(0);
+                let text_of = |_: &str| Some(live.as_str());
+                let ids = order.plan(clock, std::slice::from_ref(&edit), &text_of);
+                let firsts = &ids.firsts[0];
                 let ins: Vec<Inserted> = hunks
                     .iter()
-                    .zip(&firsts)
+                    .zip(firsts)
                     .zip(&hroots)
                     .map(|((h, c), r)| Inserted {
                         id: ElemId::new(next.client, *c),
                         roots: (known && !h.insert.is_empty()).then(|| r.clone()),
                     })
                     .collect();
-                clock += hunks
-                    .iter()
-                    .map(|h| h.insert.encode_utf16().count() as u32)
-                    .sum::<u32>();
+                clock = ids.next;
                 if sprov.has(root) {
                     sprov.apply(root, live, hunks, &ins);
                 }
@@ -1008,7 +1019,14 @@ mod tests {
     /// `plan` with no provenance map and regions of unknown roots: v1.7's merge, which these
     /// tests pin (by root is the session's, `tests/history.rs`).
     fn plan_v17(texts: &[(&'static str, String)], batches: Vec<Batch>, mode: Mode) -> Plan {
-        plan(texts, &Prov::default(), ElemId::new(9, 0), batches, mode)
+        plan(
+            texts,
+            &Prov::empty(Units::Utf16),
+            ElemId::new(9, 0),
+            IdOrder::Yrs,
+            batches,
+            mode,
+        )
     }
 
     fn batch(before: &str, after: &str) -> Batch {

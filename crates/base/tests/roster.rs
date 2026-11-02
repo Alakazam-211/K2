@@ -9,12 +9,14 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::session::{
-    At, AuditEvent, ClaimEnd, ClaimPolicy, Config, ConnId, Host, LeaveReason, LineCol, LineRange,
-    NoteKind, Participant, ParticipantKind, Rights, Role, RosterEvent, Session, SessionError,
-    SessionManager, Stay, TextFilePack, Who,
+    At, AuditEvent, ClaimEnd, ClaimPolicy, Config, ConnId, CursorAt, Host, JoinOptions, Joined,
+    LeaveReason, LineCol, LineRange, NoteKind, Participant, ParticipantKind, Rights, Role,
+    RosterEntry, RosterEvent, Session, SessionError, SessionManager, Stay, TextFilePack, Who,
+    DEVICE_LABEL_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::tools::ToolOptions;
+use k2_mpc_base::ClientId;
 
 const ROOT: &str = TextFilePack::ROOT;
 const DOC: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
@@ -704,4 +706,419 @@ fn the_snapshot_is_the_roster() {
         e => panic!("{e:?}"),
     }
     let _ = LeaveReason::Left;
+}
+
+// ---------- per-connection carets (v0.10.1) ----------
+//
+// The same person in two tabs: one roster row, a `Device` per connection with its own caret,
+// and a `Cursor` event per connection (`client`). Run with `--features planted-device-bugs`
+// (every connection shows the most active one's caret: "first connection only") these fail.
+
+impl Fx {
+    /// Another connection of `pid` (a person), with an optional label.
+    fn tab(&self, pid: &str, label: Option<&str>) -> Joined {
+        let p = Participant::new(
+            pid,
+            pid.to_uppercase(),
+            "#123456",
+            ParticipantKind::Person,
+            "tab",
+        );
+        let opts = match label {
+            Some(l) => JoinOptions::new().label(l),
+            None => JoinOptions::new(),
+        };
+        self.s.join_with(p, Stay::Held, &opts).unwrap()
+    }
+    /// `pid`'s roster row as `viewer` sees it.
+    fn row(&self, viewer: ConnId, pid: &str) -> RosterEntry {
+        self.s
+            .roster(viewer)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.participant.pid == pid)
+            .unwrap_or_else(|| panic!("{pid} isn't on the roster"))
+    }
+}
+
+/// A caret event of `a`'s: who, the connection, the head's `line:col`.
+type CaretEvent = (String, Option<ClientId>, Option<(usize, usize)>);
+
+/// A device as a test compares it: its client, its caret's head `line:col`, its label.
+type DeviceRow<'a> = (ClientId, Option<(usize, usize)>, Option<&'a str>);
+
+/// Each of `a`'s `Cursor` events (others' carets aside: a typist's caret moves too).
+fn caret_events(evs: &[RosterEvent]) -> Vec<CaretEvent> {
+    evs.iter()
+        .filter_map(|e| match e {
+            RosterEvent::Cursor {
+                who: w,
+                cursor,
+                client,
+                ..
+            } if *w == who("a") => Some((
+                w.to_string(),
+                *client,
+                cursor.as_ref().map(|c| (c.head.line, c.head.col)),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a consumer that ignores `client` holds for `pid` after `evs`: the last event's caret
+/// (`None` when there is no event: unchanged).
+fn old_fold(evs: &[RosterEvent], pid: &str) -> Option<Option<CursorAt>> {
+    evs.iter().rev().find_map(|e| match e {
+        RosterEvent::Cursor { who, cursor, .. } if who.pid() == Some(pid) => Some(cursor.clone()),
+        _ => None,
+    })
+}
+
+fn head(c: &Option<CursorAt>) -> Option<(usize, usize)> {
+    c.as_ref().map(|c| (c.head.line, c.head.col))
+}
+
+/// Two connections of one pid: each has its own `Device` with its own caret, in join order,
+/// one roster row; `cursor` is still the most active connection's.
+#[test]
+fn two_connections_of_one_pid_each_get_their_own_device_caret() {
+    let f = fx("devices");
+    let w = f.person("w");
+    let t1 = f.tab("a", None);
+    let t2 = f.tab("a", Some("another tab"));
+    f.s.set_cursor(t1.conn, ROOT, lc(2, 1), lc(2, 1)).unwrap();
+    f.advance(10);
+    f.s.set_cursor(t2.conn, ROOT, lc(5, 3), lc(5, 3)).unwrap();
+    let rows = f.s.roster(w).unwrap();
+    assert_eq!(
+        rows.iter().filter(|e| e.participant.pid == "a").count(),
+        1,
+        "one row a person: {rows:?}"
+    );
+    let a = f.row(w, "a");
+    assert_eq!(a.connections, 2);
+    let got: Vec<DeviceRow<'_>> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, head(&d.cursor), d.label.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (t1.client, Some((2, 1)), None),
+            (t2.client, Some((5, 3)), Some("another tab")),
+        ],
+        "each connection's own caret, in join order"
+    );
+    // the per-person caret is the most active connection's (t2 moved last), as before
+    assert_eq!(head(&a.cursor), Some((5, 3)));
+    // the first tab moves: its device follows, the other stays
+    f.advance(10);
+    f.s.set_cursor(t1.conn, ROOT, lc(3, 2), lc(3, 2)).unwrap();
+    let a = f.row(w, "a");
+    assert_eq!(head(&a.devices[0].cursor), Some((3, 2)));
+    assert_eq!(head(&a.devices[1].cursor), Some((5, 3)));
+    assert_eq!(head(&a.cursor), Some((3, 2)));
+    // the snapshot carries the same devices as the roster
+    let rx = f.s.subscribe_roster(w).unwrap();
+    match drain(&rx).remove(0) {
+        RosterEvent::Snapshot { members, .. } => {
+            let m = members.iter().find(|m| m.who == who("a")).unwrap();
+            assert_eq!(m.entry.devices, a.devices);
+        }
+        e => panic!("{e:?}"),
+    }
+    // a second tab with no caret is a device with none
+    let t3 = f.tab("a", None);
+    let a = f.row(w, "a");
+    assert_eq!(a.devices.len(), 3);
+    assert_eq!(a.devices[2].client, t3.client);
+    assert_eq!(a.devices[2].cursor, None);
+}
+
+/// A caret move on connection 2 is its own event, `client: Some(c2)`; connection 1's caret is
+/// not re-sent. A consumer that ignores `client` still holds the person's caret
+/// (`RosterEntry::cursor`) after every flush, a connection leaving with its caret included.
+#[test]
+fn a_caret_move_on_connection_2_emits_its_client() {
+    let f = fx("device-events");
+    let w = f.person("w");
+    let t1 = f.tab("a", None);
+    let t2 = f.tab("a", None);
+    let rx = f.s.subscribe_roster(w).unwrap();
+    drain(&rx);
+    f.s.set_cursor(t1.conn, ROOT, lc(2, 1), lc(2, 1)).unwrap();
+    f.tick();
+    let evs = drain(&rx);
+    assert_eq!(
+        caret_events(&evs),
+        vec![("a".to_owned(), Some(t1.client), Some((2, 1)))]
+    );
+    f.s.set_cursor(t2.conn, ROOT, lc(4, 2), lc(4, 2)).unwrap();
+    f.tick();
+    let evs = drain(&rx);
+    assert_eq!(
+        caret_events(&evs),
+        vec![("a".to_owned(), Some(t2.client), Some((4, 2)))],
+        "only connection 2's caret: {evs:?}"
+    );
+    assert_eq!(head(&old_fold(&evs, "a").unwrap()), Some((4, 2)));
+    // both move in one interval: one event each, the most active connection's last
+    f.s.set_cursor(t2.conn, ROOT, lc(6, 1), lc(6, 1)).unwrap();
+    f.advance(10);
+    f.s.set_cursor(t1.conn, ROOT, lc(7, 1), lc(7, 1)).unwrap();
+    f.tick();
+    let evs = drain(&rx);
+    assert_eq!(
+        caret_events(&evs),
+        vec![
+            ("a".to_owned(), Some(t2.client), Some((6, 1))),
+            ("a".to_owned(), Some(t1.client), Some((7, 1))),
+        ],
+        "{evs:?}"
+    );
+    assert_eq!(
+        old_fold(&evs, "a").unwrap(),
+        f.row(w, "a").cursor,
+        "the last event is the person's caret"
+    );
+    // the most active tab (t1) leaves with its caret: its caret goes (client t1, none), and a
+    // `client: None` event gives the person's caret now (t2's), for a consumer that keeps one
+    f.s.leave(t1.conn).unwrap();
+    f.tick();
+    let evs = drain(&rx);
+    assert_eq!(
+        caret_events(&evs),
+        vec![
+            ("a".to_owned(), Some(t1.client), None),
+            ("a".to_owned(), None, Some((6, 1))),
+        ],
+        "{evs:?}"
+    );
+    let a = f.row(w, "a");
+    assert_eq!(old_fold(&evs, "a").unwrap(), a.cursor);
+    assert_eq!(a.devices.len(), 1);
+    assert_eq!(a.devices[0].client, t2.client);
+    // a caret carried through someone else's edit is that connection's event
+    let b = f.person("b");
+    type_at(&f, b, 0, "new first line\n");
+    f.tick();
+    let evs = drain(&rx);
+    assert_eq!(
+        caret_events(&evs),
+        vec![("a".to_owned(), Some(t2.client), Some((7, 1)))],
+        "{evs:?}"
+    );
+}
+
+/// After every flush, a consumer that ignores `client` holds each person's
+/// `RosterEntry::cursor`, over a run of moves, drops, joins and leaves on several tabs.
+#[test]
+fn a_consumer_ignoring_client_keeps_the_persons_caret() {
+    let f = fx("device-old");
+    let w = f.person("w");
+    let rx = f.s.subscribe_roster(w).unwrap();
+    drain(&rx);
+    let mut tabs: Vec<Joined> = (0..3).map(|_| f.tab("a", None)).collect();
+    let mut held: Option<CursorAt> = None;
+    let mut seed = 7u64;
+    for step in 0..120 {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let r = (seed >> 33) as usize;
+        let k = r % tabs.len().max(1);
+        match r % 7 {
+            _ if tabs.is_empty() => tabs.push(f.tab("a", None)),
+            0 => {
+                let t = tabs.remove(k);
+                f.s.leave(t.conn).unwrap();
+            }
+            1 => tabs.push(f.tab("a", None)),
+            2 => {
+                let b = f.person("b");
+                type_at(&f, b, (r / 7) % 20, "x");
+            }
+            _ => {
+                let line = 1 + (r / 7) % 10;
+                f.s.set_cursor(tabs[k].conn, ROOT, lc(line, 1), lc(line, 1))
+                    .unwrap();
+            }
+        }
+        f.advance(5);
+        if step % 3 == 0 {
+            f.tick();
+            let evs = drain(&rx);
+            // the old client's fold: joined and left start over, a caret event replaces
+            for e in &evs {
+                match e {
+                    RosterEvent::Joined { who: x, .. } | RosterEvent::Left { who: x, .. }
+                        if *x == who("a") =>
+                    {
+                        held = None
+                    }
+                    RosterEvent::Cursor { who: x, cursor, .. } if *x == who("a") => {
+                        held = cursor.clone()
+                    }
+                    _ => {}
+                }
+            }
+            let now =
+                f.s.roster(w)
+                    .unwrap()
+                    .into_iter()
+                    .find(|e| e.participant.pid == "a")
+                    .and_then(|e| e.cursor);
+            assert_eq!(held, now, "step {step}: {evs:?}");
+        }
+    }
+}
+
+/// One connection: the same events as before v0.10.1, each with its `client`, and never a
+/// `client: None` one; its one device is its caret.
+#[test]
+fn a_single_connection_participant_is_unchanged() {
+    let f = fx("device-one");
+    let w = f.person("w");
+    let a = f.tab("a", None);
+    let rx = f.s.subscribe_roster(w).unwrap();
+    drain(&rx);
+    let mut all = Vec::new();
+    for (line, col) in [(2, 1), (2, 3), (5, 1)] {
+        f.s.set_cursor(a.conn, ROOT, lc(line, col), lc(line, col))
+            .unwrap();
+        f.tick();
+        all.extend(drain(&rx));
+    }
+    let b = f.person("b");
+    type_at(&f, b, 0, "x\n");
+    f.tick();
+    all.extend(drain(&rx));
+    assert_eq!(
+        caret_events(&all),
+        vec![
+            ("a".to_owned(), Some(a.client), Some((2, 1))),
+            ("a".to_owned(), Some(a.client), Some((2, 3))),
+            ("a".to_owned(), Some(a.client), Some((5, 1))),
+            ("a".to_owned(), Some(a.client), Some((6, 1))),
+        ]
+    );
+    let row = f.row(w, "a");
+    assert_eq!(row.devices.len(), 1);
+    assert_eq!(row.devices[0].client, a.client);
+    assert_eq!(row.devices[0].cursor, row.cursor);
+    assert_eq!(row.devices[0].label, None);
+    // the caret goes: one event, none
+    f.s.leave(a.conn).unwrap();
+    let a2 = f.tab("a", None);
+    f.s.set_cursor(a2.conn, ROOT, lc(1, 1), lc(1, 1)).unwrap();
+    f.tick();
+    let evs = drain(&rx);
+    assert!(
+        caret_events(&evs).iter().all(|(_, c, _)| c.is_some()),
+        "{evs:?}"
+    );
+}
+
+/// The host's label round-trips onto its connection's device, cleaned, and never fails a
+/// join; a shared join with a label relabels its connection.
+#[test]
+fn the_join_label_round_trips() {
+    let f = fx("device-label");
+    let w = f.person("w");
+    let t1 = f.tab("a", Some("Chrome on Mac"));
+    let t2 = f.tab("a", Some("  phone\u{7}\n tab  "));
+    let t3 = f.tab("a", Some(" \t "));
+    let long = "x".repeat(DEVICE_LABEL_MAX + 10);
+    let t4 = f.tab("a", Some(&long));
+    let a = f.row(w, "a");
+    let labels: Vec<(ClientId, Option<String>)> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, d.label.clone()))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            (t1.client, Some("Chrome on Mac".to_owned())),
+            (t2.client, Some("phone tab".to_owned())),
+            (t3.client, None),
+            (t4.client, Some("x".repeat(DEVICE_LABEL_MAX))),
+        ]
+    );
+    // in the pushed snapshot too
+    let rx = f.s.subscribe_roster(w).unwrap();
+    match drain(&rx).remove(0) {
+        RosterEvent::Snapshot { members, .. } => {
+            let m = members.iter().find(|m| m.who == who("a")).unwrap();
+            assert_eq!(m.entry.devices[0].label.as_deref(), Some("Chrome on Mac"));
+        }
+        e => panic!("{e:?}"),
+    }
+    // a shared join: the first makes its connection, a second with a label relabels it
+    let p = Participant::new("c", "C", "#123456", ParticipantKind::Agent, "cli");
+    let j1 =
+        f.s.join_with(p.clone(), Stay::Held, &JoinOptions::new().shared(true))
+            .unwrap();
+    let j2 =
+        f.s.join_with(
+            p,
+            Stay::Held,
+            &JoinOptions::new().shared(true).label("terminal"),
+        )
+        .unwrap();
+    assert_eq!(j1.conn, j2.conn);
+    let c = f.row(w, "c");
+    assert_eq!(c.devices.len(), 1);
+    assert_eq!(c.devices[0].label.as_deref(), Some("terminal"));
+}
+
+/// `join_with` with `.replacing(prev)` and `.label(..)`: the pid's connection holding `prev`
+/// closes (`replaced` names it) and the new connection's device carries the label given at
+/// this join. A replacing join without a label gets none: nothing is inherited from the
+/// connection it replaced.
+#[test]
+fn a_replacing_join_with_a_label_closes_the_old_and_labels_the_new() {
+    let f = fx("device-label-replacing");
+    let w = f.person("w");
+    let old = f.tab("a", Some("old tab"));
+    let p = Participant::new("a", "A", "#123456", ParticipantKind::Person, "tab");
+    let new =
+        f.s.join_with(
+            p.clone(),
+            Stay::Held,
+            &JoinOptions::new().label("new tab").replacing(old.client),
+        )
+        .unwrap();
+    assert_eq!(
+        new.replaced,
+        Some(old.conn),
+        "the old connection is the one closed"
+    );
+    assert_ne!(new.conn, old.conn);
+    assert!(
+        f.s.roster(old.conn).is_err(),
+        "the replaced connection is gone"
+    );
+    let a = f.row(w, "a");
+    assert_eq!(a.connections, 1);
+    let labels: Vec<(ClientId, Option<&str>)> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, d.label.as_deref()))
+        .collect();
+    assert_eq!(labels, vec![(new.client, Some("new tab"))]);
+    // replacing again with no label: the new device has none (no inheritance)
+    let bare =
+        f.s.join_with(p, Stay::Held, &JoinOptions::new().replacing(new.client))
+            .unwrap();
+    assert_eq!(bare.replaced, Some(new.conn));
+    let a = f.row(w, "a");
+    let labels: Vec<(ClientId, Option<&str>)> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, d.label.as_deref()))
+        .collect();
+    assert_eq!(labels, vec![(bare.client, None)]);
 }

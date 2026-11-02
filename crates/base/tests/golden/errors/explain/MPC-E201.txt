@@ -2,6 +2,7 @@ MPC-E201 undo_conflict (history and undo)
 exit:     1
 message:  step {step} conflicts in {count} region(s) at {where}; nothing applied
 next:     Someone else changed text your change touched, so undoing it whole would overwrite their work. Nothing was applied. Either run undo --partial (undoes the regions nobody touched and reports the rest; revert --partial for revert), or read the lines in details.conflicts (cat -n) and fix them by hand with replace.
+step:     undo --partial; why: Undoing the change whole would overwrite others' work; undo only the regions nobody touched, or fix the conflicting lines by hand.
 rule:     U13, U11, hist.undo_atomic
 verbs:    undo; redo; revert
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "step {step} conflicts in {count} region(s) at {where}; nothing applied",
   "next": "Someone else changed text your change touched, so undoing it whole would overwrite their work. Nothing was applied. Either run undo --partial (undoes the regions nobody touched and reports the rest; revert --partial for revert), or read the lines in details.conflicts (cat -n) and fix them by hand with replace.",
+  "next_step": {
+    "verb": "undo --partial",
+    "args": [],
+    "why": "Undoing the change whole would overwrite others' work; undo only the regions nobody touched, or fix the conflicting lines by hand."
+  },
   "rule": "U13, U11, hist.undo_atomic",
   "verbs": ["undo", "redo", "revert"],
   "returned_by": ["undo", "redo", "revert"],

@@ -179,6 +179,20 @@ pub enum ChangeKind {
 }
 
 impl ChangeKind {
+    /// Its name, as the activity ring and the wire (`ChangeEvent.kind`) give it: `edit`,
+    /// `undo`, `redo`, `restore`, `revert`, `external` or `import`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Edit => "edit",
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+            Self::Restore => "restore",
+            Self::Revert => "revert",
+            Self::External => "external",
+            Self::Import => "import",
+        }
+    }
+
     fn to_u8(self) -> u8 {
         match self {
             Self::Edit => 1,
@@ -248,10 +262,13 @@ pub(crate) struct RootShape {
     pub hunks: Vec<(u64, u64, u64)>,
 }
 
-/// Roots as runs `(bytes, UTF-16 units, root client, root first clock)`: the character at
-/// UTF-16 offset `k` of a run has root `(client, clock + k)` (undo spec U23). Element IDs
-/// and lengths only.
-pub(crate) type RootRuns = Vec<(u32, u32, u64, u32)>;
+/// Roots as runs `(bytes, units, root client, root first clock)`, units and clocks in the
+/// engine's units ([`crate::engine::Units`]): the character `k` units into a run has root
+/// `(client, clock + k)` (undo spec U23). Element IDs and lengths only. Stored as u32
+/// (revert record versions 2 and 3, [`enc_runs`]): a units or clock value over `u32::MAX` is
+/// refused at encode ([`StoreError::ClockOverflow`]), never truncated. Yrs clocks are u32,
+/// so a Yrs doc never reaches it.
+pub(crate) type RootRuns = Vec<(u32, u64, u64, u64)>;
 
 /// The roots of the elements a hunk inserted and of those it deleted (revert record
 /// version 2, store format 5).
@@ -324,26 +341,27 @@ impl RevertRecord {
 }
 
 /// The engine clocks a change's inserted text occupies: client `client`, clocks
-/// `start..end` (the engine's own units). Engine clocks per client only grow, so the spans
-/// of one client's changes never overlap.
+/// `start..end` (the engine's own units, [`crate::engine::Units`]; stored as u64). Engine
+/// clocks per client only grow, so the spans of one client's changes never overlap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClockSpan {
     pub client: u64,
-    pub start: u32,
-    pub end: u32,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// `(start, end, seq)`: change `seq` inserted the text at clocks `start..end` of one client.
-pub(crate) type SpanOf = (u32, u32, Seq);
+pub(crate) type SpanOf = (u64, u64, Seq);
 
 /// One provenance row: `client`'s elements at clocks `start..end` restore the roots from
 /// `root` on (`root.1 + k` for the element at `start + k`).
+/// Clocks in the engine's units; stored as u64.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProvRow {
     pub client: u64,
-    pub start: u32,
-    pub end: u32,
-    pub root: (u64, u32),
+    pub start: u64,
+    pub end: u64,
+    pub root: (u64, u64),
 }
 
 /// A change's hunks per root, in record order: what [`DocStore::change_hunks`] returns.
@@ -543,11 +561,18 @@ pub(super) fn dec_change(
     Ok((info, shape))
 }
 
-fn enc_runs(w: &mut W, runs: &RootRuns) {
+/// Runs as stored: `(bytes u32, units u32, client u64, clock u32)`, little-endian, the
+/// layout of records versions 2 and 3 (unchanged since format 5). The units and the clock
+/// are u64 in memory (P2, v0.10.1) and narrowed here, checked: a value over `u32::MAX`
+/// refuses the record ([`StoreError::ClockOverflow`]) instead of storing a wrong root.
+fn enc_runs(w: &mut W, runs: &RootRuns) -> Result<(), StoreError> {
+    let narrow = |v: u64| u32::try_from(v).map_err(|_| StoreError::ClockOverflow(v));
     w.u32(runs.len() as u32);
     for &(bytes, units, client, clock) in runs {
+        let (units, clock) = (narrow(units)?, narrow(clock)?);
         w.u32(bytes).u32(units).u64(client).u32(clock);
     }
+    Ok(())
 }
 
 fn dec_runs(r: &mut R<'_>, total: usize) -> Result<RootRuns, StoreError> {
@@ -557,7 +582,7 @@ fn dec_runs(r: &mut R<'_>, total: usize) -> Result<RootRuns, StoreError> {
     }
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        out.push((r.u32()?, r.u32()?, r.u64()?, r.u32()?));
+        out.push((r.u32()?, u64::from(r.u32()?), r.u64()?, u64::from(r.u32()?)));
     }
     Ok(out)
 }
@@ -566,7 +591,8 @@ fn dec_runs(r: &mut R<'_>, total: usize) -> Result<RootRuns, StoreError> {
 /// (`0`: unknown; `1`: the inserted elements' roots, then the deleted elements', as runs).
 /// Version 3 (format 6, a change with structured ops): version 2, then the structured roots'
 /// ops by key (`structured::enc_elem_roots`). A text change's record stays version 2.
-pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
+/// Fails only on a root run over u32 ([`enc_runs`]).
+pub(super) fn enc_record(rec: &RevertRecord) -> Result<Vec<u8>, StoreError> {
     let mut w = W::default();
     w.u8(if rec.elems.is_empty() { 2 } else { 3 })
         .str(&rec.author)
@@ -589,8 +615,8 @@ pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
                 }
                 Some(x) => {
                     w.u8(1);
-                    enc_runs(&mut w, &x.inserted);
-                    enc_runs(&mut w, &x.deleted);
+                    enc_runs(&mut w, &x.inserted)?;
+                    enc_runs(&mut w, &x.deleted)?;
                 }
             }
         }
@@ -598,7 +624,7 @@ pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
     if !rec.elems.is_empty() {
         structured::enc_elem_roots(&mut w, &rec.elems);
     }
-    w.0
+    Ok(w.0)
 }
 
 /// Decodes revert records version 1 (no roots), 2 and 3.
@@ -731,24 +757,22 @@ pub(super) fn dec_authored(b: &[u8]) -> Result<RootHunks, StoreError> {
     Ok(roots)
 }
 
-/// A provenance row's value: `(end clock, root client, root first clock)`.
-fn enc_prov(end: u32, root: (u64, u32)) -> [u8; 24] {
+/// A provenance row's value: `(end clock, root client, root first clock)`, three u64s,
+/// little-endian (format 5; the clocks were u32 in memory before v0.10.1, the bytes the same).
+fn enc_prov(end: u64, root: (u64, u64)) -> [u8; 24] {
     let mut out = [0u8; 24];
-    out[..8].copy_from_slice(&u64::from(end).to_le_bytes());
+    out[..8].copy_from_slice(&end.to_le_bytes());
     out[8..16].copy_from_slice(&root.0.to_le_bytes());
-    out[16..].copy_from_slice(&u64::from(root.1).to_le_bytes());
+    out[16..].copy_from_slice(&root.1.to_le_bytes());
     out
 }
 
-fn dec_prov(b: &[u8]) -> Result<(u32, (u64, u32)), StoreError> {
-    let bad = || StoreError::Corrupt("provenance row");
+fn dec_prov(b: &[u8]) -> Result<(u64, (u64, u64)), StoreError> {
     if b.len() != 24 {
-        return Err(bad());
+        return Err(StoreError::Corrupt("provenance row"));
     }
     let word = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"));
-    let end = u32::try_from(word(0)).map_err(|_| bad())?;
-    let clock = u32::try_from(word(16)).map_err(|_| bad())?;
-    Ok((end, (word(8), clock)))
+    Ok((word(0), (word(8), word(16))))
 }
 
 pub(super) fn enc_pair(a: u64, b: u64) -> [u8; 16] {
@@ -898,16 +922,10 @@ pub(super) fn put_changes(
         let shape = c.record.shape();
         ct.insert((id, seq), enc_change(&c.info, &shape).as_slice())?;
         if let Some(k) = c.span.filter(|k| k.end > k.start) {
-            kt.insert(
-                (id, k.client, u64::from(k.start)),
-                enc_pair(u64::from(k.end), seq).as_slice(),
-            )?;
+            kt.insert((id, k.client, k.start), enc_pair(k.end, seq).as_slice())?;
         }
         for p in c.provenance.iter().filter(|p| p.end > p.start) {
-            pt.insert(
-                (id, p.client, u64::from(p.start)),
-                enc_prov(p.end, p.root).as_slice(),
-            )?;
+            pt.insert((id, p.client, p.start), enc_prov(p.end, p.root).as_slice())?;
         }
         // only a widened change: absent means the record's hunks
         if let Some(a) = c
@@ -922,7 +940,7 @@ pub(super) fn put_changes(
                 t.insert((id, seq), enc_authored(a).as_slice())?;
             }
         }
-        let rec = enc_record(&c.record);
+        let rec = enc_record(&c.record)?;
         let n = rec.len() as u64;
         rt.insert((id, seq), rec.as_slice())?;
         it.insert((id, seq), enc_pair(c.info.at_ms, n).as_slice())?;
@@ -1082,11 +1100,14 @@ impl DocStore {
     /// Blame's lookups, in one read: for each `(client, from, to)`, the clock spans of
     /// `client`'s changes that meet clocks `from..to`, in clock order, as
     /// `(start, end, seq)`. Clocks no recorded change covers (changes made before v0.3.0)
-    /// are simply not covered.
+    /// are simply not covered. A row with a clock over `max_clock` (the doc's engine's,
+    /// [`crate::doc::Doc::max_clock`]) is damage: refused as [`StoreError::Corrupt`], as
+    /// before v0.10.1 (when the read narrowed to u32), never handed on.
     pub(crate) fn clock_spans(
         &self,
         id: DocId,
-        runs: &[(u64, u32, u32)],
+        runs: &[(u64, u64, u64)],
+        max_clock: u64,
     ) -> Result<Vec<Vec<SpanOf>>, StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(CHANGE_CLOCKS)?;
@@ -1095,18 +1116,15 @@ impl DocStore {
             let mut spans = Vec::new();
             if to > from {
                 // the span starting at or before `from` may reach into it
-                let first = t
-                    .range((id, client, 0)..=(id, client, u64::from(from)))?
-                    .next_back();
-                let later =
-                    t.range((id, client, u64::from(from) + 1)..(id, client, u64::from(to)))?;
+                let first = t.range((id, client, 0)..=(id, client, from))?.next_back();
+                let later = t.range((id, client, from + 1)..(id, client, to))?;
                 for kv in first.into_iter().chain(later) {
                     let (k, v) = kv?;
                     let (end, seq) = dec_pair(v.value())?;
-                    let start = u32::try_from(k.value().2)
-                        .map_err(|_| StoreError::Corrupt("change clocks"))?;
-                    let end =
-                        u32::try_from(end).map_err(|_| StoreError::Corrupt("change clocks"))?;
+                    let start = k.value().2;
+                    if start > max_clock || end > max_clock {
+                        return Err(StoreError::Corrupt("change clocks"));
+                    }
                     if end > from {
                         spans.push((start, end, seq));
                     }
@@ -1118,11 +1136,14 @@ impl DocStore {
     }
 
     /// The provenance rows (format 5) meeting each `(client, from, to)` (clocks `from..to`),
-    /// in clock order, in one read. Elements no row covers are their own roots.
+    /// in clock order, in one read. Elements no row covers are their own roots. A row with a
+    /// clock over `max_clock` is refused as [`StoreError::Corrupt`], as in
+    /// [`Self::clock_spans`].
     pub(crate) fn provenance_rows(
         &self,
         id: DocId,
-        runs: &[(u64, u32, u32)],
+        runs: &[(u64, u64, u64)],
+        max_clock: u64,
     ) -> Result<Vec<Vec<ProvRow>>, StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(PROVENANCE)?;
@@ -1130,16 +1151,15 @@ impl DocStore {
         for &(client, from, to) in runs {
             let mut rows = Vec::new();
             if to > from {
-                let first = t
-                    .range((id, client, 0)..=(id, client, u64::from(from)))?
-                    .next_back();
-                let later =
-                    t.range((id, client, u64::from(from) + 1)..(id, client, u64::from(to)))?;
+                let first = t.range((id, client, 0)..=(id, client, from))?.next_back();
+                let later = t.range((id, client, from + 1)..(id, client, to))?;
                 for kv in first.into_iter().chain(later) {
                     let (k, v) = kv?;
                     let (end, root) = dec_prov(v.value())?;
-                    let start = u32::try_from(k.value().2)
-                        .map_err(|_| StoreError::Corrupt("provenance row"))?;
+                    let start = k.value().2;
+                    if start > max_clock || end > max_clock || root.1 > max_clock {
+                        return Err(StoreError::Corrupt("provenance row"));
+                    }
                     if end > from {
                         rows.push(ProvRow {
                             client,
@@ -1492,7 +1512,9 @@ pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
             |b| dec_change(7, b, false),
             |(c, _)| enc_change(c, &[]),
         ),
-        "revert record" => fx(name, b, false, dec_record, enc_record),
+        "revert record" => fx(name, b, false, dec_record, |r| {
+            enc_record(r).expect("a decoded record's runs fit u32")
+        }),
         "authored hunks" => fx(name, b, true, dec_authored, |a| enc_authored(a)),
         "provenance row" => fx(name, b, true, dec_prov, |&(end, root)| {
             enc_prov(end, root).to_vec()
@@ -1523,6 +1545,33 @@ pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
 #[cfg(feature = "fuzzing")]
 pub(super) fn fuzz_version_head(b: &[u8]) -> Result<VersionInfo, StoreError> {
     dec_version_head(1, b)
+}
+
+/// Clock rows written raw, as a damaged store holds them (tests only).
+#[cfg(test)]
+impl DocStore {
+    /// Write change-clocks rows `(client, start, end, seq)` and provenance rows `(client,
+    /// start, end, root)` for doc `id` as they are, unchecked.
+    pub(crate) fn plant_clock_rows_for_tests(
+        &self,
+        id: DocId,
+        change_clocks: &[(u64, u64, u64, Seq)],
+        provenance: &[(u64, u64, u64, (u64, u64))],
+    ) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        {
+            let mut kt = w.open_table(CHANGE_CLOCKS)?;
+            for &(client, start, end, seq) in change_clocks {
+                kt.insert((id, client, start), enc_pair(end, seq).as_slice())?;
+            }
+            let mut pt = w.open_table(PROVENANCE)?;
+            for &(client, start, end, root) in provenance {
+                pt.insert((id, client, start), enc_prov(end, root).as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1642,6 +1691,179 @@ mod tests {
 
     /// The records land with the change, carry the text purge must reach, and leave the
     /// window with their stats; pending ones are counted until settled.
+    /// A revert record with root runs, as v0.10.1 builds it (P2: u64 units and clocks in
+    /// memory), for the stored-bytes tests below.
+    fn record_with_runs(inserted: RootRuns, deleted: RootRuns) -> RevertRecord {
+        RevertRecord {
+            author: "ab".into(),
+            on_behalf_of: None,
+            at_ms: 1000,
+            roots: vec![RecordRoot {
+                root: "r".into(),
+                empty_after: false,
+                hunks: vec![RecordHunk {
+                    start: 1,
+                    end: 2,
+                    insert: "é".into(),
+                    deleted: "x".into(),
+                    redacted: false,
+                    roots: Some(HunkRoots { inserted, deleted }),
+                }],
+            }],
+            elems: Vec::new(),
+        }
+    }
+
+    /// A Yrs doc's clock bound ([`crate::doc::Doc::max_clock`]).
+    const Y: u64 = u32::MAX as u64;
+
+    fn unhex(h: &str) -> Vec<u8> {
+        let h: String = h.split_whitespace().collect();
+        (0..h.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// P2 changes no stored byte (v0.10.1): the records that hold engine clocks encode as
+    /// v0.10.0's encoders wrote them (these bytes were checked against v0.10.0's own
+    /// encoders), and decode back to the same values. A revert record's runs stay
+    /// `(bytes u32, units u32, client u64, clock u32)`; a provenance row and a change-clocks
+    /// value were three and two u64s already.
+    #[test]
+    fn stored_clock_encodings_are_v0_10_0s_byte_for_byte() {
+        let rec = record_with_runs(
+            vec![(2, 1, 7, 0xFFFF_FFFE)],
+            vec![(4, 2, 0x0102_0304_0506_0708, 3)],
+        );
+        let want = unhex(
+            "0202000000616200e80300000000000001000000010000007200010000000100
+             00000000000002000000000000000002000000c3a90100000078010100000002
+             000000010000000700000000000000feffffff01000000040000000200000008
+             0706050403020103000000",
+        );
+        assert_eq!(
+            enc_record(&rec).unwrap(),
+            want,
+            "revert record v2 with runs"
+        );
+        assert_eq!(dec_record(&want).unwrap(), rec);
+        let prov = unhex("09000000000000000700000000000000ffffffff00000000");
+        assert_eq!(
+            enc_prov(9, (7, 0xFFFF_FFFF)).to_vec(),
+            prov,
+            "provenance row"
+        );
+        assert_eq!(dec_prov(&prov).unwrap(), (9, (7, 0xFFFF_FFFF)));
+        let clocks = unhex("0c000000000000000500000000000000");
+        assert_eq!(enc_pair(12, 5).to_vec(), clocks, "change clocks value");
+    }
+
+    /// A root run whose units or clock is over `u32::MAX` is refused at encode, never
+    /// stored truncated (v0.10.1, P2 with the stored layout kept): the record, and a whole
+    /// commit holding it, fail with [`StoreError::ClockOverflow`], and nothing of the commit
+    /// is written. The u64 tables (clock spans, provenance) take such clocks as they are.
+    #[test]
+    fn a_root_run_over_u32_is_refused_at_encode_and_nothing_is_written() {
+        use crate::store::{DocKey, DocMeta, LogEntry};
+        let over = u64::from(u32::MAX) + 1;
+        let fits = record_with_runs(vec![(2, 1, 7, u64::from(u32::MAX))], Vec::new());
+        assert!(enc_record(&fits).is_ok(), "u32::MAX itself fits");
+        for (inserted, deleted) in [
+            (vec![(2, 1, 7, over)], Vec::new()),
+            (Vec::new(), vec![(2, 1, 7, over)]),
+            (vec![(2, over, 7, 0)], Vec::new()),
+        ] {
+            let rec = record_with_runs(inserted, deleted);
+            assert_eq!(enc_record(&rec), Err(StoreError::ClockOverflow(over)));
+        }
+        let dir = std::env::temp_dir().join(format!("k2mb-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = DocStore::open(dir.join("d.redb")).unwrap();
+        let id = store
+            .create(&DocMeta {
+                key: DocKey {
+                    space: "s".into(),
+                    path: "p".into(),
+                },
+                pack: "t".into(),
+                engine: "e".into(),
+                engine_format: 1,
+                codec: vec![],
+                created_ms: 0,
+                synced_hash: None,
+                synced_seq: 0,
+                declined: None,
+            })
+            .unwrap();
+        let change = |record: RevertRecord, start: u64| {
+            (
+                LogEntry {
+                    author: "a".into(),
+                    client: 7,
+                    at_ms: 5,
+                    via: "cli".into(),
+                    update: vec![1],
+                    on_behalf_of: None,
+                },
+                NewChange {
+                    info: ChangeInfo::new(ChangeKind::Edit, "a", "cli", 5),
+                    record,
+                    span: Some(ClockSpan {
+                        client: 7,
+                        start,
+                        end: start + 2,
+                    }),
+                    provenance: vec![ProvRow {
+                        client: 7,
+                        start,
+                        end: start + 2,
+                        root: (9, over + 5),
+                    }],
+                    authored: None,
+                    row_marks: Vec::new(),
+                    col_remap: false,
+                    note_rows: Vec::new(),
+                },
+            )
+        };
+        let (e, c) = change(record_with_runs(vec![(2, 1, 7, over)], Vec::new()), 0);
+        assert_eq!(
+            store.commit_changes(id, &[e], &[c], &[]),
+            Err(StoreError::ClockOverflow(over))
+        );
+        assert!(store.revert_records(id).unwrap().is_empty(), "no record");
+        assert_eq!(
+            store.clock_spans(id, &[(7, 0, 9)], Y).unwrap(),
+            vec![vec![]]
+        );
+        assert!(store.provenance_rows(id, &[(7, 0, 9)], Y).unwrap()[0].is_empty());
+        // a record that fits commits, with its span and provenance past u32: kept exactly for
+        // an engine whose clocks reach them, refused as damage under a u32 engine's bound
+        let (e, c) = change(record_with_runs(vec![(2, 1, 7, 3)], Vec::new()), over);
+        assert_eq!(store.commit_changes(id, &[e], &[c], &[]).unwrap(), vec![1]);
+        assert_eq!(
+            store
+                .clock_spans(id, &[(7, over, over + 1)], u64::MAX)
+                .unwrap(),
+            vec![vec![(over, over + 2, 1)]]
+        );
+        let rows = store
+            .provenance_rows(id, &[(7, over, over + 1)], u64::MAX)
+            .unwrap();
+        assert_eq!(rows[0][0].root, (9, over + 5));
+        assert_eq!(
+            store.clock_spans(id, &[(7, over, over + 1)], Y),
+            Err(StoreError::Corrupt("change clocks"))
+        );
+        assert_eq!(
+            store.provenance_rows(id, &[(7, over, over + 1)], Y),
+            Err(StoreError::Corrupt("provenance row"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn records_stats_prune_and_purge_reach() {
         use crate::store::{ApprovalState, DocKey, DocMeta, LogEntry};
@@ -1723,7 +1945,8 @@ mod tests {
             store
                 .clock_spans(
                     id,
-                    &[(7, 0, 3), (7, 6, 10), (7, 16, 20), (8, 0, 9), (7, 5, 5)]
+                    &[(7, 0, 3), (7, 6, 10), (7, 16, 20), (8, 0, 9), (7, 5, 5)],
+                    Y
                 )
                 .unwrap(),
             vec![

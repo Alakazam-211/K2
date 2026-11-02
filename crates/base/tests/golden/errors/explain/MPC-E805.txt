@@ -2,6 +2,7 @@ MPC-E805 no_element (structured and CSV)
 exit:     4
 message:  {verb}: {line}
 next:     The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).
+step:     row list; why: The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first.
 rule:     CSV contract §3.3 (C1)
 verbs:    a pack's own verbs
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "{verb}: {line}",
   "next": "The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).",
+  "next_step": {
+    "verb": "row list",
+    "args": [],
+    "why": "The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first."
+  },
   "rule": "CSV contract §3.3 (C1)",
   "verbs": ["@pack"],
   "returned_by": [],

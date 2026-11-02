@@ -2,6 +2,7 @@ MPC-E123 patch_failed (sessions and edits)
 exit:     1
 message:  {failed} out of {hunks} hunk(s) FAILED; nothing applied
 next:     The patch doesn't fit the live text (others changed those lines, or it was made against another version). Nothing was applied: patches are all or nothing. stdout shows each failed hunk beside the live lines. Read the text again and make a new patch, or apply the rest with --partial.
+step:     cat; args: -n; why: The patch doesn't fit the live text, so nothing was applied; read the text again and make a new patch, or apply only the hunks that fit.
 rule:     K-PAR-8
 verbs:    patch; apply
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "{failed} out of {hunks} hunk(s) FAILED; nothing applied",
   "next": "The patch doesn't fit the live text (others changed those lines, or it was made against another version). Nothing was applied: patches are all or nothing. stdout shows each failed hunk beside the live lines. Read the text again and make a new patch, or apply the rest with --partial.",
+  "next_step": {
+    "verb": "cat",
+    "args": ["-n"],
+    "why": "The patch doesn't fit the live text, so nothing was applied; read the text again and make a new patch, or apply only the hunks that fit."
+  },
   "rule": "K-PAR-8",
   "verbs": ["patch", "apply"],
   "returned_by": ["patch", "apply"],

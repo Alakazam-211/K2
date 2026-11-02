@@ -261,6 +261,65 @@ fn a_poisoned_doc_is_reloaded_never_encoded() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Hardening: the session reopens a doc left `Pending` from the store before its next edit
+/// (`AuditEvent::Recovered`): nothing of the refused batch is in it, and edits work.
+#[test]
+fn a_doc_left_pending_is_reopened_from_the_store() {
+    use crate::doc::DocError;
+    struct Ev(std::sync::Mutex<Vec<AuditEvent>>);
+    impl Host for Ev {
+        fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+            Rights::editor()
+        }
+        fn now_ms(&self) -> u64 {
+            5
+        }
+        fn on_event(&self, e: &AuditEvent) {
+            self.0.lock().unwrap().push(e.clone());
+        }
+    }
+    let (dir, store, _) = setup("missing-other");
+    let host = Arc::new(Ev(Default::default()));
+    let recovered = |h: &Ev| {
+        h.0.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, AuditEvent::Recovered { .. }))
+            .count()
+    };
+    let (ws, file) = (dir.join("ws"), dir.join("ws/a.md"));
+    fs::write(&file, b"a\n").unwrap();
+    let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
+    let s = mgr.open_file(Arc::new(MD), &key(), &file, &ws).unwrap();
+    let p = Participant::new("agent", "A", "#000", ParticipantKind::Agent, "cli");
+    let c = s.join(p, Stay::Held).unwrap().conn;
+    // the batch the session refuses
+    let mut x = Doc::new(MD.schema()).unwrap();
+    x.replace_text_as(4242, "source", "p\n").unwrap();
+    let mut y = Doc::load(MD.schema(), &x.encode_state().unwrap()).unwrap();
+    let after = y
+        .replace_text_as(4343, "source", "p\nq\n")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        s.apply_raw_for_tests(&after),
+        Err(SessionError::Doc(DocError::Pending))
+    );
+    assert_eq!(recovered(&host), 0);
+    // the next edit reopens the doc from the store: nothing of 4343's change, and edits work
+    assert_eq!(
+        s.replace_text(c, TextFilePack::ROOT, "b\n"),
+        Err(SessionError::Doc(DocError::Pending))
+    );
+    assert_eq!(recovered(&host), 1, "the doc was reopened from the store");
+    assert_eq!(s.read(c).unwrap().text_by_root[0].1, "a\n");
+    s.replace_text(c, TextFilePack::ROOT, "b\n").unwrap();
+    assert_eq!(s.read(c).unwrap().text_by_root[0].1, "b\n");
+    drop(s);
+    mgr.release().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// v0.9.8 (the disk replica decoded on first need): a stored sync state that doesn't decode
 /// is no longer found at the open but at the first disk need after it. It must be as loud
 /// and as safe there: the open's error (the same variant, the same error id) from every

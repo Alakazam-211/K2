@@ -636,7 +636,8 @@ impl Session {
         let client = st.members[i].client;
         let next = ElemId::new(client, st.doc.clock_of(client));
         let prov = st.prov.as_ref().expect("just built");
-        let step = match undo::plan(&st.texts, prov, next, vec![batch], mode) {
+        let order = st.doc.id_order();
+        let step = match undo::plan(&st.texts, prov, next, order, vec![batch], mode) {
             Plan::Conflict { step, conflicts } => {
                 return Ok(UndoOutcome::Conflicts { step, conflicts })
             }

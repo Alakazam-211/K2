@@ -215,7 +215,15 @@ impl Session {
             let mut ps = Vec::new();
             for h in lines.iter().filter(|h| h.end > h.start && takes_ink(h)) {
                 let runs = prov.query(root, text, h.start, h.end);
-                ps.extend(pieces(&store, self.doc_id, text, &runs, h.start)?);
+                ps.extend(pieces(
+                    &store,
+                    self.doc_id,
+                    st.doc.max_clock(),
+                    st.doc.units(),
+                    text,
+                    &runs,
+                    h.start,
+                )?);
             }
             rooted.push((root.as_str(), text, lines, ps));
         }

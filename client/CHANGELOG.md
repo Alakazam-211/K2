@@ -3,11 +3,200 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
-## 0.11.0, with its licence (kit tag v0.10.0.2)
+## 0.12.0 (kit tag v0.10.2)
 
-The same code as 0.11.0: `package.json` (and the lockfile's root entry) now say
-`"license": "MIT OR Apache-2.0"`, the kit's licence (the kit's `LICENSE-MIT` and
-`LICENSE-APACHE`). The version is unchanged.
+The client for kit v0.10.2.
+
+**The client is a library only: the editor component is removed** (kit v0.10.2). Hosts own
+their editor UI and draw it over the library: `HOST.md` has the calls an editor makes, the
+rules it keeps (no local undo history; one `Transport` across reconnects; `connect` while open
+replaces the connection; drop, don't buffer, while closed; one edit in flight; the retry loop
+by `canRetry`; Re-apply with presence first) and the tests that cover each.
+
+- **Removed:** `src/editor/*` (`mountLiveEditor`, `DEFAULT_STRINGS`, `HISTORY_ERROR`,
+  `CLOSE_RETRY_ERROR`, `LiveEditorError`, `ByteIndex`, `readableOn`, `contrast`, `luminance`,
+  `CSS_VARS` and their types), the `./editor` export, and `src/codemirror.ts`
+  (`codemirrorLive`, `changesToHunks`, `hunksToChanges`, `remoteChange`,
+  `CodemirrorLiveOptions`). `MPC-EDITOR-HISTORY` and `MPC-EDITOR-CLOSE-RETRY` were the
+  component's and go with it. `EDITOR.md` is a pointer to `HOST.md`.
+- **New exports:** `setDefaultLiveTimers` from the package root and `core` (`core` now
+  re-exports the root: the same names); `k2-mpc-client/test` (`test/index.ts`): the test
+  helpers (`FakeServer`, `FakeLive`, `Net`, `rng`, `FakeLiveHost`, `FakeLiveTransport`,
+  `netTimers`, `microtasks`, `settle`, `randomEdit`, `randomText`, `boundaries`, `runrec`),
+  each still at its own path; `k2-mpc-client/test/jsdom-shims` (a side-effect import). In
+  `files` and `sideEffects`.
+- **Dependencies:** no peer dependencies (the five `@codemirror/*` peers are gone). Dev:
+  `@codemirror/commands`, `lang-markdown`, `language`, `view`, `@playwright/test` and `jsdom`
+  removed; `@codemirror/state` 6.7.6 stays **dev-only, a test oracle** (the caret re-send's
+  "maps the caret exactly as CodeMirror maps a selection"), never imported by `src`. The
+  lockfile drops 85 packages and adds none; the licence check's one exception (MIT-0, through
+  jsdom) is gone with it.
+- **Tests:** no browser tests (no Playwright, no Chromium or WebKit runs) and no DOM: the whole
+  suite runs in Node. The editor's library coverage moved onto `test/live-host.ts`, a DOM-free
+  host that keeps `HOST.md`'s rules over `LiveText`: `live-convergence.test.ts` (three hosts,
+  random typing, outside edits, undo, dropped sockets and reconnects; Re-apply never doubling
+  text on a host without the reconnect rule; fixed seeds each failing under its planted fault,
+  re-picked by `live-seed-scan.test.ts`), and the caret re-send scenarios on `carets()`
+  (`caret-resend.test.ts`). The planted faults moved to `test/plants.ts`. `exports.test.ts`
+  pins every name and file a host builds against (a planted rename and a removed export are
+  caught). The byte index's test (`ByteIndex`, the editor's) went with the editor, as did the
+  bench's two binding models.
+
+- **Licence:** `package.json` (and the lockfile's root entry) say `"license": "MIT OR
+  Apache-2.0"`, the kit's licence (also in 0.11.0 as shipped with kit tag v0.10.0.2). The
+  package now carries `LICENSE-MIT` and `LICENSE-APACHE` (copies of the kit's, in `files`), so
+  `npm pack` includes them.
+
+- **`ErrorReport.next_step`** (K-PAR-10): a refusal's `next` as data, `{verb, args, why}`
+  (the new `NextStep` type; `verb` is always a kit verb). It is optional: absent when there is
+  nothing to run, and from a host on an older kit, and such a report reads as before; `next`
+  keeps its prose.
+  `WIRE.md` lists it.
+- Test tooling: the bench gate (`M2_BENCH_GATE`) waits for a quiet machine before each
+  measurement. When other work used more than half the core it is pinned to (sampled from
+  `/proc/stat`), or the 1-minute load is above half the machine's CPUs, it logs `BENCH LOADED`
+  and re-checks every 15 s for up to 5 minutes. A target that never got a quiet machine ends
+  `BENCH GATE LOADED` (exit 3), distinct from a miss (exit 1). Thresholds:
+  `M2_BENCH_CORE_BUSY_MAX`, `M2_BENCH_LOAD_MAX`, `M2_BENCH_LOADED_WAIT_S`. Limits never change.
+- Dev dependencies: vitest 4.1.12 (was 2.0.5), vite 6.4.5 (now pinned directly; vitest 2 brought
+  5.4.21) and esbuild 0.28.2 (was 0.21.5), for the vitest, tinypool, vite and esbuild advisories;
+  no runtime dependency changes. package-lock.json is written with npm 11 (npm 10.9's arborist
+  crashes resolving vitest 4); npm ci works on npm 10. vitest 3 and later time out synchronous
+  tests too, so the four long suites (`rope`, `realistic`, `convergence`, `editor-convergence`)
+  set `{ timeout: 60_000 }` on their `describe`; every other test keeps the 5 s default. Two
+  rope tests run about 2x slower under vitest 4 (runner overhead; bench-quick unchanged: the
+  same source bundled by esbuild 0.21.5 and 0.28.2, three interleaved runs each, gives a median
+  new/old p50 ratio of 1.05 over 36 measurements, range 0.75-1.33, inside the 1.33x median
+  run-to-run spread of one build).
+- **An undo in flight no longer forces "check and retype" on a kit v0.10.2 host.** A change
+  whose reply was lost (`MPC-E000`) is recognised when it lands late by its client ID. An undo
+  or redo still unanswered when that connection dropped lands under the same ID, so until now
+  either kind of change left Re-apply answering `unknown`. Now `LiveText` reads the change
+  event's `kind`: only an `edit` from that ID is the lost change (`landed`, `presence`
+  `present`); an `undo` or `redo` is not (ignored; the change stays watched, and `presence` is
+  `absent` when nothing else came from that ID, so Re-apply places it). Any other kind under a
+  client's own ID (`revert`, `restore`, `external`, `import`) shouldn't happen and concludes
+  nothing (`unknown`). **With an older kit** (no `kind`), or when some of those events have a
+  kind and some don't, it is as before: an undo in flight gives `unknown` and no `landed`.
+  No API change. `EDITOR.md` (then), "Rejections"; `WIRE.md`, "Undo and redo".
+- **Correction to the v0.10.0.1 notes:** they said undo and redo would be marked in a change's
+  `via`. They are marked in **`kind`** (`ChangeEvent.kind`, kit v0.10.2); **`via` is
+  unchanged**.
+- Tests: the fake host sends `kind` (`edit`, `undo`) on every change event, and
+  `FakeServer.emitKind = false` models an older kit. Scripted cases, mounted and on
+  `LiveText`: a late undo alone (absent, Re-apply applies once), a late edit alone (landed),
+  both in either order (landed once, at the edit's version, no doubled text), events with and
+  without a kind mixed (`unknown`), another kind under the client's own ID (`unknown`), and the
+  older kit's rule unchanged. Planted faults (an undo read as the edit, kinds ignored, another
+  kind read as an undo, a kind-less event read as an undo) must each fail them. The
+  convergence runs and the Re-apply scan run with and without `kind`.
+- A test fixture for a removed-text note to a reader without history now carries the kit's
+  v0.10.2 message ("Someone with history access can restore it from version N.").
+
+**Presence and marks as data** (`PRESENCE.md`). What a host draws its own editor UI from:
+other people's carets and the person's rejected changes, with every offset in UTF-16 code units
+of the current text. Library only (`live.ts`, `presence.ts` (new), `index.ts`, `core.ts`): no
+DOM, and `src/editor/*` is unchanged. Additive: every existing name and signature is as before
+(`presence(id)` still answers whether a lost change landed).
+
+- **`participants()` / `onParticipants(cb)`:** one entry a connection (`Participant`: `handle`,
+  `client?`, `name`, `colour` as the roster sent it, `kind` (`person` / `agent` / `app`; the
+  kit's `external`, `restore`, `import` and unknown kinds are `app`), `rawKind`, `isSelf`,
+  `sameUser`, `label?`, `caret`, `selections` (one element today), `lastActiveAt`, `away`).
+  This connection is listed once with `caret: null`; the person's other connections are
+  `sameUser`; a participant with no caret to show has one caret-less entry; an older host gives
+  one entry a participant. Built on `carets()`, converted through the rope's index.
+- **`marks()` / `onMarks(cb)`:** each open rejection as `Mark` (`id`, UTF-16 `range`, `text`,
+  `reason {code, message}`, `error`, `mayHaveApplied`, `presence`, `placement`, `canReapply`,
+  `canInsertHere`, `removed`).
+- **"Insert my text here" in the library:** `insertHerePreview(id)` (where, in UTF-16, and
+  what; changes nothing) and `insertHere(id, {group?})` (a local edit in its own undo group,
+  the rejection dismissed). The frozen editor's semantics: one hunk only, presence checked for
+  a lost reply, the typed text at the tracked place, never a deletion. The editor keeps its own
+  copy.
+- **Batching:** at most one callback a listener a delivery, with the latest snapshot, none when
+  nothing changed. This connection's own activity (its entry's `lastActiveAt`) never calls back
+  by itself: the person typing re-renders no participant list. **New option** `LiveOptions.schedule` (`FrameScheduler`): default
+  `requestAnimationFrame` when present, else a 16 ms (`FRAME_MS`) timer on `LiveOptions.timers`;
+  `(deliver) => deliver()` for immediate delivery (an agent, a Node tool).
+- **New exports:** `participantKind`, `defaultScheduler`, `FRAME_MS`, and the types
+  `Participant`, `ParticipantKind`, `Range16`, `Mark`, `MarkPlacement`, `InsertPreview`,
+  `InsertHereResult`, `InsertRefusal`, `FrameScheduler` (from both entry points); `Presence`
+  is now exported from `core` too.
+- **Tests:** `test/presence.test.ts`: offsets across remote inserts before, after and inside
+  carets, with CJK and emoji; this connection never given a caret, its other tab `sameUser`;
+  50 caret moves in a frame give one callback with the latest; no callback when nothing
+  changed; `lastActiveAt` on moves and typing, not on an unmoved re-send; typing alone gives no
+  callback, going away and back one each; an older host; kinds
+  and colour; an immediate scheduler, the timer default and the frame default; a mark's UTF-16
+  range and reason; dismiss; Re-apply by the rule; a lost reply (`cant-tell`, landed); insert
+  here where the preview said, once, in its own undo group; multi-hunk refused. Planted faults,
+  each failing its check: byte offsets, no batching, a callback every delivery, a caret on this
+  connection, activity by the raw caret, the own activity compared again, insert here without the one-hunk check, local edits
+  without their group (`PRESENCE_PLANT=<name>` plants one in every test).
+
+**Per-connection carets.** The same person on two devices or in two tabs sees their other
+connection's caret, as Google Docs shows one login's other tabs. Library only (`live.ts`,
+`wire.ts`, `index.ts`, `core.ts`): `src/editor/*` is unchanged, and the library marks carets and
+draws nothing (no UI text). Additive: from an older host the client does exactly what 0.11.1 did.
+
+- **Wire types:** `RosterEntry.devices?: Device[]` (`Device = {client, cursor, label?}`, exported)
+  and `cursor` events' `client?` (kit v0.10.2, `WIRE.md` "The roster").
+- **The roster fold** keeps carets per (handle, client): a `cursor` event with `client` updates
+  that connection's device (a `null` caret removes it: the connection left or dropped its
+  caret); every `cursor` event still sets the entry's `cursor`, as before.
+- **`carets()`** with `devices` on an entry: one caret a connection, most active first (so
+  `find` by handle gets the caret an older host showed); this connection's own
+  (`LiveOptions.client`, `welcome.client`) never; another connection of this participant with
+  `sameUser: true`; without a client ID, every connection of its own participant is hidden.
+  With no `devices` (an older host): one caret a participant, its own skipped, as 0.11.1.
+- **`RemoteCaret` gains** `client?` (the connection, when the host sends per-connection
+  carets), `isSelf` (always `false`: this connection is never returned), `sameUser` and
+  `label?` (the host's label for the connection). Existing fields and their meaning are
+  unchanged.
+- **A device's label** arrives with a snapshot (a `cursor` event carries none): a connection
+  that joins after this one subscribed has no label until the next snapshot.
+- **Tests:** `test/carets-per-conn.test.ts`: connections of one person each see the others'
+  carets, mapped across remote edits; their own is never returned (snapshot or events); no
+  client ID hides the own participant's; other people are one caret a connection; an older
+  host is the 0.11.1 `carets()` exactly (a copy of it, 40 random runs); planted faults
+  (skipping by handle again, one caret a person) fail. The fake host's caret route sends
+  `devices` and `client` as the kit does (`caretRoute.olderHost` for the old route), through
+  which two tabs of one person see each other's carets and a tab that leaves takes its caret
+  with it. The goldens gain `devices` and `client`; `roster_events_devices.json` (new) folds to
+  the kit's per-connection carets.
+
+## 0.11.1 (first released in kit v0.10.2)
+
+A fix for remote carets, client-side only: no wire change, no new dependency. `package.json`
+stays at `0.11.0` for this patch (a host applies the diff to its vendored copy).
+
+- **The caret is re-sent after remote changes, mapped and throttled.** A host that drops a
+  `cursor` frame unless it is at the version that socket was last sent (and may forward a
+  queued change just before comparing) could leave an idle person's caret unseen. 0.11.0 did
+  re-send on each remote change of the root, but at the caret's old offset (the editor then
+  sent a corrected second frame), not after a change to another root, and unthrottled. Now
+  `LiveText` moves its caret through every change that isn't the person's own typing exactly
+  as CodeMirror moves a selection, and re-sends it after any remote change that advances the
+  version (another root's included): at most once per 250 ms, with a trailing send at the
+  last version, never while an edit of its own is pending. The editor's echo of the moved
+  caret dedupes to nothing (one frame per version). `setCursor` with the caret's current
+  place sends nothing while a re-send is due.
+- **New options:** `LiveOptions.timers` (`LiveTimers`: the throttle's clock; the system's by
+  default) and `LiveOptions.caretResendMs` (default `CARET_RESEND_MS`, 250).
+- **Tests:** the fake host gains an opt-in caret route (`FakeServer.caretRoute`): a `cursor`
+  frame is accepted only at the version that connection was last sent, compared after the
+  queue is forwarded, folded per participant as the kit's roster does, and pushed as roster
+  events on `caretTick()`. `test/caret-resend.test.ts`: an idle caret read behind shows in the
+  typist's editor and stays, at its real place (fails with the re-send planted out); recovery
+  within one throttle window; the throttle (50 remote changes in 100 ms: 2 frames); nothing
+  sent with an edit in flight; the mapping against CodeMirror's `SelectionRange.map`; and
+  today's limit for one person on two devices (the other device's caret isn't drawn). The
+  editor harness runs the throttle on its fake clock.
+- **The editor harness's fixed seeds were picked again:** caret frames draw link latencies from
+  a run's generator, so the re-send changed every run's schedule and the old seeds no longer
+  reached their planted faults (seed 77 re-applied nothing). The new ones (7, 8; 1163, 1752;
+  9, 10; slow 7003, 7023) each pass and fail under their fault, as before.
 
 ## 0.11.0 (kit tag v0.10.0.1)
 

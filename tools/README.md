@@ -10,6 +10,12 @@ runner; nothing here names a machine. The examples submit them with one compute 
 runner. Any Linux box with a checkout runs a job the same way (`sh tools/job.sh <commands
 file>` at the repo root). Figures in the notes say "a build node" with the node's size where it matters.
 `tools/check-private.sh` keeps internal host names out of the tree.
+`tools/oss-check.sh` (K-OSS-3) fails unless the repo carries its licence: `LICENSE-MIT` and
+`LICENSE-APACHE` at the root, `license = "MIT OR Apache-2.0"` and `publish = false` on every
+crate of ours, the same licence on every `package.json` of ours (and its lockfile's root entry),
+and the client's copies of both licence files byte-identical to the root's.
+`tools/test-oss-check.sh` plants each failure. Both run in `scripts/check.sh` and the evidence
+part.
 
 **Build machines are the host's.** The jobs are self-contained shell scripts for any Linux
 runner; nothing here names a machine. The examples submit them with one compute CLI
@@ -168,39 +174,51 @@ k2 compute run <node> --no-source --needs rust@stable,cargo-nextest --cpus 4 --m
 
 The licence check (`scripts/check-licences.sh`, `cargo metadata` only) runs locally.
 
-### Client-only jobs (browser tests)
+### Client jobs
 
-The JS client's browser tests need `client/` and nothing else. `tools/client-ship.sh <kit-repo>
-<kit-sha> <out-dir>` writes a fresh one-commit repo holding only `client/` at that commit, checks
-that nothing of the kit came with it (no path outside `client/`, no crates, vendored engine,
-Rust or Cargo files, no history), and prints `ship <sha> <- kit <sha>`. Ship that repo, and quote
-the proof line with the job id.
+The JS client is a library with no DOM (since v0.10.2): its whole suite runs in Node, with no
+browser tests. **The client gate runs in a full checkout** (any runner with the kit), so the
+shared-vector test also reads the kit's copy of the vectors:
 
-Two kinds of browser job, two commands:
+```sh
+k2 compute run "$NODE" --needs node@22 --cpus 4 --mem 8G --detach -- sh -ec 'cd client &&
+  npm ci && node scripts/check-licences.mjs && npx tsc --noEmit && npx vitest run'
+```
 
-- **The client gate, in a full checkout** (any runner with the kit): Chromium only, which is
-  the default (`client/playwright.config.ts`). It never selects WebKit:
+`tools/client-ship.sh <kit-repo> <kit-sha> <out-dir>` writes a fresh one-commit repo holding
+only `client/` at that commit, checks that nothing of the kit came with it (no path outside
+`client/`, no crates, vendored engine, Rust or Cargo files, no history), and prints `ship <sha>
+<- kit <sha>`. Use it for a client-only job on a runner that must not get kit source (a second
+run of the suite, a seed scan): ship that repo (`--repo`), and quote the proof line with the
+job id. Without the kit beside it, the shared-vector test checks the client's own copy only.
 
-  ```sh
-  k2 compute run "$NODE" --needs node@22 --cpus 4 --mem 8G --detach -- sh -ec 'cd client &&
-    npm ci && node scripts/check-licences.mjs && npx tsc --noEmit && npx vitest run &&
-    export PLAYWRIGHT_BROWSERS_PATH="$PWD/.pw-browsers" && npx playwright install chromium &&
-    npx playwright test'
-  ```
+## The public cut
 
-- **WebKit, from the client-only repo,** on a runner that has WebKit's system libraries (most
-  don't; it fails at launch with "Host system is missing dependencies" where they're missing):
+A host pulls the kit's release tags (squashed, by git subtree) into a **public** repo, so the
+tag it pulls must carry no engine source that isn't public yet. Each such release gets a
+**public cut**: on a release branch, the pre-cut release commit, then one more commit,
+`release: public cut`, made by `public-cut.sh`. The tag goes on the cut. **The cut is never
+merged into main:** main merges the pre-cut commit (`tag^`), which keeps everything.
 
-  ```sh
-  tools/client-ship.sh . <kit-sha> <workspace>/client-ship
-  k2 compute run "$WEBKIT_NODE" --repo client-ship --sha <ship-sha> --needs node@22 \
-    --cpus 4 --mem 4G --detach -- sh -ec 'cd client && npm ci &&
-    export PLAYWRIGHT_BROWSERS_PATH="$PWD/.pw-browsers" && npx playwright install webkit &&
-    MPC_BROWSERS=webkit npx playwright test'
-  ```
+| Script | What it does |
+|---|---|
+| `public-cut.sh [--no-commit] [--lock FILE] [--trailer TEXT]...` | Run at the root of a clean checkout of the release branch (never main): removes every `vendor/mpce*` but the allowlist's, the crates the allowlist drops (the conformance suite), the engine-only features (`native`, and every feature derived from removed ones, to a fixed point), engine dependencies from every dependency table, the code under cfgs on removed features, the tooling's parts for them, and the lockfile's removed packages (removals only); then runs `check-public-cut.sh` and commits. Idempotent: on a cut tree it changes nothing and commits nothing. `--no-commit` is a dry run (allowed detached and on a dirty tree). Its header has the rules; a case it can't decide (a feature mixing engine parts with an optional dependency, an unknown cfg form) stops it, to decide by hand |
+| `check-public-cut.sh [ROOT]` | Fails closed (exit 1, naming every offending path or entry) unless the tree may be a public cut: both licence files; no engine path, manifest entry, lock entry or engine identifier outside `PUBLIC_ENGINE_CRATES`; no engine-only feature declared, requested or left enabled; every cfg names a declared feature; no dropped crate or engine feature in the tooling; every pinned regression present; `check-private.sh` clean. The allowlist (`PUBLIC_ENGINE_CRATES`, `NATIVE_FEATURES`, `DROPPED_CRATES`, `LICENCE_FILES`) is at its top, the one place to change it; `--print-config` prints it |
+| `public-cut-regressions.txt` | The pinned regression tests of the host's earlier tags, which every cut must still carry (a hotfix line is cherry-picked, not an ancestor, so they are checked by name). One per line: `NAME` (a Rust `fn NAME` with a test attribute, not `#[ignore]`d) or `PATH IDENT` (the word in that file). **At each hotfix tag, append its regression tests** under a comment naming the tag and the fix |
+| `tests/public-cut-gate.sh` | The cut's gate: a commands file for `job.sh`, run at the cut commit, one part per job (`--env PART=`): `full.sh`'s parts on the cut (`lint`, `base-a1` to `base-d`, `errors`, `spec-undo`, `wire-guard`, `evidence` with oss), `licence`, `lockproof` (cargo's own resolution leaves the pruned lock unchanged), `checker` (the cut is clean; planted copies of it are blocked), `checker-precut` (the pre-cut commit is blocked; the script on planted copies drops derived features and stops on a mixed one) and `reproduce` (the script run on the node makes exactly the cut's tree: the node's awk gates, other awks are informational). Planted and reproduced trees are `git archive` copies beside the checkout, never a worktree of its repository. Each part ends with `=== RESULT <part>: GREEN` or `RED` |
 
-The typecheck, the client's full test suite and its licence check stay in a full checkout: the
-shared-vector test also reads the kit's copy of the vectors when it is there.
+The procedure for a release:
+
+```sh
+# on the release branch, at the pre-cut release commit (the one main will merge)
+sh tools/public-cut.sh --trailer '...'          # makes `release: public cut`
+sh tools/public-cut.sh                          # again: "nothing to cut" (idempotent)
+# the gate, every part, at the cut commit (a --repo job each; Test jobs above)
+k2 compute run <node> --repo <repo> --sha <cut> --needs rust@stable+clippy+rustfmt,cargo-nextest \
+  --cpus 4 --mem 16G --env PART=reproduce -- sh tools/job.sh tools/tests/public-cut-gate.sh
+```
+
+Then tag the cut, and merge `tag^` (never the tag) into main.
 
 ## Build settings
 
@@ -284,7 +302,7 @@ medians (the build's whole process tree; the largest single process 600–830 MB
 
 **The Quint export guard** (`tools/quint/`, v0.9.3): a guard against a Quint→TLA+ export
 issue, where the exported TLA+ can say something other than the Quint source. Every Quint job
-runs it in `spec/quint/` **before anything else touches the model**, the TLC warm-up included:
+runs it in `spec/quint/` **before anything else touches the model**, any TLC run included:
 `lint.sh undo.qnt` (a source lint: `qnt_lint.py`, Quint's parser, no Java), then `lint.sh
 --export` on an instance of `undo.qnt` (`export_check.py`: the model compiled to TLA+, read
 back and compared with the Quint IR, definition by definition). A finding (exit 1) or a tool
@@ -337,13 +355,18 @@ Long runs (`g1.sh`) may add `--tier batch` (idle-time work) and `--detach`; see
 
 ### Apalache and TLC in a job
 
-`tlc.sh` (sourced after the warm-up `quint verify`, which fetches Apalache) starts **one
+`tlc.sh` (sourced after `need_apalache`, which stops the job unless the export check's compile
+fetched Apalache) starts **one
 Apalache server** for the job (`APA_HEAP`, default 6g) and every `quint compile` reuses it.
 On the v1.7 model a compile that started its own server failed at random (`error:` with
 nothing after it); with one server about one compile in six still fails cold, so `tlc`
 retries a failed compile up to 3 times and logs each failure. TLC runs with `TLC_HEAP`
-(default 3g), so both fit a `--mem 12G` job. The warm-up itself may report exit 1: it is
-only there to fetch Apalache.
+(default 3g), so both fit a `--mem 12G` job. The export check retries a tool error the same
+way (up to 3 attempts, each logged as the known random compile failure on a cold server); a
+finding is never retried. Until v0.10.0's follow-up a warm-up `quint verify` on quint's own
+server ran before `tlc.sh`: it checked nothing, and since v1.9 it exited 1 on every job
+(`error: error` after SanyParser; that server has 4 GiB and no Jackson limits agent). It is
+gone: `need_apalache` checks for what it was there to fetch.
 
 **Each job has its own Apalache port.** Jobs on one node share its network, and on Quint's
 default (`localhost:8822`) one job's compile could reach another job's server and fail with

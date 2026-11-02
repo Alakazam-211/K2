@@ -1,7 +1,8 @@
-// A fake host for the live editor: `LiveTransport`s over the fake server. Every `connect` is a
-// new connection with a new client ID (as a host's join); the test drops sockets, closes
-// connections with a reason, makes connects fail, and lets a resume past the server's window
-// come back with the text (no resume).
+// A fake host for a live client (a host's editor, or `live-host.ts`'s DOM-free host):
+// `LiveTransport`s over the fake server. Every `connect` is a new connection with a new client
+// ID (as a host's join); the test drops sockets, closes connections with a reason, makes
+// connects fail, and lets a resume past the server's window come back with the text (no
+// resume). A stable test helper: `k2-mpc-client/test` (test/index.ts).
 
 import { canRetry, type ClientFrame, type ConnectOptions, type CloseEvent, type CloseReason, type LiveTransport, type Rights, type ServerFrame, type Transport, type Welcome } from "../src/wire";
 import type { Faults, FakeServer, Net } from "./fake-server";
@@ -19,7 +20,7 @@ export class FakeLiveHost {
     this.nextConn = firstConn;
   }
 
-  /** A participant's transport (one per editor, for its whole life). */
+  /** A participant's transport (one per client, for its whole life). */
   transport(handle: string, opts: { rights?: Rights; faults?: () => Faults | undefined } = {}): FakeLiveTransport {
     const t = new FakeLiveTransport(this, handle, opts.rights ?? "edit", opts.faults);
     this.transports.push(t);
@@ -35,7 +36,7 @@ export class FakeLiveTransport implements LiveTransport {
   conn: number | null = null;
   private inner: Transport | null = null;
   private innerOff: (() => void) | null = null;
-  /** The socket died: sends are lost until the editor connects again. */
+  /** The socket died: sends are lost until the client connects again. */
   private dead = false;
   private readonly frameLs = new Set<(f: ServerFrame) => void>();
   private readonly closeLs = new Set<(e: CloseEvent) => void>();
@@ -49,7 +50,7 @@ export class FakeLiveTransport implements LiveTransport {
   closedByEditor = false;
   /** Resume whatever the server's window (its `since` may then be refused: MPC-E112). */
   resumeAlways = false;
-  /** Every frame the editor handed over (sent or dropped). */
+  /** Every frame the client handed over (sent or dropped). */
   readonly sent: ClientFrame[] = [];
 
   constructor(
@@ -125,7 +126,7 @@ export class FakeLiveTransport implements LiveTransport {
   // ---- what tests do
 
   /** The socket dies: frames to the client in flight are lost; frames to the server in flight
-   * arrive or not (`inboundArrives`); the editor hears of it after `notifyAfter`. */
+   * arrive or not (`inboundArrives`); the client hears of it after `notifyAfter`. */
   drop(inboundArrives = false, notifyAfter = this.host.latency(), late = 0): void {
     if (this.conn === null) return;
     this.host.server.drop(this.conn, inboundArrives, notifyAfter, late);
@@ -185,7 +186,8 @@ export class FakeLiveTransport implements LiveTransport {
   }
 }
 
-/** Timers on the fake clock, for `LiveEditorOptions.timers`. */
+/** Timers on the fake clock (with randomness for a retry's jitter), for a host's timers and
+ * `setDefaultLiveTimers`. */
 export function netTimers(net: Net, random: () => number) {
   return {
     set: (f: () => void, ms: number) => {
@@ -203,7 +205,7 @@ export function netTimers(net: Net, random: () => number) {
   };
 }
 
-/** Let promise callbacks and queued microtasks run (the editor's welcome and flushes). */
+/** Let promise callbacks and queued microtasks run (a welcome and its flushes). */
 export async function microtasks(n = 6): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }

@@ -355,10 +355,12 @@ impl Lens<'_> {
                 who,
                 cursor,
                 version,
+                client,
             } => RosterEvent::Cursor {
                 who: self.who(who),
                 cursor,
                 version,
+                client,
             },
             RosterEvent::CellCursor { who, cell, version } => RosterEvent::CellCursor {
                 who: self.who(who),

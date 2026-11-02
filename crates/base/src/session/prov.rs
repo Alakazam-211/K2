@@ -1,15 +1,15 @@
 //! Provenance of restored text (undo spec v1.8, U23): every live element's **root**.
 //!
 //! Elements are named by the engine's element ID ([`ElemId`]: client and clock, the clock in
-//! the engine's UTF-16 units; a character's ID is its first unit's). An element inserted by
-//! an edit, `write --base`, `replace_text`, `restore`, an import or an external change is
-//! **its own root**. An element an undo, redo or revert inserts puts back an element `d`
-//! that the reversed change removed, and records `root(d)`, path-compressed when it is made:
-//! roots are never chains. Only the kit stamps it (its own undo, redo and revert); nothing
-//! from a client ever does (`sec.client_provenance_refused`).
+//! the engine's units, [`crate::engine::Units`]; a character's ID is its first unit's). An
+//! element inserted by an edit, `write --base`, `replace_text`, `restore`, an import or an
+//! external change is **its own root**. An element an undo, redo or revert inserts puts back
+//! an element `d` that the reversed change removed, and records `root(d)`, path-compressed
+//! when it is made: roots are never chains. Only the kit stamps it (its own undo, redo and
+//! revert); nothing from a client ever does (`sec.client_provenance_refused`).
 //!
 //! **The live map** ([`Prov`]): per text root, runs aligned with the live text, each
-//! `{bytes, units, id, root}` (the character at UTF-16 offset `k` of a run has ID `id + k`
+//! `{bytes, units, id, root}` (the character `k` engine units into a run has ID `id + k`
 //! and, for a restored run, root `root + k`; `root: None` is "its own root"). Runs live in
 //! chunks of at most [`CHUNK`] runs behind `Arc`s: applying a hunk finds its chunk by a scan
 //! of the chunks' byte totals (O(runs / [`CHUNK`])), then splices only the chunks it touches
@@ -34,22 +34,24 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::engine::Units;
 use crate::text::diff::Hunk;
 
-/// An element's ID: the engine's (client, clock); clocks count UTF-16 code units.
+/// An element's ID: the engine's (client, clock); clocks are in the engine's units
+/// ([`crate::engine::Units`]: UTF-16 code units on Yrs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub(crate) struct ElemId {
     pub client: u64,
-    pub clock: u32,
+    pub clock: u64,
 }
 
 impl ElemId {
-    pub fn new(client: u64, clock: u32) -> Self {
+    pub fn new(client: u64, clock: u64) -> Self {
         Self { client, clock }
     }
 
-    /// The ID `units` UTF-16 units further on in the same client's run.
-    pub fn plus(self, units: u32) -> Self {
+    /// The ID `units` engine units further on in the same client's run.
+    pub fn plus(self, units: u64) -> Self {
         Self {
             client: self.client,
             clock: self.clock + units,
@@ -57,16 +59,18 @@ impl ElemId {
     }
 }
 
-fn units(s: &str) -> u32 {
-    s.encode_utf16().count() as u32
+/// `s`'s length in the doc's engine units (`u`: [`Units`], from [`crate::doc::Doc::units`];
+/// UTF-16 code units on Yrs, scalars on the native engine).
+fn units(u: Units, s: &str) -> u64 {
+    u.of(s)
 }
 
-/// A run of characters: `bytes` of text (`units` UTF-16 units) whose character at UTF-16
-/// offset `k` has ID (or root) `start + k`.
+/// A run of characters: `bytes` of text (`units` engine units) whose character `k` units
+/// in has ID (or root) `start + k`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdRun {
     pub bytes: u32,
-    pub units: u32,
+    pub units: u64,
     pub start: ElemId,
 }
 
@@ -77,11 +81,11 @@ pub(crate) struct Ids(Vec<IdRun>);
 
 impl Ids {
     /// `text`'s characters as one run of consecutive IDs from `start`.
-    pub fn fresh(text: &str, start: ElemId) -> Self {
+    pub fn fresh(u: Units, text: &str, start: ElemId) -> Self {
         let mut out = Self::default();
         out.push(IdRun {
             bytes: text.len() as u32,
-            units: units(text),
+            units: units(u, text),
             start,
         });
         out
@@ -134,7 +138,7 @@ impl Ids {
     }
 
     /// The IDs of `text[lo..hi]`, `text` being the text these are aligned with.
-    pub fn slice(&self, text: &str, lo: usize, hi: usize) -> Ids {
+    pub fn slice(&self, u: Units, text: &str, lo: usize, hi: usize) -> Ids {
         debug_assert_eq!(self.bytes(), text.len(), "ids aligned with their text");
         let mut out = Ids::default();
         let mut at = 0usize;
@@ -148,10 +152,10 @@ impl Ids {
                 continue;
             }
             let (a, b) = (s.max(lo), e.min(hi));
-            let skip = units(&text[s..a]);
+            let skip = units(u, &text[s..a]);
             out.push(IdRun {
                 bytes: (b - a) as u32,
-                units: units(&text[a..b]),
+                units: units(u, &text[a..b]),
                 start: r.start.plus(skip),
             });
         }
@@ -159,15 +163,15 @@ impl Ids {
     }
 
     /// One ID per character of `text` (the text these are aligned with).
-    pub fn chars(&self, text: &str) -> Vec<ElemId> {
+    pub fn chars(&self, u: Units, text: &str) -> Vec<ElemId> {
         debug_assert_eq!(self.bytes(), text.len(), "ids aligned with their text");
         let mut out = Vec::with_capacity(text.len());
         let mut at = 0usize;
         for r in &self.0 {
-            let mut k = 0u32;
+            let mut k = 0u64;
             for ch in text[at..at + r.bytes as usize].chars() {
                 out.push(r.start.plus(k));
-                k += ch.len_utf16() as u32;
+                k += u.of_char(ch);
             }
             at += r.bytes as usize;
         }
@@ -175,12 +179,12 @@ impl Ids {
     }
 
     /// From one ID per character of `text`.
-    pub fn from_chars(text: &str, ids: &[ElemId]) -> Ids {
+    pub fn from_chars(u: Units, text: &str, ids: &[ElemId]) -> Ids {
         let mut out = Ids::default();
         for (ch, id) in text.chars().zip(ids) {
             out.push(IdRun {
                 bytes: ch.len_utf8() as u32,
-                units: ch.len_utf16() as u32,
+                units: u.of_char(ch),
                 start: *id,
             });
         }
@@ -190,17 +194,17 @@ impl Ids {
 
     /// These IDs after `hunks` (canonical, on `text`) replaced their ranges with the
     /// elements `inserted` (one per hunk, aligned with its insert).
-    pub fn apply(&self, text: &str, hunks: &[Hunk], inserted: &[Ids]) -> Ids {
+    pub fn apply(&self, u: Units, text: &str, hunks: &[Hunk], inserted: &[Ids]) -> Ids {
         debug_assert_eq!(hunks.len(), inserted.len());
         let mut out = Ids::default();
         let mut at = 0usize;
         for (h, ins) in hunks.iter().zip(inserted) {
-            out.extend(&self.slice(text, at, h.start));
+            out.extend(&self.slice(u, text, at, h.start));
             debug_assert_eq!(ins.bytes(), h.insert.len());
             out.extend(ins);
             at = h.end;
         }
-        out.extend(&self.slice(text, at, text.len()));
+        out.extend(&self.slice(u, text, at, text.len()));
         out
     }
 }
@@ -228,23 +232,23 @@ pub(crate) fn coalesce_with(hunks: Vec<Hunk>, ids: Vec<Ids>) -> (Vec<Hunk>, Vec<
     (hs, is)
 }
 
-/// One run of live text: `bytes` (`units` UTF-16 units) whose character at UTF-16 offset `k`
-/// has ID `id + k` and root `root + k` (`None`: each is its own root).
+/// One run of live text: `bytes` (`units` engine units) whose character `k` units in has ID
+/// `id + k` and root `root + k` (`None`: each is its own root).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Run {
     pub bytes: u32,
-    pub units: u32,
+    pub units: u64,
     pub id: ElemId,
     pub root: Option<ElemId>,
 }
 
 impl Run {
     /// The part of this run from byte `a` to byte `b` of it; `text` is its text.
-    fn slice(&self, text: &str, a: usize, b: usize) -> Run {
-        let skip = units(&text[..a]);
+    fn slice(&self, u: Units, text: &str, a: usize, b: usize) -> Run {
+        let skip = units(u, &text[..a]);
         Run {
             bytes: (b - a) as u32,
-            units: units(&text[a..b]),
+            units: units(u, &text[a..b]),
             id: self.id.plus(skip),
             root: self.root.map(|r| r.plus(skip)),
         }
@@ -287,12 +291,12 @@ pub(crate) struct TextMap {
 }
 
 /// At most this many bytes per run of a [`TextMap`]: cutting a run inside costs a scan of
-/// its text up to the cut (its UTF-16 offset), so a long run would make one keystroke
+/// its text up to the cut (its offset in engine units), so a long run would make one keystroke
 /// inside it cost the run's length.
 pub(crate) const MAX_RUN: usize = 4096;
 
 /// `r` (whose text is `text`) cut into runs of at most about [`MAX_RUN`] bytes.
-fn split_long(text: &str, r: Run, out: &mut Vec<Run>) {
+fn split_long(u: Units, text: &str, r: Run, out: &mut Vec<Run>) {
     if (r.bytes as usize) <= MAX_RUN {
         push_run(out, r);
         return;
@@ -304,7 +308,7 @@ fn split_long(text: &str, r: Run, out: &mut Vec<Run>) {
             b -= 1;
         }
         // a piece starts a new run: never joined back past the bound
-        out.push(r.slice(text, a, b));
+        out.push(r.slice(u, text, a, b));
         a = b;
     }
 }
@@ -335,12 +339,12 @@ fn chunked(runs: Vec<Run>) -> Vec<Arc<Chunk>> {
 
 impl TextMap {
     /// From runs covering `text` exactly.
-    pub fn from_runs(text: &str, runs: impl IntoIterator<Item = Run>) -> Self {
+    pub fn from_runs(u: Units, text: &str, runs: impl IntoIterator<Item = Run>) -> Self {
         let mut v = Vec::new();
         let mut at = 0usize;
         for r in runs {
             let e = at + r.bytes as usize;
-            split_long(&text[at..e], r, &mut v);
+            split_long(u, &text[at..e], r, &mut v);
             at = e;
         }
         debug_assert_eq!(at, text.len(), "the runs cover the text");
@@ -368,7 +372,7 @@ impl TextMap {
     }
 
     /// The runs of `text[lo..hi]` (`text`: the live text this map is aligned with), clipped.
-    pub fn query(&self, text: &str, lo: usize, hi: usize) -> Vec<Run> {
+    pub fn query(&self, u: Units, text: &str, lo: usize, hi: usize) -> Vec<Run> {
         debug_assert_eq!(self.bytes(), text.len(), "the map is aligned with the text");
         let mut out = Vec::new();
         let mut at = 0usize;
@@ -390,21 +394,21 @@ impl TextMap {
                     break;
                 }
                 let (a, b) = (s.max(lo), e.min(hi));
-                push_run(&mut out, r.slice(&text[s..e], a - s, b - s));
+                push_run(&mut out, r.slice(u, &text[s..e], a - s, b - s));
             }
         }
         out
     }
 
     /// The roots of `text[lo..hi]`.
-    pub fn roots(&self, text: &str, lo: usize, hi: usize) -> Ids {
-        Ids::from_runs(self.query(text, lo, hi).iter().map(Run::root_run))
+    pub fn roots(&self, u: Units, text: &str, lo: usize, hi: usize) -> Ids {
+        Ids::from_runs(self.query(u, text, lo, hi).iter().map(Run::root_run))
     }
 
     /// Replace `before[s..e]` with the runs `ins`; returns the runs removed. `before` is the
     /// text this map is aligned with up to `e` (the caller applies hunks back to front, so
     /// everything before `e` is still `before`'s).
-    fn splice(&mut self, before: &str, s: usize, e: usize, ins: &[Run]) -> Vec<Run> {
+    fn splice(&mut self, u: Units, before: &str, s: usize, e: usize, ins: &[Run]) -> Vec<Run> {
         // the chunks [ci, cj) holding every run that meets [s, e), and the insertion point
         // (at the text's end: the last chunk)
         let n = self.chunks.len();
@@ -448,13 +452,13 @@ impl TextMap {
                     if a == rs && b == re {
                         return r;
                     }
-                    let skip = units(&before[rs..a]);
+                    let skip = units(u, &before[rs..a]);
                     Run {
                         bytes: (b - a) as u32,
                         units: if b == re {
                             r.units - skip
                         } else {
-                            units(&before[a..b])
+                            units(u, &before[a..b])
                         },
                         id: r.id.plus(skip),
                         root: r.root.map(|x| x.plus(skip)),
@@ -506,7 +510,7 @@ impl TextMap {
 /// The live restored elements by root, as runs keyed by their first root: `(units, first
 /// live ID)`. The element of root `r` inside the run starting at root `s` is `live + (r - s)`.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ByRoot(BTreeMap<ElemId, (u32, ElemId)>);
+pub(crate) struct ByRoot(BTreeMap<ElemId, (u64, ElemId)>);
 
 impl ByRoot {
     /// The live element restoring root `r`, if any.
@@ -516,7 +520,7 @@ impl ByRoot {
     }
 
     /// Is any root of `start .. start + units` live here?
-    pub fn any(&self, start: ElemId, units: u32) -> bool {
+    pub fn any(&self, start: ElemId, units: u64) -> bool {
         let end = start.plus(units);
         if self.get(start).is_some() {
             return true;
@@ -527,7 +531,7 @@ impl ByRoot {
             .is_some_and(|(s, _)| s.client == start.client)
     }
 
-    fn insert(&mut self, root: ElemId, units: u32, live: ElemId) {
+    fn insert(&mut self, root: ElemId, units: u64, live: ElemId) {
         if units == 0 {
             return;
         }
@@ -539,7 +543,7 @@ impl ByRoot {
         self.0.insert(root, (units, live));
     }
 
-    fn remove(&mut self, root: ElemId, units: u32, live: ElemId) {
+    fn remove(&mut self, root: ElemId, units: u64, live: ElemId) {
         let end = root.clock + units;
         let mut keys: Vec<ElemId> = Vec::new();
         if let Some((s, (n, _))) = self.0.range(..root).next_back() {
@@ -552,7 +556,7 @@ impl ByRoot {
                 .range(root..ElemId::new(root.client, end))
                 .map(|(s, _)| *s),
         );
-        let mut got = 0u32;
+        let mut got = 0u64;
         for s in keys {
             let (n, l) = self.0.remove(&s).expect("just found");
             let (a, b) = (s.clock.max(root.clock), (s.clock + n).min(end));
@@ -577,8 +581,8 @@ impl ByRoot {
 
     /// Normalised: each run joined with the next when both its roots and its live IDs
     /// continue it.
-    fn normal(&self) -> Vec<(ElemId, u32, ElemId)> {
-        let mut out: Vec<(ElemId, u32, ElemId)> = Vec::new();
+    fn normal(&self) -> Vec<(ElemId, u64, ElemId)> {
+        let mut out: Vec<(ElemId, u64, ElemId)> = Vec::new();
         for (s, (n, l)) in &self.0 {
             match out.last_mut() {
                 Some((ps, pn, pl))
@@ -610,8 +614,10 @@ pub(crate) struct Inserted {
 }
 
 /// The live map of a doc's text roots, and the index of its live restored elements.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Prov {
+    /// The doc's engine units (C2: from [`crate::doc::Doc::units`], never assumed).
+    units: Units,
     texts: Vec<(&'static str, TextMap)>,
     by_root: ByRoot,
     /// Which build this map descends from (unique per [`Prov::build`]), and how many
@@ -627,11 +633,11 @@ pub(crate) type ProvToken = (u64, u64);
 impl Prov {
     /// Build from each text root's live text and runs (`(root, text, runs)`, the runs
     /// covering the text).
-    pub fn build(texts: Vec<(&'static str, &str, Vec<Run>)>) -> Self {
+    pub fn build(units: Units, texts: Vec<(&'static str, &str, Vec<Run>)>) -> Self {
         let mut by_root = ByRoot::default();
         let mut out = Vec::with_capacity(texts.len());
         for (name, text, runs) in texts {
-            let map = TextMap::from_runs(text, runs);
+            let map = TextMap::from_runs(units, text, runs);
             for c in &map.chunks {
                 for r in &c.runs {
                     if let Some(root) = r.root {
@@ -643,11 +649,23 @@ impl Prov {
         }
         static LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            units,
             texts: out,
             by_root,
             lineage: LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             applied: 0,
         }
+    }
+
+    /// An empty map counting in `units` (no text roots): `plan`'s tests of v1.7's merge.
+    #[cfg(test)]
+    pub fn empty(units: Units) -> Self {
+        Self::build(units, Vec::new())
+    }
+
+    /// The doc's engine units this map counts in.
+    pub fn units(&self) -> Units {
+        self.units
     }
 
     /// This map's identity now: its build, and the changes applied since.
@@ -681,13 +699,13 @@ impl Prov {
     /// The live runs of `text[lo..hi]` of text root `root` (`text` its live text).
     pub fn query(&self, root: &str, text: &str, lo: usize, hi: usize) -> Vec<Run> {
         self.map(root)
-            .map_or_else(Vec::new, |m| m.query(text, lo, hi))
+            .map_or_else(Vec::new, |m| m.query(self.units, text, lo, hi))
     }
 
     /// The roots of `text[lo..hi]` of text root `root`.
     pub fn roots(&self, root: &str, text: &str, lo: usize, hi: usize) -> Ids {
         self.map(root)
-            .map_or_else(Ids::default, |m| m.roots(text, lo, hi))
+            .map_or_else(Ids::default, |m| m.roots(self.units, text, lo, hi))
     }
 
     /// Is any root of the run `r` live (a restoration of it is)?
@@ -709,7 +727,7 @@ impl Prov {
         let runs: Vec<Vec<Run>> = hunks
             .iter()
             .zip(ins)
-            .map(|(h, x)| new_runs(&h.insert, x))
+            .map(|(h, x)| new_runs(self.units, &h.insert, x))
             .collect();
         self.apply_runs(root, before, hunks, &runs);
     }
@@ -735,7 +753,7 @@ impl Prov {
                         // planted: a restored element blamed to its restorer, not its root
                         r.root = None;
                     }
-                    split_long(&h.insert[at..e], r, &mut v);
+                    split_long(self.units, &h.insert[at..e], r, &mut v);
                     at = e;
                 }
                 debug_assert_eq!(at, h.insert.len(), "inserted runs cover the insert");
@@ -747,7 +765,8 @@ impl Prov {
             } else {
                 h.end
             };
-            let removed = self.texts[k].1.splice(before, h.start, end, &runs);
+            let u = self.units;
+            let removed = self.texts[k].1.splice(u, before, h.start, end, &runs);
             if mutant != Some(Mutant::MissDeletionInIndex) {
                 for r in removed {
                     if let Some(root) = r.root {
@@ -843,6 +862,7 @@ fn mutant() -> Option<Mutant> {
 /// an element a row covers restores the row's root at its offset; every other element is
 /// its own root (it was never restored, or was made before store format 5).
 pub(crate) fn live_runs(
+    u: Units,
     text: &str,
     blame: &[crate::engine::BlameRun],
     rows: &[Vec<crate::store::ProvRow>],
@@ -861,17 +881,17 @@ pub(crate) fn live_runs(
                 .get(k)
                 .filter(|r| r.start <= clock && clock < r.end)
                 .map(|r| ElemId::new(r.root.0, r.root.1 + (clock - r.start)));
-            let u = ch.len_utf16() as u32;
+            let n = u.of_char(ch);
             push_run(
                 &mut out,
                 Run {
                     bytes: ch.len_utf8() as u32,
-                    units: u,
+                    units: n,
                     id: ElemId::new(b.client, clock),
                     root,
                 },
             );
-            clock += u;
+            clock += n;
         }
         at += b.bytes;
     }
@@ -879,18 +899,18 @@ pub(crate) fn live_runs(
 }
 
 /// The runs a hunk inserts: one per root run (restorations), or one fresh run.
-fn new_runs(text: &str, x: &Inserted) -> Vec<Run> {
+fn new_runs(u: Units, text: &str, x: &Inserted) -> Vec<Run> {
     match &x.roots {
         None if text.is_empty() => Vec::new(),
         None => vec![Run {
             bytes: text.len() as u32,
-            units: units(text),
+            units: units(u, text),
             id: x.id,
             root: None,
         }],
         Some(roots) => {
             debug_assert_eq!(roots.bytes(), text.len(), "restored roots fit the text");
-            let mut at = 0u32;
+            let mut at = 0u64;
             roots
                 .runs()
                 .iter()
@@ -911,14 +931,18 @@ fn new_runs(text: &str, x: &Inserted) -> Vec<Run> {
 
 /// Each character of `text`, its element ID, from the engine's blame runs covering it;
 /// `None` when the runs don't cover the text exactly.
-pub(crate) fn elem_ids(text: &str, runs: &[crate::engine::BlameRun]) -> Option<Vec<ElemId>> {
+pub(crate) fn elem_ids(
+    u: Units,
+    text: &str,
+    runs: &[crate::engine::BlameRun],
+) -> Option<Vec<ElemId>> {
     let mut out = Vec::with_capacity(text.len());
     let mut at = 0usize;
     for r in runs {
         let mut clock = r.clock;
         for ch in text.get(at..at + r.bytes)?.chars() {
             out.push(ElemId::new(r.client, clock));
-            clock += ch.len_utf16() as u32;
+            clock += u.of_char(ch);
         }
         at += r.bytes;
     }
@@ -1001,7 +1025,7 @@ mod tests {
     /// names others in repeated text; and refuses IDs that don't describe a merge.
     #[test]
     fn identity_hunks_follow_the_elements() {
-        let id = |c: u64, k: u32| ElemId::new(c, k);
+        let id = |c: u64, k: u64| ElemId::new(c, k);
         // old `A B A` (a0's B at 2); the merge put a copy `B A` before a0's B: `A [B A] B A`
         let old = "ABA";
         let old_ids = [id(1, 0), id(7, 0), id(1, 1)];
@@ -1038,6 +1062,9 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// The units these tests count in (Yrs's: an astral character is two).
+    const U: Units = Units::Utf16;
+
     /// The naive model: one `(char, id, root)` per live character.
     type El = (char, ElemId, Option<ElemId>);
 
@@ -1048,7 +1075,7 @@ mod tests {
             let mut k = 0;
             for ch in text[at..at + r.bytes as usize].chars() {
                 out.push((ch, r.id.plus(k), r.root.map(|x| x.plus(k))));
-                k += ch.len_utf16() as u32;
+                k += U.of_char(ch);
             }
             at += r.bytes as usize;
         }
@@ -1059,22 +1086,22 @@ mod tests {
     fn ids_slice_apply_and_normalise() {
         let a = ElemId::new(5, 10);
         let t = "aé🎉b";
-        let ids = Ids::fresh(t, a);
+        let ids = Ids::fresh(U, t, a);
         assert_eq!(ids.runs().len(), 1);
-        let s = ids.slice(t, 1, 7); // "é🎉"
+        let s = ids.slice(U, t, 1, 7); // "é🎉"
         assert_eq!(s.runs()[0].start, a.plus(1));
         assert_eq!(s.runs()[0].units, 3);
         // per-character runs normalise back to one
-        let chars = ids.chars(t);
-        assert_eq!(Ids::from_chars(t, &chars), ids);
+        let chars = ids.chars(U, t);
+        assert_eq!(Ids::from_chars(U, t, &chars), ids);
         // applying a hunk with its own inserted ids
         let h = vec![Hunk {
             start: 1,
             end: 3,
             insert: "XY".into(),
         }];
-        let x = Ids::fresh("XY", ElemId::new(9, 0));
-        let got = ids.apply(t, &h, &[x]);
+        let x = Ids::fresh(U, "XY", ElemId::new(9, 0));
+        let got = ids.apply(U, t, &h, &[x]);
         assert_eq!(got.bytes(), "aXY🎉b".len());
         assert_eq!(got.runs().len(), 3);
     }
@@ -1110,16 +1137,19 @@ mod tests {
     fn long_runs_are_cut_and_chunks_stay_full() {
         let text: String = "é".repeat(3 * MAX_RUN);
         let id = ElemId::new(4, 0);
-        let mut p = Prov::build(vec![(
-            "r",
-            text.as_str(),
-            vec![Run {
-                bytes: text.len() as u32,
-                units: units(&text),
-                id,
-                root: None,
-            }],
-        )]);
+        let mut p = Prov::build(
+            U,
+            vec![(
+                "r",
+                text.as_str(),
+                vec![Run {
+                    bytes: text.len() as u32,
+                    units: units(U, &text),
+                    id,
+                    root: None,
+                }],
+            )],
+        );
         let runs = p.query("r", &text, 0, text.len());
         assert!(runs.len() >= 6, "{} runs", runs.len());
         let roots = p.roots("r", &text, 1000, 2000);
@@ -1144,7 +1174,7 @@ mod tests {
                 insert: "x".into(),
             };
             let x = Inserted {
-                id: ElemId::new(100 + k as u64, k as u32),
+                id: ElemId::new(100 + k as u64, k as u64),
                 roots: None,
             };
             p.apply("r", &text, std::slice::from_ref(&h), &[x]);
@@ -1174,15 +1204,15 @@ mod tests {
         #[test]
         fn map_equals_the_naive_model(seed in "[ab\né]{0,6}", ops in ops()) {
             let mut text = seed.clone();
-            let mut next = 0u32;
-            let mut alloc = |n: u32| { let c = next; next += n; ElemId::new(3, c) };
-            let first = alloc(units(&seed));
-            let mut p = Prov::build(vec![("r", seed.as_str(), vec![Run {
-                bytes: seed.len() as u32, units: units(&seed), id: first, root: None,
+            let mut next = 0u64;
+            let mut alloc = |n: u64| { let c = next; next += n; ElemId::new(3, c) };
+            let first = alloc(units(U, &seed));
+            let mut p = Prov::build(U, vec![("r", seed.as_str(), vec![Run {
+                bytes: seed.len() as u32, units: units(U, &seed), id: first, root: None,
             }].into_iter().filter(|r| r.bytes > 0).collect())]);
             let mut model: Vec<El> = flat(&seed, &p.query("r", &text, 0, text.len()));
             // roots given out once, so restorations never repeat a root (I1)
-            let mut root_clock = 0u32;
+            let mut root_clock = 0u64;
             for (pos, del, ins, restore) in ops {
                 let chars: Vec<usize> = text.char_indices().map(|(i, _)| i)
                     .chain(std::iter::once(text.len())).collect();
@@ -1190,21 +1220,21 @@ mod tests {
                 let ei = (si + del as usize).min(chars.len() - 1);
                 let (s, e) = (chars[si], chars[ei]);
                 if s == e && ins.is_empty() { continue; }
-                let n = units(&ins);
+                let n = units(U, &ins);
                 let id = alloc(n);
                 let roots = restore.then(|| {
-                    let r = Ids::fresh(&ins, ElemId::new(99, root_clock));
+                    let r = Ids::fresh(U, &ins, ElemId::new(99, root_clock));
                     root_clock += n;
                     r
                 });
                 let h = Hunk { start: s, end: e, insert: ins.clone() };
                 p.apply("r", &text, std::slice::from_ref(&h), &[Inserted { id, roots: roots.clone() }]);
                 let new_els: Vec<El> = {
-                    let rr = roots.as_ref().map(|r| r.chars(&ins));
+                    let rr = roots.as_ref().map(|r| r.chars(U, &ins));
                     let mut k = 0;
                     ins.chars().enumerate().map(|(i, ch)| {
                         let el = (ch, id.plus(k), rr.as_ref().map(|v| v[i]));
-                        k += ch.len_utf16() as u32;
+                        k += U.of_char(ch);
                         el
                     }).collect()
                 };
@@ -1219,9 +1249,9 @@ mod tests {
                     }
                 }
                 let live: usize = model.iter().filter(|x| x.2.is_some()).count();
-                let indexed: u32 = p.by_root.0.values().map(|(n, _)| *n).sum();
-                let live_units: u32 = model.iter().filter(|x| x.2.is_some())
-                    .map(|x| x.0.len_utf16() as u32).sum();
+                let indexed: u64 = p.by_root.0.values().map(|(n, _)| *n).sum();
+                let live_units: u64 = model.iter().filter(|x| x.2.is_some())
+                    .map(|x| U.of_char(x.0)).sum();
                 prop_assert_eq!(indexed, live_units, "{} live restored chars", live);
                 // a sub-range query is the model's slice
                 let lo = chars[si.min(chars.len() - 1)].min(text.len());
@@ -1245,9 +1275,9 @@ mod tests {
         ) {
             const C: u64 = 3;
             let mut text = seed.clone();
-            let mut clock = units(&seed);
-            let mut p = Prov::build(vec![("r", seed.as_str(), vec![Run {
-                bytes: seed.len() as u32, units: units(&seed), id: ElemId::new(C, 0), root: None,
+            let mut clock = units(U, &seed);
+            let mut p = Prov::build(U, vec![("r", seed.as_str(), vec![Run {
+                bytes: seed.len() as u32, units: units(U, &seed), id: ElemId::new(C, 0), root: None,
             }].into_iter().filter(|r| r.bytes > 0).collect())]);
             let mut model: Vec<El> = flat(&seed, &p.query("r", &text, 0, text.len()));
             for raw in ops {
@@ -1279,12 +1309,12 @@ mod tests {
                     let mut k = 0;
                     let els: Vec<El> = s.chars().map(|ch| {
                         let el = (ch, ElemId::new(C, c + k), None);
-                        k += ch.len_utf16() as u32;
+                        k += U.of_char(ch);
                         el
                     }).collect();
                     model.splice(*si..*ei, els);
                 }
-                clock += hunks.iter().map(|h| units(&h.insert)).sum::<u32>();
+                clock += hunks.iter().map(|h| units(U, &h.insert)).sum::<u64>();
                 text = crate::text::diff::apply(&text, &hunks);
                 let got = flat(&text, &p.query("r", &text, 0, text.len()));
                 prop_assert_eq!(&got, &model);

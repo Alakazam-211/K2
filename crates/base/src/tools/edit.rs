@@ -203,6 +203,31 @@ impl PosEdit {
         })
     }
 
+    /// Its positional address as the caller gave it (`--lines 3,4`), for K-ADDR-3: every
+    /// form but `append`, `--line $`, `--after $` and `--after 0` (the start and the end are
+    /// the same in every version).
+    pub(crate) fn positional(&self) -> Option<String> {
+        let n = |l: &LineNo| match l {
+            LineNo::N(n) => n.to_string(),
+            LineNo::Last => "$".to_owned(),
+        };
+        let lc = |p: &LineCol| format!("{}:{}", p.line, p.col);
+        match self {
+            PosEdit::Append { .. }
+            | PosEdit::InsertLine(LineNo::Last)
+            | PosEdit::InsertAfter(LineNo::Last | LineNo::N(0)) => None,
+            PosEdit::InsertLine(l) => Some(format!("--line {}", n(l))),
+            PosEdit::InsertAfter(l) => Some(format!("--after {}", n(l))),
+            PosEdit::InsertAt(p) => Some(format!("--at {}", lc(p))),
+            PosEdit::ReplaceLines(sp) | PosEdit::DeleteLines(sp) => {
+                Some(format!("--lines {},{}", n(&sp.first), n(&sp.last)))
+            }
+            PosEdit::ReplaceRange(a, b) | PosEdit::DeleteRange(a, b) => {
+                Some(format!("--range {}-{}", lc(a), lc(b)))
+            }
+        }
+    }
+
     /// The new text.
     pub(crate) fn apply(&self, text: &str, stdin: &str) -> Result<String, ToolError> {
         let ls = lines(text);

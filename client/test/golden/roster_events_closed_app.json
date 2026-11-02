@@ -20,7 +20,20 @@
             "anchor_lc": "4:1",
             "head_lc": "4:1"
           },
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": {
+                "root": "source",
+                "anchor": 28,
+                "head": 28,
+                "version": 7,
+                "anchor_lc": "4:1",
+                "head_lc": "4:1"
+              }
+            }
+          ]
         },
         {
           "handle": "p3",
@@ -37,7 +50,20 @@
             "anchor_lc": "7:1",
             "head_lc": "7:1"
           },
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 3,
+              "cursor": {
+                "root": "source",
+                "anchor": 42,
+                "head": 42,
+                "version": 7,
+                "anchor_lc": "7:1",
+                "head_lc": "7:1"
+              }
+            }
+          ]
         },
         {
           "handle": "p2",
@@ -47,7 +73,13 @@
           "role": "viewer",
           "away": false,
           "cursor": null,
-          "rights": "edit"
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 4,
+              "cursor": null
+            }
+          ]
         }
       ],
       "watching": 0,
@@ -75,7 +107,7 @@
           "not_shown": 0,
           "withheld": false,
           "no_history": true,
-          "message": "An outside save may have removed your text (L8). It read \"by the widget\\n\"."
+          "message": "An outside save may have removed your text (L8). Someone with history access can restore it from version 2. It read \"by the widget\\n\"."
         }
       ]
     },

@@ -141,12 +141,23 @@ impl DocStore {
     /// checks it before changing anything (v0.9.5), so it refuses cleanly instead of purging
     /// rows and then failing to rewrite the file.
     pub fn check_rewritable(&self) -> Result<(), StoreError> {
+        self.check_rewritable_format()?;
         let g = self.db.read().unwrap_or_else(|p| p.into_inner());
         let r = g.begin_read()?;
         match unknown_table(&r)? {
             Some(table) => Err(StoreError::NewerData { table }),
             None => Ok(()),
         }
+    }
+
+    /// [`StoreError::RewriteNewer`] for a store of a format this build reads but doesn't
+    /// write (above [`super::STORE_FORMAT`]). Read-only.
+    fn check_rewritable_format(&self) -> Result<(), StoreError> {
+        let found = self.format()?;
+        if found > super::STORE_FORMAT {
+            return Err(StoreError::RewriteNewer { found });
+        }
+        Ok(())
     }
 
     /// Test-only: add a table this kit doesn't know (as a newer kit would), with one row, through redb's normal API; a multimap table when
@@ -173,6 +184,9 @@ impl DocStore {
     /// before it. Every other store call waits while it runs (a full copy). A purge calls
     /// it; a host may too (it also returns free space to the file system).
     pub fn rewrite_file(&self) -> Result<RewriteReport, StoreError> {
+        // a store of a format this build doesn't write (the native engine's): refused before
+        // anything changes (v0.10.1)
+        self.check_rewritable_format()?;
         let mut g = self.db.write().unwrap_or_else(|p| p.into_inner());
         let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let bytes_before = size(&self.path);

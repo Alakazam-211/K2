@@ -2,6 +2,7 @@ MPC-E304 bad_claim (presence and claims)
 exit:     2
 message:  bad claim: {reason}
 next:     The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.
+step:     claim --release; why: The claim call isn't valid as given; fix its arguments, or release all of your claims.
 rule:     A13 (claims)
 verbs:    claim; claim --renew; claim --release
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "bad claim: {reason}",
   "next": "The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.",
+  "next_step": {
+    "verb": "claim --release",
+    "args": [],
+    "why": "The claim call isn't valid as given; fix its arguments, or release all of your claims."
+  },
   "rule": "A13 (claims)",
   "verbs": ["claim", "claim --renew", "claim --release"],
   "returned_by": ["claim", "claim --renew", "claim --release"],

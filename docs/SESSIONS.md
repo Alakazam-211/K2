@@ -43,17 +43,38 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
      `binary`, `mixed_line_endings`). Nothing is stored.
    - `NotFound`: no stored doc and no bytes.
    - `PackMismatch`: the stored doc belongs to another pack.
+   - `EngineMismatch { stored, stored_format, engine, engine_format }` (v0.10.1): the stored
+     doc's engine stamp names another engine, or another stored-state format, than this
+     build runs. Nothing of it is read and nothing changes (`MPC-E520`, exit 6). See
+     [The engine stamp](#the-engine-stamp-v099).
 
    `open_file(pack, &key, path, root)` is the same for a doc that lives in a file, which
    the session then keeps in sync ([Disk sync](#disk-sync)). `open` stays for docs without a
    file (tests, in-memory use).
-3. Join to get a **connection**. Both calls return `Joined { conn: ConnId, client, version }`.
+3. Join to get a **connection**. Each call returns `Joined { conn: ConnId, client, version,
+   replaced }` (`replaced` is `None` except from `join_replacing`).
    - `join(participant, Stay)` always opens a new connection. Use it for anything with its own
      lifetime: a tab's socket (`Stay::Held`), `watch` or `open` (`Stay::Held`).
    - `join_shared(participant, Stay)` reuses the pid's existing shared connection with the same
      `via`, or opens one. Use it for one-shot verbs (`Stay::UntilIdle`), so an agent running many
      verbs keeps one connection and one client ID. Every client ID stays in the doc's state
      for good.
+   - `join_replacing(participant, Stay, prev: ClientId)` (v0.10.1) is `join` for a reconnect:
+     it also closes the connection of this doc holding client ID `prev`, when that one is the
+     same pid's, as `leave` closes it (claims end, caret gone, subscriptions closed), under
+     the same lock, so nothing reaches the old connection between; the pid stays present
+     (no participant `Left`). `replaced` names the closed connection. A `prev` no present
+     connection holds, or another pid's, is ignored silently: that connection is untouched
+     and the call is a plain `join` (`replaced: None`).
+   - `join_with(participant, Stay, &JoinOptions)` (v0.10.1) is either, with options:
+     `JoinOptions::label("another tab")` labels the connection on the roster (its `Device`;
+     host text, never doc text: control characters dropped, trimmed, at most
+     `DEVICE_LABEL_MAX` = 64 characters, never a refusal), and `.shared(true)` is
+     `join_shared`'s reuse (a label given relabels the reused connection).
+     `.replacing(prev)` is `join_replacing`'s close of `prev`, with a label: a replacing join's
+     label is the one given at that join, never the replaced connection's, so a host
+     reconnecting a tab passes its label again (`join_with(.., &JoinOptions::new()
+     .label(l).replacing(prev))`).
 4. Every per-participant call takes the `ConnId`. It is `Copy`, doesn't borrow the session,
    and is unique in the process. A connection that left, expired or was kicked, or that
    belongs to another session or to before an unload, gets `NotJoined { conn }`: join again.
@@ -83,6 +104,27 @@ threads of its own. `recheck_rights()` per session, or `SessionManager::recheck_
 every loaded doc, is the host's periodic rights re-check (PRD §11.2).
 `SessionManager::loaded_keys()` lists the loaded docs (text and tier 0), sorted by space then
 path; it never loads anything.
+
+### The engine stamp (v0.10.1)
+
+Every stored doc records the engine and the stored-state format that wrote it
+(`DocMeta::engine` / `engine_format`: `yrs-0.28` / 2 today; a blob doc's is `none` / 0).
+Since v0.10.1 a text session checks it on every load from the store: `open`, `open_file`,
+the reopen after a promotion, and the reload after a failed store write (if that reload
+is refused, the session closes with `Broken`). The pack is checked first, so a blob doc
+opened by a text pack is still `PackMismatch`.
+
+- **The same engine** is the same family (the name up to its first `-`: `yrs`) **and** the
+  same format. The rest of the name is the library version that wrote the doc, for the
+  record: a library update that keeps the format reads its docs as they are.
+- **An unstamped doc** (an empty `engine`, whatever its format) loads as this engine's.
+  Every store the kit wrote stamps its docs (the stamp has been in the doc record since
+  the first store format), so only a host's own `DocStore::create` or `put_meta` can leave
+  it empty. Loading doesn't restamp it.
+- **Tier 0** reads no engine state (blob versions are bytes), so no stamp applies; a blob
+  doc is known by its pack, `kit:blob`.
+- `Doc::from_store` and `DocStore::load` are below the check: a host that rebuilds a doc
+  from the store itself checks `DocMeta` first.
 
 ## Identity, connections and attribution
 
@@ -488,6 +530,10 @@ versions; everyone who set one, most recent first). Needs read and history.
 
 ## Presence
 
+A reconnect that names its previous connection (`join_replacing`, Lifecycle step 3) keeps the
+pid present: the old connection closes as `leave` closes it, the roster gets no `Left` and no
+`Joined` for the pid.
+
 `roster(conn)` needs read. It has **one entry per participant (pid)**, however many connections
 they have. Editors come first, then viewers, then away participants; within each group the
 order is by first join. Each `RosterEntry` has:
@@ -509,10 +555,28 @@ order is by first join. Each `RosterEntry` has:
   type at its edges stays out, and once its text is all deleted or replaced (an undo of it,
   someone's rewrite) it is gone; it never names a line past the doc's end. An agent's caret is at
   the end of its last edit, so agents have carets in `cursor` too.
+- `devices: Vec<Device>` (v0.10.1, text docs): one `Device { client, cursor, label }` per
+  connection, in join order, each with **its own** caret: the same person in two tabs or on
+  two devices shows each tab's caret to the other. Empty on a grid (its carets stay per
+  participant, `cell`) and for tier 0.
+
+The roster push's `RosterEvent::Cursor` carries `client` (v0.10.1): one event per connection
+whose caret changed in the interval (a connection that left with a caret: `None`), the one
+whose caret is the participant's `cursor` last. When the last of them isn't the participant's
+caret, one more `Cursor` with `client: None` gives it, so a consumer that keeps one caret a
+participant (the last event's) holds `cursor` after every flush, as before.
 
 Carets and views (per connection):
 - `set_cursor(conn, root, anchor: At, head: At)` needs edit. `At::Byte(n)` or
   `At::Line(LineCol { line, col })`, 1-based, with columns counted in characters.
+- `set_cursor_at(conn, root, version, anchor, head)` (v0.10.1): byte offsets of the root's
+  text **at `version`** (a live client's `cursor` frame). Admitted as `set_cursor`; when
+  `version` is behind, the offsets move through the changes since on that root (the window
+  `events_since` reads) with `position::transform` and `Bias::After`, then are set as
+  `set_cursor` sets `At::Byte` (off a boundary after mapping: `MPC-E114`), under one lock.
+  Returns `CursorAtVersion::Set(Cursor)`, or `Dropped(CursorDrop::Ahead)` (a version ahead
+  of the doc's) / `Dropped(CursorDrop::PastWindow)` (the changes since can't be read): nothing
+  set, not an error.
 - `set_view(conn, LineRange)` needs read. Readers use this instead of a caret.
 - Stored positions are byte offsets carried through every change by
   `position::transform`:
@@ -520,12 +584,16 @@ Carets and views (per connection):
   - strictly inside a replaced range: snaps to the hunk's start;
   - after it: shifted.
 - Helpers in `session::position`: `line_col`, `offset`, `line_of`, `line_start`, `line_count`.
+- Every surface's unit (API bytes, `line:col`, byte tools, the hunk channel, the engine's UTF-16,
+  grid addresses), as `capabilities` states it: `docs/POSITIONS.md`.
 
 ## Events
 
 `subscribe(conn)` needs read. It returns a `Receiver<ChangeEvent { version, pid, client, via,
-root, hunks, at_ms, on_behalf_of }>` with one event per root per change. The hunks are in the coordinates of
-the text before the change.
+root, hunks, at_ms, on_behalf_of, kind }>` with one event per root per change. The hunks are in the coordinates of
+the text before the change. `kind` (v0.10.1) is the change record's `ChangeKind` (`Edit`, `Undo`,
+`Redo`, `Revert`, `Restore`, `External`, `Import`; `ChangeKind::as_str` gives the wire's name),
+the same live and from `events_since`, after a restart too.
 - Each receiver queues `subscriber_queue` (1024) events. A receiver that falls that far behind
   is **cut off**: it drains what was queued, then sees the channel disconnected, and should
   re-read and subscribe again.
@@ -872,7 +940,7 @@ right**) and `restore_from` (the same version, to tell someone who does). The ex
 ```text
 An outside save may have removed your text (L2). Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read "the agent's line\n".
 An outside save may have replaced your text (L2). Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read "alpha beta\n"; the file now has "alpha gamma".
-An outside save may have removed your text (L2). It read "sam's line\n".
+An outside save may have removed your text (L2). Someone with history access can restore it from version 41. It read "sam's line\n".
 ... N more characters not shown; version 41 has them.
 ... N more characters not shown; someone with history access can restore it from version 41.
 An outside save may have removed your text (L2). The text is no longer held here. Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since.
@@ -1212,6 +1280,68 @@ tool's "no"). `run_tool` looks a verb up there **only when no kit tool has that 
 `edit_with`, one change, caret at its last hunk, one `undo` reverts it, the same
 `stderr_summary`. The host routes `<host> doc <verb>` to `run_tool` for these as for any tool.
 
+### Addresses: one grammar (K-ADDR-1, K-ADDR-2)
+
+Every verb that names a thing inside a doc parses it with `addr::parse(s, forms)`
+(`crates/base/src/addr.rs`), in one grammar whose forms are syntactically distinct:
+
+| Form | Syntax | Example | Class |
+|---|---|---|---|
+| native ID, scoped | `@<kind>:<id>[/<kind>:<id>]…` | `@sld:256/sp:4` | the format's own |
+| minted key | `@k:<key>` (also `key:<key>`) | `@k:r17` | durable |
+| Nth | `#N` (from 1) | `#3` | positional |
+| line | `LN` (from 1) | `L12` | positional |
+| forced name | `name:<text>` | `name:city` | counts only when unique |
+| bare word | anything else | `city`, `r17`, `2024` | the context's key, else a unique name |
+
+`forms` (`addr::Forms`) says which of native IDs, `#N` and `LN` the context has; elsewhere
+those spellings are bare words (a grid's columns have no lines and no native IDs, so a header
+named `L3` or `@timestamp` is a name). **A number never falls back to an index**: `2024` is a
+key or a name, never the 2024th anything. The grid verbs read rows as keys, `#N`, `LN` and
+`--where`, columns as keys, `#N`, names and words (`table::verbs`).
+
+**Ambiguity is refused with the candidates** (K-ADDR-2): a name, a `--where` or a duplicated
+ID that matches two or more things is never resolved to the first (or the topmost). The verb
+returns `tools::ToolError::Address` (exit 2, **usage, never a hold**: a host must not print a
+permission line for it) carrying `MPC-E170 ambiguous_address`; its message is the verb's own
+line (a grid's lists the keys) and `details` is `{"what", "given", "candidates": [{"address",
+"position"}]}`: each candidate's most durable address (`@k:c2`) and where it is now (`#2`).
+A pack's verbs build it with `addr::ambiguous(message, what, given, &candidates)` and
+`ToolError::address(report)`; `addr::unique` is the one-or-refuse lookup. The other address
+ids are allocated now and returned from the releases that need them: `MPC-E171
+positional_needs_version` (K-ADDR-3), `MPC-E172 address_not_found` (`node`, K-READ-1) and
+`MPC-E173 stale_cursor` (K-READ-2, exit 1).
+
+### Positions are bound to a version (K-ADDR-3, R-1, R-2)
+
+A position (`#N`, `LN`, a line or range, a pack's "the Nth match") means something only in
+one version, so an **agent's** edit that uses one names that version:
+
+- **Grid edits (R-1):** `#N` and `LN` (rows, columns, `--at #N`, `--to #N`, a cell's `R,C`,
+  `--where`'s column) count in the edit's `--base` version, not the live table: a row or
+  column someone inserted or moved after the agent's read never changes the target. The
+  element found there must still be live (exit 4 otherwise, as for a key). Keys and names
+  resolve live. A base the kit no longer holds (live, a recent read, a stored version) is
+  `SessionError::BaseExpired`, exit 8, `MPC-E112`, for a positional edit only; under
+  `--if-version V` the live table is V. Agents' grid edits already need one of the two
+  (`MPC-E801`).
+- **Text edits and pack verbs (R-2):** `insert --line/--after/--at`, `replace` and `delete`
+  with `--lines` or `--range`, a `sed -i` script with a line-number address, and a pack verb's
+  declared positional address (`PackVerb::positional(find)`, e.g. Markdown's `--nth K`) by an
+  agent with no `--if-version`: `ToolOptions::positional` decides. `PositionalMode::Warn`
+  (this release's default, `tools::POSITIONAL_DEFAULT`) applies it as before and adds one line
+  to `ToolOutput::warnings`, for stderr:
+
+  `note: --lines 3,4 is a position, and this edit names no version: it applied to the live
+  text; a later release refuses it (positional_needs_version, MPC-E171). Pass --if-version
+  with the version you read, or name the target by key.`
+
+  `PositionalMode::Refuse` refuses it: `ToolError::Address` with `MPC-E171`, exit 2, nothing
+  applied, `details.address` and `details.verb`. **The next kit release flips
+  `POSITIONAL_DEFAULT` to `Refuse`.** `append`, `--line $`, `--after $`, `--after 0`, exact
+  `replace`, `patch` and pattern-addressed `sed -i` are not positions. People's edits are never
+  checked: they act on what they see.
+
 ## Status and the pool
 
 - `status()` is metadata only and needs no connection. It returns
@@ -1518,6 +1648,7 @@ Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amend
 | `Declined(Declined)` | file can't be live, or live editing is off | 4 or "opens as today" |
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
+| `EngineMismatch { stored, stored_format, engine, engine_format }` | the stored doc was written by another engine, or another stored-state format, than this build runs; not loaded, nothing changed (v0.10.1). Error id `MPC-E520` `engine_mismatch` | 6 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
 | `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id `MPC-E152` `unaccepted` (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
 | `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id `MPC-E518` `quarantined` (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
@@ -2401,7 +2532,7 @@ Changes made before v0.3.0 have no clock rows either. No new dependency.
 
 **Behaviour:** none changes for existing calls.
 
-**Hosts:** route `k2 doc blame [-L a,b]` to `Session::blame` (history right) and print
+**Hosts:** route the `blame [-L a,b]` verb to `Session::blame` (history right) and print
 `Blame::render` with your name lookup (or `porcelain` for scripts), fenced for agents as
 `show`'s text is (it holds doc text); the tab's blame gutter
 calls the same method for the lines in view; tier-0 files call `BlobSession::blame`.
@@ -2435,7 +2566,7 @@ with its file (or purged) since the upgrade.**
 5. `session_exit`: `Store(CurrentVersion)` is 2, `Store(PurgedVersion)` is 4.
 6. A `PurgeScope::Text` shorter than 8 bytes is refused (`BadEdit`, exit 2).
 
-**Hosts:** map `k2 doc purge` (`--range`, `--version`, `--text` from stdin, `--and-remove`)
+**Hosts:** map the `purge` verb (`--range`, `--version`, `--text` from stdin, `--and-remove`)
 to `Session::purge` and print `not_reached` with "rotate the secret"; give `Rights::owner` to
 the workspace owner and admins (Q21); choose pseudonyms for participant erasure; audit
 `Purged`.

@@ -1,0 +1,16 @@
+# The pinned regression tests every public cut must carry (tools/check-public-cut.sh,
+# "regressions"). A host tag's hotfix line is cherry-picked, not an ancestor of the next
+# release, so its tests are checked by name: append each hotfix's here, with the tag and the
+# fix it pins.
+#   NAME         a Rust `fn NAME` with a test attribute, not #[ignore]d
+#   PATH IDENT   the word IDENT in the file PATH
+# A line's `#` starts a comment.
+
+# v0.10.0.3 (b11f00cc): K-AUD-1 after a restart, the disk replica's write-back (5effd640..57c3562b)
+an_outside_save_then_a_restart_keeps_the_replica_the_docs_text
+a_stale_replica_after_a_restart_is_reported_and_repaired
+# the soak's must-never-fire events include DiskReplicaRepaired (57c3562b)
+crates/base/tests/soak.rs DiskReplicaRepaired
+
+# v0.10.0.2 (5fedd15f) and v0.10.0.1 (bebf77f6) pinned no regression test: the licence, and
+# the client 0.11.0 release.

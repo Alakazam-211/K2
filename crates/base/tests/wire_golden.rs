@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    At, AuditEvent, ChangeEvent, Config, ConnId, CursorAt, EditOptions, Host, LeaveReason,
-    LineRange, Overwrite, Participant, ParticipantKind, Rights, Role, RosterEvent, RosterMember,
-    Session, SessionManager, Stay, TextFilePack, Who, OVERWRITE_PENDING_MAX,
+    At, AuditEvent, ChangeEvent, Config, ConnId, CursorAt, EditOptions, Host, JoinOptions,
+    LeaveReason, LineRange, Overwrite, Participant, ParticipantKind, Rights, Role, RosterEvent,
+    RosterMember, Session, SessionManager, Stay, TextFilePack, Who, OVERWRITE_PENDING_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::diff::Hunk;
@@ -132,6 +132,7 @@ fn change(e: &ChangeEvent, st: &Stable) -> Value {
         ("pid", Value::from(e.pid.as_str())),
         ("client", Value::from(st.client(e.client))),
         ("via", Value::from(e.via.as_str())),
+        ("kind", Value::from(e.kind.as_str())),
         ("root", Value::from(e.root.as_str())),
         ("hunks", Value::List(e.hunks.iter().map(hunk).collect())),
         ("at_ms", Value::from(e.at_ms)),
@@ -210,10 +211,11 @@ fn caret(c: &CursorAt, version: Seq) -> Value {
     ])
 }
 
-/// `RosterMember` → the wire's `RosterEntry`.
-fn member(m: &RosterMember, version: Seq) -> Value {
+/// `RosterMember` → the wire's `RosterEntry`. `devices` (v0.10.1) only when the kit gives
+/// some (a text doc): one `{client, cursor, label?}` a connection, `label` only when set.
+fn member(m: &RosterMember, version: Seq, st: &Stable) -> Value {
     let p = &m.entry.participant;
-    Value::obj([
+    let mut fields = vec![
         ("handle", who(&m.who)),
         ("name", Value::from(p.name.as_str())),
         ("colour", Value::from(p.colour.as_str())),
@@ -228,7 +230,24 @@ fn member(m: &RosterMember, version: Seq) -> Value {
                 .map_or(Value::Null, |c| caret(c, version)),
         ),
         ("rights", Value::from(rights(m.rights))),
-    ])
+    ];
+    if !m.entry.devices.is_empty() {
+        let devices = m.entry.devices.iter().map(|d| {
+            let mut o = vec![
+                ("client", Value::from(st.client(d.client))),
+                (
+                    "cursor",
+                    d.cursor.as_ref().map_or(Value::Null, |c| caret(c, version)),
+                ),
+            ];
+            if let Some(l) = &d.label {
+                o.push(("label", Value::from(l.as_str())));
+            }
+            Value::obj(o)
+        });
+        fields.push(("devices", Value::List(devices.collect())));
+    }
+    Value::obj(fields)
 }
 
 /// One place of an `Overwrite` → a cell of the wire's `cells`.
@@ -292,7 +311,7 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
                 ("version", Value::from(*version)),
                 (
                     "members",
-                    Value::List(members.iter().map(|m| member(m, *version)).collect()),
+                    Value::List(members.iter().map(|m| member(m, *version, st)).collect()),
                 ),
                 ("watching", Value::from(*watching)),
             ];
@@ -359,16 +378,24 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             who: w,
             cursor,
             version,
+            client,
             ..
-        } => Value::obj([
-            ("kind", Value::from("cursor")),
-            ("who", who(w)),
-            (
-                "cursor",
-                cursor.as_ref().map_or(Value::Null, |c| caret(c, *version)),
-            ),
-            ("version", Value::from(*version)),
-        ]),
+        } => {
+            let mut fields = vec![
+                ("kind", Value::from("cursor")),
+                ("who", who(w)),
+                (
+                    "cursor",
+                    cursor.as_ref().map_or(Value::Null, |c| caret(c, *version)),
+                ),
+                ("version", Value::from(*version)),
+            ];
+            // the connection whose caret this is (v0.10.1); absent: the participant's
+            if let Some(c) = client {
+                fields.push(("client", Value::from(st.client(*c))));
+            }
+            Value::obj(fields)
+        }
         RosterEvent::ClaimStarted {
             who: w,
             claim,
@@ -808,6 +835,20 @@ struct FileFx {
     mgr: SessionManager,
     key: DocKey,
     s: Arc<Session>,
+    /// Each joined connection's client ID → its fixed number ([`fixed_client`]).
+    clients: Mutex<HashMap<u64, u64>>,
+}
+
+/// The fixed number for a participant's client ID in the file scenarios: the main
+/// scenario's numbers for the same pids.
+fn fixed_client(pid: &str) -> u64 {
+    match pid {
+        "ada" => MAX_CLIENT_ID,
+        "agent-7" => 2,
+        "widget" => 3,
+        "bob" => 4,
+        other => panic!("no fixed client ID for {other}"),
+    }
 }
 
 fn file_fx(tag: &str) -> FileFx {
@@ -844,6 +885,7 @@ fn file_fx(tag: &str) -> FileFx {
         mgr,
         key,
         s,
+        clients: Mutex::new(HashMap::new()),
     }
 }
 
@@ -860,10 +902,22 @@ impl FileFx {
         kind: ParticipantKind,
         via: &str,
     ) -> ConnId {
-        self.s
+        let j = self
+            .s
             .join(Participant::new(pid, name, colour, kind, via), Stay::Held)
+            .unwrap();
+        self.clients
+            .lock()
             .unwrap()
-            .conn
+            .insert(j.client, fixed_client(pid));
+        j.conn
+    }
+    /// The run's client IDs, fixed (the main scenario's rewrite).
+    fn stable(&self) -> Stable {
+        Stable {
+            clients: self.clients.lock().unwrap().clone(),
+            ..Stable::default()
+        }
     }
     fn text(&self, c: ConnId) -> String {
         self.s
@@ -1037,7 +1091,7 @@ fn outside_saves_and_the_hosts_close_are_golden() {
     assert!(waiting(&late_bob[0]).is_empty());
     assert_eq!(late_bob.len(), 2, "a snapshot, then `closed`: {late_bob:?}");
 
-    let mut st = Stable::default();
+    let mut st = f.stable();
     let dir = golden_dir();
     for (lens, name, evs, later) in [
         ("", "Ada", &ros, &late),
@@ -1127,7 +1181,7 @@ fn the_roll_up_is_golden() {
         matches!(tail[1], RosterEvent::Overwritten { overwrite, .. } if overwrite.is_rollup() && overwrite.more == 2)
     );
 
-    let mut st = Stable::default();
+    let mut st = f.stable();
     let me = self_in(&late[0], "Ada");
     golden(
         &golden_dir().join("roster_events_rollup.json"),
@@ -1151,6 +1205,100 @@ fn the_roll_up_is_golden() {
                         .map(|e| roster_event(e, &mut st, &me))
                         .collect(),
                 ),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+        ])),
+    );
+}
+
+// ---------- per-connection carets (v0.10.1) ----------
+
+/// The same person on three connections (two of them labelled by the host) and a second
+/// person. Every connection's caret is its own `cursor` event (`client`), and each member's
+/// `devices` lists its connections with their carets. Ada's first connection subscribes: it
+/// is the file's `client`, the connection a client hides. Carets on all three, a line typed
+/// by Bob above them (each carried, one event a connection, the most active last), then the
+/// most active connection leaves with its caret: its `cursor` goes (`null`), and a `cursor`
+/// with no `client` gives Ada's caret now, for a client that keeps one caret a person.
+///
+/// `roster_events_devices.json`: `self`, `client`, the stream, and `final`, a later
+/// subscription's snapshot.
+#[test]
+fn per_connection_carets_are_golden() {
+    let f = file_fx("devices");
+    let ada = |opts: JoinOptions| {
+        f.s.join_with(
+            Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"),
+            Stay::Held,
+            &opts,
+        )
+        .unwrap()
+    };
+    let t1 = ada(JoinOptions::new());
+    let bob = f.join("bob", "Bob", "#16a34a", ParticipantKind::Person, "tab");
+    let mut st = f.stable();
+    st.clients.insert(t1.client, MAX_CLIENT_ID);
+    let roster = f.s.subscribe_roster(t1.conn).unwrap();
+    let t2 = ada(JoinOptions::new().label("another tab"));
+    let t3 = ada(JoinOptions::new().label("Phone"));
+    st.clients.insert(t2.client, 5);
+    st.clients.insert(t3.client, 6);
+    f.tick();
+
+    let at = |line: usize| f.text(t1.conn).match_indices('\n').nth(line - 2).unwrap().0 + 1;
+    f.s.set_cursor(t1.conn, ROOT, At::Byte(0), At::Byte(0))
+        .unwrap();
+    f.host.now.fetch_add(10, Ordering::SeqCst);
+    f.s.set_cursor(t2.conn, ROOT, At::Byte(at(3)), At::Byte(at(3)))
+        .unwrap();
+    f.tick();
+    f.s.set_cursor(t3.conn, ROOT, At::Byte(at(5)), At::Byte(at(5) + 3))
+        .unwrap();
+    f.tick();
+    // Bob types a line at the top: every caret is carried
+    f.type_at(bob, 0, "by bob\n");
+    f.tick();
+    // the most active connection (t3) leaves with its caret
+    f.s.leave(t3.conn).unwrap();
+    f.tick();
+
+    let ros = drain(&roster);
+    let late = drain(&f.s.subscribe_roster(t1.conn).unwrap());
+    let cursors: Vec<(Option<u64>, bool)> = ros
+        .iter()
+        .filter_map(|e| match e {
+            RosterEvent::Cursor {
+                who: w,
+                client,
+                cursor,
+                ..
+            } if w.pid() == Some("ada") => Some((client.map(|c| st.client(c)), cursor.is_some())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cursors,
+        vec![
+            (Some(MAX_CLIENT_ID), true),
+            (Some(5), true),
+            (Some(6), true),
+            (Some(MAX_CLIENT_ID), true),
+            (Some(5), true),
+            (Some(6), true),
+            (Some(6), false),
+            (None, true),
+        ],
+        "{ros:?}"
+    );
+    let me = self_in(&late[0], "Ada");
+    golden(
+        &golden_dir().join("roster_events_devices.json"),
+        &file(Value::obj([
+            ("self", me.clone()),
+            ("client", Value::from(st.client(t1.client))),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
             ),
             ("final", roster_event(&late[0], &mut st, &me)),
         ])),

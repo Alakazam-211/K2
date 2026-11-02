@@ -9,11 +9,15 @@
 # FUZZ_HOME (required): the private folder the corpus lives in, outside every repo:
 #   <FUZZ_HOME>/plan                    what to run, one job per line, `|` between
 #                                       fields (paths may hold spaces):
-#                                         <repo dir> | <rev> | <node> | <target>... [| <features>]
+#                                         <repo dir> | <rev> | <node> | <target>... [| <features> [| <with>]]
 #                                       (<repo dir>: a repo or worktree inside the K2
 #                                       workspace: the runner ships it at <rev>, unpushed
 #                                       commits too; FUZZ_SHIP=env ships it in the job)
 #                                       (<features>: the fuzz crate's cargo features)
+#                                       (<with>: sibling repos the repo's path
+#                                       dependencies need, `dir[@rev]` (default main), dir
+#                                       relative to the workspace: a pack's kit, e.g.
+#                                       `k2-mpc-base@main`; bundle.sh's FUZZ_WITH)
 #                                       (`#` starts a comment; up to 4 targets a job, all
 #                                       run at once, one CPU each; node `auto`: the
 #                                       allowed node free now, pick-node.py)
@@ -69,15 +73,15 @@ fi
 
 JOBS=(); n=0
 # the plan on fd 3: the k2 CLI in the loop must not read it
-while IFS='|' read -r repo rev node targets features <&3; do
+while IFS='|' read -r repo rev node targets features with <&3; do
   case "$repo" in ''|\#*) continue ;; esac
   trim() { echo "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
   repo=$(trim "$repo"); rev=$(trim "$rev"); node=$(trim "$node"); targets=$(trim "$targets")
-  features=$(trim "${features:-}")
+  features=$(trim "${features:-}"); with=$(trim "${with:-}")
   n=$((n+1)); b="$RUN/bundle-$n"
   [ $n -le "$MAX_JOBS" ] || { echo "plan line $n: over FUZZ_MAX_JOBS ($MAX_JOBS), skipped" | tee -a "$REPORT"; continue; }
   # shellcheck disable=SC2086
-  JOB_SECS=$(( TIMEOUT * 60 )) FEATURES=$features "$HERE/bundle.sh" "$repo" "$rev" "$b" "$FUZZ_HOME" "$SECS" $targets | tee -a "$REPORT"
+  JOB_SECS=$(( TIMEOUT * 60 )) FEATURES=$features FUZZ_WITH=$with "$HERE/bundle.sh" "$repo" "$rev" "$b" "$FUZZ_HOME" "$SECS" $targets | tee -a "$REPORT"
   cpus=${FUZZ_CPUS:-4}
   if [ "$node" = auto ]; then
     : "${FUZZ_NODES:?set FUZZ_NODES for node auto}"

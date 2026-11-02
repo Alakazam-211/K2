@@ -4,11 +4,9 @@ import { fileURLToPath } from "node:url";
 
 // The kit's licences: MIT, Apache-2.0, BSD (2- and 3-clause), ISC, Zlib, and Unicode-3.0.
 const ALLOWED = new Set(["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0"]);
-// Named exceptions: each a dev-only package, with the licence it may have and why.
-const EXCEPTIONS = new Map([
-  // MIT-0 (MIT without the notice clause), reached only through jsdom's CSS parser in tests
-  ["@csstools/color-helpers", "MIT-0"],
-]);
+// Named exceptions: each a dev-only package, with the licence it may have and why. None since
+// v0.10.2 (the MIT-0 one came with jsdom, which the client no longer installs).
+const EXCEPTIONS = new Map([]);
 // an SPDX expression is fine when every alternative of an OR, or every term of an AND, is
 const ok = (expr) => {
   const e = expr.replace(/[()]/g, "").trim();

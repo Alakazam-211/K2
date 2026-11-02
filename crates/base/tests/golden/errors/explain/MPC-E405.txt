@@ -2,6 +2,7 @@ MPC-E405 declined_off (disk and outside edits)
 exit:     4
 message:  live editing is off: {reason} (declined)
 next:     The file changed on disk into something that can't be a live doc (the reason says what), so live editing stopped. Reads still work. Edit the file with ordinary tools, or fix what the reason names; it goes live again when it decodes.
+step:     cat; why: The file changed on disk into something that can't be live; reads still work, and it goes live again once it decodes.
 rule:     K-DISK-8
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "live editing is off: {reason} (declined)",
   "next": "The file changed on disk into something that can't be a live doc (the reason says what), so live editing stopped. Reads still work. Edit the file with ordinary tools, or fix what the reason names; it goes live again when it decodes.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "The file changed on disk into something that can't be live; reads still work, and it goes live again once it decodes."
+  },
   "rule": "K-DISK-8",
   "verbs": ["@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],

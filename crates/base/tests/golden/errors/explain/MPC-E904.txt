@@ -2,6 +2,7 @@ MPC-E904 claims_participant_cap (limits)
 exit:     2
 message:  bad claim: you hold {count} claims here (the most); release one
 next:     You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.
+step:     claim --release; why: You hold all the claims you may on this doc; release one you no longer need, then claim again.
 rule:     A13 (claims_per_participant)
 verbs:    claim
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "bad claim: you hold {count} claims here (the most); release one",
   "next": "You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.",
+  "next_step": {
+    "verb": "claim --release",
+    "args": [],
+    "why": "You hold all the claims you may on this doc; release one you no longer need, then claim again."
+  },
   "rule": "A13 (claims_per_participant)",
   "verbs": ["claim"],
   "returned_by": ["claim"],

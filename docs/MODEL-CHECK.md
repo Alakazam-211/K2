@@ -187,6 +187,16 @@ violation set changed.
 
 ITF replay: 1,000 traces at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000 at 2 × 1 + 2
 undos + 1 revert (5,000 steps): **0 mismatches**.
+**Current counts (note of 2026-10-31; the rows above are history, as recorded then).** Three of
+these bounds count fewer states since the model's purge revision of 2026-10-29 (canonical purge
+hunks, as the trace oracle since commit `04487c5`; under the old per-copy reading a purge's removal
+was one hunk per copy): 2 × 1 + 1 undo + 1 revert **35,758** (was 35,792), 1 × 3 + 1 revert + 1
+restart **199,268** (was 200,530), 2 × 1 + 2 undos + 1 revert **49,644** (was 49,656). The other
+four are unchanged: 3,889, 220,210, 144 and 542,418. TLC = enumerator at all seven. Recorded in
+`docs/evidence/g1-undo.md` (runs `88555d19`, `ee85bf3c`; the re-runs after the revision `3f360ca1`,
+`708bd100`). Latest: v0.10.0's merge commit `260ef4e`, jobs `f57e1522` (`counts.sh` `PART=a`: the
+first four bounds; ITF 2,000 traces and the regression traces, 0 mismatches) and `5d514715`
+(`PART=b`: the other three), the same seven counts, TLC = enumerator.
 
 **Violation sets.** On the enumerator without `--first` (every rule's least depth, the whole
 bound), v0.9.0's binaries against these, at every bound above and at each mutant's bound:
@@ -275,6 +285,9 @@ being one), the carried theirs leaves them (two windows read the same by root ar
 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) (new: (x)'s bound) | – | 144 | 144 | 2 s |
 | 2 × 1 + 2 undos + 1 revert (`ab`, 4) (new: restorations meet) | – | 49,656 | 49,656 | 49 s |
 
+**Current counts:** see the note of 2026-10-31 under v1.9's table (three bounds count fewer
+states since the purge revision of 2026-10-29, commit `04487c5`).
+
 Case class `concurrent_restore` (distinct states whose transition hit it): 4,661 at
 2 × 1 + 2 undos + 1 revert; 10,654 at 2 × 2 + 1 undo (`--steps 2`: the second step reads the
 first's restoration as its base, by root); 0 at the bounds with one undo and no second
@@ -297,6 +310,10 @@ at 2 × 1 + 2 undos + 1 revert (5,000 steps; 1,422 undos, 578 redos, 1,000 rever
 
 Job `a75a2670` (counts `PART=m`); the smoke job `ac55d0a0` (TLC with every worker) agrees, and
 `cargo test --features mutants --test mutants` gives the same rules and depths.
+
+**Latest (2026-10-31):** v0.10.0's merge commit `260ef4e`, job `f292077c` (`counts.sh` `PART=m`):
+every mutant above fails its own rule only, at the same depths on the enumerator and on TLC
+with one worker; (xi) `xi-no-o4a` at 4 and 4, as v1.9 recorded (`20db2b75`).
 
 **(x)'s witness** (depth 3, 1 × 1 + 1 undo + 1 revert, seed `ab`): p1 deletes `b` at the doc's
 end (`a`); p1 undoes (`ab`, the new `b` has the seed `b`'s root); p1 reverts its delete. By

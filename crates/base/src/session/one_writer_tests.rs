@@ -117,7 +117,7 @@ fn check_edits(edits: &[EditRecord]) -> Result<(), String> {
             .map_or(0, |x| x.1);
         match mine {
             Some((lo, hi)) => {
-                if lo != e.clock_before {
+                if u64::from(lo) != e.clock_before {
                     return Err(format!(
                         "an edit as {} starts at clock {lo}, the doc had {}",
                         e.client, e.clock_before
@@ -130,7 +130,7 @@ fn check_edits(edits: &[EditRecord]) -> Result<(), String> {
                     ));
                 }
             }
-            None if after != e.clock_before => {
+            None if u64::from(after) != e.clock_before => {
                 return Err(format!(
                     "a delete-only edit as {} moved its clock",
                     e.client

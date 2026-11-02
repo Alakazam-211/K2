@@ -53,7 +53,9 @@ pub struct Clean {
 pub struct Conflict {
     /// Byte range in `base`.
     pub base: Range<usize>,
-    /// 1-based line range in `base` (inclusive start, inclusive end).
+    /// 1-based line range in `base` (inclusive start, inclusive end; an insertion's is one
+    /// line, where its text lands). On the [`closed`] texts: a conflict that inserts after an
+    /// unterminated last line is reported as line N+1, N the base's line count.
     pub lines: (usize, usize),
     pub base_text: String,
     pub ours: String,
@@ -85,7 +87,11 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
 /// **By whole lines (v0.9.7.1):** the sides are [`write_base_sides`] on the [`closed`]
 /// texts; the pair rules O1–O5 decide on them; the final "\n" of a clean merge follows the
 /// side that wrote its last line ([`end_is_open`]). A conflict's ranges are on `base`, its
-/// line numbers in `base`, ours and theirs ([`Conflict`]).
+/// line numbers in `base`, ours and theirs ([`Conflict`]), counted on the closed texts: a
+/// conflict that inserts after an unterminated last line is reported as line N+1, where its
+/// new line lands, the same rule as for a closed base; its range is `base.len()..base.len()`.
+/// Only a window (`at_end` false) reports such a conflict: in [`merge3`] (`write --base`) the
+/// two insertions both land by O5, and the outside-edit merge never refuses.
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
     // the planted faults exist only in test builds and with the `differential` feature: a
     // plain build compiles the checks out (the same path as when none is planted)
@@ -135,7 +141,11 @@ pub fn write_base_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec
 
 /// A conflict found on the [`closed`] texts, on the texts themselves: a range that reached
 /// the closing "\n" of an open base ends at the base's end, and a side's text there loses
-/// the "\n" its own text doesn't have. Line numbers don't change (closing adds no line).
+/// the "\n" its own text doesn't have. Line numbers don't change (closing adds no line), so
+/// a conflict that inserts after an unterminated last line is reported as line N+1 (N the
+/// base's line count): its range, at the closed base's end, becomes the empty
+/// `base.len()..base.len()`, and its lines name the new line N+1 where its text lands, as
+/// for a closed base.
 fn on_open_texts(mut c: Conflict, base: &str, ours: &str, theirs: &str) -> Conflict {
     if c.base.end > base.len() {
         c.base.end = base.len();
@@ -806,6 +816,52 @@ mod tests {
         ));
         // inside one line, two insertions are two changes of that line: a conflict (v0.9.7.1)
         assert!(matches!(merge3("ab", "abX", "abY"), Merge::Conflicts(_)));
+    }
+
+    /// A conflict that inserts after an unterminated last line is reported as line N+1, where
+    /// its new line lands, as for a closed base: the merge runs on the closed texts and
+    /// [`on_open_texts`] clamps the range into the base, keeping the line numbers. For an
+    /// insertion the range is empty and `lines` is (start, start): `lines.1` is `lines.0` plus
+    /// the line breaks inside the base text, less a final one (none here). Same-point
+    /// insertions at the end of a non-empty text land by O5 in `merge3`, so the conflict is a
+    /// window's (`at_end` false).
+    #[test]
+    fn an_insertion_conflict_after_an_open_last_line_is_line_n_plus_1() {
+        // (base, ours, theirs, ours' text, theirs' text): a side's text keeps its own final
+        // "\n", or has none when its text has none
+        for (base, ours, theirs, want_ours, want_theirs) in [
+            ("a", "a\nx", "a\ny", "x", "y"),
+            ("a", "a\nx\n", "a\ny\n", "x\n", "y\n"),
+            ("a", "a\nx\n", "a\ny", "x\n", "y"),
+            ("a", "a\nx", "a\ny\n", "x", "y\n"),
+        ] {
+            let Merge::Conflicts(c) = merge3_window(base, ours, theirs, false) else {
+                panic!("{ours:?} {theirs:?}: two insertions at one point conflict")
+            };
+            assert_eq!(c.len(), 1, "{c:#?}");
+            let c = &c[0];
+            assert_eq!(c.lines, (2, 2), "line N+1 for the base's N = 1: {c:#?}");
+            assert_eq!(c.base, 1..1, "clamped to the open base's end: {c:#?}");
+            assert_eq!(c.base_text, "");
+            assert_eq!(
+                (c.ours.as_str(), c.theirs.as_str()),
+                (want_ours, want_theirs)
+            );
+            assert_eq!((c.ours_lines, c.theirs_lines), ((2, 2), (2, 2)));
+            // whole text: both land, theirs first (O5)
+            assert!(matches!(merge3(base, ours, theirs), Merge::Clean(_)));
+        }
+        // the control: a closed base gives the same lines, its range at its own end
+        let Merge::Conflicts(c) = merge3_window("a\n", "a\nx\n", "a\ny\n", false) else {
+            panic!("two insertions at one point conflict")
+        };
+        assert_eq!(c.len(), 1, "{c:#?}");
+        let c = &c[0];
+        assert_eq!(c.lines, (2, 2), "{c:#?}");
+        assert_eq!(c.base, 2..2, "{c:#?}");
+        assert_eq!(c.base_text, "");
+        assert_eq!((c.ours.as_str(), c.theirs.as_str()), ("x\n", "y\n"));
+        assert_eq!((c.ours_lines, c.theirs_lines), ((2, 2), (2, 2)));
     }
 
     /// The keep-both rule character by character (the model of [`merge3_keep_both`]'s

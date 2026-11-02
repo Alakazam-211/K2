@@ -2,6 +2,7 @@ MPC-E511 store_no_version (store)
 exit:     4
 message:  no version {version} for doc {doc}
 next:     There's no such version. List versions with log and use one it prints.
+step:     log; why: There's no such version; list the versions and use one shown.
 rule:     K-HIST-9
 verbs:    show --version; restore; version --name
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "no version {version} for doc {doc}",
   "next": "There's no such version. List versions with log and use one it prints.",
+  "next_step": {
+    "verb": "log",
+    "args": [],
+    "why": "There's no such version; list the versions and use one shown."
+  },
   "rule": "K-HIST-9",
   "verbs": ["show --version", "restore", "version --name"],
   "returned_by": ["show --version", "restore", "version --name"],

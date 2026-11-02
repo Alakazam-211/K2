@@ -8,6 +8,7 @@
       "pid": "p1",
       "client": 9007199254740991,
       "via": "tab",
+      "kind": "edit",
       "root": "source",
       "hunks": [
         {
@@ -24,6 +25,7 @@
       "pid": "p2",
       "client": 2,
       "via": "cli",
+      "kind": "edit",
       "root": "source",
       "hunks": [
         {
@@ -45,6 +47,7 @@
       "pid": "p1",
       "client": 9007199254740991,
       "via": "tab",
+      "kind": "undo",
       "root": "source",
       "hunks": [
         {

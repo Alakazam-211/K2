@@ -1,0 +1,21 @@
+MPC-E171 positional_needs_version (sessions and edits)
+exit:     2
+message:  {address} is a position; an agent's edit by position names the version it read
+next:     Positions (#N, LN, line numbers, the Nth match) move when others edit, so an agent's edit that uses one must say which version it counted them in. Nothing was applied. Read the doc again (the read prints its version) and run the edit with --if-version <that version> (a grid edit: --base <that version>), or name the thing by its key.
+rule:     K-ADDR-3
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E171",
+  "name": "positional_needs_version",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{address} is a position; an agent's edit by position names the version it read",
+  "next": "Positions (#N, LN, line numbers, the Nth match) move when others edit, so an agent's edit that uses one must say which version it counted them in. Nothing was applied. Read the doc again (the read prints its version) and run the edit with --if-version <that version> (a grid edit: --base <that version>), or name the thing by its key.",
+  "rule": "K-ADDR-3",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

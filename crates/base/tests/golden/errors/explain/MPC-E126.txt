@@ -2,6 +2,7 @@ MPC-E126 replace_not_unique (sessions and edits)
 exit:     1
 message:  replace: --old matches {matches} times in {doc}; nothing applied
 next:     --old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.
+step:     cat; args: -n; why: The old text matches more than once; add surrounding text until it matches once, or replace every match.
 rule:     A12 (exact replace)
 verbs:    replace
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "replace: --old matches {matches} times in {doc}; nothing applied",
   "next": "--old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.",
+  "next_step": {
+    "verb": "cat",
+    "args": ["-n"],
+    "why": "The old text matches more than once; add surrounding text until it matches once, or replace every match."
+  },
   "rule": "A12 (exact replace)",
   "verbs": ["replace"],
   "returned_by": ["replace"],

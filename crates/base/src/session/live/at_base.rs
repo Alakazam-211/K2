@@ -29,6 +29,29 @@ pub struct EditAtBase {
     pub hunks: Vec<Hunk>,
 }
 
+/// Returned by [`Session::set_cursor_at`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CursorAtVersion {
+    /// The caret as set, in byte offsets of the root's current text.
+    Set(Cursor),
+    /// Nothing set: the caret couldn't be brought to the doc's version. Not an error: a host
+    /// sends no reply, as for a caret frame it drops.
+    Dropped(CursorDrop),
+}
+
+/// Why [`Session::set_cursor_at`] set nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CursorDrop {
+    /// The version is behind and the changes since can't be read: past the live window (as
+    /// [`Session::events_since`] refuses), a change since out of the revert window or
+    /// purged, or a structured doc's.
+    PastWindow,
+    /// The version is ahead of the doc's.
+    Ahead,
+}
+
 /// One change of the window, as its events (one per text root it touched: the authored
 /// hunks, as broadcast) and, per event, the record's hunks with the text each deleted (to
 /// rebuild the base's text; D1's widened hunks give the same text as the authored ones).
@@ -189,6 +212,7 @@ impl Session {
                         at_ms: info.at_ms,
                         on_behalf_of: info.on_behalf_of.clone(),
                         hidden: Vec::new(),
+                        kind: info.kind,
                     },
                     elems,
                     deleted,
@@ -226,6 +250,57 @@ impl Session {
             }
             None => events.collect(),
         })
+    }
+
+    /// **Place a caret given at `version`** (a client's `cursor` frame): `anchor` and `head`
+    /// are UTF-8 byte offsets of `root`'s text **at `version`**. Needs edit, as
+    /// [`Session::set_cursor`] (a reader gets its refusal). When `version` is behind the
+    /// doc's, each change since on `root` (the window [`Session::events_since`] reads) moves
+    /// them, in order, with [`position::transform`] and [`Bias::After`], as the kit carries a
+    /// caret; then they are set as [`Session::set_cursor`] sets `At::Byte` offsets (off a
+    /// character boundary: `MPC-E114`). The window is read and the caret set under one lock,
+    /// so no change lands between.
+    ///
+    /// `Dropped`, nothing set: `version` is ahead of the doc's ([`CursorDrop::Ahead`]), or
+    /// the changes since can't be read ([`CursorDrop::PastWindow`]).
+    pub fn set_cursor_at(
+        &self,
+        conn: ConnId,
+        root: &str,
+        version: Seq,
+        anchor: usize,
+        head: usize,
+    ) -> Result<CursorAtVersion> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Edit, Action::Cursor, now)?;
+        let (mut anchor, mut head) = (anchor, head);
+        if version > st.version {
+            return Ok(CursorAtVersion::Dropped(CursorDrop::Ahead));
+        }
+        if version < st.version {
+            let Ok(window) = self.window(&st, version) else {
+                return Ok(CursorAtVersion::Dropped(CursorDrop::PastWindow));
+            };
+            for w in window.iter().filter(|w| w.event.root == root) {
+                anchor = position::transform(anchor, &w.event.hunks, Bias::After);
+                head = position::transform(head, &w.event.hunks, Bias::After);
+            }
+        }
+        let (_, text) = self.text_of(&st, root)?;
+        let res = |a: At| {
+            a.resolve(text)
+                .ok_or_else(|| SessionError::BadPosition(format!("{a:?} is not in {root:?}")))
+        };
+        let c = Cursor {
+            root: root.to_owned(),
+            anchor: res(At::Byte(anchor))?,
+            head: res(At::Byte(head))?,
+        };
+        let m = &mut st.members[i];
+        m.cursor = Some(c.clone());
+        m.last_cursor_ms = Some(now);
+        Ok(CursorAtVersion::Set(c))
     }
 
     /// A refusal as member `i` may see it: an App viewer's names others by handle (K5).

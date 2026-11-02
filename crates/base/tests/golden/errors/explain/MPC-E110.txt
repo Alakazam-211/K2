@@ -2,6 +2,7 @@ MPC-E110 stale (sessions and edits)
 exit:     1
 message:  doc changed since {expected} (now {actual})
 next:     Someone changed the doc after the version you named, so nothing was applied. Read it again (cat prints the version), redo your change on what you read, and pass the new version with --if-version (a blob write: the new base).
+step:     cat; why: Someone changed the doc after the version you named; read it again, redo your change on what you read, and guard it with the new version.
 rule:     A14 (--if-version), K-T0-5
 verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs); write
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "doc changed since {expected} (now {actual})",
   "next": "Someone changed the doc after the version you named, so nothing was applied. Read it again (cat prints the version), redo your change on what you read, and pass the new version with --if-version (a blob write: the new base).",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "Someone changed the doc after the version you named; read it again, redo your change on what you read, and guard it with the new version."
+  },
   "rule": "A14 (--if-version), K-T0-5",
   "verbs": ["@change", "write"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],

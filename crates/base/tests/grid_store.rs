@@ -28,7 +28,7 @@ use k2_mpc_base::session::{
     UndoOutcome, UndoRequest, View,
 };
 use k2_mpc_base::store::{
-    DocKey, DocStore, StoreError, VersionReason, STORE_FORMAT, STORE_FORMAT_BASE,
+    DocKey, DocStore, StoreError, VersionReason, STORE_FORMAT, STORE_FORMAT_BASE, STORE_FORMAT_READ,
 };
 use k2_mpc_base::table::{self, Field, Record, Shape, Table, TableError, CELLS, ROWS};
 use k2_mpc_base::tools::{exit, session_exit};
@@ -363,20 +363,22 @@ fn store_newer_format_refused_with_one_line() {
         let w = d.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", STORE_FORMAT + 1)
+            .insert("store_format", STORE_FORMAT_READ + 1)
             .unwrap();
         w.commit().unwrap();
     }
+    // v0.10.1 reads format 7 (the native engine's, forward-declared): the first format it
+    // refuses is 8
     let e = DocStore::open(&path).err().expect("refused");
     assert_eq!(
         e,
         StoreError::Newer {
-            found: STORE_FORMAT + 1
+            found: STORE_FORMAT_READ + 1
         }
     );
     let line = e.to_string();
     assert!(
-        !line.contains('\n') && line.contains("this build reads up to 6"),
+        !line.contains('\n') && line.contains("this build reads up to 7"),
         "{line}"
     );
 }
@@ -1115,6 +1117,12 @@ fn n1_producer() {
         s.replace_text(c, TextFilePack::ROOT, "one\ntwo\n").unwrap();
         s.name_version(c, "n1", None).unwrap();
         s.revert(c, 2, false).unwrap();
+        // tools/n1 `layout-both` (v0.10.1): revert the revert too, so the store holds restored
+        // elements (provenance rows) and a revert record with roots for the other build to read
+        if std::env::var("K2MB_N1_RESTORE").is_ok() {
+            let last = s.read(c).unwrap().version;
+            s.revert(c, last, false).unwrap();
+        }
         if grid {
             let g = mgr
                 .open(Arc::new(Lite), &key("t.csv"), Some(b"a,b\n"))

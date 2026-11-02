@@ -2,6 +2,7 @@ MPC-E103 forbidden_history (sessions and edits)
 exit:     3
 message:  refused: needs History rights
 next:     Reading history (log, diff --version, show --version, blame, versions, someone else's approvals) needs the history right, which you don't have. Don't retry: work from the live text (cat), or ask the doc's owner for history access.
+step:     cat; why: Reading history needs a right you don't have; work from the live text instead, or ask the doc's owner for history access.
 rule:     K-PERM-9
 verbs:    log, diff --version, show --version, export --version, blame, log --pending, approvals, blame --cell, blame --structure; log --pending; approvals
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 3,
   "message": "refused: needs History rights",
   "next": "Reading history (log, diff --version, show --version, blame, versions, someone else's approvals) needs the history right, which you don't have. Don't retry: work from the live text (cat), or ask the doc's owner for history access.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "Reading history needs a right you don't have; work from the live text instead, or ask the doc's owner for history access."
+  },
   "rule": "K-PERM-9",
   "verbs": ["@history", "log --pending", "approvals"],
   "returned_by": ["log", "diff --version", "show --version", "export --version", "blame", "log --pending", "approvals"],

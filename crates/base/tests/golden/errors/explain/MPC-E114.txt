@@ -2,6 +2,7 @@ MPC-E114 bad_position (sessions and edits)
 exit:     2
 message:  bad position: {reason}
 next:     A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.
+step:     wc; args: -l; why: A line or position is outside the doc; read its length and pass lines inside it.
 rule:     K-PRES-6
 verbs:    cursor; view; claim; blame
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "bad position: {reason}",
   "next": "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.",
+  "next_step": {
+    "verb": "wc",
+    "args": ["-l"],
+    "why": "A line or position is outside the doc; read its length and pass lines inside it."
+  },
   "rule": "K-PRES-6",
   "verbs": ["cursor", "view", "claim", "blame"],
   "returned_by": ["view", "claim", "cursor", "blame"],

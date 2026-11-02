@@ -2,6 +2,7 @@ MPC-E807 header_only_row_blank (structured and CSV)
 exit:     2
 message:  header on: the only row is a blank line, and a blank header line with nothing after it isn't written (the file would change); add a non-blank row first
 next:     The table's only row is blank: as the header it would be a blank header line with nothing after it, which isn't written, so the file would change. Nothing was applied. Add a row with values first (row insert), then switch the header on.
+step:     row insert; why: A blank only row can't be written as the header; add a row with values first, then switch the header on.
 rule:     CSV contract §1.4 (C1)
 verbs:    a pack's own verbs
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "header on: the only row is a blank line, and a blank header line with nothing after it isn't written (the file would change); add a non-blank row first",
   "next": "The table's only row is blank: as the header it would be a blank header line with nothing after it, which isn't written, so the file would change. Nothing was applied. Add a row with values first (row insert), then switch the header on.",
+  "next_step": {
+    "verb": "row insert",
+    "args": [],
+    "why": "A blank only row can't be written as the header; add a row with values first, then switch the header on."
+  },
   "rule": "CSV contract §1.4 (C1)",
   "verbs": ["@pack"],
   "returned_by": [],

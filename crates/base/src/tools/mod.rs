@@ -79,7 +79,9 @@ mod udiff;
 
 pub use error::{exit, session_exit, ToolError, ToolRunError};
 pub use fence::{random_nonce, Fence};
-pub use run::{ToolOptions, ToolOutput};
+pub use run::{
+    positional_note, PositionalMode, ToolOptions, ToolOutput, Warnings, POSITIONAL_DEFAULT,
+};
 #[cfg(test)]
 pub(crate) use udiff::refusal as udiff_refusal_for_tests;
 pub use udiff::unified;
@@ -96,7 +98,7 @@ pub(crate) fn too_much_output() -> ToolError {
 pub(crate) fn no_operands(tool: &str, operand: &str) -> ToolError {
     ToolError::unsupported(
         operand.to_owned(),
-        format!("doc {tool} takes no file operands: the host passes the doc"),
+        format!("{tool} takes no file operands: the host passes the doc"),
     )
 }
 
@@ -450,6 +452,9 @@ pub struct VerbCtx<'a> {
     pack: &'a dyn crate::session::Pack,
     codec: &'a [u8],
     hist: Option<&'a dyn VerbHistory>,
+    /// The version positional addresses (`#N`, `LN`) count in, when it isn't the live one: an
+    /// edit's `--base` (K-ADDR-3, R-1).
+    at: Option<&'a crate::session::View>,
 }
 
 /// The doc's history as a structured verb may read it, under the call's lock (the session
@@ -480,7 +485,28 @@ impl<'a> VerbCtx<'a> {
             pack,
             codec,
             hist: None,
+            at: None,
         }
+    }
+    /// Count positional addresses in `at` (an edit's `--base` version) instead of the live
+    /// doc.
+    pub(crate) fn with_positions_at(mut self, at: &'a crate::session::View) -> Self {
+        self.at = Some(at);
+        self
+    }
+    /// The doc as positional addresses (`#N`, `LN`) count in it (K-ADDR-3): an edit's `--base`
+    /// version, else the live doc ([`VerbCtx::view`]). A key or a name always resolves live.
+    pub fn positions_view(&self) -> &'a crate::session::View {
+        self.at.unwrap_or(self.view)
+    }
+    /// The version positional addresses count in when it isn't the live doc (an edit's
+    /// `--base`): `None` for reads and for edits without a `--base` or at the live version.
+    pub(crate) fn positions_at(&self) -> Option<&'a crate::session::View> {
+        self.at
+    }
+    /// [`VerbCtx::line_map`] of [`VerbCtx::positions_view`]: the rendered lines `LN` counts.
+    pub fn positions_line_map(&self) -> Option<crate::table::LineMap> {
+        self.pack.line_map(self.positions_view(), self.codec)
     }
     pub(crate) fn with_history(mut self, hist: &'a dyn VerbHistory) -> Self {
         self.hist = Some(hist);
@@ -543,6 +569,10 @@ impl<'a> VerbCtx<'a> {
     }
 }
 
+/// How a pack verb finds its positional address in a call's arguments
+/// ([`PackVerb::positional`]).
+pub type FindPositional = fn(&[String]) -> Option<String>;
+
 /// A pack's structured verb, parsed (A9): `(the doc as a View, stdin, the pack's codec) ->
 /// StructOutput`. A pure function of its inputs, run under the session lock (an edit verb
 /// inside [`crate::session::Session::edit_ops_with`]): bounded, no I/O, never calling back
@@ -590,6 +620,8 @@ pub struct PackVerb {
     serves: &'static [crate::parity::PersonAction],
     exits: &'static [u8],
     run: VerbFn,
+    /// Its positional address in a call's arguments, if any ([`PackVerb::positional`]).
+    positional: Option<FindPositional>,
 }
 
 impl PackVerb {
@@ -610,6 +642,7 @@ impl PackVerb {
             serves,
             exits,
             run: VerbFn::Text(parse),
+            positional: None,
         }
     }
 
@@ -629,6 +662,7 @@ impl PackVerb {
             serves,
             exits,
             run: VerbFn::StructEdit(parse),
+            positional: None,
         }
     }
 
@@ -648,7 +682,25 @@ impl PackVerb {
             serves,
             exits,
             run: VerbFn::StructRead(parse),
+            positional: None,
         }
+    }
+
+    /// **Declare its positional addresses** (K-ADDR-3, R-2): `find(args)` returns the
+    /// positional address in a call's arguments (after the verb's words, without
+    /// `--if-version` and `--base`), as the caller wrote it (`--nth 2`, `--row #3`), or
+    /// `None`. An agent's text edit verb with one and no `--if-version` is then refused or
+    /// warned about as the host chooses ([`PositionalMode`]); a structured edit verb's
+    /// positional addresses count in its `--base` version ([`VerbCtx::positions_view`]).
+    pub const fn positional(mut self, find: FindPositional) -> Self {
+        self.positional = Some(find);
+        self
+    }
+
+    /// The positional address in `args`, if the verb declares how to find one
+    /// ([`PackVerb::positional`]).
+    pub fn positional_in(&self, args: &[String]) -> Option<String> {
+        self.positional.and_then(|f| f(args))
     }
 
     pub fn name(&self) -> &'static str {
@@ -896,6 +948,18 @@ impl Tool {
     /// version `V`. Read verbs refuse the flag, so this is `None` for them.
     pub fn if_version(&self) -> Option<Seq> {
         self.if_version
+    }
+
+    /// The edit's positional address, as given (`--lines 3,4`, `--at 2:5`, a `sed -i` line
+    /// address): it counts lines in some version (K-ADDR-3). `None` for reads, `append`,
+    /// exact `replace`, `patch` (its context lines locate it) and `sed -i` scripts addressed
+    /// by pattern or `$` only.
+    pub fn positional(&self) -> Option<String> {
+        match &self.inner {
+            Inner::Pos(e) => e.positional(),
+            Inner::Sed(s) if s.in_place => s.line_address().map(|n| format!("sed -i line {n}")),
+            _ => None,
+        }
     }
 
     /// `patch --dry-run`: an edit verb that never applies.

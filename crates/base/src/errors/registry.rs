@@ -3,8 +3,12 @@
 //! another exit code, and a retired one stays here as `.retired("0.x.y")`. The snapshot
 //! test (`crates/base/tests/golden/errors/registry.snapshot`) holds this.
 //!
-//! Message templates use `{key}` for the report's details. `next` is written for a caller
-//! that has only the CLI: what happened, then what to run.
+//! Message templates use `{key}` for the report's details. `next` is prose: what happened,
+//! then what to run. `.step(verb, args, why)` is the same as data ([`super::NextStep`],
+//! K-PAR-10): a kit verb by its registry name, its arguments as argv tokens (`{key}`: the
+//! refusal's `details.key`), and why, in prose naming no command line. An entry with nothing
+//! to run (wait, ask a person, report it, use ordinary file tools) has no step.
+//! Neither names a host's command (its program name, the doc path): the host renders those.
 
 use super::Area::{
     self, Blob, Disk, Erasure, Export, History, Limits, Presence, Session, Store, Structured,
@@ -42,8 +46,20 @@ const HOST: &[&str] = &["(host)"];
 
 registry! { KIT:
 
-// ---------------------------------------------------------------- 0xx exports
-// a host's export of a doc's version (crate::export, ExportRegistry::export)
+// ---------------------------------------------------------------- 0xx exports (and the client's 000)
+// 000: the JS client's own (client/src/wire.ts `ERR.NOT_APPLIED`): no kit verb returns it
+// Its area reads `exports`: the hundreds digit names the area (a test holds that), and this
+// block is 0xx. Retitling the area would change E001-E007's explain goldens, so it stays.
+
+NOT_APPLIED = e("MPC-E000", "not_applied", Export, 1, "client/WIRE.md (a lost reply)", SYNC,
+    "the change wasn't applied (its reply was lost)",
+    "The connection dropped before the host answered this change, and the doc's record doesn't \
+     list it, so the client kept its text out of the doc and handed it back (a rejection). \
+     Re-apply it (the client checks the record first and re-applies only a change that never \
+     landed), or dismiss it. Nothing else changed.")
+    .indirect("the JS client: a change whose reply was lost, settled by a since reply");
+
+// 001-: a host's export of a doc's version (crate::export, ExportRegistry::export)
 
 EXPORT_UNSUPPORTED = e("MPC-E001", "export_unsupported", Export, 2, "X-ERR-1", HOST,
     "no exporter writes {target} from {kind}",
@@ -65,13 +81,19 @@ EXPORT_LIMIT = e("MPC-E003", "export_limit", Export, 2, "X-LIM-1", HOST,
 EXPORT_CANCELLED = e("MPC-E004", "export_cancelled", Export, 1, "X-CAN-1", HOST,
     "export cancelled",
     "The export was cancelled before it finished; nothing was placed. Run it again if you \
-     still want the file.");
+     still want the file.")
+    .step("export", &[],
+        "The export was cancelled before it finished and nothing was placed; run it again if you \
+         still want the file.");
 
 EXPORT_DECODE = e("MPC-E005", "export_decode", Export, 1, "X-ERR-1", HOST,
     "could not read the source",
     "The source version couldn't be read in its format (damaged, or a variant the exporter \
      doesn't read). Nothing was written. Export as-is to get the bytes, or try another \
-     version.");
+     version.")
+    .step("export", &["--to", "as-is"],
+        "The source couldn't be read in its format; export it as it is to get the bytes, or try \
+         another version.");
 
 EXPORT_IO = e("MPC-E006", "export_io", Export, 1, "X-ERR-1", HOST,
     "export i/o failed",
@@ -103,32 +125,46 @@ FORBIDDEN_HISTORY = e("MPC-E103", "forbidden_history", Session, 3, "K-PERM-9",
     "refused: needs History rights",
     "Reading history (log, diff --version, show --version, blame, versions, someone else's \
      approvals) needs the history right, which you don't have. Don't retry: work from the \
-     live text (cat), or ask the doc's owner for history access.");
+     live text (cat), or ask the doc's owner for history access.")
+    .step("cat", &[],
+        "Reading history needs a right you don't have; work from the live text instead, or ask \
+         the doc's owner for history access.");
 
 FORBIDDEN_APPROVER = e("MPC-E104", "forbidden_approver", Session, 3, "K-ID-11",
     &["approve", "decline"],
     "refused: needs Approver rights",
     "Only the person a change was made for can approve or decline it; an agent never can, \
      even the one that made it. Ask that person to run approve or decline (list the \
-     pending changes with log --pending). Don't retry.");
+     pending changes with log --pending). Don't retry.")
+    .step("log --pending", &[],
+        "Only the person a change was made for can approve or decline it; list the pending \
+         changes and ask that person.");
 
 FORBIDDEN_AUTHOR_OR_OWNER = e("MPC-E105", "forbidden_author_or_owner", Session, 3, "K-HIST-19",
     &["revert"],
     "refused: needs AuthorOrOwner rights",
     "Only the change's author, the person it was made for, or an owner can revert it. \
-     Don't retry: ask one of them, or undo your own changes with undo.");
+     Don't retry: ask one of them, or undo your own changes with undo.")
+    .step("undo", &[],
+        "Only the change's author, the person it was made for or an owner can revert it; undo \
+         your own changes instead, or ask one of them.");
 
 FORBIDDEN_OWNER = e("MPC-E106", "forbidden_owner", Session, 3, "K-PURGE-1, K-T0-2",
     &["lease --break", "purge"],
     "refused: needs Owner rights",
     "Only an owner of the doc can do this (break someone else's lease, purge). Don't \
      retry: ask an owner. To wait for a lease instead, retry after it expires (status shows \
-     the holder and expiry).");
+     the holder and expiry).")
+    .step("status", &[],
+        "Only an owner can do this; ask one, or see who holds the lease and until when, and retry \
+         after it expires.");
 
 NOT_JOINED = e("MPC-E107", "not_joined", Session, 2, "K-PRES-1", ANY,
     "{conn} has not joined this doc",
     "Your connection left the doc (it was idle, kicked, or the doc reloaded). Run the verb \
-     again: any verb joins the doc first. Nothing was applied.");
+     again: any verb joins the doc first. Nothing was applied.")
+    .step("open", &[],
+        "Your connection left the doc; join it again, then run your verb. Nothing was applied.");
 
 NO_DOC = e("MPC-E108", "no_doc", Session, 4, "K-EXIT-1", ANY,
     "no doc at {key}",
@@ -148,7 +184,10 @@ STALE = e("MPC-E110", "stale", Session, 1, "A14 (--if-version), K-T0-5",
     "doc changed since {expected} (now {actual})",
     "Someone changed the doc after the version you named, so nothing was applied. Read it \
      again (cat prints the version), redo your change on what you read, and pass the new \
-     version with --if-version (a blob write: the new base).");
+     version with --if-version (a blob write: the new base).")
+    .step("cat", &[],
+        "Someone changed the doc after the version you named; read it again, redo your change on \
+         what you read, and guard it with the new version.");
 
 WRITE_CONFLICT = e("MPC-E111", "write_conflict", Session, 1, "K-BR-2, K-BR-3 (O1–O5)",
     &["write"],
@@ -163,14 +202,20 @@ WRITE_CONFLICT = e("MPC-E111", "write_conflict", Session, 1, "K-BR-2, K-BR-3 (O1
      change only the lines you need with replace --lines or patch, each with \
      --if-version <that version> (they take --if-version, not --base). details.conflicts has \
      each region's your_lines (in your text), current_lines (in the current text), base, \
-     ours and theirs.");
+     ours and theirs.")
+    .step("cat", &[],
+        "Someone else changed the same lines since your base; read the current text, redo your \
+         change on it, then write it against that version.");
 
 BASE_EXPIRED = e("MPC-E112", "base_expired", Session, 8, "K-BR-4, K-EXIT-1",
-    &["write"],
+    &["write", "@pack"],
     "base version {base} is unknown or no longer cached; nothing applied",
     "The version you wrote against is too old to merge from (or was never read). Never \
      retry the same request: read the doc again (cat), redo your change on what you read, \
-     and write with that version as --base.");
+     and write with that version as --base.")
+    .step("cat", &[],
+        "The version you wrote against is too old to merge from; read the doc again, redo your \
+         change, and write against the version you read. Never retry the same request.");
 
 BAD_EDIT = e("MPC-E113", "bad_edit", Session, 2, "K-SCH-2", CHANGE,
     "bad edit: {reason}",
@@ -181,7 +226,9 @@ BAD_POSITION = e("MPC-E114", "bad_position", Session, 2, "K-PRES-6",
     &["cursor", "view", "claim", "blame"],
     "bad position: {reason}",
     "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) \
-     and pass lines inside it.");
+     and pass lines inside it.")
+    .step("wc", &["-l"],
+        "A line or position is outside the doc; read its length and pass lines inside it.");
 
 BAD_PARTICIPANT = e("MPC-E115", "bad_participant", Session, 2, "K-PRES-9",
     &["(host)"],
@@ -195,7 +242,10 @@ TOOL_UNSUPPORTED = e("MPC-E120", "tool_unsupported", Session, 2, "K-PAR-7", RUN_
     "{flag}: not supported ({hint})",
     "That verb, flag or syntax is outside the supported subset; nothing is approximated. \
      Use what the hint says, or see capabilities for each verb's flags. Nothing was \
-     applied.");
+     applied.")
+    .step("capabilities", &[],
+        "That verb, flag or syntax is outside the supported subset; use what the hint says, or \
+         look up each verb's flags.");
 
 TOOL_REFUSED = e("MPC-E121", "tool_refused", Session, 2, "K-PAR-7, K-SEC-6", RUN_TOOL,
     "{what}: refused ({reason})",
@@ -213,32 +263,46 @@ PATCH_FAILED = e("MPC-E123", "patch_failed", Session, 1, "K-PAR-8", &["patch", "
     "The patch doesn't fit the live text (others changed those lines, or it was made \
      against another version). Nothing was applied: patches are all or nothing. stdout \
      shows each failed hunk beside the live lines. Read the text again and make a new \
-     patch, or apply the rest with --partial.");
+     patch, or apply the rest with --partial.")
+    .step("cat", &["-n"],
+        "The patch doesn't fit the live text, so nothing was applied; read the text again and \
+         make a new patch, or apply only the hunks that fit.");
 
 PATCH_REJECTS = e("MPC-E124", "patch_rejects", Session, 1, "K-PAR-8, K-BR-9",
     &["patch", "apply"],
     "{failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)",
     "--partial applied the hunks that fit; the failed ones (on stdout) were not applied. \
-     Read the lines they were for and make those changes again on the live text.");
+     Read the lines they were for and make those changes again on the live text.")
+    .step("cat", &["-n"],
+        "The hunks that fit were applied and the failed ones were not; read the lines they were \
+         for and make those changes again on the live text.");
 
 REPLACE_NO_MATCH = e("MPC-E125", "replace_no_match", Session, 1, "A12 (exact replace)",
     &["replace"],
     "replace: --old matches nothing in {doc}; nothing applied",
     "The exact text in --old isn't in the doc (it matches byte for byte, with \\n line \
      breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the \
-     text exactly; nothing was applied.");
+     text exactly; nothing was applied.")
+    .step("cat", &["-n"],
+        "The exact old text isn't in the doc; read the lines again and copy the text byte for \
+         byte.");
 
 REPLACE_NOT_UNIQUE = e("MPC-E126", "replace_not_unique", Session, 1, "A12 (exact replace)",
     &["replace"],
     "replace: --old matches {matches} times in {doc}; nothing applied",
     "--old must match exactly once. Add surrounding text to --old until it matches once, or \
      pass --all to replace every match. stdout lists where each match is; nothing was \
-     applied.");
+     applied.")
+    .step("cat", &["-n"],
+        "The old text matches more than once; add surrounding text until it matches once, or \
+         replace every match.");
 
 PACK_VERB_NO = e("MPC-E127", "pack_verb_no", Session, 1, "A6 (pack verbs)", &["@pack"],
     "{verb}: nothing applied",
     "The file type's own verb found nothing to change (stdout says why: e.g. no such \
-     section). Check its target (cat, grep -n) and run it again; nothing was applied.");
+     section). Check its target (cat, grep -n) and run it again; nothing was applied.")
+    .step("cat", &[],
+        "The file type's own verb found nothing to change; check its target and run it again.");
 
 // 130–139: approvals
 
@@ -247,18 +311,27 @@ HELD_BACKLOG = e("MPC-E130", "held_backlog", Session, 2, "K-HIST-23, K-ID-10", C
     "Too many of your changes made for a person are waiting for their approval, so new \
      ones are held (nothing applied). This is refused for now, not for good: don't retry in \
      a loop. Ask the person to approve or decline the pending changes (log --pending lists \
-     them), then run the verb again.");
+     them), then run the verb again.")
+    .step("log --pending", &[],
+        "Too many of your changes wait for a person's approval, so new ones are held for now; ask \
+         that person to settle the pending ones, then run the verb again. Don't retry in a loop.");
 
 NO_APPROVAL = e("MPC-E131", "no_approval", Session, 4, "K-ID-11", &["approve", "decline"],
     "change {seq} has no approval (it wasn't made on anyone's behalf)",
     "That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, \
-     or doesn't exist). List the pending ones with log --pending and use one of those.");
+     or doesn't exist). List the pending ones with log --pending and use one of those.")
+    .step("log --pending", &[],
+        "That change isn't waiting for anyone's approval; list the pending ones and use one of \
+         those.");
 
 BAD_APPROVAL = e("MPC-E132", "bad_approval", Session, 2, "K-ID-11", &["approve", "decline"],
     "bad approval: {reason}",
     "An approval is settled once: pending → approved or declined. This one is already \
      settled (the message says how). To reverse a declined change, use revert or restore \
-     --version.");
+     --version.")
+    .step("log --pending", &["--all"],
+        "That approval is already settled; list the settled ones to see how, and revert or \
+         restore to reverse a declined change.");
 
 // 140–159: the sync wire and the doc model
 
@@ -318,7 +391,9 @@ WRONG_KIND = e("MPC-E149", "wrong_kind", Session, 2, "K-SCH-2", &["(host)"],
     "root {root} is {actual}, not {wanted}",
     "The edit treats a part of the doc as the wrong kind (text vs table...). Use the verbs \
      for that kind (capabilities lists them).")
-    .indirect("a pack with a non-text root");
+    .indirect("a pack with a non-text root")
+    .step("capabilities", &[],
+        "The edit treats a part of the doc as the wrong kind; use the verbs for that kind.");
 
 UNSUPPORTED_KIND = e("MPC-E150", "unsupported_kind", Session, 2, "K-SCH-1", &["(host)"],
     "primitive {kind} is not implemented yet",
@@ -355,7 +430,9 @@ UNKNOWN_ID = e("MPC-E160", "unknown_error_id", Session, 4, "the catalog (docs/ER
     &["explain"],
     "no error id {id}",
     "That id isn't in this build's catalog. Run explain with no id to list every id, or \
-     check the id you copied (MPC-E and three digits).");
+     check the id you copied (MPC-E and three digits).")
+    .step("explain", &[],
+        "That id isn't in this build's catalog; list every id, or check the one you copied.");
 
 ENGINE_UNLISTED = e("MPC-E161", "engine_unlisted", Session, 2, "the MPCE seam (stable codes)",
     ANY,
@@ -363,6 +440,41 @@ ENGINE_UNLISTED = e("MPC-E161", "engine_unlisted", Session, 2, "the MPCE seam (s
     "A newer engine refused something this kit build can't explain. Nothing was applied. \
      Report the code; the engine's own docs describe it.")
     .reserved("the native engine (MPCE ranges at G2-core)");
+
+// 170–179: addresses and cursors (K-ADDR-1…3, K-READ-1…3; src/addr.rs)
+
+AMBIGUOUS_ADDRESS = e("MPC-E170", "ambiguous_address", Session, 2, "K-ADDR-2, K-EXIT-1",
+    &["@pack"],
+    "{given} names more than one {what}",
+    "The address you gave names more than one thing (a name or a value two of them share), \
+     so nothing was read or applied; the kit never picks the first one. details.candidates \
+     lists each one's own address (its key or ID) and where it is now: run the verb again \
+     with the address of the one you mean.");
+
+POSITIONAL_NEEDS_VERSION = e("MPC-E171", "positional_needs_version", Session, 2, "K-ADDR-3",
+    CHANGE,
+    "{address} is a position; an agent's edit by position names the version it read",
+    "Positions (#N, LN, line numbers, the Nth match) move when others edit, so an agent's \
+     edit that uses one must say which version it counted them in. Nothing was applied. \
+     Read the doc again (the read prints its version) and run the edit with --if-version \
+     <that version> (a grid edit: --base <that version>), or name the thing by its key.");
+
+ADDRESS_NOT_FOUND = e("MPC-E172", "address_not_found", Session, 4, "K-READ-1, K-READ-3",
+    &["@pack"],
+    "{count} of the addresses name nothing in version {version}",
+    "Some of the addresses you asked for name nothing in this version. The output still \
+     lists every address, with null for each missing one; details.missing gives each \
+     missing address with what does exist there (candidates, its parent's children). Check \
+     them against outline, or ask for one of the candidates.")
+    .reserved("the node verb (K-READ-1)");
+
+STALE_CURSOR = e("MPC-E173", "stale_cursor", Session, 1, "K-READ-2",
+    &["@pack"],
+    "the cursor is for another version, doc or call; nothing was read",
+    "A cursor continues one read of one doc at one version with the same arguments. The doc \
+     changed since (or the cursor is from another doc, or the arguments differ), so nothing \
+     was read. Read again without --cursor and page on with the cursor that read returns.")
+    .reserved("read budgets and cursors (K-READ-2)");
 
 // ---------------------------------------------------------------- 2xx history and undo
 
@@ -372,14 +484,20 @@ UNDO_CONFLICT = e("MPC-E201", "undo_conflict", History, 1,
     "Someone else changed text your change touched, so undoing it whole would overwrite \
      their work. Nothing was applied. Either run undo --partial (undoes the regions nobody \
      touched and reports the rest; revert --partial for revert), or read the lines in \
-     details.conflicts (cat -n) and fix them by hand with replace.");
+     details.conflicts (cat -n) and fix them by hand with replace.")
+    .step("undo --partial", &[],
+        "Undoing the change whole would overwrite others' work; undo only the regions nobody \
+         touched, or fix the conflicting lines by hand.");
 
 UNDO_BLOCKED = e("MPC-E202", "undo_blocked", History, 1,
     "U14, U15, hist.undo_partial", &["undo --partial", "revert"],
     "every region of the top step conflicts ({count} at {where}); nothing applied",
     "Others changed every region of your newest change, so nothing could be undone and it \
      stays on top of your undo history. Fix those lines by hand (replace --lines), then \
-     skip the step with undo --drop to reach older ones.");
+     skip the step with undo --drop to reach older ones.")
+    .step("undo --drop", &[],
+        "Others changed every region of your newest change; fix those lines by hand, then skip \
+         the step to reach older ones.");
 
 UNDO_SKIPPED = e("MPC-E203", "undo_skipped", History, 1, "U14, hist.undo_partial",
     &["undo --partial", "revert"],
@@ -387,30 +505,44 @@ UNDO_SKIPPED = e("MPC-E203", "undo_skipped", History, 1, "U14, hist.undo_partial
      them: {where}",
     "The regions nobody touched were undone; the ones listed were not (others changed \
      them). Read those lines (cat -n) and decide by hand: replace --lines to finish them, or \
-     leave them.");
+     leave them.")
+    .step("cat", &["-n"],
+        "The regions others changed were left alone; read those lines and finish them by hand, or \
+         leave them.");
 
 REVERT_TOO_OLD = e("MPC-E204", "revert_too_old", History, 8, "K-HIST-23, K-EXIT-1",
     &["revert"],
     "change {seq} is too old to revert (revert_too_old); use restore --version",
     "The change is outside the revert window. Never retry the same request. Find a version \
-     from before it (log) and restore --version that version, or edit the text by hand.");
+     from before it (log) and restore --version that version, or edit the text by hand.")
+    .step("log", &[],
+        "The change is outside the revert window; find a version from before it and restore that \
+         version. Never retry the same request.");
 
 NO_SUCH_CHANGE = e("MPC-E205", "no_such_change", History, 4, "K-HIST-19, K-HIST-9",
     &["revert", "restore", "show --version", "diff --version", "version --name"],
     "no change or version {seq} in this doc",
     "There's no change or version by that number. List them with log (changes and \
-     versions, newest first) and use one it prints.");
+     versions, newest first) and use one it prints.")
+    .step("log", &[],
+        "There's no change or version by that number; list them and use one shown.");
 
 HISTORY_LOST = e("MPC-E206", "history_lost", History, 0, "U6, U18, K-HIST-17", UNDO,
     "nothing to undo: your undo history was lost when the doc reloaded",
     "Undo history lives in memory and was dropped when the doc unloaded or the daemon \
      restarted. Your changes are still in the log: find one with log --by <you> and \
-     reverse it with revert <change>.");
+     reverse it with revert <change>.")
+    .step("log", &[],
+        "Undo history was lost when the doc reloaded, but your changes are still in the log; find \
+         yours and revert it.");
 
 CLEARED_BY_PURGE = e("MPC-E207", "cleared_by_purge", History, 0, "U19, K-PURGE-4", UNDO,
     "nothing to undo: a purge cleared the undo history",
     "An owner purged content from this doc, which clears every undo history. Reverse a \
-     change with revert <change> (log lists them), or edit the text by hand.");
+     change with revert <change> (log lists them), or edit the text by hand.")
+    .step("log", &[],
+        "A purge cleared every undo history; find the change in the log and revert it, or edit \
+         the text by hand.");
 
 // ---------------------------------------------------------------- 3xx presence and claims
 
@@ -419,33 +551,46 @@ CLAIMED = e("MPC-E301", "claimed", Presence, 5, "A13 (claims), K-PRES-12",
     "{lines} claimed by {name} ({by}); {remaining_ms} ms left",
     "Someone else is working on those lines right now (a live claim). Nothing was applied. \
      Wait and retry after details.remaining_ms, or work on other lines; activity and who \
-     show who is where.");
+     show who is where.")
+    .step("activity", &[],
+        "Someone else holds a live claim on those lines; see who is where, then wait for the time \
+         left and retry, or work on other lines.");
 
 NO_CLAIM = e("MPC-E302", "no_claim", Presence, 4, "A13 (claims)",
     &["claim --renew", "claim --release"],
     "no live claim {claim}",
     "That claim already ended (it expired, or your edit ended it), or you hold none. Take a \
-     new one with claim --lines a,b if you still need it.");
+     new one with claim --lines a,b if you still need it.")
+    .step("claim", &[],
+        "That claim already ended, or you hold none; take a new one if you still need it.");
 
 CLAIM_CONTENDED = e("MPC-E303", "claim_contended", Presence, 2, "A13 (claims)",
     &["claim --renew"],
     "{claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)",
     "Others are waiting for your claim, so it can't be extended. Finish your edit before it \
-     ends (details.remaining_ms), or release it with claim --release.");
+     ends (details.remaining_ms), or release it with claim --release.")
+    .step("claim --release", &["--id", "{claim}"],
+        "Others are waiting for your claim, so it can't be extended; finish your edit before it \
+         ends, or release it.");
 
 BAD_CLAIM = e("MPC-E304", "bad_claim", Presence, 2, "A13 (claims)",
     &["claim", "claim --renew", "claim --release"],
     "bad claim: {reason}",
     "The claim call isn't valid as given (the message says why: not your claim, a zero \
      ttl, several claims and no --id...). Fix the arguments; claim --release with no id \
-     releases all of yours.");
+     releases all of yours.")
+    .step("claim --release", &[],
+        "The claim call isn't valid as given; fix its arguments, or release all of your claims.");
 
 WATCHING = e("MPC-E305", "watching", Presence, 3, "K11 (participants_max)", CHANGE,
     "watching: the doc has its {max} participants; read-only until the host lets you in",
     "This doc already has as many participants as it allows, so you joined as a watcher: \
      you can read it and follow changes, but not edit or show presence. This is refused for \
      now, not for good: don't retry in a loop. When someone leaves, the host can let you in; \
-     until then, read.");
+     until then, read.")
+    .step("cat", &[],
+        "The doc has all the participants it allows, so you joined as a watcher; read it until \
+         the host lets you in, and don't retry in a loop.");
 
 // ---------------------------------------------------------------- 4xx disk and outside edits
 
@@ -478,7 +623,10 @@ DECLINED_OFF = e("MPC-E405", "declined_off", Disk, 4, "K-DISK-8", CHANGE,
     "live editing is off: {reason} (declined)",
     "The file changed on disk into something that can't be a live doc (the reason says \
      what), so live editing stopped. Reads still work. Edit the file with ordinary tools, \
-     or fix what the reason names; it goes live again when it decodes.");
+     or fix what the reason names; it goes live again when it decodes.")
+    .step("cat", &[],
+        "The file changed on disk into something that can't be live; reads still work, and it \
+         goes live again once it decodes.");
 
 DECLINED_UNREADABLE = e("MPC-E406", "declined_unreadable", Disk, 4, "K-PACK-4", &["(host)"],
     "live editing is off: {reason} (unreadable)",
@@ -497,7 +645,10 @@ DISK = e("MPC-E410", "disk", Disk, 1, "K-DISK-2, K-DISK-10", &["flush", "mv", "(
     "disk: {reason}",
     "Reading or writing the file failed. Nothing is lost: the doc keeps its changes and \
      write-back retries. Check the disk (space, permissions), then flush.")
-    .indirect("an I/O failure");
+    .indirect("an I/O failure")
+    .step("flush", &[],
+        "Reading or writing the file failed, but the doc keeps its changes; check the disk's \
+         space and permissions, then write it back.");
 
 BAD_PATH = e("MPC-E411", "bad_path", Disk, 2, "K-SEC-6, K-DISK-14", &["mv", "(host)"],
     "bad path: {reason}",
@@ -567,23 +718,32 @@ NO_RANDOM = e("MPC-E509", "no_random", Store, 6, "K-T0-4, K-PURGE-13", ANY,
 STORE_NO_DOC = e("MPC-E510", "store_no_doc", Store, 4, "K-EXIT-1", ANY,
     "no doc {doc}",
     "The stored doc is gone (deleted meanwhile). Open the path again.")
-    .indirect("a doc deleted between calls");
+    .indirect("a doc deleted between calls")
+    .step("open", &[],
+        "The stored doc was deleted meanwhile; open the path again.");
 
 STORE_NO_VERSION = e("MPC-E511", "store_no_version", Store, 4, "K-HIST-9",
     &["show --version", "restore", "version --name"],
     "no version {version} for doc {doc}",
-    "There's no such version. List versions with log and use one it prints.");
+    "There's no such version. List versions with log and use one it prints.")
+    .step("log", &[],
+        "There's no such version; list the versions and use one shown.");
 
 STORE_NO_APPROVAL = e("MPC-E512", "store_no_approval", Store, 4, "K-ID-11",
     &["approve", "decline"],
     "no approval for change {seq} of doc {doc}",
     "That change has no approval record. List pending ones with log --pending.")
-    .indirect("an approval record removed between calls");
+    .indirect("an approval record removed between calls")
+    .step("log --pending", &[],
+        "That change has no approval record; list the pending ones.");
 
 UNLOADED = e("MPC-E513", "unloaded", Store, 1, "K-PERF-7", ANY,
     "session unloaded; open the doc again",
     "The doc was unloaded while you held it (idle, or memory pressure). Run the verb \
-     again: it reopens the doc. Nothing was applied.");
+     again: it reopens the doc. Nothing was applied.")
+    .step("open", &[],
+        "The doc was unloaded while you held it; open it again, then run your verb. Nothing was \
+         applied.");
 
 RELEASED = e("MPC-E514", "released", Store, 1, "K-OFF-2", ANY,
     "sessions released",
@@ -599,7 +759,10 @@ BROKEN = e("MPC-E515", "broken", Store, 1, "K-OFF-7", ANY,
 DELETED = e("MPC-E516", "deleted", Store, 4, "K-PURGE-8", ANY,
     "the doc was deleted",
     "The doc was deleted while you were working on it. Nothing was applied. Check whether \
-     the file should exist; open it again to start a new doc.");
+     the file should exist; open it again to start a new doc.")
+    .step("open", &[],
+        "The doc was deleted while you worked on it; check whether the file should exist, and \
+         open it again to start a new doc.");
 
 PACK_ERROR = e("MPC-E517", "pack_error", Store, 1, "K-COD-2", ANY,
     "pack: {reason}",
@@ -619,19 +782,32 @@ CLOSED = e("MPC-E519", "closed", Store, 1, "K-OFF-2", ANY,
      off, for instance). Everything acknowledged was kept and written to the file. The host \
      decides when it opens again.");
 
+ENGINE_MISMATCH = e("MPC-E520", "engine_mismatch", Store, 6, "K-FMT-2, K-FMT-4", ANY,
+    "this doc was written by engine {stored} (format {stored_format}); this kit runs engine \
+     {engine} (format {engine_format})",
+    "The stored doc was written by another engine than this build runs (a build on another \
+     engine, or one rolled back from it), so it was not loaded. Nothing changed. Open it with \
+     a build that runs that engine, or ask the host's operator to migrate it; don't retry.")
+    .indirect("a doc stored by a build on another engine");
+
 // ---------------------------------------------------------------- 6xx erasure
 
 PURGE_CURRENT = e("MPC-E601", "purge_current_version", Erasure, 2, "K-T0-9, K-PURGE-1",
     &["purge"],
     "version {version} of doc {doc} is its current content",
     "The current version of a file can't be purged. Write or restore another version \
-     first, then purge this one.");
+     first, then purge this one.")
+    .step("restore", &[],
+        "A file's current version can't be purged; write or restore another version first, then \
+         purge this one.");
 
 PURGED_VERSION = e("MPC-E602", "purged_version", Erasure, 4, "K-PURGE-4",
     &["show --version", "restore"],
     "version {version} of doc {doc} was purged",
     "An owner purged that version; its content is gone for good. Pick another version \
-     (log).");
+     (log).")
+    .step("log", &[],
+        "That version was purged for good; pick another version.");
 
 // ---------------------------------------------------------------- 7xx tier 0 and blobs
 
@@ -639,12 +815,17 @@ LEASED = e("MPC-E701", "leased", Blob, 5, "K-T0-2", &["lease", "write", "restore
     "leased by {name} ({holder}) until {expires_ms}",
     "Someone else holds the file's lease (a lock while they change it). Nothing was \
      written. Retry after it expires (details.expires_ms, host clock), or ask them to \
-     release it; only an owner can break it (lease --break).");
+     release it; only an owner can break it (lease --break).")
+    .step("status", &[],
+        "Someone else holds the file's lease; see who holds it and until when, then retry after \
+         it expires or ask them to release it.");
 
 NO_LEASE = e("MPC-E702", "no_lease", Blob, 2, "K-T0-7", &["lease --renew"],
     "no lease held",
     "You hold no lease to renew (it expired, or the daemon restarted). Take a new one with \
-     lease.");
+     lease.")
+    .step("lease", &[],
+        "You hold no lease to renew; take a new one.");
 
 BLOB_TOO_LARGE = e("MPC-E703", "blob_too_large", Blob, 4, "K-T0-1", &["write", "(host)"],
     "blob is over the {limit}-byte limit",
@@ -656,14 +837,19 @@ BLOB_NOT_FOUND = e("MPC-E704", "blob_not_found", Blob, 4, "K-T0-1",
     "no blob {blob} in this space",
     "The bytes of that version are gone (collected, or the space was purged). Pick another \
      version (log).")
-    .indirect("a blob file collected under a live version");
+    .indirect("a blob file collected under a live version")
+    .step("log", &[],
+        "The bytes of that version are gone; pick another version.");
 
 BLOB_DAMAGED = e("MPC-E705", "blob_damaged", Blob, 1, "K-T0-4",
     &["cat", "show --version", "restore"],
     "blob {blob} is damaged (its bytes don't match its id)",
     "The stored bytes of that version are damaged and are never served. Pick another \
      version (log), and report it.")
-    .indirect("damaged blob bytes on disk");
+    .indirect("damaged blob bytes on disk")
+    .step("log", &[],
+        "The stored bytes of that version are damaged and never served; pick another version, and \
+         report it.");
 
 BLOB_IO = e("MPC-E706", "blob_io", Blob, 1, "K-T0-1", ANY,
     "blob i/o: {reason}",
@@ -689,7 +875,9 @@ NO_BLOB_SPACE = e("MPC-E709", "no_blob_space", Blob, 4, "K-T0-4, K-PURGE-13", AN
 NO_BLOB = e("MPC-E710", "no_blob", Blob, 4, "K-T0-1", ANY,
     "no blob {blob}",
     "The blob store has no record of those bytes. Pick another version (log).")
-    .indirect("a blob index row removed under a version");
+    .indirect("a blob index row removed under a version")
+    .step("log", &[],
+        "The blob store has no record of those bytes; pick another version.");
 
 // ---------------------------------------------------------------- 8xx structured and CSV
 // the CSV grid work (C1): wired at the C1 merge with main (v0.10.0); the walk in
@@ -698,26 +886,38 @@ NO_BLOB = e("MPC-E710", "no_blob", Blob, 4, "K-T0-1", ANY,
 NEEDS_BASE = e("MPC-E801", "needs_base", Structured, 2, "K-BR-12", &["cell set", "@change"],
     "an agent's grid edit needs a base: read first and pass --base",
     "Agents edit tables against what they read. Read the table first (it prints the \
-     version), then run the edit again with --base <version>.");
+     version), then run the edit again with --base <version>.")
+    .step("cat", &[],
+        "Agents edit tables against what they read; read the table first, then run the edit again \
+         against the version it printed.");
 
 AT_LIMIT = e("MPC-E802", "at_limit", Structured, 2, "K-CSV-7 (KC4)", &["@change"],
     "this table is at its size limit ({limit} {what}, deleted rows included); the owner can \
      free space with `rows drop-deleted`",
     "The table can't grow past its limit (details.what: cells or columns); nothing was \
      applied and nothing was dropped. Remove rows or columns first, or ask an owner to run \
-     rows drop-deleted to free the space deleted rows still hold.");
+     rows drop-deleted to free the space deleted rows still hold.")
+    .step("rows drop-deleted", &[],
+        "The table is at its size limit; remove rows or columns first, or have an owner free the \
+         space deleted rows still hold.");
 
 FACET_CONFLICT = e("MPC-E803", "facet_conflict", Structured, 1, "K-BR-12 (KC7)",
     &["@change"],
     "{count} element(s) changed since your base: {where}",
     "Someone changed the same cells or rows after the version you read. Nothing was \
-     applied. Read again, redo your change on the new values, and pass the new --base.");
+     applied. Read again, redo your change on the new values, and pass the new --base.")
+    .step("cat", &[],
+        "Someone changed the same cells or rows since your base; read again, redo your change on \
+         the new values, and pass the new base.");
 
 OP_REFUSED = e("MPC-E804", "op_refused", Structured, 2, "K-SCH-2 (C1)", &["@change"],
     "op {op} on root {root}: {problem}",
     "One of the edit's row, column or cell operations can't apply (an unknown or reused \
      key, a move next to itself, dropping a live element); nothing of the change was \
-     applied. List the rows or columns again (row list, col list) and use the keys shown.");
+     applied. List the rows or columns again (row list, col list) and use the keys shown.")
+    .step("row list", &[],
+        "An operation names an unknown or reused key; list the rows or columns again and use the \
+         keys shown.");
 
 NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3 (C1)",
     &["@pack"],
@@ -726,14 +926,20 @@ NO_ELEMENT = e("MPC-E805", "no_element", Structured, 4, "CSV contract §3.3 (C1)
      who deleted it when you may read history). A raw keyed cell write naming a row or \
      column the table doesn't know (dropped, or never in it) is refused the same way, whole. \
      Nothing was applied. List the live ones (row list, col list), or restore a deleted one \
-     first (row restore, col restore).");
+     first (row restore, col restore).")
+    .step("row list", &[],
+        "The row, column or cell is unknown or deleted; list the live ones, or restore a deleted \
+         one first.");
 
 HEADER_NAMES_UNRENDERED = e("MPC-E806", "header_names_unrendered", Structured, 2,
     "CSV contract §1.4 (C1)", &["@pack"],
     "the columns have names that would appear as a header line; clear them or add a row first",
     "The table has no row, and its columns still hold names from before the header was \
      switched off: switching it on would write them as a header line, changing the file. \
-     Nothing was applied. Clear the names (col rename) or add a row first, then switch.");
+     Nothing was applied. Clear the names (col rename) or add a row first, then switch.")
+    .step("col rename", &[],
+        "The columns still hold names that would be written as a header line; clear them or add a \
+         row first, then switch.");
 
 HEADER_ONLY_ROW_BLANK = e("MPC-E807", "header_only_row_blank", Structured, 2,
     "CSV contract §1.4 (C1)", &["@pack"],
@@ -741,7 +947,10 @@ HEADER_ONLY_ROW_BLANK = e("MPC-E807", "header_only_row_blank", Structured, 2,
      isn't written (the file would change); add a non-blank row first",
     "The table's only row is blank: as the header it would be a blank header line with \
      nothing after it, which isn't written, so the file would change. Nothing was applied. \
-     Add a row with values first (row insert), then switch the header on.");
+     Add a row with values first (row insert), then switch the header on.")
+    .step("row insert", &[],
+        "A blank only row can't be written as the header; add a row with values first, then \
+         switch the header on.");
 
 // ---------------------------------------------------------------- 9xx limits
 
@@ -755,25 +964,53 @@ TOOL_LIMIT = e("MPC-E902", "tool_limit", Limits, 2, "K-PAR-7, K-SEC-4", RUN_TOOL
     "limit: {reason}",
     "The call would go over a bound (output size, pattern size or work). Nothing was \
      applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller \
-     edits.");
+     edits.")
+    .step("head", &[],
+        "The call would pass a bound; narrow it: fewer lines, a simpler pattern, smaller edits.");
 
 CLAIMS_DOC_CAP = e("MPC-E903", "claims_doc_cap", Limits, 2, "A13 (claims_max)", &["claim"],
     "bad claim: this doc has {count} live claims (the most)",
     "This doc has as many live claims as it allows. Wait for some to end (activity and who \
-     show them), or edit without a claim.");
+     show them), or edit without a claim.")
+    .step("activity", &[],
+        "This doc has all the live claims it allows; wait for some to end, or edit without a \
+         claim.");
 
 CLAIMS_PARTICIPANT_CAP = e("MPC-E904", "claims_participant_cap", Limits, 2,
     "A13 (claims_per_participant)", &["claim"],
     "bad claim: you hold {count} claims here (the most); release one",
     "You hold as many claims on this doc as you may. Release one you no longer need \
-     (claim --release --id ID), then claim again.");
+     (claim --release --id ID), then claim again.")
+    .step("claim --release", &[],
+        "You hold all the claims you may on this doc; release one you no longer need, then claim \
+         again.");
 
 CLAIM_WAITERS_CAP = e("MPC-E905", "claim_waiters_cap", Limits, 2,
     "A13 (claim_waiters_max)", &["(host)"],
     "bad claim: {count} already waiting for {claim}",
     "That claim already has as many waiters as it allows. Retry after it ends, or work \
-     elsewhere.");
+     elsewhere.")
+    .step("activity", &[],
+        "That claim already has as many waiters as it allows; see where others are working and \
+         work elsewhere, or retry after it ends.");
 }
 
 registry! { ENGINE:
+
+// The native engine's own codes (feature `native`), as the engine allocates them; reached
+// through the adapter (`engine/mpce.rs`). Append-only, as the kit's.
+
+REF_NOT_IN_PAST = e("MPCE-E199", "ref_not_in_past", Session, 2,
+    "the MPCE seam (stable codes); E-CORE-3", SYNC,
+    "the engine refused the update: an op names an element outside its own causal past",
+    "The update depends on content it doesn't carry or the doc doesn't hold. Nothing was \
+     applied. The editor should resync.")
+    .indirect("the native engine's admission (feature native)");
+
+CHANGE_TOO_LARGE = e("MPCE-E980", "change_too_large", Limits, 2,
+    "the MPCE seam (stable codes); E-CORE-10", CHANGE,
+    "the engine refused the change: it would pass a decoder bound",
+    "The change is larger than one update may be (in events, bytes or one op's text). \
+     Nothing was stored or applied. Make it in smaller changes.")
+    .indirect("the native engine's local edit (feature native)");
 }

@@ -21,6 +21,7 @@ use super::handles::Handles;
 use super::host::{LeaveReason, Rights};
 use super::participant::{CellCursor, ConnId, CursorAt, Participant, Role, RosterEntry};
 use super::position::LineRange;
+use crate::doc::ClientId;
 use crate::store::Seq;
 
 /// Who an event is about: the host's participant id, or, for a viewer whose participant
@@ -115,7 +116,19 @@ pub enum RosterEvent {
     /// Away (every connection hidden for [`super::Config::away_after_ms`]) or back.
     Away { who: Who, away: bool },
     /// Their caret: anchor and head, in bytes and `line:col`, or gone. Coalesced: one per
-    /// participant per flush, the last place (carried through other people's edits too).
+    /// connection per flush, the last place (carried through other people's edits too).
+    ///
+    /// **Per connection (v0.10.1).** On a text doc `client` names the connection whose caret
+    /// this is ([`super::Device::client`]); a client keeps one caret per `(who, client)` and
+    /// hides only its own connection's. The stream stays right for a consumer that ignores
+    /// `client` and keeps one caret a participant (the last event's): within a flush, a
+    /// participant's events end with one whose caret is [`RosterEntry::cursor`] (their most
+    /// active connection's), so after every flush that consumer holds exactly what it held
+    /// before v0.10.1. When the last per-connection event isn't that caret (a connection
+    /// left, or dropped its caret, while another still has one), one more event follows with
+    /// `client: None` and the participant's caret: it is about the participant, not a
+    /// connection. A participant with one connection gets exactly the events they got
+    /// before, each with its `client`.
     Cursor {
         who: Who,
         cursor: Option<CursorAt>,
@@ -124,9 +137,12 @@ pub enum RosterEvent {
         /// A client whose text is at another version maps them through the changes between
         /// (e.g. [`super::Session::events_since`]).
         version: Seq,
+        /// The connection whose caret this is, or `None` for the participant's own caret
+        /// ([`RosterEntry::cursor`]; see above). v0.10.1.
+        client: Option<ClientId>,
     },
     /// On a grid: their cell caret or selection ([`RosterEntry::cell`]), by key, or gone.
-    /// Coalesced as [`RosterEvent::Cursor`] is: one per participant per flush, the last
+    /// Coalesced: one per participant per flush (grid carets are per participant), the last
     /// place (its live position, column name and lines follow moves, sorts and others'
     /// edits too).
     CellCursor {
@@ -187,8 +203,12 @@ struct Told {
     rights: Rights,
     role: Role,
     away: bool,
+    /// The caret the participant's last `Cursor` event gave (what a consumer that keeps one
+    /// caret a participant holds).
     cursor: Option<CursorAt>,
     cell: Option<CellCursor>,
+    /// Each connection's caret as last told (a text doc's [`RosterEntry::devices`]).
+    devices: Vec<(ClientId, Option<CursorAt>)>,
 }
 
 struct Sub {
@@ -361,6 +381,7 @@ impl RosterHub {
                             away: false,
                             cursor: None,
                             cell: None,
+                            devices: Vec::new(),
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -387,6 +408,7 @@ impl RosterHub {
                             away: false,
                             cursor: None,
                             cell: None,
+                            devices: Vec::new(),
                         });
                         self.told.len() - 1
                     }
@@ -413,14 +435,7 @@ impl RosterHub {
                         away: r.entry.away,
                     });
                 }
-                if t.cursor != r.entry.cursor {
-                    t.cursor = r.entry.cursor.clone();
-                    batch.push(RosterEvent::Cursor {
-                        who: who.clone(),
-                        cursor: r.entry.cursor.clone(),
-                        version,
-                    });
-                }
+                cursor_events(t, &who, &r.entry, version, &mut batch);
                 if t.cell != r.entry.cell {
                     t.cell = r.entry.cell.clone();
                     batch.push(RosterEvent::CellCursor {
@@ -490,6 +505,60 @@ fn told(r: &Row) -> Told {
         away: r.entry.away,
         cursor: r.entry.cursor.clone(),
         cell: r.entry.cell.clone(),
+        devices: devices(&r.entry),
+    }
+}
+
+fn devices(e: &RosterEntry) -> Vec<(ClientId, Option<CursorAt>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.cursor.clone()))
+        .collect()
+}
+
+/// One participant's `Cursor` events for a flush ([`RosterEvent::Cursor`], v0.10.1): one per
+/// connection whose caret changed since `t` (a connection gone with a caret: `None`), the
+/// ones whose caret is the participant's ([`RosterEntry::cursor`]) last; then, if the last
+/// caret told isn't the participant's, one with `client: None` that is.
+fn cursor_events(
+    t: &mut Told,
+    who: &Who,
+    e: &RosterEntry,
+    version: Seq,
+    batch: &mut Vec<RosterEvent>,
+) {
+    let was = |c: ClientId| t.devices.iter().find(|(k, _)| *k == c).map(|(_, x)| x);
+    let mut moved: Vec<(ClientId, Option<CursorAt>)> = t
+        .devices
+        .iter()
+        .filter(|(c, x)| x.is_some() && !e.devices.iter().any(|d| d.client == *c))
+        .map(|(c, _)| (*c, None))
+        .collect();
+    for d in &e.devices {
+        if was(d.client).cloned().flatten() != d.cursor {
+            moved.push((d.client, d.cursor.clone()));
+        }
+    }
+    // a stable sort: the participant's own caret goes last
+    moved.sort_by_key(|(_, x)| *x == e.cursor);
+    t.devices = devices(e);
+    for (c, x) in moved {
+        t.cursor = x.clone();
+        batch.push(RosterEvent::Cursor {
+            who: who.clone(),
+            cursor: x,
+            version,
+            client: Some(c),
+        });
+    }
+    if t.cursor != e.cursor {
+        t.cursor = e.cursor.clone();
+        batch.push(RosterEvent::Cursor {
+            who: who.clone(),
+            cursor: e.cursor.clone(),
+            version,
+            client: None,
+        });
     }
 }
 

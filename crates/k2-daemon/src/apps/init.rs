@@ -1,11 +1,14 @@
 //! `/cli/app/init` (prd-tauri-core-0467-v1 TC-13): `k2 app init --template
 //! tauri|static|node-api [<folder>] [--name <app>] [--dry-run]`.
 //!
-//! POST `{folder, template, name?, dryRun?}`: the daemon plans the
-//! template's files in `folder` (`k2_core::app_templates`) and, unless it
-//! is a dry run, writes them. It never overwrites a file: one that exists
+//! POST `{folder, template, name?, app?, voice?, dryRun?}`: the daemon plans
+//! the template's files in `folder` (`k2_core::app_templates`) and, unless
+//! it is a dry run, writes them. It never overwrites a file: one that exists
 //! is `skipped`; `tauri.conf.json` only gains the keys it lacks; JSON5 and
 //! TOML Tauri configs get the snippet printed instead.
+//!
+//! `app` (0.46.8, `--app`): a thin shell over an App already on this box,
+//! one the caller may reach and K2 fronts (the update feed's own rules).
 //!
 //! Who: as `k2 app sdk add` (whoever may build from that folder: the owner,
 //! an Owner/Admin login, a K2 shell tab, an agent with "Build and run
@@ -24,7 +27,7 @@ pub const POST_ROUTES: &[&str] = &[ROUTE];
 
 fn refusal(e: app_templates::TemplateError) -> Refusal {
     let status = match e.code {
-        tpl_codes::TEMPLATE_UNKNOWN | tpl_codes::NAME_INVALID => 400,
+        tpl_codes::TEMPLATE_UNKNOWN | tpl_codes::NAME_INVALID | tpl_codes::TAURI_ONLY => 400,
         tpl_codes::NOT_A_TAURI_REPO | tpl_codes::CHANGED_UNDER_US => 409,
         _ => 500,
     };
@@ -45,7 +48,17 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     })?;
     let dry = v.get("dryRun").and_then(J::as_bool).unwrap_or(false);
     let sub = super::origins::box_subdomain();
-    let plan = app_templates::plan(&folder, template, s(&v, "name"), Some(sub.as_str()).filter(|x| !x.is_empty())).map_err(refusal)?;
+    let voice = v.get("voice").and_then(J::as_bool).unwrap_or(false);
+    let existing = match s(&v, "app") {
+        // Before the App is looked up, so the template's own refusal wins.
+        Some(_) if template != "tauri" => {
+            return Err(no(tpl_codes::TAURI_ONLY, 400, format!("--app goes with --template tauri, not --template {template}")));
+        }
+        Some(raw) => Some(super::updates_routes::shell_target(who, raw)?),
+        None => None,
+    };
+    let options = app_templates::Options { name: s(&v, "name"), sub: Some(sub.as_str()).filter(|x| !x.is_empty()), existing: existing.as_ref(), voice };
+    let plan = app_templates::plan_with(&folder, template, &options).map_err(refusal)?;
     let mut out = app_templates::plan_json(&plan, dry);
     out["ok"] = json!(true);
     out["dryRun"] = json!(dry);

@@ -9,6 +9,10 @@
 //!   label, an empty `pubkey`, `bundle.createUpdaterArtifacts: true`),
 //!   `k2/README.md` with the next five commands, and a `tauri-linux`
 //!   compute preset when the repo's `.k2/compute.toml` has presets.
+//!   With `--app <existing App>` (0.46.8, a thin shell over a server App the
+//!   box already runs): no web manifest, and the updater wired to that App's
+//!   host with the download host's `latest.json` as a second endpoint. With
+//!   `--voice` (0.46.8): the mic and camera keys (below).
 //! - `static`: `k2/web.manifest.json` only.
 //! - `node-api`: a small `@k2/server` backend in `k2/api/` (manifest, a
 //!   health route, `host.checks`, and the parted-upload route: a phone sends
@@ -21,6 +25,12 @@
 //! `tauri.conf.json` and only by inserting keys it lacks, with every other
 //! byte kept; `tauri.conf.json5` and `Tauri.toml` get the snippet printed
 //! instead (TA-17: Tauri reads all three).
+//!
+//! **`--voice`:** `src-tauri/Info.plist` (macOS) and `Info.ios.plist` (Tauri
+//! merges both), `src-tauri/Entitlements.plist` and
+//! `bundle.macOS.entitlements`. A plist that exists is never edited: the keys
+//! it lacks are printed. So are the Android lines: `gen/android` belongs to
+//! `tauri android init`.
 
 mod json_insert;
 mod text;
@@ -45,6 +55,8 @@ pub mod codes {
     pub const NAME_INVALID: &str = "app_id_invalid";
     /// A file changed between the plan and the write.
     pub const CHANGED_UNDER_US: &str = "init_changed";
+    /// `--app` or `--voice` on a template other than `tauri`.
+    pub const TAURI_ONLY: &str = "tauri_template_only";
     pub const IO: &str = "io_error";
 }
 
@@ -96,7 +108,8 @@ pub struct FilePlan {
 pub struct Plan {
     pub template: String,
     pub folder: String,
-    /// The App name the files use (`<name>-web`, `<name>-api`).
+    /// The App name the files use (`<name>-web`, `<name>-api`), or the
+    /// existing App's id (`--app`).
     pub name: String,
     pub files: Vec<FilePlan>,
     /// The commands to run next, in order.
@@ -127,12 +140,61 @@ fn host_for(app_id: &str, sub: Option<&str>) -> Option<String> {
     sub.filter(|s| !s.trim().is_empty()).map(|s| format!("{app_id}.{}.{}", s.trim(), crate::tunnel::config::SUBDOMAIN_HOST))
 }
 
-/// Plan `template` in `folder`. `name`: `--name`, else the folder's name;
-/// `sub`: this box's K2 Connect subdomain, for the App's URL.
+/// A server App already on this box (`--app`), as the daemon read it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExistingApp {
+    pub app_id: String,
+    /// Its first public host (`None`: it has none yet).
+    pub host: Option<String>,
+    /// The stable channel's `latest.json` on the download host.
+    pub fallback_endpoint: Option<String>,
+    /// The id K2 Web mints the download-host token for.
+    pub dl_id: Option<String>,
+}
+
+/// What a plan is asked for, past the template and folder.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options<'a> {
+    /// `--name`, else the folder's name.
+    pub name: Option<&'a str>,
+    /// This box's K2 Connect subdomain, for the App's URL.
+    pub sub: Option<&'a str>,
+    /// `--app`: wire the shell to this App instead of a new `<name>-web`.
+    pub existing: Option<&'a ExistingApp>,
+    /// `--voice`: the mic and camera permission keys.
+    pub voice: bool,
+}
+
+/// Plan `template` in `folder` with no options past the name and box.
 pub fn plan(folder: &Path, template: &str, name: Option<&str>, sub: Option<&str>) -> Result<Plan, TemplateError> {
+    plan_with(folder, template, &Options { name, sub, ..Options::default() })
+}
+
+/// Plan `template` in `folder`.
+pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, TemplateError> {
     if !TEMPLATES.contains(&template) {
         return Err(err(codes::TEMPLATE_UNKNOWN, format!("--template is one of {} (not '{template}')", TEMPLATES.join(", "))));
     }
+    if template != "tauri" && (o.existing.is_some() || o.voice) {
+        return Err(err(codes::TAURI_ONLY, format!("--app and --voice go with --template tauri, not --template {template}")));
+    }
+    if let Some(e) = o.existing {
+        if o.name.is_some() {
+            return Err(err(codes::TAURI_ONLY, format!("--app names the App already: drop --name (the shell updates through {})", e.app_id)));
+        }
+        let mut p = Plan { template: template.to_string(), folder: folder.display().to_string(), name: e.app_id.clone(), files: Vec::new(), next: Vec::new(), notes: Vec::new() };
+        if e.host.is_none() {
+            p.notes.push(format!(
+                "{} has no public host yet, so the files say <your-app-host>; give it one (k2 app domain add {} <label>), then put it in (k2 app updates list {} --json prints the URLs)",
+                e.app_id, e.app_id, e.app_id
+            ));
+        }
+        let host = e.host.clone().unwrap_or_else(|| "<your-app-host>".into());
+        let t = Tauri { base: &e.app_id, app_id: &e.app_id, host: &host, existing: Some(e), voice: o.voice };
+        plan_tauri(folder, &t, &mut p)?;
+        return Ok(p);
+    }
+    let (name, sub) = (o.name, o.sub);
     let raw = name.map(str::to_string).unwrap_or_else(|| folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     let base = name_from(&raw).ok_or_else(|| {
         err(codes::NAME_INVALID, format!("'{raw}' can't name an App: pass --name <name> (lower-case letters, digits and -, a letter first, up to 28)"))
@@ -151,7 +213,7 @@ pub fn plan(folder: &Path, template: &str, name: Option<&str>, sub: Option<&str>
     }
     let host_s = host.clone().unwrap_or_else(|| "<your-app-host>".into());
     match template {
-        "tauri" => plan_tauri(folder, &base, &app_id, &host_s, &mut p)?,
+        "tauri" => plan_tauri(folder, &Tauri { base: &base, app_id: &app_id, host: &host_s, existing: None, voice: o.voice }, &mut p)?,
         "static" => {
             new_file(folder, "k2/web.manifest.json", &text::web_manifest(&app_id, &base), &mut p);
             p.next = vec![
@@ -193,7 +255,21 @@ fn new_file(folder: &Path, rel: &str, content: &str, p: &mut Plan) {
     }
 }
 
-fn plan_tauri(folder: &Path, base: &str, app_id: &str, host: &str, p: &mut Plan) -> Result<(), TemplateError> {
+/// The Tauri template's inputs.
+struct Tauri<'a> {
+    base: &'a str,
+    app_id: &'a str,
+    host: &'a str,
+    /// `--app`: a thin shell over this App; no web manifest.
+    existing: Option<&'a ExistingApp>,
+    voice: bool,
+}
+
+/// The file `bundle.macOS.entitlements` names by default, from `src-tauri/`.
+const ENTITLEMENTS: &str = "./Entitlements.plist";
+
+fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateError> {
+    let (base, app_id, host) = (t.base, t.app_id, t.host);
     let tauri_dir = folder.join("src-tauri");
     let json_conf = tauri_dir.join("tauri.conf.json");
     let other_conf = ["tauri.conf.json5", "Tauri.toml"].into_iter().find(|f| tauri_dir.join(f).is_file());
@@ -207,36 +283,68 @@ fn plan_tauri(folder: &Path, base: &str, app_id: &str, host: &str, p: &mut Plan)
             ),
         ));
     }
-    new_file(folder, "k2/web.manifest.json", &text::web_manifest(app_id, base), p);
+    if t.existing.is_none() {
+        new_file(folder, "k2/web.manifest.json", &text::web_manifest(app_id, base), p);
+    }
     let endpoint = format!("https://{host}/_k2/updates/stable/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}");
-    let updater = json!({ "endpoints": [endpoint], "pubkey": "" });
+    // A thin shell's second endpoint: the download host still answers when
+    // the box is down.
+    let fallback = t.existing.and_then(|e| e.fallback_endpoint.as_deref());
+    let endpoints: Vec<&str> = std::iter::once(endpoint.as_str()).chain(fallback).collect();
+    let updater = json!({ "endpoints": endpoints, "pubkey": "" });
+    // `--voice`: where the entitlements file is, from the config (`None`: the
+    // config names a path K2 won't write to; its keys are printed instead).
+    let mut entitlements = Some(ENTITLEMENTS.to_string());
     if json_conf.is_file() {
         let before = std::fs::read_to_string(&json_conf).map_err(|e| err(codes::IO, format!("read src-tauri/tauri.conf.json: {e}")))?;
         match json_insert::wire_updater(&before, &updater) {
-            Ok(json_insert::Wired { text: Some(after), added }) => p.files.push(FilePlan {
-                path: "src-tauri/tauri.conf.json".into(),
-                action: Action::Edit,
-                note: format!("adds {} (every other line kept)", added.join(", ")),
-                content: after,
-                before: Some(before),
-            }),
-            Ok(json_insert::Wired { text: None, .. }) => p.files.push(FilePlan {
-                path: "src-tauri/tauri.conf.json".into(),
-                action: Action::Skipped,
-                note: "already has plugins.updater and bundle.createUpdaterArtifacts: left as it is (check its endpoints point at the App's /_k2/updates/…)".into(),
-                content: String::new(),
-                before: None,
-            }),
+            Ok(w) => {
+                let mut added = w.added;
+                let mut after = w.text;
+                if t.voice {
+                    let cur = after.clone().unwrap_or_else(|| before.clone());
+                    match json_insert::wire_entitlements(&cur, ENTITLEMENTS) {
+                        Ok(json_insert::Wired { text: Some(edited), added: more }) => {
+                            after = Some(edited);
+                            added.extend(more);
+                        }
+                        Ok(json_insert::Wired { text: None, .. }) => {
+                            entitlements = serde_json::from_str::<J>(&cur)
+                                .ok()
+                                .and_then(|v| v["bundle"]["macOS"]["entitlements"].as_str().map(str::to_string));
+                        }
+                        Err(why) => p.notes.push(format!(
+                            "src-tauri/tauri.conf.json can't take bundle.macOS.entitlements ({why}): add \"entitlements\": \"{ENTITLEMENTS}\" under bundle.macOS by hand, or the mic and camera entitlements won't reach the build"
+                        )),
+                    }
+                }
+                match after {
+                    Some(after) => p.files.push(FilePlan {
+                        path: "src-tauri/tauri.conf.json".into(),
+                        action: Action::Edit,
+                        note: format!("adds {} (every other line kept)", added.join(", ")),
+                        content: after,
+                        before: Some(before),
+                    }),
+                    None => p.files.push(FilePlan {
+                        path: "src-tauri/tauri.conf.json".into(),
+                        action: Action::Skipped,
+                        note: format!("already has plugins.updater and bundle.createUpdaterArtifacts: left as it is (check its endpoints: {})", endpoints.join(" , ")),
+                        content: String::new(),
+                        before: None,
+                    }),
+                }
+            }
             Err(why) => p.files.push(FilePlan {
                 path: "src-tauri/tauri.conf.json".into(),
                 action: Action::Snippet,
                 note: format!("not edited ({why}): add this by hand"),
-                content: text::tauri_json_snippet(&updater),
+                content: text::tauri_json_snippet(&updater, t.voice),
                 before: None,
             }),
         }
     } else if let Some(f) = other_conf {
-        let snippet = if f == "Tauri.toml" { text::tauri_toml_snippet(&updater) } else { text::tauri_json_snippet(&updater) };
+        let snippet = if f == "Tauri.toml" { text::tauri_toml_snippet(&updater, t.voice) } else { text::tauri_json_snippet(&updater, t.voice) };
         p.files.push(FilePlan {
             path: format!("src-tauri/{f}"),
             action: Action::Snippet,
@@ -245,7 +353,17 @@ fn plan_tauri(folder: &Path, base: &str, app_id: &str, host: &str, p: &mut Plan)
             before: None,
         });
     }
-    new_file(folder, "k2/README.md", &text::tauri_readme(app_id, host), p);
+    let mut readme = match t.existing {
+        Some(e) => text::tauri_readme_existing(app_id, host, e.fallback_endpoint.as_deref(), e.dl_id.as_deref()),
+        None => text::tauri_readme(app_id, host),
+    };
+    if t.voice {
+        readme.push_str(text::VOICE_README);
+    }
+    new_file(folder, "k2/README.md", &readme, p);
+    if t.voice {
+        plan_voice(folder, base, entitlements.as_deref(), p);
+    }
     // CE-3: a preset stub when the repo already keeps compute presets.
     let compute = folder.join(".k2/compute.toml");
     if let Ok(t) = std::fs::read_to_string(&compute) {
@@ -264,17 +382,105 @@ fn plan_tauri(folder: &Path, base: &str, app_id: &str, host: &str, p: &mut Plan)
             });
         }
     }
-    p.next = vec![
-        "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
-        "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
-        format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
-        format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
-        format!("npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
-        format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
-        format!("k2 app updates promote {app_id} --from beta --to stable"),
-        format!("k2 app status {app_id}"),
-    ];
+    let token_step = |dl: Option<&str>| {
+        format!(
+            "ask K2 Web for this App's download-host token ({}), then k2 app updates token {app_id} --file <file>   (never on the command line)",
+            dl.unwrap_or("k2 app updates token <app> names the id it is for")
+        )
+    };
+    p.next = match t.existing {
+        Some(e) => vec![
+            format!("point the shell's window at the live site: app.windows[0].url = \"https://{host}/\" in src-tauri/tauri.conf.json"),
+            "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
+            "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
+            format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
+            token_step(e.dl_id.as_deref()),
+            format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
+            format!("k2 app updates promote {app_id} --from beta --to stable"),
+            format!("k2 app status {app_id}"),
+        ],
+        None => vec![
+            "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
+            "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
+            format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
+            format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
+            token_step(None),
+            format!("npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
+            format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),
+            format!("k2 app updates promote {app_id} --from beta --to stable"),
+            format!("k2 app status {app_id}"),
+        ],
+    };
     Ok(())
+}
+
+/// `--voice`: the mic and camera keys, per platform.
+fn plan_voice(folder: &Path, name: &str, entitlements: Option<&str>, p: &mut Plan) {
+    let usage = text::voice_usage_keys(name);
+    plist_keys(folder, "src-tauri/Info.plist", &usage, "macOS's", p);
+    plist_keys(folder, "src-tauri/Info.ios.plist", &usage, "iOS's", p);
+    let ents = text::voice_entitlements();
+    // A path inside src-tauri/ K2 may write; one outside gets the keys printed.
+    let inside = entitlements.filter(|e| !Path::new(e).is_absolute() && !e.split(['/', '\\']).any(|c| c == ".."));
+    match inside {
+        Some(e) => {
+            let rel = format!("src-tauri/{}", e.trim_start_matches("./"));
+            plist_keys(folder, &rel, &ents, "the macOS hardened runtime's", p);
+        }
+        None => {
+            let shown = entitlements.unwrap_or("your entitlements file");
+            p.files.push(FilePlan {
+                path: shown.to_string(),
+                action: Action::Snippet,
+                note: "bundle.macOS.entitlements names this file, and K2 doesn't write outside src-tauri/: add these by hand".into(),
+                content: text::plist_entries(&ents),
+                before: None,
+            });
+        }
+    }
+    let android = "src-tauri/gen/android/app/src/main/AndroidManifest.xml";
+    let lines = text::android_permissions();
+    let has = std::fs::read_to_string(folder.join(android)).ok();
+    let missing: Vec<&String> = lines.iter().filter(|l| has.as_deref().is_none_or(|t| !t.contains(android_name(l)))).collect();
+    if missing.is_empty() {
+        p.files.push(FilePlan { path: android.into(), action: Action::Skipped, note: "already has the mic and camera permissions".into(), content: String::new(), before: None });
+    } else {
+        p.files.push(FilePlan {
+            path: android.into(),
+            action: Action::Snippet,
+            note: "tauri android init writes this file and K2 doesn't edit it: put these inside <manifest>, and ask for the mic and camera at run time".into(),
+            content: missing.iter().map(|l| format!("{l}\n")).collect(),
+            before: None,
+        });
+    }
+}
+
+/// `android.permission.X` of a `<uses-permission>` line.
+fn android_name(line: &str) -> &str {
+    line.split('"').nth(1).unwrap_or(line)
+}
+
+/// A new plist with `entries`, or (it exists: never edited) the entries it
+/// lacks to add by hand.
+fn plist_keys(folder: &Path, rel: &str, entries: &[(String, String)], whose: &str, p: &mut Plan) {
+    let path = folder.join(rel);
+    if !path.exists() {
+        p.files.push(FilePlan { path: rel.to_string(), action: Action::Write, note: format!("new: {whose} mic and camera keys"), content: text::plist(entries), before: None });
+        return;
+    }
+    let has = std::fs::read_to_string(&path).unwrap_or_default();
+    let missing: Vec<(String, String)> = entries.iter().filter(|(k, _)| !has.contains(&format!("<key>{k}</key>"))).cloned().collect();
+    if missing.is_empty() {
+        p.files.push(FilePlan { path: rel.to_string(), action: Action::Skipped, note: format!("already has {whose} mic and camera keys"), content: String::new(), before: None });
+    } else {
+        p.files.push(FilePlan {
+            path: rel.to_string(),
+            action: Action::Snippet,
+            note: "already there and K2 doesn't edit a plist: add these inside its <dict>".into(),
+            content: text::plist_entries(&missing),
+            before: None,
+        });
+    }
 }
 
 /// What [`apply`] did.

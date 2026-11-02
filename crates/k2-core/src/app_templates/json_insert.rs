@@ -68,6 +68,47 @@ pub fn wire_updater(text: &str, updater: &J) -> Result<Wired, String> {
     Ok(Wired { text: Some(t), added })
 }
 
+/// Add `bundle.macOS.entitlements` (= `path`) to a Tauri config's text when
+/// it is missing (`text: None` when it is there). `Err(why)`: K2 can't edit
+/// it safely; the same proof as [`wire_updater`].
+pub fn wire_entitlements(text: &str, path: &str) -> Result<Wired, String> {
+    let root: J = serde_json::from_str(text).map_err(|e| format!("it doesn't parse as JSON: {e}"))?;
+    let bundle = root.get("bundle");
+    let macos = bundle.and_then(|b| b.get("macOS"));
+    if macos.and_then(|m| m.get("entitlements")).is_some_and(|e| !e.is_null()) {
+        return Ok(Wired { text: None, added: Vec::new() });
+    }
+    if bundle.is_some_and(|b| !b.is_object()) {
+        return Err("its bundle isn't an object".into());
+    }
+    if macos.is_some_and(|m| !m.is_object()) {
+        return Err("its bundle.macOS isn't an object".into());
+    }
+    if macos.is_some_and(|m| m.get("entitlements").is_some()) {
+        return Err("its bundle.macOS.entitlements is null".into());
+    }
+    let unit = indent_unit(text);
+    let value = J::String(path.to_string());
+    let after = if let Some(open) = object_at(text, &["bundle", "macOS"]) {
+        insert_member(text, open, "entitlements", &value, &unit)
+    } else if let Some(open) = object_at(text, &["bundle"]) {
+        insert_member(text, open, "macOS", &serde_json::json!({ "entitlements": path }), &unit)
+    } else {
+        let top = object_at(text, &[]).ok_or("no top-level object")?;
+        insert_member(text, top, "bundle", &serde_json::json!({ "macOS": { "entitlements": path } }), &unit)
+    }
+    .ok_or("the bundle object couldn't be found in the text")?;
+    let got: J = serde_json::from_str(&after).map_err(|e| format!("the edit didn't parse ({e})"))?;
+    let mut expect = root.clone();
+    let b = expect.as_object_mut().ok_or("not an object")?.entry("bundle").or_insert_with(|| J::Object(Default::default()));
+    let m = b.as_object_mut().ok_or("bundle")?.entry("macOS").or_insert_with(|| J::Object(Default::default()));
+    m.as_object_mut().ok_or("bundle.macOS")?.insert("entitlements".into(), value);
+    if got != expect {
+        return Err("the edit didn't come out as planned".into());
+    }
+    Ok(Wired { text: Some(after), added: vec!["bundle.macOS.entitlements"] })
+}
+
 /// The file's indent step: the leading whitespace of the first member of
 /// the top-level object (two spaces when it can't tell).
 fn indent_unit(text: &str) -> String {

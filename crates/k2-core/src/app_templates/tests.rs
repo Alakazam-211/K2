@@ -110,6 +110,157 @@ fn json5_and_toml_configs_get_a_snippet_and_a_non_tauri_folder_is_refused() {
     assert_eq!(plan(&none.0, "static", Some("--"), None).unwrap_err().code, codes::NAME_INVALID);
 }
 
+fn jobs_app() -> ExistingApp {
+    ExistingApp {
+        app_id: "jobs".into(),
+        host: Some("jobs.example.com".into()),
+        fallback_endpoint: Some("https://dl.k2.dev/dev.k2.box.jobs/stable/latest.json".into()),
+        dl_id: Some("dev.k2.box.jobs".into()),
+    }
+}
+
+/// 0.46.8: a shell over a server App already on the box: no web manifest,
+/// the feed on that App's host, the download host second, no `-web` or
+/// `app install` anywhere. Never overwrites, a second run writes nothing.
+#[test]
+fn app_wires_the_shell_to_an_existing_app_and_skips_the_web_manifest() {
+    let d = Dir::new("tpl-existing");
+    d.write("src-tauri/tauri.conf.json", CONF);
+    let e = jobs_app();
+    let o = Options { existing: Some(&e), ..Options::default() };
+    let p = plan_with(&d.0, "tauri", &o).expect("plan");
+    assert_eq!(p.name, "jobs");
+    assert!(p.files.iter().all(|f| f.path != "k2/web.manifest.json"), "{:?}", actions(&p));
+    let next = p.next.join("\n");
+    assert!(!next.contains("-web") && !next.contains("k2 app install") && !next.contains("k2 app deploy"), "{next}");
+    assert!(next.contains("k2 app updates token jobs --file") && next.contains("dev.k2.box.jobs"), "the token step: {next}");
+    assert!(next.contains("https://jobs.example.com/"), "the window's URL: {next}");
+    apply(&d.0, &p).expect("apply");
+    let conf: J = serde_json::from_str(&d.read("src-tauri/tauri.conf.json")).expect("still JSON");
+    assert_eq!(
+        conf["plugins"]["updater"]["endpoints"],
+        json!(["https://jobs.example.com/_k2/updates/stable/{{target}}/{{arch}}/{{current_version}}", "https://dl.k2.dev/dev.k2.box.jobs/stable/latest.json"])
+    );
+    assert_eq!(conf["plugins"]["updater"]["pubkey"], "");
+    assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
+    let readme = d.read("k2/README.md");
+    assert!(!readme.contains("-web") && !readme.contains("k2 app install"), "{readme}");
+    assert!(readme.contains("k2 app updates token jobs --file") && readme.contains("latest.json"), "{readme}");
+    assert!(!d.0.join("k2/web.manifest.json").exists());
+    let p2 = plan_with(&d.0, "tauri", &o).expect("plan again");
+    assert!(p2.files.iter().all(|f| f.action == Action::Skipped), "second run: {:?}", actions(&p2));
+    assert!(p2.files[0].note.contains("jobs.example.com"), "it says which endpoints to check: {}", p2.files[0].note);
+
+    // No public host yet: a placeholder, and how to get one.
+    let d2 = Dir::new("tpl-existing-nohost");
+    d2.write("src-tauri/tauri.conf.json", CONF);
+    let e = ExistingApp { host: None, ..jobs_app() };
+    let p = plan_with(&d2.0, "tauri", &Options { existing: Some(&e), ..Options::default() }).unwrap();
+    assert!(p.notes[0].contains("<your-app-host>") && p.notes[0].contains("k2 app domain add jobs"), "{:?}", p.notes);
+
+    // Refused: another template, or --name beside it.
+    let e = jobs_app();
+    let o = Options { existing: Some(&e), ..Options::default() };
+    assert_eq!(plan_with(&d.0, "static", &o).unwrap_err().code, codes::TAURI_ONLY);
+    assert_eq!(plan_with(&d.0, "node-api", &o).unwrap_err().code, codes::TAURI_ONLY);
+    assert_eq!(plan_with(&d.0, "tauri", &Options { name: Some("x"), ..o }).unwrap_err().code, codes::TAURI_ONLY);
+    // A folder with no Tauri config: the same refusal as ever.
+    let none = Dir::new("tpl-existing-none");
+    assert_eq!(plan_with(&none.0, "tauri", &o).unwrap_err().code, codes::NOT_A_TAURI_REPO);
+}
+
+/// The plain template still names the token step (it was missing).
+#[test]
+fn the_plain_template_says_the_download_token_step() {
+    let d = Dir::new("tpl-token");
+    d.write("src-tauri/tauri.conf.json", CONF);
+    let p = plan(&d.0, "tauri", None, Some("box")).unwrap();
+    assert!(p.next.iter().any(|n| n.contains("k2 app updates token my-tauri-app-web --file")), "{:?}", p.next);
+    apply(&d.0, &p).unwrap();
+    assert!(d.read("k2/README.md").contains("k2 app updates token my-tauri-app-web --file"));
+}
+
+/// 0.46.8 `--voice`: the mic and camera keys on each platform, never over
+/// a plist that is there.
+#[test]
+fn voice_writes_the_keys_and_prints_what_it_wont_edit() {
+    let d = Dir::new("tpl-voice");
+    d.write("src-tauri/tauri.conf.json", CONF);
+    let o = Options { voice: true, sub: Some("box"), ..Options::default() };
+    let p = plan_with(&d.0, "tauri", &o).unwrap();
+    let android = "src-tauri/gen/android/app/src/main/AndroidManifest.xml";
+    let got = actions(&p);
+    for (path, want) in [
+        ("src-tauri/Info.plist", Action::Write),
+        ("src-tauri/Info.ios.plist", Action::Write),
+        ("src-tauri/Entitlements.plist", Action::Write),
+        ("src-tauri/tauri.conf.json", Action::Edit),
+        (android, Action::Snippet),
+    ] {
+        assert!(got.iter().any(|(f, a)| f == path && *a == want), "{path}: {got:?}");
+    }
+    let a = p.files.iter().find(|f| f.path == android).unwrap();
+    for perm in ["RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS", "CAMERA"] {
+        assert!(a.content.contains(&format!("android.permission.{perm}")), "{}", a.content);
+    }
+    apply(&d.0, &p).unwrap();
+    for f in ["src-tauri/Info.plist", "src-tauri/Info.ios.plist"] {
+        let t = d.read(f);
+        assert!(t.starts_with("<?xml") && t.contains("<key>NSMicrophoneUsageDescription</key>") && t.contains("<key>NSCameraUsageDescription</key>"), "{f}: {t}");
+    }
+    let t = d.read("src-tauri/Entitlements.plist");
+    assert!(t.contains("<key>com.apple.security.device.audio-input</key>\n  <true/>") && t.contains("<key>com.apple.security.device.camera</key>"), "{t}");
+    let conf: J = serde_json::from_str(&d.read("src-tauri/tauri.conf.json")).unwrap();
+    assert_eq!(conf["bundle"]["macOS"]["entitlements"], "./Entitlements.plist");
+    assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
+    assert_eq!(conf["bundle"]["active"], true, "kept");
+    assert!(d.read("k2/README.md").contains("## Calls"));
+
+    // Again: nothing to write, the plists are left alone.
+    let p2 = plan_with(&d.0, "tauri", &o).unwrap();
+    assert!(p2.files.iter().all(|f| matches!(f.action, Action::Skipped | Action::Snippet)), "{:?}", actions(&p2));
+    assert_eq!(p2.files.iter().filter(|f| f.action == Action::Snippet).map(|f| f.path.as_str()).collect::<Vec<_>>(), [android]);
+
+    // A plist with one key: only the other is printed, and it stays as it is.
+    let d2 = Dir::new("tpl-voice-own");
+    d2.write("src-tauri/tauri.conf.json", "{\n  \"bundle\": {\n    \"macOS\": {\n      \"entitlements\": \"./mine.plist\"\n    }\n  }\n}\n");
+    d2.write("src-tauri/Info.plist", "<plist><dict><key>NSMicrophoneUsageDescription</key><string>mine</string></dict></plist>");
+    d2.write("src-tauri/mine.plist", "<plist><dict></dict></plist>");
+    d2.write(android, "<manifest><uses-permission android:name=\"android.permission.RECORD_AUDIO\" /></manifest>");
+    let p = plan_with(&d2.0, "tauri", &o).unwrap();
+    let f = |path: &str| p.files.iter().find(|f| f.path == path).unwrap_or_else(|| panic!("{path}: {:?}", actions(&p)));
+    assert_eq!(f("src-tauri/Info.plist").action, Action::Snippet);
+    assert!(f("src-tauri/Info.plist").content.contains("NSCameraUsageDescription") && !f("src-tauri/Info.plist").content.contains("NSMicrophone"));
+    let mine = f("src-tauri/mine.plist");
+    assert_eq!(mine.action, Action::Snippet, "the file the config names");
+    assert!(mine.content.contains("audio-input"));
+    assert!(!p.files.iter().any(|f| f.path == "src-tauri/Entitlements.plist"), "{:?}", actions(&p));
+    let a = f(android);
+    assert!(!a.content.contains("RECORD_AUDIO") && a.content.contains("android.permission.CAMERA"), "{}", a.content);
+    apply(&d2.0, &p).unwrap();
+    assert!(d2.read("src-tauri/Info.plist").contains("<string>mine</string>") && !d2.read("src-tauri/Info.plist").contains("NSCamera"), "never edited");
+
+    // A config that names a file outside src-tauri/: printed, never written.
+    let d3 = Dir::new("tpl-voice-outside");
+    d3.write("src-tauri/tauri.conf.json", "{\"bundle\":{\"macOS\":{\"entitlements\":\"../../outside.plist\"}}}");
+    let p = plan_with(&d3.0, "tauri", &o).unwrap();
+    let out = p.files.iter().find(|f| f.path == "../../outside.plist").expect("printed");
+    assert_eq!(out.action, Action::Snippet);
+    apply(&d3.0, &p).unwrap();
+    assert!(!d3.0.join("../../outside.plist").exists());
+
+    // TOML: the entitlements line is in the snippet; the plists are written.
+    let d4 = Dir::new("tpl-voice-toml");
+    d4.write("src-tauri/Tauri.toml", "[package]\nproduct-name = \"x\"\n");
+    let p = plan_with(&d4.0, "tauri", &o).unwrap();
+    let t = p.files.iter().find(|f| f.path == "src-tauri/Tauri.toml").unwrap();
+    assert!(t.content.contains("[bundle.macOS]\nentitlements = \"./Entitlements.plist\""), "{}", t.content);
+    assert!(p.files.iter().any(|f| f.path == "src-tauri/Entitlements.plist" && f.action == Action::Write));
+
+    // Only for the Tauri template.
+    assert_eq!(plan_with(&d.0, "static", &o).unwrap_err().code, codes::TAURI_ONLY);
+}
+
 #[test]
 fn static_and_node_api_files_validate_as_apps() {
     let d = Dir::new("tpl-static");

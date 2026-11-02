@@ -756,11 +756,14 @@ ta_out="$("$K2" study tauri)"
 assert_contains "title" "$ta_out" "k2 study tauri — the K2 side of a Tauri app, end to end"
 for needle in "k2 app init --template tauri" "k2 app deploy <name>-web dist --manifest k2/web.manifest.json" "manifest_conflict" \
     "k2 app updates key" "k2 app updates promote" "installs only a" "your login Keychain" "k2 compute run --secret" \
-    "k2 app links set" "--drop" "k2.asGuest(pass).push.register" "at most 16 MiB" "files.uploadChunk" "k2 app status"; do
+    "k2 app links set" "--drop" "k2.asGuest(pass).push.register" "at most 16 MiB" "files.uploadChunk" "k2 app status" \
+    "THIN SHELL OVER A LIVE SITE" "k2 app init --template tauri --app <app>" "app.windows[0].url" "endpoints.fallback" \
+    "k2dl_" "dl_token_missing" "k2 app updates token <name>-web --file <file>" "k2 connect status" \
+    "--max-devices 5" "One id" "--voice" "not yet tested" "k2 app domain" "push.viewing" "signCommand"; do
     assert_contains "tauri: $needle" "$ta_out" "$needle"
 done
 ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
-if [ "$ta_lines" -le 180 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 180)" >&2; fail=$((fail + 1)); fi
+if [ "$ta_lines" -le 200 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 200)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
 assert_contains "app-deploys: static Apps" "$("$K2" study app-deploys)" "STATIC APPS (0.46.7: a built site, no server)"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"

@@ -124,6 +124,20 @@ fn the_app(who: &Who, raw: Option<&str>) -> R<AppRow> {
     Ok(app)
 }
 
+/// `k2 app init --template tauri --app <app>`: the App a thin shell updates
+/// through, under the feed's own rules (the caller's App, K2 in front).
+pub(crate) fn shell_target(who: &Who, raw: &str) -> R<k2_core::app_templates::ExistingApp> {
+    let app = the_app(who, Some(raw))?;
+    need_front(&app)?;
+    let dl_id = dl_id_of(&app).ok();
+    Ok(k2_core::app_templates::ExistingApp {
+        host: crate::app_pairing::pairing_hosts(&app.service_id).into_iter().next(),
+        fallback_endpoint: dl_id.as_ref().map(|id| format!("{}/{id}/stable/latest.json", au::dl_base())),
+        dl_id,
+        app_id: app.app_id,
+    })
+}
+
 /// TA-10: K2 answers on an App's hosts only when it fronts the App.
 fn need_front(app: &AppRow) -> R<()> {
     if let Err(why) = crate::app_pairing::front_rewrites(&app.service_id) {

@@ -232,7 +232,7 @@ async fn s2_an_agent_adds_app_users_of_its_own_apps_only() {
     )
     .await;
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": wide })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
     let dl = format!("dl{tag}");
     owner_post(port, "/cli/skin/roles", json!({ "name": dl, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read", "files:read", "files:download"] }] })).await;
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": dl })).await;

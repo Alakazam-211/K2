@@ -2,6 +2,7 @@ MPC-E801 needs_base (structured and CSV)
 exit:     2
 message:  an agent's grid edit needs a base: read first and pass --base
 next:     Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.
+step:     cat; why: Agents edit tables against what they read; read the table first, then run the edit again against the version it printed.
 rule:     K-BR-12
 verbs:    cell set; insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "an agent's grid edit needs a base: read first and pass --base",
   "next": "Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "Agents edit tables against what they read; read the table first, then run the edit again against the version it printed."
+  },
   "rule": "K-BR-12",
   "verbs": ["cell set", "@change"],
   "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],

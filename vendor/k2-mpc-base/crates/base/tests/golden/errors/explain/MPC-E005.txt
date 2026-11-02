@@ -2,6 +2,7 @@ MPC-E005 export_decode (exports)
 exit:     1
 message:  could not read the source
 next:     The source version couldn't be read in its format (damaged, or a variant the exporter doesn't read). Nothing was written. Export as-is to get the bytes, or try another version.
+step:     export; args: --to as-is; why: The source couldn't be read in its format; export it as it is to get the bytes, or try another version.
 rule:     X-ERR-1
 verbs:    a host call (no verb)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "could not read the source",
   "next": "The source version couldn't be read in its format (damaged, or a variant the exporter doesn't read). Nothing was written. Export as-is to get the bytes, or try another version.",
+  "next_step": {
+    "verb": "export",
+    "args": ["--to", "as-is"],
+    "why": "The source couldn't be read in its format; export it as it is to get the bytes, or try another version."
+  },
   "rule": "X-ERR-1",
   "verbs": ["(host)"],
   "returned_by": [],

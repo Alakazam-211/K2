@@ -31,6 +31,9 @@
 //! - [`tools`]: the text verbs agents run on a live doc (`cat`, `grep`, `sed`, `patch`...),
 //!   as pure functions and through [`Session::run_tool`]; packs add their own
 //!   ([`session::Pack::verbs`]).
+//! - [`ids`]: the ID table (K-ID-13): every ID and address kind the kit's verbs take or
+//!   print, with its durability class, scope and verbs (`docs/IDS.md`); packs add theirs
+//!   ([`session::Pack::ids`]); the ID-churn judge for packs' tests (feature `test-support`).
 //! - [`parity`]: the agent-parity framework: person actions, the verb registry, and the
 //!   harness that runs each action the person's way and the agent's way and compares.
 //!
@@ -60,6 +63,7 @@ compile_error!(
      engine owner's sign-off). Build with `--cfg k2_mpc_untrusted_wire_ack` only once they do."
 );
 
+pub mod addr;
 pub mod blob;
 pub mod codec;
 pub mod conformance;
@@ -74,6 +78,7 @@ pub mod export;
 #[doc(hidden)]
 pub mod fuzzing;
 mod hash;
+pub mod ids;
 pub mod parity;
 pub mod schema;
 pub mod session;

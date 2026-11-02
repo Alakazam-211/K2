@@ -1073,3 +1073,52 @@ fn the_join_label_round_trips() {
     assert_eq!(c.devices.len(), 1);
     assert_eq!(c.devices[0].label.as_deref(), Some("terminal"));
 }
+
+/// `join_with` with `.replacing(prev)` and `.label(..)`: the pid's connection holding `prev`
+/// closes (`replaced` names it) and the new connection's device carries the label given at
+/// this join. A replacing join without a label gets none: nothing is inherited from the
+/// connection it replaced.
+#[test]
+fn a_replacing_join_with_a_label_closes_the_old_and_labels_the_new() {
+    let f = fx("device-label-replacing");
+    let w = f.person("w");
+    let old = f.tab("a", Some("old tab"));
+    let p = Participant::new("a", "A", "#123456", ParticipantKind::Person, "tab");
+    let new =
+        f.s.join_with(
+            p.clone(),
+            Stay::Held,
+            &JoinOptions::new().label("new tab").replacing(old.client),
+        )
+        .unwrap();
+    assert_eq!(
+        new.replaced,
+        Some(old.conn),
+        "the old connection is the one closed"
+    );
+    assert_ne!(new.conn, old.conn);
+    assert!(
+        f.s.roster(old.conn).is_err(),
+        "the replaced connection is gone"
+    );
+    let a = f.row(w, "a");
+    assert_eq!(a.connections, 1);
+    let labels: Vec<(ClientId, Option<&str>)> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, d.label.as_deref()))
+        .collect();
+    assert_eq!(labels, vec![(new.client, Some("new tab"))]);
+    // replacing again with no label: the new device has none (no inheritance)
+    let bare =
+        f.s.join_with(p, Stay::Held, &JoinOptions::new().replacing(new.client))
+            .unwrap();
+    assert_eq!(bare.replaced, Some(new.conn));
+    let a = f.row(w, "a");
+    let labels: Vec<(ClientId, Option<&str>)> = a
+        .devices
+        .iter()
+        .map(|d| (d.client, d.label.as_deref()))
+        .collect();
+    assert_eq!(labels, vec![(bare.client, None)]);
+}

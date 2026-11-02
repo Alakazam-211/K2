@@ -20,6 +20,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Web client
 - **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
 
+### Live docs
+- **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.
+- **Agents get a heads-up about edits by line number.** If an agent edits a live doc by position (such as `k2 doc insert --line 3`) without having read it first and without `--if-version`, the edit still applies, and it now gets a `note:` saying a later release will refuse this. An agent that has read the doc is unaffected, because K2 checks its edit against the version it read.
+
 ## 0.46.7 — Apps run their own chat
 
 0.46.7 brings Sew 0.6.0: an App can now decide who sees which chat and voice channel in its own Space.

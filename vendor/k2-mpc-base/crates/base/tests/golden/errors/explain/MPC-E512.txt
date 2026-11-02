@@ -2,6 +2,7 @@ MPC-E512 store_no_approval (store)
 exit:     4
 message:  no approval for change {seq} of doc {doc}
 next:     That change has no approval record. List pending ones with log --pending.
+step:     log --pending; why: That change has no approval record; list the pending ones.
 rule:     K-ID-11
 verbs:    approve; decline
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 4,
   "message": "no approval for change {seq} of doc {doc}",
   "next": "That change has no approval record. List pending ones with log --pending.",
+  "next_step": {
+    "verb": "log --pending",
+    "args": [],
+    "why": "That change has no approval record; list the pending ones."
+  },
   "rule": "K-ID-11",
   "verbs": ["approve", "decline"],
   "returned_by": ["approve", "decline"],

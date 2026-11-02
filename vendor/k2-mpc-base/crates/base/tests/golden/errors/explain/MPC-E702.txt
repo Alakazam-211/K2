@@ -2,6 +2,7 @@ MPC-E702 no_lease (tier 0 and blobs)
 exit:     2
 message:  no lease held
 next:     You hold no lease to renew (it expired, or the daemon restarted). Take a new one with lease.
+step:     lease; why: You hold no lease to renew; take a new one.
 rule:     K-T0-7
 verbs:    lease --renew
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "no lease held",
   "next": "You hold no lease to renew (it expired, or the daemon restarted). Take a new one with lease.",
+  "next_step": {
+    "verb": "lease",
+    "args": [],
+    "why": "You hold no lease to renew; take a new one."
+  },
   "rule": "K-T0-7",
   "verbs": ["lease --renew"],
   "returned_by": ["lease --renew"],

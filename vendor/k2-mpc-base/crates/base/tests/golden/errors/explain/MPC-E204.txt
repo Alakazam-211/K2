@@ -2,6 +2,7 @@ MPC-E204 revert_too_old (history and undo)
 exit:     8
 message:  change {seq} is too old to revert (revert_too_old); use restore --version
 next:     The change is outside the revert window. Never retry the same request. Find a version from before it (log) and restore --version that version, or edit the text by hand.
+step:     log; why: The change is outside the revert window; find a version from before it and restore that version. Never retry the same request.
 rule:     K-HIST-23, K-EXIT-1
 verbs:    revert
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 8,
   "message": "change {seq} is too old to revert (revert_too_old); use restore --version",
   "next": "The change is outside the revert window. Never retry the same request. Find a version from before it (log) and restore --version that version, or edit the text by hand.",
+  "next_step": {
+    "verb": "log",
+    "args": [],
+    "why": "The change is outside the revert window; find a version from before it and restore that version. Never retry the same request."
+  },
   "rule": "K-HIST-23, K-EXIT-1",
   "verbs": ["revert"],
   "returned_by": ["revert"],

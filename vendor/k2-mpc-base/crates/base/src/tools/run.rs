@@ -40,6 +40,101 @@ pub struct ToolOutput {
     /// ends with the id, `(MPC-E125)`. `None` for reads (grep's "no match" is an answer,
     /// not a refusal) and for edits that applied cleanly.
     pub refusal: Option<ErrorReport>,
+    /// Warnings about the call itself, for **stderr** (one `note: ` line each), never part of
+    /// `stdout`: an agent's edit by position with no version, applied in
+    /// [`PositionalMode::Warn`] ([`positional_note`], K-ADDR-3). Empty for most calls.
+    pub warnings: Warnings,
+}
+
+/// [`ToolOutput::warnings`]: `note: ` lines for stderr about the call itself. Boxed, as it is
+/// almost always empty (a [`ToolOutput`] stays small).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Warnings(Option<Box<Lines>>);
+
+/// [`Warnings`]' lines, once there is one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Lines(Vec<String>);
+
+impl Warnings {
+    /// The lines, each starting `note: `.
+    pub fn lines(&self) -> &[String] {
+        match self.0.as_deref() {
+            Some(l) => &l.0,
+            None => &[],
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.lines().is_empty()
+    }
+}
+
+impl Extend<String> for Warnings {
+    fn extend<I: IntoIterator<Item = String>>(&mut self, iter: I) {
+        let mut it = iter.into_iter().peekable();
+        if it.peek().is_some() {
+            self.0.get_or_insert_with(Box::default).0.extend(it);
+        }
+    }
+}
+
+impl PartialEq<Vec<String>> for Warnings {
+    fn eq(&self, other: &Vec<String>) -> bool {
+        self.lines() == other.as_slice()
+    }
+}
+
+/// What an agent's edit by position with no version does (K-ADDR-3, R-1, R-2): an edit
+/// verb's line or range (`--lines`, `--line`, `--after`, `--at`, `--range`, a `sed -i` line
+/// address) or a pack verb's positional address (`--nth K`, [`super::PackVerb::positional`])
+/// counts positions in some version, and an agent's edit names that version with
+/// `--if-version` (a grid edit: `--if-version` or `--base`). People act on what they see:
+/// their edits are never checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PositionalMode {
+    /// Apply it on the live doc as before, and add a warning ([`ToolOutput::warnings`],
+    /// [`positional_note`]) naming `positional_needs_version`. This release's default.
+    Warn,
+    /// Refuse it: `MPC-E171 positional_needs_version`, exit 2 ([`ToolError::Address`]),
+    /// nothing applied.
+    Refuse,
+}
+
+/// The mode [`ToolOptions::default`] uses: [`PositionalMode::Warn`] for this one release
+/// (K-ADDR-3's compatibility window); the next release flips it to
+/// [`PositionalMode::Refuse`]. A host may choose either with [`ToolOptions::positional`].
+pub const POSITIONAL_DEFAULT: PositionalMode = PositionalMode::Warn;
+
+impl Default for PositionalMode {
+    fn default() -> Self {
+        POSITIONAL_DEFAULT
+    }
+}
+
+/// The warning [`PositionalMode::Warn`] adds, for `address` (`--lines 3,4`, `--nth 2`): one
+/// `note: ` line that names the refusal it becomes and no host.
+pub fn positional_note(address: &str) -> String {
+    format!(
+        "note: {address} is a position, and this edit names no version: it applied to the \
+         live text; a later release refuses it (positional_needs_version, {}). Pass \
+         --if-version with the version you read, or name the target by key.",
+        ids::POSITIONAL_NEEDS_VERSION.id
+    )
+}
+
+/// The refusal [`PositionalMode::Refuse`] gives for `address` in `verb`.
+fn positional_refusal(verb: &str, address: &str) -> ToolError {
+    ToolError::address(
+        ErrorReport::new(
+            &ids::POSITIONAL_NEEDS_VERSION,
+            format!(
+                "{address} is a position; an agent's edit by position names the version it \
+                 read (--if-version V); nothing applied"
+            ),
+        )
+        .with("verb", verb)
+        .with("address", address),
+    )
 }
 
 /// The host's choices for one [`Session::run_tool_with`] call. `#[non_exhaustive]`: start
@@ -49,6 +144,9 @@ pub struct ToolOutput {
 pub struct ToolOptions {
     /// What an edit verb does about others' claims (default [`ClaimPolicy::Ignore`]).
     pub policy: ClaimPolicy,
+    /// What an agent's edit by position with no version does (default
+    /// [`POSITIONAL_DEFAULT`]).
+    pub positional: PositionalMode,
 }
 
 impl ToolOptions {
@@ -59,6 +157,12 @@ impl ToolOptions {
     /// The claim policy for an edit verb (`--respect-claims`: [`ClaimPolicy::Respect`]).
     pub fn policy(mut self, policy: ClaimPolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// What an agent's edit by position with no version does ([`PositionalMode`]).
+    pub fn positional(mut self, mode: PositionalMode) -> Self {
+        self.positional = mode;
         self
     }
 }
@@ -145,6 +249,10 @@ impl Session {
         let verb = crate::parity::verb_form(argv);
         if let Some(v) = argv.first().and_then(|n| self.pack_verb(n)) {
             let (if_version, args) = super::args::take_if_version(&argv[1..])?;
+            let warning = match v.positional_in(&args) {
+                Some(a) => self.positional_check(conn, &verb, &a, if_version, None, opts)?,
+                None => None,
+            };
             let edit = v.parse(&args)?;
             let name = self.key()?.path;
             let doc = name.clone();
@@ -155,6 +263,7 @@ impl Session {
             let mut out = self.run_edit(conn, root, &name, guard, &verb, move |live| {
                 edit(&doc, live, stdin)
             })?;
+            out.warnings.extend(warning);
             if out.exit != exit::OK && out.changed.is_none() && out.refusal.is_none() {
                 let first = String::from_utf8_lossy(&out.stdout)
                     .lines()
@@ -218,16 +327,25 @@ impl Session {
                     notes,
                     for_edit: for_edit.map(Box::new),
                     refusal: None,
+                    warnings: Warnings::default(),
                 })
             }
             Kind::Edit => {
+                let warning = match tool.positional() {
+                    Some(a) => {
+                        self.positional_check(conn, &verb, &a, tool.if_version(), None, opts)?
+                    }
+                    None => None,
+                };
                 let guard = Guard {
                     policy: opts.policy,
                     if_version: tool.if_version(),
                 };
-                self.run_edit(conn, root, &name, guard, &verb, |live| {
+                let mut out = self.run_edit(conn, root, &name, guard, &verb, |live| {
                     tool.edit(&name, live, stdin)
-                })
+                })?;
+                out.warnings.extend(warning);
+                Ok(out)
             }
         }
     }
@@ -290,9 +408,13 @@ impl Session {
                 notes,
                 for_edit: for_edit.map(Box::new),
                 refusal,
+                warnings: Warnings::default(),
             });
         }
         let (if_version, base, args) = super::args::take_guards(args)?;
+        // positional addresses (#N, LN) count in the version named: under --base, the base's
+        // table (R-1); under --if-version the live one is that version
+        let at_base = v.positional_in(&args).is_some();
         let f = v.parse_structured(&args)?;
         let (pack, codec) = self.pack_and_codec()?;
         let mut eo = crate::session::EditOptions::new().policy(opts.policy);
@@ -300,8 +422,12 @@ impl Session {
         eo.base = base;
         let mut report: Option<(Vec<u8>, u8)> = None;
         let mut own: Option<&'static crate::errors::ErrorEntry> = None;
-        let res = self.edit_ops_verb(conn, &eo, verb, |view, hist| {
+        let res = self.edit_ops_verb(conn, &eo, verb, at_base, |view, at, hist| {
             let ctx = super::VerbCtx::new(view, stdin, pack.as_ref(), &codec).with_history(hist);
+            let ctx = match at {
+                Some(at) => ctx.with_positions_at(at),
+                None => ctx,
+            };
             let o = f(&ctx)?;
             report = Some((o.stdout, o.exit));
             own = o.refusal;
@@ -345,6 +471,7 @@ impl Session {
             notes,
             for_edit: None,
             refusal,
+            warnings: Warnings::default(),
         })
     }
 
@@ -368,7 +495,7 @@ impl Session {
         eo.if_version = tool.if_version();
         let mut report: Option<EditOutput> = None;
         let mut applied = true;
-        let res = self.edit_ops_verb(conn, &eo, verb, |view, _| {
+        let res = self.edit_ops_verb(conn, &eo, verb, false, |view, _, _| {
             let bytes = pack
                 .encode(&view.content(), &codec)
                 .map_err(|e| ToolError::usage(format!("the doc can't be rendered: {}", e.0)))?;
@@ -433,6 +560,7 @@ impl Session {
             notes,
             for_edit: None,
             refusal,
+            warnings: Warnings::default(),
         })
     }
 
@@ -500,7 +628,29 @@ impl Session {
             notes,
             for_edit: None,
             refusal,
+            warnings: Warnings::default(),
         })
+    }
+
+    /// K-ADDR-3 for an edit with a positional `address`: a person's, or one naming its version
+    /// (`if_version`, `base`), goes ahead; an agent's with neither is refused
+    /// ([`PositionalMode::Refuse`]) or goes ahead with a warning ([`PositionalMode::Warn`]).
+    fn positional_check(
+        &self,
+        conn: ConnId,
+        verb: &str,
+        address: &str,
+        if_version: Option<Seq>,
+        base: Option<Seq>,
+        opts: &ToolOptions,
+    ) -> Result<Option<String>, ToolError> {
+        if if_version.is_some() || base.is_some() || !self.is_agent(conn) {
+            return Ok(None);
+        }
+        match opts.positional {
+            PositionalMode::Refuse => Err(positional_refusal(verb, address)),
+            PositionalMode::Warn => Ok(Some(positional_note(address))),
+        }
     }
 }
 

@@ -1670,21 +1670,25 @@ impl Session {
         opts: &EditOptions,
         f: impl FnOnce(&View) -> std::result::Result<Vec<Edit>, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_ops_impl(conn, opts, None, |v, _| f(v))
+        self.edit_ops_impl(conn, opts, None, false, |v, _, _| f(v))
             .map(|(r, _)| r)
     }
 
     /// [`Session::edit_ops_with`] for a pack's structured verb (A9, through `run_tool`): the
     /// change is logged under `verb`, and the heads-up notes on the elements it touches
-    /// (others' claims, carets, views, recent edits there) come back with it.
+    /// (others' claims, carets, views, recent edits there) come back with it. `at_base`: the
+    /// verb names positions (`#N`, `LN`), which count in the `--base` version (K-ADDR-3,
+    /// R-1): `f` also gets that version's doc when it isn't the live one (the live doc, a
+    /// recent read or a stored version; none of them: [`SessionError::BaseExpired`]).
     pub(crate) fn edit_ops_verb<E>(
         &self,
         conn: ConnId,
         opts: &EditOptions,
         verb: &str,
-        f: impl FnOnce(&View, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
+        at_base: bool,
+        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
-        self.edit_ops_impl(conn, opts, Some(verb), f)
+        self.edit_ops_impl(conn, opts, Some(verb), at_base, f)
     }
 
     fn edit_ops_impl<E>(
@@ -1692,7 +1696,8 @@ impl Session {
         conn: ConnId,
         opts: &EditOptions,
         verb: Option<&str>,
-        f: impl FnOnce(&View, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
+        at_base: bool,
+        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         let now = self.now();
         let mut guard = self.lock()?;
@@ -1700,11 +1705,18 @@ impl Session {
         let i = self.admit_edit(st, conn, Action::Edit, now)?;
         Self::check_version(st, opts.if_version)?;
         self.check_backlog(st, i)?;
+        let at = match opts.base {
+            Some(b) if at_base && b != st.version => match self.base_view(st, b, now)? {
+                Some(v) => Some(v),
+                None => return Err(SessionError::BaseExpired { base: b }.into()),
+            },
+            _ => None,
+        };
         let view = View::new(st.doc.keyed_state().map_err(SessionError::from)?)
             .with_codec(&st.codec)
             .with_max_value(self.config.grid_max_value_len);
         let hist = LockedHistory::new(self, st, i);
-        let edits = match catch_unwind(AssertUnwindSafe(|| f(&view, &hist))) {
+        let edits = match catch_unwind(AssertUnwindSafe(|| f(&view, at.as_deref(), &hist))) {
             Ok(r) => r,
             Err(panic) => {
                 drop(guard);
@@ -3430,6 +3442,7 @@ impl Session {
                     } else {
                         Vec::new()
                     },
+                    kind: change.info.kind,
                 },
             );
         }

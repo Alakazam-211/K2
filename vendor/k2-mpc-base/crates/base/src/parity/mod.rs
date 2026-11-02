@@ -22,6 +22,8 @@
 //!   verbs), [`kit_grid_cases`] and the pack's [`GridCase`]s; it compares the grid **by key**
 //!   ([`GridObservation`]) as well as the rendered bytes. P35-P44 are grid rows; text and
 //!   blob lists don't carry them (a text pack maps them N/A in its exhaustive `match`).
+//! - [`positions`]: how each verb counts the positions it takes or prints (K-ADDR-4), the
+//!   table `capabilities` states (`docs/POSITIONS.md`).
 //!
 //! A pack's test:
 //!
@@ -44,6 +46,7 @@ mod cases;
 mod grid;
 mod grid_cases;
 mod harness;
+pub mod positions;
 mod registry;
 
 pub use action::PersonAction;

@@ -155,6 +155,16 @@ pub trait Pack: Send + Sync {
         &[]
     }
 
+    /// The native ID kinds this pack's codec and own verbs read (K-ID-13), as data: each
+    /// kind's class, scope and the verbs that accept it. The pack's `docs/IDS.md` is
+    /// generated from it ([`crate::ids::markdown`]) and checked against its registry
+    /// ([`crate::ids::check`]). List only the pack's own kinds (Markdown's headings, docx's
+    /// `w14:paraId`): the kit's (lines, `L:C`, grid keys, `#N`, versions...) are
+    /// [`crate::ids::KIT`]. Default: none (a format with no IDs of its own, as plain text).
+    fn ids(&self) -> &'static [crate::ids::IdKind] {
+        &[]
+    }
+
     /// A file has no keys (A8): its new bytes (an outside save, a text edit verb's result,
     /// an agent's `write --base` body), as edits against `synced`, the doc as the file last
     /// held it. A structured doc's session applies them **by key** to the live doc (CSV
@@ -162,7 +172,7 @@ pub trait Pack: Send + Sync {
     /// key counters are the live doc's, so keys minted here are new to the live doc too.
     ///
     /// Default: [`default_reconcile`] (decode, then a minimal text diff per text root, or
-    /// for a [`crate::table`] schema the aligner [`table::reconcile`]). A file that doesn't
+    /// for a [`crate::table`] schema the aligner [`table::reconcile()`]). A file that doesn't
     /// decode is [`Declined`] (it opens the old way until it decodes again).
     fn reconcile(&self, synced: &View, bytes: &[u8], codec: &[u8]) -> Result<Reconciled, Declined> {
         let _ = codec;
@@ -187,7 +197,7 @@ pub trait Pack: Send + Sync {
 /// - every root text: each text root's edit from `synced`'s text, whole lines first
 ///   ([`crate::text::lines::edit_hunks`]);
 /// - a [`crate::table`] schema: the decoded table's rendering, aligned to `synced`'s table
-///   by [`table::reconcile`] (rows and columns matched by content, keys kept, moves found);
+///   by [`table::reconcile()`] (rows and columns matched by content, keys kept, moves found);
 /// - anything else: declined `cannot_reconcile` (the pack overrides it).
 pub fn default_reconcile<P: Pack + ?Sized>(
     pack: &P,

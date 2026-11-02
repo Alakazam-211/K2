@@ -1,0 +1,21 @@
+MPC-E172 address_not_found (sessions and edits)
+exit:     4
+message:  {count} of the addresses name nothing in version {version}
+next:     Some of the addresses you asked for name nothing in this version. The output still lists every address, with null for each missing one; details.missing gives each missing address with what does exist there (candidates, its parent's children). Check them against outline, or ask for one of the candidates.
+rule:     K-READ-1, K-READ-3
+verbs:    a pack's own verbs
+status:   reserved for the node verb (K-READ-1); nothing returns it yet
+--- json
+{
+  "id": "MPC-E172",
+  "name": "address_not_found",
+  "area": "sessions and edits",
+  "exit": 4,
+  "message": "{count} of the addresses name nothing in version {version}",
+  "next": "Some of the addresses you asked for name nothing in this version. The output still lists every address, with null for each missing one; details.missing gives each missing address with what does exist there (candidates, its parent's children). Check them against outline, or ask for one of the candidates.",
+  "rule": "K-READ-1, K-READ-3",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "reserved",
+  "since_or_until": "the node verb (K-READ-1)"
+}

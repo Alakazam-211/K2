@@ -230,8 +230,8 @@ impl Blame {
 pub struct CharBlame {
     pub ch: char,
     pub client: ClientId,
-    /// The element's clock (UTF-16 code units).
-    pub clock: u32,
+    /// The element's clock, in the engine's units (UTF-16 code units on Yrs).
+    pub clock: u64,
     /// The pid that owns the client, if the store knows it.
     pub pid: Option<String>,
     /// The change that inserted it, if the store recorded one.
@@ -239,7 +239,7 @@ pub struct CharBlame {
     /// Its provenance root's client and clock (undo spec U23): itself, unless an undo, redo
     /// or revert put it back.
     pub root_client: ClientId,
-    pub root_clock: u32,
+    pub root_clock: u64,
     /// The pid that owns the root's client, if the store knows it.
     pub root_pid: Option<String>,
     /// The change that inserted the root, if the store recorded one.
@@ -267,7 +267,7 @@ struct Resolved {
 }
 
 /// The change covering `clock` among `spans` (clock order), moving the cursor `k` forward.
-fn seek(spans: &[crate::store::SpanOf], k: &mut usize, clock: u32) -> Option<Seq> {
+fn seek(spans: &[crate::store::SpanOf], k: &mut usize, clock: u64) -> Option<Seq> {
     while *k < spans.len() && spans[*k].1 <= clock {
         *k += 1;
     }
@@ -279,9 +279,14 @@ fn seek(spans: &[crate::store::SpanOf], k: &mut usize, clock: u32) -> Option<Seq
 
 /// Walk the characters of `text[lo..]` the provenance runs `runs` cover (from `lo` on),
 /// calling `f(byte, char, resolved)` for each, with one store read for every change lookup.
+/// `max_clock` is the doc's engine's ([`crate::doc::Doc::max_clock`]): a stored clock past
+/// it is refused ([`DocStore::clock_spans`]); `u` its units ([`crate::doc::Doc::units`]).
+#[allow(clippy::too_many_arguments)]
 fn walk(
     store: &DocStore,
     doc_id: DocId,
+    max_clock: u64,
+    u: crate::engine::Units,
     text: &str,
     runs: &[super::super::prov::Run],
     lo: usize,
@@ -295,7 +300,7 @@ fn walk(
             q.push((r.id.client, r.id.clock, r.id.clock + r.units));
         }
     }
-    let spans = store.clock_spans(doc_id, &q)?;
+    let spans = store.clock_spans(doc_id, &q, max_clock)?;
     let mut spans = spans.iter();
     let mut at = lo;
     for r in runs {
@@ -305,7 +310,7 @@ fn walk(
         } else {
             None
         };
-        let (mut a, mut b, mut k) = (0, 0, 0u32);
+        let (mut a, mut b, mut k) = (0, 0, 0u64);
         for ch in text[at..at + r.bytes as usize].chars() {
             let id = r.id.plus(k);
             let root = r.root.map(|x| x.plus(k));
@@ -324,7 +329,7 @@ fn walk(
                     root_seq,
                 },
             );
-            k += ch.len_utf16() as u32;
+            k += u.of_char(ch);
             at += ch.len_utf8();
         }
     }
@@ -347,12 +352,14 @@ pub(super) struct Piece {
 pub(super) fn pieces(
     store: &DocStore,
     doc_id: DocId,
+    max_clock: u64,
+    u: crate::engine::Units,
     text: &str,
     runs: &[super::super::prov::Run],
     lo: usize,
 ) -> Result<Vec<Piece>> {
     let mut out: Vec<Piece> = Vec::new();
-    walk(store, doc_id, text, runs, lo, |at, ch, x| {
+    walk(store, doc_id, max_clock, u, text, runs, lo, |at, ch, x| {
         let p = Piece {
             start: at,
             end: at + ch.len_utf8(),
@@ -377,8 +384,9 @@ impl Session {
     /// Test-only (feature `conformance`, off by default): every live character of text root
     /// `root`, in order, with the element that holds it: `(char, (client, clock), owner pid,
     /// change)`, and its provenance root `(client, clock)` with the root's owner and change
-    /// (U23: itself, unless an undo, redo or revert put it back). Clocks count UTF-16 code
-    /// units; a change is the log position that inserted it, where the store recorded one.
+    /// (U23: itself, unless an undo, redo or revert put it back). Clocks are in the engine's
+    /// units (UTF-16 code units on Yrs); a change is the log position that inserted it, where
+    /// the store recorded one.
     /// For per-element rules (an undo deletes only elements whose root its change inserted).
     #[cfg(feature = "conformance")]
     pub fn char_blame(&self, root: &str) -> Result<Vec<CharBlame>> {
@@ -404,9 +412,16 @@ impl Session {
             })
         };
         let mut chars = Vec::with_capacity(text.len());
-        walk(&store, self.doc_id, text, &runs, 0, |_, ch, x| {
-            chars.push((ch, x))
-        })?;
+        walk(
+            &store,
+            self.doc_id,
+            st.doc.max_clock(),
+            st.doc.units(),
+            text,
+            &runs,
+            0,
+            |_, ch, x| chars.push((ch, x)),
+        )?;
         let mut out = Vec::with_capacity(chars.len());
         for (ch, x) in chars {
             let root = x.root.unwrap_or(x.id);
@@ -642,7 +657,15 @@ impl Session {
         let (lo, hi) = (spans[0].0, spans[spans.len() - 1].1);
         let runs = prov.query(root, text, lo, hi);
         let store = self.store(st)?.clone();
-        let pieces = pieces(&store, self.doc_id, text, &runs, lo)?;
+        let pieces = pieces(
+            &store,
+            self.doc_id,
+            st.doc.max_clock(),
+            st.doc.units(),
+            text,
+            &runs,
+            lo,
+        )?;
         // what the store knows about the changes and clients involved
         let seqs: BTreeSet<Seq> = pieces
             .iter()
@@ -737,6 +760,66 @@ mod tests {
             1_000
         }
         fn on_event(&self, _: &AuditEvent) {}
+    }
+
+    /// A stored clock past the doc's engine's (Yrs clocks are u32) can only be damage. Blame
+    /// and revert, which read the store's change clocks and provenance rows, refuse it as
+    /// `Corrupt`, as v0.10.0's reads did; it is never handed on, truncated or not (v0.10.1:
+    /// the clocks are u64 in memory and on disk, the bound is the engine's).
+    #[test]
+    fn stored_clocks_past_the_engine_are_refused_by_blame_and_revert() {
+        let dir = std::env::temp_dir().join(format!("k2mb-blame-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+        let mgr = SessionManager::new(store.clone(), Arc::new(H), Config::default());
+        let key = DocKey {
+            space: "ws".into(),
+            path: "c.md".into(),
+        };
+        const ROOT: &str = TextFilePack::ROOT;
+        let s = mgr
+            .open(
+                Arc::new(TextFilePack::new("md", 1 << 20)),
+                &key,
+                Some(b"one\n"),
+            )
+            .unwrap();
+        let p = Participant::new("alice", "A", "#111111", ParticipantKind::Person, "tab");
+        let c = s.join(p, Stay::Held).unwrap().conn;
+        s.replace_text(c, ROOT, "one\ntwo\n").unwrap();
+        let (client, clock, seq, max) = {
+            let st = s.lock().unwrap();
+            let runs = st.doc.blame_runs(ROOT).unwrap();
+            let r = *runs.last().unwrap();
+            (r.client, r.clock, st.version, st.doc.max_clock())
+        };
+        assert_eq!(max, u64::from(u32::MAX), "a Yrs doc's bound");
+        assert!(s.blame(c, ROOT, None).is_ok(), "an undamaged store blames");
+        let over = max + 1;
+        let refused = |r: Result<()>, what: &str| match r {
+            Err(SessionError::Store(crate::store::StoreError::Corrupt(w))) if w == what => {}
+            other => panic!("{what}: want Corrupt({what:?}), got {other:?}"),
+        };
+        // a change-clocks row covering alice's text, ending past u32
+        store
+            .plant_clock_rows_for_tests(s.doc_id, &[(client, clock, over + 3, seq)], &[])
+            .unwrap();
+        s.lock().unwrap().prov = None;
+        refused(s.blame(c, ROOT, None).map(|_| ()), "change clocks");
+        // a provenance row for alice's text naming a root past u32
+        store
+            .plant_clock_rows_for_tests(
+                s.doc_id,
+                &[(client, clock, clock + 1, seq)],
+                &[(client, clock, clock + 1, (client, over))],
+            )
+            .unwrap();
+        s.lock().unwrap().prov = None;
+        refused(s.blame(c, ROOT, None).map(|_| ()), "provenance row");
+        s.lock().unwrap().prov = None;
+        refused(s.revert(c, seq, false).map(|_| ()), "provenance row");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

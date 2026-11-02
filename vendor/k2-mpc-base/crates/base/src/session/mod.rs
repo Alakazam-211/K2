@@ -80,10 +80,11 @@ pub use live::{
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
 };
 pub use live::{
-    Blame, BlameLine, ChangeEvent, DiffOutput, EditAtBase, EditOptions, EditResult, FileBytes,
-    FileCodec, FileCopy, JoinOptions, Joined, LogItem, LogQuery, NotReached, PurgeOutcome,
-    PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, SettingsChanged, Status,
-    SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
+    Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, DiffOutput, EditAtBase,
+    EditOptions, EditResult, FileBytes, FileCodec, FileCopy, JoinOptions, Joined, LogItem,
+    LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange,
+    Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
+    WriteReport,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{

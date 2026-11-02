@@ -36,7 +36,7 @@ use crate::elem::{
     keyed_diff, Applied, Edited, ElemState, Facet, Key, KeyedRoot, KeyedState, ListOp, MapOp,
     OpRefusal, Value, WriteId,
 };
-use crate::engine::{BlameRun, EngineDoc, YrsDoc};
+use crate::engine::{BlameRun, Engine, EngineDoc};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::{self, Hunk, HunkError};
 
@@ -189,10 +189,11 @@ impl Edit {
     }
 }
 
-/// A doc on a pack's schema.
+/// A doc on a pack's schema, on its engine (Yrs, and with feature `native` the native engine,
+/// chosen by `EngineChoice`).
 pub struct Doc {
     schema: Schema,
-    inner: YrsDoc,
+    inner: Engine,
 }
 
 pub(crate) fn check_client(id: ClientId) -> Result<(), DocError> {
@@ -219,11 +220,28 @@ fn check_schema(schema: &Schema) -> Result<(), DocError> {
 }
 
 impl Doc {
+    /// The Yrs doc, for a Yrs-only hook of a test, `differential` or `conformance` build (C2:
+    /// [`crate::engine::Engine::yrs`] is `None` on another engine). A hook with a meaning on
+    /// every engine says what it does on each instead of calling this.
+    #[allow(dead_code)] // test and feature builds only
+    fn yrs_only(&self) -> &crate::engine::YrsDoc {
+        self.inner
+            .yrs()
+            .expect("a Yrs-only test hook, on a doc that runs on another engine")
+    }
+
+    #[allow(dead_code)] // test and feature builds only
+    fn yrs_only_mut(&mut self) -> &mut crate::engine::YrsDoc {
+        self.inner
+            .yrs_mut()
+            .expect("a Yrs-only test hook, on a doc that runs on another engine")
+    }
+
     /// A new, empty doc.
     pub fn new(schema: Schema) -> Result<Self, DocError> {
         check_schema(&schema)?;
         Ok(Self {
-            inner: YrsDoc::new(&schema),
+            inner: Engine::new(&schema)?,
             schema,
         })
     }
@@ -232,7 +250,7 @@ impl Doc {
     pub fn load(schema: Schema, state: &[u8]) -> Result<Self, DocError> {
         check_schema(&schema)?;
         Ok(Self {
-            inner: YrsDoc::load(&schema, state)?,
+            inner: Engine::load(&schema, state)?,
             schema,
         })
     }
@@ -257,7 +275,7 @@ impl Doc {
             .iter()
             .map(|(name, kind)| {
                 let n = match kind {
-                    Kind::Text => Neutral::Text(self.inner.text(name)),
+                    Kind::Text => Neutral::Text(self.inner.text(name)?),
                     Kind::MovableList => Neutral::List(self.inner.list(name)?),
                     Kind::Map => Neutral::Map(self.inner.map(name)?),
                     // check_schema refuses unimplemented kinds
@@ -281,7 +299,7 @@ impl Doc {
             .iter()
             .map(|(name, kind)| {
                 let r = match kind {
-                    Kind::Text => KeyedRoot::Text(self.inner.text(name)),
+                    Kind::Text => KeyedRoot::Text(self.inner.text(name)?),
                     Kind::MovableList => KeyedRoot::List {
                         live: self.inner.list(name)?,
                         hidden: self.inner.hidden(name)?,
@@ -343,7 +361,7 @@ impl Doc {
     /// The current text of a text root.
     pub fn text(&self, root: &str) -> Result<String, DocError> {
         self.root(root, Kind::Text)?;
-        Ok(self.inner.text(root))
+        self.inner.text(root)
     }
 
     /// List root `root`'s elements in place order, live and deleted (a deleted element keeps
@@ -437,13 +455,36 @@ impl Doc {
         update: &[u8],
         allowed: ClientId,
     ) -> Result<UpdateInfo, DocError> {
-        check_client(allowed)?;
-        self.inner.check_update(update, allowed)
+        self.client_checked(update, allowed)
     }
 
     /// Check, then apply, an update from a connection that owns client `allowed`.
     #[cfg(feature = "untrusted-wire")]
     pub fn apply_client_update(
+        &mut self,
+        update: &[u8],
+        allowed: ClientId,
+    ) -> Result<UpdateInfo, DocError> {
+        self.client_applied(update, allowed)
+    }
+
+    /// The one client check: [`Doc::check_client_update`]'s body, and the conformance
+    /// suite's hook ([`crate::conformance::replica::check_from`], kit-made bytes only).
+    #[cfg(any(feature = "untrusted-wire", feature = "conformance"))]
+    pub(crate) fn client_checked(
+        &self,
+        update: &[u8],
+        allowed: ClientId,
+    ) -> Result<UpdateInfo, DocError> {
+        check_client(allowed)?;
+        self.inner.check_update(update, allowed)
+    }
+
+    /// The one client check-then-apply: [`Doc::apply_client_update`]'s body, and the
+    /// conformance suite's hook ([`crate::conformance::replica::deliver_from`], kit-made
+    /// bytes only).
+    #[cfg(any(feature = "untrusted-wire", feature = "conformance"))]
+    pub(crate) fn client_applied(
         &mut self,
         update: &[u8],
         allowed: ClientId,
@@ -477,6 +518,17 @@ impl Doc {
     /// live one, deleting an absent map key) are reported with [`crate::elem::Effect::None`];
     /// when every op is one and no text changes, `update` is `None`.
     pub fn edit_applied(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
+        Ok(self.edit_made(client, edits)?.edited)
+    }
+
+    /// [`Doc::edit_applied`], with each text hunk's first inserted clock as the engine
+    /// applied it ([`crate::engine::Made`]): what the session's provenance and clock spans
+    /// name the change's elements by (C2: never predicted after the fact).
+    pub(crate) fn edit_made(
+        &mut self,
+        client: ClientId,
+        edits: &[Edit],
+    ) -> Result<crate::engine::Made, DocError> {
         check_client(client)?;
         let mut text = false;
         for e in edits {
@@ -491,9 +543,12 @@ impl Doc {
             }
         }
         if !text && edits.iter().all(|e| matches!(e, Edit::Text { .. })) {
-            return Ok(Edited {
-                update: None,
-                applied: Vec::new(),
+            return Ok(crate::engine::Made {
+                edited: Edited {
+                    update: None,
+                    applied: Vec::new(),
+                },
+                firsts: vec![Vec::new(); edits.len()],
             });
         }
         self.inner.edit_as(client, edits)
@@ -535,7 +590,7 @@ impl Doc {
     #[doc(hidden)]
     pub fn position_index_stats(&self) -> crate::differential::PositionIndexStats {
         let [lookups, marker_hits, walks, shadow_checks, mismatches, stale_markers] =
-            self.inner.position_stats();
+            self.yrs_only().position_stats();
         crate::differential::PositionIndexStats {
             lookups,
             marker_hits,
@@ -551,7 +606,7 @@ impl Doc {
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]
     pub fn history_units_for_tests(&self) -> u64 {
-        self.inner.history_units_for_tests()
+        self.yrs_only().history_units_for_tests()
     }
 
     /// Test-only: each text root's text read afresh from the engine (not the cache), sorted
@@ -559,14 +614,14 @@ impl Doc {
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]
     pub fn engine_texts_for_tests(&self) -> Vec<(&'static str, String)> {
-        self.inner.texts_for_tests()
+        self.yrs_only().texts_for_tests()
     }
 
     /// Test-only: plant a bug in the engine's position index (until the doc is reloaded).
     #[cfg(feature = "planted-position-bugs")]
     #[doc(hidden)]
     pub fn plant_position_bug(&self, bug: crate::differential::PlantedPositionBug) {
-        self.inner.plant_position_bug(bug.into());
+        self.yrs_only().plant_position_bug(bug.into());
     }
 
     /// What the runtime check found since the last call (the session reports each).
@@ -583,13 +638,37 @@ impl Doc {
     /// `text`, as a bug in the cache would.
     #[cfg(any(test, feature = "differential"))]
     pub fn corrupt_text_cache_for_tests(&mut self, root: &str, text: &str) {
-        self.inner.corrupt_text_cache(root, text);
+        self.yrs_only_mut().corrupt_text_cache(root, text);
     }
 
     /// How many clock units `client` has inserted into this doc: a change by `client`
     /// occupies the clocks between this before it and this after it (blame's index).
-    pub(crate) fn clock_of(&self, client: ClientId) -> u32 {
+    pub(crate) fn clock_of(&self, client: ClientId) -> u64 {
         self.inner.clock_of(client)
+    }
+
+    /// The largest clock the doc's engine makes ([`EngineDoc::max_clock`]): the bound on
+    /// clocks the store holds for it.
+    pub(crate) fn max_clock(&self) -> u64 {
+        self.inner.max_clock()
+    }
+
+    /// The doc's engine units ([`crate::engine::Units`]): what its clocks count.
+    pub(crate) fn units(&self) -> crate::engine::Units {
+        self.inner.units()
+    }
+
+    /// Whether a session may store this doc (C2): until C3 gives native docs their own
+    /// stamp and record format, only a doc on Yrs (a native doc would be stamped as Yrs's).
+    /// Every doc a session makes or loads is on Yrs today; this holds that line.
+    pub(crate) fn check_storable(&self) -> Result<(), DocError> {
+        Ok(())
+    }
+
+    /// How the doc's engine numbers what a change inserts ([`crate::engine::IdOrder`]): the
+    /// prediction undo's planner uses before anything is applied.
+    pub(crate) fn id_order(&self) -> crate::engine::IdOrder {
+        self.inner.id_order()
     }
 
     /// Whether this doc and `other` have the same state vector (the same inserts; deletes
@@ -624,7 +703,7 @@ impl Doc {
     /// The state vector as sorted `(client, clock)` pairs. The kit's unit tests only.
     #[cfg(test)]
     pub(crate) fn clocks_for_tests(&self) -> Vec<(ClientId, u32)> {
-        self.inner.snapshot_for_tests().1
+        self.yrs_only().snapshot_for_tests().1
     }
 
     /// Deliver everything `from` has that this doc lacks: two of this kit's docs in one
@@ -636,8 +715,8 @@ impl Doc {
     }
 
     #[cfg(test)]
-    pub(crate) fn engine(&self) -> &YrsDoc {
-        &self.inner
+    pub(crate) fn engine(&self) -> &crate::engine::YrsDoc {
+        self.yrs_only()
     }
 
     /// Deliver everything `from` has that this doc lacks. Both docs are this kit's, in one
@@ -649,23 +728,55 @@ impl Doc {
         self.inner.apply_trusted(&update)
     }
 
-    /// The state vector as sorted `(client, clock)` pairs. Test-only.
+    /// The state vector as sorted `(client, clock)` pairs (the native engine: its version
+    /// vector, each agent's next seq). Test-only.
     #[cfg(feature = "conformance")]
-    pub(crate) fn state_clocks(&self) -> Vec<(ClientId, u32)> {
-        self.inner.state_clocks()
+    pub(crate) fn state_clocks(&self) -> Vec<(ClientId, u64)> {
+        self.yrs_only()
+            .state_clocks()
+            .into_iter()
+            .map(|(c, k)| (c, u64::from(k)))
+            .collect()
     }
 
     /// What this doc has past `clocks`, a state it has seen. Test-only.
     #[cfg(feature = "conformance")]
-    pub(crate) fn events_since(&self, clocks: &[(ClientId, u32)]) -> Result<Vec<u8>, DocError> {
-        self.inner.events_since(clocks)
+    pub(crate) fn events_since(&self, clocks: &[(ClientId, u64)]) -> Result<Vec<u8>, DocError> {
+        let mut c32 = Vec::with_capacity(clocks.len());
+        for &(c, k) in clocks {
+            let k = u32::try_from(k)
+                .map_err(|_| DocError::Malformed(format!("a Yrs clock past u32: {k}")))?;
+            c32.push((c, k));
+        }
+        self.yrs_only().events_since(&c32)
     }
 
     /// Deliver an update another of this kit's docs made in this process, refusing one that
     /// skips ahead of a client's history. Test-only.
     #[cfg(feature = "conformance")]
     pub(crate) fn deliver_local(&mut self, update: &[u8]) -> Result<(), DocError> {
-        self.inner.deliver_local(update)
+        self.yrs_only_mut().deliver_local(update)
+    }
+
+    /// This doc loaded from what it keeps at rest: on Yrs its encoded state; on the native
+    /// engine its records, with its digest key (the engine's own load). Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn reloaded(&self) -> Result<Doc, DocError> {
+        Doc::load(self.schema, &self.encode_state()?)
+    }
+
+    /// Hardening (test-only): the next apply after a passed check on a native doc errs after
+    /// the engine applied it. `false` on a doc on Yrs (no such hook there).
+    #[cfg(feature = "conformance")]
+    pub(crate) fn fail_next_apply(&mut self) -> bool {
+        false
+    }
+
+    /// How many times a native doc's replica was reopened after an apply error (test-only);
+    /// `None` on Yrs.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn reopens(&self) -> Option<u32> {
+        None
     }
 
     /// How many runs the current places of `keys` form in list root `root` (adjacent slots,
@@ -673,7 +784,7 @@ impl Doc {
     #[cfg(feature = "conformance")]
     pub(crate) fn slot_runs(&self, root: &str, keys: &[Key]) -> Result<Option<usize>, DocError> {
         self.root(root, Kind::MovableList)?;
-        self.inner.slot_runs(root, keys)
+        self.yrs_only().slot_runs(root, keys)
     }
 
     /// A relative position at byte offset `at` of text root `root`, stuck to the character
@@ -691,7 +802,7 @@ impl Doc {
             return Ok(None);
         }
         let at16 = text[..at].encode_utf16().count() as u32;
-        Ok(self.inner.sticky(root, at16, right))
+        Ok(self.yrs_only().sticky(root, at16, right))
     }
 
     /// Where `pos` is now, as a byte offset of text root `root`. Test-only.
@@ -702,7 +813,7 @@ impl Doc {
         pos: &crate::engine::Sticky,
     ) -> Result<Option<usize>, DocError> {
         let text = self.text(root)?;
-        let Some(at16) = self.inner.resolve_sticky(pos) else {
+        let Some(at16) = self.yrs_only().resolve_sticky(pos) else {
             return Ok(None);
         };
         let (mut n16, mut byte) = (0u32, 0usize);

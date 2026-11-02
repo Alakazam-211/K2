@@ -19,5 +19,7 @@ See `docs/YRS-FORK.md`.
 
 Transitive dependencies are all MIT, Apache-2.0, BSD, ISC or Zlib (checked by
 `scripts/check-licences.sh`), with one exception: **`unicode-ident`** is
-`(MIT OR Apache-2.0) AND Unicode-3.0`, used only at build time by procedural macros.
+`(MIT OR Apache-2.0) AND Unicode-3.0`, used only at build time by procedural macros
+(through `proc-macro2` and `syn`) on native targets; a `wasm32` build also links it through
+`wasm-bindgen` (`getrandom`'s web backend, reached from `vendor/yrs` via `fastrand`).
 Unicode-3.0 is an OSI-approved permissive licence.

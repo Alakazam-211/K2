@@ -22,7 +22,7 @@ mod purge;
 mod removed;
 mod tier0_history;
 
-pub use at_base::EditAtBase;
+pub use at_base::{CursorAtVersion, CursorDrop, EditAtBase};
 #[cfg(feature = "conformance")]
 pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
@@ -54,7 +54,7 @@ use super::summary;
 use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
 use super::view::View;
 use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
-use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
+use crate::engine::{reads_stamp, ENGINE_FORMAT, ENGINE_NAME};
 use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
@@ -79,6 +79,9 @@ pub struct Joined {
     /// and the store maps it to the pid.
     pub client: ClientId,
     pub version: Seq,
+    /// The connection [`Session::join_replacing`] closed for this one; `None` from
+    /// [`Session::join`] and [`Session::join_shared`], or when there was none to close.
+    pub replaced: Option<ConnId>,
 }
 
 /// Options for [`Session::join_with`] (v0.10.1): [`Session::join`] and
@@ -93,6 +96,10 @@ pub struct JoinOptions {
     pub label: Option<String>,
     /// Reuse the pid's shared connection with the same `via`, as [`Session::join_shared`].
     pub shared: bool,
+    /// Close the pid's connection holding this client ID, as [`Session::join_replacing`]
+    /// (a reconnect). The new connection's label is the one given here, never the replaced
+    /// connection's: a host reconnecting a tab passes its label again.
+    pub prev: Option<ClientId>,
 }
 
 impl JoinOptions {
@@ -111,6 +118,15 @@ impl JoinOptions {
     /// replaced when this one has a label).
     pub fn shared(mut self, shared: bool) -> Self {
         self.shared = shared;
+        self
+    }
+
+    /// Close the pid's connection holding client ID `prev` as this one joins, as
+    /// [`Session::join_replacing`] does ([`JoinOptions::prev`](field@JoinOptions::prev)).
+    /// With `shared(true)` reusing an existing connection, `prev` is ignored and
+    /// [`Joined::replaced`] is `None`.
+    pub fn replacing(mut self, prev: ClientId) -> Self {
+        self.prev = Some(prev);
         self
     }
 }
@@ -338,15 +354,7 @@ pub(crate) struct Shown {
 
 /// The activity ring's verb for a change made through a direct API call.
 fn kind_verb(k: ChangeKind) -> &'static str {
-    match k {
-        ChangeKind::Edit => "edit",
-        ChangeKind::Undo => "undo",
-        ChangeKind::Redo => "redo",
-        ChangeKind::Restore => "restore",
-        ChangeKind::Revert => "revert",
-        ChangeKind::External => "external",
-        ChangeKind::Import => "import",
-    }
+    k.as_str()
 }
 
 /// The span of an edit's changed lines in its first root (`first..=last` over them).
@@ -485,6 +493,10 @@ pub struct ChangeEvent {
     /// Cells it wrote into a deleted row or column, with who deleted it (the deleter's side
     /// of K-CSV-4).
     pub hidden: Vec<HiddenCellWrite>,
+    /// What kind of change it is (the change record's kind, as `log` lists it): an edit, an
+    /// undo, a redo, a revert, a restore, an outside save or the import. On the wire,
+    /// [`ChangeKind::as_str`].
+    pub kind: ChangeKind,
 }
 
 /// An outside save that changed only the file's codec settings (a re-save with a BOM, CRLF or
@@ -1009,6 +1021,21 @@ fn take_d1_extra() -> Vec<(usize, usize)> {
     Vec::new()
 }
 
+/// Refuse a stored doc another engine wrote, before any of its state is read (v0.10.1):
+/// [`SessionError::EngineMismatch`] unless its stamp is this engine's
+/// ([`crate::engine::reads_stamp`]; an unstamped doc is).
+fn check_engine(meta: &DocMeta) -> Result<()> {
+    if reads_stamp(&meta.engine, meta.engine_format) {
+        return Ok(());
+    }
+    Err(SessionError::EngineMismatch {
+        stored: meta.engine.clone(),
+        stored_format: meta.engine_format,
+        engine: ENGINE_NAME.to_owned(),
+        engine_format: ENGINE_FORMAT,
+    })
+}
+
 /// Each text root's text, in schema order (a structured root has none).
 fn texts_of(doc: &Doc, schema: &Schema) -> Result<Vec<(&'static str, String)>> {
     schema
@@ -1171,6 +1198,7 @@ impl Session {
                 pack: schema.name.to_owned(),
             });
         }
+        check_engine(&meta)?;
         let loaded = store.load(doc_id)?;
         let mut doc = Doc::from_store(schema, &loaded)?;
         doc.set_edit_check_every(config.edit_check_every);
@@ -1231,20 +1259,24 @@ impl Session {
             }
         };
         let edits = grid::import_edits(&ordered);
-        let made = doc.edit_applied(client, &edits)?;
+        let made = doc.edit_made(client, &edits)?;
+        let (made, firsts) = (made.edited, made.firsts);
         let update = made.update;
         // a structured import's ops, by key (its record and its element writes)
         let (elems, counts) = grid::elem_records(&made.applied, &edits, &grid::Befores::new());
         if structured {
             grid::check_import_size(&config, &schema, &ordered)?;
         }
-        let edits: Vec<Edit> = edits
-            .into_iter()
-            .filter(|e| matches!(e, Edit::Text { .. }))
+        // each root's imported text: fresh elements from the import client's clocks, as the
+        // engine applied them
+        let firsts: Vec<Vec<u64>> = edits
+            .iter()
+            .zip(firsts)
+            .filter(|(e, _)| matches!(e, Edit::Text { .. }))
+            .map(|(_, f)| f)
             .collect();
-        // each root's imported text: fresh elements from the import client's clocks
-        let firsts = crate::engine::insert_clocks(0, &edits);
         let now = host.now_ms();
+        doc.check_storable()?;
         let meta = DocMeta {
             key,
             pack: schema.name.to_owned(),
@@ -1310,6 +1342,7 @@ impl Session {
                             redacted: false,
                             roots: Some(HunkRoots {
                                 inserted: root_runs(&Ids::fresh(
+                                    doc.units(),
                                     t,
                                     ElemId::new(client, first.first().copied().unwrap_or(0)),
                                 )),
@@ -1554,7 +1587,18 @@ impl Session {
     /// command-line call while a `watch` runs. Use this for anything with its own lifetime
     /// (a socket, a `watch`); use [`Session::join_shared`] for one-shot verbs.
     pub fn join(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_with(p, stay, &JoinOptions::new())
+        self.join_impl(p, stay, false, None, None)
+    }
+
+    /// Like [`Session::join`], and closes the connection of this doc that holds client ID
+    /// `prev` (a reconnecting client's last one) when it is `p`'s pid's: as
+    /// [`Session::leave`] closes it (its claims end, its caret goes, its subscriptions
+    /// close), under the same lock as the join, so nothing reaches it between. The pid stays
+    /// present throughout (no participant `Left`). `prev` held by no present connection, or
+    /// by another pid's, is ignored: that connection is untouched and this is a plain join.
+    /// [`Joined::replaced`] names the connection closed.
+    pub fn join_replacing(&self, p: Participant, stay: Stay, prev: ClientId) -> Result<Joined> {
+        self.join_impl(p, stay, false, Some(prev), None)
     }
 
     /// Like [`Session::join`], but reuses the pid's existing shared connection with the same
@@ -1563,16 +1607,27 @@ impl Session {
     /// one client ID instead of minting one per call (every client ID stays in the doc's
     /// state for good).
     pub fn join_shared(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_with(p, stay, &JoinOptions::new().shared(true))
+        self.join_impl(p, stay, true, None, None)
     }
 
     /// [`Session::join`] with options (v0.10.1): a label for the connection
     /// ([`JoinOptions::label`](field@JoinOptions::label), carried on its roster
-    /// [`super::Device`]), and [`JoinOptions::shared`](field@JoinOptions::shared) for
-    /// [`Session::join_shared`]'s reuse.
+    /// [`super::Device`]), [`JoinOptions::shared`](field@JoinOptions::shared) for
+    /// [`Session::join_shared`]'s reuse, and [`JoinOptions::prev`](field@JoinOptions::prev)
+    /// for [`Session::join_replacing`]'s close of the reconnecting client's last connection.
     pub fn join_with(&self, p: Participant, stay: Stay, opts: &JoinOptions) -> Result<Joined> {
-        let shared = opts.shared;
-        let label = super::participant::device_label(opts.label.as_deref());
+        self.join_impl(p, stay, opts.shared, opts.prev, opts.label.clone())
+    }
+
+    fn join_impl(
+        &self,
+        p: Participant,
+        stay: Stay,
+        shared: bool,
+        prev: Option<ClientId>,
+        label: Option<String>,
+    ) -> Result<Joined> {
+        let label = super::participant::device_label(label.as_deref());
         presence::check_participant(&p)?;
         let now = self.now();
         let mut st = self.lock()?;
@@ -1605,6 +1660,7 @@ impl Session {
                     conn: m.pres.conn,
                     client: m.client,
                     version: st.version,
+                    replaced: None,
                 });
             }
         }
@@ -1668,11 +1724,26 @@ impl Session {
             grid: Default::default(),
             label,
         });
+        // join_replacing: the pid's connection holding `prev` closes as `leave` closes it,
+        // after the new one is in (the pid stays present: no participant Left)
+        let pid = &st.members.last().expect("pushed above").p.pid;
+        let replaced = prev
+            .and_then(|c| {
+                st.members
+                    .iter()
+                    .position(|m| m.client == c && m.p.pid == *pid && m.pres.conn != conn)
+            })
+            .map(|i| {
+                let old = st.members[i].pres.conn;
+                self.remove_member(st, i, LeaveReason::Left);
+                old
+            });
         self.roster_flush(st, now, false);
         Ok(Joined {
             conn,
             client,
             version: st.version,
+            replaced,
         })
     }
 
@@ -2842,7 +2913,8 @@ impl Session {
         let client = st.members[i].client;
         let next = ElemId::new(client, st.doc.clock_of(client));
         let prov = st.prov.as_ref().expect("just built");
-        let (steps, blocked) = match undo::plan(&st.texts, prov, next, batches, mode) {
+        let order = st.doc.id_order();
+        let (steps, blocked) = match undo::plan(&st.texts, prov, next, order, batches, mode) {
             Plan::Conflict { step, conflicts } => {
                 return Ok(UndoOutcome::Conflicts { step, conflicts })
             }
@@ -3409,6 +3481,7 @@ impl Session {
                         hunks: hunks.clone(),
                     },
                     hidden: Vec::new(),
+                    kind: a.kind,
                 };
                 Self::broadcast(st, &ev);
             }
@@ -3428,6 +3501,7 @@ impl Session {
                     } else {
                         Vec::new()
                     },
+                    kind: a.kind,
                 };
                 Self::broadcast(st, &ev);
             }
@@ -3556,9 +3630,9 @@ impl Session {
     ///
     /// `restores` (an undo, redo or revert): per edit, per hunk, the roots of the elements it
     /// puts back (U23); every other insertion is fresh, its own root. The provenance map
-    /// follows exactly: the new elements' IDs are the member's next clocks in the engine
-    /// adapter's order ([`crate::engine::insert_clocks`]), and each restored run gets a
-    /// provenance row ([`Applied::prov_rows`]).
+    /// follows exactly: the new elements' IDs are the member's next clocks as the engine
+    /// applied them ([`crate::engine::Made`]), and each restored run gets a provenance row
+    /// ([`Applied::prov_rows`]).
     fn apply_local(
         &self,
         st: &mut State,
@@ -3636,14 +3710,15 @@ impl Session {
             }
         }
         let clock_before = st.doc.clock_of(client);
-        let Some(update) = st.doc.edit_as(client, &canon)? else {
+        let made = st.doc.edit_made(client, &canon)?;
+        let Some(update) = made.edited.update else {
             return Ok(None);
         };
         {
             prof!("session.engine_checks");
             self.report_engine_checks(st, st.version + 1);
         }
-        let firsts = crate::engine::insert_clocks(clock_before, &canon);
+        let firsts = made.firsts;
         let mut a = Applied {
             span: Some((clock_before, st.doc.clock_of(client))),
             update,
@@ -3695,7 +3770,7 @@ impl Session {
                     .filter(|r| !h.insert.is_empty() && !r.is_empty());
                 let inserted = match &put_back {
                     Some(r) => {
-                        let mut off = 0u32;
+                        let mut off = 0u64;
                         for run in r.runs() {
                             a.prov_rows.push(ProvRow {
                                 client,
@@ -3707,7 +3782,7 @@ impl Session {
                         }
                         r.clone()
                     }
-                    None => Ids::fresh(&h.insert, id),
+                    None => Ids::fresh(prov.units(), &h.insert, id),
                 };
                 pairs.push((deleted, inserted));
                 ins.push(Inserted {
@@ -3847,7 +3922,7 @@ impl Session {
                 let t = text
                     .get(at..e)
                     .ok_or_else(|| broken("the engine's runs don't fit the text"))?;
-                q.push((r.client, r.clock, r.clock + t.encode_utf16().count() as u32));
+                q.push((r.client, r.clock, r.clock + doc.units().of(t)));
                 at = e;
             }
             if at != text.len() {
@@ -3855,15 +3930,15 @@ impl Session {
             }
             let rows = {
                 prof!("prov.rows");
-                store.provenance_rows(doc_id, &q)?
+                store.provenance_rows(doc_id, &q, doc.max_clock())?
             };
             built.push((
                 *root,
                 text.as_str(),
-                super::prov::live_runs(text, &runs, &rows),
+                super::prov::live_runs(doc.units(), text, &runs, &rows),
             ));
         }
-        Ok(Prov::build(built))
+        Ok(Prov::build(doc.units(), built))
     }
 
     /// Carry every stored position through a change to `root` by `typist`: carets, views,
@@ -4066,6 +4141,7 @@ impl Session {
     fn recover(&self, st: &mut State, error: &str) {
         let reloaded = (|| -> Result<_> {
             let store = self.store(st)?;
+            check_engine(&store.meta(self.doc_id)?)?;
             let loaded = store.load(self.doc_id)?;
             let mut doc = Doc::from_store(self.schema, &loaded)?;
             doc.set_edit_check_every(self.config.edit_check_every);
@@ -4367,6 +4443,16 @@ impl Session {
     // ----- for the manager -----
 
     /// The pack's own verb `name` ([`Pack::verbs`]), when `name` isn't a kit verb.
+    /// Whether `conn` is an agent's connection (K-ADDR-3 checks agents' positional edits); a
+    /// connection that isn't joined: no (the verb's admission refuses it).
+    pub(crate) fn is_agent(&self, conn: ConnId) -> bool {
+        self.lock().is_ok_and(|st| {
+            st.members
+                .iter()
+                .any(|m| m.conn == conn && m.p.kind == ParticipantKind::Agent)
+        })
+    }
+
     pub(crate) fn pack_verb(&self, name: &str) -> Option<crate::tools::PackVerb> {
         if crate::tools::is_kit_verb(name) {
             return None;
@@ -4703,7 +4789,7 @@ impl Session {
             let ids = |doc: &Doc| {
                 doc.blame_runs(root)
                     .ok()
-                    .and_then(|runs| super::prov::elem_ids(text, &runs))
+                    .and_then(|runs| super::prov::elem_ids(doc.units(), text, &runs))
             };
             match (ids(&st.doc), ids(replica)) {
                 (Some(a), Some(b)) if a == b => {}
@@ -5436,7 +5522,7 @@ impl Session {
                     .doc
                     .blame_runs(root)
                     .ok()
-                    .and_then(|runs| super::prov::elem_ids(text, &runs));
+                    .and_then(|runs| super::prov::elem_ids(st.doc.units(), text, &runs));
                 (*root, ids)
             })
             .collect();
@@ -5458,7 +5544,7 @@ impl Session {
                             start: r.id,
                         }
                     }));
-                    (kept.chars(text) != *ids).then(|| {
+                    (kept.chars(p.units(), text) != *ids).then(|| {
                         format!("outside edit: root {root:?}: element IDs other than the engine's")
                     })
                 })
@@ -5474,12 +5560,12 @@ impl Session {
         }
         // the merge is made on the live doc itself, as the external participant: changes made
         // since the last write-back are kept, and nothing is merged in from the replica
-        let made = st
-            .doc
-            .edit_as(client, &edits)
-            .map(|u| u.expect("non-empty edits change the doc"));
-        let update = match made {
-            Ok(u) => u,
+        let made = st.doc.edit_made(client, &edits);
+        let (update, firsts) = match made {
+            Ok(m) => (
+                m.edited.update.expect("non-empty edits change the doc"),
+                m.firsts,
+            ),
             Err(e) => {
                 self.recover(st, &e.to_string());
                 return Err(e.into());
@@ -5542,7 +5628,7 @@ impl Session {
                         .and_then(|(_, ids)| ids.as_deref());
                     old_ids.and_then(|old_ids| {
                         let runs = st.doc.blame_runs(root).ok()?;
-                        let new_ids = super::prov::elem_ids(new, &runs)?;
+                        let new_ids = super::prov::elem_ids(st.doc.units(), new, &runs)?;
                         super::prov::identity_hunks(old, old_ids, new, &new_ids)
                     })
                 };
@@ -5583,19 +5669,20 @@ impl Session {
         // outside save's record kept no roots, so a revert of it put back fresh text)
         let mut pairs_of: Vec<(String, Vec<(Ids, Ids)>)> = Vec::new();
         if let Some(p) = prov.as_mut() {
-            let firsts = crate::engine::insert_clocks(clock_before, &edits);
-            // the hunks the engine was handed are canonical: its clocks are the predicted ones
+            // the clocks the engine gave each hunk (`Made::firsts`); its order predicts them
+            // too (`IdOrder`, what undo's planner relies on), from the texts before
             debug_assert_eq!(
-                st.doc.clock_of(client) - clock_before,
-                edits
-                    .iter()
-                    .flat_map(|e| {
-                        let Edit::Text { hunks, .. } = e else {
-                            unreachable!("a text edit (structured edits take their own path)")
-                        };
-                        hunks.iter().map(|h| h.insert.encode_utf16().count() as u32)
-                    })
-                    .sum::<u32>(),
+                {
+                    let text_of = |r: &str| {
+                        before
+                            .iter()
+                            .find(|(x, _)| *x == r)
+                            .map(|(_, t)| t.as_str())
+                    };
+                    let planned = st.doc.id_order().plan(clock_before, &edits, &text_of);
+                    (planned.firsts, planned.next)
+                },
+                (firsts.clone(), st.doc.clock_of(client)),
                 "the outside edit's insert clocks"
             );
             for (e, firsts) in edits.iter().zip(&firsts) {
@@ -5609,7 +5696,7 @@ impl Session {
                     .map(|(h, &clock)| {
                         (
                             p.roots(root, old, h.start, h.end),
-                            Ids::fresh(&h.insert, ElemId::new(client, clock)),
+                            Ids::fresh(p.units(), &h.insert, ElemId::new(client, clock)),
                         )
                     })
                     .collect();
@@ -5745,6 +5832,7 @@ impl Session {
                         hunks: told,
                     },
                     hidden: Vec::new(),
+                    kind: change.info.kind,
                 },
             );
         }
@@ -6260,7 +6348,7 @@ pub(super) fn record_root(
 struct Applied {
     update: Vec<u8>,
     /// The engine clocks of `update`'s inserted text (blame's index).
-    span: Option<(u32, u32)>,
+    span: Option<(u64, u64)>,
     roots: Vec<(String, Vec<Hunk>)>,
     regions: Vec<Region>,
     record: Vec<RecordRoot>,

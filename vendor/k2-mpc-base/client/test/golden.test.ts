@@ -6,7 +6,6 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { RemovedTextNote } from "../src/editor/notes";
 import { LiveText, type Rejection } from "../src/live";
 import type { CaretAt, ChangeEvent, ErrorReport, RosterEntry, RosterEvent, ServerFrame, Transport } from "../src/wire";
 import { runrec } from "./runrec";
@@ -31,7 +30,8 @@ const keys = (o: object) => Object.keys(o).sort();
 
 /** Exactly the fields `ChangeEvent` names, with their types. */
 function checkChange(e: ChangeEvent) {
-  expect(keys(e)).toEqual(["at_ms", "client", "hunks", "on_behalf_of", "pid", "root", "version", "via"]);
+  expect(keys(e)).toEqual(["at_ms", "client", "hunks", "kind", "on_behalf_of", "pid", "root", "version", "via"]);
+  expect(["edit", "undo", "redo", "revert", "restore", "external", "import"]).toContain(e.kind);
   expect(isInt(e.version) && isInt(e.client) && isInt(e.at_ms)).toBe(true);
   expect(typeof e.pid).toBe("string");
   expect(typeof e.via).toBe("string");
@@ -77,9 +77,6 @@ const OVERWRITTEN_KEYS = [
 const CELL_KEYS = ["region", "col", "yours", "file", "cut"] as const satisfies readonly (keyof Cell)[];
 type Complete<T, K extends readonly unknown[]> = [Exclude<keyof T, K[number]>] extends [never] ? true : never;
 const overwrittenComplete: Complete<Overwritten, typeof OVERWRITTEN_KEYS> = true;
-// the editor's own copy of the type (`RemovedTextNote`) is held to the same names
-const NOTE_KEYS = OVERWRITTEN_KEYS satisfies readonly (keyof RemovedTextNote)[];
-const noteComplete: Complete<RemovedTextNote, typeof NOTE_KEYS> = true;
 const cellComplete: Complete<Cell, typeof CELL_KEYS> = true;
 const SNAPSHOT_KEYS = ["kind", "version", "members", "watching"];
 
@@ -118,7 +115,7 @@ const isIntOrNull = (x: unknown) => x === null || isInt(x);
 
 /** Exactly the fields `overwritten` names, each of its type (WIRE.md, "The `overwritten` event"). */
 function checkOverwritten(e: Overwritten) {
-  expect(overwrittenComplete && cellComplete && noteComplete).toBe(true);
+  expect(overwrittenComplete && cellComplete).toBe(true);
   expect(keys(e)).toEqual([...OVERWRITTEN_KEYS].sort());
   expect(e.kind).toBe("overwritten");
   expect(typeof e.to).toBe("string");
@@ -164,7 +161,7 @@ function checkOverwritten(e: Overwritten) {
 const GRID_SOURCES = ["an outside save", "a write", "a revert", "a restore", "rows drop-deleted"];
 const GRID_RULES = ["cell", "name", "quoting", "edited_row", "deleted_row", "moved_row", "edited_col", "deleted_col", "moved_col", "dropped_row", "dropped_col", "rollup"];
 function checkOverwrittenGrid(e: Overwritten) {
-  expect(overwrittenComplete && cellComplete && noteComplete).toBe(true);
+  expect(overwrittenComplete && cellComplete).toBe(true);
   expect(keys(e)).toEqual([...OVERWRITTEN_KEYS].sort());
   expect(e.kind).toBe("overwritten");
   expect(typeof e.to).toBe("string");
@@ -291,6 +288,13 @@ describe("golden wire JSON written by the Rust kit", () => {
     // the undo comes back as a change by the same participant and client
     expect(events[2].pid).toBe(events[0].pid);
     expect(events[2].client).toBe(events[0].client);
+  });
+
+  it("change_events.json: the undo's change says it is an undo, the others are edits", () => {
+    const g = load("change_events.json");
+    const events = g.events as ChangeEvent[];
+    expect(events[2].kind).toBe("undo");
+    expect(events.filter((e) => e !== events[2]).every((e) => e.kind === "edit")).toBe(true);
   });
 
   it("change_events_app.json: an App viewer sees handles, never pids", () => {
@@ -560,7 +564,7 @@ describe("golden wire JSON written by the Rust kit", () => {
   it("errors.json: each report is `ErrorReport` JSON, and the client acts on it", () => {
     const g = load("errors.json") as Record<string, ErrorReport>;
     for (const [name, r] of Object.entries(g)) {
-      expect(keys(r), name).toEqual(["details", "exit", "id", "message", "next", "rule"]);
+      expect(keys(r).filter((k) => k !== "next_step"), name).toEqual(["details", "exit", "id", "message", "next", "rule"]);
       expect(r.id).toMatch(/^MPC-E\d{3}$/);
       expect(isInt(r.exit)).toBe(true);
       expect(typeof r.message).toBe("string");
@@ -595,5 +599,43 @@ describe("golden wire JSON written by the Rust kit", () => {
     l.applyLocal([{ start: 0, end: 0, insert: ">" }]);
     w.deliver({ type: "refused", op: 2, error: g.base_expired });
     expect(reloads).toEqual(["MPC-E112"]);
+  });
+
+  it("errors.json: `next_step` is `{verb, args, why}` or absent; a report without it works the same", () => {
+    const g = load("errors.json") as Record<string, ErrorReport>;
+    const has: string[] = [];
+    for (const [name, r] of Object.entries(g)) {
+      const st = r.next_step;
+      if (st === undefined) continue;
+      has.push(name);
+      expect(keys(st), name).toEqual(["args", "verb", "why"]);
+      expect(typeof st.verb === "string" && st.verb.length > 0, name).toBe(true);
+      expect(Array.isArray(st.args) && st.args.every((a) => typeof a === "string"), name).toBe(true);
+      expect(typeof st.why === "string" && st.why.length > 0, name).toBe(true);
+      // no host command text: a host renders the step in its own syntax
+      for (const t of [st.verb, ...st.args, st.why]) expect(/\bk2\b|k2doc|^\$ /i.test(t), `${name}: ${t}`).toBe(false);
+      for (const a of st.args) expect(a !== "doc" && !/\s/.test(a), `${name}: ${a}`).toBe(true);
+      expect(st.why.includes("--"), name).toBe(false);
+    }
+    // MPC-E151 has nothing to run, so no `next_step`; MPC-E111 has one
+    expect(has).toContain("write_conflict");
+    expect(has).not.toContain("bad_hunk");
+    // a report without `next_step` (an older host, or nothing to run)
+    const { next_step, ...old } = g.write_conflict;
+    expect(next_step).toBeDefined();
+    const w = wire();
+    const l = new LiveText({ text: "abc", version: 1 }, w.t);
+    const rej: Rejection[] = [];
+    const errors: ErrorReport[] = [];
+    l.onRejected((r) => rej.push(r));
+    l.onError((e) => errors.push(e));
+    l.applyLocal([{ start: 3, end: 3, insert: "!" }]);
+    w.deliver({ type: "refused", op: 1, error: old });
+    expect(rej).toHaveLength(1);
+    expect(rej[0].error).toEqual(old);
+    expect(rej[0].error?.next_step).toBeUndefined();
+    expect(l.text).toBe("abc");
+    w.deliver({ type: "error", error: { id: "MPC-E113", message: "bad edit", next: "Fix it." } });
+    expect(errors.map((e) => [e.id, e.next_step])).toEqual([["MPC-E113", undefined]]);
   });
 });

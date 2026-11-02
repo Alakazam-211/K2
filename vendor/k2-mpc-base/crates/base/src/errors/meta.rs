@@ -207,6 +207,45 @@ fn status_text(s: Status) -> String {
     }
 }
 
+/// An entry's [`super::NextStep`] as `explain`'s `step:` line, `verb; args: a b; why: ...`
+/// (no host syntax; `args` left out when there are none), or nothing when it has none.
+fn step_line(e: &ErrorEntry) -> String {
+    let Some(st) = e.step else {
+        return String::new();
+    };
+    let mut o = format!("step:     {}", st.verb);
+    if !st.args.is_empty() {
+        o.push_str("; args: ");
+        o.push_str(&st.args.join(" "));
+    }
+    o.push_str("; why: ");
+    o.push_str(st.why);
+    o.push('\n');
+    o
+}
+
+/// An entry's [`super::NextStep`] as a `docs/ERRORS.md` line, the verb and each argument in
+/// backticks, then why; or nothing when it has none.
+fn step_markdown(e: &ErrorEntry) -> String {
+    let Some(st) = e.step else {
+        return String::new();
+    };
+    let run = if st.args.is_empty() {
+        format!("`{}`", st.verb)
+    } else {
+        format!(
+            "`{}` with {}",
+            st.verb,
+            st.args
+                .iter()
+                .map(|a| format!("`{a}`"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    format!("- **Next step:** {run}. {}\n", st.why)
+}
+
 /// `explain <id>`: the entry as text (a golden test per id holds it).
 pub fn explain(e: &ErrorEntry) -> String {
     format!(
@@ -214,6 +253,7 @@ pub fn explain(e: &ErrorEntry) -> String {
          exit:     {exit}\n\
          message:  {message}\n\
          next:     {next}\n\
+         {step}\
          rule:     {rule}\n\
          verbs:    {verbs}\n\
          status:   {status}\n",
@@ -223,6 +263,7 @@ pub fn explain(e: &ErrorEntry) -> String {
         exit = e.exit,
         message = e.message,
         next = e.next,
+        step = step_line(e),
         rule = e.rule,
         verbs = verbs_text(e),
         status = status_text(e.status),
@@ -236,13 +277,18 @@ fn entry_value(e: &ErrorEntry, verbs: &Verbs) -> Value {
         .filter(|v| verbs.returns(e, v))
         .map(|v| v.name)
         .collect();
-    Value::obj([
+    let mut o = vec![
         ("id", Value::from(e.id)),
         ("name", Value::from(e.name)),
         ("area", Value::from(e.area.title())),
         ("exit", Value::from(e.exit)),
         ("message", Value::from(e.message)),
         ("next", Value::from(e.next)),
+    ];
+    if let Some(st) = e.step {
+        o.push(("next_step", st.to_value()));
+    }
+    o.extend([
         ("rule", Value::from(e.rule)),
         ("verbs", Value::list(e.verbs.iter().copied())),
         ("returned_by", Value::list(returned_by)),
@@ -255,7 +301,8 @@ fn entry_value(e: &ErrorEntry, verbs: &Verbs) -> Value {
                 Status::Retired(v) => Value::from(v),
             },
         ),
-    ])
+    ]);
+    Value::obj(o)
 }
 
 /// `explain <id> --json`: the entry as one JSON object (pretty, stable key order).
@@ -449,7 +496,15 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
                 ("explain", Value::from("explain <ID> [--json]")),
                 (
                     "json_shape",
-                    Value::list(["id", "exit", "message", "next", "rule", "details"]),
+                    Value::list([
+                        "id",
+                        "exit",
+                        "message",
+                        "next",
+                        "next_step",
+                        "rule",
+                        "details",
+                    ]),
                 ),
             ]),
         ),
@@ -486,6 +541,7 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
         ),
         ("parity", Value::List(parity.collect())),
         ("limits", Value::Obj(limits)),
+        ("positions", positions(&verbs)),
         (
             "errors",
             Value::List(
@@ -501,6 +557,49 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
                     .collect(),
             ),
         ),
+    ])
+}
+
+/// `capabilities`' `positions` (K-ADDR-4): each surface's unit, every unit, and the
+/// position forms of each verb served, from [`crate::parity::positions`]'s one table.
+fn positions(verbs: &Verbs) -> Value {
+    use crate::parity::positions as p;
+    let units = p::UNITS.iter().map(|u| {
+        Value::obj([
+            ("unit", Value::from(u.word())),
+            ("base", u.base().map_or(Value::Null, Value::from)),
+            ("meaning", Value::from(u.meaning())),
+        ])
+    });
+    let rows = verbs.all.iter().filter_map(|v| {
+        let r = p::of(v.name)?;
+        Some(Value::obj([
+            ("verb", Value::from(r.verb)),
+            (
+                "forms",
+                Value::List(
+                    r.forms
+                        .iter()
+                        .map(|f| {
+                            Value::obj([
+                                ("at", Value::from(f.at)),
+                                ("unit", Value::from(f.unit.word())),
+                                ("tier", f.tier.map_or(Value::Null, |t| tier_word(t).into())),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]))
+    });
+    Value::obj([
+        ("internal", Value::from(p::INTERNAL.word())),
+        ("line_col", Value::from(p::LINE_COL)),
+        ("wire", Value::from(p::WIRE.word())),
+        ("yjs_wire", Value::from(p::YJS_WIRE.word())),
+        ("doc", Value::from("docs/POSITIONS.md")),
+        ("units", Value::List(units.collect())),
+        ("verbs", Value::List(rows.collect())),
     ])
 }
 
@@ -596,6 +695,46 @@ fn capabilities_text(c: &Value) -> String {
             o.push_str(&format!("  {k} = {}\n", v.to_json()));
         }
     }
+    if let Some(p) = c.get("positions") {
+        o.push_str(&format!(
+            "\nPositions ({}):\n  inside the kit: {}\n  line:col: {}\n  the hunk channel \
+             (frames, carets): {}\n  sync updates with Yjs clients: {}\n  units:\n",
+            s(p, "doc"),
+            s(p, "internal"),
+            s(p, "line_col"),
+            s(p, "wire"),
+            s(p, "yjs_wire")
+        ));
+        if let Some(Value::List(l)) = p.get("units") {
+            for u in l {
+                let base = match u.get("base").and_then(Value::as_u64) {
+                    Some(b) => format!("{b}-based"),
+                    None => "no base".to_owned(),
+                };
+                o.push_str(&format!(
+                    "    {:<16} {base}: {}\n",
+                    s(u, "unit"),
+                    s(u, "meaning")
+                ));
+            }
+        }
+        o.push_str("  verbs:\n");
+        if let Some(Value::List(l)) = p.get("verbs") {
+            for v in l {
+                let forms: Vec<String> = match v.get("forms") {
+                    Some(Value::List(fs)) => fs
+                        .iter()
+                        .map(|f| match f.get("tier").and_then(Value::as_str) {
+                            Some(t) => format!("{} {} ({t})", s(f, "at"), s(f, "unit")),
+                            None => format!("{} {}", s(f, "at"), s(f, "unit")),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                o.push_str(&format!("    {}: {}\n", s(v, "verb"), forms.join(", ")));
+            }
+        }
+    }
     o.push_str("\nError ids: run explain for the list, explain <ID> for one.\n");
     o
 }
@@ -617,10 +756,15 @@ pub fn errors_markdown() -> String {
          object:\n\n\
          ```json\n\
          {\"id\": \"MPC-E110\", \"exit\": 1, \"message\": \"doc changed since 12 (now 14)\",\n \
-         \"next\": \"Someone changed the doc after …\", \"rule\": \"A14 (--if-version), K-T0-5\",\n \
-         \"details\": {\"expected\": 12, \"actual\": 14}}\n\
+         \"next\": \"Someone changed the doc after …\",\n \
+         \"next_step\": {\"verb\": \"cat\", \"args\": [], \"why\": \"Someone changed the doc …\"},\n \
+         \"rule\": \"A14 (--if-version), K-T0-5\", \"details\": {\"expected\": 12, \"actual\": 14}}\n\
          ```\n\n\
-         `details` is structured (numbers, values, lists, objects), never prose. `explain \
+         `details` is structured (numbers, values, lists, objects), never prose. `next_step` \
+         is `next` as data: `verb` a kit verb, `args` its arguments, one token each (`{key}`: \
+         the refusal's `details.key`), and `why` in prose; it has no host syntax, so a host \
+         renders it in its own (K-PAR-10). It is left out when there is nothing to run (wait, \
+         ask a person, report it, use ordinary file tools). `explain \
          <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit \
          codes:\n\n\
          | Exit | Name | Meaning |\n|---|---|---|\n",
@@ -661,8 +805,14 @@ pub fn errors_markdown() -> String {
         }
         for e in &mine {
             o.push_str(&format!(
-                "\n### {} `{}`\n\n- **Message:** `{}`\n- **Next:** {}\n- **Rule:** {}\n- **Exit:** {}\n",
-                e.id, e.name, e.message, e.next, e.rule, e.exit
+                "\n### {} `{}`\n\n- **Message:** `{}`\n- **Next:** {}\n{}- **Rule:** {}\n- **Exit:** {}\n",
+                e.id,
+                e.name,
+                e.message,
+                e.next,
+                step_markdown(e),
+                e.rule,
+                e.exit
             ));
             if e.status != Status::Live {
                 o.push_str(&format!("- **Status:** {}\n", status_text(e.status)));

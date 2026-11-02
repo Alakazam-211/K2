@@ -364,6 +364,13 @@ fn open_error(e: &SessionError) -> Closed {
             message: Some(super::routes::QUARANTINED_HINT.to_string()),
             ..Closed::kit(CloseReason::Declined, e)
         },
+        // Kit v0.10.2 (MPC-E520): another engine or stored format wrote this
+        // doc, so it is not loaded. The kit's line names which.
+        SessionError::EngineMismatch { .. } => Closed {
+            code: Some("engine_mismatch".into()),
+            message: Some(e.to_string()),
+            ..Closed::kit(CloseReason::Declined, e)
+        },
         SessionError::NotFound(_) => Closed::kit(CloseReason::NotFound, e),
         SessionError::Forbidden { .. } => Closed::kit(CloseReason::Auth, e),
         SessionError::Released => restart(),

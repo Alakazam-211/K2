@@ -1,4 +1,4 @@
-k2-mpc-base 0.10.0+3
+k2-mpc-base 0.10.2
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -97,52 +97,52 @@ Verbs (after the doc path):
     usage:  insert --line N | --after N | --at L:C [--if-version V] (text on stdin)
     exits:  0
     serves: P9 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   replace  [edit; text; needs read+edit]
     usage:  replace --lines a,b | --range L:C-L:C (text on stdin) | --old TEXT --new TEXT [--all] (exact; '-': that one from stdin; 1: no match or not unique, nothing applied) [--if-version V]
     exits:  0 1
     serves: P10 P12 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E125 MPC-E126 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E125 MPC-E126 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   delete  [edit; text; needs read+edit]
     usage:  delete --lines a,b | --range L:C-L:C [--if-version V]
     exits:  0
     serves: P11
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   sed -i  [edit; text; needs read+edit]
     usage:  sed -i SCRIPT (s///, d, a, i, c, y...) [--if-version V]
     exits:  0
     serves: P11 P12 P15
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   patch  [edit; text; needs read+edit]
     usage:  patch [-p N] [-R] [--dry-run] [-F N] [--partial] [--if-version V] (diff on stdin)
     exits:  0 1
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   apply  [edit; text; needs read+edit]
     usage:  apply: as patch
     exits:  0 1
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   append  [edit; text; needs read+edit]
     usage:  append [--ensure-newline] [--if-version V] (text on stdin)
     exits:  0
     serves: P13
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901 MPC-E902
   write  [edit; text+blob+grid; needs read+edit]
     usage:  write --base V | --base live (new text on stdin; a grid: --base V [--partial] [--respect-claims], merged by key)
     exits:  0 1 8
     serves: P14
-    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   undo  [edit; text+grid; needs read+edit]
     usage:  undo [--steps N] [--for P]
     exits:  0 1
     serves: P16
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   redo  [edit; text+grid; needs read+edit]
     usage:  redo [--steps N]
     exits:  0 1
     serves: P16
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   undo --drop  [edit; text+grid; needs read+edit]
     usage:  undo --drop
     exits:  0
@@ -152,7 +152,7 @@ Verbs (after the doc path):
     usage:  undo --partial [--steps N] [--for P]
     exits:  0 1
     serves: P26
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   status  [read; text+blob+grid; needs read]
     usage:  status
     exits:  0
@@ -212,7 +212,7 @@ Verbs (after the doc path):
     usage:  restore --version V
     exits:  0
     serves: P20
-    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   version --name  [edit; text+blob+grid; needs read+edit]
     usage:  version --name NAME [--version V]
     exits:  0
@@ -247,7 +247,7 @@ Verbs (after the doc path):
     usage:  revert <change> [--partial] (too old: exit 8)
     exits:  0 1
     serves: P31
-    errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
+    errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E171 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E901
   lease  [edit; blob; needs read+edit]
     usage:  lease [--ttl MS] (take it, or extend yours; someone else's: exit 5)
     exits:  0
@@ -268,7 +268,7 @@ Verbs (after the doc path):
     exits:  0 1
     serves: P34
     errors: MPC-E106
-  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E154 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E519 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
+  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E154 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E519 MPC-E520 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
 
 Verbs with no doc:
   explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
@@ -394,5 +394,45 @@ Limits in effect:
   grid_max_cols = 1024
   grid_max_value_len = 65536
   tool_output_max_bytes = 33554432
+
+Positions (docs/POSITIONS.md):
+  inside the kit: utf8_bytes
+  line:col: 1-based lines; 1-based columns in Unicode scalar values
+  the hunk channel (frames, carets): utf8_bytes
+  sync updates with Yjs clients: utf16_code_units
+  units:
+    utf8_bytes       0-based: UTF-8 byte offsets of a root's doc text (\n line breaks, no BOM), on character boundaries
+    utf16_code_units 0-based: UTF-16 code units, inside the update bytes exchanged with Yjs clients only; never an offset of the kit's API
+    file_bytes       no base: bytes of the file as the pack encodes it (BOM and CRLF included)
+    file_chars       no base: Unicode scalar values of the file as the pack encodes it (a BOM is one, a CR one)
+    lines            1-based: lines of the text the verb sees (a grid: its rendered file), \n ending a line; ranges inclusive, $ the last line
+    line_col         1-based: L:C, a line and a column counted in Unicode scalar values (an emoji is one column); chars + 1 is the line's end; a range L:C-L:C is half-open
+    rendered_lines   1-based: a grid's rendered lines, as the pack's line map counts them (the header's first)
+    grid_row         no base: a row: a key (r17), #N (the Nth live row) or LN (rendered line N's row)
+    grid_col         no base: a column: a key (c3), #N (the Nth live column) or a header name
+    grid_cell        no base: R,C: a row and a column
+    ordinal          1-based: #N: the Nth live row or column
+  verbs:
+    cat: -n lines, -b lines
+    wc: -l lines, -c file_bytes, -m file_chars
+    head: -n lines, -c file_bytes
+    tail: -n lines, -c file_bytes
+    sed: script lines
+    view: --lines lines
+    grep: -n lines, -A lines, -B lines, -C lines
+    who: stdout line_col, stdout lines
+    activity: stdout lines
+    claim: --lines lines, --rows grid_row (grid), --cols grid_col (grid), --cells grid_cell (grid)
+    follow: stdout line_col
+    cursor: --at line_col, --select line_col, --cell grid_cell (grid), --to grid_cell (grid)
+    insert: --line lines, --after lines, --at line_col
+    replace: --lines lines, --range line_col
+    delete: --lines lines, --range line_col
+    sed -i: script lines
+    patch: stdin lines, -F lines
+    apply: stdin lines
+    diff --version: -U lines, stdout lines
+    diff: -U lines, stdout lines
+    blame: -L lines (text), -L rendered_lines (grid), stdout lines (text), stdout rendered_lines (grid)
 
 Error ids: run explain for the list, explain <ID> for one.

@@ -1,5 +1,8 @@
 // jsdom has no layout: CodeMirror's measuring asks ranges for their rectangles, which jsdom's
 // Range lacks. Empty rectangles are enough for tests that never read positions on screen.
+// For a host's editor tests in jsdom (the host brings jsdom; this file needs only the DOM types
+// of the TypeScript `lib`). Kept at this path: hosts import it by path
+// (`k2-mpc-client/test/jsdom-shims`).
 
 if (typeof Range !== "undefined") {
   const empty = () => Object.assign([], { item: () => null }) as unknown as DOMRectList;

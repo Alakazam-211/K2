@@ -2,8 +2,8 @@
 
 `LiveText` gives a host the data to draw other people's carets and the person's rejected
 changes in its own editor UI. The library has no DOM: it holds the data, says when it changed,
-and acts on the host's request. The host owns all look and feel (EDITOR.md describes the
-kit's own editor component, which is separate and frozen).
+and acts on the host's request. The host owns all look and feel: it draws its own editor
+(HOST.md has the calls and rules; the kit's own editor component was removed in v0.10.2).
 
 **Offsets are UTF-16 code units of the replica's current text** (`live.text`): what CodeMirror
 and a JS string index use. The wire, `carets()` and `Rejection.region` stay in UTF-8 bytes. The

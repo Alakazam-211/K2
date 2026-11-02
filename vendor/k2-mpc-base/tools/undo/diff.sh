@@ -1,7 +1,6 @@
 # State-set diff (<= 10 min): TLC's states (-dump) against the enumerator's at bounds where the
 # counts differ; tools/undo/statediff.py prints the states only one side has.
-inst w 2 1 1 0 4 "0, 1, 1" true true none
-q verify w.qnt --main=w --backend=tlc --invariant=inv > /dev/null 2>&1
+need_apalache
 . "$ROOT/tools/undo/tlc.sh"
 INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
 inst d_2x1r1 2 1 1 1 4 "0, 1, 1" true true none

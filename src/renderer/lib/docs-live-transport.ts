@@ -1,6 +1,6 @@
 // The Live view's transport (plan L2): K2's side of the socket between a
 // tab and the kit's live session, `WS /cli/docs/live` (daemon
-// `docs/live.rs`). The editor component (K2 Cores' `k2-mpc-client`) owns the
+// `docs/live.rs`). K2's Live editor (components/LiveEditor) owns the
 // retry loop and consumes this object; K2 implements one attempt.
 //
 // The contract (L2 transport spec v0 + its addendum, 2026-10-30):

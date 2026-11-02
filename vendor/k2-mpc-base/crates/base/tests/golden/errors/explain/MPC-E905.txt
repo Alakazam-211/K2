@@ -2,6 +2,7 @@ MPC-E905 claim_waiters_cap (limits)
 exit:     2
 message:  bad claim: {count} already waiting for {claim}
 next:     That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.
+step:     activity; why: That claim already has as many waiters as it allows; see where others are working and work elsewhere, or retry after it ends.
 rule:     A13 (claim_waiters_max)
 verbs:    a host call (no verb)
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 2,
   "message": "bad claim: {count} already waiting for {claim}",
   "next": "That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.",
+  "next_step": {
+    "verb": "activity",
+    "args": [],
+    "why": "That claim already has as many waiters as it allows; see where others are working and work elsewhere, or retry after it ends."
+  },
   "rule": "A13 (claim_waiters_max)",
   "verbs": ["(host)"],
   "returned_by": [],

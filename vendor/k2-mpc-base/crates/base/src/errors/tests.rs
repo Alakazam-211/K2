@@ -31,10 +31,16 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
     vec![
         S::Db(x.into()),
         S::Newer { found: 99 },
+        S::RewriteNewer { found: 7 },
+        S::ForeignEngine {
+            stored: "mpce-0.1".into(),
+            stored_format: 1,
+        },
         S::NewerData {
             table: "later_kit".into(),
         },
         S::Corrupt("log entry"),
+        S::ClockOverflow(1 << 32),
         S::NoDoc(1),
         S::KeyTaken(key()),
         S::NoVersion(1, 2),
@@ -122,11 +128,18 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             expected: 12,
             actual: 14,
         },
+        S::BaseExpired { base: 12 },
         S::RateLimited { retry_after_ms: 90 },
         S::NotFound(key()),
         S::PackMismatch {
             stored: "markdown".into(),
             pack: "text".into(),
+        },
+        S::EngineMismatch {
+            stored: "loro-1.0".into(),
+            stored_format: 1,
+            engine: "yrs-0.28".into(),
+            engine_format: 2,
         },
         S::BadParticipant(x.into()),
         S::BadPosition(x.into()),
@@ -248,6 +261,15 @@ fn tool_errors_with(x: &str) -> Vec<ToolError> {
         ToolError::refused("sed w", "writes another file"),
         ToolError::usage(x),
         ToolError::Limit(x.into()),
+        ToolError::address(crate::addr::ambiguous(
+            x,
+            "column",
+            x,
+            &[crate::addr::Candidate::new(x)],
+        )),
+        ToolError::address(
+            ErrorReport::new(&super::ids::POSITIONAL_NEEDS_VERSION, x).with("address", x),
+        ),
     ]
 }
 
@@ -455,13 +477,15 @@ fn every_live_id_has_a_path() {
         );
     }
     let meta = run_meta(
-        &["explain".to_owned(), "MPC-E000".to_owned()],
+        &["explain".to_owned(), "MPC-E999".to_owned()],
         false,
         &[],
         &crate::session::Config::default(),
     )
     .unwrap();
     seen.insert(meta.refusal.unwrap().id());
+    // a change whose reply was lost: the JS client's own (client/src/wire.ts), no kit path
+    seen.insert("MPC-E000");
     // exact replace and pack verbs: produced by run_tool (the integration test reaches them)
     seen.extend(["MPC-E125", "MPC-E126", "MPC-E127"]);
     // a grid verb's exit 4 (an unknown or deleted element): produced by run_tool on a table
@@ -515,9 +539,12 @@ fn engine_codes_cross_as_strings() {
     let r = ErrorReport::engine("MPCE-E123", "the engine said no");
     assert_eq!(r.id(), "MPC-E161");
     assert_eq!(r.detail("code").and_then(Value::as_str), Some("MPCE-E123"));
+    // a code the catalog lists is reported as itself
+    let r = ErrorReport::engine("MPCE-E199", "the engine said no");
+    assert_eq!(r.id(), "MPCE-E199");
     assert!(
-        ENGINE.is_empty(),
-        "the engine allocates its own ranges (G2-core)"
+        ENGINE.iter().all(|e| e.is_engine()),
+        "the engine's table holds only MPCE ids (the engine allocates its own ranges)"
     );
 }
 
@@ -634,4 +661,188 @@ fn export_errors() -> Vec<ExportError> {
             message: "boom".into(),
         },
     ]
+}
+
+/// K-PAR-10: the names a step's verb may take: the kit's verbs, the doc-less verbs and the
+/// grid verbs, by their registry names (never a hand list).
+fn kit_verb_names() -> BTreeSet<&'static str> {
+    crate::parity::KIT_VERBS
+        .iter()
+        .map(|v| v.name)
+        .chain(META_VERBS.iter().map(|(n, _)| *n))
+        .chain(crate::table::verbs::VERBS.iter().map(|v| v.name()))
+        .collect()
+}
+
+/// Host command text: a word `k2` (any case), `k2doc`, `k2 doc`, a shell prompt.
+fn host_text(s: &str) -> Option<&'static str> {
+    let low = s.to_ascii_lowercase();
+    if low.contains("k2doc") || low.contains("k2 doc") {
+        return Some("k2 doc");
+    }
+    if low
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .any(|w| w == "k2")
+    {
+        return Some("the word k2");
+    }
+    if s.starts_with("$ ") || s.contains("\n$ ") {
+        return Some("a shell prompt");
+    }
+    None
+}
+
+/// K-PAR-10, over every entry: its step is absent (nothing to run), or valid: the verb is a
+/// kit verb by its registry name (flags in `args`), with a reason.
+#[test]
+fn every_next_step_names_a_kit_verb_and_a_reason() {
+    let verbs = kit_verb_names();
+    assert!(verbs.contains("undo --partial") && verbs.contains("row list"));
+    assert!(KIT.len() >= 80, "only {} entries", KIT.len());
+    let (mut with, mut without) = (0, 0);
+    for e in entries() {
+        let Some(st) = e.step else {
+            without += 1;
+            continue;
+        };
+        with += 1;
+        assert!(
+            verbs.contains(st.verb),
+            "{}: {:?} is not a kit verb",
+            e.id,
+            st.verb
+        );
+        assert!(!st.why.trim().is_empty(), "{} {}: no why", e.id, e.name);
+        assert_eq!(st.why.trim(), st.why, "{}: why has outer space", e.id);
+    }
+    assert!(with > 40, "only {with} entries have a step");
+    assert!(
+        without > 0,
+        "every entry has a step: the absent case is untested"
+    );
+}
+
+/// K-PAR-10: no host command text in any entry's message or `next`, nor in a step's reason
+/// or arguments; arguments are single argv tokens with no host prefix; a reason names no
+/// command line.
+#[test]
+fn no_host_command_text_in_the_registry() {
+    for e in entries() {
+        for (what, s) in [("message", e.message), ("next", e.next)] {
+            assert_eq!(host_text(s), None, "{} {what}: {s:?}", e.id);
+        }
+        let Some(st) = e.step else { continue };
+        assert_eq!(host_text(st.why), None, "{} why: {:?}", e.id, st.why);
+        assert_eq!(host_text(st.verb), None, "{} verb: {:?}", e.id, st.verb);
+        for a in st.args {
+            assert_eq!(host_text(a), None, "{} arg {a:?}", e.id);
+            assert!(
+                !a.is_empty() && !a.contains(char::is_whitespace),
+                "{} arg {a:?}",
+                e.id
+            );
+            let low = a.to_ascii_lowercase();
+            assert!(
+                low != "doc" && !low.starts_with("k2") && !a.contains('/'),
+                "{} arg {a:?}: a host prefix or a path",
+                e.id
+            );
+        }
+        // the reason is prose: no flags, no backticks, no shell prompt
+        assert!(
+            !st.why.contains("--") && !st.why.contains('`') && !st.why.contains("$ "),
+            "{}: why names a command line: {:?}",
+            e.id,
+            st.why
+        );
+        assert!(st.why.ends_with('.'), "{}: why is a sentence", e.id);
+    }
+    // the check itself catches what it is for
+    assert!(host_text("run k2 doc cat").is_some());
+    assert!(host_text("K2 undo").is_some());
+    assert!(host_text("k2doc").is_some());
+    assert!(host_text("$ cat").is_some());
+    assert_eq!(host_text("the K2-agnostic kit's mpc-k2x"), None);
+}
+
+/// K-PAR-10: an argument `{key}` is a plain identifier, and names a detail the refusal
+/// carries (its message template names it); any other argument has no braces.
+#[test]
+fn step_placeholders_are_plain_detail_keys() {
+    let mut seen = 0;
+    for e in entries() {
+        let Some(st) = e.step else { continue };
+        for a in st.args {
+            match a.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+                Some(k) => {
+                    seen += 1;
+                    let mut cs = k.chars();
+                    assert!(
+                        cs.next()
+                            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+                            && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                        "{}: placeholder {a:?} is not a plain identifier",
+                        e.id
+                    );
+                    assert!(
+                        e.message.contains(&format!("{{{k}}}")),
+                        "{}: {a:?} is no detail of its message",
+                        e.id
+                    );
+                }
+                None => assert!(
+                    !a.contains('{') && !a.contains('}'),
+                    "{}: arg {a:?} has a stray brace",
+                    e.id
+                ),
+            }
+        }
+    }
+    assert!(seen >= 1, "no placeholder: the check is vacuous");
+}
+
+/// K-PAR-10 (additive this release): the report's JSON carries `next_step` right after
+/// `next` when the entry has one, and leaves it out when not; the same on every surface;
+/// `next` keeps its prose.
+#[test]
+fn next_step_is_in_the_json_after_next() {
+    let r = SessionError::Stale {
+        expected: 12,
+        actual: 14,
+    }
+    .report();
+    assert_eq!(r.next(), super::ids::STALE.next);
+    let j = r.to_json();
+    let next = format!("\"next\":{},", json_str(r.next()));
+    let at = j.find(&next).expect("next") + next.len();
+    assert!(
+        j[at..].starts_with(r#""next_step":{"verb":"cat","args":[],"why":""#),
+        "{j}"
+    );
+    let st = r.next_step().expect("stale has a step");
+    assert_eq!(Some(st), super::ids::STALE.step);
+    let o = r.clone().with_next("app", "Reload.");
+    assert_eq!(o.next_step(), r.next_step());
+    assert!(o.to_json_for("app").contains(&st.to_value().to_json()));
+    let c = super::ids::CLAIM_CONTENDED
+        .step
+        .unwrap()
+        .to_value()
+        .to_json();
+    assert!(c.contains(r#""args":["--id","{claim}"]"#), "{c}");
+    // nothing to run: no `next_step` at all, `next` then `rule`
+    let w = ErrorReport::new(&super::ids::FORBIDDEN_READ, "refused: needs Read rights");
+    assert_eq!(w.next_step(), None);
+    let wj = w.to_json();
+    assert!(!wj.contains("next_step"), "{wj}");
+    assert!(
+        wj.contains(&format!(
+            "\"next\":{},\"rule\":",
+            json_str(super::ids::FORBIDDEN_READ.next)
+        )),
+        "{wj}"
+    );
+    assert!(!explain(&super::ids::FORBIDDEN_READ).contains("step:"));
+    assert!(!explain_json(&super::ids::FORBIDDEN_READ).contains("next_step"));
+    assert!(explain(&super::ids::STALE).contains("\nstep:     cat; why: "));
 }

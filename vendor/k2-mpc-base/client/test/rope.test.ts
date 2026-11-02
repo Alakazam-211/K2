@@ -1,13 +1,11 @@
-// The rope (src/rope.ts) and the editor's byte index (src/editor/bytes.ts) against plain-string
-// models: random edits on random texts (ASCII, CJK, emoji, ZWJ sequences, line breaks), tiny
-// chunks so edits land on chunk edges and surrogate pairs sit at them, empty and large documents,
+// The rope (src/rope.ts) against plain-string models: random edits on random texts (ASCII, CJK,
+// emoji, ZWJ sequences, line breaks), tiny chunks so edits land on chunk edges and surrogate
+// pairs sit at them, empty and large documents,
 // every UTF-8/UTF-16 conversion, validation, slices, inversion, equality, and that an edit never
 // changes the version it came from. A planted fault (a chunk's cached UTF-8 length off by one)
 // must be caught.
 
-import { ChangeSet, Text } from "@codemirror/state";
 import { describe, expect, it, vi } from "vitest";
-import { ByteIndex } from "../src/editor/bytes";
 import { apply, byteToIndex, invert, utf8Len, validate, type Hunk } from "../src/hunk";
 import { Rope } from "../src/rope";
 import { rng } from "./fake-server";
@@ -137,7 +135,9 @@ function property(seed: number, start: string, chunk: number | undefined, steps:
   check(rope, model, r, `seed ${seed} end`);
 }
 
-describe("the rope against a plain string", () => {
+// Long by design (randomised runs, 3-20 s on a build node). vitest 2 never timed out a synchronous
+// test; vitest 3 and later apply the 5 s default to them too, so these suites name their own limit.
+describe("the rope against a plain string", { timeout: 60_000 }, () => {
   it("random edits, tiny chunks (edges everywhere), from empty and from random text", () => {
     let n = 0;
     for (const chunk of [2, 3, 4, 7, 16]) {
@@ -220,49 +220,3 @@ describe("the rope against a plain string", () => {
   });
 });
 
-describe("the editor's byte index against a plain string", () => {
-  /** A random document of many short lines (several blocks), random transactions. */
-  function bytesProperty(seed: number, lines: number, steps: number) {
-    const r = rng(seed);
-    const ls = Array.from({ length: lines }, () => text(r, 6).replace(/\n/g, ""));
-    let doc = Text.of(ls);
-    let idx = ByteIndex.of(doc);
-    for (let s = 0; s < steps; s++) {
-      const str = doc.toString();
-      const hs = edit(r, str, 2000);
-      const specs = hs.map((h) => ({ from: byteToIndex(str, h.start), to: byteToIndex(str, h.end), insert: h.insert }));
-      const cs = ChangeSet.of(specs, doc.length);
-      const next = cs.apply(doc);
-      const old = idx;
-      const oldDoc = doc;
-      idx = idx.update(doc, next, cs);
-      doc = next;
-      const now = doc.toString();
-      const where = `seed ${seed} step ${s}`;
-      expect(idx.total(), where).toBe(utf8Len(now));
-      for (let k = 0; k < 40; k++) {
-        const pos = r.int(doc.length + 1);
-        const want = utf8Len(now.slice(0, pos));
-        // a position inside a pair is clamped by CodeMirror's own lineAt: compare at boundaries
-        if (byteToIndex(now, want) !== pos) continue;
-        expect(idx.byteAt(doc, pos), `${where}: byteAt(${pos})`).toBe(want);
-        expect(idx.posAt(doc, want), `${where}: posAt(${want})`).toBe(pos);
-      }
-      for (let k = 0; k < 20; k++) {
-        const b = r.int(utf8Len(now) + 2);
-        expect(idx.posAt(doc, b), `${where}: posAt(${b})`).toBe(byteToIndex(now, b));
-      }
-      // the index it came from still answers for its own document
-      const was = oldDoc.toString();
-      expect(old.total(), `${where}: the old index changed`).toBe(utf8Len(was));
-      const p = r.int(oldDoc.length + 1);
-      const w = utf8Len(was.slice(0, p));
-      if (byteToIndex(was, w) === p) expect(old.byteAt(oldDoc, p), `${where}: the old index changed`).toBe(w);
-    }
-  }
-
-  it("random transactions on documents of one block and of many", () => {
-    for (let seed = 1; seed <= 6; seed++) bytesProperty(seed, 40, 60);
-    for (let seed = 7; seed <= 12; seed++) bytesProperty(seed, 3000, 60);
-  });
-});

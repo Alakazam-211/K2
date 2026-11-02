@@ -1,0 +1,21 @@
+MPC-E173 stale_cursor (sessions and edits)
+exit:     1
+message:  the cursor is for another version, doc or call; nothing was read
+next:     A cursor continues one read of one doc at one version with the same arguments. The doc changed since (or the cursor is from another doc, or the arguments differ), so nothing was read. Read again without --cursor and page on with the cursor that read returns.
+rule:     K-READ-2
+verbs:    a pack's own verbs
+status:   reserved for read budgets and cursors (K-READ-2); nothing returns it yet
+--- json
+{
+  "id": "MPC-E173",
+  "name": "stale_cursor",
+  "area": "sessions and edits",
+  "exit": 1,
+  "message": "the cursor is for another version, doc or call; nothing was read",
+  "next": "A cursor continues one read of one doc at one version with the same arguments. The doc changed since (or the cursor is from another doc, or the arguments differ), so nothing was read. Read again without --cursor and page on with the cursor that read returns.",
+  "rule": "K-READ-2",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "reserved",
+  "since_or_until": "read budgets and cursors (K-READ-2)"
+}

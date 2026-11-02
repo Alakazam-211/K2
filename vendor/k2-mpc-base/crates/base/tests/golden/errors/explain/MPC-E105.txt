@@ -2,6 +2,7 @@ MPC-E105 forbidden_author_or_owner (sessions and edits)
 exit:     3
 message:  refused: needs AuthorOrOwner rights
 next:     Only the change's author, the person it was made for, or an owner can revert it. Don't retry: ask one of them, or undo your own changes with undo.
+step:     undo; why: Only the change's author, the person it was made for or an owner can revert it; undo your own changes instead, or ask one of them.
 rule:     K-HIST-19
 verbs:    revert
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 3,
   "message": "refused: needs AuthorOrOwner rights",
   "next": "Only the change's author, the person it was made for, or an owner can revert it. Don't retry: ask one of them, or undo your own changes with undo.",
+  "next_step": {
+    "verb": "undo",
+    "args": [],
+    "why": "Only the change's author, the person it was made for or an owner can revert it; undo your own changes instead, or ask one of them."
+  },
   "rule": "K-HIST-19",
   "verbs": ["revert"],
   "returned_by": ["revert"],

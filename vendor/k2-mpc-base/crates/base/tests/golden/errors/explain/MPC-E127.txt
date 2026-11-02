@@ -2,6 +2,7 @@ MPC-E127 pack_verb_no (sessions and edits)
 exit:     1
 message:  {verb}: nothing applied
 next:     The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.
+step:     cat; why: The file type's own verb found nothing to change; check its target and run it again.
 rule:     A6 (pack verbs)
 verbs:    a pack's own verbs
 status:   live
@@ -13,6 +14,11 @@ status:   live
   "exit": 1,
   "message": "{verb}: nothing applied",
   "next": "The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "The file type's own verb found nothing to change; check its target and run it again."
+  },
   "rule": "A6 (pack verbs)",
   "verbs": ["@pack"],
   "returned_by": [],

@@ -9,9 +9,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { apply, coalesce, type Hunk } from "../src/hunk";
-import { LiveText, type Rejection } from "../src/live";
+import { LiveText, type Landed, type Rejection } from "../src/live";
 import type { ChangeEvent, ClientFrame, ServerFrame, Transport } from "../src/wire";
-import { withRegionPlacement } from "./editor-harness";
+import { KIND_IGNORED, kindsAs, NONE_AS_UNDO, OTHER_AS_UNDO, UNDO_AS_EDIT, withRegionPlacement } from "./plants";
 
 type W = [number, number, string];
 const hunks = (ws: W[]): Hunk[] => ws.map(([start, end, insert]) => ({ start, end, insert }));
@@ -178,4 +178,180 @@ describe("Re-apply's reach and the person's own pending changes", () => {
     expect(l.placeRejection(rej[0].id)).toEqual({ refused: "conflict" });
     expect(l.reapply(rej[0].id)).toBeNull();
   });
+});
+
+/**
+ * A lost change (`MPC-E000`) and the changes that come later from the client ID it went out on,
+ * by their `kind` (kit v0.10.1). The replica types "X" at the end of "abc" (client 1), asks for
+ * an undo (`undoInFlight`: unanswered when the connection goes), reconnects as client 2, and the
+ * resync doesn't list "X". Then late changes under client 1: `undo` deletes the "a" (the undo
+ * that was in flight), `edit` is "X" itself landing. A kind of `null` stands for an older kit's
+ * event (no `kind`).
+ */
+describe("a lost change's landing, by the kinds of the changes from its client ID", () => {
+  type K = ChangeEvent["kind"] | null;
+  function lost(undoInFlight = true) {
+    const w = wire();
+    const l = new LiveText({ text: "abc", version: 1 }, w.t, { client: 1 });
+    const rej: Rejection[] = [];
+    const landed: Landed[] = [];
+    l.onRejected((r) => rej.push(r));
+    l.onLanded((x) => landed.push(x));
+    l.applyLocal([h(3, 3, "X")]);
+    if (undoInFlight) l.undo();
+    l.reconnected({ client: 2 });
+    const since = w.sent.filter((f) => f.type === "since").at(-1) as { op: number };
+    w.deliver({ type: "events", op: since.op, events: [] }); // not listed: MPC-E000
+    expect(rej.map((r) => r.error?.id)).toEqual(["MPC-E000"]);
+    expect(rej[0].asOf).toEqual({ version: 1, client: 1, undoInFlight });
+    const id = rej[0].id;
+    let v = 1;
+    let text = "abc";
+    /** A change from client 1 (the lost change's) arrives: its undo or the edit itself. */
+    const late = (what: "undo" | "edit", kind: K) => {
+      const hs = what === "undo" ? [h(0, 1, "")] : [h(text.length, text.length, "X")];
+      v++;
+      text = apply(text, hs);
+      const event: ChangeEvent = { version: v, pid: "p1", client: 1, via: "tab", root: "source", hunks: hs, at_ms: 0, ...(kind === null ? {} : { kind }) };
+      w.deliver({ type: "change", event });
+      return v;
+    };
+    const count = () => l.text.split("X").length - 1;
+    return { l, w, id, landed, late, count };
+  }
+
+  // each case throws when its rule is broken (the planted faults below must make it throw)
+  const cases = {
+    "(a) a late undo, the edit never: absent, and Re-apply applies once": () => {
+      const s = lost();
+      s.late("undo", "undo");
+      expect(s.landed).toEqual([]);
+      expect(s.l.presence(s.id)).toBe("absent");
+      expect(s.l.reapply(s.id)).not.toBeNull();
+      expect(s.l.text).toBe("bcX");
+      expect(s.w.sent.filter((f) => f.type === "edit").at(-1)).toMatchObject({ base: 2, hunks: [h(2, 2, "X")] });
+      expect(s.l.reapply(s.id)).toBeNull(); // once
+    },
+    "(a) a late redo counts as an undo: absent": () => {
+      const s = lost();
+      s.late("undo", "redo");
+      expect(s.l.presence(s.id)).toBe("absent");
+    },
+    "(b) a late edit: landed at its version, gone from rejected, nothing to re-apply": () => {
+      const s = lost();
+      const at = s.late("edit", "edit");
+      expect(s.landed.map((x) => [x.rejection.id, x.version])).toEqual([[s.id, at]]);
+      expect(s.l.rejected).toEqual([]);
+      expect(s.l.reapply(s.id)).toBeNull();
+      expect(s.count()).toBe(1);
+    },
+    "(c) the undo, then the edit: landed once, at the edit's version, no doubled text": () => {
+      const s = lost();
+      s.late("undo", "undo");
+      expect(s.l.presence(s.id)).toBe("absent"); // between the two
+      const at = s.late("edit", "edit");
+      expect(s.landed.map((x) => x.version)).toEqual([at]);
+      expect(s.l.reapply(s.id)).toBeNull();
+      expect(s.count()).toBe(1);
+    },
+    "(c) the edit, then the undo: landed once, at the edit's version, no doubled text": () => {
+      const s = lost();
+      const at = s.late("edit", "edit");
+      s.late("undo", "undo");
+      expect(s.landed.map((x) => x.version)).toEqual([at]);
+      expect(s.l.reapply(s.id)).toBeNull();
+      expect(s.count()).toBe(1);
+    },
+    "(d) mixed, the undo with a kind and the edit without: unknown, nothing landed": () => {
+      const s = lost();
+      s.late("undo", "undo");
+      s.late("edit", null);
+      expect(s.landed).toEqual([]);
+      expect(s.l.presence(s.id)).toBe("unknown");
+    },
+    "(d) mixed, the undo without a kind and the edit with: unknown, nothing landed": () => {
+      const s = lost();
+      s.late("undo", null);
+      s.late("edit", "edit");
+      expect(s.landed).toEqual([]);
+      expect(s.l.presence(s.id)).toBe("unknown");
+    },
+    "(d) mixed, the edit without a kind and the undo with: unknown, nothing landed": () => {
+      const s = lost();
+      s.late("edit", null);
+      s.late("undo", "undo");
+      expect(s.landed).toEqual([]);
+      expect(s.l.presence(s.id)).toBe("unknown");
+    },
+    "(e) another kind under the client's own ID (a revert): unknown, nothing landed, with or without an undo in flight": () => {
+      for (const undo of [true, false]) {
+        const s = lost(undo);
+        s.late("undo", "revert");
+        expect(s.landed).toEqual([]);
+        expect(s.l.presence(s.id)).toBe("unknown");
+      }
+    },
+    "(e) an edit beside another kind: unknown, nothing landed": () => {
+      const s = lost();
+      s.late("undo", "external");
+      s.late("edit", "edit");
+      expect(s.landed).toEqual([]);
+      expect(s.l.presence(s.id)).toBe("unknown");
+    },
+  };
+  for (const [name, f] of Object.entries(cases)) it(name, f);
+
+  it("an older kit (no kind): as before kinds, exactly", () => {
+    // an undo in flight: any change from the ID leaves it unknown, and nothing lands
+    const a = lost();
+    a.late("undo", null);
+    expect(a.landed).toEqual([]);
+    expect(a.l.presence(a.id)).toBe("unknown");
+    const b = lost();
+    b.late("edit", null);
+    expect(b.landed).toEqual([]);
+    expect(b.l.presence(b.id)).toBe("unknown");
+    // none in flight: the first change from the ID is the change
+    const c = lost(false);
+    const at = c.late("edit", null);
+    expect(c.landed.map((x) => x.version)).toEqual([at]);
+    // nothing from the ID yet: absent
+    const d = lost();
+    expect(d.l.presence(d.id)).toBe("absent");
+  });
+
+  it("with kinds and no undo in flight: the edit lands; an undo under the ID (unexpected) is not the edit", () => {
+    const a = lost(false);
+    const at = a.late("edit", "edit");
+    expect(a.landed.map((x) => x.version)).toEqual([at]);
+    const b = lost(false);
+    b.late("undo", "undo");
+    expect(b.landed).toEqual([]);
+    expect(b.l.presence(b.id)).toBe("absent");
+  });
+
+  it("past the history's reach: unknown, and a late edit doesn't land", () => {
+    const s = lost();
+    for (let k = 0; k < 513; k++) {
+      const v = 2 + k;
+      s.w.deliver({ type: "change", event: { version: v, pid: "p3", client: 3, via: "tab", root: "source", hunks: [h(0, 0, "z")], at_ms: 0, kind: "edit" } });
+    }
+    expect(s.l.presence(s.id)).toBe("unknown");
+    s.w.deliver({ type: "change", event: { version: 515, pid: "p1", client: 1, via: "tab", root: "source", hunks: [h(0, 0, "X")], at_ms: 0, kind: "edit" } });
+    expect(s.landed).toEqual([]);
+    expect(s.l.presence(s.id)).toBe("unknown");
+  });
+
+  // each planted fault must break the cases it names
+  const faults: Array<[string, Parameters<typeof kindsAs>[0], string[]]> = [
+    ["an undo read as the edit", UNDO_AS_EDIT, ["(a) a late undo, the edit never: absent, and Re-apply applies once", "(a) a late redo counts as an undo: absent", "(c) the undo, then the edit: landed once, at the edit's version, no doubled text"]],
+    ["kinds ignored (the older kit's rule)", KIND_IGNORED, ["(a) a late undo, the edit never: absent, and Re-apply applies once", "(b) a late edit: landed at its version, gone from rejected, nothing to re-apply", "(c) the undo, then the edit: landed once, at the edit's version, no doubled text", "(c) the edit, then the undo: landed once, at the edit's version, no doubled text"]],
+    ["another kind read as an undo", OTHER_AS_UNDO, ["(e) another kind under the client's own ID (a revert): unknown, nothing landed, with or without an undo in flight", "(e) an edit beside another kind: unknown, nothing landed"]],
+    ["no kind beside kinds read as an undo", NONE_AS_UNDO, ["(d) mixed, the undo with a kind and the edit without: unknown, nothing landed", "(d) mixed, the undo without a kind and the edit with: unknown, nothing landed", "(d) mixed, the edit without a kind and the undo with: unknown, nothing landed"]],
+  ];
+  for (const [name, fault, broken] of faults) {
+    it(`planted fault (${name}): ${broken.length} cases catch it`, () => {
+      for (const c of broken) expect(() => kindsAs(fault, cases[c as keyof typeof cases]), `${c} missed the fault`).toThrow();
+    });
+  }
 });

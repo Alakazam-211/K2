@@ -132,6 +132,7 @@ fn change(e: &ChangeEvent, st: &Stable) -> Value {
         ("pid", Value::from(e.pid.as_str())),
         ("client", Value::from(st.client(e.client))),
         ("via", Value::from(e.via.as_str())),
+        ("kind", Value::from(e.kind.as_str())),
         ("root", Value::from(e.root.as_str())),
         ("hunks", Value::List(e.hunks.iter().map(hunk).collect())),
         ("at_ms", Value::from(e.at_ms)),

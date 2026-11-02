@@ -1,0 +1,21 @@
+MPC-E000 not_applied (exports)
+exit:     1
+message:  the change wasn't applied (its reply was lost)
+next:     The connection dropped before the host answered this change, and the doc's record doesn't list it, so the client kept its text out of the doc and handed it back (a rejection). Re-apply it (the client checks the record first and re-applies only a change that never landed), or dismiss it. Nothing else changed.
+rule:     client/WIRE.md (a lost reply)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E000",
+  "name": "not_applied",
+  "area": "exports",
+  "exit": 1,
+  "message": "the change wasn't applied (its reply was lost)",
+  "next": "The connection dropped before the host answered this change, and the doc's record doesn't list it, so the client kept its text out of the doc and handed it back (a rejection). Re-apply it (the client checks the record first and re-applies only a change that never landed), or dismiss it. Nothing else changed.",
+  "rule": "client/WIRE.md (a lost reply)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

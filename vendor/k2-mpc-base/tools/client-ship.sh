@@ -3,8 +3,8 @@
 #
 #   tools/client-ship.sh <kit-repo> <kit-sha> <out-dir>
 #
-# For browser jobs (the client's Playwright tests), which need the JS client alone. The
-# runner ships <out-dir> (`k2 compute run … --repo <out-dir> --sha <printed sha>`), so a job
+# For client-only jobs on a runner that must not get kit source (a second run of the client
+# suite, a seed scan): they need the JS client alone. The runner ships <out-dir> (`k2 compute run … --repo <out-dir> --sha <printed sha>`), so a job
 # gets `client/` at that kit commit and no other file of the kit: no Rust crates, no vendored
 # engine, no history.
 #

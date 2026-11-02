@@ -1,6 +1,9 @@
 use super::*;
 use crate::{Doc, Kind, Schema};
 
+/// A Yrs doc's clock bound ([`crate::doc::Doc::max_clock`]).
+const Y: u64 = u32::MAX as u64;
+
 const S: Schema = Schema {
     name: "test",
     roots: &[("source", Kind::Text)],
@@ -204,16 +207,55 @@ fn refuses_a_newer_store_format() {
         let w = db.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", STORE_FORMAT + 1)
+            .insert("store_format", STORE_FORMAT_READ + 1)
             .unwrap();
         w.commit().unwrap();
     }
     assert_eq!(
         DocStore::open(t.db()).err(),
         Some(StoreError::Newer {
-            found: STORE_FORMAT + 1
+            found: STORE_FORMAT_READ + 1
         })
     );
+}
+
+/// The DocMeta record, version 1, is frozen (v0.10.1): a doc the native engine writes keeps
+/// this layout, its stamp in `engine` / `engine_format`, so this build can read the stamp of
+/// a doc it can't load and refuse it (MPC-E520) instead of misreading it. These bytes are
+/// the layout; the decode is strict (a trailing byte, another version, a cut record are
+/// damage).
+#[test]
+fn doc_meta_v1_layout_is_frozen_with_a_native_stamp() {
+    let m = DocMeta {
+        key: DocKey {
+            space: "ws".into(),
+            path: "a.md".into(),
+        },
+        pack: "markdown".into(),
+        engine: "mpce-0.1".into(),
+        engine_format: 1,
+        codec: vec![1, 2],
+        created_ms: 5,
+        synced_hash: Some(vec![0xaa, 0xbb]),
+        synced_seq: 3,
+        declined: None,
+    };
+    let hex = "0102000000777304000000612e6d64080000006d61726b646f776e080000006d\
+               7063652d302e310100000002000000010205000000000000000102000000aabb\
+               030000000000000000";
+    let want: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    assert_eq!(enc_meta(&m), want, "DocMeta v1 bytes");
+    assert_eq!(dec_meta(&want).unwrap(), m);
+    let mut trailing = want.clone();
+    trailing.push(0);
+    assert!(dec_meta(&trailing).is_err(), "a trailing byte is damage");
+    let mut v2 = want.clone();
+    v2[0] = 2;
+    assert_eq!(dec_meta(&v2), Err(StoreError::Corrupt("doc meta version")));
+    assert!(dec_meta(&want[..want.len() - 1]).is_err(), "a cut record");
 }
 
 #[test]
@@ -513,7 +555,10 @@ fn older_formats_are_stamped_current_and_newer_refused() {
             .value();
         // stamped the base format: format 6 comes only with a structured doc
         assert_eq!(f, STORE_FORMAT_BASE);
-        assert_eq!((STORE_FORMAT_BASE, STORE_FORMAT), (5, 6));
+        assert_eq!(
+            (STORE_FORMAT_BASE, STORE_FORMAT, STORE_FORMAT_READ),
+            (5, 6, 7)
+        );
         drop(r);
         let w = s.begin_write().unwrap();
         w.open_table(META)
@@ -533,9 +578,26 @@ fn older_formats_are_stamped_current_and_newer_refused() {
             .unwrap();
         w.commit().unwrap();
     }
+    // format 7 (v0.10.1: forward-declared, the native engine's) opens read-only and keeps
+    // its stamp; it isn't rewritten here
+    {
+        let s = DocStore::open(d.db()).unwrap();
+        assert_eq!(s.format().unwrap(), 7);
+        assert_eq!(s.rewrite_file(), Err(StoreError::RewriteNewer { found: 7 }));
+        assert_eq!(
+            s.check_rewritable(),
+            Err(StoreError::RewriteNewer { found: 7 })
+        );
+        let w = s.begin_write().unwrap();
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 8u64)
+            .unwrap();
+        w.commit().unwrap();
+    }
     let e = DocStore::open(d.db()).err().expect("refused");
-    assert_eq!(e, StoreError::Newer { found: 7 });
-    assert_eq!(e.to_string(), "store is format 7; this build reads up to 6");
+    assert_eq!(e, StoreError::Newer { found: 8 });
+    assert_eq!(e.to_string(), "store is format 8; this build reads up to 7");
 }
 
 /// A blob doc in `s` (space `ws-1`) with its import by `kit:import`.
@@ -701,7 +763,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
     };
     // version 1, as a format-4 build wrote it: decodes with unknown roots
     let v1: Vec<u8> = {
-        let mut b = enc_record(&rec(None));
+        let mut b = enc_record(&rec(None)).unwrap();
         b[0] = 1;
         let n = b.len();
         b.truncate(n - 1); // version 1 has no roots byte
@@ -712,7 +774,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
         inserted: vec![(2, 2, 7, 0)],
         deleted: vec![(1, 1, 3, 4)],
     }));
-    assert_eq!(dec_record(&enc_record(&with)).unwrap(), with);
+    assert_eq!(dec_record(&enc_record(&with).unwrap()).unwrap(), with);
     let id = {
         let s = DocStore::open(d.db()).unwrap();
         let id = s.create(&meta("p.md")).unwrap();
@@ -733,7 +795,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
         assert_eq!(f.get("store_format").unwrap().unwrap().value(), 5);
         assert_eq!(r.open_table(PROVENANCE).unwrap().iter().unwrap().count(), 0);
     }
-    assert!(s.provenance_rows(id, &[(7, 0, 9)]).unwrap()[0].is_empty());
+    assert!(s.provenance_rows(id, &[(7, 0, 9)], Y).unwrap()[0].is_empty());
     // a change with provenance rows: written with it, read back by clock range
     let entry = LogEntry {
         author: "a".into(),
@@ -760,13 +822,13 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
     };
     s.commit_changes(id, &[entry], &[change], &[]).unwrap();
     let got = s
-        .provenance_rows(id, &[(7, 4, 6), (7, 5, 9), (8, 0, 9)])
+        .provenance_rows(id, &[(7, 4, 6), (7, 5, 9), (8, 0, 9)], Y)
         .unwrap();
     assert_eq!(got[0].len(), 1);
     assert_eq!(got[0][0].root, (3, 10));
     assert!(got[1].is_empty() && got[2].is_empty());
     s.rewrite_file().unwrap();
-    assert_eq!(s.provenance_rows(id, &[(7, 0, 3)]).unwrap()[0].len(), 1);
+    assert_eq!(s.provenance_rows(id, &[(7, 0, 3)], Y).unwrap()[0].len(), 1);
     assert!(s.tables_holding(id).unwrap().contains(&"provenance"));
     s.delete_doc(id, 100).unwrap();
     assert!(s.tables_holding(id).unwrap().is_empty());
@@ -1056,6 +1118,11 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
         .unwrap()
         .remove(key("a.md").index().as_str())
         .unwrap();
+    // a store from before v0.10.1 (no sweep marker: an open since sweeps once)
+    w.open_table(META)
+        .unwrap()
+        .remove(AUTHORED_SWEPT_KEY)
+        .unwrap();
     {
         let mut rt = w.open_table(REVERTS).unwrap();
         let mut rec = dec_record(rt.get((b, 1)).unwrap().unwrap().value()).unwrap();
@@ -1063,7 +1130,8 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
         h.redacted = true;
         h.insert.clear();
         h.deleted.clear();
-        rt.insert((b, 1), enc_record(&rec).as_slice()).unwrap();
+        rt.insert((b, 1), enc_record(&rec).unwrap().as_slice())
+            .unwrap();
     }
     w.commit().unwrap();
     let rows = |s: &DocStore| -> Vec<(u64, u64)> {
@@ -1111,6 +1179,114 @@ fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
     drop(s);
     let s = DocStore::open(d.db()).unwrap();
     assert_eq!(rows(&s), vec![(b, 1)]);
+}
+
+/// The sweep marker's `meta` key, spelled out so these tests compile without the fix.
+const AUTHORED_SWEPT_KEY: &str = "authored_swept";
+
+/// For the once-per-store sweep (v0.10.1): a store at `format` made by a kit before the marker
+/// (no `authored_swept`), holding one doc and a row a kit <= v0.9.6 left behind (its record
+/// is gone). Returns the dir (keep it alive) and the doc.
+fn store_with_leftover(tag: &str, format: u64) -> (TmpDir, DocId) {
+    let d = TmpDir::new(tag);
+    let s = DocStore::open(d.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let w = s.begin_write().unwrap();
+    {
+        let mut m = w.open_table(META).unwrap();
+        m.remove(AUTHORED_SWEPT_KEY).unwrap();
+        m.insert("store_format", format).unwrap();
+    }
+    w.commit().unwrap();
+    plant_leftover(&s, id);
+    (d, id)
+}
+
+/// A row in `authored` whose record is gone, as a kit <= v0.9.6 leaves one.
+fn plant_leftover(s: &DocStore, id: DocId) {
+    use super::history::{enc_authored, AUTHORED};
+    let row = enc_authored(&[(
+        "source".into(),
+        vec![crate::text::Hunk {
+            start: 0,
+            end: 1,
+            insert: "LEFT-BY-AN-OLDER-KIT".into(),
+        }],
+    )]);
+    let w = s.begin_write().unwrap();
+    w.open_table(AUTHORED)
+        .unwrap()
+        .insert((id, 1), row.as_slice())
+        .unwrap();
+    w.commit().unwrap();
+}
+
+fn authored_rows(s: &DocStore) -> Vec<(u64, u64)> {
+    let r = s.begin_read().unwrap();
+    let t = r.open_table(super::history::AUTHORED).unwrap();
+    let v = redb::ReadableTable::iter(&t)
+        .unwrap()
+        .map(|kv| kv.unwrap().0.value())
+        .collect();
+    v
+}
+
+fn swept_marker(s: &DocStore) -> Option<u64> {
+    let r = s.begin_read().unwrap();
+    let v = r
+        .open_table(META)
+        .unwrap()
+        .get(AUTHORED_SWEPT_KEY)
+        .unwrap()
+        .map(|v| v.value());
+    v
+}
+
+/// v0.10.1: an open sweeps the authored table **once per store**, and marks the store in the
+/// sweep's own transaction, whatever it found; later opens skip it (it reads every row:
+/// O(the changes D1 widened), about half of a reopen at 100k versions). The trade-off,
+/// accepted: a row an older kit leaves after the marker stays (no shipped release ran a kit
+/// <= v0.9.6). At format 6, as at 5.
+#[test]
+fn an_open_sweeps_the_authored_table_once_and_marks_the_store() {
+    let (d, id) = store_with_leftover("authored-sweep-once-6", 6);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(
+        authored_rows(&s),
+        vec![],
+        "the first open sweeps the leftover"
+    );
+    assert_eq!(swept_marker(&s), Some(1), "and marks the store");
+    plant_leftover(&s, id);
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(
+        authored_rows(&s),
+        vec![(id, 1)],
+        "a marked store isn't swept again: the row stays"
+    );
+    assert_eq!(swept_marker(&s), Some(1));
+    assert_eq!(s.format().unwrap(), 6);
+}
+
+/// v0.10.1: a text-only store stays at format 5 (no bump; a v0.9.x kit still opens it) and
+/// is swept on its first open only. A new store is marked by the open that creates it.
+#[test]
+fn a_format_5_text_only_store_is_swept_on_its_first_open_only() {
+    let fresh = TmpDir::new("authored-sweep-fresh");
+    let s = DocStore::open(fresh.db()).unwrap();
+    assert_eq!(swept_marker(&s), Some(1), "a new store is marked at once");
+    drop(s);
+
+    let (d, id) = store_with_leftover("authored-sweep-once-5", STORE_FORMAT_BASE);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(authored_rows(&s), vec![], "the first open sweeps");
+    assert_eq!(swept_marker(&s), Some(1));
+    plant_leftover(&s, id);
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(authored_rows(&s), vec![(id, 1)], "the second doesn't");
+    assert_eq!(s.format().unwrap(), STORE_FORMAT_BASE, "still format 5");
 }
 
 /// The authored hunks of a change D1 widened (v0.9.7): written in the change's own

@@ -361,7 +361,7 @@ fn a_lease_survives_leaving_and_keeps_the_session_loaded() {
     let f = fx("lease-cli");
     fs::write(f.path("a.bin"), b"one").unwrap();
     f.grant("agent", Rights::editor());
-    // `k2 doc lease` in one call...
+    // a `lease` verb in one call...
     {
         let s = f.open("a.bin");
         let c = s.join_shared(agent("agent"), Stay::UntilIdle).unwrap().conn;
@@ -375,7 +375,7 @@ fn a_lease_survives_leaving_and_keeps_the_session_loaded() {
         .mgr
         .get_blob(&key("a.bin"))
         .expect("a held lease keeps it loaded");
-    // ...`k2 doc write` in the next
+    // ...a `write` verb in the next
     let c = s.join_shared(agent("agent"), Stay::UntilIdle).unwrap().conn;
     assert_eq!(
         s.lease().unwrap().unwrap().pid,

@@ -112,3 +112,43 @@ fn out_of_order_client_updates_are_refused_never_held_pending_and_resync_lands_t
         assert_eq!(yrs::GetString::get_string(&c.1, &c.0.transact()), "abxy\nz");
     }
 }
+
+/// Hardening: a doc left `Pending` by `apply_client_update` refuses to encode, edit or apply until it is reloaded; reloaded
+/// from the stored state, it works, with nothing of the refused update. (A host calling
+/// `apply_client_update` directly must reload on `Pending`; a session does it itself.)
+#[test]
+fn a_doc_left_pending_by_a_client_update_refuses_encode_and_edit_until_reloaded() {
+    let mut doc = Doc::new(S).unwrap();
+    doc.replace_text_as(7, ROOT, "xy\n").unwrap();
+    let stored = doc.encode_state().unwrap();
+    let a = client(100, &doc);
+    let b = client(200, &doc);
+    let a0 = typed(&a, 0, "a");
+    b.0.transact_mut()
+        .apply_update(Update::decode_v1(&a0).unwrap())
+        .unwrap();
+    let b0 = typed(&b, 1, "b");
+    assert_eq!(
+        doc.apply_client_update(&b0, 200).map(|_| ()),
+        Err(DocError::Pending)
+    );
+    assert_eq!(doc.encode_state(), Err(DocError::Pending), "encode refused");
+    assert_eq!(
+        doc.replace_text_as(7, ROOT, "xy\nq\n").map(|_| ()),
+        Err(DocError::Pending),
+        "edit refused"
+    );
+    assert_eq!(
+        doc.apply_client_update(&a0, 100).map(|_| ()),
+        Err(DocError::Pending),
+        "apply refused"
+    );
+    // reloaded: it works, and nothing of the refused update is in it
+    let mut doc = Doc::load(S, &stored).unwrap();
+    assert_eq!(doc.text(ROOT).unwrap(), "xy\n");
+    doc.replace_text_as(7, ROOT, "xy\nq\n").unwrap();
+    doc.apply_client_update(&a0, 100).unwrap();
+    doc.apply_client_update(&b0, 200).unwrap();
+    assert_eq!(doc.text(ROOT).unwrap(), "abxy\nq\n");
+    assert!(doc.encode_state().is_ok(), "nothing pending");
+}

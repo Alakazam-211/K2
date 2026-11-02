@@ -728,6 +728,25 @@ fn store_newer(err: &StoreError, table: &str) -> CliResponse {
     }
 }
 
+/// A refusal the kit's registry names: 409, K2's code beside the kit's id.
+/// `session_error` adds the exit from `session_exit`.
+fn kit_refusal(code: &str, id: &str, hint: String) -> CliResponse {
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": { "code": code, "id": id, "hint": hint } }).to_string(),
+    }
+}
+
+/// What `MPC-E520` tells the caller: the kit's line (which engine wrote the
+/// doc), then that nothing happened and what to do.
+fn engine_mismatch_hint(e: &dyn std::fmt::Display) -> String {
+    format!(
+        "{e}. It isn't opened as a live doc: nothing was changed, and the file itself is as it was. \
+         Edit it outside k2 doc for now, and report it"
+    )
+}
+
 /// `4m 10s`, `35s`.
 fn human_ms(ms: u64) -> String {
     let s = ms.div_ceil(1000);
@@ -822,6 +841,26 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         // `store_newer`; the kit's message is the guidance, passed on as is.
         SessionError::Store(err @ StoreError::NewerData { table })
         | SessionError::Blob(BlobError::Store(err @ StoreError::NewerData { table })) => store_newer(err, table),
+        // Kit v0.10.2 (MPC-E502): a store a newer build stamped, which this
+        // build reads but won't rewrite or purge. Exit 6.
+        SessionError::Store(err @ StoreError::RewriteNewer { .. })
+        | SessionError::Blob(BlobError::Store(err @ StoreError::RewriteNewer { .. })) => {
+            kit_refusal("store_newer", "MPC-E502", err.to_string())
+        }
+        // Kit v0.10.2 (MPC-E520): a doc another engine or stored format wrote.
+        // It is never read, on open or on delete and purge. Exit 6.
+        SessionError::EngineMismatch { .. } => kit_refusal("engine_mismatch", "MPC-E520", engine_mismatch_hint(e)),
+        SessionError::Store(err @ StoreError::ForeignEngine { .. })
+        | SessionError::Blob(BlobError::Store(err @ StoreError::ForeignEngine { .. })) => {
+            kit_refusal("engine_mismatch", "MPC-E520", engine_mismatch_hint(err))
+        }
+        // Kit v0.10.2 (MPC-E112): a positional edit whose `--base` version
+        // the kit no longer holds. Exit 8; the same request never works again.
+        SessionError::BaseExpired { base } => kit_refusal(
+            "base_expired",
+            "MPC-E112",
+            format!("version {base} is no longer kept as a base; read the doc again and retry"),
+        ),
         SessionError::Blob(BlobError::TooLarge { limit }) => refusal(
             "422 Unprocessable Entity",
             "too_large",
@@ -1457,6 +1496,43 @@ pub(super) fn is_tool_edit(argv: &[String]) -> bool {
         .is_some_and(|v| v.kind == VerbKind::Edit && v.runs_through_run_tool())
 }
 
+/// A tool verb's refusal: exit 2 (usage, so no permission line), nothing
+/// applied. An address refusal (kit v0.10.2: `MPC-E170` ambiguous, `MPC-E171`
+/// a position with no version) also says its id and, when it has them, the
+/// matches to choose from, so the caller can name one on the next try.
+fn tool_refused(t: &Target, verb: &str, e: &k2_mpc_base::tools::ToolError) -> Value {
+    let mut stderr = format!("k2 doc {verb}: {e}");
+    let mut v = json!({ "doc": doc_json(t), "exit": e.exit(), "stdout": "" });
+    if let k2_mpc_base::tools::ToolError::Address(report) = e {
+        stderr.push_str(&format!(" ({})", report.id()));
+        let error: Value = serde_json::from_str(&report.to_json()).expect("the kit's report is JSON");
+        for c in error["details"]["candidates"].as_array().into_iter().flatten() {
+            if let Some(address) = c["address"].as_str() {
+                match c["position"].as_str() {
+                    Some(at) => stderr.push_str(&format!("\n  {address} ({at})")),
+                    None => stderr.push_str(&format!("\n  {address}")),
+                }
+            }
+        }
+        v["error"] = error;
+    }
+    v["stderr"] = Value::String(stderr);
+    v
+}
+
+/// `notes` of a tool reply: the call's own warnings (kit v0.10.2: an agent's
+/// edit by position with no version), then the heads-up notes.
+fn tool_notes(notes: &Notes, warnings: &k2_mpc_base::tools::Warnings) -> Value {
+    if warnings.is_empty() {
+        return notes_text(notes);
+    }
+    let mut lines = warnings.lines().to_vec();
+    if !notes.is_empty() {
+        lines.push(notes.to_string());
+    }
+    Value::String(lines.join("\n"))
+}
+
 fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let mut argv: Vec<String> = match c.input.body.get("argv") {
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_ARGV => a
@@ -1480,14 +1556,7 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c));
     let out = match s.run_tool_with(j.conn, ROOT, &argv, &stdin, &opts) {
         Ok(o) => o,
-        Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => {
-            return Ok(ok(json!({
-                "doc": doc_json(c.target),
-                "exit": e.exit(),
-                "stdout": "",
-                "stderr": format!("k2 doc {}: {e}", argv[0]),
-            })))
-        }
+        Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => return Ok(ok(tool_refused(c.target, &argv[0], &e))),
         Err(k2_mpc_base::tools::ToolRunError::Session(e)) => return Err(VerbError::Session(e)),
     };
     if !is_edit || out.changed.is_some() {
@@ -1518,8 +1587,9 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         "version": out.version,
         "changed": out.changed.as_ref().map(edit_json),
         "fence": fence,
-        // Heads-up notes and `--for-edit`'s outcome: stderr lines.
-        "notes": notes_text(&out.notes),
+        // Heads-up notes, the call's own warnings and `--for-edit`'s
+        // outcome: stderr lines.
+        "notes": tool_notes(&out.notes, &out.warnings),
         "forEdit": out.for_edit.as_ref().map(|f| f.to_string()),
         "ifVersion": guarded,
     });
@@ -2404,6 +2474,119 @@ mod tests {
             e["hint"],
             json!("This store holds data from a newer kit (table \"later\"). Upgrade K2 to a version with a newer kit to purge or rewrite it; reading and editing still work.")
         );
+    }
+
+    /// Kit v0.10.2: an address refusal keeps exit 2, and says its id and the
+    /// matches to choose from.
+    #[test]
+    fn an_address_refusal_names_its_id_and_candidates() {
+        use k2_mpc_base::addr::{ambiguous, Candidate};
+        use k2_mpc_base::tools::ToolError;
+        let t = Target {
+            project_id: "p1".into(),
+            root: "/w".into(),
+            rel: "notes/plan.csv".into(),
+            abs: "/w/notes/plan.csv".into(),
+            tier: target::Tier::Markdown,
+        };
+        let report = ambiguous(
+            "two columns are called city",
+            "column",
+            "city",
+            &[Candidate::new("@k:c2").at("#2"), Candidate::new("@k:c5")],
+        );
+        let v = tool_refused(&t, "cell", &ToolError::address(report));
+        assert_eq!(v["exit"], json!(2));
+        assert_eq!(v["stdout"], json!(""));
+        assert_eq!(
+            v["stderr"],
+            json!("k2 doc cell: two columns are called city (MPC-E170)\n  @k:c2 (#2)\n  @k:c5")
+        );
+        assert_eq!(v["error"]["id"], json!("MPC-E170"));
+        assert_eq!(v["error"]["exit"], json!(2));
+
+        // Any other tool refusal reads as before.
+        let v = tool_refused(&t, "cell", &ToolError::usage("no such flag"));
+        assert_eq!(v["exit"], json!(2));
+        assert!(v["stderr"].as_str().expect("stderr").starts_with("k2 doc cell: "), "{v}");
+        assert_eq!(v.get("error"), None);
+    }
+
+    /// Kit v0.10.2: an agent's edit by position with no version applies, and
+    /// its note reaches stderr through `notes`. With a version (K2 adds the
+    /// one the agent last read, `claims::guard_argv`) there is no note.
+    #[test]
+    fn a_positional_edit_with_no_version_carries_the_kits_note() {
+        use k2_mpc_base::session::{AuditEvent, Config, Host, Participant, Rights, SessionManager};
+        use k2_mpc_base::tools::{positional_note, ToolOptions};
+
+        struct OwnerHost;
+        impl Host for OwnerHost {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::full().with_owner(true)
+            }
+            fn now_ms(&self) -> u64 {
+                1_000
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        let dir = std::env::temp_dir().join(format!("k2-positional-note-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let store = Arc::new(DocStore::open(dir.join("docs.redb")).expect("open a temp docs store"));
+        let mgr = SessionManager::new(store, Arc::new(OwnerHost), Config::default());
+        let key = DocKey { space: "ws".into(), path: "notes.md".into() };
+        let s = mgr.open(Arc::new(k2_mpc_markdown::PACK), &key, Some(b"one\ntwo\n")).expect("import");
+        let agent = Participant::new("agent:p1", "Agent", "#123456", ParticipantKind::Agent, "cli");
+        let conn = s.join(agent, Stay::Held).expect("join").conn;
+        let argv = |a: &[&str]| a.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+
+        let opts = ToolOptions::new();
+        let out = s.run_tool_with(conn, ROOT, &argv(&["insert", "--line", "2"]), b"x\n", &opts).expect("applies");
+        assert_eq!(out.exit, 0);
+        assert!(out.changed.is_some(), "it applied");
+        let note = positional_note("--line 2");
+        assert_eq!(tool_notes(&out.notes, &out.warnings), json!(note));
+
+        let at = out.version.to_string();
+        let out = s
+            .run_tool_with(conn, ROOT, &argv(&["insert", "--if-version", &at, "--line", "2"]), b"y\n", &opts)
+            .expect("applies");
+        assert!(out.changed.is_some(), "it applied");
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        assert_eq!(tool_notes(&out.notes, &out.warnings), notes_text(&out.notes));
+        drop(s);
+        mgr.release().expect("release");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
+    /// Kit v0.10.2's new refusals have their own codes, the kit's ids and the
+    /// kit's exits: never the 500 `docs_failed` of the catch-all.
+    #[test]
+    fn the_kits_v0_10_2_refusals_have_their_own_codes_and_exits() {
+        let mismatch = SessionError::EngineMismatch {
+            stored: "other-1.0".into(),
+            stored_format: 1,
+            engine: "yrs-0.28".into(),
+            engine_format: 2,
+        };
+        let foreign = StoreError::ForeignEngine { stored: "other-1.0".into(), stored_format: 1 };
+        let cases: Vec<(SessionError, &str, &str, u8)> = vec![
+            (SessionError::BaseExpired { base: 7 }, "base_expired", "MPC-E112", 8),
+            (mismatch, "engine_mismatch", "MPC-E520", 6),
+            (SessionError::Store(foreign.clone()), "engine_mismatch", "MPC-E520", 6),
+            (SessionError::Blob(BlobError::Store(foreign)), "engine_mismatch", "MPC-E520", 6),
+            (SessionError::Store(StoreError::RewriteNewer { found: 7 }), "store_newer", "MPC-E502", 6),
+            (SessionError::Blob(BlobError::Store(StoreError::RewriteNewer { found: 7 })), "store_newer", "MPC-E502", 6),
+        ];
+        for (err, code, id, exit) in cases {
+            let r = session_error(&err);
+            assert_eq!(r.status, "409 Conflict", "{err:?}");
+            let e = error_of(&r);
+            assert_eq!(e["code"], json!(code), "{err:?}");
+            assert_eq!(e["id"], json!(id), "{err:?}");
+            assert_eq!(e["exit"], json!(exit), "{err:?}");
+            assert!(e["hint"].as_str().expect("a hint").len() > 20, "{err:?}: {e:?}");
+        }
     }
 
     /// Kit v0.9.5, end to end through the kit: a docs store holding a newer

@@ -1,7 +1,7 @@
 // The Live view: a file whose multiplayer core is on (Settings → Cores →
 // Multiplayer) opens in K2's Live editor (`mountLiveEditor`,
-// components/LiveEditor; behaviour as vendor/k2-mpc-base/client/EDITOR.md
-// describes) over K2's socket, `WS /cli/docs/live`,
+// components/LiveEditor; the rules it keeps are in
+// vendor/k2-mpc-base/client/HOST.md) over K2's socket, `WS /cli/docs/live`,
 // dialled through the server's queue (MS70, `docs-live-daemon.ts`).
 //
 // Everyone in the file sees each other's carets and edits as they happen;

@@ -19,7 +19,7 @@ mkdir -p "$ROOT/itf"
 timed "simulate + ITF (2x1 +1 undo +1 revert, 300 traces)" q run itf_tiny.qnt --main=itf_tiny --init=winit --step=wstep \
   --max-samples=300 --n-traces=300 --max-steps=4 --out-itf="$ROOT/itf/t_{seq}.itf.json" --verbosity=1
 timed "ITF replay into spec_undo::model" R --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init abb "$ROOT/itf"
-timed "warm-up (fetches Apalache)" q verify u_tiny.qnt --main=u_tiny --backend=tlc --invariant=inv
+need_apalache
 . "$ROOT/tools/undo/tlc.sh"
 INV="inv_own_only inv_I1 inv_U9 inv_U13 inv_U15 inv_U17 inv_U19 inv_U22a inv_RT inv_O5"
 tlc u_tiny "$INV" 240

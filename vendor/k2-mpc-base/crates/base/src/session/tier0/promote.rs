@@ -261,7 +261,8 @@ impl BlobSession {
                 let runs = doc.blame_runs(root)?;
                 ids_before.push((
                     root.clone(),
-                    elem_ids(old, &runs).map(|v| Ids::from_chars(old, &v)),
+                    elem_ids(doc.units(), old, &runs)
+                        .map(|v| Ids::from_chars(doc.units(), old, &v)),
                 ));
                 let mut spans = Vec::with_capacity(runs.len());
                 let mut at = 0;
@@ -340,8 +341,8 @@ impl BlobSession {
                             .iter()
                             .find(|(r, _)| r == root)
                             .and_then(|(_, i)| i.clone());
-                        let new_ids = elem_ids(&new, &doc.blame_runs(root)?)
-                            .map(|v| Ids::from_chars(&new, &v));
+                        let new_ids = elem_ids(doc.units(), &new, &doc.blame_runs(root)?)
+                            .map(|v| Ids::from_chars(doc.units(), &new, &v));
                         let pairs: Option<Vec<(Ids, Ids)>> = old_ids.zip(new_ids).map(|(o, n)| {
                             let mut delta: isize = 0;
                             elems
@@ -350,8 +351,8 @@ impl BlobSession {
                                     let at = (h.start as isize + delta) as usize;
                                     delta += h.insert.len() as isize - (h.end - h.start) as isize;
                                     (
-                                        o.slice(old, h.start, h.end),
-                                        n.slice(&new, at, at + h.insert.len()),
+                                        o.slice(doc.units(), old, h.start, h.end),
+                                        n.slice(doc.units(), &new, at, at + h.insert.len()),
                                     )
                                 })
                                 .collect()
@@ -438,6 +439,7 @@ impl BlobSession {
         outcome.sort_by_key(|(vid, _)| *vid);
 
         // the switch: one transaction
+        doc.check_storable()?;
         let old = store.meta(self.doc_id)?;
         let hash_key = fresh_key()?;
         let hash = file_hash(&hash_key, &current_bytes);

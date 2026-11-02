@@ -27,6 +27,11 @@ pub enum SessionError {
     /// text: `doc changed since 12 (now 14)`. Exit 1.
     #[error("doc changed since {expected} (now {actual})")]
     Stale { expected: Seq, actual: Seq },
+    /// A structured edit's positional addresses count in its `--base` version (K-ADDR-3,
+    /// R-1), and that version is no longer held (not live, not a recent read, not stored).
+    /// Nothing applied. Exit 8 (`MPC-E112 base_expired`): never retry the same request.
+    #[error("base version {base} is unknown or no longer cached; nothing applied")]
+    BaseExpired { base: Seq },
     #[error("too many edits; retry in {retry_after_ms} ms")]
     RateLimited { retry_after_ms: u64 },
     /// The file can't be a live doc, or live editing was turned off for it.
@@ -37,6 +42,22 @@ pub enum SessionError {
     NotFound(DocKey),
     #[error("doc was stored by pack {stored:?}, not {pack:?}")]
     PackMismatch { stored: String, pack: String },
+    /// The stored doc's engine stamp ([`crate::store::DocMeta`]'s `engine` and
+    /// `engine_format`) names another engine, or another stored-state format, than this
+    /// build runs (v0.10.1): it is not loaded, so no engine reads another's state. A stamp of
+    /// this engine's family at another library version, with this format, loads; so does an
+    /// unstamped doc (an empty `engine`). Nothing changed. Exit 6, as a store from a newer
+    /// build.
+    #[error(
+        "this doc was written by engine {stored} (format {stored_format}); this kit runs \
+         engine {engine} (format {engine_format})"
+    )]
+    EngineMismatch {
+        stored: String,
+        stored_format: u32,
+        engine: String,
+        engine_format: u32,
+    },
     #[error("bad participant: {0}")]
     BadParticipant(String),
     #[error("bad position: {0}")]

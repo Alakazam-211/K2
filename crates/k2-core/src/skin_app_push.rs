@@ -880,6 +880,7 @@ impl PushConfig {
             agent_replies: false,
             previews: true,
             max_devices: None,
+            server_only: false,
             apns: None,
             fcm: None,
             cred_error: None,

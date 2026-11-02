@@ -118,7 +118,7 @@ fn space(app: &str, params: &HashMap<String, String>) -> CliResponse {
     if params.get("app").map(|a| a.trim()).is_some_and(|a| !a.is_empty() && a != app) {
         return error(404, "not_found", "this call answers only for the App whose pass this is: leave app out", None);
     }
-    let spaces = match k2_core::tool_hook::app_spaces(app) {
+    let spaces = match k2_core::tool_hook::spaces_of_app(app) {
         Ok(s) => s,
         Err(e) => return error(503, "chat_unavailable", e, None),
     };

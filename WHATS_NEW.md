@@ -25,6 +25,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An App's server can ask K2 for its own chat Space and channel ids:** `k2.asApp().chat.space()`, feature key `app-chat-space-v1`.
 - **An App can take phone push registration only from its own server:** `k2 app push set <app> --register server`. Off by default.
 - **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
+- **A deploy held for your approval now starts with the box services its manifest asks for.** The held card names them, and approving it covers them: the App starts with `K2_BOX_*` and its firewall rule, with no second request or restart. `k2 app box-service request` also says which service it allowed now, instead of printing an empty `already allowed:`, and reports a request that failed to apply.
 
 ### Chat and voice (Sew)
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
@@ -56,9 +57,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Claude Max 20x now shows as Ultra,** matching Anthropic's new name for the plan.
 ### Mobile devices
 - **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
-
-### Apps
-- **A deploy held for your approval now starts with the box services its manifest asks for.** The held card names them, and approving it covers them: the App starts with `K2_BOX_*` and its firewall rule, with no second request or restart. `k2 app box-service request` also says which service it allowed now, instead of printing an empty `already allowed:`, and reports a request that failed to apply.
 
 ## 0.46.7 — Apps run their own chat
 

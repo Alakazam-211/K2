@@ -742,7 +742,7 @@ describe("mountLiveEditor", () => {
       expect(eds[0].reapply(conflict.id)).toEqual({ status: "unknown", reason: "conflict" });
     });
 
-    it("an undo unanswered on the lost connection: the client can't tell, so Re-apply refuses", async () => {
+    it("an undo unanswered on the lost connection: each change says its kind, so Re-apply knows the edit landed", async () => {
       const { net, server, eds, ts, logs } = setup("abc\n", 1);
       server.leaveOldOnReconnect = false;
       server.noRuleLeave = "keepalive";
@@ -750,6 +750,24 @@ describe("mountLiveEditor", () => {
       type(eds[0], 0, "u");
       await settle(net);
       // an edit and an undo in flight, then the socket goes half-open with both arriving late
+      type(eds[0], 4, "X");
+      eds[0].undo();
+      ts[0].drop(true, 1, 40);
+      await settle(net);
+      const rej = logs[0].rejected.find((r) => r.error?.id === "MPC-E000")!;
+      expect(rej.asOf?.undoInFlight).toBe(true);
+      expect(eds[0].reapply(rej.id)).toEqual({ status: "already-present" });
+      expect(doc(eds[0])).toBe(server.text);
+    });
+
+    it("the same undo from a server that sends no kinds (older than kit v0.10.1): the client can't tell, so Re-apply refuses", async () => {
+      const { net, server, eds, ts, logs } = setup("abc\n", 1);
+      server.emitKind = false;
+      server.leaveOldOnReconnect = false;
+      server.noRuleLeave = "keepalive";
+      await settle(net);
+      type(eds[0], 0, "u");
+      await settle(net);
       type(eds[0], 4, "X");
       eds[0].undo();
       ts[0].drop(true, 1, 40);

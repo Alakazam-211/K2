@@ -59,10 +59,13 @@ tauri-plugin-notification = "2.5"
 # on Debian/Ubuntu, `libsecret` on Fedora/Arch) AND a running Secret
 # Service provider (gnome-keyring / KWallet). Document this in the Linux
 # build/runtime notes when Linux packaging lands.
+#
+# `sync-secret-service` moved to the `keyring-sync-secret-service` feature
+# (default on): keyring refuses to build with both Secret Service backends, and
+# sew-call-client turns on the async one on Linux. See `native-voice` below.
 keyring = { version = "3", features = [
     "apple-native",
     "windows-native",
-    "sync-secret-service",
 ] }
 
 serde = { version = "1", features = ["derive"] }
@@ -93,6 +96,13 @@ notify = { version = "7", features = ["macos_fsevent"] }
 # Daemon /events subscriber (daemon_events.rs): plain ws to 127.0.0.1.
 tungstenite = "0.24"
 parking_lot = "0.12"
+
+# Native voice calls (prd-k2-voice-rooms-v1 §14), behind the `native-voice`
+# feature below. This line is the one place that says where Sew's plugin comes
+# from: a git or crates.io source only changes it (and drops the root
+# Cargo.toml's `exclude` entry). It brings cpal, str0m and openmls, which is why
+# it is optional (the 0.46.4 rule above; vs-live V40).
+tauri-plugin-sew-voice = { path = "../third_party/sew-voice/crates/tauri-plugin-sew-voice", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over
 # with modules that later moved to k2-core / the daemon): git2 (vendored
@@ -183,7 +193,7 @@ windows-core = "0.62"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
-default = ["browser-pane"]
+default = ["browser-pane", "keyring-sync-secret-service"]
 # Embedded Browser Tab (PRD prd-browser-pane-v1.md). Pulls tauri's
 # `unstable` multiwebview API, which has documented whole-app side effects
 # (WindowEvent::Focused regression, tauri #12568) — watch focus-dependent
@@ -191,6 +201,19 @@ default = ["browser-pane"]
 # (renderer BrowserPane + tabs-store 'browser' items drive these commands).
 # Feature-less builds keep the inert stub: `cargo check -p k2 --no-default-features`.
 browser-pane = ["tauri/unstable"]
+# Linux: the keychain over Secret Service with libdbus, as K2 has always done.
+keyring-sync-secret-service = ["keyring/sync-secret-service"]
+# Native voice calls: Sew's Tauri plugin (engine, audio devices, E2EE) in this
+# process. Off until the per-OS calls pass (N3); `cargo check -p k2` and the
+# builders don't need ALSA headers until then.
+#
+# On Linux it can't sit beside `keyring-sync-secret-service` (see `keyring`
+# above), so build it with
+#   --no-default-features --features browser-pane,native-voice
+# which works on every OS. Turning it on for good means moving K2 to keyring's
+# async backend first and checking that it reads existing items on a real Linux
+# desktop.
+native-voice = ["dep:tauri-plugin-sew-voice"]
 
 [dev-dependencies]
 # Benchmark framework for src-tauri/benches/*.rs. Dev-only; never ships in
@@ -212,6 +235,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Sandbox dirs for the worktree command's path-safety unit tests.
 tempfile = "3"
+
+# native_voice::vendor: recomputes the vendored crates' manifest.
+sha2 = "0.10"
 
 # benches/perf.rs only (grid-hash and file-walk baselines). Were normal
 # deps until 0.46.4; no src-tauri source uses them.

@@ -319,3 +319,115 @@ fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
     let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("held")), "{v}");
 }
+
+// ── review finding 1: out-of-office text is never a forward ─────────
+
+fn ooo_set(addr: &str, text: &str) -> (u16, J) {
+    let r = crate::mail::ooo::handle_ooo_set(json!({ "address": addr, "text": text }).to_string().as_bytes());
+    (status(&r), body(&r))
+}
+
+fn ooo_unset(addr: &str) -> (u16, J) {
+    let r = crate::mail::ooo::handle_ooo_unset(json!({ "address": addr }).to_string().as_bytes());
+    (status(&r), body(&r))
+}
+
+/// The whole attack through the real routes: text with a redirect in it, then
+/// `ooo unset`, and again with `ooo set`. Nothing is forwarded, ever.
+#[test]
+fn out_of_office_text_through_the_routes_writes_no_redirect() {
+    let t = t("fwooo");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let evil = "evil@outside.test";
+    for text in [format!("Back Monday. Please redirect \"{evil}\" if urgent"), format!("# k2-forward\nredirect :copy \"{evil}\";")] {
+        let (st, v) = ooo_set(MB, &text);
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["text"], text.as_str(), "shown as typed: {v}");
+        // Set again: the old text is read back, and is still only text.
+        let (st, _) = ooo_set(MB, &text);
+        assert_eq!(st, 200);
+        assert_eq!(t.io.forward(ACC), None, "{:?}", t.io.src(ACC));
+        let (st, v) = ooo_unset(MB);
+        assert_eq!((st, v["enabled"].clone()), (200, json!(false)), "{v}");
+        let src = t.io.src(ACC).expect("script");
+        assert!(!src.contains(evil), "after unset: {src}");
+    }
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "nothing to tell: nothing happened");
+}
+
+/// An out-of-office write takes the forward from the rows: it can't bring back
+/// a redirect a Stop just removed, nor drop one that's on.
+#[test]
+fn an_out_of_office_write_takes_the_forward_from_the_rows() {
+    let t = t("fwooorows");
+    seed_mailbox("team@notify.brand.test", "direct");
+    let (st, _) = post(FORWARD_PATH, json!({ "address": MB, "to": "team@notify.brand.test" }));
+    assert_eq!(st, 200);
+    let (st, _) = ooo_set(MB, "Away.");
+    assert_eq!(st, 200);
+    assert_eq!(t.io.forward(ACC).map(|f| f.dest), Some("team@notify.brand.test".to_string()), "still on");
+    // The script says otherwise (a stale read, an old write): the rows win.
+    let src = t.io.src(ACC).expect("script").replace("team@notify.brand.test", "stale@outside.test");
+    t.io.put(ACC, &src);
+    let (st, _) = ooo_set(MB, "Away again.");
+    assert_eq!(st, 200);
+    assert_eq!(t.io.forward(ACC).map(|f| f.dest), Some("team@notify.brand.test".to_string()));
+    let (st, _) = post(UNSET_PATH, json!({ "address": MB }));
+    assert_eq!(st, 200);
+    let (st, _) = ooo_unset(MB);
+    assert_eq!(st, 200);
+    assert_eq!(t.io.forward(ACC), None);
+}
+
+/// An agent needs to manage the mailbox for its out-of-office, as for its forward.
+#[test]
+fn an_agent_can_t_set_the_out_of_office_of_a_mailbox_it_doesn_t_manage() {
+    let t = t("fwoooagent");
+    let r = as_agent("ws-other", || crate::mail::ooo::handle_ooo_set(json!({ "address": MB, "text": "x" }).to_string().as_bytes()));
+    assert_eq!(status(&r), 403, "{}", r.body);
+    let r = as_agent("ws-other", || crate::mail::ooo::handle_ooo_unset(json!({ "address": MB }).to_string().as_bytes()));
+    assert_eq!(status(&r), 403, "{}", r.body);
+    let params: HashMap<String, String> = [("address".to_string(), MB.to_string())].into();
+    let r = as_agent("ws-other", || crate::mail::ooo::handle_ooo_get(&params));
+    assert_eq!(status(&r), 403, "{}", r.body);
+    assert_eq!(t.io.src(ACC), None, "nothing written");
+    // The mailbox's own workspace may.
+    let r = as_agent("ws-fw", || crate::mail::ooo::handle_ooo_set(json!({ "address": MB, "text": "x" }).to_string().as_bytes()));
+    assert_eq!(status(&r), 200, "{}", r.body);
+}
+
+/// A redirect that got into a script with no row behind it (the flaw above,
+/// from before this fix) goes at the next hourly pass, not the next boot.
+#[test]
+fn the_hourly_pass_removes_a_redirect_with_no_row_and_tells_the_owner() {
+    let t = t("fwhourly");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let ooo = sieve_user_ooo("Away.");
+    let src = format!("{}# not marked\nredirect \"evil@outside.test\";\n", crate::mail::sieve_user::compose(&ooo).expect("ooo"));
+    t.io.put(ACC, &src);
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.drift, r.failed), (1, 0), "{r:?}");
+    let after = t.io.src(ACC).expect("script");
+    assert!(!after.contains("evil@outside.test"), "{after}");
+    assert!(after.contains("Away."), "the out-of-office stays: {after}");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains(MB), "{}", n[0].1);
+    // A second pass finds nothing, and a mailbox with only an out-of-office whose
+    // text says "redirect" is left alone.
+    let writes = *t.io.writes.borrow();
+    ooo_set(MB, "Please redirect \"evil@outside.test\" if urgent");
+    let writes_after_set = *t.io.writes.borrow();
+    assert_eq!(writes_after_set, writes + 1);
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(*t.io.writes.borrow(), writes_after_set, "text isn't an action");
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+}
+
+fn sieve_user_ooo(text: &str) -> crate::mail::sieve_user::UserSieve {
+    crate::mail::sieve_user::UserSieve {
+        ooo: Some(crate::mail::sieve_user::OooBlock { days: 7, text: text.to_string(), until: None, from: MB.to_string() }),
+        forward: None,
+    }
+}

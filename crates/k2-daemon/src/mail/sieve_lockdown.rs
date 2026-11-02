@@ -221,7 +221,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
 /// argument(s) verbatim). Both commands take their target as the LAST
 /// positional argument, after any tagged ones (RFC 5228 §4.2, RFC 5435
 /// §3), so the last string or string list before `;` is the target.
-fn outbound_actions(src: &str) -> Vec<(&'static str, Vec<String>)> {
+pub(crate) fn outbound_actions(src: &str) -> Vec<(&'static str, Vec<String>)> {
     let toks = tokenize(src);
     let mut out = Vec::new();
     let mut at_command = true;
@@ -446,9 +446,7 @@ fn is_k2_rendering(name: &str, src: &str) -> bool {
     }
     name == sieve_user::LEGACY_FORWARD_NAME
         && parsed.ooo.is_none()
-        && parsed
-            .forward
-            .as_ref()
+        && sieve_user::parse_legacy_forward(src)
             .is_some_and(|f| legacy_forward(&f.dest, f.keep) == src)
 }
 

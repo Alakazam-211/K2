@@ -580,7 +580,7 @@ pub(crate) fn take_notices() -> Vec<(String, String, Vec<String>)> {
     NOTICES.with(|n| std::mem::take(&mut *n.borrow_mut()))
 }
 
-fn notice(title: &str, body: &str, extra: &[String]) {
+pub(crate) fn notice(title: &str, body: &str, extra: &[String]) {
     #[cfg(test)]
     NOTICES.with(|n| n.borrow_mut().push((title.to_string(), body.to_string(), extra.to_vec())));
     #[cfg(not(test))]

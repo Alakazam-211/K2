@@ -15,7 +15,13 @@
 //! **When:** right after every change (the route waits for it), at daemon
 //! start (after the Sieve lockdown; it also imports same-box forwards that
 //! predate the rows) and hourly. A script that doesn't match what K2 would
-//! write is rewritten and the change is logged as a `drift` event.
+//! write is rewritten and the change is logged as a `drift` event. The hourly
+//! pass also reads the mailboxes with no rows: an outbound action in one of
+//! their scripts has no row behind it, so it goes, and the owner is told.
+//!
+//! **Out-of-office** changes come through here too ([`patch_ooo`]), under the
+//! same lock: the forward block is written from the rows, never read back
+//! from the script.
 //!
 //! **Holds K2 applies itself** ([`hold_reason`]): air-gap on, or the
 //! mailbox's domain `receive-only`, pauses an active outside forward;
@@ -495,6 +501,33 @@ pub fn resume(id: &str, actor: &str) -> Result<Forward, ChangeError> {
 
 // ── the whole box ───────────────────────────────────────────────────
 
+/// Change a mailbox's out-of-office (`None`: off), under the sync lock. The
+/// forward block comes from its rows, so an out-of-office write can neither
+/// invent a forward nor bring back one that was stopped.
+pub fn patch_ooo(address_id: &str, ooo: Option<sieve_user::OooBlock>) -> Result<UserSieve, String> {
+    let ctx = ctx();
+    with_io(|io| {
+        let _g = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+        let mb = mailbox(address_id)?.ok_or_else(|| format!("mail forwards: mailbox {address_id} is gone"))?;
+        let account = mb.account_id.as_deref().ok_or_else(|| format!("mail forwards: mailbox {address_id} has no mail-server account"))?;
+        let live = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::live_for_address(&conn, address_id)?
+        };
+        let current = io.read(account)?;
+        let mut want = desired(&current, live.as_ref(), &ctx);
+        if want.forward.as_ref().is_some_and(|f| f.guard.is_some()) && !outside_forward_supported() {
+            want.forward = None;
+        }
+        want.ooo = ooo;
+        if !in_sync(&current, &want) {
+            io.write(account, &current, &want)?;
+        }
+        Ok(want)
+    })
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub checked: usize,
@@ -538,12 +571,74 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
             }
         }
     }
+    strip_unbacked(io, &mut r);
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = store::purge(&conn, ctx.now) {
         k2_core::log_debug!("{P} purge: {e}");
     }
     r
+}
+
+/// The active mailboxes with no live row: anything in their scripts that sends
+/// mail out has no row behind it. It goes, whatever wrote it, and the owner
+/// hears. The out-of-office block stays.
+fn strip_unbacked(io: &dyn SieveIo, r: &mut Report) {
+    let rows: Vec<(String, String, String)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let Ok(mut st) = conn.prepare(
+            "SELECT a.id, a.address, a.stalwart_account_id FROM mail_addresses a \
+             WHERE a.status = 'active' AND a.stalwart_account_id IS NOT NULL AND a.stalwart_account_id <> '' \
+             AND NOT EXISTS (SELECT 1 FROM mail_forwards f WHERE f.address_id = a.id AND f.state <> 'removed') ORDER BY a.address",
+        ) else {
+            r.failed += 1;
+            return;
+        };
+        let rows = st.query_map([], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)));
+        match rows {
+            Ok(it) => it.filter_map(Result::ok).collect(),
+            Err(_) => {
+                r.failed += 1;
+                return;
+            }
+        }
+    };
+    let mut stripped: Vec<String> = Vec::new();
+    for (id, address, account) in rows {
+        let _g = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(current) = io.read(&account) else {
+            r.failed += 1;
+            continue;
+        };
+        let k2_outbound = current.k2_src.as_deref().is_some_and(|src| !super::sieve_lockdown::outbound_actions(src).is_empty());
+        if !k2_outbound && !current.legacy {
+            continue;
+        }
+        let want = UserSieve { ooo: current.sieve.ooo.clone(), forward: None };
+        match io.write(&account, &current, &want) {
+            Ok(()) => {
+                k2_core::log_debug!("{P} mailbox {id}: removed a redirect with no forward row behind it");
+                r.drift += 1;
+                r.wrote += 1;
+                stripped.push(address);
+            }
+            Err(e) => {
+                r.failed += 1;
+                k2_core::log_debug!("{P} mailbox {id} not cleaned: {}", crate::email_notify::send::mask_addresses(&e));
+            }
+        }
+    }
+    if !stripped.is_empty() {
+        super::forward_outcomes::notice(
+            "K2 removed a forward nobody set",
+            &format!(
+                "The mail filter of {} sent mail somewhere with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed it. Check who could change these mailboxes, and their recent activity: k2 hostmail audit-sieve.",
+                stripped.join(", ")
+            ),
+            &[],
+        );
+    }
 }
 
 /// FW-A5: same-box forwards K2 wrote before 0256 become rows. A forward

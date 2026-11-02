@@ -1,17 +1,19 @@
 //! `GET|POST /cli/mail/ooo` and `POST /cli/mail/ooo/unset`.
 //!
 //! Out-of-office = Stalwart user Sieve `vacation` (RFC 5230) on a
-//! minted mailbox. Lookup is password-rotate style (host-wide active
-//! row; 404 if missing/retired). Not quota `canManage`.
+//! minted mailbox. An agent needs to manage the mailbox
+//! (`authorize_mailbox`, as for its forward). Writes go through
+//! `forward_sync::patch_ooo`, under its lock, with the forward block from the
+//! rows: this text can never become a forward.
 
 use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
-use crate::mail::addresses::{self, AddrError};
 use crate::mail::domains;
+use crate::mail::hostmail_auth::authorize_mailbox;
 use crate::mail::sieve_user::{
     self, cap_text, days_in_range, parse_until_date, reject_html, reject_lone_dot_line, OooBlock,
-    SievePatch, VACATION_DAYS_DEFAULT,
+    VACATION_DAYS_DEFAULT,
 };
 use k2_core::db::schema::MailAddress;
 
@@ -46,35 +48,6 @@ fn usage(hint: String) -> CliResponse {
     err_json("400 Bad Request", "usage", hint)
 }
 
-/// Host-wide active hosted row (password-rotate). Not canManage.
-fn lookup_active(address: &str) -> Result<MailAddress, CliResponse> {
-    let address = match addresses::normalize_address(address) {
-        Ok(a) => a,
-        Err(AddrError::Usage(h)) => return Err(usage(h)),
-        Err(e) => return Err(usage(format!("{e:?}"))),
-    };
-    let row = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        addresses::load_address(&conn, &address)
-    };
-    let Some(row) = row else {
-        return Err(err_json(
-            "404 Not Found",
-            "not_found",
-            format!("no hosted address '{address}'"),
-        ));
-    };
-    if row.status != "active" {
-        return Err(err_json(
-            "404 Not Found",
-            "not_found",
-            format!("no hosted address '{address}'"),
-        ));
-    }
-    Ok(row)
-}
-
 fn account_id_of(row: &MailAddress, address: &str) -> Result<String, CliResponse> {
     row.stalwart_account_id
         .as_deref()
@@ -104,6 +77,18 @@ fn engine() -> Result<crate::mail::jmap::StalwartClient, CliResponse> {
     domains::engine_from_db()
         .map(|(e, _)| e)
         .map_err(|hint| err_json("503 Service Unavailable", "not_ready", hint))
+}
+
+/// Refuse a write before it starts when there's no mail server to write to.
+fn server_ready() -> Result<(), CliResponse> {
+    #[cfg(test)]
+    {
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        engine().map(|_| ())
+    }
 }
 
 fn show_json(address: &str, sieve: &sieve_user::UserSieve) -> String {
@@ -136,7 +121,7 @@ pub fn handle_ooo_get(params: &HashMap<String, String>) -> CliResponse {
         Ok(a) => a,
         Err(r) => return r,
     };
-    let row = match lookup_active(&address) {
+    let row = match authorize_mailbox(&address) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -194,25 +179,23 @@ pub fn handle_ooo_set(body: &[u8]) -> CliResponse {
             Err(h) => return usage(h),
         },
     };
-    let row = match lookup_active(&address) {
+    let row = match authorize_mailbox(&address) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    let account_id = match account_id_of(&row, &row.address) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
-    let engine = match engine() {
-        Ok(e) => e,
-        Err(resp) => return resp,
-    };
+    if let Err(resp) = account_id_of(&row, &row.address) {
+        return resp;
+    }
+    if let Err(resp) = server_ready() {
+        return resp;
+    }
     let block = OooBlock {
         days,
         text: text.to_string(),
         until,
         from: row.address.clone(),
     };
-    match sieve_user::patch_user_sieve(&engine, &account_id, SievePatch::SetOoo(block.clone())) {
+    match crate::mail::forward_sync::patch_ooo(&row.id, Some(block)) {
         Ok(sieve) => CliResponse::ok_json(show_json(&row.address, &sieve)),
         Err(e) => err_json("502 Bad Gateway", "engine", e),
     }
@@ -228,19 +211,17 @@ pub fn handle_ooo_unset(body: &[u8]) -> CliResponse {
         Ok(a) => a,
         Err(r) => return r,
     };
-    let row = match lookup_active(&address) {
+    let row = match authorize_mailbox(&address) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    let account_id = match account_id_of(&row, &row.address) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
-    let engine = match engine() {
-        Ok(e) => e,
-        Err(resp) => return resp,
-    };
-    match sieve_user::patch_user_sieve(&engine, &account_id, SievePatch::UnsetOoo) {
+    if let Err(resp) = account_id_of(&row, &row.address) {
+        return resp;
+    }
+    if let Err(resp) = server_ready() {
+        return resp;
+    }
+    match crate::mail::forward_sync::patch_ooo(&row.id, None) {
         Ok(sieve) => CliResponse::ok_json(show_json(&row.address, &sieve)),
         Err(e) => err_json("502 Bad Gateway", "engine", e),
     }

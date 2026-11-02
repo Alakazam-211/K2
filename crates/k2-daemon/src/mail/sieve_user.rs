@@ -272,21 +272,59 @@ fn sieve_quoted(s: &str) -> String {
     out
 }
 
-/// Parse a `k2` (or leftover `k2-forward`) script into blocks.
+/// `source` with every `text:` body blanked, byte for byte (each byte a
+/// space, newlines kept), so offsets still line up. An out-of-office text is
+/// whatever someone typed: nothing in it is a command or a mark, whatever it
+/// looks like. A body runs from a line ending in `text:` to its lone `.`
+/// (RFC 5228); an unterminated one blanks to the end.
+pub fn blank_text_bodies(source: &str) -> String {
+    let mut out = Vec::with_capacity(source.len());
+    let mut in_body = false;
+    for line in source.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\r', '\n']);
+        if in_body {
+            if bare == "." {
+                in_body = false;
+                out.extend_from_slice(line.as_bytes());
+            } else {
+                out.extend(line.bytes().map(|b| if b == b'\n' || b == b'\r' { b } else { b' ' }));
+            }
+        } else {
+            in_body = bare.trim_end().ends_with("text:");
+            out.extend_from_slice(line.as_bytes());
+        }
+    }
+    // Multi-byte characters were only ever blanked whole: this is ASCII there.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Parse a `k2` script into its marked blocks. A redirect K2 didn't mark as
+/// its forward block isn't a forward (and is dropped by the next write).
 pub fn parse(source: &str) -> UserSieve {
-    let ooo = parse_ooo_block(source);
-    let forward = parse_forward_block(source);
+    let code = blank_text_bodies(source);
+    let ooo = parse_ooo_block(source, &code);
+    let forward = parse_forward_block(&code);
     UserSieve { ooo, forward }
 }
 
-fn parse_ooo_block(source: &str) -> Option<OooBlock> {
-    let region = marked_region(source, OOO_MARK, FORWARD_MARK).or_else(|| {
-        if source.contains("vacation") {
-            Some(source.to_string())
-        } else {
-            None
+/// The forward in a leftover `k2-forward` script (from before the marks).
+pub fn parse_legacy_forward(source: &str) -> Option<ForwardBlock> {
+    let code = blank_text_bodies(source);
+    parse_forward_region(&code)
+}
+
+fn parse_ooo_block(source: &str, code: &str) -> Option<OooBlock> {
+    // The marks are read from the blanked copy: a mark typed into the text
+    // isn't one. The text itself comes from the source.
+    let region = match code.find(OOO_MARK) {
+        Some(i) => {
+            let start = i + OOO_MARK.len();
+            let end = code[start..].find(FORWARD_MARK).map_or(source.len(), |e| start + e);
+            source[start..end].to_string()
         }
-    })?;
+        None if code.contains("vacation") => source.to_string(),
+        None => return None,
+    };
     if !region.contains("vacation") {
         return None;
     }
@@ -302,14 +340,13 @@ fn parse_ooo_block(source: &str) -> Option<OooBlock> {
     })
 }
 
-fn parse_forward_block(source: &str) -> Option<ForwardBlock> {
-    let region = marked_region(source, FORWARD_MARK, OOO_MARK).or_else(|| {
-        if source.contains("redirect") {
-            Some(source.to_string())
-        } else {
-            None
-        }
-    })?;
+/// The marked forward block of a blanked script.
+fn parse_forward_block(code: &str) -> Option<ForwardBlock> {
+    parse_forward_region(&marked_region(code, FORWARD_MARK, OOO_MARK)?)
+}
+
+fn parse_forward_region(region: &str) -> Option<ForwardBlock> {
+    let region = region.to_string();
     let keep = region.contains("redirect :copy") || region.contains("redirect :copy\n");
     let dest = extract_redirect_dest(&region)?;
     let guard = extract_quoted_after(&region, &format!("header :contains \"{LOOP_HEADER}\""))
@@ -427,7 +464,7 @@ pub fn load_user_sieve(
                 parsed.forward = part.forward;
             }
         } else if sc.name == LEGACY_FORWARD_NAME && parsed.forward.is_none() {
-            parsed.forward = part.forward.or_else(|| parse_forward_block(&src));
+            parsed.forward = parse_legacy_forward(&src);
         }
     }
     Ok((parsed, scripts))
@@ -475,6 +512,9 @@ pub fn save_user_sieve(
     }
 }
 
+/// Read, patch, write, with no lock and no rows behind it. Production code goes
+/// through `forward_sync` instead; this is for tests against a mail server.
+#[cfg(test)]
 pub fn patch_user_sieve(
     client: &StalwartClient,
     account_id: &str,
@@ -677,16 +717,55 @@ mod tests {
     #[test]
     fn parse_legacy_k2_forward_script() {
         let src = "require [\"copy\"];\nredirect :copy \"keep@x.test\";\n";
-        let s = parse(src);
-        assert!(s.ooo.is_none());
         assert_eq!(
-            s.forward,
+            parse_legacy_forward(src),
             Some(ForwardBlock {
                 dest: "keep@x.test".to_string(),
                 keep: true,
                 guard: None,
             })
         );
+        // Unmarked in a `k2` script, the same text isn't K2's forward.
+        assert_eq!(parse(src), UserSieve::default());
+    }
+
+    /// Review finding 1: text someone typed into an out-of-office never
+    /// becomes a forward, however it's worded, and is kept as typed.
+    #[test]
+    fn out_of_office_text_never_becomes_a_forward() {
+        for text in [
+            "Back Monday. Please redirect \"evil@outside.test\" if urgent",
+            "redirect :copy \"evil@outside.test\";",
+            "# k2-forward\nredirect \"evil@outside.test\";",
+            "# k2-ooo\n# k2-forward\nredirect :copy \"evil@outside.test\";\nbye",
+            "caf\u{e9} \u{1f600} redirect \"evil@outside.test\";",
+        ] {
+            let s = UserSieve { ooo: Some(ooo(text)), forward: None };
+            let src = compose(&s).expect("script");
+            let round = parse(&src);
+            assert_eq!(round.forward, None, "no forward in the text: {src}");
+            assert_eq!(round.ooo.as_ref().map(|o| o.text.as_str()), Some(text), "kept as typed: {src}");
+            assert_eq!(compose(&round).as_deref(), Some(src.as_str()), "byte-stable: {src}");
+            // What `ooo unset` does: nothing left, so nothing is written.
+            assert_eq!(compose(&apply_patch(round, SievePatch::UnsetOoo)), None, "{src}");
+            // Beside a real forward, the real one stands and the text's doesn't.
+            let both = UserSieve { ooo: Some(ooo(text)), forward: Some(outside(true)) };
+            let src = compose(&both).expect("script");
+            assert_eq!(parse(&src), both, "{src}");
+            assert_eq!(compose(&apply_patch(parse(&src), SievePatch::UnsetOoo)).map(|o| o.contains("evil@")), Some(false), "{src}");
+        }
+    }
+
+    #[test]
+    fn blanking_keeps_every_offset() {
+        let src = "require [\"vacation\"];\nvacation :days 7 text:\nh\u{e9}llo redirect \"x@y.test\"\n.\n;\n# k2-forward\nredirect \"a@b.test\";\n";
+        let code = blank_text_bodies(src);
+        assert_eq!(code.len(), src.len());
+        assert!(!code.contains("x@y.test"), "{code}");
+        assert!(code.contains("redirect \"a@b.test\""), "{code}");
+        assert_eq!(code.find("# k2-forward"), src.find("# k2-forward"));
+        // No closing dot: it blanks to the end.
+        assert!(!blank_text_bodies("vacation text:\nredirect \"x@y.test\";\n").contains("x@y.test"));
     }
 
     // ── outside forwards (prd-hostmail-external-forwarding-v1 §3.4) ──

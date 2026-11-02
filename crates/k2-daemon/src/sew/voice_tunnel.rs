@@ -22,10 +22,12 @@
 //!   media turn-cert --when-idle` (renewal, same key).
 //! - **Sew settings** ([`media_keys`], Sew SW-9 11-01): `sew media install
 //!   --relay-only --turn-tls passthrough` (`relay_only = true`, `turn_tls`),
-//!   `turn_domain`, `turn_trusted_cidrs = [127.0.0.1/32, ::1/128]`,
-//!   `bind_v4 = 127.0.0.1` (UDP 7882 / TCP 7881 off the network) and NO
-//!   `node_ip` (Sew writes 127.0.0.1 itself; the engine's only host
-//!   candidate is loopback, reachable by its own TURN). Back in direct mode:
+//!   `turn_domain`, `bind_v4 = 127.0.0.1` (UDP 7882 / TCP 7881 off the
+//!   network) and NO `node_ip` (Sew writes 127.0.0.1 itself; the engine's only
+//!   host candidate is loopback, reachable by its own TURN). No
+//!   `turn_trusted_cidrs`: not an install key on Sew 0.6.x or 0.7.0 (an unknown
+//!   key fails the install with exit 2), and Sew's default is loopback only,
+//!   which is where frpc-voice dials from. Back in direct mode:
 //!   `relay_only = false`, `bind_v4 = 0.0.0.0`, the node IP. Sew refuses
 //!   relay-only with tier plain/off (exit 78, [`sew_media`] names it); K2
 //!   never sends it.
@@ -34,7 +36,7 @@
 
 use serde_json::{json, Value};
 
-use k2_root_proto::sew::{MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, TURN_TRUSTED_LOOPBACK, UNIT_MEDIA};
+use k2_root_proto::sew::{MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, UNIT_MEDIA};
 
 use super::supervisor::{self as sup, no, Env, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
@@ -124,12 +126,12 @@ pub fn ready(env: &Env) -> R<()> {
     Ok(())
 }
 
-/// The Sew keys the tunnel tier sets (§6.6 M5/M7/M9), plus the cert pair.
+/// The Sew keys the tunnel tier sets (§6.6 M5/M9), plus the cert pair. Sew
+/// refuses any other key: `voice_tunnel_tests` pin this list.
 pub fn media_keys(host: &str, chain: &str, key_pem: &str) -> Value {
     let mut v = json!({
         "turn_tls": voice::TIER_PASSTHROUGH,
         "turn_domain": host,
-        "turn_trusted_cidrs": TURN_TRUSTED_LOOPBACK,
         "relay_only": true,
         // UDP 7882 / TCP 7881 stay off the network (Sew 11-01; never empty).
         "bind_v4": MEDIA_BIND_LOOPBACK,

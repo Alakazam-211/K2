@@ -916,6 +916,18 @@ pub mod fake {
     /// item 12: `on_disk` for the upgrade-only fixture build.
     pub const TESTBUILD: &str = "testbuild";
 
+    /// Why the helper or real Sew would refuse this `media install` body.
+    fn sew_refuses_media_input(stdin: Option<&[u8]>) -> Option<String> {
+        let req: k2_root_proto::sew::MediaRequest = match serde_json::from_slice(stdin.unwrap_or(b"{}")) {
+            Ok(r) => r,
+            Err(e) => return Some(format!("invalid --config-json: {e}")),
+        };
+        let turn = req.has_turn_tls().then_some(("/stage/turn.crt", "/stage/turn.key"));
+        serde_json::from_value::<k2_root_proto::sew::SewMediaInstallInputs>(req.sew_inputs(Some("/stage/media.tgz"), turn))
+            .err()
+            .map(|e| format!("invalid --config-json: {e}"))
+    }
+
     pub fn helper_ok(protocol: u32, sew_ns: bool, pin: &str) -> RootHelperState {
         RootHelperState {
             kind: Kind::Root,
@@ -1411,6 +1423,13 @@ pub mod fake {
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             k2_root_proto::verbs::Verb::parse(&refs).map_err(|e| format!("root helper: {e} (not sent)"))?;
             self.calls.lock().unwrap().push(Call { argv: joined.clone(), stdin: stdin.map(<[u8]>::to_vec) });
+            // As the real pair does: the helper's MediaRequest, then Sew's
+            // `MediaInstallInputs` (exit 2 on an unknown key or a wrong type).
+            if joined.starts_with("engine sew media install") || joined.starts_with("engine sew media reconfigure") {
+                if let Some(reason) = sew_refuses_media_input(stdin) {
+                    return Ok(json!({"sewExit": 2, "reason": reason}));
+                }
+            }
             let queued = self.answers.lock().unwrap().get_mut(&joined).and_then(VecDeque::pop_front);
             match queued {
                 Some(a) => a,

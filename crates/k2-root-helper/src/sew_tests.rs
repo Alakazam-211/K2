@@ -1763,6 +1763,12 @@ fn capture_turn_files(t: &T) -> std::rc::Rc<std::cell::RefCell<Vec<(String, Stri
             let cert = std::fs::read_to_string(&c).unwrap_or_default();
             let key = std::fs::read_to_string(&k).unwrap_or_default();
             let json = std::fs::read_to_string(&j).unwrap_or_default();
+            // This test Sew takes what real Sew takes (`deny_unknown_fields`:
+            // exit 2 on an unknown key or a wrong type), and nothing else.
+            if !json.is_empty() {
+                serde_json::from_str::<k2_root_proto::sew::SewMediaInstallInputs>(&json)
+                    .unwrap_or_else(|e| panic!("real Sew would refuse this with exit 2: {e}\n{json}"));
+            }
             let mode = std::fs::metadata(&k).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
             s.borrow_mut().push((cert, key, json, mode));
         }),
@@ -1838,9 +1844,8 @@ fn media_reconfigure_carries_the_tunnel_keys() {
     sew_answers(&t, 0, r#"{"changed":["/etc/sew/sew.toml [voice.ops]"],"restart_required":[]}"#);
     let seen = capture_turn_files(&t);
     for bad in [
-        &br#"{"turn_trusted_cidrs":["0.0.0.0/0"],"relay_only":true}"#[..],
-        br#"{"turn_trusted_cidrs":[],"relay_only":true}"#,
-        br#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
+        // Not an install key on Sew 0.6.x or 0.7.0 (exit 2 there): never sent.
+        &br#"{"turn_trusted_cidrs":["127.0.0.1/32"]}"#[..],
         br#"{"relay_only":"true"}"#,
         // Sew refuses relay-only with tier plain/off (exit 78): never sent.
         br#"{"relay_only":true}"#,
@@ -1854,21 +1859,20 @@ fn media_reconfigure_carries_the_tunnel_keys() {
     // doesn't know: refused before anything runs.
     let o = t.call_in(
         &["engine", "sew", "media", "reconfigure", "restart-now"],
-        br#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":true,"bind_v4":"127.0.0.1"}"#,
+        br#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","relay_only":true,"bind_v4":"127.0.0.1"}"#,
     );
     assert_eq!(o.code, exit::STATE, "{}", o.stderr);
     assert!(sew_calls(&t).is_empty());
     // The way back to direct carries the keys as sent.
     ok(&t.call_in(
         &["engine", "sew", "media", "reconfigure", "restart-now"],
-        br#"{"turn_domain":"turn-box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":false,"bind_v4":"0.0.0.0"}"#,
+        br#"{"turn_domain":"turn-box.k2.dev","relay_only":false,"bind_v4":"0.0.0.0"}"#,
     ));
     let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
     assert_eq!(
         j,
         serde_json::json!({
             "turn_domain": "turn-box.k2.dev",
-            "turn_trusted_cidrs": ["127.0.0.1/32", "::1/128"],
             "relay_only": false,
             "bind_v4": "0.0.0.0",
             "profile": "shared",

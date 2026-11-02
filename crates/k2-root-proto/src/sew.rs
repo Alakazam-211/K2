@@ -1806,13 +1806,8 @@ pub struct MediaRequest {
     /// [`turn_key_pem_ok`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_key_pem: Option<String>,
-    /// Protocol 12 (0.46.8, voice rooms §6.6 M7): `voice.ops.
-    /// turn_trusted_cidrs`, the peers sew-media takes PROXY v2 from: a
-    /// non-empty subset of [`TURN_TRUSTED_LOOPBACK`] (frpc-voice dials from
-    /// loopback). An 11 helper refuses the key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_trusted_cidrs: Option<Vec<String>>,
-    /// Protocol 12 (§6.6 M9): Sew's `--relay-only` (`voice.ops.
+    /// Protocol 12 (0.46.8, §6.6 M9; an 11 helper refuses the key): Sew's
+    /// `--relay-only` (`voice.ops.
     /// ice_relay_only`): `true` with the tunnel tier, `false` in direct mode.
     /// Sew refuses relay-only with TURN tier `plain` or `off` (exit 78), so
     /// `true` is accepted only with `turn_tls: passthrough` in the same
@@ -1834,17 +1829,56 @@ pub const MEDIA_BIND_ANY: &str = "0.0.0.0";
 /// Sew's exit code when relay-only meets TURN tier `plain` or `off`.
 pub const SEW_EXIT_RELAY_ONLY_REFUSED: i64 = 78;
 
-/// The only PROXY v2 sources K2 lets sew-media trust (§6.6 M7): loopback,
-/// where frpc-voice dials from. Sew's own default (`127.0.0.0/8`) is wider,
-/// so K2 sets these explicitly.
-pub const TURN_TRUSTED_LOOPBACK: [&str; 2] = ["127.0.0.1/32", "::1/128"];
-
-/// A trusted-CIDR list K2 may send: non-empty, each entry one of
-/// [`TURN_TRUSTED_LOOPBACK`], none twice.
-pub fn turn_trusted_cidrs_ok(cidrs: &[String]) -> bool {
-    !cidrs.is_empty()
-        && cidrs.iter().all(|c| TURN_TRUSTED_LOOPBACK.contains(&c.as_str()))
-        && cidrs.iter().enumerate().all(|(i, c)| !cidrs[..i].contains(c))
+/// What `sew media install --config-json` accepts: Sew's own
+/// `MediaInstallInputs` as K2 knows it (Sew 0.6.x and 0.7.0), `deny_unknown_fields`
+/// like Sew's. An unknown key, a wrong type or a bad value fails the install
+/// with exit 2. `turn_trusted_cidrs` is NOT one of them on those releases: K2
+/// never sends it (Sew's default is loopback only, right for the tunnel).
+/// K2 never parses this in production: the test Sews do, so K2's tests fail
+/// on a key real Sew would refuse.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SewMediaInstallInputs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tarball: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stun_servers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_private_node_ip: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_v4: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_v6: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_tls: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_cert: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_advertise_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_proxy_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_plain: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cred_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sysctl: Option<String>,
 }
 
 impl MediaRequest {
@@ -1901,9 +1935,6 @@ impl MediaRequest {
             }
             _ => return Err("media refused: turn_cert_pem and turn_key_pem go together"),
         }
-        if self.turn_trusted_cidrs.as_deref().is_some_and(|c| !turn_trusted_cidrs_ok(c)) {
-            return Err("media refused: turn_trusted_cidrs");
-        }
         // Sew refuses relay-only with tier plain/off (exit 78): K2 sends it
         // only together with the passthrough tier it rides.
         if self.relay_only == Some(true) && self.turn_tls.as_deref() != Some("passthrough") {
@@ -1917,7 +1948,7 @@ impl MediaRequest {
 
     /// The request carries a protocol-12 key (the voice tunnel's).
     pub fn needs_tunnel_keys(&self) -> bool {
-        self.turn_trusted_cidrs.is_some() || self.relay_only.is_some() || self.bind_v4.is_some()
+        self.relay_only.is_some() || self.bind_v4.is_some()
     }
 
     /// True when this request carries TURN TLS material.
@@ -2786,17 +2817,26 @@ mod tests {
     #[test]
     fn tunnel_tier_keys_are_loopback_only_and_reach_sews_json() {
         let r: MediaRequest = serde_json::from_str(
-            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","turn_trusted_cidrs":["127.0.0.1/32","::1/128"],"relay_only":true,"bind_v4":"127.0.0.1"}"#,
+            r#"{"turn_tls":"passthrough","turn_domain":"turn.box.k2.dev","relay_only":true,"bind_v4":"127.0.0.1"}"#,
         )
         .unwrap();
         r.validate_reconfigure().unwrap();
         assert!(r.needs_tunnel_keys());
         assert!(r.node_ip.is_none(), "the tunnel tier sends no node IP");
+        // Exactly what Sew's `MediaInstallInputs` takes for the tunnel tier
+        // (Sew, 11-02): an extra key fails the install with exit 2.
         let inputs = r.sew_inputs(None, None);
-        assert_eq!(inputs["turn_trusted_cidrs"], serde_json::json!(["127.0.0.1/32", "::1/128"]));
-        assert_eq!(inputs["relay_only"], true);
-        assert_eq!(inputs["bind_v4"], "127.0.0.1");
-        assert_eq!(inputs["turn_domain"], "turn.box.k2.dev");
+        assert_eq!(
+            inputs,
+            serde_json::json!({
+                "relay_only": true,
+                "turn_tls": "passthrough",
+                "turn_domain": "turn.box.k2.dev",
+                "bind_v4": "127.0.0.1",
+                "profile": "shared",
+            })
+        );
+        serde_json::from_value::<SewMediaInstallInputs>(inputs).expect("real Sew's inputs take it");
         // Sew refuses relay-only with tier plain/off (exit 78): K2 never
         // sends relay-only without the passthrough tier.
         for bad in [
@@ -2818,17 +2858,21 @@ mod tests {
         let old: MediaRequest = serde_json::from_str(r#"{"turn_tls":"direct"}"#).unwrap();
         assert!(!old.needs_tunnel_keys(), "a pre-0.46.8 request stays protocol-11 clean");
         assert!(old.sew_inputs(None, None).get("relay_only").is_none());
-        for bad in [
-            r#"{"turn_trusted_cidrs":[]}"#,
-            r#"{"turn_trusted_cidrs":["127.0.0.0/8"]}"#,
-            r#"{"turn_trusted_cidrs":["0.0.0.0/0"]}"#,
-            r#"{"turn_trusted_cidrs":["127.0.0.1/32","127.0.0.1/32"]}"#,
-            r#"{"turn_trusted_cidrs":["10.0.0.1/32"]}"#,
-        ] {
-            let m: MediaRequest = serde_json::from_str(bad).unwrap();
-            assert!(m.validate_reconfigure().is_err(), "{bad}");
-        }
         assert!(serde_json::from_str::<MediaRequest>(r#"{"relay_only":"yes"}"#).is_err());
+        // Not an install key on Sew 0.6.x or 0.7.0: neither door takes it.
+        let cidrs = r#"{"turn_trusted_cidrs":["127.0.0.1/32"]}"#;
+        assert!(serde_json::from_str::<MediaRequest>(cidrs).is_err());
+        assert!(serde_json::from_str::<SewMediaInstallInputs>(cidrs).is_err());
+        // Sew's inputs refuse what real Sew refuses: an unknown key, a wrong type.
+        assert!(serde_json::from_str::<SewMediaInstallInputs>(r#"{"tier":"passthrough"}"#).is_err());
+        assert!(serde_json::from_str::<SewMediaInstallInputs>(r#"{"relay_only":"true"}"#).is_err());
+        assert!(serde_json::from_str::<SewMediaInstallInputs>(r#"{"udp_port":"7882"}"#).is_err());
+        // A direct install, staged by the helper, is one Sew takes.
+        let d: MediaRequest = serde_json::from_str(
+            r#"{"public_url":"wss://voice.box.k2.dev","node_ip":"203.0.113.7","udp_port":7882,"tcp_port":7881,"turn_tls":"direct","turn_domain":"turn-box.k2.dev","turn_advertise_port":5349,"sysctl":"apply","relay_only":false,"bind_v4":"0.0.0.0"}"#,
+        )
+        .unwrap();
+        serde_json::from_value::<SewMediaInstallInputs>(d.sew_inputs(Some("/s/m.tgz"), Some(("/s/c.pem", "/s/k.pem")))).expect("real Sew's inputs take it");
     }
 
     #[test]

@@ -109,6 +109,29 @@ fn csr_sans(csr_pem: &str) -> Vec<String> {
 const TUNNEL_INSTALL: &str = "engine sew media install";
 const RECONF: &str = "engine sew media reconfigure restart-now";
 
+/// A body's keys, sorted (`serde_json` maps may not be).
+fn keys_of(v: &Value) -> Vec<String> {
+    let mut k: Vec<String> = v.as_object().expect("an object").keys().cloned().collect();
+    k.sort();
+    k
+}
+
+/// The test Sew refuses what real Sew refuses, with its exit 2: this is what
+/// keeps the key lists above honest.
+#[test]
+fn the_test_sew_refuses_a_key_real_sew_would() {
+    let t = t();
+    for body in [
+        json!({"public_url": "wss://voice.lztek.k2.dev", "turn_trusted_cidrs": ["127.0.0.1/32"]}),
+        json!({"public_url": "wss://voice.lztek.k2.dev", "tier": "passthrough"}),
+        json!({"public_url": "wss://voice.lztek.k2.dev", "relay_only": "true"}),
+    ] {
+        let e = sew_media(&t.env(), &["media", "install"], &body, "media_install_failed").expect_err("refused");
+        assert_eq!(e.code, "media_install_failed", "{body}");
+        assert!(e.hint.contains("exit 2"), "{}", e.hint);
+    }
+}
+
 /// S9a end to end: no TURN DNS, a `turn-tunnel` cert for `turn.<label>`
 /// with the bare label, Sew's M5/M7/M9 keys and no node IP, the voice lane
 /// armed, the served check through the relay.
@@ -133,11 +156,16 @@ fn a_tunnel_install_publishes_no_ip_and_hands_sew_relay_only_passthrough() {
     let m = t.stdin_of(TUNNEL_INSTALL);
     assert_eq!(m["turn_tls"], "passthrough");
     assert_eq!(m["turn_domain"], "turn.lztek.k2.dev");
-    assert_eq!(m["turn_trusted_cidrs"], json!(["127.0.0.1/32", "::1/128"]));
     assert_eq!(m["relay_only"], true);
     assert_eq!(m["bind_v4"], "127.0.0.1", "media sockets off the network");
     assert!(m.get("node_ip").is_none(), "no node IP: Sew writes 127.0.0.1 itself: {m}");
     assert!(m.get("turn_advertise_port").is_none(), "Sew's passthrough default (443): {m}");
+    // Sew's `MediaInstallInputs` refuses anything else (exit 2): the exact keys.
+    assert_eq!(
+        keys_of(&m),
+        ["bind_v4", "public_url", "relay_only", "sysctl", "tcp_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls", "udp_port"],
+        "{m}"
+    );
     let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(m).expect("the helper's MediaRequest parses it");
     req.validate().expect("valid for protocol 12");
 
@@ -229,7 +257,8 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     assert_eq!((v["turnTier"].as_str(), v["changed"].as_bool()), (Some("tunnel"), Some(true)), "{v}");
     let r = t.stdin_of(RECONF);
     assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("passthrough"), Some("turn.lztek.k2.dev"), Some(true)));
-    assert!(r.get("node_ip").is_none());
+    assert_eq!(r["bind_v4"], "127.0.0.1");
+    assert_eq!(keys_of(&r), ["bind_v4", "relay_only", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"], "{r}");
     assert!(t.ops.cp_log().contains(&"DELETE /turn/dns/lztek".to_string()), "the box IP leaves DNS: {:?}", t.ops.cp_log());
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true]);
 
@@ -246,6 +275,11 @@ fn tier_moves_both_ways_and_the_front_never_moves_the_tunnel() {
     assert_eq!((r["turn_tls"].as_str(), r["turn_domain"].as_str(), r["relay_only"].as_bool()), (Some("direct"), Some("turn-lztek.k2.dev"), Some(false)));
     assert_eq!(r["node_ip"], "203.0.113.7");
     assert_eq!(r["bind_v4"], "0.0.0.0", "media sockets back on the network");
+    assert_eq!(
+        keys_of(&r),
+        ["bind_v4", "node_ip", "relay_only", "turn_advertise_port", "turn_cert_pem", "turn_domain", "turn_key_pem", "turn_tls"],
+        "{r}"
+    );
     assert!(t.ops.cp_log().contains(&"PUT /turn/dns/lztek".to_string()));
     assert_eq!(*t.ops.lane_calls.lock().unwrap(), vec![true, false], "the lane stops");
     assert_eq!(set_tier_named(&t.env(), "front").unwrap_err().code, "bad_request");

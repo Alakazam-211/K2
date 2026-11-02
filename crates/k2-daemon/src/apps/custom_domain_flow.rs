@@ -753,13 +753,33 @@ fn get(host: &str) -> Option<AppDomain> {
 /// Check `host` now with `lk` and act on the result. Returns the name's
 /// row after the check, and what the check saw.
 pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(AppDomain, Outcome)> {
-    let d = get(host)?;
+    let mut d = get(host)?;
     if matches!(d.state.as_str(), STATE_WAITING_DNS | STATE_FAILING) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = domains::set_app_state(&conn, host, STATE_VERIFYING, d.last_error.as_deref());
     }
-    let mut o = evaluate(&d, lk, &box_ips(), &crate::apps::origins::box_subdomain());
+    let ips = box_ips();
+    let sub = crate::apps::origins::box_subdomain();
+    let mut o = evaluate(&d, lk, &ips, &sub);
+    // Path B: K2 Connect picks the TXT value, so the claim comes before any
+    // TXT check: when DNS already shows Path B, or when Path B is what K2
+    // shows for a name not yet on either path. A name DNS shows on this box
+    // keeps its own proof.
+    if wants_claim(&d, &o) {
+        match super::relay_claims::with_api(|api| super::relay_claims::ensure_claim(&d, api)) {
+            Ok(()) => {
+                d = get(host)?;
+                o = evaluate(&d, lk, &ips, &sub);
+            }
+            // No claim: only that is said. What DNS or the TXT would need
+            // comes with K2 Connect's answer (the box's token proves nothing).
+            Err(words) => {
+                o.ok = false;
+                o.reason = Some(words);
+            }
+        }
+    }
     // Path B (PB-3): DNS and the TXT pass on the box; the control plane
     // decides whether its relays route the name here.
     if o.ok && o.path == Some(domains::PATH_CONNECT) {
@@ -782,6 +802,22 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
         Next::Nothing => {}
     }
     Some((get(host)?, o))
+}
+
+/// Does this check need a claim first? No claim held, not `external`, and
+/// DNS shows Path B or (DNS not on this box) Path B is what K2 shows.
+fn wants_claim(d: &AppDomain, o: &Outcome) -> bool {
+    if d.holds_relay_claim() {
+        return false;
+    }
+    if o.path == Some(domains::PATH_CONNECT) {
+        return true;
+    }
+    if o.path == Some(PATH_DIRECT) || d.state == STATE_EXTERNAL {
+        return false;
+    }
+    let advice = setup_advice();
+    advice["records"] != "none" && shown_path(d, &advice) == domains::PATH_CONNECT
 }
 
 /// [`check_with`] against public DNS, issuing on a background thread.
@@ -1046,12 +1082,13 @@ pub fn records_direct(d: &AppDomain) -> Vec<J> {
 
 /// The DNS records for Path B (PB-5; Rosson 2026-11-01): a CNAME to the
 /// App's own `<app>.<box>.k2.dev`, or at an apex (which can't hold a
-/// CNAME) an ALIAS / ANAME / flattened CNAME to it; and the TXT proof.
+/// CNAME) an ALIAS / ANAME / flattened CNAME to it; and the TXT proof K2
+/// Connect gave, once it has accepted a claim (no TXT line before that:
+/// `relay_claims::txt_pending_words`).
 /// Every line DNS-only. No `A` records at the relays: their addresses are
 /// not promised. Empty off K2 Connect.
 pub fn records_connect(d: &AppDomain, sub: &str) -> Vec<J> {
     let Some(target) = path_b_target(&d.app, sub) else { return Vec::new() };
-    let (txt_name, txt_value) = d.txt();
     let apex = d.hostname.eq_ignore_ascii_case(&d.apex);
     let first = if apex {
         json!({
@@ -1064,6 +1101,10 @@ pub fn records_connect(d: &AppDomain, sub: &str) -> Vec<J> {
     } else {
         json!({ "type": "CNAME", "name": d.hostname, "value": target, "note": "DNS-only (no proxy / grey cloud)" })
     };
+    if !d.holds_relay_claim() {
+        return vec![first];
+    }
+    let (txt_name, txt_value) = d.txt();
     vec![first, json!({ "type": "TXT", "name": txt_name, "value": txt_value })]
 }
 

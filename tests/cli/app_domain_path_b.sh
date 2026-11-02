@@ -84,6 +84,12 @@ class H(BaseHTTPRequestHandler):
                                         "pathB": {"available": False, "why": "needs K2 Connect Pro: upgrade at https://k2.dev/dashboard"}})
             return self._send(200, {"ok": True, "app": "shop", "own": {"label": "shop", "host": "shop.box1.k2.dev"},
                                     "custom": [SUB, APEX], "front443": False, "pathB": PATH_B, "maxCustomNames": 100})
+        if path == "/cli/app/domain/add" and mode == "pending":
+            c = custom("shop.example.com", {"type": "CNAME", "name": "shop.example.com", "value": "shop.box1.k2.dev"}, None)
+            c["records"] = c["records"][:1]
+            c["txt"] = None
+            c["txtPending"] = c["next"] = "No TXT record to set yet: K2 Connect gives the value once it accepts the claim (K2 Connect's database didn't answer: K2 tries again). K2 tries again every 10 minutes; k2 app domain check shop shop.example.com tries now. The CNAME or ALIAS can be set already."
+            return self._send(200, {"ok": True, "app": "shop", "custom": c, "txt": None})
         if path == "/cli/app/domain/add":
             return self._send(200, {"ok": True, "app": "shop", "custom": APEX if "example.com\"" in body and "shop." not in body else SUB, "txt": None})
         if path == "/cli/app/domain/rm":
@@ -138,6 +144,16 @@ assert_contains "add: says why" "$out" "Through K2 Connect (Pro)"
 assert_contains "add: K2 Connect's state in words" "$out" "K2 Connect: claimed, waiting for its own check of the TXT"
 assert_absent "add: never an A record" "$out" "    A "
 
+echo "== a claim that hasn't gone through: the CNAME alone, and why =="
+echo pending >"$MODE_FILE"
+run app domain add shop shop.example.com
+assert_eq "pending: exit 0" "$rc" "0"
+assert_contains "pending: the CNAME" "$out" "CNAME shop.example.com"
+assert_absent "pending: no TXT line" "$out" "TXT   _k2-domain"
+assert_contains "pending: why" "$out" "No TXT record to set yet"
+assert_contains "pending: what to run" "$out" "k2 app domain check shop shop.example.com tries now"
+echo ok >"$MODE_FILE"
+
 echo "== an apex =="
 run app domain add shop example.com
 assert_contains "apex: ALIAS" "$out" "ALIAS example.com"
@@ -182,6 +198,7 @@ run app domain --help
 assert_absent "help: no 0.46.7 promise" "$out" "Path B in 0.46.7"
 assert_contains "help: the two ways" "$out" "TWO WAYS IN"
 assert_contains "help: the cap" "$out" "At most 20 names per box"
+assert_contains "help: who picks the TXT" "$out" "K2 Connect picks that TXT value"
 assert_contains "help: who" "$out" "Build and run Apps"
 
 echo

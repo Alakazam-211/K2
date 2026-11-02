@@ -246,6 +246,14 @@ pub fn status_json(d: &AppDomain, probe: bool) -> J {
     v["records"] = J::Array(super::custom_domain_flow::records_for(d, &advice));
     v["recordsPath"] = json!(super::custom_domain_flow::shown_path(d, &advice));
     v["pathB"] = advice["pathB"].clone();
+    // Path B before a claim succeeded: K2 Connect picks the TXT value, so the
+    // box's own token is never shown as one to set.
+    if v["recordsPath"] == domains::PATH_CONNECT && !d.holds_relay_claim() && d.state != domains::STATE_LIVE {
+        v["txt"] = J::Null;
+        if advice["records"] != "none" {
+            v["txtPending"] = json!(super::relay_claims::txt_pending_words(d));
+        }
+    }
     if let Some(s) = served {
         v["served"] = json!(s.as_str());
         if live && s != ServedBy::ThisBox {

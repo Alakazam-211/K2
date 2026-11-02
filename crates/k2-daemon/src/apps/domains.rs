@@ -115,7 +115,10 @@ fn custom_json(d: &k2_core::domains::AppDomain) -> J {
     });
     // No records to show (a desktop without Path B): the setup line says
     // what it needs; no DNS step to send anyone on.
-    v["next"] = if advice["records"] == "none" && d.state != k2_core::domains::STATE_LIVE {
+    let pending = v["txtPending"].as_str().map(str::to_string);
+    v["next"] = if let Some(p) = pending {
+        json!(p)
+    } else if advice["records"] == "none" && d.state != k2_core::domains::STATE_LIVE {
         json!(format!("No DNS to set yet. Once that's solved: k2 app domain add {} {} prints the records.", d.app, d.hostname))
     } else {
         json!(next_step(d, shown))
@@ -271,6 +274,7 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
             "note": restart_note(&app.app_id, &host),
         }));
     }
+    let d = claim_if_path_b(app, &d)?;
     let planted = plant_for(caller.as_deref(), &d, &binding);
     labels::audit(&app.app_id, "custom_domain_add", &by, json!({ "host": host, "apex": binding.apex, "txt": planted }));
     crate::front443::rebuild_now();
@@ -288,6 +292,10 @@ fn plant_for(caller_ws: Option<&str>, d: &k2_core::domains::AppDomain, binding: 
     if !binding.dns_write || binding.is_pending_ns() {
         return J::Null;
     }
+    // Path B before a claim succeeded: K2 Connect hasn't given the value.
+    if !d.holds_relay_claim() && super::custom_domain_flow::shown_path(d, &super::custom_domain_flow::setup_advice()) == k2_core::domains::PATH_CONNECT {
+        return json!({ "planted": false, "why": "K2 Connect hasn't given the TXT value yet" });
+    }
     let may = match caller_ws.and_then(super::routes::ws_by_id) {
         Some(ws) => k2_core::workspace::settings::dns_manage_allowed_for_path(&ws.path),
         None => true,
@@ -299,6 +307,21 @@ fn plant_for(caller_ws: Option<&str>, d: &k2_core::domains::AppDomain, binding: 
         Ok(()) => json!({ "planted": true }),
         Err(e) => json!({ "planted": false, "why": e }),
     }
+}
+
+/// Path B is what K2 shows for `d`: claim now, to learn the TXT value K2
+/// Connect picked. A claim that doesn't go through isn't an error here: the
+/// name stays bound, says why, and K2 tries again.
+fn claim_if_path_b(app: &AppRow, d: &k2_core::domains::AppDomain) -> R<k2_core::domains::AppDomain> {
+    use super::custom_domain_flow as flow;
+    let advice = flow::setup_advice();
+    if advice["records"] == "none" || flow::shown_path(d, &advice) != k2_core::domains::PATH_CONNECT {
+        return Ok(d.clone());
+    }
+    if let Err(e) = super::relay_claims::with_api(|api| super::relay_claims::ensure_claim(d, api)) {
+        k2_core::log_debug!("[apps/domains] {}: no claim at K2 Connect yet: {e}", d.hostname);
+    }
+    app_domain_of(app, &d.hostname)
 }
 
 /// What an `external` name needs to reach the App: its next start.
@@ -354,6 +377,7 @@ fn set_external(who: &Who, app: &AppRow, d: &k2_core::domains::AppDomain, on: bo
         };
         if let Some(binding) = binding {
             let fresh = app_domain_of(app, &host)?;
+            let fresh = claim_if_path_b(app, &fresh)?;
             planted = plant_for(super::routes::agent_ws(who), &fresh, &binding);
         }
         let _ = super::custom_domain_flow::check_now(&host);
@@ -424,11 +448,23 @@ fn custom_check(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let host = host_arg(&v)?;
-    app_domain_of(&app, &host)?;
+    let before = app_domain_of(&app, &host)?;
     if k2_core::airgap::enabled() {
         return Err(no("airgap", 409, "air-gap is on: K2 makes no DNS checks"));
     }
     let (d, o) = super::custom_domain_flow::check_now(&host).ok_or_else(|| no(NOT_ATTACHED, 404, format!("{host} is gone")))?;
+    // This check claimed the name and K2 Connect gave a new TXT value: on a
+    // K2-hosted zone K2 sets it, as `add` does. It shows up for the next check.
+    if d.verify_token != before.verify_token {
+        let binding = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::get_binding(&conn, &d.apex).map_err(db_err)?
+        };
+        if let Some(b) = binding {
+            let _ = plant_for(super::routes::agent_ws(who), &d, &b);
+        }
+    }
     // A name that changed state is served (or dropped) at once.
     super::custom_names::reload();
     Ok(json!({ "ok": true, "app": app.app_id, "custom": custom_json(&d), "check": { "ok": o.ok, "txt": o.txt_ok, "pointsHere": o.here, "path": o.path, "seen": o.seen, "reason": o.reason } }))
@@ -834,6 +870,87 @@ mod custom_tests {
         }
     }
 
+    /// K2 Web's review: K2 Connect picks the TXT value. On a box where Path B
+    /// is what K2 shows, `add` claims first and shows K2 Connect's value, never
+    /// the box's; while the claim doesn't go through, the CNAME shows alone and
+    /// says why, and nothing is planted.
+    #[test]
+    fn add_claims_first_and_shows_the_txt_k2_connect_picked() {
+        use crate::apps::relay_claims::{self, ClaimAnswer, CpError, RelayApi};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        const PICKED: &str = "relay-picked-token-0123456789";
+        struct Cp {
+            down: RefCell<bool>,
+            claims: RefCell<u32>,
+        }
+        impl RelayApi for Cp {
+            fn claim(&self, h: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
+                *self.claims.borrow_mut() += 1;
+                if *self.down.borrow() {
+                    return Err(CpError::Retry("K2 Connect's database didn't answer: K2 tries again".into()));
+                }
+                Ok(ClaimAnswer { hostname: h.into(), status: "pending".into(), verify_token: Some(PICKED.into()), last_error: None })
+            }
+            fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {
+                panic!("no verify before the TXT is seen")
+            }
+            fn release(&self, _: &str) -> Result<(), CpError> {
+                Ok(())
+            }
+            fn list(&self) -> Result<Vec<ClaimAnswer>, CpError> {
+                Ok(vec![])
+            }
+            fn http_redirect(&self, _: Option<&str>, _: bool) -> Result<(), CpError> {
+                Ok(())
+            }
+        }
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        setup();
+        let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+        cfg.subdomain = "box1".into();
+        k2_core::tunnel::config::save(&cfg).unwrap();
+        // Behind a router, on Pro: Path B is what K2 shows.
+        flow::set_test_nat(Some(Some(true)));
+        relay_claims::set_test_pro(Some(Ok(true)));
+        relay_claims::set_test_ready(Some(Ok(())));
+        let cp = Rc::new(Cp { down: RefCell::new(true), claims: RefCell::new(0) });
+        relay_claims::set_test_api(Some(cp.clone()));
+        let me = agent("ws-nsi");
+
+        // K2 Connect not answering: bound, the CNAME alone, the reason, no TXT.
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "agentnsi", "label": HOST })).unwrap();
+        let c = &v["custom"];
+        assert_eq!(*cp.claims.borrow(), 1);
+        let recs = c["records"].as_array().unwrap();
+        assert_eq!(recs.len(), 1, "{c}");
+        assert_eq!((recs[0]["type"].as_str(), recs[0]["value"].as_str()), (Some("CNAME"), Some("agentnsi.box1.k2.dev")));
+        assert!(c["txt"].is_null(), "the box's token is never shown: {c}");
+        let p = c["txtPending"].as_str().unwrap();
+        assert!(p.contains("No TXT record to set yet") && p.contains("database didn't answer"), "{p}");
+        assert_eq!(c["next"].as_str(), Some(p));
+
+        // It answers: the next list or check shows ITS value.
+        *cp.down.borrow_mut() = false;
+        flow::set_test_lookup(None);
+        let d = app_domain_of(&app_for(&me, Some("agentnsi")).unwrap(), HOST).unwrap();
+        relay_claims::with_api(|api| relay_claims::ensure_claim(&d, api)).unwrap();
+        let list = handle("/cli/app/domains", &me, b"", &HashMap::from([("app".to_string(), "agentnsi".to_string())])).unwrap();
+        let c = &list["custom"][0];
+        let recs = c["records"].as_array().unwrap();
+        assert_eq!(recs.len(), 2, "{c}");
+        assert_eq!(recs[1]["name"].as_str(), Some("_k2-domain.nsi.agentnsi.com"));
+        assert_eq!(recs[1]["value"].as_str(), Some("k2-verify=relay-picked-token-0123456789"));
+        assert_eq!(c["txt"]["value"].as_str(), Some("k2-verify=relay-picked-token-0123456789"));
+        assert!(c.get("txtPending").is_none(), "{c}");
+
+        flow::set_test_nat(None);
+        relay_claims::set_test_api(None);
+        relay_claims::set_test_pro(None);
+        relay_claims::set_test_ready(None);
+    }
+
     /// PB-3: removing a Path B name releases it at K2 Connect first, then the
     /// row goes. A control plane that doesn't answer never blocks the removal
     /// and says so; a name with no claim never calls it.
@@ -847,7 +964,7 @@ mod custom_tests {
             down: bool,
         }
         impl RelayApi for Cp {
-            fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+            fn claim(&self, _: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
                 panic!("no claim on rm")
             }
             fn http_redirect(&self, _: Option<&str>, _: bool) -> Result<(), CpError> {

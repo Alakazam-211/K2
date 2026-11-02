@@ -13797,10 +13797,14 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
                               k2 firewall says whether that list is applied.
 
   Path B, then:
-    1. k2 app domain add <app-id> shop.example.com prints (when Path B is
-       open to this box; k2 app domains <app-id> shows them again):
+    1. k2 app domain add <app-id> shop.example.com claims the name at K2
+       Connect and prints (when Path B is open to this box; k2 app domains
+       <app-id> shows them again):
          CNAME  shop.example.com              <app-id>.<box>.k2.dev
          TXT    _k2-domain.shop.example.com   "k2-verify=<token>"
+       K2 Connect picks that TXT value: set exactly what K2 prints. If the
+       claim doesn't go through yet, K2 prints the CNAME alone and says why;
+       it tries again, and prints the TXT once K2 Connect has given it.
        At an apex (example.com itself), which can't hold a CNAME: ALIAS,
        ANAME or CNAME flattening to <app-id>.<box>.k2.dev if your DNS host
        has it (Cloudflare, DNSimple, Route 53 alias...). If it has none, use

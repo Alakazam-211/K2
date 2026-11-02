@@ -12,7 +12,20 @@ fn every_control_plane_refusal_maps_to_plain_words() {
     let v = parse_reply(201, r#"{"hostname":"shop.example.com","status":"pending","httpRedirect":true}"#, HOST).unwrap();
     assert_eq!(answer(&v, HOST).unwrap().status, "pending", "a new claim");
     let v = parse_reply(200, r#"{"hostname":"shop.example.com","status":"verified"}"#, HOST).unwrap();
-    assert_eq!(answer(&v, HOST).unwrap(), ClaimAnswer { hostname: HOST.into(), status: "verified".into(), last_error: None });
+    assert_eq!(answer(&v, HOST).unwrap(), ClaimAnswer { hostname: HOST.into(), status: "verified".into(), verify_token: None, last_error: None });
+    // The token K2 Connect picked, with its own record.
+    let v = parse_reply(201, r#"{"hostname":"shop.example.com","status":"pending","verifyToken":"abcDEF_0123456789-x","txtName":"_k2-domain.shop.example.com","txtValue":"k2-verify=abcDEF_0123456789-x"}"#, HOST).unwrap();
+    assert_eq!(answer(&v, HOST).unwrap().verify_token.as_deref(), Some("abcDEF_0123456789-x"));
+    // A record that doesn't match its token, or a token K2 can't use: never shown.
+    for bad in [
+        r#"{"status":"pending","verifyToken":"abcDEF_0123456789-x","txtValue":"k2-verify=something-else-entirely"}"#,
+        r#"{"status":"pending","verifyToken":"abcDEF_0123456789-x","txtName":"_k2-domain.other.example.com"}"#,
+        r#"{"status":"pending","verifyToken":"short"}"#,
+        r#"{"status":"pending","verifyToken":"has spaces and a quote " in it"}"#,
+    ] {
+        let v = parse_reply(200, bad, HOST).unwrap();
+        assert!(matches!(answer(&v, HOST), Err(CpError::Unreachable(_))), "{bad}");
+    }
     for (status, body, code, want) in [
         (401, r#"{"error":"invalid_token","detail":"x"}"#, "invalid_token", "the owner re-pairs"),
         (400, r#"{"error":"capability_missing"}"#, "capability_missing", "the owner runs k2 update"),
@@ -20,8 +33,9 @@ fn every_control_plane_refusal_maps_to_plain_words() {
         (403, r#"{"error":"pro_required"}"#, "pro_required", UPGRADE_URL),
         (400, r#"{"error":"hostname_invalid","detail":"no dots"}"#, "hostname_invalid", "no dots"),
         (400, r#"{"error":"hostname_not_allowed","detail":"a public suffix"}"#, "hostname_not_allowed", "a public suffix"),
-        (400, r#"{"error":"bad_verify_token"}"#, "bad_verify_token", "add it again"),
-        (409, r#"{"error":"hostname_claimed_elsewhere","detail":"x is already verified by another K2 account"}"#, "hostname_claimed_elsewhere", "another K2 account"),
+        (400, r#"{"error":"verify_token_not_accepted"}"#, "verify_token_not_accepted", "a K2 bug"),
+        (400, r#"{"error":"bad_request","detail":"malformed body"}"#, "bad_request", "a K2 bug"),
+        (409, r#"{"error":"hostname_claimed_elsewhere","detail":"x is already verified by another K2 account"}"#, "hostname_claimed_elsewhere", "another K2 server or account"),
         (409, r#"{"error":"hostname_claimed_elsewhere","detail":"x is held by another box on your account ('b2'); release it there first"}"#, "hostname_claimed_elsewhere", "another box on your account"),
         (403, r#"{"error":"cap_reached","scope":"box","count":20,"limit":20}"#, "cap_reached", "this server already holds 20 of 20"),
         (403, r#"{"error":"cap_reached","scope":"account","count":100,"limit":100}"#, "cap_reached", "this K2 account already holds 100 of 100"),
@@ -38,7 +52,7 @@ fn every_control_plane_refusal_maps_to_plain_words() {
     }
     // These may go through later: nothing sticks to the name.
     for (status, body, want) in [
-        (429, r#"{"error":"rate_limited","count":5,"limit":5}"#, "5 new names an hour"),
+        (429, r#"{"error":"rate_limited","count":7,"limit":7}"#, "7 new names an hour"),
         (409, r#"{"error":"conflict"}"#, "same moment"),
         (502, r#"{"error":"supabase_error"}"#, "database"),
         (503, r#"{"error":"dns_unavailable"}"#, "look up"),
@@ -76,20 +90,13 @@ fn the_capability_is_customsni() {
     assert_eq!(CAPABILITY, "customSni");
 }
 
-/// `verifyToken` must be 16-128 of A-Za-z0-9_-: K2's own always is.
-#[test]
-fn k2s_verify_tokens_fit_the_control_planes_rule() {
-    let t = k2_core::domains::new_verify_token();
-    assert!((16..=128).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'), "{t}");
-}
-
 /// The relay's :80 switch: only when this box holds a name; its word for it
 /// reaches the owner.
 #[test]
 fn the_relay_redirect_switch_goes_to_the_control_plane_only_with_names() {
     struct Cp(std::cell::RefCell<Vec<String>>);
     impl RelayApi for Cp {
-        fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+        fn claim(&self, _: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
             panic!("no claim")
         }
         fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {

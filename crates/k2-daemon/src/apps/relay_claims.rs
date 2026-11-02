@@ -7,7 +7,7 @@
 //! `requested ∩ verified(label)`. The box asks with its tunnel token:
 //!
 //! ```text
-//! POST {base}/api/custom-hostnames               {hostname, verifyToken, capabilities:["customSni"], httpRedirect}
+//! POST {base}/api/custom-hostnames               {hostname, capabilities:["customSni"], httpRedirect?}
 //! POST {base}/api/custom-hostnames/verify        {hostname}
 //! POST {base}/api/custom-hostnames/release       {hostname}
 //! POST {base}/api/custom-hostnames/http-redirect {hostname?, enabled}   the relay's :80 (no hostname: all of them)
@@ -17,9 +17,17 @@
 //! `{base}` is K2 Connect's control plane (`K2_CUSTOM_HOSTNAMES_BASE`, else
 //! `K2_CONNECT_BASE`, else `https://connect.k2.dev`); k2-connect's
 //! `control-plane/src/custom_hostnames.rs`. Answers carry `{hostname, status:
-//! pending|verified|failing|released, lastError?, …}` (one, or `{names:[…],
-//! counts, limits}` for the list; a new claim is 201, repeating a held one
-//! 200); refusals `{error: <code>, detail, scope?, count?, limit?}`. It does
+//! pending|verified|failing|released, verifyToken, txtName, txtValue,
+//! httpRedirect, lastError?, …}` (one, or `{names:[…], counts, limits}` for
+//! the list; a new claim is 201, repeating a held one 200); refusals `{error:
+//! <code>, detail, scope?, count?, limit?}`.
+//!
+//! **K2 Connect picks the TXT proof, never the box** (K2 Web's review: a
+//! box-chosen token let a stranger who could plant a TXT take a name over).
+//! So the box claims FIRST, stores the token the answer gives
+//! (`domains::set_relay_claim`) and shows that as the record to set. Until a
+//! claim succeeds there is no TXT value to show (`txt_pending_words`): the CNAME
+//! is shown alone and K2 tries again. It does
 //! the authoritative TXT check through public resolvers (never the box's
 //! word), uniqueness, the deny list, the Pro gate, the caps (20 held names per
 //! box, 100 per account; held = pending, verified or failing) and 5 new claims
@@ -51,6 +59,8 @@ pub struct ClaimAnswer {
     pub hostname: String,
     /// `pending` | `verified` | `failing` | `released`.
     pub status: String,
+    /// The proof token K2 Connect picked (`verifyToken`).
+    pub verify_token: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -68,7 +78,9 @@ pub enum CpError {
 
 /// The four calls (production: [`LiveApi`]; tests: a fake).
 pub trait RelayApi {
-    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError>;
+    /// `http_redirect`: `None` leaves it out (a held name keeps its switch, a
+    /// new one starts on).
+    fn claim(&self, hostname: &str, http_redirect: Option<bool>) -> Result<ClaimAnswer, CpError>;
     fn verify(&self, hostname: &str) -> Result<ClaimAnswer, CpError>;
     fn release(&self, hostname: &str) -> Result<(), CpError>;
     fn list(&self) -> Result<Vec<ClaimAnswer>, CpError>;
@@ -129,12 +141,18 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             )
         }
         "hostname_claimed_elsewhere" => match detail {
-            // k2-connect names the case: another box of this account, or another account.
+            // k2-connect names the case: another box of this account, or not.
             Some(d) if d.contains("your account") => format!("{d}. K2 never takes a name over"),
             _ => format!(
-                "{hostname} is already verified for another K2 account. Its owner removes it there first; K2 never takes over another account's name"
+                "{hostname} is already verified for another K2 server or account. Whoever holds it removes it there first; K2 never takes a name over"
             ),
         },
+        "verify_token_not_accepted" => {
+            "K2 Connect refused this request because it carried a proof token, which it now picks itself: this is a K2 bug. Update K2 on this server (the owner runs k2 update) and report it".to_string()
+        }
+        "bad_request" => {
+            format!("K2 Connect couldn't read K2's request{d}: this is a K2 bug. Update K2 on this server (the owner runs k2 update) and report it")
+        }
         "capability_missing" => {
             "K2 Connect says this K2 can't serve custom names yet: update K2 on this server (the owner runs k2 update), then try again".to_string()
         }
@@ -150,17 +168,19 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
         "hostname_not_allowed" => format!(
             "K2 Connect won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
         ),
-        "bad_verify_token" => format!(
-            "K2 Connect refused this name's proof token (16 to 128 letters, digits, _ or -): remove the name and add it again to get a new one: k2 app domain rm <app-id> {hostname}, then k2 app domain add <app-id> {hostname}"
+        "not_claimed" => format!(
+            "K2 Connect has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); K2 claims it again at the next check, and the TXT value may change"
         ),
-        "not_claimed" => format!("K2 Connect has no claim on {hostname} from this server; K2 claims it again at the next check"),
         "verification_failed" => format!(
             "K2 Connect can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; K2 tries again"
         ),
         "txt_missing" | "not_verified" | "pending" => format!(
             "K2 Connect can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
         ),
-        "rate_limited" => "K2 Connect takes 5 new names an hour per account and this account is over that now: K2 tries again later".to_string(),
+        "rate_limited" => {
+            let limit = v.get("limit").and_then(J::as_u64).unwrap_or(5);
+            format!("K2 Connect takes {limit} new names an hour per account and this account is over that now: K2 tries again later")
+        }
         "conflict" => format!("another change to {hostname} reached K2 Connect at the same moment: K2 tries again"),
         "supabase_error" => "K2 Connect's database didn't answer: K2 tries again".to_string(),
         "dns_unavailable" => "K2 Connect couldn't look up the TXT record right now: K2 tries again".to_string(),
@@ -171,14 +191,31 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
     }
 }
 
+/// 16 to 128 of `A-Za-z0-9_-`, what the control plane issues.
+fn valid_token(t: &str) -> bool {
+    (16..=128).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 /// Parse one answer object.
 fn answer(v: &J, hostname: &str) -> Result<ClaimAnswer, CpError> {
     let status = v.get("status").and_then(J::as_str).map(str::to_ascii_lowercase).ok_or_else(|| {
         CpError::Unreachable(format!("K2 Connect's answer for {hostname} has no status"))
     })?;
+    let host = v.get("hostname").and_then(J::as_str).unwrap_or(hostname).to_ascii_lowercase();
+    let verify_token = v.get("verifyToken").and_then(J::as_str).map(str::to_string);
+    // What K2 shows is what K2 Connect checks: a token that doesn't make its
+    // own record is never stored or shown.
+    if let Some(t) = &verify_token {
+        let name_ok = v.get("txtName").and_then(J::as_str).is_none_or(|n| n.eq_ignore_ascii_case(&k2_core::domains::verify_txt_name(&host)));
+        let value_ok = v.get("txtValue").and_then(J::as_str).is_none_or(|x| x == k2_core::domains::verify_txt_value(t));
+        if !valid_token(t) || !name_ok || !value_ok {
+            return Err(CpError::Unreachable(format!("K2 Connect's TXT record for {host} isn't one K2 can use")));
+        }
+    }
     Ok(ClaimAnswer {
-        hostname: v.get("hostname").and_then(J::as_str).unwrap_or(hostname).to_ascii_lowercase(),
+        hostname: host,
         status,
+        verify_token,
         last_error: v.get("lastError").and_then(J::as_str).map(str::to_string),
     })
 }
@@ -239,13 +276,11 @@ impl LiveApi {
 }
 
 impl RelayApi for LiveApi {
-    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError> {
-        let body = json!({
-            "hostname": host_arg(hostname),
-            "verifyToken": verify_token,
-            "capabilities": [CAPABILITY],
-            "httpRedirect": http_redirect,
-        });
+    fn claim(&self, hostname: &str, http_redirect: Option<bool>) -> Result<ClaimAnswer, CpError> {
+        let mut body = json!({ "hostname": host_arg(hostname), "capabilities": [CAPABILITY] });
+        if let Some(on) = http_redirect {
+            body["httpRedirect"] = json!(on);
+        }
         let v = self.call("POST", &endpoint(), Some(body), hostname)?;
         answer(&v, hostname)
     }
@@ -307,7 +342,7 @@ pub fn with_api<T>(f: impl FnOnce(&dyn RelayApi) -> T) -> T {
     {
         struct Down;
         impl RelayApi for Down {
-            fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+            fn claim(&self, _: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
                 Err(CpError::Unreachable("no control plane in tests".into()))
             }
             fn http_redirect(&self, _: Option<&str>, _: bool) -> Result<(), CpError> {
@@ -411,6 +446,18 @@ fn record(host: &str, state: Option<&str>, err: Option<&str>) {
     let _ = k2_core::domains::set_relay_state(&conn, host, state, err, chrono::Utc::now().timestamp());
 }
 
+/// A claim K2 Connect answered: its state and, when it gave one, its token.
+fn record_answer(host: &str, state: &str, token: Option<&str>, err: Option<&str>) {
+    match token {
+        Some(t) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = k2_core::domains::set_relay_claim(&conn, host, state, t, err, chrono::Utc::now().timestamp());
+        }
+        None => record(host, Some(state), err),
+    }
+}
+
 fn claims_held() -> usize {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -438,8 +485,58 @@ pub fn precheck(d: &AppDomain) -> Result<(), (String, String)> {
     Ok(())
 }
 
-/// Bring `d`'s claim to verified if it can (its TXT and DNS already pass on
-/// the box). Records the claim on the row.
+/// Words for a name K2 Connect hasn't accepted a claim on yet: there is no
+/// TXT value to show until it does, because K2 Connect picks it.
+pub fn txt_pending_words(d: &AppDomain) -> String {
+    let why = d.relay_error.as_deref().map(|e| format!(" ({e})")).unwrap_or_default();
+    format!(
+        "No TXT record to set yet: K2 Connect gives the value once it accepts the claim{why}. K2 tries again every 10 minutes; \
+         k2 app domain check {} {} tries now. The CNAME or ALIAS can be set already.",
+        d.app, d.hostname
+    )
+}
+
+/// Make sure this box holds a claim on `d` (K2 Connect's answer carries the
+/// TXT token to publish). `Err`: no claim, in plain words; the row keeps any
+/// reason for `txt_pending_words`. Nothing sent while the box's own checks
+/// say no (PB-4).
+pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
+    let host = d.hostname.as_str();
+    if d.holds_relay_claim() {
+        return Ok(());
+    }
+    precheck(d).map_err(|(_, words)| words)?;
+    // The relay's :80 follows the owner's switch (`k2 front http`); left out
+    // while the owner never touched it.
+    match api.claim(host, k2_core::front443::load().http) {
+        Ok(a) => {
+            let Some(token) = a.verify_token.as_deref() else {
+                let w = format!("K2 Connect's answer for {host} carries no TXT value; K2 tries again");
+                record(host, d.relay_state.as_deref(), Some(&w));
+                return Err(w);
+            };
+            let state = if a.status == "verified" || a.status == "failing" { RELAY_VERIFIED } else { RELAY_CLAIMED };
+            record_answer(host, state, Some(token), a.last_error.as_deref());
+            Ok(())
+        }
+        Err(CpError::Refused { words, .. }) => {
+            record(host, Some(k2_core::domains::RELAY_REFUSED), Some(&words));
+            Err(words)
+        }
+        Err(CpError::Retry(w)) => {
+            record(host, d.relay_state.as_deref(), Some(&w));
+            Err(w)
+        }
+        Err(CpError::Unreachable(w)) => {
+            let w = format!("K2 Connect didn't answer ({w}); K2 tries again");
+            record(host, d.relay_state.as_deref(), Some(&w));
+            Err(w)
+        }
+    }
+}
+
+/// Bring `d`'s claim to verified if it can (the claim's TXT and DNS already
+/// pass on the box; [`ensure_claim`] came first). Records it on the row.
 pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
     let host = d.hostname.as_str();
     if d.relay_state.as_deref() == Some(RELAY_VERIFIED) {
@@ -449,25 +546,9 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
         // Box-side: nothing was sent; the row keeps any earlier claim.
         return Step::Refused { code, words };
     }
-    // The relay's :80 follows the owner's switch (`k2 front http`).
-    let redirect = k2_core::front443::load().http_on();
-    let claim_then_verify = || match api.claim(host, &d.verify_token, redirect) {
-        Ok(a) if a.status == "verified" || a.status == "failing" => Ok(a),
-        Ok(_) => api.verify(host),
-        Err(e) => Err(e),
-    };
-    let claimed = if d.relay_state.as_deref() == Some(RELAY_CLAIMED) {
-        match api.verify(host) {
-            // K2 Connect dropped an old claim (7 days unverified): claim again.
-            Err(CpError::Refused { code, .. }) if code == "not_claimed" => claim_then_verify(),
-            other => other,
-        }
-    } else {
-        claim_then_verify()
-    };
-    match claimed {
+    match api.verify(host) {
         Ok(a) if a.status == "verified" || a.status == "failing" => {
-            record(host, Some(RELAY_VERIFIED), a.last_error.as_deref());
+            record_answer(host, RELAY_VERIFIED, a.verify_token.as_deref(), a.last_error.as_deref());
             Step::Verified
         }
         Ok(a) if a.status == "released" => {
@@ -476,13 +557,20 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
             Step::Refused { code: "released".into(), words: w }
         }
         Ok(a) => {
-            let w = a.last_error.unwrap_or_else(|| words_for("pending", host, &J::Null));
-            record(host, Some(RELAY_CLAIMED), Some(&w));
+            let w = a.last_error.clone().unwrap_or_else(|| words_for("pending", host, &J::Null));
+            record_answer(host, RELAY_CLAIMED, a.verify_token.as_deref(), Some(&w));
             Step::Waiting(w)
         }
         // Claimed; its own TXT check hasn't passed yet.
         Err(CpError::Refused { code, words }) if code == "verification_failed" => {
             record(host, Some(RELAY_CLAIMED), Some(&words));
+            Step::Waiting(words)
+        }
+        // It no longer holds this box's claim (dropped after 7 days
+        // unverified, or the label changed hands): the next check claims
+        // again, and K2 shows the token that answer gives.
+        Err(CpError::Refused { code, words }) if code == "not_claimed" => {
+            record(host, None, Some(&words));
             Step::Waiting(words)
         }
         Err(CpError::Refused { code, words }) => {
@@ -523,7 +611,17 @@ pub fn sync(api: &dyn RelayApi) -> Result<Vec<String>, String> {
     };
     let mut released = Vec::new();
     for d in rows.iter().filter(|d| d.holds_relay_claim()) {
-        let Some(a) = listed.iter().find(|a| a.hostname.eq_ignore_ascii_case(&d.hostname)) else { continue };
+        // Only rows of this label's current owner are listed: a name this box
+        // thinks it holds and K2 Connect doesn't list is no longer its own.
+        let Some(a) = listed.iter().find(|a| a.hostname.eq_ignore_ascii_case(&d.hostname)) else {
+            let w = "K2 Connect released it: it no longer lists this name for this server";
+            record(&d.hostname, Some(RELAY_RELEASED), Some(w));
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = k2_core::domains::set_app_state(&conn, &d.hostname, k2_core::domains::STATE_FAILING, Some(w));
+            released.push(d.hostname.clone());
+            continue;
+        };
         match a.status.as_str() {
             "released" => {
                 let w = format!(

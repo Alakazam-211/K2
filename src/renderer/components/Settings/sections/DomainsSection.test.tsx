@@ -366,6 +366,18 @@ describe('DomainsSection — custom App names through K2 Connect', () => {
     expect(screen.getByTestId('app-record-A').textContent).toContain('203.0.113.10')
   })
 
+  it('before a claim succeeds, the CNAME shows alone and says why there is no TXT', async () => {
+    listRows = [row({
+      recordsPath: 'connect',
+      records: [{ type: 'CNAME', name: 'nsi.agentnsi.com', value: 'agentnsi.box.k2.dev' }],
+      txtPending: 'No TXT record to set yet: K2 Connect gives the value once it accepts the claim.',
+      pathB: pathB({}),
+    })]
+    render(<DomainsSection />)
+    expect((await screen.findByTestId('app-txt-pending-nsi.agentnsi.com')).textContent).toContain('No TXT record to set yet')
+    expect(screen.queryByTestId('app-record-TXT')).toBeNull()
+  })
+
   it('a live name K2 Connect routes keeps its badge', async () => {
     listRows = [row({ state: 'live', live: true, notServedYet: false, viaRelay: true, recordsPath: 'connect' })]
     render(<DomainsSection />)

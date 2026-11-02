@@ -71,7 +71,7 @@ fn the_http_switch_goes_to_the_relay_for_path_b_names() {
     use crate::apps::relay_claims::{self, ClaimAnswer, CpError, RelayApi};
     struct Cp(std::cell::RefCell<Vec<String>>, bool);
     impl RelayApi for Cp {
-        fn claim(&self, _: &str, _: &str, _: bool) -> Result<ClaimAnswer, CpError> {
+        fn claim(&self, _: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
             panic!("no claim")
         }
         fn verify(&self, _: &str) -> Result<ClaimAnswer, CpError> {

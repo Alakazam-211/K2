@@ -340,6 +340,29 @@ pub fn set_relay_state(
     Ok(n > 0)
 }
 
+/// Record a claim K2 Connect answered, with the proof token it picked (K2
+/// Connect picks it, never the box: a box-chosen token would let anyone who
+/// planted a TXT take a name over). From here `AppDomain::txt` is what its
+/// TXT check needs, on both paths: a name still moves between them by DNS.
+pub fn set_relay_claim(
+    conn: &Connection,
+    hostname: &str,
+    state: &str,
+    token: &str,
+    error: Option<&str>,
+    at: i64,
+) -> rusqlite::Result<bool> {
+    if !RELAY_STATES.contains(&state) {
+        return Err(rusqlite::Error::InvalidParameterName(format!("unknown relay state '{state}'")));
+    }
+    let n = conn.execute(
+        "UPDATE domain_names SET relay_state = ?2, verify_token = ?3, relay_error = ?4, relay_checked_at = ?5 \
+         WHERE hostname = ?1 AND role LIKE 'app:%'",
+        params![hostname, state, token, error, at],
+    )?;
+    Ok(n > 0)
+}
+
 /// How many names hold a place in this box's Path B cap (claimed or
 /// verified at the control plane).
 pub fn relay_claims(conn: &Connection) -> rusqlite::Result<usize> {
@@ -702,6 +725,9 @@ pub fn upsert_name(conn: &Connection, hostname: &str, apex: &str, role: &str) ->
                is_primary = CASE WHEN {SAME} THEN domain_names.is_primary ELSE 0 END, \
                last_error = CASE WHEN {SAME} THEN domain_names.last_error END, \
                failing_since = CASE WHEN {SAME} THEN domain_names.failing_since END, \
+               relay_state = CASE WHEN {SAME} THEN domain_names.relay_state END, \
+               relay_error = CASE WHEN {SAME} THEN domain_names.relay_error END, \
+               relay_checked_at = CASE WHEN {SAME} THEN domain_names.relay_checked_at END, \
                apex = excluded.apex, role = excluded.role"
         ),
         params![hostname, apex, role, state, token],

@@ -30,6 +30,8 @@ export type AppNameStatus = {
   /** The DNS to set, for the path in `recordsPath`. */
   records?: { type: string; name: string; value: string; note?: string }[]
   recordsPath?: 'direct' | 'connect'
+  /** Path B before K2 Connect accepted a claim: it picks the TXT value. */
+  txtPending?: string
   pathB?: {
     available: boolean
     why?: string | null
@@ -578,6 +580,11 @@ export function DomainsSection(): React.JSX.Element {
                             TXT {n.app.txt.name} &quot;{n.app.txt.value}&quot; (DNS-only)
                           </span>
                         ) : null}
+                        {n.app.txtPending && (
+                          <span className="block" data-testid={`app-txt-pending-${n.hostname}`}>
+                            {n.app.txtPending}
+                          </span>
+                        )}
                         {n.app.pathB?.available && (
                           <span className="block" data-testid={`app-path-b-meter-${n.hostname}`}>
                             {n.app.pathB.meter}

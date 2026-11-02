@@ -401,8 +401,11 @@ struct FakeCp {
     calls: RefCell<Vec<String>>,
 }
 
+/// The proof token the control plane picks in these tests.
+const PICKED: &str = "relay-picked-token-0123456789";
+
 fn answer(status: &str) -> ClaimAnswer {
-    ClaimAnswer { hostname: HOST.into(), status: status.into(), last_error: None }
+    ClaimAnswer { hostname: HOST.into(), status: status.into(), verify_token: Some(PICKED.into()), last_error: None }
 }
 
 impl RelayApi for FakeCp {
@@ -410,8 +413,8 @@ impl RelayApi for FakeCp {
         self.calls.borrow_mut().push(format!("http-redirect {hostname:?} {enabled}"));
         Ok(())
     }
-    fn claim(&self, hostname: &str, verify_token: &str, http_redirect: bool) -> Result<ClaimAnswer, CpError> {
-        self.calls.borrow_mut().push(format!("claim {hostname} {verify_token} {http_redirect}"));
+    fn claim(&self, hostname: &str, http_redirect: Option<bool>) -> Result<ClaimAnswer, CpError> {
+        self.calls.borrow_mut().push(format!("claim {hostname} {http_redirect:?}"));
         self.claim.borrow().clone().unwrap_or_else(|| Ok(answer("pending")))
     }
     fn verify(&self, hostname: &str) -> Result<ClaimAnswer, CpError> {
@@ -449,10 +452,10 @@ fn path_b_box() -> (Rc<FakeCp>, Seams) {
     (cp, Seams)
 }
 
-/// DNS: a CNAME to this App's name on this box. The box's label comes from
-/// tunnel.json, so the test names it.
-fn cname_here(d: &AppDomain) -> Fake {
-    let mut f = Fake::new(proof(d), &["192.0.2.50"]);
+/// DNS: a CNAME to this App's name on this box, and the TXT K2 Connect
+/// picked. The box's label comes from tunnel.json, so the test names it.
+fn cname_here(_: &AppDomain) -> Fake {
+    let mut f = Fake::new(vec![format!("k2-verify={PICKED}")], &["192.0.2.50"]);
     f.cname = Some(format!("agentnsi.{}.k2.dev", label()));
     f
 }
@@ -523,7 +526,8 @@ fn the_dns_check_recognises_path_b() {
 #[test]
 fn path_b_records_are_a_cname_or_alias_and_never_a_relay_address() {
     let _db = k2_core::db::scoped_for_test();
-    let d = setup();
+    let mut d = setup();
+    d.relay_state = Some(domains::RELAY_CLAIMED.into());
     let r = records_connect(&d, "nsi");
     assert_eq!(r.len(), 2);
     assert_eq!((r[0]["type"].as_str(), r[0]["name"].as_str(), r[0]["value"].as_str()), (Some("CNAME"), Some(HOST), Some("agentnsi.nsi.k2.dev")));
@@ -572,7 +576,12 @@ fn a_verified_claim_issues_and_the_tunnel_carries_the_name() {
     assert_eq!(r.relay_state.as_deref(), Some(domains::RELAY_VERIFIED));
     assert!(r.via_relay());
     assert_eq!(*orders.borrow(), vec![HOST.to_string()]);
-    assert_eq!(*cp.calls.borrow(), vec![format!("claim {HOST} {} true", d.verify_token), format!("verify {HOST}")]);
+    // The claim comes first and carries no token; the row now holds K2
+    // Connect's, and the box's own is gone.
+    assert_eq!(*cp.calls.borrow(), vec![format!("claim {HOST} None"), format!("verify {HOST}")]);
+    assert_eq!(r.verify_token, PICKED);
+    assert_ne!(d.verify_token, PICKED);
+    assert_eq!(r.txt(), (format!("_k2-domain.{HOST}"), format!("k2-verify={PICKED}")));
     assert!(crate::domains::acme::app_name_via_relay(HOST));
     let rl = crate::apps::custom_names::reload();
     assert_eq!(rl.tunnel, vec![HOST.to_string()], "issuing names ride the custom proxy");
@@ -595,6 +604,51 @@ fn a_verified_claim_issues_and_the_tunnel_carries_the_name() {
     let _ = k2_core::tunnel::custom_names::set(Vec::new());
 }
 
+/// K2 Web's review: a TXT carrying the box's own old token proves nothing. K2
+/// claims, learns K2 Connect's value, and waits for that one; never verifies.
+#[test]
+fn the_boxs_own_token_is_not_the_proof_on_path_b() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let d = setup();
+    set_box_label("nsi");
+    let (cp, _s) = path_b_box();
+    let mut f = Fake::new(proof(&d), &["192.0.2.50"]);
+    f.cname = Some("agentnsi.nsi.k2.dev".into());
+    let (r, o) = check_with(HOST, &f, &|h| panic!("no order for {h}")).unwrap();
+    assert!(!o.ok && !o.txt_ok, "{o:?}");
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_WAITING_DNS, Some(domains::RELAY_CLAIMED)));
+    assert!(r.last_error.as_deref().unwrap().contains(&format!("k2-verify={PICKED}")), "{:?}", r.last_error);
+    assert_eq!(*cp.calls.borrow(), vec![format!("claim {HOST} None")], "no verify before the TXT shows");
+    // No claim yet: the CNAME alone, and a claim that fails says why.
+    let bare = {
+        let mut b = d.clone();
+        b.relay_state = None;
+        b
+    };
+    assert_eq!(records_connect(&bare, "nsi").len(), 1);
+    let mut held = d.clone();
+    held.relay_state = Some(domains::RELAY_CLAIMED.into());
+    held.verify_token = PICKED.into();
+    assert_eq!(records_connect(&held, "nsi")[1]["value"], format!("k2-verify={PICKED}"));
+}
+
+/// The owner turned the :80 redirect off: the claim says so; otherwise it is
+/// left out (a held name keeps its switch, a new one starts on).
+#[test]
+fn the_claim_sends_http_redirect_only_when_the_owner_chose() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let d = setup();
+    set_box_label("nsi");
+    let (cp, _s) = path_b_box();
+    let mut cfg = k2_core::front443::load();
+    cfg.http = Some(false);
+    k2_core::front443::save(&cfg).unwrap();
+    let _ = check_with(HOST, &cname_here(&d), &|_| {}).unwrap();
+    assert_eq!(cp.calls.borrow()[0], format!("claim {HOST} Some(false)"));
+}
+
 /// PRD test 5: each refusal maps to words and a state; pending waits.
 #[test]
 fn control_plane_refusals_are_plain_words_and_never_issue() {
@@ -607,7 +661,7 @@ fn control_plane_refusals_are_plain_words_and_never_issue() {
     for (code, want) in [
         ("pro_required", "isn't Pro"),
         ("cap_reached", "already holds"),
-        ("hostname_claimed_elsewhere", "another K2 account"),
+        ("hostname_claimed_elsewhere", "another K2 server or account"),
         ("capability_missing", "update K2"),
     ] {
         *cp.claim.borrow_mut() = Some(Err(CpError::Refused { code: code.into(), words: relay_claims::words_for(code, HOST, &J::Null) }));
@@ -636,16 +690,17 @@ fn control_plane_refusals_are_plain_words_and_never_issue() {
     let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
     assert_eq!(r.relay_state.as_deref(), Some(domains::RELAY_CLAIMED));
     assert!(r.last_error.as_deref().unwrap().contains("5 new names an hour"), "{:?}", r.last_error);
-    // It dropped the old claim: K2 claims again.
-    *cp.verify.borrow_mut() = Some(Err(CpError::Refused { code: "not_claimed".into(), words: "x".into() }));
+    // It dropped the old claim: this box holds none now, and the next check
+    // claims again.
+    *cp.verify.borrow_mut() = Some(Err(CpError::Refused { code: "not_claimed".into(), words: "no claim".into() }));
+    let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
+    assert_eq!(r.relay_state, None);
+    assert_eq!(r.relay_error.as_deref(), Some("no claim"));
     cp.calls.borrow_mut().clear();
-    let _ = check_with(HOST, &cname_here(&d), &no_order).unwrap();
-    assert!(cp.calls.borrow().iter().any(|c| c.starts_with("claim ")), "{:?}", cp.calls.borrow());
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        domains::set_relay_state(&conn, HOST, Some(domains::RELAY_CLAIMED), None, 1).unwrap();
-    }
+    *cp.verify.borrow_mut() = Some(Ok(answer("pending")));
+    let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
+    assert_eq!(cp.calls.borrow()[0], format!("claim {HOST} None"));
+    assert_eq!(r.relay_state.as_deref(), Some(domains::RELAY_CLAIMED));
     // No answer at all: says so, tries again, no state change at the plane.
     *cp.verify.borrow_mut() = Some(Err(CpError::Unreachable("HTTP 502".into())));
     let (r, _) = check_with(HOST, &cname_here(&d), &no_order).unwrap();
@@ -726,13 +781,27 @@ fn the_control_plane_decides_a_relayed_names_fate() {
     assert_eq!(relay_claims::with_api(relay_claims::sync), Ok(vec![]));
     assert_eq!(row().state, STATE_LIVE);
     // The list says released: failing, wins over everything, off the tunnel.
-    *cp.list.borrow_mut() = vec![ClaimAnswer { hostname: HOST.into(), status: "released".into(), last_error: Some("TXT gone for 7 days".into()) }];
+    *cp.list.borrow_mut() = vec![ClaimAnswer { hostname: HOST.into(), status: "released".into(), verify_token: Some(PICKED.into()), last_error: Some("TXT gone for 7 days".into()) }];
     assert_eq!(relay_claims::with_api(relay_claims::sync), Ok(vec![HOST.to_string()]));
     let r = row();
     assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_FAILING, Some(domains::RELAY_RELEASED)));
     assert!(r.last_error.as_deref().unwrap().contains("K2 Connect released it: TXT gone for 7 days"), "{:?}", r.last_error);
     assert!(!r.via_relay());
     assert!(crate::apps::custom_names::reload().tunnel.is_empty());
+
+    // Only rows of the label's current owner are listed: a name it no longer
+    // lists is no longer this box's.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        domains::set_relay_state(&conn, HOST, Some(domains::RELAY_VERIFIED), None, 1).unwrap();
+        domains::set_app_state(&conn, HOST, STATE_LIVE, None).unwrap();
+    }
+    cp.list.borrow_mut().clear();
+    assert_eq!(relay_claims::with_api(relay_claims::sync), Ok(vec![HOST.to_string()]));
+    let r = row();
+    assert_eq!((r.state.as_str(), r.relay_state.as_deref()), (STATE_FAILING, Some(domains::RELAY_RELEASED)));
+    assert!(r.last_error.as_deref().unwrap().contains("no longer lists"), "{:?}", r.last_error);
 
     // Fixed: a fresh claim brings it back.
     let (r, o) = check_with(HOST, &cname_here(&row()), &|_| {}).unwrap();

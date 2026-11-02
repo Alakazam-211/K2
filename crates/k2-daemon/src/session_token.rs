@@ -1171,6 +1171,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // names its own Apps' users (the door and `agent_scoped`).
         "/cli/skin/users/full-name",
         "/cli/skin/users/rooms",
+        // 0.46.8: its own Apps' guests' sessions: read and end (only tightens).
+        "/cli/skin/users/sessions",
+        "/cli/skin/users/sessions/revoke",
         "/cli/skin/roles",
         "/cli/skin/roles/update",
         "/cli/skin/roles/remove",

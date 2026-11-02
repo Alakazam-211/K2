@@ -11167,6 +11167,37 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // 0.46.8: a person's sessions in one App, for the owner and for an
+        // App's own agent ("Let this agent manage its Apps' users"; the
+        // handler holds it to its own App's guests).
+        crate::app_profile_routes::USER_SESSIONS => {
+            let _ = stream.read(&mut buf).await;
+            let r = match owner_or_skin_manage_hook_scoped(crate::app_profile_routes::USER_SESSIONS, &query, bearer_token.as_deref(), state.token.as_str()) {
+                Ok((_, agent_ws)) => {
+                    let params = super::http::parse_params(&path, &query);
+                    tokio::task::spawn_blocking(move || crate::app_profile_routes::handle_user_sessions(agent_ws.as_deref(), &params))
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                Err(f) => f,
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        crate::app_profile_routes::USER_SESSIONS_REVOKE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = match owner_or_skin_manage_hook_scoped(crate::app_profile_routes::USER_SESSIONS_REVOKE, &query, bearer_token.as_deref(), state.token.as_str()) {
+                Ok((actor, agent_ws)) => tokio::task::spawn_blocking(move || {
+                    crate::app_profile_routes::handle_user_sessions_revoke(agent_ws.as_deref(), &body, &actor)
+                })
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e)),
+                Err(f) => f,
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p == crate::app_profile_routes::OWNER_IMAGE_CLEAR || p == crate::app_profile_routes::OWNER_SESSIONS_REVOKE => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;

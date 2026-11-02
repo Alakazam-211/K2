@@ -1796,6 +1796,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/users/remove", Owner),
     post("/cli/skin/users/reset-link", Admin),
     post("/cli/skin/users/rooms", Owner),
+    // 0.46.8: `k2 app user sessions`; an App's own agent too (its own gate).
+    get("/cli/skin/users/sessions", Owner),
+    post("/cli/skin/users/sessions/revoke", Owner),
     post("/cli/skin/users/unlock", Admin),
     // App users' personal wallets (0.46.3): an App user's OWN session
     // pass only (`person_pass_required` for anything else); no Connect

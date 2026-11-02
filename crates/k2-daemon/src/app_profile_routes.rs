@@ -25,6 +25,10 @@
 //! - `GET /cli/skin/access/profile?app=&user=[&image=1]`;
 //! - `POST /cli/skin/access/profile/image/clear {user}`;
 //! - `POST /cli/skin/access/sessions/revoke {app, user, id | all}`;
+//! - `GET /cli/skin/users/sessions?app=&user=` and `POST
+//!   /cli/skin/users/sessions/revoke {app, user, id | all}` (0.46.8): the same
+//!   list and revoke, open to an App's own agent for that App's own guests:
+//!   revoking only tightens. Never a box login.
 //! - `GET /cli/app/profile-settings?app=`, `POST /cli/app/profile-settings
 //!   {app, editNames?, editImage?}`: the owner, or the App's own agent
 //!   with "manage its Apps' users" on, lower only, never `host` (U16).
@@ -47,6 +51,11 @@ pub const SESSIONS_REVOKE_OTHERS: &str = "/cli/skin/sessions/revoke-others";
 pub const OWNER_PROFILE: &str = "/cli/skin/access/profile";
 pub const OWNER_IMAGE_CLEAR: &str = "/cli/skin/access/profile/image/clear";
 pub const OWNER_SESSIONS_REVOKE: &str = "/cli/skin/access/sessions/revoke";
+/// 0.46.8: `k2 app user sessions`, for the owner and for an App's own agent
+/// with "Let this agent manage its Apps' users" (an App-user route, so that
+/// switch gates it).
+pub const USER_SESSIONS: &str = "/cli/skin/users/sessions";
+pub const USER_SESSIONS_REVOKE: &str = "/cli/skin/users/sessions/revoke";
 pub const SETTINGS: &str = "/cli/app/profile-settings";
 
 /// The person's own routes (the dispatcher resolves the pass).
@@ -605,6 +614,83 @@ pub fn handle_owner_image_clear(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// May an agent of `ws` see and end `p`'s sessions on `app`? Only an App of
+/// its workspace, only someone with a login on that App, never a box login.
+/// Someone else's person is the same `not_found` as nobody.
+fn agent_may_end_sessions(ws: &str, app: &str, p: &SkinPrincipal) -> Result<(), CliResponse> {
+    if app == skin::HOST_APP_ID || !app_of_workspace(app, ws) {
+        return Err(refusal(
+            "403 Forbidden",
+            "owner_only",
+            "that isn't an App of your workspace: only the owner ends sessions there (ask your human)",
+        ));
+    }
+    let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
+    if !grants.iter().any(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == app) {
+        return Err(refusal("404 Not Found", "not_found", "no such App user on that App"));
+    }
+    if crate::skin_routes::has_box_login(&p.id, &grants) {
+        return Err(crate::skin_routes::box_login_refused(&p.username));
+    }
+    Ok(())
+}
+
+/// `GET /cli/skin/users/sessions?app=&user=`: the person's browsers and
+/// devices in that App. `agent_ws`: the agent's workspace once the App-user
+/// gate passed (`None`: the owner).
+pub fn handle_user_sessions(agent_ws: Option<&str>, params: &HashMap<String, String>) -> CliResponse {
+    let app = match resolve_app(params.get("app").map(String::as_str)) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let Some(user) = params.get("user").or_else(|| params.get("username")).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return usage("name the person (user)");
+    };
+    let p = match principal_named(user) {
+        Ok(Some(p)) => p,
+        Ok(None) => return refusal("404 Not Found", "not_found", "no such App user"),
+        Err(r) => return r,
+    };
+    if let Some(ws) = agent_ws {
+        if let Err(r) = agent_may_end_sessions(ws, &app, &p) {
+            return r;
+        }
+    }
+    match profile::sessions_for(&p.id, &app, "") {
+        Ok(sessions) => CliResponse::ok_json(
+            json!({ "ok": true, "username": p.username, "app": app, "sessions": sessions.iter().map(session_json).collect::<Vec<_>>() }).to_string(),
+        ),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// `POST /cli/skin/users/sessions/revoke {app, user, id | all: true}`:
+/// [`handle_owner_sessions_revoke`] for the owner, and for an App's own agent
+/// on that App's own guests. The same revoke, so a person's Sew session ends
+/// the same way (`skin::enqueue_session_revokes`).
+pub fn handle_user_sessions_revoke(agent_ws: Option<&str>, body: &[u8], actor: &str) -> CliResponse {
+    if let Some(ws) = agent_ws {
+        let v = match json_body(body) {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        let app = match resolve_app(text(&v, &["app", "appId"])) {
+            Ok(a) => a,
+            Err(r) => return r,
+        };
+        let Some(user) = text(&v, &["user", "username"]) else { return usage("name the person (user)") };
+        let p = match principal_named(user) {
+            Ok(Some(p)) => p,
+            Ok(None) => return refusal("404 Not Found", "not_found", "no such App user"),
+            Err(r) => return r,
+        };
+        if let Err(r) = agent_may_end_sessions(ws, &app, &p) {
+            return r;
+        }
+    }
+    handle_owner_sessions_revoke(body, actor)
+}
+
 /// `POST /cli/skin/access/sessions/revoke {app, user, id | all: true}`
 /// (owner): one session (`id` from the owner's profile view) or every
 /// session and device sign-in of the person in that App.
@@ -637,7 +723,8 @@ pub fn handle_owner_sessions_revoke(body: &[u8], actor: &str) -> CliResponse {
             Err(e) => return CliResponse::internal_error(e),
         }
     };
-    audit("app_user_session_revoked", actor, &format!("{} app={app} ended={ended} by the owner", p.username));
+    let by = if crate::skin_routes::actor_is_agent(actor) { actor } else { "the owner" };
+    audit("app_user_session_revoked", actor, &format!("{} app={app} ended={ended} by {by}", p.username));
     CliResponse::ok_json(json!({ "ok": true, "username": p.username, "app": app, "ended": ended }).to_string())
 }
 

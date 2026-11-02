@@ -1032,8 +1032,10 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert_eq!(r.status, 200, "its own new guest, still empty: {}", r.body);
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
+    // 0.46.8: the role's room is outside what this App may hand out; the
+    // refusal names the App's guests-rooms grant.
     let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's role: {}", r.body);
+    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "another workspace's role: {}", r.body);
     assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None));
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [a.handle]})).await;
     assert_eq!(r.status, 200, "its own room: {}", r.body);
@@ -1248,15 +1250,15 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     let decoy_app = app_row(&a, "decoyappa");
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": decoy_app})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    for (path, body) in [
-        ("/cli/skin/roles/assign", json!({"username": "decoy-guest", "role": victim.id})),
-        ("/cli/skin/roles/update", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
-        ("/cli/skin/roles/room", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
-        ("/cli/skin/roles/paths", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),
-        ("/cli/skin/roles/remove", json!({"name": victim.id})),
+    for (path, want, body) in [
+        ("/cli/skin/roles/assign", "outside_app_rooms", json!({"username": "decoy-guest", "role": victim.id})),
+        ("/cli/skin/roles/update", "owner_only", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
+        ("/cli/skin/roles/room", "owner_only", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
+        ("/cli/skin/roles/paths", "owner_only", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),
+        ("/cli/skin/roles/remove", "owner_only", json!({"name": victim.id})),
     ] {
         let r = post(d.port, path, &agent, body).await;
-        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path}: {}", r.body);
+        assert_eq!((r.status, r.code()), (403, want.to_string()), "{path}: {}", r.body);
         assert!(r.body.contains("decoy-victim"), "the refusal names the real role: {path}: {}", r.body);
     }
     let after = k2_core::skin::find_role(&victim.id).unwrap().expect("the victim role");

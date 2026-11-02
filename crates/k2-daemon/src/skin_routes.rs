@@ -592,7 +592,7 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
                     let fits = role_in_workspace(&r, ws) || own_apps.iter().any(|a| role_within(&r, &app_rooms_of(ws, a)));
                     if !fits {
                         return Err(match own_apps.first() {
-                            Some(app) => outside_app_rooms(app, &role_rooms_outside(&r, &app_rooms_of(ws, app))),
+                            Some(app) => role_outside_app_rooms(&r, app, &role_rooms_outside(&r, &app_rooms_of(ws, app))),
                             None => outside_workspace(format!("role '{}' reaches outside your workspace", r.name)),
                         });
                     }
@@ -871,6 +871,19 @@ fn role_rooms_outside(r: &skin::SkinRole, allowed: &[String]) -> Vec<String> {
     out
 }
 
+/// [`outside_app_rooms`] for a role, naming it: which role was checked is
+/// part of the answer (a role named like another's id never stands in).
+fn role_outside_app_rooms(r: &skin::SkinRole, app: &str, rooms: &[String]) -> CliResponse {
+    let mut out = outside_app_rooms(app, rooms);
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&out.body) {
+        let hint = v["error"]["hint"].as_str().unwrap_or_default().to_string();
+        v["error"]["hint"] = serde_json::json!(format!("role '{}': {hint}", r.name));
+        v["error"]["role"] = serde_json::json!(r.name);
+        out.body = v.to_string();
+    }
+    out
+}
+
 /// A role an agent of `ws` may edit: wholly its workspace's, or a role of
 /// one of its Apps inside what that App may hand out.
 fn role_is_agents(r: &skin::SkinRole, ws: &str) -> bool {
@@ -1128,7 +1141,7 @@ fn agent_add_app(ws: &str, v: &serde_json::Value) -> Result<String, CliResponse>
                 // (`skin::ties`, the ceiling). Outside it: the broad path.
                 let allowed = app_rooms_of(ws, &app);
                 if !role_within(&r, &allowed) {
-                    return Err(outside_app_rooms(&app, &role_rooms_outside(&r, &allowed)));
+                    return Err(role_outside_app_rooms(&r, &app, &role_rooms_outside(&r, &allowed)));
                 }
                 if let Some(cap) = skin::person_only_cap_in_policy(&r.room_policy) {
                     return Err(person_only_refused(cap));

@@ -196,6 +196,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // its `sew_changed` refetch event.
   'components/Settings/sections/sew-api.ts',
   'components/Settings/sections/SewSection.tsx',
+  // Voice rooms §4.5: Settings → Voice Rooms is the window's own server (its
+  // count, names and refetch event), like Chat Hosting above. App remounts
+  // on a server switch, so the page never holds another server's list.
+  'components/Settings/sections/VoiceRoomsSection.tsx',
   // 0.45.4 federation: peer-list change events for the window's server.
   'components/Settings/sections/ConnectionsSection.tsx',
   // 0.45.5 Settings → Notifications (Thread push): the window's server's
@@ -281,6 +285,11 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/unread.ts',
   // Usage v2: a server switch drops the window's limits doc.
   'stores/usage-limits.ts',
+  // Voice rooms §4.3: only to hear the window's server, whichever it is, on
+  // the primary bus (its app socket feeds that bus; a pinned bus gets frames
+  // only from a Home room's socket). Every request takes the row's own
+  // `scopeForHost` scope: the call belongs to the app, not the window.
+  'stores/voice.ts',
 ]
 
 describe('MS79 scope boundary ratchets', () => {

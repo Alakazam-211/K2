@@ -361,6 +361,11 @@ pub fn ack_to(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option
     Ok(Some(target))
 }
 
+/// How far `person` has read this conversation (0 when they never have).
+pub fn read_through(conn: &Connection, person: &str, kind: &str, id: &str) -> Result<i64, ReadError> {
+    cursor(conn, person, kind, id).map(|c| c.last_read_seq)
+}
+
 /// True when `project_id` is a workspace on this server.
 pub fn project_exists(conn: &Connection, project_id: &str) -> Result<bool, ReadError> {
     conn.query_row("SELECT COUNT(*) > 0 FROM projects WHERE id = ?1", params![project_id.trim()], |r| r.get(0))
@@ -939,6 +944,24 @@ mod tests {
         let (item, _) = overlay::post_choice(conn, conv, project, "rs-agent", "rs-agent", "Ship?", vec!["Go".into(), "Wait".into()], false, None)
             .expect("ask");
         (item.id, item.seq)
+    }
+
+    #[test]
+    fn read_through_follows_the_cursor() {
+        let (g, project) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        let c = conv();
+        assert_eq!(read_through(&conn, "owner", KIND_THREAD, &c).expect("read"), 0, "never read");
+        let first = agent_post(&conn, &c, &project, "one");
+        let second = agent_post(&conn, &c, &project, "two");
+        assert_eq!(ack_to(&conn, "owner", KIND_THREAD, &c, Some(first)).expect("ack"), Some(first));
+        assert_eq!(read_through(&conn, "owner", KIND_THREAD, &c).expect("read"), first);
+        assert_eq!(ack_to(&conn, "owner", KIND_THREAD, &c, Some(first)).expect("ack"), None, "not moved");
+        assert_eq!(ack_to(&conn, "owner", KIND_THREAD, &c, None).expect("ack"), Some(second), "no seq: the head");
+        assert_eq!(ack_to(&conn, "owner", KIND_THREAD, &c, Some(second + 9)).expect("ack"), None, "clamped, nothing to move");
+        assert_eq!(read_through(&conn, "owner", KIND_THREAD, &c).expect("read"), second);
+        assert_eq!(read_through(&conn, "alice", KIND_THREAD, &c).expect("read"), 0, "one person's cursor only");
     }
 
     #[test]

@@ -58,6 +58,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Posting to a Thread or project chat answers at once.** A post used to wait until its line was typed into the agent's terminal, up to 20 seconds with a sleeping agent. Now it answers once it is stored, and the agent gets it right after, in order.
 - **A Thread on another server opens faster.** It shows the last messages straight away while it loads, and starts loading when you hover its row.
 - **Links in chat have no copy button any more.** Right-click a link for **Copy link**.
+- **Read a chat on your computer and its notifications leave your iPhone, even with the app closed.** Within seconds, that chat's notifications go, up to the message you read, muted chats included. Newer ones and other chats stay. iOS decides when these silent updates arrive and sends none to an app you force-quit, so opening the app is still the sure way. Needs K2 Companion 4.1.6 or newer.
+- **No more "2 new messages" for messages you've already read.** A second notification could still arrive up to 5 minutes after you read and left the chat.
+- **Your phone's badge no longer stays one too high after a project chat or permission card notification.** Reading the message could leave the badge at the higher number until something else changed it.
 
 ### Live docs
 - **Re-apply knows more after a dropped connection.** If your connection dropped with an edit and an undo both unanswered, the Live editor used to say it couldn't tell whether your edit had gone in. It can now tell them apart, so you no longer have to check and retype.

@@ -35,6 +35,10 @@
 //! **Viewing (TP26).** Checked at FLUSH time, not post time: a `viewing`
 //! frame that lands before the window flushes still quiets the push.
 //!
+//! **Read (push-read-hints-v1).** Also checked at flush: someone who read past
+//! the held post gets no alert. Their cursor has already passed it, so no later
+//! read could clear that alert from the phone.
+//!
 //! **Unread (thread-read-v1, 0.46.1).** A person who MUTED the Thread gets
 //! no push (checked at post and at flush). Every push carries that
 //! person's `unreadTotal` / `waitingTotal` (strings, read at flush) so the
@@ -115,6 +119,8 @@ pub trait PushEnv {
     fn airgap(&self) -> bool;
     /// Has `person` muted `conversation_id`? (thread-read-v1: no push.)
     fn muted(&self, person: &str, conversation_id: &str) -> bool;
+    /// How far `person` has read `conversation_id`.
+    fn read_through(&self, person: &str, conversation_id: &str) -> i64;
     /// `person`'s badge numbers now (thread-read-v1 `unreadTotal`).
     fn totals(&self, person: &str) -> k2_core::read_state::Totals;
     /// push-content-available-v1 (0.46.7): `conversation_id` changed with
@@ -249,6 +255,15 @@ impl Coalescer {
         if env.muted(person, conversation) {
             w.pending = 0;
             w.open_until = None;
+            env.stale(person, conversation);
+            return;
+        }
+        // Read past the held post while the window was open, then left, so
+        // viewing no longer says so. Nothing to announce.
+        if env.read_through(person, conversation) >= w.post.seq {
+            w.pending = 0;
+            w.open_until = None;
+            w.viewed_since_push = true;
             env.stale(person, conversation);
             return;
         }
@@ -393,6 +408,15 @@ impl PushEnv for DaemonEnv {
         }
         k2_core::read_state::is_muted(&conn, person, k2_core::read_state::KIND_THREAD, conversation_id, k2_core::read_state::now_secs())
             .unwrap_or(false)
+    }
+
+    fn read_through(&self, person: &str, conversation_id: &str) -> i64 {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if !k2_core::read_state::tables_exist(&conn) {
+            return 0;
+        }
+        k2_core::read_state::read_through(&conn, person, k2_core::read_state::KIND_THREAD, conversation_id).unwrap_or(0)
     }
 
     fn totals(&self, person: &str) -> k2_core::read_state::Totals {
@@ -607,6 +631,8 @@ mod tests {
         calls_taken: RefCell<Vec<usize>>,
         /// (person, conversation) pairs that are muted.
         muted: RefCell<HashSet<(String, String)>>,
+        /// (person, conversation) → how far they've read.
+        read: RefCell<HashMap<(String, String), i64>>,
         /// push-content-available-v1: stale notes and alerts, in order.
         stale: RefCell<Vec<(String, String)>>,
         alerted: RefCell<Vec<(String, String)>>,
@@ -676,6 +702,9 @@ mod tests {
         fn muted(&self, person: &str, conversation_id: &str) -> bool {
             self.muted.borrow().contains(&(person.to_string(), conversation_id.to_string()))
         }
+        fn read_through(&self, person: &str, conversation_id: &str) -> i64 {
+            self.read.borrow().get(&(person.to_string(), conversation_id.to_string())).copied().unwrap_or(0)
+        }
         fn totals(&self, person: &str) -> k2_core::read_state::Totals {
             k2_core::read_state::Totals { total: person.len() as i64, waiting_total: 1 }
         }
@@ -687,6 +716,70 @@ mod tests {
             self.alerted_seqs.borrow_mut().push(seq);
             self.alerted_totals.borrow_mut().push(totals);
         }
+    }
+
+    /// push-read-hints-v1 (test 18): a post held in the window, and the person
+    /// reads past it and leaves. No alert goes, because no later read could
+    /// clear it, and the phone's chat is noted stale. A cursor still behind the
+    /// held post leaves the alert alone.
+    #[test]
+    fn no_alert_for_a_held_post_already_read() {
+        let pair = |p: &str, c: &str| (p.to_string(), c.to_string());
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, post("c-1", 40, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-1", 41, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        assert_eq!(env.sent().len(), 1, "the second is held");
+        env.read.borrow_mut().insert(pair("owner", "c-1"), 41);
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(env.sent().len(), 1, "read through the held post: no alert");
+        assert_eq!(*env.stale.borrow(), vec![pair("owner", "c-1")], "the phone's copy is stale");
+        assert_eq!(*env.alerted_seqs.borrow(), [40], "an alert that never went is never noted");
+        let (pending, open, viewed) = c.state("c-1", "owner").expect("window");
+        assert_eq!((pending, open), (0, None), "nothing held, nothing open");
+        assert!(viewed, "having read it counts as looking: no backoff next time");
+
+        // Past it counts too.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-1", 40, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-1", 41, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        env.read.borrow_mut().insert(pair("owner", "c-1"), 45);
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(env.sent().len(), 1);
+
+        // Behind the held post: the alert goes, whether it read some or none.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-1", 40, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-1", 41, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        env.read.borrow_mut().insert(pair("owner", "c-1"), 40);
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(env.sent().len(), 2, "41 is still unread");
+        assert_eq!(env.sent()[1].seq, 41);
+        assert!(env.stale.borrow().is_empty());
+
+        // Each person's own cursor decides.
+        let env = Fake::with(&[("owner", &["owner"]), ("gina", &["gina"])]);
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-2", 7, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-2", 8, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        env.read.borrow_mut().insert(pair("gina", "c-2"), 8);
+        c.tick(&env, t0 + WINDOW);
+        let trailing: Vec<String> = env.sent()[2..].iter().map(|t| t.principal.clone()).collect();
+        assert_eq!(trailing, ["owner"]);
+
+        // A later post in the same window starts fresh: it's unread again.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-3", 1, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-3", 2, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        env.read.borrow_mut().insert(pair("owner", "c-3"), 2);
+        c.tick(&env, t0 + WINDOW);
+        c.post(&env, post("c-3", 3, ThreadMsgKind::Text), t0 + WINDOW + Duration::from_secs(1));
+        assert_eq!(env.sent().len(), 2, "quiet again, so it goes at once");
+        assert_eq!(env.sent()[1].seq, 3);
     }
 
     /// push-read-hints-v1: an alert says which seq it was for, the trailing

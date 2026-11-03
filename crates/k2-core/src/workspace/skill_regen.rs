@@ -474,6 +474,7 @@ Older conversations:      k2 sessions --past --search "<words>" ; k2 sessions sh
 Talk to one:              k2 msg <ws>/<handle> "…"   or   k2 msg --session <id> "…" (reopens it)
 Reopen without a message: k2 sessions open <id> [--name <name>]  — prints its address
 Start a helper:           k2 sessions new <name> --brief <file>   ; stop: k2 sessions stop <name>
+Clear stopped helpers:    k2 sidecar archive <name>  or  k2 sidecar archive --all-stopped  (the conversation stays)
 One conversation never runs twice; opening a live one prints its address.
 ```
 Only the main session may open, start or stop sessions, and only when "Allow hiring and managing agents" is on. A helper shares your checkout: for a separate branch, say in the brief to work in its own git worktree. Put the handback in the brief: "when done, `k2 msg <ws>` with a summary" (`<ws>` is the main session's address, this workspace's name). No secrets in a brief. `k2 study sessions`.

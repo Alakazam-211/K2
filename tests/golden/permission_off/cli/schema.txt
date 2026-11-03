@@ -245,6 +245,17 @@ exit: 0
       ]
     },
     {
+      "name": "sidecar archive",
+      "usage": "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]",
+      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Allow hiring and managing agents on.",
+      "args": [{"name": "name", "required": false, "description": "The sidecar's name or <workspace>/<name> address."}],
+      "flags": [
+        {"name": "--all-stopped", "arg": null, "description": "Every stopped sidecar in this workspace."},
+        {"name": "--workspace", "arg": "ws", "description": "Default: this workspace."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (address, archived; or archived, skipped, count)."}
+      ]
+    },
+    {
       "name": "sidecar access",
       "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
       "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",

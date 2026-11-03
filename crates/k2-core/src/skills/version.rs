@@ -309,7 +309,8 @@ pub const SKILL_VERSION_ZEN: u32 = 47;
 /// Bumped to 48 (0.46.8): the `[guest …]` stamp on an App guest's Thread post.
 /// Bumped to 49 (0.46.8): `k2 mail forward-message` in the mail verbs.
 /// Bumped to 50 (0.46.8): the Study topics gain `chat-refresh`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 50;
+/// Bumped to 51 (0.46.8): the k2-cli skill names `k2 sidecar archive`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 51;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

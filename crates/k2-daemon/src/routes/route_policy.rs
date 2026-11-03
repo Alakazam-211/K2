@@ -1636,6 +1636,7 @@ pub const ROUTES: &[Route] = &[
     // land and retire change the workspace's main branch / delete a
     // worktree (Admin, like new/stop; agents ask with a card); review is a
     // read.
+    post("/cli/sidecar/archive", Admin),
     post("/cli/sidecar/interrupt", Member),
     post("/cli/sidecar/land", Admin),
     get("/cli/sidecar/list", Member),

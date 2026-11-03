@@ -71,6 +71,7 @@ assert_eq "sidecar --help exit 0" "$rc" "0"
 assert_contains "help: new" "$out" "k2 sidecar new <name> --harness <preset>"
 assert_contains "help: list" "$out" "k2 sidecar list [--workspace <ws>] [--json]"
 assert_contains "help: stop" "$out" "k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]"
+assert_contains "help: archive" "$out" "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]"
 assert_contains "help: access" "$out" "k2 sidecar access on|off|status [--workspace <ws>]"
 assert_contains "help: Big 7" "$out" "claude, grok, codex, gemini, cursor-agent, pi, hermes"
 assert_contains "help: secrets" "$out" "Do not put secrets in a brief."
@@ -97,6 +98,10 @@ capture_nod sidecar new Gardens --harness claude --brief "$WORK/nope.md"
 assert_eq "missing brief file exit 2" "$rc" "2"
 capture_nod sidecar new Gardens --harness claude --bogus
 assert_eq "unknown flag exit 2" "$rc" "2"
+capture_nod sidecar archive
+assert_eq "archive with no name exit 2" "$rc" "2"
+capture_nod sidecar archive one --all-stopped
+assert_eq "archive with both exit 2" "$rc" "2"
 capture_nod sidecar stop
 assert_eq "stop without a name exit 2" "$rc" "2"
 capture_nod sidecar access maybe
@@ -441,8 +446,28 @@ set -e
 assert_eq "same name while live exit 1" "$rc" "1"
 assert_contains "same name while live code" "$(cat "$SB/dup.err")" "sidecar_live"
 
+set +e
+real sidecar archive gardens >/dev/null 2>"$SB/live.err"; rc=$?
+set -e
+assert_eq "archive a live sidecar exit 1" "$rc" "1"
+assert_contains "archive a live sidecar code" "$(cat "$SB/live.err")" "sidecar_live"
 assert_eq "stop" "$(real sidecar stop gardens)" "stopped sidews/gardens"
 assert_eq "stop again" "$(real sidecar stop gardens)" "sidews/gardens was already asleep"
+assert_contains "archive" "$(real sidecar archive gardens)" "archived sidews/gardens"
+assert_contains "archived: off the list" "$(real sidecar list --json)" '"sidecars":[]'
+set +e
+real sidecar archive gardens >/dev/null 2>"$SB/again.err"; rc=$?
+set -e
+assert_eq "archive again exit 4" "$rc" "4"
+assert_contains "all-stopped with none" "$(real sidecar archive --all-stopped)" "archived 0 stopped sidecars"
+# Back again: the name stays with its conversation.
+real sidecar new Gardens --harness claude >/dev/null 2>"$SB/back.err" || { cat "$SB/back.err"; exit 1; }
+assert_contains "new on an archived name resumes" "$(cat "$SB/back.err")" "resumed sidews/gardens"
+assert_eq "stop the resumed one" "$(real sidecar stop gardens)" "stopped sidews/gardens"
+assert_contains "all-stopped" "$(real sidecar archive --all-stopped)" "archived 1 stopped sidecar: sidews/gardens"
+real sidecar new Gardens --harness claude >/dev/null 2>"$SB/back.err" || { cat "$SB/back.err"; exit 1; }
+assert_eq "stop it for the checks below" "$(real sidecar stop gardens)" "stopped sidews/gardens"
+assert_eq "still asleep" "$(real sidecar stop gardens)" "sidews/gardens was already asleep"
 set +e
 real sidecar stop nobody >/dev/null 2>"$SB/nob.err"; rc=$?
 set -e

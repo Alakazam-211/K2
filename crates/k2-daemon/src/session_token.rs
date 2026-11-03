@@ -1129,6 +1129,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",
+        "/cli/sidecar/archive",
         // Workbench W1 (0.46.7): review and interrupt are agent verbs
         // (the handler applies the sidecar rules); land and retire reach
         // the handler so an agent gets `land_needs_person` /

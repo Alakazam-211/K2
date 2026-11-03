@@ -249,6 +249,7 @@ pub fn is_route(path: &str) -> bool {
         "/cli/sidecar/new"
             | "/cli/sidecar/list"
             | "/cli/sidecar/stop"
+            | "/cli/sidecar/archive"
             | "/cli/agent-access/set"
             | "/cli/sidecar/review"
             | "/cli/sidecar/interrupt"
@@ -263,6 +264,7 @@ pub fn is_post_route(path: &str) -> bool {
         path,
         "/cli/sidecar/new"
             | "/cli/sidecar/stop"
+            | "/cli/sidecar/archive"
             | "/cli/agent-access/set"
             | "/cli/sidecar/interrupt"
             | "/cli/sidecar/land"
@@ -318,6 +320,14 @@ pub fn handle(
                 Err(e) => (refusal(&e), format!("refused:{}", e.code)),
             };
             audit("sidecar-stop", &caller, &outcome, ingress);
+            resp
+        }
+        "/cli/sidecar/archive" => {
+            let (resp, outcome) = match handle_archive(&caller, body) {
+                Ok((v, outcome)) => (CliResponse::ok_json(v.to_string()), outcome),
+                Err(e) => (refusal(&e), format!("refused:{}", e.code)),
+            };
+            audit("sidecar-archive", &caller, &outcome, ingress);
             resp
         }
         "/cli/sidecar/list" => match handle_list(&caller, params) {
@@ -1352,31 +1362,13 @@ fn handle_stop(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, Strin
     if force && matches!(caller, Caller::Agent(_)) {
         return Err(err("forbidden", 403, "agents may not use --force"));
     }
-    let mut raw = str_field(&v, "name").unwrap_or("").trim().to_string();
+    let raw = str_field(&v, "name").unwrap_or("").trim().to_string();
     if raw.is_empty() {
         return Err(err("no_such_sidecar", 404, "name the sidecar to stop"));
     }
     // An address `<ws>/<name>` (WS-N3, `k2 sessions stop k2/x`): the
     // workspace half must be this workspace.
-    if let Some((ws_part, handle)) = k2_core::workspace_session_handles::split_workspace_handle(&raw) {
-        if !k2_core::workspace_session_handles::address_tokens_match(ws_part, &ws.handle) {
-            return Err(err(
-                "forbidden",
-                403,
-                format!("{raw} is not in {}; an agent may act only on its own workspace", ws.handle),
-            ));
-        }
-        raw = handle.to_string();
-    }
-    if raw == ws.handle {
-        return Err(err(
-            "forbidden",
-            403,
-            format!("{raw} is the main session; stop only sidecars (k2 sessions shows them)"),
-        ));
-    }
-    let token = k2_core::workspace_session_handles::slugify_custom_name(&raw)
-        .unwrap_or_else(|_| raw.to_lowercase());
+    let token = sidecar_token(&ws, &raw, "stop")?;
 
     let lock = workspace_lock(&ws.id);
     let _guard = lock.lock();
@@ -1502,6 +1494,161 @@ fn handle_stop(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, Strin
         serde_json::json!({ "ok": true, "address": address, "stopped": true, "state": "asleep" }),
         format!("ok {address}"),
     ))
+}
+
+// ── archive ───────────────────────────────────────────────────────────
+
+/// `k2 sidecar archive <name>` / `--all-stopped` (0.46.8): take stopped
+/// sidecars off `k2 sidecar list`. What a tab close with `clear_index` does:
+/// the tab row goes. The transcript stays on disk (`k2 sessions --past`), the
+/// Thread stays, and the name stays with its conversation, so `k2 sidecar new`
+/// on that name resumes it. The same gate as stop. A live sidecar is refused
+/// (stop it first), and so is a worktree sidecar, whose worktree `retire` must
+/// deal with; a retired one has no worktree left, so it may go.
+fn handle_archive(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, String), SidecarError> {
+    require_credential(caller)?;
+    let v = json_body(body)?;
+    let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    agent_gate(caller, &ws)?;
+    let all = v.get("allStopped").and_then(|a| a.as_bool()).unwrap_or(false);
+    let raw = str_field(&v, "name").unwrap_or("").trim().to_string();
+    if all == !raw.is_empty() {
+        return Err(err("bad_request", 400, "name one sidecar, or pass --all-stopped"));
+    }
+
+    let lock = workspace_lock(&ws.id);
+    let _guard = lock.lock();
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        core::list_rows(&conn, &ws.id).map_err(|e| err("bad_request", 500, e))?
+    };
+
+    if all {
+        let mut archived = Vec::new();
+        let mut skipped = Vec::new();
+        for r in &rows {
+            let address = sidecar_address(&ws, r);
+            if conversation_live(&ws.id, &r.conversation_key) {
+                continue;
+            }
+            match archive_row(caller, &ws, r, &address) {
+                Ok(()) => archived.push(address),
+                Err(e) => skipped.push(serde_json::json!({ "address": address, "code": e.code, "hint": e.hint })),
+            }
+        }
+        let count = archived.len();
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "archived": archived, "skipped": skipped, "count": count }),
+            format!("ok {} archived={count}", ws.handle),
+        ));
+    }
+
+    let token = sidecar_token(&ws, &raw, "archive")?;
+    let key = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace_session_handles::resolve_handle(&conn, &ws.id, &token)
+    }
+    .map_err(|_| err("no_such_sidecar", 404, format!("no sidecar '{raw}' in {}", ws.handle)))?;
+    let Some(row) = rows.iter().find(|r| r.conversation_key == key) else {
+        return Err(err("no_such_sidecar", 404, format!("no sidecar '{raw}' in {}: nothing to archive (k2 sidecar list)", ws.handle)));
+    };
+    let address = sidecar_address(&ws, row);
+    if conversation_live(&ws.id, &key) {
+        return Err(err("sidecar_live", 409, format!("{address} is running; stop it first: k2 sidecar stop {token}")));
+    }
+    archive_row(caller, &ws, row, &address)?;
+    Ok((serde_json::json!({ "ok": true, "address": address, "archived": true }), format!("ok {address}")))
+}
+
+fn sidecar_address(ws: &Workspace, row: &core::SidecarRow) -> String {
+    k2_core::workspace_session_handles::format_address(&ws.handle, Some(row.handle.as_deref().unwrap_or(&row.pane_group_id)))
+}
+
+/// A sidecar named by the caller, as stop and archive take it: its handle, or
+/// its `<ws>/<name>` address in this workspace. Never the main session.
+fn sidecar_token(ws: &Workspace, raw: &str, verb: &str) -> Result<String, SidecarError> {
+    let mut raw = raw.to_string();
+    if let Some((ws_part, handle)) = k2_core::workspace_session_handles::split_workspace_handle(&raw) {
+        if !k2_core::workspace_session_handles::address_tokens_match(ws_part, &ws.handle) {
+            return Err(err(
+                "forbidden",
+                403,
+                format!("{raw} is not in {}; an agent may act only on its own workspace", ws.handle),
+            ));
+        }
+        raw = handle.to_string();
+    }
+    if raw == ws.handle {
+        return Err(err(
+            "forbidden",
+            403,
+            format!("{raw} is the main session; {verb} only sidecars (k2 sessions shows them)"),
+        ));
+    }
+    Ok(k2_core::workspace_session_handles::slugify_custom_name(&raw).unwrap_or_else(|_| raw.to_lowercase()))
+}
+
+/// Is any tab row of this conversation running? (`list_rows` folds them.)
+fn conversation_live(project_id: &str, key: &str) -> bool {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::list_by_project(&conn, project_id).unwrap_or_default()
+    };
+    rows.iter()
+        .filter(|r| r.session_id.as_deref().map(str::trim) == Some(key) || r.pane_group_id == key)
+        .any(|r| live_session(&r.agent_name).is_some())
+}
+
+/// The refusals, then the removal. The caller checked it isn't running.
+fn archive_row(caller: &Caller, ws: &Workspace, row: &core::SidecarRow, address: &str) -> Result<(), SidecarError> {
+    if let Caller::Agent(_) = caller {
+        let own = format!("agent:{}", ws.handle);
+        if row.created_by.as_deref() != Some(own.as_str()) {
+            return Err(err(
+                "forbidden",
+                403,
+                "an agent may archive only sidecars an agent of this workspace opened; ask your human",
+            ));
+        }
+    }
+    let worktree = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::worktree_task::store::get(&conn, &ws.id, &row.pane_group_id)
+    };
+    if worktree.is_some_and(|m| m.retired_at.is_none()) {
+        return Err(err(
+            "worktree_sidecar",
+            409,
+            format!("{address} has its own git worktree, so it wasn't archived. Nothing more is needed unless you want it gone: retiring it removes the worktree, so a person does that (k2 sidecar review {address}, then k2 sidecar retire {address}; an agent that runs retire is refused and gets the line to ask with)."),
+        ));
+    }
+    crate::v2_spawn::record_closed_tab(&row.agent_name);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "DELETE FROM workspace_tab_sessions WHERE project_id = ?1 AND (pane_group_id = ?2 OR (session_id IS NOT NULL AND TRIM(session_id) = ?3))",
+            rusqlite::params![ws.id, row.pane_group_id, row.conversation_key],
+        )
+        .map_err(|e| err("bad_request", 500, format!("archive {address}: {e}")))?;
+    }
+    match core::remove_layout_tab(&ws.id, &row.pane_group_id) {
+        Ok(core::LayoutWrite::Wrote { workspace_id, revision }) => {
+            let _ = crate::session_events::emit(crate::session_events::SessionEvent::TabOrderChanged {
+                workspace_path: ws.path.clone(),
+                project: ws.id.clone(),
+                workspace: workspace_id,
+                revision,
+            });
+        }
+        Ok(_) => {}
+        Err(e) => log_debug!("[sidecar] layout remove failed pg={}: {e}", row.pane_group_id),
+    }
+    Ok(())
 }
 
 // ── access (§5.5) ─────────────────────────────────────────────────────
@@ -2254,6 +2401,10 @@ pub fn sidecar_display_name(pane_group_id: &str, session_id: Option<&str>) -> Op
 }
 
 #[cfg(test)]
+#[path = "sidecar_archive_tests.rs"]
+mod archive_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2271,6 +2422,8 @@ mod tests {
         assert!(is_route("/cli/agent-access/set"));
         assert!(!is_route("/cli/sidecar/other"));
         assert!(is_post_route("/cli/sidecar/stop"));
+        assert!(is_post_route("/cli/sidecar/archive"));
+        assert!(is_route("/cli/sidecar/archive"));
         assert!(!is_post_route("/cli/sidecar/list"));
         assert_eq!(body_cap("/cli/sidecar/new"), 96 * 1024);
         assert_eq!(body_cap("/cli/sidecar/stop"), 4 * 1024);

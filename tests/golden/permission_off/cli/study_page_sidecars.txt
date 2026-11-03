@@ -12,12 +12,19 @@ VERBS
   k2 sidecar new <name> --harness <preset> --brief <file>   prints the address
   k2 sidecar list                                           live and asleep
   k2 sidecar stop <name>                                    stop is sleep
+  k2 sidecar archive <name> | --all-stopped                 off the list; the chat stays
   k2 sidecar access on|off|status --workspace <ws>          owner/admin
 
 RULES
   Names: lowercase letters, digits, single hyphens; not all digits; 40 max.
   new on a stopped name resumes the same conversation and address.
   stop keeps the address, name, history and brief. k2 msg wakes it.
+  archive is for stopped sidecars you're done with: it takes them off
+  k2 sidecar list. The name and conversation stay: new on that name with the
+  same harness resumes it, k2 sessions --past finds it; a fresh chat needs a
+  new name. Running ones are refused (stop first); a worktree sidecar is
+  refused too (retire it, which a person does). --all-stopped skips those
+  and any you may not archive, and says which.
   The brief is saved to .k2/sidecars/<name>/BRIEF.md (0600, 64 KiB max);
   the sidecar gets one line pointing at it. No secrets in a brief.
   At most 8 live sidecars per workspace.

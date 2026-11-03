@@ -22633,6 +22633,7 @@ k2 sidecar — open extra AI sessions (sidecars) in a workspace
                  [--worktree [--base <ref>]] [--workspace <ws>] [--model <model>] [--json]
   k2 sidecar list [--workspace <ws>] [--json]
   k2 sidecar stop <name> [--workspace <ws>] [--force] [--json]
+  k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]
   k2 sidecar interrupt <name> [--workspace <ws>] [--json]
   k2 sidecar access on|off|status [--workspace <ws>]      owner/admin
 
@@ -22647,6 +22648,10 @@ A sidecar shares this workspace's role, skills and inbox. Its address is
 new on a stopped name resumes the same conversation.
 interrupt stops the sidecar's current turn (its Esc / Ctrl+C); the process keeps
 running. stop ends the process.
+archive takes stopped sidecars off this list. Its conversation stays: new on that
+name with the same harness resumes it, and k2 sessions --past finds it. It refuses a
+running sidecar, and a worktree sidecar (that's retire). --all-stopped skips running
+sidecars, worktree sidecars and any you may not archive, and says which.
 Harnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).
 Agents: only the main session, only with "Allow hiring and managing agents" on.
 Do not put secrets in a brief. --workspace defaults to this workspace.
@@ -22816,6 +22821,19 @@ sys.stderr.write("%s %s (%s)%s. Message it: k2 msg %s \"...\"\n" % (what, v["add
 import json, sys
 v = json.load(sys.stdin)
 print(("stopped %s" % v["address"]) if v.get("stopped") else ("%s was already asleep" % v["address"]))
+'
+            ;;
+        archive)
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("address"):
+    print("archived %s. Its conversation stays: k2 sidecar new %s --harness <the same harness> resumes it." % (v["address"], v["address"].split("/")[-1]))
+    sys.exit(0)
+n = v.get("count", 0)
+print("archived %d stopped sidecar%s%s" % (n, "" if n == 1 else "s", (": " + ", ".join(v.get("archived") or [])) if n else ""))
+for s in v.get("skipped") or []:
+    print("not archived %s: %s" % (s.get("address"), s.get("hint")))
 '
             ;;
         list)
@@ -23030,6 +23048,40 @@ cmd_sidecar_list() {
     _sidecar_render list "$as_json" "$raw"
 }
 
+cmd_sidecar_archive() {
+    local usage="usage: k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]"
+    local name="" workspace="" all=0 as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --all-stopped) all=1; shift ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sidecar --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"
+                else
+                    echo "$usage" >&2
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if { [ -z "$name" ] && [ "$all" = 0 ]; } || { [ -n "$name" ] && [ "$all" = 1 ]; }; then
+        echo "$usage" >&2
+        exit 2
+    fi
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local body
+    body="$(K2_SC_NAME="$name" K2_SC_WS="$workspace" K2_SC_ALL="$all" python3 -c '
+import json, os
+print(json.dumps({"workspace": os.environ["K2_SC_WS"], "name": os.environ["K2_SC_NAME"], "allStopped": os.environ["K2_SC_ALL"] == "1"}))
+')"
+    local raw
+    raw="$(_sidecar_send POST /cli/sidecar/archive "$body")" || true
+    _sidecar_render archive "$as_json" "$raw"
+}
+
 cmd_sidecar_stop() {
     local name="" workspace="" force=0 as_json=0
     while [ $# -gt 0 ]; do
@@ -23237,13 +23289,14 @@ cmd_sidecar() {
         new) cmd_sidecar_new "$@" ;;
         list|ls) cmd_sidecar_list "$@" ;;
         stop) cmd_sidecar_stop "$@" ;;
+        archive) cmd_sidecar_archive "$@" ;;
         access) cmd_sidecar_access "$@" ;;
         interrupt) cmd_sidecar_interrupt "$@" ;;
         review) cmd_sidecar_review "$@" ;;
         land) cmd_sidecar_land "$@" ;;
         retire) cmd_sidecar_retire "$@" ;;
         *)
-            echo "usage: unknown sidecar verb '$sub' (new|list|stop|interrupt|review|land|retire|access — k2 sidecar --help)" >&2
+            echo "usage: unknown sidecar verb '$sub' (new|list|stop|archive|interrupt|review|land|retire|access — k2 sidecar --help)" >&2
             exit 2
             ;;
     esac
@@ -41963,6 +42016,17 @@ cmd_schema() {
       ]
     },
     {
+      "name": "sidecar archive",
+      "usage": "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]",
+      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Allow hiring and managing agents on.",
+      "args": [{"name": "name", "required": false, "description": "The sidecar's name or <workspace>/<name> address."}],
+      "flags": [
+        {"name": "--all-stopped", "arg": null, "description": "Every stopped sidecar in this workspace."},
+        {"name": "--workspace", "arg": "ws", "description": "Default: this workspace."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (address, archived; or archived, skipped, count)."}
+      ]
+    },
+    {
       "name": "sidecar access",
       "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
       "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",
@@ -51097,12 +51161,19 @@ VERBS
   k2 sidecar new <name> --harness <preset> --brief <file>   prints the address
   k2 sidecar list                                           live and asleep
   k2 sidecar stop <name>                                    stop is sleep
+  k2 sidecar archive <name> | --all-stopped                 off the list; the chat stays
   k2 sidecar access on|off|status --workspace <ws>          owner/admin
 
 RULES
   Names: lowercase letters, digits, single hyphens; not all digits; 40 max.
   new on a stopped name resumes the same conversation and address.
   stop keeps the address, name, history and brief. k2 msg wakes it.
+  archive is for stopped sidecars you're done with: it takes them off
+  k2 sidecar list. The name and conversation stay: new on that name with the
+  same harness resumes it, k2 sessions --past finds it; a fresh chat needs a
+  new name. Running ones are refused (stop first); a worktree sidecar is
+  refused too (retire it, which a person does). --all-stopped skips those
+  and any you may not archive, and says which.
   The brief is saved to .k2/sidecars/<name>/BRIEF.md (0600, 64 KiB max);
   the sidecar gets one line pointing at it. No secrets in a brief.
   At most 8 live sidecars per workspace.

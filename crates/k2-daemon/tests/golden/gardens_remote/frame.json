@@ -1,5 +1,6 @@
 {
   "body": {
+    "frameVersion": "<frameVersion>",
     "garden": "g-00000001",
     "hash": "<hash>",
     "hello": {
@@ -18,11 +19,13 @@
         "garden-history-v1",
         "workbench-v1"
       ],
+      "height": "fill",
       "k2": "hello",
       "motion": {
         "reduced": false
       },
       "v": 1,
+      "view": "phone",
       "widget": {
         "garden": "g-00000001",
         "id": "b1",

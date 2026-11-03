@@ -563,8 +563,10 @@ impl ZenFiles {
             for w in page["page"]["widgets"].as_array().into_iter().flatten() {
                 let ours = placed.iter().any(|p| p.garden == g && w["id"] == p.placement.as_str()) && w["widget"] == name;
                 if ours {
-                    for a in w["sourceAddresses"].as_array().into_iter().flatten().filter_map(J::as_str) {
-                        push(a);
+                    for key in ["sourceAddresses", "phoneSourceAddresses"] {
+                        for a in w[key].as_array().into_iter().flatten().filter_map(J::as_str) {
+                            push(a);
+                        }
                     }
                 }
             }

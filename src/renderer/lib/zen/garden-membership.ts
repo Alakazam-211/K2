@@ -48,8 +48,11 @@ export function gardenPageUses(raw: unknown): GardenUses {
     const r = obj(w)
     if (!r || r.kind !== 'custom') continue
     if (typeof r.widget === 'string' && r.widget !== '' && !out.widgets.includes(r.widget)) out.widgets.push(r.widget)
-    if (Array.isArray(r.sourceAddresses)) {
-      for (const a of r.sourceAddresses) {
+    // A phone's config may bind more sources than the desktop's (the daemon
+    // sends them apart): a Garden uses them all, whichever device shows them.
+    for (const list of [r.sourceAddresses, r.phoneSourceAddresses]) {
+      if (!Array.isArray(list)) continue
+      for (const a of list) {
         if (typeof a === 'string' && a !== '' && !out.sources.includes(a)) out.sources.push(a)
       }
     }

@@ -965,6 +965,8 @@ impl ZenFiles {
     /// (every Garden-safe cap it asks for, no grant: [`effective_caps`]) and
     /// `paused` (the runaway guard's pause, or `null`).
     pub(crate) fn fill_custom_widgets(&self, garden: &str, page: &mut J, pauses: &WidgetPauses) {
+        // Only `phone` is read back: the rows' own config, for the sources.
+        let layout = json!({ "phone": page.get("phone") });
         let Some(widgets) = page["widgets"].as_array_mut() else { return };
         for w in widgets.iter_mut().filter(|w| w["kind"] == schema::CUSTOM_KIND) {
             let widget = w["widget"].as_str().unwrap_or_default().to_string();
@@ -1010,7 +1012,17 @@ impl ZenFiles {
             // and the addresses this placement binds (`not_bound` otherwise).
             let sources = m.and_then(|m| m.sources.clone());
             let config = w["props"].get("config").cloned().unwrap_or_else(|| json!({}));
-            w["sourceAddresses"] = json!(widgets::placement_source_addresses(sources.as_ref(), &config));
+            let bound = widgets::placement_source_addresses(sources.as_ref(), &config);
+            // contract-gardens-phone rev 2 §A.3: what a phone's `config` binds
+            // beyond the desktop's. Kept apart so the desktop frame's bound
+            // list doesn't widen; a lock and Settings read both. Sent only
+            // when there are any.
+            let on_phone: Vec<String> =
+                super::phone::source_addresses(&layout, w, sources.as_ref()).into_iter().filter(|a| !bound.contains(a)).collect();
+            if !on_phone.is_empty() {
+                w["phoneSourceAddresses"] = json!(on_phone);
+            }
+            w["sourceAddresses"] = json!(bound);
             w["sources"] = sources.unwrap_or(J::Null);
             // 0.46.3: "garden" (the frame follows the Garden's light/dark)
             // unless the manifest says "own".
@@ -1087,6 +1099,41 @@ impl ZenFiles {
                             suggestion: Some("set config.source to a source name or name::host (k2 sources list names them)".into()),
                         });
                     }
+                }
+            }
+        }
+        // contract-gardens-phone rev 2 §A.3: a phone's `config` may name sources
+        // too; every address it binds must parse, as the desktop's must.
+        for s in page.get("phone").and_then(|p| p["screens"].as_array()).into_iter().flatten() {
+            for row in s["widgets"].as_array().into_iter().flatten() {
+                let Some(phone_config) = row.get("config") else { continue };
+                let id = row["id"].as_str().unwrap_or_default();
+                let Some(w) = widgets.iter().find(|w| w["id"] == id && w["kind"] == schema::CUSTOM_KIND) else { continue };
+                let widget = w["widget"].as_str().unwrap_or_default();
+                let st = match garden {
+                    Some(g) => self.garden_widget_status(g, widget),
+                    None => self.widget_status(widget),
+                };
+                let sources = st.manifest.as_ref().and_then(|m| m.sources.as_ref());
+                if !sources.is_some_and(|s| s == "config") {
+                    continue;
+                }
+                let config = super::phone::merge_config(w, Some(phone_config));
+                for a in widgets::placement_source_addresses(sources, &config) {
+                    let Err(e) = crate::sources::Address::parse(&a) else { continue };
+                    let key = widgets::SOURCE_CONFIG_KEYS
+                        .iter()
+                        .find(|k| phone_config.get(**k).and_then(J::as_str).is_some_and(|v| v.contains(a.as_str())));
+                    // A key only the desktop's config holds is reported above.
+                    let Some(key) = key else { continue };
+                    let (line, col) = at(super::phone::config_pos_key(id, key));
+                    out.push(Diagnostic {
+                        file: file.to_string(),
+                        line,
+                        col,
+                        message: format!("'{a}' isn't a source address (name or name::host): {}", e.hint),
+                        suggestion: Some("set config.source to a source name or name::host (k2 sources list names them)".into()),
+                    });
                 }
             }
         }

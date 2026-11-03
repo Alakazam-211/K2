@@ -964,6 +964,8 @@ describe('a Garden’s Local Data and External Data (Rosson 2026-10-23)', () => 
       sources: ['x', 'y::akzm.k2.dev'],
     })
     expect(gardenPageUses({ widgets: [{ kind: 'custom', widget: 'b' }] })).toEqual({ widgets: ['b'], sources: [] })
+    // A phone's config may bind more (rev 2 §A.3): the Garden uses them too.
+    expect(gardenPageUses({ widgets: [{ kind: 'custom', widget: 'c', sourceAddresses: ['x'], phoneSourceAddresses: ['y', 'x'] }] })).toEqual({ widgets: ['c'], sources: ['x', 'y'] })
     expect(sourceNameOn('fleet', 'local')).toBe('fleet')
     expect(sourceNameOn('fleet', 'akzm.k2.dev')).toBeNull()
     expect(sourceNameOn('fleet::akzm.k2.dev', 'akzm.k2.dev')).toBe('fleet')

@@ -280,7 +280,10 @@ fn the_page_is_zen_get_without_sources_plus_how_the_phone_runs_each_placement() 
     let fx = fx(&["store:read", "store:write"]);
     let v = ok_of(PAGE, &fx.phone, &[("garden", &fx.d.garden)], J::Null);
     assert!(v.get("sources").is_none(), "no file names on the phone: {v}");
-    assert_eq!(v["remote"]["widgets"], json!([{ "id": "b1", "run": "frame" }]), "{v}");
+    let rows = v["remote"]["widgets"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!((&rows[0]["id"], &rows[0]["run"]), (&json!("b1"), &json!("frame")), "{v}");
+    assert!(rows[0]["frameVersion"].as_str().is_some_and(|f| !f.is_empty()), "{v}");
     assert_eq!(v["remote"]["features"], json!(phone_features()));
     // The rest is GET /cli/zen/get's answer, unchanged.
     let params: HashMap<String, String> = [("garden".to_string(), fx.d.garden.clone())].into();
@@ -576,7 +579,7 @@ impl Norm {
             J::Object(o) => J::Object(o.iter().map(|(k, x)| (k.clone(), self.value(x, Some(k)))).collect()),
             J::Array(a) => J::Array(a.iter().map(|x| self.value(x, key)).collect()),
             J::String(s) => match key {
-                Some("version" | "cursor" | "since" | "serverId" | "lastGoodAt" | "at" | "addedAt" | "updatedAt" | "upload") => json!(format!("<{}>", key.unwrap_or_default())),
+                Some("version" | "frameVersion" | "cursor" | "since" | "serverId" | "lastGoodAt" | "at" | "addedAt" | "updatedAt" | "upload") => json!(format!("<{}>", key.unwrap_or_default())),
                 Some("nonce") => json!("<nonce>"),
                 _ => json!(self.text(s)),
             },
@@ -600,6 +603,20 @@ fn samples() -> BTreeMap<String, String> {
     put("gardens-unchanged", GARDENS, &fx.phone, &[("since", &cursor)], J::Null);
     put("page", PAGE, &fx.phone, &[("garden", &g)], J::Null);
     put("frame", FRAME, &fx.phone, &[("garden", &g), ("placement", "b1"), ("scheme", "dark")], J::Null);
+    // Mobile layouts (contract rev 2 §A, §B, §C). These read a second Garden,
+    // so everything above still shows a Garden with no layout.
+    let g2 = fx.d.f.gardens()[1].id.clone();
+    let garden2 = fx.d.f.path_of(&ZenFile::Garden(g2.clone()));
+    std::fs::write(&garden2, phone_layout::TWO).expect("Garden 2");
+    put("frame-no-layout-auto", FRAME, &fx.phone, &[("garden", &g2), ("placement", "b1"), ("scheme", "dark")], J::Null);
+    let laid_out = format!(
+        "{}[[phone.screen]]\nlabel = \"Board\"\ncanvas = \"full\"\n[[phone.screen.widget]]\nid = \"b1\"\nheight = \"fill\"\n[phone.screen.widget.config]\nzoom = 2\nbubble = false\n",
+        phone_layout::TWO
+    );
+    std::fs::write(&garden2, &laid_out).expect("Garden 2 with a layout");
+    put("page-phone", PAGE, &fx.phone, &[("garden", &g2)], J::Null);
+    put("frame-phone-merged", FRAME, &fx.phone, &[("garden", &g2), ("placement", "b1"), ("scheme", "dark")], J::Null);
+    put("frame-phone-unlisted", FRAME, &fx.phone, &[("garden", &g2), ("placement", "b2"), ("scheme", "dark")], J::Null);
     put("call-store-put", CALL, &fx.phone, &[], call_body(&fx, "store.put", json!(["obj/1", { "t": "hi" }])));
     put("call-store-get", CALL, &fx.phone, &[], call_body(&fx, "store.get", json!(["obj/1"])));
     let mut stale = call_body(&fx, "store.get", json!(["obj/1"]));
@@ -629,9 +646,11 @@ fn samples() -> BTreeMap<String, String> {
         ]
         .concat(),
     };
-    // The frame's nonce appears in its srcdoc too.
-    let nonce = out["frame"]["body"]["nonce"].as_str().expect("frame nonce").to_string();
-    let norm = Norm { subs: [norm.subs, vec![(nonce, "<nonce>".into())]].concat() };
+    // Each frame's nonce appears in its srcdoc too.
+    let nonces: Vec<(String, String)> =
+        out.values().filter_map(|v| v["body"]["nonce"].as_str()).map(|n| (n.to_string(), "<nonce>".to_string())).collect();
+    assert!(nonces.len() >= 4, "every frame sample has one");
+    let norm = Norm { subs: [norm.subs, nonces].concat() };
     out.into_iter()
         .map(|(k, v)| (format!("{k}.json"), format!("{}\n", serde_json::to_string_pretty(&norm.value(&v, None)).expect("json"))))
         .collect()
@@ -677,3 +696,6 @@ fn golden_samples_are_what_the_daemon_writes() {
         assert!(found.is_empty(), "{name}: {found:?}");
     }
 }
+
+#[path = "zen_remote_routes_phone_tests.rs"]
+mod phone_layout;

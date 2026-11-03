@@ -22,10 +22,14 @@ export function gardenSourceAddresses(page: unknown): string[] {
   const widgets = (page as { widgets?: unknown } | null)?.widgets
   if (!Array.isArray(widgets)) return out
   for (const w of widgets) {
-    const addrs = (w as { sourceAddresses?: unknown } | null)?.sourceAddresses
-    if (!Array.isArray(addrs)) continue
-    for (const a of addrs) {
-      if (typeof a === 'string' && a !== '' && !out.includes(a)) out.push(a)
+    // A phone's config may bind more than the desktop's (sent apart): a lock
+    // protects what any device shows.
+    const card = w as { sourceAddresses?: unknown; phoneSourceAddresses?: unknown } | null
+    for (const addrs of [card?.sourceAddresses, card?.phoneSourceAddresses]) {
+      if (!Array.isArray(addrs)) continue
+      for (const a of addrs) {
+        if (typeof a === 'string' && a !== '' && !out.includes(a)) out.push(a)
+      }
     }
   }
   return out

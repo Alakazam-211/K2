@@ -51,3 +51,17 @@ describe('widget weight', () => {
     )
   })
 })
+
+// contract-gardens-phone rev 2 §A: `page.phone` is the phone's. The desktop
+// draws what it always drew, with or without one.
+describe('page.phone on the desktop', () => {
+  it('changes nothing the desktop reads', () => {
+    const widgets = [
+      { id: 'a', kind: 'agents', column: 0, props: {}, caps: [] },
+      { id: 'b', kind: 'agents', column: 1, props: {}, caps: [] },
+    ]
+    const plain = page(widgets) as { page: Record<string, unknown> }
+    const withPhone = { page: { ...plain.page, phone: { screens: [{ label: 'One', widgets: [{ id: 'b', height: 'fill' }] }] } } }
+    expect(parseZenGet(withPhone)).toEqual(parseZenGet(plain))
+  })
+})

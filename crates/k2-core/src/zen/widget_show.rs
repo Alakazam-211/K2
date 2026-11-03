@@ -12,7 +12,6 @@ use crate::zen::builtin_widgets::{parse_widget_ref, WidgetRef};
 use crate::zen::store::{ZenError, ZenFile, ZenFiles};
 use crate::zen::widget_access::{effective_caps, sources_reach_note, WidgetOrigin, WidgetPauses};
 use crate::zen::widget_store::widget_label;
-use crate::zen::widgets;
 
 impl ZenFiles {
     /// GET `/cli/zen/widget/show?widget=<name|k2:ref>`.
@@ -43,13 +42,7 @@ impl ZenFiles {
             let f = ZenFile::Garden(p.garden.clone());
             let eff = self.effective(&f, &self.base_for(&f));
             let page = crate::zen::garden_page(&eff.layer, &self.gardens().iter().find(|g| g.id == p.garden).map(|g| g.template.clone()).unwrap_or_default());
-            let config = page["widgets"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|w| w["id"] == p.placement.as_str())
-                .and_then(|w| w["props"].get("config").cloned())
-                .unwrap_or_else(|| json!({}));
+            let placed = page["widgets"].as_array().into_iter().flatten().find(|w| w["id"] == p.placement.as_str());
             let gst = self.garden_widget_status(&p.garden, &name);
             let gsources = gst.manifest.as_ref().and_then(|m| m.sources.clone());
             let paused = pauses.get(&p.garden, &p.placement);
@@ -68,7 +61,7 @@ impl ZenFiles {
                 "paused": paused,
                 "state": gst.state.as_str(),
                 "note": state,
-                "sources": widgets::placement_source_addresses(gsources.as_ref(), &config),
+                "sources": placed.map(|w| crate::zen::phone::all_source_addresses(&page, w, gsources.as_ref())).unwrap_or_default(),
             }));
         }
 

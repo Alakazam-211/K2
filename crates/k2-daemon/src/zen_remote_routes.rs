@@ -55,7 +55,7 @@ use serde_json::{json, Value as J};
 use k2_core::contract::{catalog, phone, Phone};
 use k2_core::zen::stdlib::{self, LibRef, LibSource};
 use k2_core::zen::widget_shot::{self, Scheme};
-use k2_core::zen::{ZenError, ZenFiles};
+use k2_core::zen::{phone as garden_phone, ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::garden_data::call::CallBody;
@@ -388,11 +388,15 @@ fn gardens(p: &Person, params: &HashMap<String, String>) -> CliResponse {
 
 /// How the phone runs one placement (§4.1).
 fn run_of(kind: &str) -> (&'static str, Option<&'static str>) {
-    match kind {
-        "custom" => ("frame", None),
-        "agents" | "conversation" | "garden-empty" => ("native", None),
-        _ => ("placeholder", Some("desktop_only")),
-    }
+    let run = garden_phone::run_of_kind(kind);
+    (run.as_str(), (run == garden_phone::Run::Placeholder).then_some("desktop_only"))
+}
+
+/// A placement's `frameVersion` (contract rev 2 §C), from the resolved page.
+/// `None` with no good version: `remote/frame` answers 409 `widget_broken`.
+fn frame_version_of(page: &J, w: &J) -> Option<String> {
+    let hash = w["hash"].as_str().filter(|h| !h.is_empty())?;
+    Some(garden_phone::frame_version(hash, &garden_phone::merged_config(page, w), garden_phone::hello_height(page, w).as_ref()))
 }
 
 /// The hello's `features` on a phone (GP-A5): the desktop frame's, minus
@@ -434,6 +438,11 @@ fn page(p: &Person, params: &HashMap<String, String>) -> CliResponse {
                     let mut row = json!({ "id": w["id"], "run": run });
                     if let Some(r) = reason {
                         row["reason"] = json!(r);
+                    }
+                    if run == garden_phone::Run::Frame.as_str() {
+                        if let Some(fv) = frame_version_of(&v["page"], w) {
+                            row["frameVersion"] = json!(fv);
+                        }
                     }
                     row
                 })
@@ -505,6 +514,11 @@ fn frame(p: &Person, params: &HashMap<String, String>) -> CliResponse {
     let widget = w["widget"].as_str().unwrap_or_default().to_string();
     let st = match f.widget_bundle_in(Some(&gid), &widget) {
         Ok(st) => st,
+        // The folder is gone: no good version, which the row's missing
+        // frameVersion already told the phone (contract rev 2 §C).
+        Err(ZenError::UnknownWidget(_)) => {
+            return refuse("409 Conflict", "widget_broken", format!("{widget} has no good version on the computer"));
+        }
         Err(e) => return zen_err(e),
     };
     let (Some(bundle), Some(manifest)) = (st.bundle.as_ref(), st.manifest.as_ref()) else {
@@ -535,15 +549,25 @@ fn frame(p: &Person, params: &HashMap<String, String>) -> CliResponse {
     let own = w["colorScheme"] == "own";
     let nonce = k2_core::zen::bundle::new_nonce();
     let srcdoc = widget_shot::remote_frame_doc(&bundle.render(&nonce), &nonce, &vars, scheme, libs.len(), own);
-    let hello = json!({
+    // contract-gardens-phone rev 2 §B.1: the daemon sets `view`, `config` (the
+    // phone's merged over the desktop's) and `height`; the phone adds only
+    // `viewport`. A placement `page.phone` leaves out gets no `height`.
+    let config = garden_phone::merged_config(&v["page"], &w);
+    let height = garden_phone::hello_height(&v["page"], &w);
+    let frame_version = garden_phone::frame_version(&bundle.hash, &config, height.as_ref());
+    let mut hello = json!({
         "k2": "hello",
         "v": 1,
         "caps": w["caps"],
         "features": phone_features(),
         "widget": { "id": placement, "name": w["name"], "garden": gid },
-        "config": w["props"].get("config").cloned().unwrap_or_else(|| json!({})),
+        "config": config,
         "motion": { "reduced": v["motion"]["reduced"].as_bool().unwrap_or(false) },
+        "view": "phone",
     });
+    if let Some(h) = height {
+        hello["height"] = h;
+    }
     audit("zen.remote.frame", p, format!("garden={gid} placement={placement} widget={widget} hash={}", &bundle.hash[..bundle.hash.len().min(12)]));
     ok(json!({
         "ok": true,
@@ -551,6 +575,7 @@ fn frame(p: &Person, params: &HashMap<String, String>) -> CliResponse {
         "placement": placement,
         "widget": widget,
         "hash": bundle.hash,
+        "frameVersion": frame_version,
         "nonce": nonce,
         "scheme": scheme.as_str(),
         "srcdoc": srcdoc,

@@ -38,6 +38,8 @@ describe('data-sources-lock', () => {
   it('collects every address a page shows, once', () => {
     expect(gardenSourceAddresses(PAGE.page)).toEqual(['fleet::akzm.k2.dev', 'latest::akzm.k2.dev', 'money'])
     expect(gardenSourceAddresses({ widgets: [{}] })).toEqual([])
+    // What a phone's config binds is protected too (rev 2 §A.3).
+    expect(gardenSourceAddresses({ widgets: [{ sourceAddresses: ['fleet'], phoneSourceAddresses: ['small', 'fleet'] }] })).toEqual(['fleet', 'small'])
     expect(gardenSourceAddresses(null)).toEqual([])
     expect(splitAddress('money')).toEqual({ name: 'money', host: 'local' })
     expect(splitAddress('fleet::akzm.k2.dev')).toEqual({ name: 'fleet', host: 'akzm.k2.dev' })

@@ -452,6 +452,7 @@
       ],
       "widgets": [
         {
+          "frameVersion": "<frameVersion>",
           "id": "b1",
           "run": "frame"
         }

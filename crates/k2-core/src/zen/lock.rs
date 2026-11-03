@@ -434,8 +434,8 @@ impl ZenFiles {
                 let widget = w["widget"].as_str().unwrap_or_default();
                 let st = self.garden_widget_status(&g.id, widget);
                 let sources = st.manifest.as_ref().and_then(|m| m.sources.as_ref());
-                let config = w.get("props").and_then(|p| p.get("config")).cloned().unwrap_or_else(|| json!({}));
-                for a in super::widgets::placement_source_addresses(sources, &config) {
+                // A phone's `config` may bind sources too: they stay protected.
+                for a in super::phone::all_source_addresses(&page, w, sources) {
                     let Ok(addr) = crate::sources::Address::parse(&a) else { continue };
                     match (&addr.host, &this_host) {
                         (None, _) => {

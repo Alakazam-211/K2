@@ -125,7 +125,7 @@ async fn a_login_streams_only_its_subscribed_chats() {
 
     let boot = get(port, "/boot-status", OWNER, "").await.json();
     let features = boot["features"].as_array().expect("features");
-    for key in ["inbox-stream-v1", "push-content-available-v1", "push-e2e-v2"] {
+    for key in ["inbox-stream-v1", "push-content-available-v1", "push-read-hints-v1", "push-e2e-v2"] {
         assert!(features.iter().any(|f| f == key), "{key}: {boot}");
     }
 

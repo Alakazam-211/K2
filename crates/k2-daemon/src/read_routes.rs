@@ -131,12 +131,12 @@ pub fn note_own_read(conn: &rusqlite::Connection, person: &str, kind: &str, id: 
     if !read_state::tables_exist(conn) {
         return;
     }
-    match read_state::ack(conn, person, kind, id, Some(seq)) {
-        Ok(true) => {
+    match read_state::ack_to(conn, person, kind, id, Some(seq)) {
+        Ok(Some(to)) => {
             crate::read_live::person_changed(person, kind, id);
-            crate::badge_push::trigger(person);
+            crate::badge_push::read_moved(person, kind, id, to);
         }
-        Ok(false) => {}
+        Ok(None) => {}
         Err(e) => k2_core::log_debug!("[read] own-post advance for {person} in {kind} {id}: {e}"),
     }
 }
@@ -747,7 +747,9 @@ fn handle_unread(person: &Person, f: &Fields) -> CliResponse {
 }
 
 /// Compute one conversation's state + the person's totals after a change.
-fn state_after(person: &Person, kind: &str, id: &str, changed: bool) -> CliResponse {
+/// `read_to`: the cursor moved there (a mute changes state and moves none,
+/// so it never tells a phone the chat was read).
+fn state_after(person: &Person, kind: &str, id: &str, changed: bool, read_to: Option<i64>) -> CliResponse {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let now = read_state::now_secs();
@@ -764,7 +766,10 @@ fn state_after(person: &Person, kind: &str, id: &str, changed: bool) -> CliRespo
         // Every socket of this person (desktop and phone) follows, and
         // their phones get a corrected badge.
         crate::read_live::person_changed(&person.key, kind, id);
-        crate::badge_push::trigger(&person.key);
+        match read_to {
+            Some(seq) => crate::badge_push::read_moved(&person.key, kind, id, seq),
+            None => crate::badge_push::trigger(&person.key),
+        }
     }
     let mut v = with_totals(state_json(&item), totals);
     v["ok"] = serde_json::json!(true);
@@ -777,15 +782,15 @@ fn handle_ack(person: &Person, kind: &str, id: &str, f: &Fields) -> CliResponse 
         Ok(s) => s,
         Err(r) => return r,
     };
-    let changed = {
+    let moved = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        match read_state::ack(&conn, &person.key, kind, id, seq) {
-            Ok(c) => c,
+        match read_state::ack_to(&conn, &person.key, kind, id, seq) {
+            Ok(m) => m,
             Err(e) => return read_error(e),
         }
     };
-    state_after(person, kind, id, changed)
+    state_after(person, kind, id, moved.is_some(), moved)
 }
 
 /// The workspace an agent is named by: `projectId`, else `agent` / `addr`
@@ -830,21 +835,23 @@ fn handle_read_all(person: &Person, f: &Fields) -> CliResponse {
         let sum = read_state::thread_sums_by_project(&summary.items).get(&project_id).copied().unwrap_or_default();
         (marked, sum, summary.totals)
     };
-    for conv in &marked {
+    for (conv, _) in &marked {
         crate::read_live::person_changed(&person.key, KIND_THREAD, conv);
     }
-    if !marked.is_empty() {
-        crate::badge_push::trigger(&person.key);
-    }
+    let changed = !marked.is_empty();
+    let marked_ids: Vec<&str> = marked.iter().map(|(conv, _)| conv.as_str()).collect();
     let v = serde_json::json!({
         "ok": true,
-        "changed": !marked.is_empty(),
+        "changed": changed,
         "projectId": project_id,
-        "marked": marked,
+        "marked": marked_ids,
         "unread": sum.unread,
         "waiting": sum.waiting,
         "muted": sum.muted,
     });
+    if changed {
+        crate::badge_push::read_moved_many(&person.key, KIND_THREAD, marked);
+    }
     CliResponse::ok_json(with_totals(v, totals).to_string())
 }
 
@@ -876,7 +883,7 @@ fn handle_mute(person: &Person, f: &Fields) -> CliResponse {
             Err(e) => return read_error(e),
         }
     };
-    state_after(person, &kind, &id, changed)
+    state_after(person, &kind, &id, changed, None)
 }
 
 /// Boot: see every person this server knows (each starts fully read).
@@ -899,3 +906,7 @@ pub fn boot() {
         Err(e) => k2_core::log_debug!("[read] boot: {e}"),
     }
 }
+
+#[cfg(test)]
+#[path = "read_routes_tests.rs"]
+mod tests;

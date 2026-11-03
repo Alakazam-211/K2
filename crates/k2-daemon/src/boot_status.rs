@@ -825,6 +825,9 @@ pub const FEATURE_PUSH_E2E_V2: &str = "push-e2e-v2";
 /// desktop, over budget, a person's post, a closed card). Ids and seqs
 /// only. No SQL migration.
 pub const FEATURE_PUSH_CONTENT_AVAILABLE: &str = "push-content-available-v1";
+/// A silent push names the chats a person just read, so their phone can clear
+/// those notifications with the app closed. The phone doesn't gate on it.
+pub const FEATURE_PUSH_READ_HINTS: &str = "push-read-hints-v1";
 
 /// Unread counts (thread-read-v1, 0.46.1, migration 0190): per-person read
 /// cursors and mutes for Threads and project chats — `GET
@@ -1177,6 +1180,7 @@ pub fn features() -> Vec<&'static str> {
             }
         }
         out.push(FEATURE_PUSH_CONTENT_AVAILABLE);
+        out.push(FEATURE_PUSH_READ_HINTS);
     }
     if thread_read_ready() {
         out.push(FEATURE_THREAD_READ);
@@ -1347,6 +1351,7 @@ mod tests {
                 "push-e2e-v1",
                 "push-e2e-v2",
                 "push-content-available-v1",
+                "push-read-hints-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
                 "stash-sync-v1",

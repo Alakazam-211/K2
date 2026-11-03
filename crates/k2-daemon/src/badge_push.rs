@@ -32,6 +32,22 @@
 //! a drop is never retried. An alert to the person for that chat clears
 //! its note ([`note_alerted`]): the alert already carries it.
 //!
+//! **Read hints (push-read-hints-v1).** When a person's cursor moves forward
+//! ([`read_moved`]), the chat rides their next badge push as a `read` entry,
+//! so a phone can clear that chat's notifications with the app closed. The
+//! newest 8 go, highest seq per chat, and a push holding one isn't skipped
+//! for unchanged totals. The same limits apply: one push per person per
+//! 10 s, the badge budget, the per-daemon path, a drop is never retried.
+//!
+//! An entry is noted only if an alert may be showing for that chat. The
+//! desktop posts a read for every new seq while a chat is open, and every own
+//! post moves the cursor too, so without this one person chatting would send
+//! a push every 10 s (360/h against a whole server's 240/h). [`ChatMark`]
+//! keeps that in memory: a chat with no mark sends once (an alert from before
+//! a restart may still be showing), then it takes a new alert. The cost: a
+//! hint lost on the way isn't resent by a later read of that chat. Opening
+//! the app, or the unread total reaching 0, still clears it on the phone.
+//!
 //! The [`Coalescer`] is pure state + an injected [`BadgeEnv`] (fake clock
 //! and capture sink in tests). The daemon ticks one global instance.
 
@@ -39,7 +55,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use k2_core::push::{BadgePush, PushEvent};
+use k2_core::push::{BadgePush, PushEvent, ReadEntry, ReadHint, ReadKind};
 use k2_core::read_state::Totals;
 
 /// At most one badge push per person per window.
@@ -48,6 +64,22 @@ pub const WINDOW: Duration = Duration::from_secs(10);
 pub const STALE_WINDOW: Duration = Duration::from_secs(60);
 /// Forget a person whose last push is this old and who has nothing due.
 const FORGET_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// Most `read` entries held for one person; older ones go. Only 8 ride a push,
+/// so the push already says `readMore`.
+const READ_HELD_MAX: usize = 64;
+/// Most chats one person keeps a [`ChatMark`] for. Past it they're all
+/// forgotten, which means "unknown" and errs toward sending.
+const READ_MARKS_MAX: usize = 256;
+
+/// What a person's phones may still be showing for one chat.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ChatMark {
+    /// The seq of the newest alert sent to this person.
+    alerted_through: i64,
+    /// The highest seq sent in a push carrying a `read` entry.
+    hinted_through: i64,
+}
 
 /// What the coalescer needs from the daemon.
 pub trait BadgeEnv {
@@ -78,6 +110,25 @@ struct Entry {
     stale: Vec<String>,
     /// When the stale notes go out on their own.
     stale_due: Option<Instant>,
+    /// Chats read since the last push, oldest first (push-read-hints-v1).
+    read: Vec<ReadEntry>,
+    /// Which chats may still have an alert showing.
+    marks: HashMap<(ReadKind, String), ChatMark>,
+}
+
+impl Entry {
+    fn mark(&mut self, kind: ReadKind, id: &str) -> &mut ChatMark {
+        let chat = (kind, id.to_string());
+        if self.marks.len() >= READ_MARKS_MAX && !self.marks.contains_key(&chat) {
+            self.marks.clear();
+        }
+        self.marks.entry(chat).or_default()
+    }
+
+    /// Is an alert possibly showing for this chat? No record means it may be.
+    fn may_show_alert(&self, kind: ReadKind, id: &str) -> bool {
+        self.marks.get(&(kind, id.to_string())).is_none_or(|m| m.alerted_through > m.hinted_through)
+    }
 }
 
 /// Per-person badge state.
@@ -130,6 +181,30 @@ impl Coalescer {
         }
     }
 
+    /// `person`'s cursor in this chat moved to `seq`. Run [`Self::trigger`]
+    /// next under the same lock, or the entry can sit with nothing due to
+    /// send it.
+    pub fn note_read(&mut self, person: &str, kind: ReadKind, id: &str, seq: i64) {
+        let e = self.people.entry(person.to_string()).or_default();
+        if !e.may_show_alert(kind, id) {
+            return;
+        }
+        let same = |r: &ReadEntry| r.kind == kind && r.id == id;
+        let seq = e.read.iter().find(|r| same(r)).map_or(seq, |r| r.seq.max(seq));
+        e.read.retain(|r| !same(r));
+        e.read.push(ReadEntry { kind, id: id.to_string(), seq });
+        if e.read.len() > READ_HELD_MAX {
+            e.read.remove(0);
+        }
+    }
+
+    /// An alert for this chat, at `seq`, went to `person`: a read of it can
+    /// clear something now. A pending `read` entry stays.
+    pub fn note_alert_sent(&mut self, person: &str, kind: ReadKind, id: &str, seq: i64) {
+        let m = self.people.entry(person.to_string()).or_default().mark(kind, id);
+        m.alerted_through = m.alerted_through.max(seq);
+    }
+
     /// Send every scheduled push whose window is over.
     pub fn tick(&mut self, env: &dyn BadgeEnv, now: Instant) {
         let due: Vec<String> = self
@@ -162,6 +237,7 @@ impl Coalescer {
             e.due.is_some()
                 || e.stale_due.is_some()
                 || e.last_told.is_some()
+                || !e.marks.is_empty()
                 || e.last_send.is_some_and(|t| now.saturating_duration_since(t) < FORGET_AFTER)
         });
     }
@@ -173,6 +249,8 @@ impl Coalescer {
         // drop is never retried (the foreground catch-up is the guarantee).
         let stale = std::mem::take(&mut e.stale);
         e.stale_due = None;
+        // The same for read entries: the phone's next open clears them.
+        let read = std::mem::take(&mut e.read);
         if env.blocked() {
             return;
         }
@@ -180,7 +258,8 @@ impl Coalescer {
         // Newest note first, with each chat's newest seq now.
         let pairs: Vec<(String, i64)> =
             stale.iter().rev().filter_map(|c| env.latest_seq(c).map(|s| (c.clone(), s))).collect();
-        if e.last_told == Some(totals) && pairs.is_empty() {
+        let read = ReadHint::of(read.into_iter().rev().collect());
+        if e.last_told == Some(totals) && pairs.is_empty() && read.is_empty() {
             return;
         }
         let devices = env.devices(person);
@@ -194,13 +273,17 @@ impl Coalescer {
         }
         e.last_told = Some(totals);
         e.last_send = Some(now);
+        for r in &read.entries {
+            let m = e.mark(r.kind, &r.id);
+            m.hinted_through = m.hinted_through.max(r.seq);
+        }
         env.send(PushEvent::Badge(BadgePush {
             principal: person.to_string(),
             device_usernames: devices,
             unread_total: totals.total.to_string(),
             waiting_total: totals.waiting_total.to_string(),
             stale: k2_core::push::StaleHint::of(pairs),
-            read: Default::default(),
+            read,
         }));
     }
 
@@ -331,6 +414,33 @@ pub fn trigger(person: &str) {
     });
 }
 
+/// `person`'s cursor in this chat moved forward to `seq`: their phones may
+/// clear its notifications. Off the caller's thread; the note and the trigger
+/// run under one lock, so a flush can't slip between them.
+pub fn read_moved(person: &str, kind: &str, id: &str, seq: i64) {
+    read_moved_many(person, kind, vec![(id.to_string(), seq)]);
+}
+
+/// [`read_moved`] for several chats of one kind at once (Mark all as read):
+/// one push carries them, not one per chat.
+pub fn read_moved_many(person: &str, kind: &str, chats: Vec<(String, i64)>) {
+    #[cfg(test)]
+    test_read_capture::capture(person, kind, &chats);
+    let kind = ReadKind::of_cursor(kind);
+    let person = person.to_string();
+    run_off_thread(move || {
+        ensure_ticker();
+        let now = Instant::now();
+        let mut c = lock();
+        if let Some(kind) = kind {
+            for (id, seq) in &chats {
+                c.note_read(&person, kind, id, *seq);
+            }
+        }
+        c.trigger(&DaemonEnv, &person, now);
+    });
+}
+
 /// A card was answered, voided or expired: every person with a phone may
 /// have a new `waitingTotal`.
 pub fn trigger_everyone() {
@@ -362,6 +472,30 @@ pub fn note_stale(person: &str, conversation: &str) {
 /// A Thread alert to `person` for `conversation` went out.
 pub fn note_alerted(person: &str, conversation: &str) {
     lock().note_alerted(person, conversation);
+}
+
+/// An alert for this chat, at `seq`, went to `person`.
+pub fn note_alert_sent(person: &str, kind: ReadKind, id: &str, seq: i64) {
+    lock().note_alert_sent(person, kind, id, seq);
+}
+
+/// What [`read_moved`] was told, for the route tests (the daemon wiring is a
+/// no-op under test).
+#[cfg(test)]
+pub(crate) mod test_read_capture {
+    use std::sync::Mutex;
+
+    static CAPTURED: Mutex<Vec<(String, String, String, i64)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn capture(person: &str, kind: &str, chats: &[(String, i64)]) {
+        let mut all = CAPTURED.lock().expect("read capture lock");
+        all.extend(chats.iter().map(|(id, seq)| (person.to_string(), kind.to_string(), id.clone(), *seq)));
+    }
+
+    /// Everything noted for chats in `ids`, in order.
+    pub(crate) fn for_chats(ids: &[&str]) -> Vec<(String, String, String, i64)> {
+        CAPTURED.lock().expect("read capture lock").iter().filter(|c| ids.contains(&c.2.as_str())).cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -583,6 +717,258 @@ mod tests {
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[1].principal, "owner");
         assert!(!sent[1].device_usernames.contains(&"gina".to_string()));
+    }
+
+    fn told(total: i64) -> Totals {
+        Totals { total, waiting_total: 0 }
+    }
+
+    /// What `read_moved` does: the note, then the trigger.
+    fn read(c: &mut Coalescer, env: &Fake, kind: ReadKind, id: &str, seq: i64, now: Instant) {
+        c.note_read("gina", kind, id, seq);
+        c.trigger(env, "gina", now);
+    }
+
+    fn wires(env: &Fake) -> Vec<String> {
+        env.sent().iter().map(|b| b.read.wire()).collect()
+    }
+
+    /// Test 10: the first read in a quiet window goes at once. Later ones
+    /// merge into one trailing push: highest seq per chat, newest read first.
+    #[test]
+    fn read_entries_merge_over_the_window() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        read(&mut c, &env, ReadKind::Thread, "c-1", 40, t0);
+        assert_eq!(wires(&env), ["t:c-1:40"], "the first goes at once");
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 45);
+        c.note_alert_sent("gina", ReadKind::Project, "g-1", 5);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-2", 5);
+        read(&mut c, &env, ReadKind::Thread, "c-1", 42, t0 + Duration::from_secs(1));
+        read(&mut c, &env, ReadKind::Project, "g-1", 5, t0 + Duration::from_secs(2));
+        read(&mut c, &env, ReadKind::Thread, "c-2", 3, t0 + Duration::from_secs(3));
+        read(&mut c, &env, ReadKind::Thread, "c-1", 41, t0 + Duration::from_secs(4));
+        assert_eq!(env.sent().len(), 1, "held inside the window");
+        assert_eq!(c.due("gina"), Some(t0 + WINDOW));
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(env.sent().len(), 2, "one trailing push");
+        assert_eq!(env.sent()[1].read.wire(), "t:c-1:42,t:c-2:3,p:g-1:5", "highest seq per chat; a re-read moves it to newest");
+        assert!(!env.sent()[1].read.more);
+        c.tick(&env, t0 + WINDOW * 3);
+        assert_eq!(env.sent().len(), 2, "nothing left to send");
+    }
+
+    /// Over 8: the newest go with `readMore`. Over the 64 held: the oldest go.
+    #[test]
+    fn more_than_eight_entries_set_read_more() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        for i in 0..9 {
+            c.note_read("gina", ReadKind::Thread, &format!("c-{i}"), 10 + i);
+        }
+        c.trigger(&env, "gina", t0);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 1, "one push, not one per chat");
+        assert_eq!(sent[0].read.entries.len(), 8);
+        assert_eq!(sent[0].read.entries[0].id, "c-8", "newest first");
+        assert!(sent[0].read.more);
+        // The one left out wasn't told: its next read may try again.
+        read(&mut c, &env, ReadKind::Thread, "c-0", 99, t0 + WINDOW);
+        assert_eq!(env.sent()[1].read.wire(), "t:c-0:99");
+
+        let mut c = Coalescer::new();
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        for i in 0..(READ_HELD_MAX as i64 + 1) {
+            c.note_read("gina", ReadKind::Thread, &format!("c-{i}"), 1);
+        }
+        assert_eq!(c.people["gina"].read.len(), READ_HELD_MAX);
+        assert!(c.people["gina"].read.iter().all(|r| r.id != "c-0"), "the oldest goes");
+        c.trigger(&env, "gina", t0);
+        assert!(env.sent()[0].read.more);
+    }
+
+    /// An entry the list can't hold doesn't make a push, and never holds a
+    /// real one back.
+    #[test]
+    fn an_id_the_list_cant_hold_never_forces_a_push() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        read(&mut c, &env, ReadKind::Thread, "a,b", 5, t0);
+        assert!(env.sent().is_empty(), "same totals and nothing to name: skipped");
+        read(&mut c, &env, ReadKind::Thread, "c-1", 5, t0 + Duration::from_secs(1));
+        assert_eq!(wires(&env), ["t:c-1:5"]);
+    }
+
+    /// Test 11 (D2): an entry beats unchanged totals. Without one it's
+    /// skipped and costs no budget.
+    #[test]
+    fn a_read_entry_goes_though_the_totals_are_unchanged() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        env.budget.set(Some(1));
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        c.trigger(&env, "gina", t0);
+        assert!(env.sent().is_empty(), "no entry, same numbers: skipped");
+        assert_eq!(env.budget.get(), Some(1), "a skip takes no budget");
+        read(&mut c, &env, ReadKind::Thread, "c-1", 7, t0 + Duration::from_secs(1));
+        assert_eq!(wires(&env), ["t:c-1:7"], "same totals still go: the entry is new");
+        assert_eq!(env.sent()[0].unread_total, "2");
+        assert_eq!(env.budget.get(), Some(0), "it takes one token");
+    }
+
+    /// Test 12: the storm. An alert, then 30 reads or own posts over five
+    /// minutes while chatting along: exactly one entry goes out. This fails
+    /// with the filter removed: about 30 pushes.
+    #[test]
+    fn chatting_along_sends_one_hint_not_a_stream() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 40);
+        for i in 0..30 {
+            read(&mut c, &env, ReadKind::Thread, "c-1", 40 + i, t0 + WINDOW * i as u32);
+            c.tick(&env, t0 + WINDOW * i as u32);
+        }
+        c.tick(&env, t0 + WINDOW * 60);
+        assert_eq!(wires(&env), ["t:c-1:40"], "one entry for the one alert");
+
+        // A new alert makes the next read worth sending again, once.
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 80);
+        let t1 = t0 + WINDOW * 100;
+        read(&mut c, &env, ReadKind::Thread, "c-1", 80, t1);
+        read(&mut c, &env, ReadKind::Thread, "c-1", 81, t1 + WINDOW * 2);
+        assert_eq!(wires(&env), ["t:c-1:40", "t:c-1:80"]);
+
+        // A read short of the alert leaves it showing, so the next one goes too.
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 100);
+        let t2 = t1 + WINDOW * 100;
+        read(&mut c, &env, ReadKind::Thread, "c-1", 90, t2);
+        read(&mut c, &env, ReadKind::Thread, "c-1", 100, t2 + WINDOW * 2);
+        read(&mut c, &env, ReadKind::Thread, "c-1", 101, t2 + WINDOW * 4);
+        assert_eq!(wires(&env)[2..], ["t:c-1:90", "t:c-1:100"]);
+    }
+
+    /// Test 13: a chat this daemon knows nothing about sends once (an alert
+    /// from before a restart may still be showing), then stays quiet.
+    #[test]
+    fn an_unknown_chat_sends_once_then_quiet() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        for i in 0..5 {
+            read(&mut c, &env, ReadKind::Project, "g-1", 10 + i, t0 + WINDOW * (2 * i as u32));
+        }
+        assert_eq!(wires(&env), ["p:g-1:10"]);
+        // Past the mark limit everything is unknown again: it sends once more.
+        for i in 0..READ_MARKS_MAX {
+            c.note_alert_sent("gina", ReadKind::Thread, &format!("c-{i}"), 1);
+        }
+        read(&mut c, &env, ReadKind::Project, "g-1", 20, t0 + WINDOW * 40);
+        assert_eq!(wires(&env), ["p:g-1:10", "p:g-1:20"]);
+    }
+
+    /// Test 14: alert, then mute, then read: the totals don't move but the
+    /// entry goes. Muted with no alert since the last hint: nothing.
+    #[test]
+    fn a_muted_chat_clears_after_its_alert_and_stays_quiet_without_one() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        c.note_alert_sent("gina", ReadKind::Thread, "c-m", 9);
+        // A mute goes through `trigger` alone: it isn't a read.
+        c.trigger(&env, "gina", t0);
+        assert!(env.sent().is_empty(), "the mute itself sends nothing");
+        read(&mut c, &env, ReadKind::Thread, "c-m", 9, t0 + Duration::from_secs(1));
+        assert_eq!(wires(&env), ["t:c-m:9"]);
+        assert_eq!(env.sent()[0].unread_total, "2", "the totals never moved");
+        read(&mut c, &env, ReadKind::Thread, "c-m", 12, t0 + WINDOW * 2);
+        assert_eq!(env.sent().len(), 1, "no alert since: nothing to clear");
+    }
+
+    /// Test 15: over budget the entries are gone and nothing is queued, but
+    /// the chat wasn't told, so the next forward read sends.
+    #[test]
+    fn a_budget_drop_loses_the_entry_but_the_next_read_tries_again() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        env.budget.set(Some(0));
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5);
+        read(&mut c, &env, ReadKind::Thread, "c-1", 5, t0);
+        assert!(env.sent().is_empty(), "over budget: dropped");
+        assert_eq!(c.due("gina"), None, "nothing queued");
+        assert!(c.people["gina"].read.is_empty(), "the entry is gone");
+        c.tick(&env, t0 + WINDOW * 4);
+        assert!(env.sent().is_empty());
+        env.budget.set(Some(1));
+        read(&mut c, &env, ReadKind::Thread, "c-1", 6, t0 + WINDOW * 5);
+        assert_eq!(wires(&env), ["t:c-1:6"], "the next read tries again");
+    }
+
+    /// Test 16: blocked or no phones: nothing goes, nothing is held, and the
+    /// chat stays worth telling.
+    #[test]
+    fn blocked_or_no_devices_send_nothing_and_hold_nothing() {
+        let t0 = Instant::now();
+        let env = Fake::with("gina", &[], 2, 0);
+        let mut c = Coalescer::new();
+        read(&mut c, &env, ReadKind::Thread, "c-1", 5, t0);
+        assert!(env.sent().is_empty(), "no phones");
+        assert!(c.people["gina"].read.is_empty());
+
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        env.blocked.set(true);
+        let mut c = Coalescer::new();
+        read(&mut c, &env, ReadKind::Thread, "c-1", 5, t0);
+        assert!(env.sent().is_empty(), "air-gap / no per-daemon path");
+        assert!(c.people["gina"].read.is_empty());
+        env.blocked.set(false);
+        c.tick(&env, t0 + WINDOW * 4);
+        assert!(env.sent().is_empty(), "nothing was held");
+        read(&mut c, &env, ReadKind::Thread, "c-1", 6, t0 + WINDOW * 5);
+        assert_eq!(wires(&env), ["t:c-1:6"], "never told, so it's still worth telling");
+    }
+
+    /// An alert's own note leaves a pending entry alone (a stale note goes,
+    /// a read entry doesn't), and read and stale hints ride one push.
+    #[test]
+    fn an_alert_never_clears_a_pending_read_entry() {
+        let env = Fake::with("gina", &["gina"], 2, 0);
+        env.seqs.borrow_mut().insert("c-2".into(), 8);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_told("gina", told(2));
+        read(&mut c, &env, ReadKind::Thread, "c-1", 3, t0);
+        c.note_read("gina", ReadKind::Thread, "c-9", 4);
+        c.note_stale("gina", "c-1", t0);
+        c.note_stale("gina", "c-2", t0);
+        c.note_alerted("gina", "c-1");
+        c.note_alert_sent("gina", ReadKind::Thread, "c-9", 5);
+        c.trigger(&env, "gina", t0 + Duration::from_secs(1));
+        c.tick(&env, t0 + WINDOW);
+        let last = env.sent().last().cloned().expect("a push");
+        assert_eq!(last.read.wire(), "t:c-9:4");
+        assert_eq!(last.stale.pairs, vec![("c-2".to_string(), 8)]);
+    }
+
+    /// A person with only marks is kept, or the filter would forget them.
+    #[test]
+    fn marks_outlive_the_idle_sweep() {
+        let env = Fake::with("gina", &[], 2, 0);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5);
+        c.tick(&env, t0 + FORGET_AFTER * 2);
+        assert_eq!(c.people["gina"].marks.len(), 1);
     }
 
     /// The badge push rides its own budget class end to end.

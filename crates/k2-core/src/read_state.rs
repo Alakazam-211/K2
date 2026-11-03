@@ -334,6 +334,11 @@ fn require_head(conn: &Connection, kind: &str, id: &str) -> Result<i64, ReadErro
 /// a `seq` at or behind the cursor changes nothing; a `seq` past the head
 /// is clamped to the head. `Ok(true)` when the cursor moved.
 pub fn ack(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option<i64>) -> Result<bool, ReadError> {
+    ack_to(conn, person, kind, id, seq).map(|moved| moved.is_some())
+}
+
+/// [`ack`], answering with the new cursor when it moved.
+pub fn ack_to(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option<i64>) -> Result<Option<i64>, ReadError> {
     if let Some(s) = seq {
         if s < 0 {
             return Err(ReadError::Usage(format!("seq must be >= 0, got {s}")));
@@ -344,7 +349,7 @@ pub fn ack(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option<i6
     let target = seq.unwrap_or(head).min(head);
     let cur = cursor(conn, person, kind, id)?;
     if target <= cur.last_read_seq {
-        return Ok(false);
+        return Ok(None);
     }
     conn.execute(
         "INSERT INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -353,7 +358,7 @@ pub fn ack(conn: &Connection, person: &str, kind: &str, id: &str, seq: Option<i6
         params![person, kind, id, target, now_secs()],
     )
     .map_err(store_err)?;
-    Ok(true)
+    Ok(Some(target))
 }
 
 /// True when `project_id` is a workspace on this server.
@@ -368,9 +373,9 @@ pub fn project_exists(conn: &Connection, project_id: &str) -> Result<bool, ReadE
 /// address reaches any more (a re-pinned Chat keeps its old conversation,
 /// and an agent row's badge sums them all, [`thread_sums_by_project`]).
 /// Forward only, one savepoint (all or none). Waiting cards stay waiting:
-/// reading never answers a card. Returns the conversations that moved.
-/// `NotFound` for a workspace this server doesn't have.
-pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) -> Result<Vec<String>, ReadError> {
+/// reading never answers a card. Returns the conversations that moved, each
+/// with its new cursor. `NotFound` for a workspace this server doesn't have.
+pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) -> Result<Vec<(String, i64)>, ReadError> {
     let project_id = project_id.trim();
     if !project_exists(conn, project_id)? {
         return Err(ReadError::NotFound(format!("no workspace '{project_id}'")));
@@ -413,7 +418,7 @@ pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) ->
     match res {
         Ok(()) => {
             conn.execute_batch("RELEASE read_all").map_err(store_err)?;
-            Ok(behind.into_iter().map(|(c, _)| c).collect())
+            Ok(behind)
         }
         Err(e) => {
             let _ = conn.execute_batch("ROLLBACK TO read_all; RELEASE read_all");
@@ -1587,7 +1592,8 @@ mod tests {
         assert_eq!(sums(&owner()).get(&project).copied(), Some(ProjectThreadSum { unread: 2, waiting: 1, muted: false }));
 
         let moved = ack_project_threads(&conn, "owner", &project).expect("read all");
-        assert_eq!(moved, vec![old_chat.clone()], "only the Threads behind their head move");
+        let old_head = head(&conn, KIND_THREAD, &old_chat).expect("head").expect("the old chat exists");
+        assert_eq!(moved, vec![(old_chat.clone(), old_head)], "only the Threads behind their head move, with the new cursor");
         let after = sums(&owner());
         assert_eq!(
             after.get(&project).copied(),
@@ -1600,7 +1606,7 @@ mod tests {
             Some(3),
             "another person's count never moves (the earlier chat's 2 lines + the pinned Chat's 1)"
         );
-        assert_eq!(ack_project_threads(&conn, "owner", &project).expect("again"), Vec::<String>::new(), "idempotent");
+        assert_eq!(ack_project_threads(&conn, "owner", &project).expect("again"), Vec::<(String, i64)>::new(), "idempotent");
         assert!(matches!(ack_project_threads(&conn, "owner", "no-such-workspace"), Err(ReadError::NotFound(_))));
         // A later post counts again.
         agent_post(&conn, &old_chat, &project, "later");

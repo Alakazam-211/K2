@@ -457,6 +457,8 @@ fn a_mark_read_on_one_surface_is_the_same_persons_state_on_another() {
     assert_eq!((seen["unread"].as_i64(), seen["lastReadSeq"].as_i64()), (Some(1), Some(2)), "surface B sees A's read: {seen}");
     // The move went out under the person's key, for this project.
     assert_eq!(dee_moves(&mut moves), vec![f.solo.clone()], "one move, this project");
+    // No K2 push for a guest, so nothing tells a K2 phone it was read.
+    assert_eq!(crate::badge_push::test_read_capture::for_chats(&[&f.solo]), Vec::new());
     // B's read frame: the overlay read-frame shape, own project only.
     let frame: J = serde_json::from_str(&pc::read_frame_wire(&{
         let db = k2_core::db::shared();

@@ -121,8 +121,8 @@ pub trait PushEnv {
     /// no alert to `person` (muted, viewed on the desktop, over budget):
     /// hint it on their next silent push.
     fn stale(&self, person: &str, conversation_id: &str);
-    /// An alert to `person` for `conversation_id` went out.
-    fn alerted(&self, person: &str, conversation_id: &str);
+    /// An alert to `person` for `conversation_id`, at `seq`, went out.
+    fn alerted(&self, person: &str, conversation_id: &str, seq: i64);
 }
 
 #[derive(Debug, Clone)]
@@ -295,11 +295,12 @@ impl Coalescer {
         }
         let len = if w.last_push.is_some() && !w.viewed_since_push { BACKOFF } else { WINDOW };
         let totals = env.totals(person);
+        let seq = w.post.seq;
         let event = PushEvent::ThreadPost(ThreadPush {
             agent_name: w.post.agent_name.clone(),
             conversation_id: conversation.clone(),
             addr: w.post.addr.clone(),
-            seq: w.post.seq,
+            seq,
             project_id: w.post.project_id.clone(),
             msg_kind: w.post.kind,
             count: w.pending,
@@ -325,7 +326,7 @@ impl Coalescer {
         // The phone now has these numbers: a badge push with the same ones
         // is skipped.
         crate::badge_push::note_told(person, totals);
-        env.alerted(person, conversation);
+        env.alerted(person, conversation, seq);
     }
 }
 
@@ -411,8 +412,9 @@ impl PushEnv for DaemonEnv {
         crate::badge_push::note_stale(person, conversation_id);
     }
 
-    fn alerted(&self, person: &str, conversation_id: &str) {
+    fn alerted(&self, person: &str, conversation_id: &str, seq: i64) {
         crate::badge_push::note_alerted(person, conversation_id);
+        crate::badge_push::note_alert_sent(person, k2_core::push::ReadKind::Thread, conversation_id, seq);
     }
 }
 
@@ -610,6 +612,7 @@ mod tests {
         /// push-content-available-v1: stale notes and alerts, in order.
         stale: RefCell<Vec<(String, String)>>,
         alerted: RefCell<Vec<(String, String)>>,
+        alerted_seqs: RefCell<Vec<i64>>,
     }
 
     impl Fake {
@@ -680,9 +683,24 @@ mod tests {
         fn stale(&self, person: &str, conversation_id: &str) {
             self.stale.borrow_mut().push((person.into(), conversation_id.into()));
         }
-        fn alerted(&self, person: &str, conversation_id: &str) {
+        fn alerted(&self, person: &str, conversation_id: &str, seq: i64) {
             self.alerted.borrow_mut().push((person.into(), conversation_id.into()));
+            self.alerted_seqs.borrow_mut().push(seq);
         }
+    }
+
+    /// push-read-hints-v1: an alert says which seq it was for, the trailing
+    /// one included.
+    #[test]
+    fn an_alert_reports_its_seq() {
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, post("c-1", 40, ThreadMsgKind::Text), t0);
+        c.post(&env, post("c-1", 41, ThreadMsgKind::Text), t0 + Duration::from_secs(1));
+        assert_eq!(*env.alerted_seqs.borrow(), [40], "the second is held");
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(*env.alerted_seqs.borrow(), [40, 41]);
     }
 
     /// push-content-available-v1 (K3): an agent post that gives a person

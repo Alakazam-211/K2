@@ -908,6 +908,76 @@ pub fn parse_auth_results(lines: &[String], authority: &AuthAuthority) -> serde_
     })
 }
 
+/// May an agent act on this message on its own, as far as its sender goes?
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SenderCheck {
+    Clear,
+    /// A person has to look: the words finish "…the original message …".
+    NeedsPerson(String),
+}
+
+/// `header.from` in the topmost header's DMARC part: `None` when the part names
+/// none, `Some("")` when it names an empty one, as a mail with several From
+/// addresses gets.
+fn dmarc_header_from(first_line: &str) -> Option<String> {
+    let (segments, _) = auth_results_segments(first_line);
+    let part = segments.iter().find(|s| auth_method_result(s, "dmarc").is_some())?;
+    part.split_whitespace().find_map(|t| {
+        let (k, v) = t.split_once('=')?;
+        k.eq_ignore_ascii_case("header.from").then(|| v.to_string())
+    })
+}
+
+/// The check behind every step that acts on a message because of who sent it.
+/// A verdict only ever says something about one sender, so:
+/// - `dmarc=fail` in ANY header, from anyone, needs a person. A forged one can
+///   only ask for more care;
+/// - so does a message that doesn't name exactly one sender (the verdict on
+///   several From addresses is `none`, whatever their domains' policies);
+/// - from this box's own stamp, `pass` passes, and `none` (the domain publishes
+///   no policy) passes only if `header.from` is that sender's domain;
+/// - any other result needs a person, as does no result at all unless the sender
+///   is a mailbox on this box: mail between them gets no stamp.
+pub fn sender_check(
+    lines: &[String],
+    authority: &AuthAuthority,
+    from: &[crate::mail::jmap::MailAddr],
+    sender_on_this_box: bool,
+) -> SenderCheck {
+    let needs = |why: String| SenderCheck::NeedsPerson(why);
+    let any_fail = lines.iter().any(|line| {
+        auth_results_segments(line)
+            .0
+            .iter()
+            .any(|s| auth_method_result(s, "dmarc").flatten().as_deref() == Some("fail"))
+    });
+    if any_fail {
+        return needs("FAILED DMARC".to_string());
+    }
+    let [sender] = from else {
+        return needs(format!("names {} senders, so a DMARC check can't vouch for it", from.len()));
+    };
+    let parsed = parse_auth_results(lines, authority);
+    let verdict = parsed["dmarc"].as_str();
+    let domain = |d: &str| {
+        k2_core::mail_domain::normalize_mail_domain(d).unwrap_or_else(|_| d.to_ascii_lowercase())
+    };
+    let matches_sender = |header_from: &str| {
+        !header_from.is_empty()
+            && sender.email.rsplit_once('@').is_some_and(|(_, d)| domain(d) == domain(header_from))
+    };
+    let header_from = lines.first().and_then(|l| dmarc_header_from(l));
+    match verdict {
+        None if sender_on_this_box => SenderCheck::Clear,
+        None => needs("has no DMARC result from this server".to_string()),
+        Some("pass") if header_from.as_deref().is_none_or(matches_sender) => SenderCheck::Clear,
+        Some("none") if header_from.as_deref().is_some_and(matches_sender) => SenderCheck::Clear,
+        Some("pass" | "none") => needs("has a DMARC result for a different domain than its sender".to_string()),
+        Some("fail") => needs("has a DMARC result that can't be read cleanly".to_string()),
+        Some(other) => needs(format!("has the DMARC result '{other}', which vouches for nobody")),
+    }
+}
+
 // ── Shaping (§8.1 message JSON) ─────────────────────────────────────────
 
 fn addr_json(a: &crate::mail::jmap::MailAddr) -> serde_json::Value {
@@ -1575,6 +1645,99 @@ pub(crate) mod tests {
         assert_eq!(dmarc_of(&[r#"mx; smtp.mailfrom="dmarc=pass@x.example"; dmarc=fail"#.to_string()], &p), "fail");
         let v = parse_auth_results(&[], &p);
         assert!(v["spf"].is_null() && v["dkim"].is_null() && v["dmarc"].is_null());
+    }
+
+    fn who(emails: &[&str]) -> Vec<crate::mail::jmap::MailAddr> {
+        emails.iter().map(|e| crate::mail::jmap::MailAddr { name: None, email: e.to_string() }).collect()
+    }
+
+    fn check_of(lines: &[String], from: &[&str], on_box: bool) -> SenderCheck {
+        sender_check(lines, &on_box_authority(), &who(from), on_box)
+    }
+
+    fn on_box_authority() -> AuthAuthority {
+        AuthAuthority::ThisBox(Some(BOX.to_string()))
+    }
+
+    /// Stalwart 0.16.25's real stamps (tests/mail/stalwart-auth-results-probe.py).
+    fn real(dmarc_part: &str) -> Vec<String> {
+        vec![format!(
+            "{BOX}; spf=none ({BOX}: no SPF records found for bounce@evil.example) smtp.mailfrom=bounce@evil.example; \
+             iprev=pass policy.iprev=127.0.0.1; {dmarc_part}"
+        )]
+    }
+
+    #[test]
+    fn several_senders_never_pass_whatever_the_stamp_says() {
+        // Two From headers: JMAP shows one sender and the stamp says `none`,
+        // with an empty header.from. A list: JMAP shows them all.
+        let empty = real("dmarc=none header.from= policy.dmarc=none");
+        assert!(matches!(check_of(&empty, &["ceo@paypal.com"], false), SenderCheck::NeedsPerson(_)));
+        let many = check_of(&empty, &["ceo@paypal.com", "a@evil.example"], false);
+        assert!(matches!(&many, SenderCheck::NeedsPerson(w) if w.contains("names 2 senders")), "{many:?}");
+        // A `pass` doesn't rescue a list, nor does being on this box.
+        let pass = real("dmarc=pass header.from=evil.example policy.dmarc=none");
+        assert!(matches!(check_of(&pass, &["ceo@paypal.com", "a@evil.example"], true), SenderCheck::NeedsPerson(_)));
+        assert!(matches!(check_of(&pass, &[], true), SenderCheck::NeedsPerson(_)));
+    }
+
+    #[test]
+    fn only_pass_or_a_matching_none_is_clear() {
+        let clear = |part: &str, from: &str| check_of(&real(part), &[from], false) == SenderCheck::Clear;
+        assert!(clear("dmarc=pass header.from=acme.example policy.dmarc=reject", "a@acme.example"));
+        assert!(clear("dmarc=pass header.from=ACME.example", "a@acme.EXAMPLE"));
+        assert!(clear("dmarc=pass", "a@acme.example"), "a stamp that names no header.from");
+        assert!(clear("dmarc=none header.from=acme.example policy.dmarc=none", "a@acme.example"));
+        assert!(!clear("dmarc=pass header.from=evil.example", "ceo@paypal.com"), "another domain's pass");
+        assert!(!clear("dmarc=none header.from=evil.example", "ceo@paypal.com"), "another domain's none");
+        assert!(!clear("dmarc=none", "a@acme.example"), "none that names nothing");
+        assert!(!clear("dmarc=none header.from= policy.dmarc=none", "a@acme.example"));
+        for bad in [
+            "dmarc=fail (policy not aligned) header.from=gmail.com policy.dmarc=none",
+            "dmarc=permerror (dns record parse error) header.from=gmail.com. policy.dmarc=none",
+            "dmarc=temperror (dns error) header.from=xn--gmal-nza.com policy.dmarc=none",
+            "dmarc=policy header.from=gmail.com",
+            "dmarc=pass; dmarc=pass header.from=gmail.com",
+        ] {
+            assert!(matches!(check_of(&real(bad), &["ceo@gmail.com"], false), SenderCheck::NeedsPerson(_)), "{bad}");
+        }
+    }
+
+    /// A failure anywhere counts, from anyone. It can only ask for more care.
+    #[test]
+    fn a_fail_in_any_header_needs_a_person() {
+        let pass = format!("{BOX}; dmarc=pass header.from=acme.example");
+        for lines in [
+            vec![pass.clone(), "mx.other.example; dmarc=fail header.from=acme.example".to_string()],
+            vec!["mx.old-name.example; dmarc=fail".to_string()],
+            vec!["dmarc=fail".to_string()],
+        ] {
+            for on_box in [false, true] {
+                let c = check_of(&lines, &["a@acme.example"], on_box);
+                assert!(matches!(&c, SenderCheck::NeedsPerson(w) if w.contains("FAILED")), "{lines:?} {c:?}");
+            }
+        }
+        // The word elsewhere in a part isn't one: a sender chose this.
+        let crafted = vec![format!(r#"{BOX}; smtp.mailfrom="dmarc=fail@x.example"; dmarc=pass header.from=x.example"#)];
+        assert_eq!(check_of(&crafted, &["a@x.example"], false), SenderCheck::Clear);
+    }
+
+    /// No result: fine between mailboxes on this box, a person otherwise. That
+    /// also covers a stamp under an old host name and an unknown host name.
+    #[test]
+    fn no_result_is_clear_only_for_a_mailbox_on_this_box() {
+        for lines in [
+            Vec::new(),
+            vec!["mx.evil.example; dmarc=pass header.from=gmail.com".to_string()],
+            vec!["mail.old-name.example; dmarc=pass header.from=acme.example".to_string()],
+            vec![format!("{BOX}; spf=pass smtp.mailfrom=a@acme.example")],
+        ] {
+            let c = check_of(&lines, &["a@acme.example"], false);
+            assert!(matches!(&c, SenderCheck::NeedsPerson(w) if w.contains("no DMARC result")), "{lines:?} {c:?}");
+            assert_eq!(check_of(&lines, &["a@acme.example"], true), SenderCheck::Clear, "{lines:?}");
+        }
+        let c = sender_check(&real("dmarc=pass header.from=a.example"), &AuthAuthority::ThisBox(None), &who(&["x@a.example"]), false);
+        assert!(matches!(c, SenderCheck::NeedsPerson(_)), "{c:?}");
     }
 
     // ── ids ──

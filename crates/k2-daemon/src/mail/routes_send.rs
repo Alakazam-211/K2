@@ -1256,7 +1256,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
 
             // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
             let authority = messages::AuthAuthority::ThisBox(hostname);
-            let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate, &authority) {
+            let on_box = send::sender_on_this_box(&ctx.from);
+            let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate, &authority, on_box) {
                 Ok(r) => r,
                 Err(e) => return send_error_response(e),
             };

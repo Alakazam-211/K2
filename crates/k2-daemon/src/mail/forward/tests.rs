@@ -1497,6 +1497,29 @@ fn an_older_mail_server_refuses_outside_forwards_but_not_same_box_ones() {
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("held")), "{v}");
 }
 
+/// A forward set up before the guard changed: K2's own script, so no false alarm
+/// from the lockdown, and the next pass brings it up to date.
+#[test]
+fn the_next_pass_rewrites_a_forward_with_the_earlier_guard() {
+    let t = t("fwoldguard");
+    system_sender_on();
+    crate::mail::forward_sync::set_test_version(Some(Some("0.16.25".to_string())));
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "{v}");
+    let now = t.io.src(ACC).expect("script");
+    assert!(now.contains("dmarc=permerror"), "{now}");
+    let earlier = crate::mail::sieve_user::compose_with_earlier_guard(&crate::mail::sieve_user::parse(&now)).expect("earlier");
+    t.io.put(ACC, &earlier);
+    let (owner, _) = crate::mail::sieve_lockdown::classify("k2", &earlier, &|_| false);
+    assert!(owner == crate::mail::sieve_lockdown::Owner::K2, "K2's own script");
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.wrote, r.failed), (1, 0), "{r:?}");
+    assert_eq!(t.io.src(ACC).as_deref(), Some(now.as_str()), "up to date");
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.wrote, r.failed), (0, 0), "once: {r:?}");
+}
+
 // ── review finding 1: out-of-office text is never a forward ─────────
 
 fn ooo_set(addr: &str, text: &str) -> (u16, J) {

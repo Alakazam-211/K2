@@ -15,8 +15,12 @@ loopback SMTP sink this script runs: an `x:MtaRoute` relay sends every
       copy carries `X-K2-Forwarded: <host>`; the mailbox keeps its copy
   X3  a bounce (empty MAIL FROM) stays home (FW-A25)
   X4  a message already carrying this box's marker stays home (loop stop)
-  X5  a message this box's Authentication-Results marks dmarc=fail stays
-      home (the header is forged here; the test can only stop a forward)
+  X5  a message whose sender nothing vouches for stays home: dmarc=fail from
+      any authserv-id, or this box's own permerror, temperror, none with an empty
+      header.from, or no DMARC part (the header is forged here; the test can
+      only stop a forward). Good results and no stamp at all still forward
+  X12 the same on real stamps, with the port-25 rules at the sandbox port: two
+      From headers, a From list, a trailing-dot From and no From stay home
   X6  spam stays home (GTUBE; recorded as INFO when this Stalwart doesn't
       score GTUBE as spam)
   X7  keep off: forwarded and NOT kept
@@ -527,11 +531,31 @@ def main():
         ("X4 a message with this box's marker stays home", f"x4-{tag}", {"X-K2-Forwarded": args.host}),
         ("X5 this box's dmarc=fail stays home", f"x5-{tag}",
          {"Authentication-Results": f"{args.host}; dkim=none; spf=none; dmarc=fail (p=reject) header.from=sender.example"}),
+        ("X5 anyone's dmarc=fail stays home", f"x5a-{tag}",
+         {"Authentication-Results": "mx.other.example; dmarc=fail header.from=sender.example"}),
+        ("X5 permerror stays home", f"x5b-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none; dmarc=permerror (dns record parse error) header.from=gmail.com. policy.dmarc=none"}),
+        ("X5 temperror stays home", f"x5c-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none; dmarc=temperror (dns error) header.from=x.example policy.dmarc=none"}),
+        ("X5 none with an empty header.from (several From) stays home", f"x5d-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none; dmarc=none header.from= policy.dmarc=none"}),
+        ("X5 none with an empty header.from at the end stays home", f"x5e-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none; dmarc=none header.from="}),
+        ("X5 this box's stamp with no DMARC part stays home", f"x5f-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none smtp.mailfrom=a@b.example"}),
     ]:
         ham(mid, hdrs)
         kept_ok = kept_eventually(mid)
         time.sleep(3)
         check(step, kept_ok and not sink.with_id(mid), f"kept {kept(mid)}, at sink {len(sink.with_id(mid))}; {json.dumps(stored_headers(mid))[:240]}")
+    for step, mid, hdrs in [
+        ("X5 control: pass forwards", f"x5g-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=pass; dmarc=pass header.from=sender.example policy.dmarc=none"}),
+        ("X5 control: none for a named domain forwards", f"x5h-{tag}",
+         {"Authentication-Results": f"{args.host}; spf=none; dmarc=none header.from=sender.example policy.dmarc=none"}),
+    ]:
+        ham(mid, hdrs)
+        check(step, len(wait_for(lambda: sink.with_id(mid))) == 1, f"{len(sink.with_id(mid))} at the sink")
 
     # X3 a bounce: inbound SMTP only (an empty MAIL FROM can't be submitted).
     # The sandbox scores inbound as spam, so this runs the golden minus its
@@ -765,6 +789,49 @@ def main():
     if wid:
         admin.call("x:WebHook/set", {"destroy": [wid]})
     srv.shutdown()
+
+    # ── X12 real stamps through the real guard ──────────────────────
+    # Stalwart stamps only on port 25: point those rules at the sandbox port,
+    # then send what an outside sender can. The guard here is the golden minus
+    # its spam step, as inbound scores as spam in the sandbox (X3).
+    def port25(obj):
+        n, g = admin.call(f"{obj}/get", {"ids": ["singleton"]})
+        row = (g.get("list") or [{}])[0]
+        patch = {k: json.loads(json.dumps(v).replace("local_port == 25", f"local_port == {args.smtp_port}"))
+                 for k, v in row.items() if "local_port == 25" in json.dumps(v)}
+        admin.call(f"{obj}/set", {"update": {"singleton": patch}})
+    port25("x:MtaStageData")
+    port25("x:SenderAuth")
+    admin.call("x:MtaStageEhlo/set", {"update": {"singleton": {"rejectNonFqdn": {"match": {}, "else": "false"}}}})
+    admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
+    time.sleep(1)
+    n, a = put_script(alice, re.sub(r'if anyof \(spamtest[^\n]*\{\nkeep;\nstop;\n\}\n', "", golden("external-keep.sieve", "me@outside.test", args.host)))
+    check("X12 setup: the one-destination guard is written", n == "SieveScript/set" and not a.get("notCreated") and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")
+
+    def inject_raw(mid, from_lines):
+        msg = (f"{from_lines}To: {alice_addr}\r\nSubject: probe {mid}\r\nMessage-ID: <{mid}@sender.example>\r\n"
+               f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S +0000', time.gmtime())}\r\n"
+               f"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHello.\r\n")
+        with smtplib.SMTP("127.0.0.1", args.smtp_port, local_hostname="sender.example", timeout=30) as s:
+            s.sendmail("bounce@evil.example", [alice_addr], msg.encode())
+
+    for step, label, from_lines in [
+        ("X12 two From headers stay home", "two", "From: A <a@evil.example>\r\nFrom: CEO <ceo@paypal.com>\r\n"),
+        ("X12 a From list stays home", "list", "From: CEO <ceo@paypal.com>, a@evil.example\r\n"),
+        ("X12 a trailing-dot From stays home", "dot", "From: ceo@gmail.com.\r\n"),
+        ("X12 no From stays home", "nofrom", ""),
+    ]:
+        mid = f"x12{label}-{tag}"
+        inject_raw(mid, from_lines)
+        kept_ok = kept_eventually(mid)
+        time.sleep(3)
+        h = stored_headers(mid).get("header:Authentication-Results:asText")
+        check(step, kept_ok and not sink.with_id(mid), f"kept {kept(mid)}, at sink {len(sink.with_id(mid))}; stamp {h}")
+    mid = f"x12c-{tag}"
+    inject_raw(mid, "From: Someone <sender@nodmarc-record-here.invalid>\r\n")
+    got = wait_for(lambda: sink.with_id(mid))
+    h = stored_headers(mid).get("header:Authentication-Results:asText")
+    check("X12 control: one From, a domain with no policy, forwards", len(got) >= 1, f"at sink {len(got)}: {[m['rcpt'] for m in got]}; stamp {h}")
 
     cleanup()
     print(f"== outside forwards: {len(FAILED)} failed check(s): {FAILED} ==", flush=True)

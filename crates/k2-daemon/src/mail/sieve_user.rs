@@ -90,8 +90,11 @@ impl ForwardBlock {
 /// 2. spam stays home (`spamtest`, or the mail server's own
 ///    `X-Spam-Score: spam…`; never `X-Spam-Status`, which is added after
 ///    Sieve);
-/// 3. a message this box's own `Authentication-Results` (authserv-id =
-///    `host`) marks `dmarc=fail` stays home;
+/// 3. a message whose sender nothing vouches for stays home: `dmarc=fail` in any
+///    `Authentication-Results`, or this box's own (authserv-id = `host`) saying
+///    the lookup broke (`permerror`, `temperror`), `none` for no domain (a mail
+///    with several From addresses, or none), or nothing about DMARC. Mail with
+///    no stamp at all, which is mail between this box's mailboxes, still forwards;
 /// 4. add the marker, then redirect.
 ///
 /// Every test can only stop a forward, never cause one, so a sender
@@ -110,6 +113,9 @@ pub struct ForwardGuard {
 pub const LOOP_HEADER: &str = "X-K2-Forwarded";
 /// `spamtest` at or above this (1–10 scale) is spam.
 pub const SPAMTEST_MIN: &str = "5";
+
+/// What a guard step does with a message that stays home.
+const STAY_HOME: &str = "{\nkeep;\nstop;\n}\n";
 
 /// Is `host` safe to put into a Sieve string and a `:matches` pattern?
 pub fn guard_host_ok(host: &str) -> bool {
@@ -288,7 +294,7 @@ fn compose_forward(fwd: &ForwardBlock) -> String {
         out.push_str(&redirect(d));
     }
     let host = sieve_quoted(&g.host);
-    let home = "{\nkeep;\nstop;\n}\n";
+    let home = STAY_HOME;
     out.push_str(&format!("if envelope :is \"from\" \"\" {home}"));
     if !g.stay_home.is_empty() {
         let list = g.stay_home.iter().map(|a| sieve_quoted(a)).collect::<Vec<_>>().join(", ");
@@ -298,13 +304,41 @@ fn compose_forward(fwd: &ForwardBlock) -> String {
     out.push_str(&format!(
         "if anyof (spamtest :value \"ge\" :comparator \"i;ascii-numeric\" \"{SPAMTEST_MIN}\", header :matches \"X-Spam-Score\" \"spam*\") {home}"
     ));
-    out.push_str(&format!("if header :matches \"Authentication-Results\" {} {home}", sieve_quoted(&format!("{};*dmarc=fail*", g.host))));
+    out.push_str(&dmarc_guard(&g.host));
     out.push_str(&format!("addheader \"{LOOP_HEADER}\" {host};\n"));
     out.push_str(&redirect(&fwd.dest));
     for d in &fwd.more {
         out.push_str(&redirect(d));
     }
     out
+}
+
+/// The guard's DMARC step (see [`ForwardGuard`]).
+fn dmarc_guard(host: &str) -> String {
+    let mut out = String::new();
+    let stamp = |rest: &str| sieve_quoted(&format!("{};*{rest}", host));
+    out.push_str(&format!(
+        "if anyof (header :contains \"Authentication-Results\" \"dmarc=fail\", header :matches \"Authentication-Results\" [{}, {}, {}, {}], allof (header :matches \"Authentication-Results\" {}, not header :contains \"Authentication-Results\" \"dmarc=\")) {STAY_HOME}",
+        stamp("dmarc=permerror*"),
+        stamp("dmarc=temperror*"),
+        stamp("dmarc=none*header.from= *"),
+        stamp("dmarc=none*header.from="),
+        sieve_quoted(&format!("{};*", host)),
+    ));
+    out
+}
+
+/// The DMARC step as 0.46.7 and earlier wrote it.
+fn earlier_dmarc_guard(host: &str) -> String {
+    let test = sieve_quoted(&format!("{host};*dmarc=fail*"));
+    format!("if header :matches \"Authentication-Results\" {test} {STAY_HOME}")
+}
+
+/// [`compose`] with the DMARC step an earlier K2 wrote. Such a script is still
+/// K2's own, not someone's edit, until the next sync pass brings it up to date.
+pub fn compose_with_earlier_guard(s: &UserSieve) -> Option<String> {
+    let host = &s.forward.as_ref()?.guard.as_ref()?.host;
+    Some(compose(s)?.replace(&dmarc_guard(host), &earlier_dmarc_guard(host)))
 }
 
 fn sieve_quoted(s: &str) -> String {
@@ -800,6 +834,20 @@ mod tests {
         assert_eq!(parse(&src), s);
     }
 
+    /// A script from before the guard changed reads the same, out-of-office
+    /// included, so the sync pass can rewrite it without losing anything.
+    #[test]
+    fn a_script_with_the_earlier_guard_parses_to_the_same_rules() {
+        let s = UserSieve { ooo: Some(ooo("away")), forward: Some(outside(true)) };
+        let now = compose(&s).expect("script");
+        let earlier = compose_with_earlier_guard(&s).expect("earlier");
+        assert_ne!(now, earlier);
+        assert!(earlier.contains("if header :matches \"Authentication-Results\" \"mail.brand.test;*dmarc=fail*\" {"), "{earlier}");
+        assert!(!earlier.contains("dmarc=permerror"), "{earlier}");
+        assert_eq!(parse(&earlier), s);
+        assert_eq!(compose(&parse(&earlier)).as_deref(), Some(now.as_str()));
+    }
+
     #[test]
     fn parse_legacy_k2_forward_script() {
         let src = "require [\"copy\"];\nredirect :copy \"keep@x.test\";\n";
@@ -905,7 +953,7 @@ mod tests {
             at("if envelope :is \"from\" \"\""),
             at("if header :contains \"X-K2-Forwarded\" \"mail.brand.test\""),
             at("spamtest :value \"ge\""),
-            at("\"mail.brand.test;*dmarc=fail*\""),
+            at("header :contains \"Authentication-Results\" \"dmarc=fail\""),
             at("addheader \"X-K2-Forwarded\""),
             at("redirect :copy \"me@outside.test\""),
         ];

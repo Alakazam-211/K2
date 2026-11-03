@@ -191,8 +191,9 @@ FORWARDING (`k2 hostmail forward`)
            outside address counts: 100/hour per mailbox and 1,000/hour per
            server (above them mail waits in the queue), and 500 copies in any
            24 hours per mailbox (K2 pauses all its outside forwards: daily_cap).
-  Not forwarded  spam, mail failing DMARC, bounce reports, and mail K2 already
-           forwarded. They stay in the mailbox.
+  Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
+           couldn't be checked, several From addresses), bounce reports, and
+           mail K2 already forwarded. They stay in the mailbox.
   Paused   per destination; new mail stays in the mailbox, and the others
            carry on. `show` gives the reason in words, whether the notice
            went out, last-24h counts, events. The reasons:

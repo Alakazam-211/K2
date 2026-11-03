@@ -72,7 +72,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Mailed links reach your server.** Confirm and stop links for mailbox forwards and email notifications, and set-password links, could answer "Unknown subdomain", which left forwards waiting for confirmation. They now use your server's own address.
 - **Scrolling a remote Claude Code session is steadier,** because K2 now tells Claude Code it supports synchronized output.
 - **Claude Max 20x now shows as Ultra,** matching Anthropic's new name for the plan.
-- **A message's sender checks now come only from this server's own verdict.** `k2 mail read` and the check on replying to a message that failed DMARC read just the result your mail server stamped. A message with no such stamp shows no result, and a result that can't be read cleanly counts as failed.
+- **A message's sender checks now come only from this server's own verdict.** `k2 mail read` and the check on replying to a message read just the result your mail server stamped. A message with no such stamp shows no result, and a result that can't be read cleanly counts as failed.
+- **Replying under sending `on` needs a clear sender.** A reply is refused unless your mail server says the message passed DMARC, or its one sender's domain publishes no policy, or it came from a mailbox on this server. Under `approval` your human decides as before.
+- **Mailbox forwards also keep home mail whose sender nothing vouches for:** a failed DMARC check from any server, a check that broke, or a message with several From addresses. It stays in the mailbox. A DNS outage at your mail server can hold forwards this way until the lookups work again.
 ### Mobile devices
 - **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
 

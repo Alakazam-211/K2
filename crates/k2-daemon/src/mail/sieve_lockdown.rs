@@ -533,7 +533,9 @@ fn is_k2_rendering(name: &str, src: &str) -> bool {
         return true; // save_user_sieve's empty remainder
     }
     let parsed = sieve_user::parse(src);
-    if sieve_user::compose(&parsed).as_deref() == Some(src) {
+    if sieve_user::compose(&parsed).as_deref() == Some(src)
+        || sieve_user::compose_with_earlier_guard(&parsed).as_deref() == Some(src)
+    {
         return true;
     }
     name == sieve_user::LEGACY_FORWARD_NAME

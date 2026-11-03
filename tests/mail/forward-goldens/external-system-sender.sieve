@@ -16,7 +16,7 @@ if anyof (spamtest :value "ge" :comparator "i;ascii-numeric" "5", header :matche
 keep;
 stop;
 }
-if header :matches "Authentication-Results" "mail.brand.test;*dmarc=fail*" {
+if anyof (header :contains "Authentication-Results" "dmarc=fail", header :matches "Authentication-Results" ["mail.brand.test;*dmarc=permerror*", "mail.brand.test;*dmarc=temperror*", "mail.brand.test;*dmarc=none*header.from= *", "mail.brand.test;*dmarc=none*header.from="], allof (header :matches "Authentication-Results" "mail.brand.test;*", not header :contains "Authentication-Results" "dmarc=")) {
 keep;
 stop;
 }

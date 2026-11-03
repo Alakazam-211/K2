@@ -11,6 +11,9 @@ what that parser relies on:
   S3  whatever envelope sender arrives, the stamp's parts split so that exactly
       one part starts with `dmarc=`, or the line reads as unclear (K2: fail).
       Printed lines are the fixtures in the Rust tests.
+  S4  several From addresses read `none` with an empty header.from, and a From
+      that can't be looked up reads neither pass nor fail: the shapes
+      `sender_check` and the Sieve guard stop on
 
 Stalwart stamps only on port 25, so the probe points those rules at the sandbox
 port. Nothing leaves the machine and no mail is delivered anywhere else.
@@ -203,6 +206,37 @@ def main():
         unclear = (not balanced) or len(claims) != 1
         check(f"S3 {label}: the real failure reads, or the line reads as unclear", real or unclear, f"balanced={balanced} claims={claims}")
         print(f"[INFO] S3 {label} line: {lines[0]}", flush=True)
+
+    def inject_from(label, from_lines):
+        subject = f"ar-{label}-{tag}"
+        msg = (f"{from_lines}To: {rcpt}\r\nSubject: {subject}\r\n"
+               f"Message-ID: <{secrets.token_hex(8)}@sender.example>\r\n"
+               f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S +0000', time.gmtime())}\r\n"
+               f"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nhello\r\n")
+        with smtplib.SMTP("127.0.0.1", port, local_hostname="sender.example", timeout=30) as s:
+            s.sendmail("bounce@evil.example", [rcpt], msg.encode())
+        for _ in range(40):
+            n, r = admin.call("Email/query", {"accountId": acct, "filter": {"subject": subject}}, using=(CORE, MAIL))
+            if r.get("ids"):
+                n, e = admin.call("Email/get", {"accountId": acct, "ids": r["ids"][:1], "properties": ["from", "header:Authentication-Results:asText:all"]}, using=(CORE, MAIL))
+                return e["list"][0]
+            time.sleep(0.5)
+        return {}
+
+    for label, from_lines in [
+        ("two-from", "From: A <a@evil.example>\r\nFrom: CEO <ceo@paypal.com>\r\n"),
+        ("list", "From: CEO <ceo@paypal.com>, a@evil.example\r\n"),
+        ("no-from", ""),
+    ]:
+        row = inject_from(label, from_lines)
+        lines = row.get("header:Authentication-Results:asText:all") or []
+        top = lines[0] if lines else ""
+        check(f"S4 {label}: none with an empty header.from", "dmarc=none header.from= " in top or top.endswith("dmarc=none header.from="), top)
+        print(f"[INFO] S4 {label}: JMAP from {json.dumps(row.get('from'))}", flush=True)
+    row = inject_from("dot", "From: ceo@gmail.com.\r\n")
+    top = (row.get("header:Authentication-Results:asText:all") or [""])[0]
+    claims = [s for s in segments(top)[0] if s.lower().startswith("dmarc=")]
+    check("S4 a trailing dot: neither pass nor none", len(claims) == 1 and not claims[0].lower().startswith(("dmarc=pass", "dmarc=none")), top)
 
     admin.call("x:Account/set", {"destroy": [acct]})
     print(f"== auth results: {len(FAILED)} failed check(s): {FAILED} ==", flush=True)

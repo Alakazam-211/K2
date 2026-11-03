@@ -48963,8 +48963,9 @@ FORWARDING (`k2 hostmail forward`)
            outside address counts: 100/hour per mailbox and 1,000/hour per
            server (above them mail waits in the queue), and 500 copies in any
            24 hours per mailbox (K2 pauses all its outside forwards: daily_cap).
-  Not forwarded  spam, mail failing DMARC, bounce reports, and mail K2 already
-           forwarded. They stay in the mailbox.
+  Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
+           couldn't be checked, several From addresses), bounce reports, and
+           mail K2 already forwarded. They stay in the mailbox.
   Paused   per destination; new mail stays in the mailbox, and the others
            carry on. `show` gives the reason in words, whether the notice
            went out, last-24h counts, events. The reasons:
@@ -71794,8 +71795,9 @@ cmd_help_mail_reply() {
 Reply to a message you received. Guardrailed: the recipient is LOCKED to the
 original sender, the From is LOCKED to the address that received it, and
 loop caps apply (max 4 replies per thread per hour; deep threads refused).
-A reply to a message that failed DMARC is refused unless the workspace is in
-approval mode (your human can then override).
+A reply is refused unless the mail server's DMARC check clears the sender (a
+pass, or one sender whose domain publishes no policy) or it's a mailbox on this
+server. In approval mode your human decides instead.
 
 Replies pass the same send gating as `k2 mail send` (off | approval | on).
 

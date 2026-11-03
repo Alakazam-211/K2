@@ -7,11 +7,15 @@
 ; (daemon died, tunnel left running) and NSIS then cannot write
 ; $INSTDIR\frpc.exe. Kill the bundled name too. A stray user frpc
 ; of the same image name is rare; install would fail either way.
+;
+; ExecShellWait, hidden, and not nsExec: nsExec is a plugin DLL that NSIS unpacks
+; and loads, and Tauri signs only its own five plugins. An unsigned DLL in a signed
+; installer is what Smart App Control blocks, and it fails our release gate.
 
 !macro NSIS_HOOK_PREINSTALL
-  nsExec::ExecToLog 'taskkill /F /IM k2.exe /T'
-  nsExec::ExecToLog 'taskkill /F /IM k2-daemon.exe /T'
-  nsExec::ExecToLog 'taskkill /F /IM frpc.exe /T'
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-daemon.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM frpc.exe /T" SW_HIDE
   Sleep 800
   Delete /REBOOTOK "$INSTDIR\k2.exe"
   Delete /REBOOTOK "$INSTDIR\k2-daemon.exe"
@@ -38,9 +42,9 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  nsExec::ExecToLog 'taskkill /F /IM k2.exe /T'
-  nsExec::ExecToLog 'taskkill /F /IM k2-daemon.exe /T'
-  nsExec::ExecToLog 'taskkill /F /IM frpc.exe /T'
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM k2-daemon.exe /T" SW_HIDE
+  ExecShellWait "open" "taskkill.exe" "/F /IM frpc.exe /T" SW_HIDE
   Sleep 800
   ; The daemon's logon autostart (k2_client::win_autostart).
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "K2 Daemon"

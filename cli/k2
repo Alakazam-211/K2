@@ -8091,7 +8091,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         under its email sending mode). Links expire (k2 app login settings)
   k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
                                         An agent with "Let this agent manage its Apps' users" on, for a login
-                                        that signs in only on your workspace's Apps: K2 mails
+                                        that signs in only on your workspace's Apps (one also on another
+                                        workspace's App answers not_found: ask the owner). K2 mails
                                         the person the App's reset link, to the email on the login, from the
                                         App's address (you never see the link). Sending it takes nothing away; access
                                         held back until they set a password starts when they do.
@@ -8137,7 +8138,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Clear K2's sign-in lockout (the owner, an admin for App-only users,
                                         or an agent with the App-users switch for a login on its own App;
                                         audited). The password stays the same. An agent clears one login
-                                        at most 6 times an hour (429 unlock_limit); the owner has no cap.
+                                        at most 6 times an hour (429 unlock_limit): at the limit it's being
+                                        guessed or they need a reset (k2 app user reset), it ends by itself
+                                        after 15 minutes, and the owner has no cap.
   k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
                                         A person's chat (their chat account, k2:principal:<id>); no scope = show it.
                                         The owner: anyone (--app: that App's user). An agent: its own App's

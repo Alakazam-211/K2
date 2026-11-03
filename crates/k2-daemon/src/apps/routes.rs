@@ -2208,19 +2208,14 @@ fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
         let subject = k2_core::skin::guest_rooms::audit_subject(&t.service_id);
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let rows: Vec<_> = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_APP, &subject, 1000)
-            .map_err(db_err)?
-            .into_iter()
-            .filter(|r| r.event.starts_with("app_user_") || r.event.starts_with("guest_rooms"))
-            .take(limit)
-            .collect();
+        let rows = deploy::audit::list_people_for(&conn, deploy::audit::SUBJECT_APP, &subject, limit).map_err(db_err)?;
         return Ok(json!({ "ok": true, "app": t.name, "audit": rows, "users": true }));
     }
     let app = app_for(who, params.get("app").map(String::as_str))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
     let deps = store::list_deployments(&conn, &app.app_id, limit).map_err(db_err)?;
-    let audit = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_APP, &app.app_id, limit).map_err(db_err)?;
+    let audit = deploy::audit::list_without_people_for(&conn, deploy::audit::SUBJECT_APP, &app.app_id, limit).map_err(db_err)?;
     let chain = deploy::audit::verify(&conn).map_err(db_err)?;
     // 0.46.8: which of these `k2 app rollback --to` can still reach.
     let stored = store::seed_hashes(&conn).map_err(db_err)?;

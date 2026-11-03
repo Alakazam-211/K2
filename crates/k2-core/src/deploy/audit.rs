@@ -163,6 +163,31 @@ pub fn list_for(conn: &Connection, subject_kind: &str, subject_id: &str, limit: 
     Ok(v)
 }
 
+/// A line about an App's people, as SQL: `app_user_*` and `guest_rooms*`.
+const PEOPLE_LINE: &str = r"(event LIKE 'app\_user\_%' ESCAPE '\' OR event LIKE 'guest\_rooms%' ESCAPE '\')";
+
+/// What happened to an App's people (`k2 app history <app> --users`), newest first.
+/// Filtered in the query: however many deploys came after, older lines stay reachable.
+pub fn list_people_for(conn: &Connection, subject_kind: &str, subject_id: &str, limit: usize) -> rusqlite::Result<Vec<AuditRow>> {
+    let mut st = conn.prepare(&format!(
+        "SELECT seq, subject_kind, subject_id, event, actor, on_behalf_of, payload_json, prev_hash, hash, at \
+         FROM deploy_audit WHERE subject_kind = ?1 AND subject_id = ?2 AND {PEOPLE_LINE} ORDER BY seq DESC LIMIT ?3"
+    ))?;
+    let v = st.query_map(params![subject_kind, subject_id, limit as i64], row)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
+}
+
+/// An App's deploy history without the lines about its people, which have their
+/// own view: every write on a login leaves one, and they'd crowd out the deploys.
+pub fn list_without_people_for(conn: &Connection, subject_kind: &str, subject_id: &str, limit: usize) -> rusqlite::Result<Vec<AuditRow>> {
+    let mut st = conn.prepare(
+        r"SELECT seq, subject_kind, subject_id, event, actor, on_behalf_of, payload_json, prev_hash, hash, at
+         FROM deploy_audit WHERE subject_kind = ?1 AND subject_id = ?2 AND event NOT LIKE 'app\_user\_%' ESCAPE '\' ORDER BY seq DESC LIMIT ?3",
+    )?;
+    let v = st.query_map(params![subject_kind, subject_id, limit as i64], row)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

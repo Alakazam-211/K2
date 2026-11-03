@@ -1175,8 +1175,6 @@ pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> 
     }
     match app_key_reset(&app, username, actor) {
         Ok(out) => {
-            audit("app_user_reset_started", actor, &format!("{} app={app} delivered={}", person.username, out["delivered"].as_str().unwrap_or("-")));
-            skin::guest_rooms::audit_user_event(&app, "app_user_reset_started", actor, json!({ "username": person.username, "delivered": out["delivered"] }));
             let mut out = out;
             out["app"] = json!(app);
             CliResponse::ok_json(out.to_string())
@@ -1240,6 +1238,11 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
     let r = app_key_reset_send(app, &person, &ws, &email, &settings, &page, &sender, &by);
     if !matches!(r, Ok(ref v) if v["delivered"] == "sent") {
         skin::guard::return_reset_mail(&person.id, app);
+    }
+    if let Ok(out) = &r {
+        let delivered = out["delivered"].as_str().unwrap_or("-");
+        audit("app_user_reset_started", actor, &format!("{} app={app} delivered={delivered}", person.username));
+        skin::guest_rooms::audit_user_event(app, "app_user_reset_started", actor, json!({ "username": person.username, "delivered": delivered }));
     }
     r
 }
@@ -1346,7 +1349,18 @@ pub fn forgot_by_pass_now(pass: &skin::SkinPass, username: &str) {
     };
     let mail = Mail { purpose: invites::PURPOSE_RESET, app: &app, to: &email, person: &person, page: &page, sender: &sender, by: &by, settings: &settings };
     match dispatch(&mail, &minted) {
-        Ok(_) => audit("app_user_forgot", by.actor(), &format!("{} app={app}", person.username)),
+        Ok(_) => {
+            audit("app_user_forgot", by.actor(), &format!("{} app={app}", person.username));
+            // A platform pass names no App: the person's own Apps in that workspace.
+            let apps: Vec<String> = if app == skin::HOST_APP_ID {
+                crate::skin_routes::apps_of_principal(&person.id).into_iter().filter(|a| skin::ties::app_workspace(a).as_deref() == Some(ws)).collect()
+            } else {
+                vec![app.clone()]
+            };
+            for a in &apps {
+                skin::guest_rooms::audit_user_event(a, "app_user_reset_started", by.actor(), json!({ "username": person.username, "door": "forgot", "delivered": "sent" }));
+            }
+        }
         Err(r) => {
             skin::guard::return_reset_mail(&person.id, &app);
             skip(&r.body)

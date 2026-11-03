@@ -1738,7 +1738,7 @@ fn note_user_event(username: &str, event: &str, actor: &str, payload: serde_json
     note_user_event_on(&apps_of_principal(&p.id), event, actor, payload);
 }
 
-fn apps_of_principal(principal_id: &str) -> Vec<String> {
+pub(crate) fn apps_of_principal(principal_id: &str) -> Vec<String> {
     skin::list_grants()
         .unwrap_or_default()
         .into_iter()

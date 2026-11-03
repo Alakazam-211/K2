@@ -591,6 +591,14 @@ fn outbound_rows(from: &str) -> Vec<(String, String, String)> {
     rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
 }
 
+/// The events on an App's record, newest first.
+fn record_events(app: &str) -> Vec<String> {
+    let subject = k2_core::skin::guest_rooms::audit_subject(app);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::deploy::audit::list_people_for(&conn, k2_core::deploy::audit::SUBJECT_APP, &subject, 500).expect("the record").into_iter().map(|r| r.event).collect()
+}
+
 fn invite_rows(username: &str) -> Vec<k2_core::skin::invites::InviteRow> {
     k2_core::skin::invites::rows_for(&principal_id(username)).expect("invite rows")
 }
@@ -1079,6 +1087,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_a_signed_in_change_doesnt() 
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["delivered"], "sent", "{}", r.body);
     assert!(!r.body.contains("k2inv_") && r.json()["token"].is_null(), "the key never sees the token: {}", r.body);
+    assert!(record_events(&shop).iter().any(|e| e == "app_user_reset_started"), "an App key's reset is on the App's record");
     let mk = mails_to(&rec, &e2);
     assert_eq!(mk.len(), 1);
     assert!(mk[0].ephemeral);
@@ -1221,6 +1230,7 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
     let r = post(port, "/cli/skin/password/forgot", OWNER, json!({ "username": g })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     wait_until("the App's reset mail", 10, || !mails_to(&rec, &e).is_empty()).await;
+    wait_until("the forgot on the App's record", 10, || record_events(&shop).iter().any(|ev| ev == "app_user_reset_started")).await;
     let m = mails_to(&rec, &e);
     assert!(m[0].ephemeral);
     assert!(tie_of(&g).is_none(), "nothing ties when the link goes out");
@@ -1232,6 +1242,37 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
 /// 0.46.8: an agent runs its App's users end to end. It starts a reset (K2 mails
 /// the person, the agent never gets the link), takes a pending link back, clears a
 /// lockout, and reads what happened in the App's own record.
+/// The record filters in the query, so a busy App's older lines about its people
+/// stay reachable, and the plain history isn't crowded by them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_apps_record_of_its_people_keeps_older_lines() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let shop_name = format!("shop{tag}");
+    let shop = app_row(&sales, &shop_name);
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    let u = format!("u{tag}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    {
+        let subject = k2_core::skin::guest_rooms::audit_subject(&shop);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for i in 0..1100 {
+            k2_core::deploy::audit::append(&conn, k2_core::deploy::audit::SUBJECT_APP, &subject, "deploy", "test", None, &json!({ "i": i })).expect("a line");
+        }
+    }
+    let r = get(port, "/cli/app/history", &agent, &format!("app={shop_name}&users=1&limit=10")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = r.json()["audit"].as_array().expect("rows").clone();
+    assert_eq!(rows.len(), 1, "{}", r.body);
+    assert_eq!(rows[0]["event"], "app_user_added", "{}", r.body);
+}
+
 /// A guess, unlock, repeat loop is bounded: an agent clears one login's lockout
 /// [`AGENT_UNLOCKS_PER_HOUR`] times an hour. A clear that found nothing doesn't
 /// count, another login has its own count, and the owner has no cap.

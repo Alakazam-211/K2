@@ -55,6 +55,8 @@
     ['gardens.list', [], 'ok'],
     ['gardens.current', [], 'ok'],
     ['layout.get', [], 'ok'],
+    ['sources.list', [], 'ok'],
+    ['sources.read', ['phone-check-not-bound'], 'not_bound'],
     ['agents.list', [], 'verb_unavailable'],
     ['thread.read', ['k2/1'], 'verb_unavailable'],
     ['window.startDrag', [], 'not_exposed'],

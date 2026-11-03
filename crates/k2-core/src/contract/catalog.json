@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 44,
+  "catalogVersion": 45,
   "caps": [
     {
       "name": "agents:read",
@@ -2662,7 +2662,7 @@
       "exposure": [
         "widget"
       ],
-      "phone": "later",
+      "phone": "door",
       "reach": "portable",
       "effect": "read",
       "kind": "call",
@@ -2753,7 +2753,7 @@
       "exposure": [
         "widget"
       ],
-      "phone": "later",
+      "phone": "door",
       "reach": "portable",
       "effect": "read",
       "kind": "call",
@@ -3245,7 +3245,7 @@
       "exposure": [
         "widget"
       ],
-      "phone": "later",
+      "phone": "door",
       "reach": "portable",
       "effect": "read",
       "kind": "call",
@@ -3357,7 +3357,7 @@
       "exposure": [
         "widget"
       ],
-      "phone": "later",
+      "phone": "host",
       "reach": "portable",
       "effect": "read",
       "kind": "subscribe",
@@ -3843,7 +3843,7 @@
       "exposure": [
         "widget"
       ],
-      "phone": "later",
+      "phone": "door",
       "reach": "portable",
       "effect": "read",
       "kind": "call",

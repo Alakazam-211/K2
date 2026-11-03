@@ -224,7 +224,7 @@ fn b1(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R
 
 // ── shared helpers (B2's handlers may use these too) ─────────────────
 
-type R<T> = Result<T, SourceErr>;
+pub(crate) type R<T> = Result<T, SourceErr>;
 type J = serde_json::Value;
 
 pub(crate) fn now() -> i64 {
@@ -509,7 +509,7 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
     Ok(serde_json::json!({"source": def_of(who, &row)?, "view": view, "warnings": warnings_of(&row)}))
 }
 
-fn read(who: &Who, params: &HashMap<String, String>) -> R<J> {
+pub(crate) fn read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = find(&conn, param(params, "name")?)?;
@@ -519,7 +519,7 @@ fn read(who: &Who, params: &HashMap<String, String>) -> R<J> {
     Ok(serde_json::to_value(view).unwrap_or(J::Null))
 }
 
-fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
+pub(crate) fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = find(&conn, param(params, "name")?)?;
@@ -573,11 +573,36 @@ fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
 }
 
 fn changes(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    let since = params.get("since").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    let c = changes_for(who, since, &|_| true, false)?;
+    Ok(serde_json::json!({"rev": c.rev, "full": c.full, "changed": c.changed, "removed": c.removed}))
+}
+
+/// Can the change log answer from `since`? Not at or below zero, not older
+/// than the last reaped removal, and not ahead of `rev` (a restored backup, a
+/// fresh install at the same address): every other answer is the whole list
+/// (contract-gardens-phone rev 2 §G). Before this rule an ahead `since` got
+/// nothing, indefinitely.
+pub(crate) fn since_can_be_honoured(since: i64, reaped: i64, rev: i64) -> bool {
+    since > 0 && since >= reaped && since <= rev
+}
+
+/// What `changes` answers.
+pub(crate) struct Changes {
+    pub(crate) rev: i64,
+    pub(crate) full: bool,
+    pub(crate) changed: Vec<SourceResult>,
+    pub(crate) removed: Vec<String>,
+}
+
+/// The card views that changed since `since`, of the sources `keep` names, and
+/// which of them went. `audit_values`: a door row reads values as `read` does,
+/// so a `shape` source is audited as there (GV47).
+pub(crate) fn changes_for(who: &Who, since: i64, keep: &dyn Fn(&str) -> bool, audit_values: bool) -> R<Changes> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let since = params.get("since").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
     let rev = store::current_rev(&conn)?;
-    let full = since <= 0 || since < store::reaped_rev(&conn)?;
+    let full = !since_can_be_honoured(since, store::reaped_rev(&conn)?, rev);
     let (rows, removed) = if full {
         (store::list_live(&conn)?, Vec::new())
     } else {
@@ -585,11 +610,16 @@ fn changes(who: &Who, params: &HashMap<String, String>) -> R<J> {
     };
     let mut changed = Vec::new();
     for row in rows {
-        if can_read(who, &row).is_ok() {
-            changed.push(view_of(&conn, who, &row)?);
+        if keep(&row.name) && can_read(who, &row).is_ok() {
+            let view = view_of(&conn, who, &row)?;
+            if audit_values {
+                audit_unmasked(&conn, who, &row, &view);
+            }
+            changed.push(view);
         }
     }
-    Ok(serde_json::json!({"rev": rev, "full": full, "changed": changed, "removed": removed}))
+    let removed = removed.into_iter().filter(|n| keep(n)).collect();
+    Ok(Changes { rev, full, changed, removed })
 }
 
 fn export(who: &Who, params: &HashMap<String, String>) -> R<J> {
@@ -933,7 +963,7 @@ fn unmute(who: &Who, body: &[u8]) -> R<J> {
     Ok(serde_json::json!({"name": row.name, "muted": J::Null}))
 }
 
-fn refresh(who: &Who, body: &[u8]) -> R<J> {
+pub(crate) fn refresh(who: &Who, body: &[u8]) -> R<J> {
     let b: NameBody = parse(body, "refresh takes {name}")?;
     let id = {
         let db = k2_core::db::shared();

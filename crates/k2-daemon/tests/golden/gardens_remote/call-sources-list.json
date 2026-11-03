@@ -1,0 +1,35 @@
+{
+  "body": {
+    "ok": true,
+    "result": [
+      {
+        "address": "fleet",
+        "display": "ok",
+        "health": "ok",
+        "label": "Fleet",
+        "phase": "live",
+        "reach": "ok"
+      },
+      {
+        "address": "far::elsewhere.example.com",
+        "display": null,
+        "health": null,
+        "label": null,
+        "phase": null,
+        "reach": "server_not_saved"
+      }
+    ]
+  },
+  "request": {
+    "body": {
+      "args": [],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.list"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 200
+}

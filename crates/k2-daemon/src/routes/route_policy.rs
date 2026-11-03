@@ -2229,6 +2229,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/remote/pause", Member),
     post("/cli/zen/remote/report", Member),
     post("/cli/zen/remote/resume", Member),
+    get("/cli/zen/remote/sources-changes", Member),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
     // Garden access (live only with the switch on): View this version.

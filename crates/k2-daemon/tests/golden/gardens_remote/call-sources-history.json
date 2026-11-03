@@ -1,0 +1,25 @@
+{
+  "body": {
+    "ok": true,
+    "result": {
+      "events": [],
+      "field": "health",
+      "item": null
+    }
+  },
+  "request": {
+    "body": {
+      "args": [
+        "fleet",
+        "health"
+      ],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.history"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 200
+}

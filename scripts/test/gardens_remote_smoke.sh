@@ -27,7 +27,10 @@
 #   5  a mobile layout (contract rev 2): a bad one refused, a good one on the
 #      page; the hello's merged config, view and height; frameVersion moves on a
 #      config edit and not on a label; saves apart from the desktop's
-#   6  revoke the phone: the next request is 403 device_session_ended
+#   6  live sources (contract rev 2 §D, §G): a read, a source it doesn't bind
+#      refused, refresh once per 15 s, sources-changes and its full rule, and no
+#      secret name, URL or header in any answer
+#   7  revoke the phone: the next request is 403 device_session_ended
 set -uo pipefail
 for t in curl jq cargo; do command -v "$t" >/dev/null || { echo "[gr-smoke] FAIL: needs $t" >&2; exit 1; }; done
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -277,7 +280,68 @@ curl -sS -X POST "$U/cli/zen/call" -H "Authorization: Bearer $OWNER" -H 'Origin:
 if jq -e '.result == null' "$ROOT/desk.json" >/dev/null; then ok "the desktop's saves didn't move"; else bad "the desktop reads the phone's save: $(cat "$ROOT/desk.json")"; fi
 
 # ── 6 ────────────────────────────────────────────────────────────────
-say "step 6: revoke the phone"
+say "step 6: live sources"
+must "$OWNER" POST /cli/sources/add '{"name":"open-card","label":"Open card","everySecs":3600,"fetch":{"url":"https://open.example.com/status"},"extract":{"fields":{"version":"/version"}}}'
+must "$OWNER" POST /cli/sources/add '{"name":"keyed-card","label":"Keyed card","everySecs":3600,"secret":"SMOKESECRETNAME","headers":[["X-Smoke-Header","smokeheadervalue"]],"fetch":{"url":"https://keyed.example.com/status?team=smokeurlpart"},"extract":{"fields":{"version":"/version"}}}'
+must "$OWNER" POST /cli/zen/widget/new '{"name":"cards","from":"hello"}'
+cat >"$H/.k2/zen/widgets/cards/manifest.json" <<'EOF'
+{"schema": 1, "name": "Cards", "entry": "index.html", "caps": ["sources:read"], "sources": "config"}
+EOF
+put_page 'schema = 1
+[layout]
+kind = "columns"
+[[layout.column]]
+size = 100
+min-width = 200
+[[widget]]
+id = "c1"
+kind = "custom"
+widget = "cards"
+column = 0
+[widget.props.config]
+sources = "open-card, keyed-card, far::elsewhere.example.com"
+'
+call "$PHONE" GET /cli/zen/remote/frame "" "garden=$GARDEN&placement=c1&scheme=dark"
+want "the frame of a source card" 200 '.hello.config.sources != null and (.hello.features | index("sources-v1"))'
+HASH="$(jq -r '.hash' <<<"$BODY")"
+source_call() { call "$PHONE" POST /cli/zen/remote/call "$(jq -n --arg g "$GARDEN" --arg h "$HASH" --arg v "$1" --argjson a "$2" '{garden: $g, placement: "c1", hash: $h, verb: $v, args: $a}')"; }
+secret_free() {
+  if grep -qE 'SMOKESECRETNAME|smokeurlpart|smokeheadervalue|X-Smoke-Header|keyed\.example\.com' <<<"$BODY"; then bad "$1 leaks part of a source's definition: $BODY"; else ok "$1 holds no secret name, URL or header"; fi
+}
+source_call sources.read '["open-card"]'
+want "an unsigned version reads nothing" 403 '.error.code == "needs_editor"'
+must "$OWNER" POST /cli/zen/widget/sign '{"widget":"cards"}'
+source_call sources.read '["keyed-card"]'
+want "sources.read" 200 '.result.address == "keyed-card" and .result.reach == "ok" and (.result | has("fields"))'
+secret_free "sources.read"
+source_call sources.list '[]'
+want "sources.list" 200 '(.result | map(.address)) == ["open-card","keyed-card","far::elsewhere.example.com"] and .result[2].reach == "server_not_saved"'
+secret_free "sources.list"
+source_call sources.read '["some-other-source"]'
+want "a source it doesn't bind" 403 '.error.code == "not_bound"'
+source_call sources.read '["far::elsewhere.example.com"]'
+want "another server" 409 '.error.code == "server_not_saved"'
+source_call sources.subscribe '["open-card"]'
+want "the subscribe is the phone's" 400 '.error.code == "not_exposed"'
+source_call sources.refresh '["open-card"]'
+want "refresh" 200 '.result.queued == true'
+source_call sources.refresh '["open-card"]'
+want "refresh again inside 15 s" 429 '.error.code == "rate_limited" and (.error.retryAfterSecs | type) == "number"'
+call "$PHONE" GET /cli/zen/remote/sources-changes "" "garden=$GARDEN&placement=c1&hash=$HASH&since=0"
+want "sources-changes from nothing" 200 '.full == true and (.changed | map(.address)) == ["keyed-card","open-card"]'
+secret_free "sources-changes"
+REV="$(jq -r '.rev' <<<"$BODY")"
+call "$PHONE" GET /cli/zen/remote/sources-changes "" "garden=$GARDEN&placement=c1&hash=$HASH&since=$((REV + 100000))"
+want "a since ahead of the daemon" 200 '.full == true and (.changed | length) == 2'
+call "$OWNER" GET /cli/sources/changes "" "since=$((REV + 100000))"
+want "/cli/sources/changes takes the same rule" 200 '.full == true'
+call "$OTHER" GET /cli/zen/remote/sources-changes "" "garden=$GARDEN&placement=c1&hash=$HASH&since=0"
+want "another person's phone" 403 '.error.code == "garden_person_only"'
+call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
+secret_free "the page"
+
+# ── 7 ────────────────────────────────────────────────────────────────
+say "step 7: revoke the phone"
 must "$OWNER" GET /cli/auth/devices
 DEV="$(jq -r '.devices[] | select(.deviceId == "ios-smoke-1" or .device_id == "ios-smoke-1" or .device.id == "ios-smoke-1") | .id' <<<"$BODY" | head -1)"
 [[ -n "$DEV" ]] || die "the owner's phone isn't listed: $BODY"

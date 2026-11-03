@@ -263,6 +263,12 @@ fn pause_resume_status_changes_history_export() {
     let rev = v["rev"].as_i64().unwrap();
     let (_, v) = get("/cli/sources/changes", &Who::Owner, &[("since", &rev.to_string())]);
     assert_eq!((v["full"].as_bool(), v["changed"].as_array().unwrap().len()), (Some(false), 0));
+    // Ahead of the daemon's rev (a restored backup): the whole list, not
+    // nothing forever (contract-gardens-phone rev 2 §G).
+    let (_, v) = get("/cli/sources/changes", &Who::Owner, &[("since", &(rev + 1000).to_string())]);
+    assert_eq!((v["full"].as_bool(), v["changed"][0]["name"].as_str(), v["rev"].as_i64()), (Some(true), Some("fleet"), Some(rev)), "{v}");
+    let (_, v) = get("/cli/sources/changes", &Who::Owner, &[("since", "not-a-number")]);
+    assert_eq!(v["full"], true, "{v}");
     call("/cli/sources/mute", &Who::Owner, json!({"name": "fleet", "forSecs": 60}));
     let (_, v) = get("/cli/sources/changes", &Who::Owner, &[("since", &rev.to_string())]);
     assert_eq!(v["changed"][0]["name"], "fleet");

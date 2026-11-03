@@ -130,7 +130,8 @@ export function fakeSources(saved: string[] = [], window = 'local'): FakeSources
       if (s.down) throw new TypeError('Failed to fetch')
       return {
         rev: s.rev,
-        full: since === 0,
+        // As the daemon: a `since` it can't honour is a whole list.
+        full: since <= 0 || since > s.rev,
         changed: [...s.views.values()].filter((v) => v.rev > since).map((v) => structuredClone(v)),
         removed: [...s.removed],
       }

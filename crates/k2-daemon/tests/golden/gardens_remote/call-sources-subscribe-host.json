@@ -1,0 +1,23 @@
+{
+  "body": {
+    "error": {
+      "code": "not_exposed",
+      "hint": "sources.subscribe is answered by the phone itself, not the server"
+    },
+    "ok": false
+  },
+  "request": {
+    "body": {
+      "args": [
+        "fleet"
+      ],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.subscribe"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 400
+}

@@ -137,6 +137,7 @@ fn any_request(fx: &Fx, path: &str) -> (Vec<(&'static str, String)>, J) {
         BLOB_PUT => (vec![], json!({ "garden": g, "placement": "b1", "hash": fx.d.hash(), "offset": 0, "base64": "aGk=", "last": true })),
         REPORT => (vec![], json!({ "garden": g, "placement": "b1", "hash": fx.d.hash(), "event": "ready" })),
         PAUSE | RESUME => (vec![], json!({ "garden": g, "placement": "b1" })),
+        SOURCES_CHANGES => (vec![("garden", g), ("placement", "b1".into()), ("hash", fx.d.hash()), ("since", "0".into())], J::Null),
         other => panic!("no request for {other}"),
     }
 }
@@ -583,7 +584,7 @@ impl Norm {
                 Some("nonce") => json!("<nonce>"),
                 _ => json!(self.text(s)),
             },
-            J::Number(_) if matches!(key, Some("rev" | "seq" | "updatedAtMs" | "ms" | "updatedAt" | "addedAt" | "createdAt" | "at")) => json!(0),
+            J::Number(_) if matches!(key, Some("rev" | "seq" | "updatedAtMs" | "ms" | "updatedAt" | "addedAt" | "createdAt" | "at" | "serverNow" | "checkedAt" | "nextAt" | "t")) => json!(0),
             other => other.clone(),
         }
     }
@@ -617,6 +618,27 @@ fn samples() -> BTreeMap<String, String> {
     put("page-phone", PAGE, &fx.phone, &[("garden", &g2)], J::Null);
     put("frame-phone-merged", FRAME, &fx.phone, &[("garden", &g2), ("placement", "b1"), ("scheme", "dark")], J::Null);
     put("frame-phone-unlisted", FRAME, &fx.phone, &[("garden", &g2), ("placement", "b2"), ("scheme", "dark")], J::Null);
+    // Live sources (contract rev 2 §D, §G): a widget of their own, on Garden 2.
+    fx.d.f.new_widget("cards", Some("hello")).expect("cards");
+    std::fs::write(
+        fx.d.f.widget_dir("cards").join("manifest.json"),
+        "{\n  \"schema\": 1,\n  \"name\": \"Cards\",\n  \"entry\": \"index.html\",\n  \"caps\": [\"sources:read\"],\n  \"sources\": \"config\"\n}\n",
+    )
+    .expect("cards manifest");
+    std::fs::write(&garden2, "schema = 1\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n[[widget]]\nid = \"c1\"\nkind = \"custom\"\nwidget = \"cards\"\ncolumn = 0\n[widget.props.config]\nsources = \"fleet, far::elsewhere.example.com\"\n").expect("Garden 2 with cards");
+    sources_samples_seed();
+    let hc = fx.d.f.garden_widget_status(&g2, "cards").hash().to_string();
+    assert_eq!(hc.len(), 64, "cards bundles clean");
+    let cards = |verb: &str, args: J| json!({ "garden": g2, "placement": "c1", "hash": hc, "verb": verb, "args": args });
+    put("call-sources-list", CALL, &fx.phone, &[], cards("sources.list", json!([])));
+    put("call-sources-read", CALL, &fx.phone, &[], cards("sources.read", json!(["fleet"])));
+    put("call-sources-history", CALL, &fx.phone, &[], cards("sources.history", json!(["fleet", "health"])));
+    put("call-sources-refresh", CALL, &fx.phone, &[], cards("sources.refresh", json!(["fleet"])));
+    put("call-sources-not-bound", CALL, &fx.phone, &[], cards("sources.read", json!(["private"])));
+    put("call-sources-server-not-saved", CALL, &fx.phone, &[], cards("sources.read", json!(["far::elsewhere.example.com"])));
+    put("call-sources-subscribe-host", CALL, &fx.phone, &[], cards("sources.subscribe", json!(["fleet"])));
+    put("sources-changes", SOURCES_CHANGES, &fx.phone, &[("garden", &g2), ("placement", "c1"), ("hash", &hc), ("since", "0")], J::Null);
+    put("sources-changes-since-ahead", SOURCES_CHANGES, &fx.phone, &[("garden", &g2), ("placement", "c1"), ("hash", &hc), ("since", "999999999")], J::Null);
     put("call-store-put", CALL, &fx.phone, &[], call_body(&fx, "store.put", json!(["obj/1", { "t": "hi" }])));
     put("call-store-get", CALL, &fx.phone, &[], call_body(&fx, "store.get", json!(["obj/1"])));
     let mut stale = call_body(&fx, "store.get", json!(["obj/1"]));
@@ -640,6 +662,7 @@ fn samples() -> BTreeMap<String, String> {
             ids,
             vec![
             (h.clone(), "<hash>".into()),
+            (hc.clone(), "<hash>".into()),
             (k2_core::zen::widget_shot::script_text(k2_core::zen::widget_shot::SEALED_FRAME_GUARD), "{{GUARD}}".into()),
             (k2_core::zen::widget_shot::script_text(k2_core::zen::widget_shot::K2_FRAME_JS), "{{K2FRAME}}".into()),
             ],
@@ -654,6 +677,25 @@ fn samples() -> BTreeMap<String, String> {
     out.into_iter()
         .map(|(k, v)| (format!("{k}.json"), format!("{}\n", serde_json::to_string_pretty(&norm.value(&v, None)).expect("json"))))
         .collect()
+}
+
+/// A source for the samples: its card view, fixed values.
+fn sources_samples_seed() {
+    use k2_core::sources::extract::{ProjectedItem, Projection};
+    let spec = json!({ "name": "fleet", "label": "Fleet", "everySecs": 60, "fetch": { "url": "https://fleet.example.com/status" }, "extract": { "fields": { "version": "/version" } } });
+    let r = crate::sources_routes::handle("/cli/sources/add", crate::compute_routes::Who::Owner, spec.to_string().as_bytes(), &HashMap::new());
+    assert!(r.status.starts_with('2'), "add: {}", r.body);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = k2_core::sources::store::get_by_name(&conn, "fleet").expect("db").expect("row");
+    let (mut st, _) = k2_core::sources::store::load_state(&conn, &row.id).expect("db").expect("state");
+    st.phase = k2_core::sources::Phase::Live;
+    st.health = k2_core::sources::Health::Ok;
+    let p = Projection {
+        fields: [("version".to_string(), json!("1.2.3"))].into(),
+        items: vec![ProjectedItem { key: "a".into(), fields: [("state".to_string(), json!("READY"))].into(), list: None }],
+    };
+    k2_core::sources::store::save_state(&conn, &st, Some(&p)).expect("save state");
 }
 
 #[test]
@@ -699,3 +741,6 @@ fn golden_samples_are_what_the_daemon_writes() {
 
 #[path = "zen_remote_routes_phone_tests.rs"]
 mod phone_layout;
+
+#[path = "zen_remote_routes_sources_tests.rs"]
+mod sources_rows;

@@ -1,0 +1,24 @@
+{
+  "body": {
+    "error": {
+      "code": "server_not_saved",
+      "hint": "On a phone a widget reads this server's sources only for now",
+      "room": "far::elsewhere.example.com"
+    },
+    "ok": false
+  },
+  "request": {
+    "body": {
+      "args": [
+        "far::elsewhere.example.com"
+      ],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.read"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 409
+}

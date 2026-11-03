@@ -1143,6 +1143,7 @@ phone (K2 Companion) reaches the Gardens only through `/cli/zen/remote/*`:
 | `GET remote/frame?garden=&placement=[&scheme=]` | `{ok, garden, placement, widget, hash, frameVersion, nonce, scheme, srcdoc, libs: [{slot, key, source, id?, version?, files?, url?, integrity?}], hello}`. `hello` has `view: "phone"`, the merged `config` and `height` (below). `srcdoc` is the desktop wrapper (`frameSrcDoc` + `zenFramePrelude`, the shared golden) with one `__K2_LIB_<n>__` slot per library; 404 `unknown_placement`, 409 `not_a_frame` / `widget_broken` / `stale_widget` |
 | `GET remote/lib?id=&version=&file=` (or `?integrity=`), `POST remote/lib/fetch` | Every library a widget loads: bundled ones from the bytes K2's release carries (`zen_lib_bundled`, checked against `src/shared/zen-lib.json`), download and CDN ones from the daemon's checked cache (`/cli/zen/lib/*`). The phone carries no copy and checks each file's sha256 again |
 | `POST remote/call {garden, placement, hash, verb, args}` | The catalog's `phone` column first (`door` runs; `later` → 501 `verb_unavailable` + `feature`; `host` / `never` / non-widget → `not_exposed`; unknown → `unknown_verb`), then the same runner as `/cli/zen/call` (placement, live hash, caps, signer gate, pause, budgets): `{ok: true, result}` |
+| `GET remote/sources-changes?garden=&placement=&hash=&since=` | `{ok, rev, full, changed: [SourceView], removed: [address]}`: this placement's bound sources only, same gate as `remote/call`. `full: true` for any `since` the daemon can't honour: at or below 0, not a number, older than the last reaped removal, or ahead of `rev` (`/cli/sources/changes` takes the same rule). Not a verb, so a widget can't call it |
 | `POST remote/blob/put`, `GET remote/blob/get` | The widget door's blob routes (same bodies and answers) |
 | `POST remote/report {garden, placement, hash, event: ready \| error \| refusal, …}` | Logged like `widget/run` (`k2 zen widget errors`) |
 | `POST remote/pause`, `POST remote/resume {garden, placement}` | `widget/pause` (anyone the door takes) and the person's Resume |
@@ -1155,6 +1156,30 @@ desktop frame's minus every feature whose rows are all `later`/`never`
 there. No new event: the phone re-reads on `zen_changed`,
 `zen_agents_order_changed` and `garden_data_changed`. The headless smoke is
 `scripts/test/gardens_remote_smoke.sh`.
+
+### Live sources on a phone (0.46.8)
+
+`sources.list`, `read`, `history` and `refresh` are `door` rows answered by
+`garden_data/phone_rows.rs`: `widget` exposure, so `/cli/zen/call` still refuses
+them. `sources.subscribe` is `host`: on `sources_changed` the phone calls
+`remote/sources-changes` and pushes each changed view.
+
+- **Bound:** only what the placement binds on a phone, from its merged `config`
+  or the manifest's fixed list: else 403 `not_bound`. An address with another
+  server's host: 409 `server_not_saved` (this daemon holds no logins there).
+- **Gate:** the door's own (the owner person's paired phone), then placement and
+  live hash (`stale_widget`), `sources:read` (`cap_not_granted`), the signer
+  gate (`needs_editor`), the placement's read budget (`rate_limited`), and a
+  source's `viewers` floor for the phone's login (`cap_not_granted`). `refresh`
+  is once per 15 s per source (429 `rate_limited`, `retryAfterSecs`).
+- **What a phone gets:** the stored card view (`sources::view::build`), `address`
+  and `reach` added, `fields` as scalars. Never `/cli/sources/show`, `list` or
+  `export`: no token, secret name, fetch URL or header reaches a phone. K2 can't
+  vet what a source's own extract keeps: that's its author's rule, on the desktop
+  too. The person's view: a `shape` source's values are shown and audited
+  (`unmasked_read`), as on the desktop.
+- **Audit:** a read through the door writes one line per device, placement and
+  verb per minute; writes always log.
 
 ### A Garden's mobile layout (`page.phone`, 0.46.8)
 

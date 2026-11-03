@@ -1,0 +1,23 @@
+{
+  "body": {
+    "ok": true,
+    "result": {
+      "nextAt": 0,
+      "queued": true
+    }
+  },
+  "request": {
+    "body": {
+      "args": [
+        "fleet"
+      ],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.refresh"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 200
+}

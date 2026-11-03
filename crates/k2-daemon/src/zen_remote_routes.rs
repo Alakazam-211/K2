@@ -75,11 +75,12 @@ pub const REPORT: &str = "/cli/zen/remote/report";
 pub const PAUSE: &str = "/cli/zen/remote/pause";
 pub const RESUME: &str = "/cli/zen/remote/resume";
 pub const AGENTS_ORDER: &str = "/cli/zen/remote/agents-order";
+pub const SOURCES_CHANGES: &str = "/cli/zen/remote/sources-changes";
 
 /// The POST rows: a GET is 405.
 pub const POST_ROUTES: &[&str] = &[BLOB_PUT, CALL, LIB_FETCH, PAUSE, REPORT, RESUME];
 /// The GET rows.
-pub const GET_ROUTES: &[&str] = &[AGENTS_ORDER, BLOB_GET, FRAME, GARDENS, LIB, PAGE];
+pub const GET_ROUTES: &[&str] = &[AGENTS_ORDER, BLOB_GET, FRAME, GARDENS, LIB, PAGE, SOURCES_CHANGES];
 
 /// `/boot-status` `features`: a phone draws Gardens only for a server that
 /// lists it.
@@ -333,6 +334,7 @@ pub fn handle(path: &str, who: &RemoteWho, params: &HashMap<String, String>, bod
         PAUSE => pause(&person, body),
         RESUME => resume(&person, body),
         AGENTS_ORDER => agents_order(&person, params),
+        SOURCES_CHANGES => sources_changes(&person, params),
         _ => refuse("404 Not Found", "not_found", format!("no remote Garden route {path}")),
     }
 }
@@ -802,6 +804,24 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
         audit_thinned("zen.remote.call", p, &format!("{what} code={code}"), format!("{what} refused code={code}"));
     }
     r
+}
+
+// ── GET sources-changes ─────────────────────────────────────────────
+
+/// `GET /cli/zen/remote/sources-changes?garden=&placement=&hash=&since=<rev>`
+/// (contract rev 2 §G): the card views of this placement's bound sources that
+/// changed, so a `sources_changed` costs one read and not one per source. Any
+/// `since` the daemon can't honour answers `full: true`.
+fn sources_changes(p: &Person, params: &HashMap<String, String>) -> CliResponse {
+    let (garden, placement, hash) = match (need(params, "garden"), need(params, "placement"), need(params, "hash")) {
+        (Ok(g), Ok(pl), Ok(h)) => (g.to_string(), pl.to_string(), h.to_string()),
+        (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
+    };
+    let since = param(params, "since").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let what = format!("{garden}/{placement}");
+    audit_thinned("zen.remote.sources_changes", p, &what, what.clone());
+    let cb = CallBody { garden, placement, hash, verb: "sources.read".into(), args: Vec::new(), confirm_token: None };
+    call_envelope(crate::garden_data::phone_rows::sources_changes(&cb, since, &source_who(p)))
 }
 
 // ── blobs ───────────────────────────────────────────────────────────

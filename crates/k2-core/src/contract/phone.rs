@@ -57,7 +57,7 @@ pub const BYTE_VERBS: &[&str] = &["blobs.put", "blobs.get"];
 /// `door` rows only the remote door answers (`garden_data::phone_rows`): a
 /// desktop frame's renderer answers them itself, so they have no `garden-local`
 /// runner. They stay `widget` exposure, so `/cli/zen/call` still refuses them.
-pub const DOOR_ROW_VERBS: &[&str] = &[];
+pub const DOOR_ROW_VERBS: &[&str] = &["sources.list", "sources.read", "sources.history", "sources.refresh"];
 
 /// Where `verb` runs on a phone; `None` for a verb that isn't a widget row
 /// (the remote door answers it `not_exposed`).
@@ -133,19 +133,20 @@ mod tests {
     }
 
     /// v1 (0.46.6): Garden data and person rows go through the door, the
-    /// page verbs are the host's, agents/Thread/sources wait for GP3a,
+    /// page verbs are the host's, agents/Thread wait for GP3a, sources answer
+    /// through the door (0.46.8, contract rev 2 §D, the subscribe on the phone),
     /// `guests.setRooms` waits for the phone's confirm flow.
     #[test]
     fn the_v1_table_names_what_the_prd_says() {
         let c = catalog();
         let p = |v: &str| phone_of(c, v).unwrap_or_else(|| panic!("{v} has no phone"));
-        for v in ["store.get", "store.put", "save.set", "viewer.get", "widget.self", "blobs.put", "blobs.get", "tickets.list", "guests.rooms"] {
+        for v in ["store.get", "store.put", "save.set", "viewer.get", "widget.self", "blobs.put", "blobs.get", "tickets.list", "guests.rooms", "sources.list", "sources.read", "sources.history", "sources.refresh"] {
             assert_eq!(p(v), Phone::Door, "{v}");
         }
-        for v in ["gardens.switch", "theme.get", "layout.set", "conversation.open", "agents.show", "canvas.setHitRegions"] {
+        for v in ["gardens.switch", "theme.get", "layout.set", "conversation.open", "agents.show", "canvas.setHitRegions", "sources.subscribe"] {
             assert_eq!(p(v), Phone::Host, "{v}");
         }
-        for v in ["guests.setRooms", "links.open", "downloads.save", "agents.list", "thread.post", "sources.read"] {
+        for v in ["guests.setRooms", "links.open", "downloads.save", "agents.list", "thread.post"] {
             assert_eq!(p(v), Phone::Later, "{v}");
         }
         // Presence is dropped on phones (Rosson Q7).
@@ -161,10 +162,10 @@ mod tests {
         let c = catalog();
         let desk = crate::zen::widget_shot::FRAME_FEATURES;
         let f = phone_features(c, desk);
-        for keep in ["zen-v1", "zen-gardens-v1", "zen-widgets-v1", "garden-data-v1", "garden-blobs-v1", "guests-rooms-v1"] {
+        for keep in ["zen-v1", "zen-gardens-v1", "zen-widgets-v1", "sources-v1", "garden-data-v1", "garden-blobs-v1", "guests-rooms-v1"] {
             assert!(f.contains(&keep), "{keep} stays: {f:?}");
         }
-        for drop in ["sources-v1", "thread-read-v1", "thread-attachments-v1", "thread-images-v1", "widget-activity-v1", "zen-files-v1"] {
+        for drop in ["thread-read-v1", "thread-attachments-v1", "thread-images-v1", "widget-activity-v1", "zen-files-v1"] {
             assert!(!f.contains(&drop), "{drop} goes: {f:?}");
         }
         // Order kept.

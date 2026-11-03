@@ -1,0 +1,24 @@
+{
+  "body": {
+    "error": {
+      "code": "not_bound",
+      "hint": "private isn't one of this placement's sources (config.source / config.sources)",
+      "room": "private"
+    },
+    "ok": false
+  },
+  "request": {
+    "body": {
+      "args": [
+        "private"
+      ],
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "verb": "sources.read"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 403
+}

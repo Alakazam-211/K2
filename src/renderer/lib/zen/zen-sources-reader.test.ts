@@ -98,6 +98,23 @@ describe('the reader', () => {
     expect((await refusal(r.read('other::akzm.k2.dev'))).last).toBeUndefined()
   })
 
+  it('a server behind what it last said (a restored backup) still pulls, and its whole list resets the rev', async () => {
+    const f = fakeSources([], 'local')
+    const local = f.servers.get('local')
+    local.views.set('fleet', fixtureView({ rev: 10 }))
+    const r = createZenSourcesReader(f.deps)
+    const off = r.subscribe('fleet', () => undefined, () => undefined, 'g-1')
+    await settle()
+    local.rev = 4
+    f.socket(4)
+    await settle()
+    expect(local.changes).toEqual([10])
+    f.socket(5)
+    await settle()
+    expect(local.changes).toEqual([10, 4])
+    off()
+  })
+
   it('the window’s server rides its socket; others poll every 20 s only while visible', async () => {
     const f = fakeSources(['akzm.k2.dev'], 'local')
     const local = f.servers.get('local')

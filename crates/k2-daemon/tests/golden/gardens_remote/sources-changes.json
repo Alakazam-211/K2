@@ -1,0 +1,79 @@
+{
+  "body": {
+    "changed": [
+      {
+        "address": "fleet",
+        "checkedAt": null,
+        "counts": {
+          "crit": 0,
+          "ok": 0,
+          "unknown": 0,
+          "warn": 0
+        },
+        "display": "ok",
+        "fields": {
+          "version": "<version>"
+        },
+        "gap": null,
+        "hardSince": null,
+        "health": "ok",
+        "httpStatus": null,
+        "items": [
+          {
+            "fields": {
+              "state": "READY"
+            },
+            "health": "unknown",
+            "key": "a",
+            "reason": null,
+            "since": null,
+            "soft": {
+              "count": 0,
+              "level": null,
+              "of": 3
+            }
+          }
+        ],
+        "keep": "values",
+        "kind": "http-json",
+        "label": "Fleet",
+        "link": null,
+        "masked": false,
+        "muted": null,
+        "name": "fleet",
+        "nextAt": null,
+        "phase": "live",
+        "pinned": false,
+        "reach": "ok",
+        "reason": null,
+        "reasonText": null,
+        "recoveredAt": null,
+        "rev": 0,
+        "serverNow": 0,
+        "simulated": null,
+        "soft": {
+          "count": 0,
+          "level": null,
+          "of": 3
+        },
+        "status": "active",
+        "updatedAt": null
+      }
+    ],
+    "full": true,
+    "ok": true,
+    "removed": [],
+    "rev": 0
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/sources-changes",
+    "query": {
+      "garden": "g-00000002",
+      "hash": "<hash>",
+      "placement": "c1",
+      "since": "<since>"
+    }
+  },
+  "status": 200
+}

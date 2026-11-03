@@ -286,7 +286,9 @@ export function createZenSourcesReader(deps: ZenSourcesDeps): ZenSourcesReader {
     s.inFlight = true
     try {
       const ch = await deps.changes(s.scope, s.rev)
-      s.rev = Math.max(s.rev, ch.rev)
+      // A whole list answers a `since` the daemon couldn't honour (one ahead of
+      // it, after a restored backup): take its rev, or every pull stays ahead.
+      s.rev = ch.full ? ch.rev : Math.max(s.rev, ch.rev)
       s.down = false
       for (const r of ch.changed) {
         const v = store(s, r)
@@ -310,7 +312,7 @@ export function createZenSourcesReader(deps: ZenSourcesDeps): ZenSourcesReader {
   const live = (s: Server): void => {
     if (s.stop || s.timer) return
     const off = deps.onChanged(s.scope, (rev) => {
-      if (rev > s.rev) void pull(s)
+      if (rev !== s.rev) void pull(s)
     })
     if (off) {
       s.stop = off

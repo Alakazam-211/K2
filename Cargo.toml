@@ -93,6 +93,11 @@ codegen-units = 1
 # position and size hold (tauri#10420); see its src/child_container.rs.
 # Paired with the vendored wry's gtk::Fixed set_bounds/bounds/reparent.
 #
+# wry also carries a guard against URIs with an empty path (`ipc:foo`), which
+# panic Tauri 2.12.0's IPC and asset handlers and abort the macOS client.
+# third_party/upstream/wry-0005-*: DROP IT ON THE TAURI 2.12.5 MOVE (0.46.9);
+# 2.12.4 has the real fix (tauri#16197).
+#
 # vte 0.15.0 (alacritty_terminal's parser, so every K2 terminal) drops one
 # ASCII byte when a 2-byte UTF-8 char is split across PTY reads after its
 # lead byte and the next read continues with that ASCII byte plus another

@@ -126,7 +126,7 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 
 | | |
 |--|--|
-| **What** | `third_party/wry` (crates.io wry 0.57.0 + nil-URL no-abort patch + macOS IPC from the main frame only) |
+| **What** | `third_party/wry` (crates.io wry 0.57.0 + nil-URL no-abort patch + macOS IPC from the main frame only + empty-URI-path guard until the Tauri 2.12.5 move) |
 | **Upstream** | [wry](https://github.com/tauri-apps/wry) |
 | **License** | **Apache-2.0 OR MIT** (Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy) — full text in `third_party/wry/LICENSE-MIT`, `third_party/wry/LICENSE-APACHE`, and `third_party/wry/LICENSE.spdx` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |

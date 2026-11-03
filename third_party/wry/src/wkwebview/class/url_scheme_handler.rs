@@ -184,6 +184,14 @@ extern "C" fn start_task(
     // send response
     match http_request.body(sent_form_body) {
       Ok(final_request) => {
+        // K2 wry-0005: `ipc:foo` would panic Tauri 2.12.0's handler, and a panic
+        // here aborts the app. Comes out on the Tauri 2.12.5 move.
+        if crate::empty_uri_path::has_empty_uri_path(&final_request) {
+          respond_with_404();
+          webview.remove_custom_task_key(task_key);
+          return;
+        }
+
         let webview = webview.retain();
         let task = task.retain();
         let responder: Box<dyn FnOnce(HttpResponse<Cow<'static, [u8]>>)> =

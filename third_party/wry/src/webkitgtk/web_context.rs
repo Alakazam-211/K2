@@ -215,6 +215,16 @@ impl WebContextExt for super::WebContext {
           }
         };
 
+        // K2 wry-0005: `ipc:foo` would panic Tauri 2.12.0's handler. Comes out on
+        // the Tauri 2.12.5 move.
+        if crate::empty_uri_path::has_empty_uri_path(&http_request) {
+          request.finish_error(&mut gtk::glib::Error::new(
+            glib::UriError::Failed,
+            "Request URI has an empty path.",
+          ));
+          return;
+        }
+
         let request_ = MainThreadRequest(request.clone());
         let responder: Box<dyn FnOnce(HttpResponse<Cow<'static, [u8]>>)> =
           Box::new(move |http_response| {

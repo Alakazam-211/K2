@@ -344,6 +344,9 @@
 
 #[cfg(any(target_os = "windows", target_os = "android"))]
 mod custom_protocol_workaround;
+// K2 wry-0005: comes out on the Tauri 2.12.5 move (see the file).
+#[cfg(any(target_os = "macos", target_os = "ios", gtk))]
+mod empty_uri_path;
 mod error;
 #[cfg(any(target_os = "android", test))]
 mod inject_initialization_scripts;

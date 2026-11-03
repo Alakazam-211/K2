@@ -1,0 +1,158 @@
+From: z3thon <rosson.long@lztek.io>
+Date: Tue, 3 Nov 2026 14:00:00 -0700
+Subject: [PATCH] K2 only: refuse a custom-protocol request with an empty URI path
+
+NOT FOR UPSTREAM, AND TEMPORARY: drop this patch and everything it adds on
+K2's move to Tauri 2.12.5 (0.46.9). Tauri 2.12.4 fixes the handlers themselves
+(tauri#16197, issue #16196).
+
+Tauri 2.12.0's IPC and asset handlers run `&uri.path().as_bytes()[1..]`, and
+`ipc:foo` has an empty path, so a page that POSTs to it panics the handler. On
+macOS that runs under an `extern "C"` callback, so the panic aborts the client.
+wry is the one place both handlers are reached from, so K2 answers such a
+request here (macOS 404, Linux an error) without calling the handler. Windows
+and Android route custom protocols through `http://<scheme>.localhost`, whose
+path is never empty, so they need nothing.
+
+Tested on macOS 27 with a real WKWebView: without the guard, a loopback page's
+fetch('ipc:foo', { method: 'POST' }) aborts the process (SIGABRT); with it, the
+fetch fails, the handler isn't called, and ipc://localhost/cmd still works.
+---
+diff --git a/src/empty_uri_path.rs b/src/empty_uri_path.rs
+new file mode 100644
+index 000000000..c952935f1
+--- /dev/null
++++ b/src/empty_uri_path.rs
+@@ -0,0 +1,78 @@
++// K2 patch, third_party/upstream/wry-0005-empty-uri-path-guard.patch.
++// REMOVE ON THE TAURI 2.12.5 MOVE (0.46.9): delete this file, its `mod` line in
++// lib.rs and the two call sites (wkwebview/class/url_scheme_handler.rs,
++// webkitgtk/web_context.rs). Tauri 2.12.4 has the real fix (tauri#16197).
++
++//! A custom-protocol request whose URI has an empty path never reaches its
++//! handler.
++//!
++//! Tauri 2.12.0's IPC and asset handlers run `&uri.path().as_bytes()[1..]`, and
++//! `ipc:foo` parses as authority-form, whose path is `""`, so a page that POSTs
++//! to it panics the handler. On macOS that handler runs under an `extern "C"`
++//! callback with no `catch_unwind`, so the panic aborts the app. Real URLs such
++//! as `tauri://localhost` and `ipc://localhost/cmd` have a path of at least `/`.
++
++/// The request has no URI path at all (`ipc:foo`, `ipc:`, `localhost:80`).
++pub(crate) fn has_empty_uri_path<T>(request: &http::Request<T>) -> bool {
++  request.uri().path().is_empty()
++}
++
++#[cfg(test)]
++mod tests {
++  use super::has_empty_uri_path;
++  use http::Request;
++
++  /// Tauri 2.12.0 `src/ipc/protocol.rs:442` and `src/protocol/asset.rs:40`: the
++  /// slice the guard stands in front of, copied as it ships.
++  fn tauri_2_12_0_handler(request: Request<Vec<u8>>) -> String {
++    let (parts, _body) = request.into_parts();
++    String::from_utf8_lossy(&parts.uri.path().as_bytes()[1..]).to_string()
++  }
++
++  /// Both call sites in wry: refuse, or call the handler.
++  fn through_the_guard(uri: &str) -> Result<String, &'static str> {
++    let request = Request::builder()
++      .uri(uri)
++      .method("POST")
++      .body(Vec::new())
++      .unwrap_or_else(|e| panic!("{uri} must build a request: {e}"));
++    if has_empty_uri_path(&request) {
++      return Err("refused");
++    }
++    Ok(tauri_2_12_0_handler(request))
++  }
++
++  #[test]
++  fn an_empty_uri_path_never_reaches_the_handler() {
++    for uri in ["ipc:foo", "ipc:", "asset:foo", "localhost:80"] {
++      assert_eq!(through_the_guard(uri), Err("refused"), "{uri}");
++    }
++  }
++
++  /// The slice really does panic on this URI, so the guard is what stands
++  /// between it and the handler. Fails if `http` ever changes the parse, which
++  /// would mean the guard can go.
++  #[test]
++  #[should_panic(expected = "out of range")]
++  fn the_unguarded_handler_panics_on_ipc_foo() {
++    let request = Request::builder()
++      .uri("ipc:foo")
++      .method("POST")
++      .body(Vec::new())
++      .expect("ipc:foo builds a request");
++    tauri_2_12_0_handler(request);
++  }
++
++  #[test]
++  fn real_urls_still_reach_the_handler() {
++    for (uri, command) in [
++      ("tauri://localhost", ""),
++      ("tauri://localhost/", ""),
++      ("ipc://localhost/plugin%3Aupdater%7Ccheck", "plugin%3Aupdater%7Ccheck"),
++      ("http://ipc.localhost/cmd", "cmd"),
++      ("asset://localhost/%2Ftmp%2Fa.png", "%2Ftmp%2Fa.png"),
++    ] {
++      assert_eq!(through_the_guard(uri), Ok(command.to_string()), "{uri}");
++    }
++  }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index a0430279e..0fac574d1 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -344,6 +344,9 @@
+ 
+ #[cfg(any(target_os = "windows", target_os = "android"))]
+ mod custom_protocol_workaround;
++// K2 wry-0005: comes out on the Tauri 2.12.5 move (see the file).
++#[cfg(any(target_os = "macos", target_os = "ios", gtk))]
++mod empty_uri_path;
+ mod error;
+ #[cfg(any(target_os = "android", test))]
+ mod inject_initialization_scripts;
+diff --git a/src/webkitgtk/web_context.rs b/src/webkitgtk/web_context.rs
+index 3399e2cc9..29c0fc411 100644
+--- a/src/webkitgtk/web_context.rs
++++ b/src/webkitgtk/web_context.rs
+@@ -215,6 +215,16 @@ impl WebContextExt for super::WebContext {
+           }
+         };
+ 
++        // K2 wry-0005: `ipc:foo` would panic Tauri 2.12.0's handler. Comes out on
++        // the Tauri 2.12.5 move.
++        if crate::empty_uri_path::has_empty_uri_path(&http_request) {
++          request.finish_error(&mut gtk::glib::Error::new(
++            glib::UriError::Failed,
++            "Request URI has an empty path.",
++          ));
++          return;
++        }
++
+         let request_ = MainThreadRequest(request.clone());
+         let responder: Box<dyn FnOnce(HttpResponse<Cow<'static, [u8]>>)> =
+           Box::new(move |http_response| {
+diff --git a/src/wkwebview/class/url_scheme_handler.rs b/src/wkwebview/class/url_scheme_handler.rs
+index 509c60e2c..7b68eff6a 100644
+--- a/src/wkwebview/class/url_scheme_handler.rs
++++ b/src/wkwebview/class/url_scheme_handler.rs
+@@ -184,6 +184,14 @@ extern "C" fn start_task(
+     // send response
+     match http_request.body(sent_form_body) {
+       Ok(final_request) => {
++        // K2 wry-0005: `ipc:foo` would panic Tauri 2.12.0's handler, and a panic
++        // here aborts the app. Comes out on the Tauri 2.12.5 move.
++        if crate::empty_uri_path::has_empty_uri_path(&final_request) {
++          respond_with_404();
++          webview.remove_custom_task_key(task_key);
++          return;
++        }
++
+         let webview = webview.retain();
+         let task = task.retain();
+         let responder: Box<dyn FnOnce(HttpResponse<Cow<'static, [u8]>>)> =

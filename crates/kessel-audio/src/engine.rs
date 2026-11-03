@@ -383,6 +383,7 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
     let mut soft_clock: Option<Instant> = None;
     let mut publish = false;
     const BLOCK: Duration = Duration::from_millis(10);
+    const MAX_CAPTURE_BLOCKS_PER_PASS: usize = 8;
 
     while !shared.stop.load(Ordering::Acquire) {
         while let Some(c) = shared.ctrl.pop() {
@@ -455,9 +456,11 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
             }
         }
 
-        // Capture: process every complete block the device has delivered.
+        // Capture: process the complete blocks the device has delivered, up
+        // to a limit, so a thread that has fallen behind still gets back to
+        // the control queue. A mute can't wait for a backlog to clear.
         if let Some(c) = cap.as_mut() {
-            loop {
+            for _ in 0..MAX_CAPTURE_BLOCKS_PER_PASS {
                 let need = c.rs.input_needed();
                 if c.rx.slots() < need {
                     break;

@@ -166,6 +166,26 @@ fn mute_stops_frames_and_time_keeps_running() {
     assert!(gap >= 48_000, "ts48k only advanced {gap} across the mute");
 }
 
+/// A device far faster than any processor keeps the processing thread behind
+/// for good. A mute must still land: it can't wait for a backlog that never
+/// clears.
+#[test]
+fn mute_lands_while_the_processing_thread_is_behind() {
+    let device = NullDevice {
+        block_period: Duration::from_micros(100),
+        input: Some(Box::new(talker(48_000, 100.0, 100.0))),
+        ..NullDevice::default()
+    };
+    let engine = AudioEngine::start(config(device)).expect("start");
+    let rx = engine.capture_frames();
+    collect(&rx, 10, Duration::from_secs(10));
+    engine.set_capture(false);
+    std::thread::sleep(Duration::from_millis(200));
+    while rx.try_recv().is_some() {}
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(rx.try_recv().is_none(), "frames while muted");
+}
+
 #[test]
 fn a_call_between_two_engines() {
     // Engine A talks; its frames are delivered to engine B as participant 7.

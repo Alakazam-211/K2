@@ -22498,7 +22498,7 @@ cmd_sessions_new() {
             --workspace) workspace="${2:-}"; shift 2 ;;
             --model) model="${2:-}"; shift 2 ;;
             --worktree|--base)
-                echo "usage: --worktree needs K2 0.46.7 Workbench (not in this K2 yet); start it without --worktree" >&2
+                echo "usage: k2 sessions new has no $1. For a sidecar in its own git worktree: k2 sidecar new <name> --harness <preset> --worktree [--base <ref>] (k2 sidecar --help)" >&2
                 exit 2 ;;
             --json) as_json=1; shift ;;
             -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;

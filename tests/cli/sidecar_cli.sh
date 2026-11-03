@@ -125,6 +125,13 @@ out="$(env HOME="$HOME1" "$K2_CLI" sessions spawn --agent foo 2>&1)"; rc=$?
 set -e
 assert_eq "sessions spawn retired exit 2" "$rc" "2"
 assert_contains "sessions spawn says where it moved" "$out" "moved to: k2 sessions new"
+# `k2 sessions new` has no worktree flag; it points at the sidecar verb.
+for flag in --worktree --base; do
+    capture_nod sessions new fix "$flag"
+    assert_eq "sessions new $flag exit 2" "$rc" "2"
+    assert_contains "sessions new $flag points at the sidecar verb" "$out" "k2 sidecar new <name> --harness <preset> --worktree"
+    assert_contains "sessions new $flag names the flag" "$out" "k2 sessions new has no $flag."
+done
 
 eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
 assert_eq "catalog: sidecar tool id" "$(_cli_tool_id_for_verb sidecar)" "sidecar"

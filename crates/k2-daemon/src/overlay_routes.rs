@@ -1164,7 +1164,11 @@ const AUTHOR_AGENT: &str = "agent";
 fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> Option<overlay::PostAuthor> {
     if let Some(pass) = request_skin() {
         let mut author = overlay::PostAuthor::guest(&skin_from_stamp(&pass));
-        author.name = Some(guest_stamp_label(&pass));
+        // A bare name says nothing more: an owner's platform pass on no App.
+        let label = guest_stamp_label(&pass);
+        if label != author.login {
+            author.name = Some(label);
+        }
         Some(author)
     } else if principal_is_bound(params) {
         let from = params.get("from").map(|s| s.trim()).unwrap_or("");

@@ -768,7 +768,8 @@ async fn every_write_on_an_apps_people_leaves_a_line_and_never_a_password() {
     assert_eq!(line_named(&rows, "app_user_role_removed")["payload"]["name"], json!(tmpl), "a removed role's App still gets the line");
 
     // Never the password, in the record or the audit log; it does say one was set.
-    assert_eq!(line_named(&rows, "app_user_added")["payload"]["passwordSet"], json!(true));
+    let added = rows.iter().find(|x| x["event"] == "app_user_added" && x["payload"]["username"] == json!(u)).expect("the add");
+    assert_eq!(added["payload"]["passwordSet"], json!(true), "{added}");
     let record = serde_json::to_string(&rows).unwrap();
     let log = serde_json::to_string(&k2_core::auth_audit::read_all().unwrap()).unwrap();
     for secret in [&added_pw, &set_pw, &generated] {
@@ -830,9 +831,9 @@ async fn a_live_owners_reset_holds_the_tie_through_every_door() {
     let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": v, "app": shop, "code": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let mint = |purpose: &str| {
-        k2_core::skin::invites::mint(&pid, &shop, purpose, 3600, Some("x@example.test"), false, None, "test")
-            .expect("a link")
-            .token
+        let m = k2_core::skin::invites::mint(&pid, &shop, purpose, 3600, Some("x@example.test"), false, None, "test").expect("a link");
+        k2_core::skin::invites::activate(&m.id).expect("its clock").expect("started");
+        m.token
     };
     // An invite never voids the owner's reset, so it can sit beside it.
     let first = mint(k2_core::skin::invites::PURPOSE_INVITE);

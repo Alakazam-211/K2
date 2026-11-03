@@ -85,8 +85,8 @@ codegen-units = 1
 
 # wry 0.57 still unwraps a nil NSURL (URLWithString / IPC / nav). The
 # path patch skips those instead of aborting the macOS main thread.
-# objc2 0.6.4 expects a null selector (aborts sendEvent). tao 0.37.1 then
-# dereferences the null superclass pointer. Path-patched the same way.
+# objc2 0.6.5 still expects a non-null selector (aborts sendEvent). tao 0.37.1
+# then dereferences the null superclass pointer. Path-patched the same way.
 #
 # tauri-runtime-wry 2.12.0: on Linux, child webviews (the Browser tab) go
 # into a per-window gtk::Fixed instead of the window's gtk::Box, so their

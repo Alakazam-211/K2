@@ -152,7 +152,25 @@ unsafe impl Send for Sel {}
 impl UnwindSafe for Sel {}
 impl RefUnwindSafe for Sel {}
 
+// One NUL byte. `CStr::from_ptr` on this address must not read off the end.
+static SENTINEL: [u8; 1] = [0];
+
 impl Sel {
+    /// Selector used when `sel_registerName` returns null.
+    ///
+    /// Not a registered selector. `send_message` skips it instead of calling
+    /// `objc_msgSend`.
+    #[inline]
+    pub(crate) const fn skip_sentinel() -> Self {
+        // SAFETY: `SENTINEL` is non-null.
+        unsafe { Self::__internal_from_ptr(SENTINEL.as_ptr()) }
+    }
+
+    #[inline]
+    pub(crate) fn is_skip_sentinel(self) -> bool {
+        ptr::eq(self.as_ptr().cast::<u8>(), SENTINEL.as_ptr())
+    }
+
     #[inline]
     #[doc(hidden)]
     pub const unsafe fn __internal_from_ptr(ptr: *const u8) -> Self {
@@ -173,22 +191,11 @@ impl Sel {
         self.ptr.as_ptr()
     }
 
-    // We explicitly don't do #[track_caller] here, since we expect the error
-    // to never actually happen.
-    pub(crate) unsafe fn register_unchecked(name: *const c_char) -> Self {
-        let ptr = unsafe { ffi::sel_registerName(name) };
-        // SAFETY: `sel_registerName` declares return type as `SEL _Nonnull`,
-        // at least when input is also `_Nonnull` (which it is in our case).
-        //
-        // Looking at the source code, it can fail and will return NULL if
-        // allocating space for the selector failed (which then subsequently
-        // invokes UB by calling `memcpy` with a NULL argument):
-        // <https://github.com/apple-oss-distributions/objc4/blob/objc4-841.13/runtime/objc-os.h#L1002-L1004>
-        //
-        // I suspect this will be really uncommon in practice, since the
-        // called selector is almost always going to be present in the binary
-        // already; but alas, we'll handle it!
-        ptr.expect("failed allocating selector")
+    // Null is not a panic. This runs on the main thread inside `extern "C"`
+    // (`TaoWindow::send_event`); unwinding out of that frame aborts.
+    pub(crate) unsafe fn register_unchecked(name: *const c_char) -> Option<Self> {
+        // `sel_registerName` returns NULL if allocating the selector failed.
+        unsafe { ffi::sel_registerName(name) }
     }
 
     /// Registers a selector with the Objective-C runtime.
@@ -206,13 +213,18 @@ impl Sel {
     #[doc(alias = "sel_registerName")]
     pub fn register(name: &CStr) -> Self {
         // SAFETY: Input is a non-null, NUL-terminated C-string pointer.
-        unsafe { Self::register_unchecked(name.as_ptr()) }
+        unsafe { Self::register_unchecked(name.as_ptr()) }.expect("failed allocating selector")
     }
 
     /// Returns the string representation of the selector.
     #[inline]
     #[doc(alias = "sel_getName")]
     pub fn name(self) -> &'static CStr {
+        if self.is_skip_sentinel() {
+            // SAFETY: `SENTINEL` is a single NUL, so this does not read past it.
+            // `sel_getName` is only valid for a registered selector.
+            return unsafe { CStr::from_ptr(SENTINEL.as_ptr().cast()) };
+        }
         // SAFETY: Input is non-null selector. Declares return type as
         // `const char * _Nonnull`, source code agrees.
         let ptr = unsafe { ffi::sel_getName(self) };

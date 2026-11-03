@@ -133,13 +133,13 @@ the macOS app. crates.io 0.57.0 still unwraps those.
 
 ## Third-party: objc2 (MIT)
 
-K2 vendors a patched copy of **objc2** 0.6.4 under `third_party/objc2` so a
+K2 vendors a patched copy of **objc2** 0.6.5 under `third_party/objc2` so a
 null return from `sel_registerName` cannot abort the macOS app. crates.io
-0.6.4 still expects that pointer. The crates.io crate ships no LICENSE file.
+0.6.5 still expects that pointer. The crates.io crate ships no LICENSE file.
 
 | | |
 |--|--|
-| **What** | `third_party/objc2` (crates.io objc2 0.6.4 + null-selector no-abort patch) |
+| **What** | `third_party/objc2` (crates.io objc2 0.6.5 + null-selector no-abort patch) |
 | **Upstream** | [objc2](https://github.com/madsmtm/objc2) |
 | **License** | **MIT** (Copyright (c) Mads Marquart) — full text in `third_party/objc2/LICENSE` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |

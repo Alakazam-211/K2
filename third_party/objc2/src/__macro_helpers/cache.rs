@@ -25,15 +25,23 @@ impl CachedSel {
     // if running on multiple threads).
     #[cold]
     unsafe fn fetch(&self, name: *const c_char) -> Sel {
-        // The panic inside `Sel::register_unchecked` is unfortunate, but
-        // strict correctness is more important than speed
-
         // SAFETY: Input is a non-null, NUL-terminated C-string pointer.
         //
         // We know this, because we construct it in `sel!` ourselves
-        let sel = unsafe { Sel::register_unchecked(name) };
-        self.ptr.store(sel.as_ptr() as *mut _, Ordering::Relaxed);
-        sel
+        let registered = unsafe { Sel::register_unchecked(name) };
+        self.cache_registered(registered)
+    }
+
+    /// Store a registered selector. `None` is not cached; the next `get`
+    /// tries again and the caller receives the skip sentinel.
+    fn cache_registered(&self, registered: Option<Sel>) -> Sel {
+        if let Some(sel) = registered {
+            self.ptr.store(sel.as_ptr().cast_mut(), Ordering::Relaxed);
+            sel
+        } else {
+            // Do not store the sentinel. It is not a real selector.
+            Sel::skip_sentinel()
+        }
     }
 
     /// Returns the cached selector. If no selector is yet cached, registers
@@ -103,10 +111,34 @@ impl CachedClass {
 
 #[cfg(test)]
 mod tests {
+    use core::ffi::CStr;
+    use core::sync::atomic::Ordering;
+
+    use super::*;
+
     #[test]
     #[should_panic = "class NonExistentClass could not be found"]
     #[cfg(not(feature = "unstable-static-class"))]
     fn test_not_found() {
         let _ = crate::class!(NonExistentClass);
+    }
+
+    #[test]
+    fn null_selector_sentinel_is_cstr_and_none_is_not_cached() {
+        // Test-only path: do not call `Sel::register` (that `expect`s).
+        let cache = CachedSel::new();
+        let sel = cache.cache_registered(None);
+        assert!(cache.ptr.load(Ordering::Relaxed).is_null());
+        assert!(sel.is_skip_sentinel());
+
+        // `CStr::from_ptr` stops at the first NUL. One zero byte is enough.
+        let from_ptr = unsafe { CStr::from_ptr(sel.as_ptr().cast()) };
+        assert_eq!(from_ptr.to_bytes(), b"");
+        assert_eq!(from_ptr.to_bytes_with_nul(), b"\0");
+        assert_eq!(sel.name().to_bytes(), b"");
+
+        let again = cache.cache_registered(None);
+        assert!(again.is_skip_sentinel());
+        assert!(cache.ptr.load(Ordering::Relaxed).is_null());
     }
 }

@@ -351,6 +351,68 @@ fn panic_verify(cls: &AnyClass, sel: Sel, err: &crate::runtime::VerificationErro
     )
 }
 
+/// All-zero is a valid return for `()`, integers, `bool` / `Bool`, raw
+/// pointers, and integer newtypes (`NSEventType`, `NSEventModifierFlags`).
+///
+/// `&T` and `NonNull<T>` are not zeroed. `Retained<T>` is not an ABI return
+/// of `send_message`; the inner type is `*mut T`, and a null pointer becomes
+/// `None` in `Retained::from_raw`.
+fn skip_null_selector<R: EncodeReturn>() -> R {
+    if let Some(value) = zero_if_valid::<R>() {
+        return value;
+    }
+    // Not a `send_event` return. Do not build a fake reference.
+    refuse_reference_skip_return()
+}
+
+#[cold]
+#[inline(never)]
+fn refuse_reference_skip_return<R>() -> R {
+    panic!("null selector: refusing to synthesize a reference return");
+}
+
+fn scalar_zero_size(encoding: &crate::encode::Encoding) -> Option<usize> {
+    use crate::encode::Encoding;
+    match encoding {
+        Encoding::Void => Some(0),
+        Encoding::Bool | Encoding::Char | Encoding::UChar => Some(1),
+        Encoding::Short | Encoding::UShort => Some(2),
+        Encoding::Int | Encoding::UInt => Some(4),
+        Encoding::LongLong | Encoding::ULongLong => Some(8),
+        Encoding::Long | Encoding::ULong => {
+            Some(if cfg!(windows) {
+                4
+            } else {
+                core::mem::size_of::<usize>()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn zero_if_valid<R: EncodeReturn>() -> Option<R> {
+    // Trait bounds on `R` cannot tell `&T` from `*const T` (same pointer
+    // encoding, and a generic function only sees `R: EncodeReturn`).
+    // `type_name` is filled in per monomorphization.
+    let name = core::any::type_name::<R>();
+    if name.starts_with('&') || name.contains("NonNull<") {
+        return None;
+    }
+    if name.starts_with("*const ") || name.starts_with("*mut ") {
+        // Null raw pointer, including a null fat pointer. Not a reference.
+        return Some(unsafe { core::mem::zeroed() });
+    }
+    // `NonZero*` is integer-encoded but all-zero is not a valid value.
+    if name.contains("NonZero") {
+        return None;
+    }
+    if scalar_zero_size(&R::ENCODING_RETURN) == Some(core::mem::size_of::<R>()) {
+        // (), integers, bool/Bool, and integer newtypes such as NSEventType.
+        return Some(unsafe { core::mem::zeroed() });
+    }
+    None
+}
+
 mod private {
     pub trait Sealed {}
 }
@@ -420,6 +482,9 @@ pub unsafe trait MessageReceiver: private::Sealed + Sized {
     #[doc(alias = "performSelector:withObject:")]
     #[doc(alias = "performSelector:withObject:withObject:")]
     unsafe fn send_message<A: EncodeArguments, R: EncodeReturn>(self, sel: Sel, args: A) -> R {
+        if sel.is_skip_sentinel() {
+            return skip_null_selector();
+        }
         let receiver = self.__as_raw_receiver();
         #[cfg(debug_assertions)]
         {
@@ -462,6 +527,9 @@ pub unsafe trait MessageReceiver: private::Sealed + Sized {
         sel: Sel,
         args: A,
     ) -> R {
+        if sel.is_skip_sentinel() {
+            return skip_null_selector();
+        }
         let receiver = self.__as_raw_receiver();
         #[cfg(debug_assertions)]
         {
@@ -539,13 +607,56 @@ unsafe impl MessageReceiver for &mut AnyObject {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU8;
     use core::ptr;
 
     use super::*;
+    use crate::encode::{Encode, Encoding};
     use crate::msg_send;
     use crate::rc::{Allocated, Retained};
     use crate::runtime::NSObject;
     use crate::test_utils;
+
+    #[repr(transparent)]
+    struct UIntNewtype(usize);
+
+    // SAFETY: transparent over `usize`, same encoding as `NSEventType`.
+    unsafe impl Encode for UIntNewtype {
+        const ENCODING: Encoding = usize::ENCODING;
+    }
+
+    #[test]
+    fn skip_null_selector_zeroes_scalars_not_references() {
+        // `zero_if_valid` keys off these spellings. Fail here instead of
+        // zeroing a reference if `type_name` changes.
+        assert!(core::any::type_name::<&AnyObject>().starts_with('&'));
+        assert!(core::any::type_name::<&mut AnyObject>().starts_with('&'));
+        assert!(core::any::type_name::<NonNull<AnyObject>>().contains("NonNull<"));
+        assert!(core::any::type_name::<NonZeroU8>().contains("NonZero"));
+        assert!(core::any::type_name::<*const AnyClass>().starts_with("*const "));
+        assert!(core::any::type_name::<*mut AnyObject>().starts_with("*mut "));
+
+        assert_eq!(zero_if_valid::<()>(), Some(()));
+        assert_eq!(zero_if_valid::<usize>(), Some(0));
+        assert!(!zero_if_valid::<crate::runtime::Bool>().unwrap().as_bool());
+        assert!(zero_if_valid::<*const AnyClass>().unwrap().is_null());
+        assert!(zero_if_valid::<*mut AnyObject>().unwrap().is_null());
+        assert_eq!(zero_if_valid::<UIntNewtype>().unwrap().0, 0);
+        assert!(zero_if_valid::<&AnyObject>().is_none());
+        assert!(zero_if_valid::<&mut AnyObject>().is_none());
+        assert!(zero_if_valid::<NonNull<AnyObject>>().is_none());
+        assert!(zero_if_valid::<NonZeroU8>().is_none());
+
+        let sel = Sel::skip_sentinel();
+        let obj: *mut AnyObject = ptr::null_mut();
+        let value: usize = unsafe { MessageReceiver::send_message(obj, sel, ()) };
+        assert_eq!(value, 0);
+        let _: () = unsafe { MessageReceiver::send_message(obj, sel, ()) };
+        // Super send uses the same skip. `NSObject` is only here so the
+        // reference is valid; the sentinel returns before `objc_msgSendSuper`.
+        let cls = crate::class!(NSObject);
+        let _: () = unsafe { MessageReceiver::send_super_message(obj, cls, sel, ()) };
+    }
 
     #[allow(unused)]
     fn test_different_receivers(obj: &mut AnyObject) {

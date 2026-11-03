@@ -2281,7 +2281,7 @@
    {
     "name": "zen guide",
     "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
-    "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, sync, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2."
+    "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, phone, themes, sync, examples, undo, safe-mode, api, services, libs), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2."
    },
    {
     "name": "skills",

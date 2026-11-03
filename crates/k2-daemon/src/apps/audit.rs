@@ -466,9 +466,7 @@ pub(crate) fn set_app_workspace(app: &str, ws: &str) {
 /// Watch each finished call for alert conditions. A refused WebSocket upgrade
 /// keeps its row and its other alerts, but no spike: an open socket that lost
 /// access makes an older client re-dial about 30 times in 5 minutes, and that
-/// says nothing about who's calling. (Only the gate's own refusals get here with
-/// a status at all: a socket handler's 403 goes out through `refuse_upgrade`, so
-/// its row reads 101.)
+/// says nothing about who's calling.
 fn observe(ws: &str, call: &Call, upgrade: bool) {
     let app = call.app_id.as_str();
     alerts().lock().unwrap_or_else(|e| e.into_inner()).ws.insert(app.to_string(), ws.to_string());

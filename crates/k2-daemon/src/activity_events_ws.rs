@@ -545,7 +545,7 @@ async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
         body.len(),
         frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
-    let _ = stream.write_all(resp.as_bytes()).await;
+    crate::routes::http::refuse_upgrade(stream, &resp).await;
     let _ = stream.flush().await;
 }
 
@@ -647,27 +647,53 @@ pub async fn serve_activity_events_connection(
     let mut skin_gate = crate::socket_access::SkinGate::default();
     // An App pass, as it is now: its flags follow, a lost cap stops that kind
     // of frame, and a socket with none of its caps left ends.
+    macro_rules! guest_apply_or_close {
+        ($now:expr, $generation:expr) => {
+            match $now {
+                crate::socket_access::RoomAccess::Still(fresh) => {
+                    let had_activity = want_activity;
+                    want_activity = fresh.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ);
+                    // `activity:read` just arrived: what this socket last
+                    // sent is from before the gap, so start over from the
+                    // room's rows, as a new socket does (AP2: already
+                    // subscribed). Without it a session that ended in the
+                    // gap never gets its removal. Off the async worker: it
+                    // reads the store.
+                    if want_activity && !had_activity {
+                        let room = project_id.clone();
+                        match tokio::task::spawn_blocking(move || GuestActivity::seed(&room)).await {
+                            Ok(seeded) => guest = seeded,
+                            Err(e) => {
+                                // Never skip it silently: the client
+                                // reconnects and reads the snapshot.
+                                log_debug!("[daemon/activity_events_ws] re-seed failed: {e}; closing for resync");
+                                let _ = write.send(Message::Close(None)).await;
+                                break;
+                            }
+                        }
+                    }
+                    want_heartbeats = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ);
+                    want_tickets = fresh.has_cap_in_room(&project_id, crate::skin_routes::TICKETS_READ);
+                    want_members = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS);
+                    read_key = fresh
+                        .has_cap_in_room(&project_id, k2_core::skin::CAP_THREAD_READ)
+                        .then(|| crate::read_routes::guest_person_key(&fresh));
+                    skin_pass = Some(fresh);
+                    skin_gate.settled($generation);
+                }
+                other => {
+                    let _ = write.send(other.close_message()).await;
+                    break;
+                }
+            }
+        };
+    }
     macro_rules! guest_recheck_or_close {
         () => {
             if let Some(raw) = skin_raw.as_ref() {
                 let generation = skin_gate.generation();
-                match crate::socket_access::room_access_now(link.clone(), raw.clone(), project_id.clone(), &SOCKET_CAPS).await {
-                    crate::socket_access::RoomAccess::Still(fresh) => {
-                        want_activity = fresh.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ);
-                        want_heartbeats = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ);
-                        want_tickets = fresh.has_cap_in_room(&project_id, crate::skin_routes::TICKETS_READ);
-                        want_members = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS);
-                        read_key = fresh
-                            .has_cap_in_room(&project_id, k2_core::skin::CAP_THREAD_READ)
-                            .then(|| crate::read_routes::guest_person_key(&fresh));
-                        skin_pass = Some(fresh);
-                        skin_gate.settled(generation);
-                    }
-                    other => {
-                        let _ = write.send(other.close_message()).await;
-                        break;
-                    }
-                }
+                let now = crate::socket_access::room_access_now(link.clone(), raw.clone(), project_id.clone(), &SOCKET_CAPS).await;
+                guest_apply_or_close!(now, generation);
             }
         };
     }

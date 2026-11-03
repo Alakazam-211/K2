@@ -1352,9 +1352,16 @@ pub(crate) async fn send_response(stream: &mut TcpStream, status: &str, ct: &str
 /// first (bounded, so a request already consumed never stalls this): a
 /// socket closed with unread bytes is reset, and on Windows that reset can
 /// reach the client before it reads the refusal.
+///
+/// The App's audit row gets the refusal's status and code, like any other
+/// answer ([`crate::apps::audit::note_response`]): without it, a refused dial on
+/// a link reads as `101`.
 pub(crate) async fn refuse_upgrade(stream: &mut TcpStream, resp: &str) {
     let mut buf = [0u8; 8192];
     let _ = tokio::time::timeout(std::time::Duration::from_millis(250), stream.read(&mut buf)).await;
+    let (head, body) = resp.split_once("\r\n\r\n").unwrap_or((resp, ""));
+    let status = head.lines().next().and_then(|l| l.split_once(' ')).map_or("", |(_, s)| s);
+    crate::apps::audit::note_response(status, body);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

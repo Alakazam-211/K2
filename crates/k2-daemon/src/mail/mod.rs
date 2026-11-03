@@ -82,6 +82,8 @@
 //!   validation), §8.4 reply guardrails, approve/deny transitions, the
 //!   `--wait` decision poll — all behind `OutboundStore`/
 //!   `SubmitBackend` traits with injected fakes/clocks in tests.
+//! - [`fwd_message`] — `k2 mail forward-message`: compose one existing
+//!   message as a new governed send (not mailbox forwarding).
 //! - [`doctor`] — S6 deliverability doctor: the MiaB-style check table
 //!   (PTR/FCrDNS, outbound-25 with provider coaching, DNSBLs, the
 //!   open-relay self-test, STARTTLS/cert, disk, per-domain DNS
@@ -183,6 +185,7 @@ pub mod routes_send;
 pub mod routes_server;
 pub mod schedule;
 pub mod secrets;
+pub mod fwd_message;
 #[cfg(test)]
 mod fake_jmap;
 pub mod send;

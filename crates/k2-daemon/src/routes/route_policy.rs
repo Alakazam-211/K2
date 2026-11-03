@@ -1129,6 +1129,7 @@ pub const ROUTES: &[Route] = &[
     both("/cli/mail/footer", Admin),
     post("/cli/mail/footer/unset", Admin),
     both("/cli/mail/forward", Admin),
+    post("/cli/mail/forward-message", Member),
     post("/cli/mail/forward/add", Admin),
     post("/cli/mail/forward/pause", Admin),
     post("/cli/mail/forward/resume", Admin),

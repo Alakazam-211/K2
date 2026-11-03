@@ -559,6 +559,7 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         // One-time link: no stored copy stays in the sending mailbox.
         ephemeral: true,
         notify: None,
+        forward_of: None,
     };
     if let Err(e) = send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), &m.sender.address) {
         return Err(fail(send_error(e)));

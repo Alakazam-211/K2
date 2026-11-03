@@ -694,6 +694,7 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
             reply_to: rt.to_vec(),
             headers: req.headers.clone(),
         }),
+        forward_of: None,
     };
     let store_ob = crate::mail::send::DbOutboundStore::default();
     let inserted = store_ob.insert(&NewOutbound {

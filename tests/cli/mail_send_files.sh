@@ -195,6 +195,45 @@ set -e
 assert_exit "reply --to stays an unknown flag" 2 "$rc"
 [ ! -e "$REPLY_POST" ] && ok "nothing POSTed" || bad "reply --to POSTed"
 
+echo "== forward-message: its own verb, and what it sends =="
+FWD_POST="$WORKDIR/post_cli_mail_forward-message.json"
+set +e
+"${K2[@]}" "$K2_CLI" mail forward-message m_abc --to a@x.example --to b@x.example,c@x.example --cc d@x.example --bcc e@x.example --note "see below" --as-eml --from me@x.example --from-name Bot --reply-to-original --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "forward-message" 0 "$rc"
+post="$(cat "$FWD_POST")"
+assert_json "id" "$post" "d.get('id') == 'm_abc'"
+assert_json "to" "$post" "d.get('to') == ['a@x.example', 'b@x.example', 'c@x.example']"
+assert_json "cc + bcc" "$post" "d.get('cc') == ['d@x.example'] and d.get('bcc') == ['e@x.example']"
+assert_json "note" "$post" "d.get('note') == 'see below'"
+assert_json "asEml" "$post" "d.get('asEml') is True"
+assert_json "from + name" "$post" "d.get('from') == 'me@x.example' and d.get('fromName') == 'Bot'"
+assert_json "replyToOriginal" "$post" "d.get('replyToOriginal') is True"
+rm -f "$FWD_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail forward-message m_abc --to a@x.example --reply-to r@x.example --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "forward-message --reply-to" 0 "$rc"
+post="$(cat "$FWD_POST")"
+assert_json "replyTo, no other extras" "$post" "d.get('replyTo') == ['r@x.example'] and 'asEml' not in d and 'replyToOriginal' not in d and 'note' not in d"
+rm -f "$FWD_POST"
+for args in "--to a@x.example" "m_abc" "m_abc m_def --to a@x.example" "m_abc --to a@x.example --reply-to r@x.example --reply-to-original" "m_abc --to a@x.example --attach f" "m_abc --to a@x.example --timeout 5"; do
+    set +e
+    # shellcheck disable=SC2086
+    "${K2[@]}" "$K2_CLI" mail forward-message $args >/dev/null 2>&1
+    rc=$?
+    set -e
+    assert_exit "refused: $args" 2 "$rc"
+done
+[ ! -e "$FWD_POST" ] && ok "none of those POSTed" || bad "a refused forward POSTed"
+out="$("${K2[@]}" "$K2_CLI" mail forward-message --help 2>&1)"
+assert_has "help says it isn't the mailbox rule" "$out" "Not \`k2 mail forward\`"
+assert_has "help says From is your mailbox" "$out" "From is always your mailbox"
+out="$(env HOME="$WORKDIR" "$K2_CLI" --schema 2>/dev/null)"
+assert_has "schema lists it" "$out" "mail forward-message"
+
 echo "== help no longer says linked only =="
 out="$("${K2[@]}" "$K2_CLI" mail send --help 2>&1)"
 assert_lacks "send help" "$out" "LINKED inboxes only"

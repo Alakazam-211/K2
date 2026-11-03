@@ -177,6 +177,8 @@ export interface ApprovalItem extends OutboundItem {
   bodyPreview: string | null
   /** Every file that would leave. Absent on older daemons and when none. */
   files?: ApprovalFile[]
+  /** `k2 mail forward-message`: what this message forwards. */
+  forwardOf?: { mailbox: string; sender: string; asEml: boolean }
   workspace: string | null
   expiresAt: number
 }

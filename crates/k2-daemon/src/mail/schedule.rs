@@ -459,6 +459,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         }
     }
 

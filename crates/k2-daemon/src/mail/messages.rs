@@ -124,6 +124,15 @@ pub trait ReadBackend {
     fn auth_authority(&self) -> AuthAuthority {
         AuthAuthority::ThisBox(None)
     }
+    /// One message for `k2 mail forward-message`: the whole text, not marked
+    /// read. Hosted only for now; the route refuses a linked inbox first.
+    fn fetch_for_forward(
+        &self,
+        _account_id: &str,
+        _email_id: &str,
+    ) -> Result<Option<crate::mail::jmap::ForwardSource>, String> {
+        Err("this inbox can't forward a message yet".to_string())
+    }
 }
 
 /// The production backend: the S1-minted JMAP client + a per-instance
@@ -222,6 +231,13 @@ impl ReadBackend for StalwartReadBackend {
     }
     fn auth_authority(&self) -> AuthAuthority {
         AuthAuthority::ThisBox(self.mail_host.clone())
+    }
+    fn fetch_for_forward(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<crate::mail::jmap::ForwardSource>, String> {
+        self.client.email_get_for_forward(account_id, email_id)
     }
     fn fetch_blob(
         &self,

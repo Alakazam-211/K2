@@ -36,6 +36,7 @@
 //! | POST /cli/mail/send               | mail/routes_send.rs     |
 //! | POST /cli/mail/reply              | mail/routes_send.rs     |
 //! | GET  /cli/mail/outbox             | mail/routes_send.rs     |
+//! | POST /cli/mail/forward-message    | mail/routes_send.rs     |
 //! | GET  /cli/mail/approvals/list     | mail/routes_send.rs     |
 //! | GET  /cli/mail/approvals/show     | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/approve  | mail/routes_send.rs     |
@@ -306,6 +307,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/address/password"
         | "/cli/mail/send"
         | "/cli/mail/reply"
+        | "/cli/mail/forward-message"
         | "/cli/mail/outbox/cancel"
         | "/cli/mail/approvals/approve"
         | "/cli/mail/approvals/deny"
@@ -411,6 +413,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/address/password" => routes_addresses::handle_address_password(body),
         "/cli/mail/send" => routes_send::handle_send(body),
         "/cli/mail/reply" => routes_send::handle_reply(body),
+        "/cli/mail/forward-message" => routes_send::handle_forward_message(body),
         "/cli/mail/outbox/cancel" => routes_send::handle_outbox_cancel(body),
         "/cli/mail/approvals/approve" => routes_send::handle_approvals_approve(body),
         "/cli/mail/approvals/deny" => routes_send::handle_approvals_deny(body),
@@ -2124,6 +2127,7 @@ mod tests {
         for route in [
             "/cli/mail/send",
             "/cli/mail/reply",
+            "/cli/mail/forward-message",
             "/cli/mail/outbox/cancel",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",

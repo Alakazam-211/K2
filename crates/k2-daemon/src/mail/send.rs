@@ -245,6 +245,24 @@ pub struct OutboundMessage {
     /// mailbox path. `None` for every other message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify: Option<NotifyHeld>,
+    /// `k2 mail forward-message`: what this message forwards, for whoever
+    /// decides it. Never a header. `None` for every other message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_of: Option<ForwardOf>,
+}
+
+/// What a forward forwards ([`OutboundMessage::forward_of`]): shown to the
+/// approver, because an `.eml` forward's text may say nothing about it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardOf {
+    /// The mailbox the original is in.
+    pub mailbox: String,
+    /// Who the original says sent it (cleaned, unverified).
+    pub sender: String,
+    /// True when the original rides whole as a message/rfc822 file.
+    #[serde(default)]
+    pub as_eml: bool,
 }
 
 /// The parts of a held notification beyond [`OutboundMessage`] (E15).
@@ -1931,6 +1949,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         }
     }
 

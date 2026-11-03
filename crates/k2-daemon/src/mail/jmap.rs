@@ -2635,6 +2635,40 @@ impl StalwartClient {
         parse_email_full(email_id, &args)
     }
 
+    /// One message as `k2 mail forward-message` needs it: [`Self::email_get_full`]
+    /// with the whole text (no `maxBodyValueBytes`: a forward must never send a
+    /// cut-off copy), plus `sentAt` and the raw size. Marks nothing read.
+    pub fn email_get_for_forward(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<ForwardSource>, String> {
+        let mut properties: Vec<&str> = FULL_PROPERTIES.to_vec();
+        properties.extend(["sentAt", "size"]);
+        let args = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({
+                "ids": [email_id],
+                "properties": properties,
+                "fetchTextBodyValues": true,
+                "fetchHTMLBodyValues": true,
+            }),
+        )?;
+        let Some(full) = parse_email_full(email_id, &args)? else {
+            return Ok(None);
+        };
+        let entry = args
+            .get("list")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(email_id)));
+        Ok(Some(ForwardSource {
+            sent_at: entry.and_then(|e| e.get("sentAt")).and_then(|v| v.as_str()).map(String::from),
+            size: entry.and_then(|e| e.get("size")).and_then(|v| v.as_u64()).unwrap_or(0),
+            full,
+        }))
+    }
+
     /// S4 — mark one message read (`Email/set` keyword patch on
     /// `$seen`, RFC 8621 §4.1.1).
     pub fn email_mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String> {
@@ -5069,6 +5103,16 @@ pub struct EmailFull {
     pub attachments: Vec<AttachmentMeta>,
     /// Raw Authentication-Results header lines, newest first as served.
     pub auth_results: Vec<String>,
+}
+
+/// One message as a forward needs it ([`StalwartClient::email_get_for_forward`]).
+#[derive(Debug, Clone)]
+pub struct ForwardSource {
+    pub full: EmailFull,
+    /// RFC 8621 `sentAt` (the original's Date header), when it has one.
+    pub sent_at: Option<String>,
+    /// The raw message's size, as the server reports it.
+    pub size: u64,
 }
 
 /// Pure `*/query` reply parser: the `ids` array (empty when absent —

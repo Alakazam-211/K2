@@ -49,7 +49,7 @@ use k2_core::db::schema::MailExternalInbox;
 
 // ── Response helpers (the S2/S3/S4 error contract + the S5 codes) ───────
 
-fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
+pub(crate) fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     CliResponse {
         status,
         content_type: "application/json",
@@ -563,8 +563,8 @@ pub(crate) fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliRe
 /// count/path shape but does NO file I/O — the daemon owns the bytes).
 /// Shared with `k2 mail draft` (same numbers; extract, don't copy).
 pub(crate) const MAX_ATTACHMENTS: usize = 10;
-const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
-const MAX_ATTACHMENTS_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENTS_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Parse the `attachments` array (workspace-relative path STRINGS — the
 /// CLI sends paths, never bytes). Enforces the count cap and the
@@ -934,6 +934,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         attachments: Vec::new(),
         ephemeral: false,
         notify: None,
+        forward_of: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1293,6 +1294,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 attachments: Vec::new(),
                 ephemeral: false,
                 notify: None,
+                forward_of: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1387,6 +1389,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 attachments,
                 ephemeral: false,
                 notify: None,
+                forward_of: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1411,6 +1414,272 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 send_after,
             )
         }
+    }
+}
+
+// ── POST /cli/mail/forward-message ──────────────────────────────────────
+
+/// The refusal for a linked inbox on either end of a forward.
+fn forward_linked_refused(which: &str) -> CliResponse {
+    error_response(
+        "400 Bad Request",
+        "usage",
+        &format!(
+            "k2 mail forward-message works on hosted K2 mailboxes only for now, and {which} is a \
+             linked inbox. Nothing was sent. Read the message with k2 mail read and send what \
+             matters with k2 mail send, or ask your human to forward it from that account"
+        ),
+    )
+}
+
+/// Send one existing message on to someone else ([`crate::mail::fwd_message`]).
+/// Body: `{project, id, to, cc?, bcc?, from?, fromName?, note?, asEml?,
+/// replyTo?, replyToOriginal?, wait?, timeout?}`. Same pipeline as
+/// `handle_send`. READ is checked exactly as `k2 mail read` checks it
+/// ([`access::can_read`], the same masked answer for a message that isn't
+/// there and one the caller may not see), and first, so no other answer can
+/// tell the two apart. SEND is checked on the From: by default the mailbox
+/// holding the original; a workspace that may only read it names its own
+/// mailbox with `from`. The From is always a mailbox the caller may send from,
+/// never the original sender.
+pub fn handle_forward_message(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let Some(project) = v["project"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response("400 Bad Request", "usage", "missing 'project' (workspace name | path | UUID)");
+    };
+    let Some(token) = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+    };
+    let to_raw = match string_list(&v["to"], "to") {
+        Ok(l) if !l.is_empty() => l,
+        Ok(_) => return error_response("400 Bad Request", "usage", "missing 'to' — at least one recipient"),
+        Err(resp) => return resp,
+    };
+    let cc_raw = match string_list(&v["cc"], "cc") {
+        Ok(l) => l,
+        Err(resp) => return resp,
+    };
+    let bcc_raw = match string_list(&v["bcc"], "bcc") {
+        Ok(l) => l,
+        Err(resp) => return resp,
+    };
+    let reply_to_raw = match string_list(&v["replyTo"], "replyTo") {
+        Ok(l) => l,
+        Err(resp) => return resp,
+    };
+    let reply_to_original = v["replyToOriginal"].as_bool().unwrap_or(false);
+    if reply_to_original && !reply_to_raw.is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "pass only one of --reply-to <addr> or --reply-to-original",
+        );
+    }
+    let mut reply_to = match send::normalize_reply_to(&reply_to_raw) {
+        Ok(r) => r,
+        Err(e) => return send_error_response(e),
+    };
+    let note = match &v["note"] {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.as_str()),
+        _ => return error_response("400 Bad Request", "usage", "'note' must be a string"),
+    };
+    let as_eml = v["asEml"].as_bool().unwrap_or(false);
+    let wait_timeout = match wait_params(&v) {
+        Ok(w) => w,
+        Err(resp) => return resp,
+    };
+    let from_name_explicit = match from_name_param(&v) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
+    let (path, project_id) = match resolve_caller(project) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    // The read gate, as `k2 mail read`: the address inside the id must be one
+    // this workspace can read. Every miss answers alike.
+    let Some((address, email_id)) = messages::decode_message_id(token) else {
+        return error_response("400 Bad Request", "usage", "invalid message id — use an id from 'k2 mail messages'");
+    };
+    let masked = || error_response("404 Not Found", "not_found", &format!("no message '{token}' in this workspace"));
+    let source = match access::can_read(&project_id, &address) {
+        Ok(inbox) => inbox,
+        Err(ReadError::Usage(hint)) => return error_response("400 Bad Request", "usage", &hint),
+        Err(_) => return masked(),
+    };
+    if source.source == Source::Linked {
+        return forward_linked_refused("this message's inbox");
+    }
+    let Some(source_account) = source.account_id.clone() else {
+        return masked();
+    };
+
+    // The sender: an explicit address passes the send gate as on `k2 mail
+    // send`; otherwise the mailbox holding the message.
+    let from_inbox = match v["from"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(addr) => match resolve_from_inbox(&project_id, Some(addr)) {
+            Ok(i) => i,
+            Err(resp) => return resp,
+        },
+        None => match access::can_send(&project_id, &address) {
+            Ok(i) => i,
+            Err(ReadError::Usage(hint)) => return error_response("400 Bad Request", "usage", &hint),
+            Err(_) => {
+                return send_error_response(SendError::Gated(format!(
+                    "you can read {address} but not send from it — pass --from with a mailbox of \
+                     yours, or ask the primary workspace for 'send' access (k2 mail access set-level)"
+                )))
+            }
+        },
+    };
+    if from_inbox.source == Source::Linked {
+        return forward_linked_refused("the sending address");
+    }
+    let Some(account_id) = from_inbox.account_id.clone() else {
+        return error_response(
+            "502 Bad Gateway",
+            "engine",
+            &format!("address '{}' has no mailbox on the mail server", from_inbox.address),
+        );
+    };
+
+    // The gate and the sender's domain, before anything is fetched.
+    let gate = match send::gate_for_path(&path) {
+        Ok(g) => g,
+        Err(e) => return send_error_response(e),
+    };
+    if gate == Gate::Off {
+        return send_error_response(SendError::Gated(send::agent_send_off_hint()));
+    }
+    if let Err(e) = send::check_domain_send_mode(&FileSecretStore::default(), &from_inbox.address) {
+        return send_error_response(e);
+    }
+
+    // Recipients, as `handle_send`.
+    let raw_total = to_raw.len() + cc_raw.len() + bcc_raw.len();
+    if raw_total > send::MAX_RECIPIENTS {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            &format!("too many recipients ({raw_total}) — max {} per message, counting to + cc + bcc", send::MAX_RECIPIENTS),
+        );
+    }
+    let (to, cc, bcc) = match (
+        send::normalize_recipients(&to_raw),
+        send::normalize_recipients(&cc_raw),
+        send::normalize_recipients(&bcc_raw),
+    ) {
+        (Ok(t), Ok(c), Ok(b)) => (t, c, b),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return send_error_response(e),
+    };
+    let policy_bcc = match send::policy_bcc_for_path(&path) {
+        Ok(p) => p,
+        Err(e) => return send_error_response(e),
+    };
+    let agent_name = k2_core::workspace::display::agent_display_name(&path);
+    let mut msg = OutboundMessage {
+        from_name: Some(from_name_explicit.clone().unwrap_or_else(|| agent_name.clone())),
+        from: from_inbox.address.clone(),
+        to,
+        cc,
+        bcc,
+        policy_bcc: Vec::new(),
+        reply_to: Vec::new(),
+        subject: String::new(),
+        text_body: String::new(),
+        in_reply_to: None,
+        references: None,
+        reply_source: None,
+        attachments: Vec::new(),
+        ephemeral: false,
+        notify: None,
+        forward_of: None,
+    };
+    send::apply_policy_bcc(&mut msg, policy_bcc);
+    if let Err(e) = send::check_recipient_limit(&msg) {
+        return send_error_response(e);
+    }
+
+    // Everything allowed so far: now read the original.
+    let (client, hostname) = match domains::engine_from_db() {
+        Ok(c) => c,
+        Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
+    };
+    let read = messages::StalwartReadBackend::new(client, hostname);
+    let src = match messages::ReadBackend::fetch_for_forward(&read, &source_account, &email_id) {
+        Ok(Some(s)) => s,
+        Ok(None) => return masked(),
+        Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
+    };
+    let on_box = send::sender_on_this_box(&src.full.summary.from);
+    if let Err(e) = forward_sender_gate(
+        &src.full.auth_results,
+        &messages::ReadBackend::auth_authority(&read),
+        &src.full.summary.from,
+        on_box,
+        gate,
+    ) {
+        return send_error_response(e);
+    }
+    let original_sender = src.full.summary.from.first().map(|a| a.email.trim().to_string());
+    if reply_to_original {
+        let Some(sender) = original_sender.as_deref().filter(|s| !s.is_empty()) else {
+            return error_response("400 Bad Request", "usage", "--reply-to-original: the original names no sender");
+        };
+        reply_to = match send::normalize_reply_to(&[sender.to_string()]) {
+            Ok(r) => r,
+            Err(_) => {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "--reply-to-original: the original's sender isn't a usable address, so nothing was sent",
+                )
+            }
+        };
+    }
+    let composed = match crate::mail::fwd_message::compose(&read, &source_account, &src, note, as_eml) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = send::check_hosted_text_size(&composed.subject, &composed.text_body) {
+        return send_error_response(e);
+    }
+    msg.reply_to = reply_to;
+    msg.subject = composed.subject;
+    msg.text_body = composed.text_body;
+    msg.attachments = composed.attachments;
+    msg.forward_of = Some(send::ForwardOf {
+        mailbox: address.clone(),
+        sender: crate::mail::fwd_message::one_line(original_sender.as_deref().unwrap_or("")),
+        as_eml,
+    });
+    dispatch_and_respond(&project_id, &path, &agent_name, &account_id, &msg, gate, wait_timeout, None)
+}
+
+/// As for a reply (§8.4): passing on a message whose sender nothing vouches for,
+/// under this mailbox's name, needs a person looking at it.
+fn forward_sender_gate(
+    auth_results: &[String],
+    authority: &messages::AuthAuthority,
+    from: &[crate::mail::jmap::MailAddr],
+    on_box: bool,
+    gate: Gate,
+) -> Result<(), SendError> {
+    if gate == Gate::Approval {
+        return Ok(());
+    }
+    match messages::sender_check(auth_results, authority, from, on_box) {
+        messages::SenderCheck::Clear => Ok(()),
+        messages::SenderCheck::NeedsPerson(why) => Err(SendError::Guardrail(format!(
+            "the original message {why}, so its sender may be forged — forwarding it is blocked \
+             unless send gating is 'approval' (your human reviews it). Ask your human via \
+             'k2 tickets ask' with an HTML brief (k2 study ticket-brief)"
+        ))),
     }
 }
 
@@ -1558,6 +1827,9 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             let preview: Option<String> =
                 stored.as_ref().map(|m| send::hide_links(&m.text_body).chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
+            if let Some(f) = stored.as_ref().and_then(|m| m.forward_of.as_ref()) {
+                v["forwardOf"] = serde_json::json!(f);
+            }
             // Every file that would leave, with its size. `k2 hostmail approvals
             // show` opens it (GET /cli/mail/approvals/show).
             if let Some(m) = stored.as_ref().filter(|m| !m.attachments.is_empty()) {
@@ -1646,6 +1918,9 @@ pub fn handle_approvals_show(params: &HashMap<String, String>) -> CliResponse {
     }
     let mut v = send::outbound_json(&row);
     v["fromName"] = serde_json::json!(msg.from_name);
+    if let Some(f) = msg.forward_of.as_ref() {
+        v["forwardOf"] = serde_json::json!(f);
+    }
     v["text"] = serde_json::json!(send::hide_links(&msg.text_body));
     v["files"] = serde_json::Value::Array(
         msg.attachments.iter().enumerate().map(|(i, f)| f.view_json(i + 1)).collect(),
@@ -2371,6 +2646,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2427,6 +2703,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -2923,6 +3200,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -3081,6 +3359,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -3752,6 +4031,7 @@ mod tests {
             attachments: Vec::new(),
             ephemeral: false,
             notify: None,
+            forward_of: None,
         }
     }
 
@@ -4034,8 +4314,8 @@ mod tests {
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
         conn.execute(
-            "INSERT INTO mail_server (id, status, pinned_version, api_url, api_key_ref, updated_at) \
-             VALUES (1, 'running', '0.16.25', ?1, 'env:K2_TEST_MAIL_API_KEY', 1)",
+            "INSERT INTO mail_server (id, status, pinned_version, hostname, api_url, api_key_ref, updated_at) \
+             VALUES (1, 'running', '0.16.25', 'mail.box.test', ?1, 'env:K2_TEST_MAIL_API_KEY', 1)",
             rusqlite::params![format!("http://127.0.0.1:{}", fake.port)],
         )
         .expect("mail_server");
@@ -4463,6 +4743,454 @@ mod tests {
         assert!(stored.reply_to.is_empty());
         assert!(send::submission_email_json(&stored).get("replyTo").is_none());
         send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    // ── k2 mail forward-message: the route's gates. The composed message and
+    // its round trip against the fake engine: mail::fwd_message::tests. ──
+
+    fn forward_body_json(path: &str, token: &str, extra: serde_json::Value) -> Vec<u8> {
+        let mut v = serde_json::json!({ "project": path, "id": token, "to": "dest@else.example" });
+        if let (Some(base), Some(add)) = (v.as_object_mut(), extra.as_object()) {
+            for (k, val) in add {
+                base.insert(k.clone(), val.clone());
+            }
+        }
+        serde_json::to_vec(&v).expect("body")
+    }
+
+    #[test]
+    fn forward_validates_its_body_first() {
+        let tok = messages::encode_message_id("a@b.example", "e1");
+        for (bad, needle) in [
+            (serde_json::json!({}), "project"),
+            (serde_json::json!({ "project": "/tmp/x" }), "id"),
+            (serde_json::json!({ "project": "/tmp/x", "id": tok }), "to"),
+            (serde_json::json!({ "project": "/tmp/x", "id": tok, "to": "a@b.example", "note": 3 }), "note"),
+            (
+                serde_json::json!({ "project": "/tmp/x", "id": tok, "to": "a@b.example", "replyTo": "c@d.example", "replyToOriginal": true }),
+                "only one",
+            ),
+            (
+                serde_json::json!({ "project": "/tmp/x", "id": tok, "to": "a@b.example", "replyTo": "c@d.example\r\nBcc: e@f.example" }),
+                "--reply-to",
+            ),
+        ] {
+            let resp = handle_forward_message(&serde_json::to_vec(&bad).unwrap());
+            assert_eq!(resp.status, "400 Bad Request", "{bad}: {}", resp.body);
+            assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains(needle), "{needle}: {}", resp.body);
+        }
+    }
+
+    /// A message the caller may not read answers exactly like one that doesn't
+    /// exist, under every mode, and nothing is recorded. Not reading is the
+    /// same check as `k2 mail read`: the same id gets the same answer there.
+    #[test]
+    fn forward_of_a_message_the_caller_cannot_read_is_masked() {
+        let _mail = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (owner_path, owner_id, domain) = seed_files_sender("fwdowner", "on");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let (stranger_path, stranger_id, stranger_domain) = seed_files_sender("fwdstranger", "on");
+        for mode in ["off", "approval", "on"] {
+            set_gating(&stranger_path, mode);
+            let resp = handle_forward_message(&forward_body_json(&stranger_path, &token, serde_json::json!({})));
+            assert_eq!(resp.status, "404 Not Found", "{mode}: {}", resp.body);
+            let v = body_json(&resp);
+            assert_eq!(v["error"]["code"], "not_found", "{mode}");
+            assert_eq!(v["error"]["hint"], format!("no message '{token}' in this workspace"), "{mode}: masked");
+            // Naming their own mailbox as the sender doesn't open it either.
+            let resp = handle_forward_message(&forward_body_json(
+                &stranger_path,
+                &token,
+                serde_json::json!({ "from": format!("bot@{stranger_domain}") }),
+            ));
+            assert_eq!(resp.status, "404 Not Found", "{mode}: {}", resp.body);
+        }
+        let read = crate::mail::routes_messages::handle_read(&params(&[("project", &stranger_path), ("id", &token)]));
+        assert_eq!(read.status, "404 Not Found", "k2 mail read answers the same: {}", read.body);
+        assert_eq!(body_json(&read)["error"]["hint"], format!("no message '{token}' in this workspace"));
+        assert_eq!(outbound_count(&stranger_id), 0);
+        assert_eq!(outbound_count(&owner_id), 0);
+        done(&stranger_path, &stranger_id, &stranger_domain);
+        done(&owner_path, &owner_id, &domain);
+    }
+
+    #[test]
+    fn forward_with_sending_off_exits_3_before_reading_the_original() {
+        let _mail = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (path, project_id, domain) = seed_files_sender("fwdoff", "off");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "gated");
+        assert_eq!(outbound_count(&project_id), 0);
+        done(&path, &project_id, &domain);
+    }
+
+    /// Past every gate the next step is the engine; with none here that is
+    /// where it stops, having recorded nothing.
+    #[test]
+    fn forward_reaches_the_engine_only_past_the_gates() {
+        let _mail = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        for mode in ["approval", "on"] {
+            let (path, project_id, domain) = seed_files_sender(&format!("fwdok{mode}"), mode);
+            let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+            let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+            assert_eq!(resp.status, "503 Service Unavailable", "{mode}: {}", resp.body);
+            // The same caps as a send come first.
+            let many: Vec<String> = (0..11).map(|i| format!("r{i}@dest.example")).collect();
+            let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({ "to": many })));
+            assert_eq!(resp.status, "400 Bad Request", "{mode}: {}", resp.body);
+            assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("too many recipients"), "{}", resp.body);
+            assert_eq!(outbound_count(&project_id), 0);
+            done(&path, &project_id, &domain);
+        }
+    }
+
+    #[test]
+    fn forward_from_or_of_a_linked_inbox_is_refused_with_a_clear_line() {
+        let (name, path) = unique("fwdlinked");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "on");
+        let token = messages::encode_message_id(&linked, "uid:1");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("hosted K2 mailboxes only"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        cleanup_linked(&project_id);
+    }
+
+    #[test]
+    fn forward_needs_a_person_when_nothing_vouches_for_the_sender() {
+        use crate::mail::jmap::MailAddr;
+        let host = messages::AuthAuthority::ThisBox(Some("mx.example".to_string()));
+        let one = vec![MailAddr { name: None, email: "a@x.example".to_string() }];
+        let gate = |lines: &[&str], from: &[MailAddr], on_box: bool, g: Gate| {
+            let lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+            forward_sender_gate(&lines, &host, from, on_box, g)
+        };
+        let fail = ["mx.example; dmarc=fail header.from=x.example"];
+        assert!(matches!(gate(&fail, &one, false, Gate::On), Err(SendError::Guardrail(_))));
+        assert!(gate(&fail, &one, false, Gate::Approval).is_ok());
+        assert!(gate(&["mx.example; dmarc=pass header.from=x.example"], &one, false, Gate::On).is_ok());
+        assert!(gate(&["mx.example; dmarc=none header.from=x.example"], &one, false, Gate::On).is_ok());
+        // No stamp: a mailbox on this box, not an outside sender.
+        assert!(gate(&[], &one, true, Gate::On).is_ok());
+        assert!(gate(&[], &one, false, Gate::On).is_err());
+        // A crafted envelope sender: the stamp's real verdict still blocks.
+        let crafted = ["mx.example; smtp.mailfrom=\"dmarc=pass@x.example\"; dmarc=fail"];
+        assert!(matches!(gate(&crafted, &one, false, Gate::On), Err(SendError::Guardrail(_))));
+        // Several From addresses.
+        let many = vec![one[0].clone(), MailAddr { name: None, email: "ceo@paypal.com".to_string() }];
+        let empty = ["mx.example; dmarc=none header.from= policy.dmarc=none"];
+        assert!(gate(&empty, &many, false, Gate::On).is_err());
+        assert!(gate(&empty, &one, false, Gate::On).is_err());
+    }
+
+    /// What the approver sees for a forward: what it forwards, its files, any
+    /// Reply-To; and a body file that holds the captured bytes until decided.
+    #[test]
+    fn a_held_forward_says_what_it_forwards() {
+        let (path, project_id, domain) = seed_files_sender("fwdheld", "approval");
+        let store = DbOutboundStore::default();
+        let msg = OutboundMessage {
+            from_name: Some("Bot".to_string()),
+            from: format!("bot@{domain}"),
+            to: vec!["dest@else.example".to_string()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
+            reply_to: vec!["sam@outside.example".to_string()],
+            subject: "Fwd: Quote".to_string(),
+            text_body: "The original message is attached.".to_string(),
+            in_reply_to: None,
+            references: None,
+            reply_source: None,
+            attachments: vec![send::StoredAttachment::from_out(&external_smtp::OutAttachment {
+                filename: "original.eml".to_string(),
+                content_type: "message/rfc822".to_string(),
+                bytes: b"raw".to_vec(),
+            })],
+            ephemeral: false,
+            notify: None,
+            forward_of: Some(send::ForwardOf {
+                mailbox: format!("bot@{domain}"),
+                sender: "sam@outside.example".to_string(),
+                as_eml: true,
+            }),
+        };
+        let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &msg, send_after: None };
+        let SendOutcome::Queued { id, .. } = send::gate_and_dispatch(&store, None, Gate::Approval, &req, now_secs()).expect("queue") else {
+            panic!("expected a queued message")
+        };
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["forwardOf"]["sender"], "sam@outside.example", "{ours}");
+        assert_eq!(ours["forwardOf"]["asEml"], true, "{ours}");
+        assert_eq!(ours["files"][0]["name"], "original.eml", "{ours}");
+        assert_eq!(ours["replyTo"], serde_json::json!(["sam@outside.example"]), "{ours}");
+        let shown = body_json(&handle_approvals_show(&params(&[("id", &id)])));
+        assert_eq!(shown["message"]["forwardOf"]["mailbox"], format!("bot@{domain}"), "{shown}");
+        let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(outbox["outbound"]["attachments"]["names"], serde_json::json!(["original.eml"]), "{outbox}");
+        send::deny(&store, &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    // ── forward-message, all the way through the handler, fake engine ──
+
+    fn forward_source(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "blobId": "raw-1",
+            "threadId": format!("t-{id}"),
+            "from": [{ "name": "Sam", "email": "Sam@Outside.Example" }],
+            "to": [{ "email": "bot@acme.dev" }],
+            "subject": "Quote\r\nBcc: evil@x.example",
+            "sentAt": "2026-11-01T10:00:00Z",
+            "receivedAt": "2026-11-01T10:00:05Z",
+            "size": 40,
+            "keywords": {},
+            "hasAttachment": true,
+            "textBody": [{ "partId": "1", "type": "text/plain" }],
+            "htmlBody": [],
+            "bodyValues": { "1": { "value": "Please see the quote.\n" } },
+            "attachments": [{ "blobId": "att-1", "name": "quote.pdf", "type": "application/pdf", "size": 9 }],
+            "header:Authentication-Results:asText:all": [],
+        })
+    }
+
+    fn seed_forward_fake() -> crate::mail::fake_jmap::FakeJmap {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        {
+            let mut st = fake.state.lock().unwrap();
+            st.emails.insert("e1".to_string(), forward_source("e1"));
+            st.blobs.insert("att-1".to_string(), b"pdf bytes".to_vec());
+            st.blobs.insert("raw-1".to_string(), b"Subject: Quote\r\n\r\nraw bytes\r\n".to_vec());
+        }
+        seed_fake_engine(&fake);
+        fake
+    }
+
+    /// Approval: nothing leaves and nothing about the original is lost if it
+    /// goes away; the owner's BCC rides; From is the mailbox; approving sends
+    /// exactly what was captured.
+    #[test]
+    fn a_forward_under_approval_holds_a_copy_and_sends_it_on_approve() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        let (path, project_id, domain) = seed_files_sender("fwdappr", "approval");
+        k2_core::workspace::settings::set_mail_always_bcc(&path, &["boss@acme.example".to_string()]).expect("policy");
+        let mailbox = format!("bot@{domain}");
+        let token = messages::encode_message_id(&mailbox, "e1");
+
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({ "note": "FYI" })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["status"], "pending_approval", "{v}");
+        let id = v["id"].as_str().expect("id").to_string();
+
+        let store = DbOutboundStore::default();
+        let stored = store.load_message(&id).unwrap();
+        assert_eq!(stored.from, mailbox, "the mailbox, never the original sender");
+        assert_eq!(stored.to, vec!["dest@else.example".to_string()]);
+        assert_eq!(stored.policy_bcc, vec!["boss@acme.example".to_string()], "the owner's BCC");
+        assert_eq!(stored.subject, "Fwd: Quote Bcc: evil@x.example", "one line");
+        assert!(stored.text_body.starts_with("FYI\n\n---------- Forwarded message"), "{}", stored.text_body);
+        assert!(stored.reply_to.is_empty(), "no Reply-To by default");
+        assert_eq!(decoded(&stored.attachments[0]), b"pdf bytes");
+        assert_eq!(stored.forward_of.as_ref().map(|f| f.sender.as_str()), Some("Sam@Outside.Example"));
+        assert!(fake.state.lock().unwrap().uploads.is_empty(), "nothing left yet");
+
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["files"][0]["name"], "quote.pdf", "{ours}");
+        assert_eq!(ours["files"][0]["size"], 9, "{ours}");
+        assert_eq!(ours["forwardOf"]["mailbox"], mailbox.as_str(), "{ours}");
+
+        {
+            let mut st = fake.state.lock().unwrap();
+            st.emails.clear();
+            st.blobs.clear();
+        }
+        let client = fake.client();
+        let mut acct = |_: &str| Ok("acc-1".to_string());
+        send::approve_and_submit(&store, Ok(&client), &mut acct, &id, "owner", None, now_secs()).expect("approve");
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.uploads, vec![b"pdf bytes".to_vec()]);
+        let e = &st.created[0];
+        assert_eq!(e["from"][0]["email"], mailbox.as_str(), "{e}");
+        assert!(e.get("replyTo").is_none(), "{e}");
+        assert!(!e.to_string().contains("boss@acme.example"), "a BCC is no header: {e}");
+        let rcpt = st.envelopes[0]["rcptTo"].to_string();
+        assert!(rcpt.contains("dest@else.example") && rcpt.contains("boss@acme.example"), "{rcpt}");
+        drop(st);
+        assert!(store.load_message(&id).unwrap().attachments.is_empty(), "no bytes once decided");
+        k2_core::workspace::settings::set_mail_always_bcc(&path, &[]).expect("policy");
+        done(&path, &project_id, &domain);
+    }
+
+    /// On + --as-eml + --reply-to-original: the raw message goes unchanged, and
+    /// Reply-To is the original sender, in the header and in the outbox.
+    #[test]
+    fn an_eml_forward_on_mode_with_reply_to_original() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        let (path, project_id, domain) = seed_files_sender("fwdeml", "on");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+
+        let resp = handle_forward_message(&forward_body_json(
+            &path,
+            &token,
+            serde_json::json!({ "asEml": true, "replyToOriginal": true }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["status"], "submitted", "{v}");
+        let id = v["id"].as_str().expect("id").to_string();
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.uploads, vec![b"Subject: Quote\r\n\r\nraw bytes\r\n".to_vec()]);
+        let e = &st.created[0];
+        assert_eq!(e["attachments"][0]["type"], "message/rfc822", "{e}");
+        assert_eq!(e["attachments"][0]["name"], "original.eml", "{e}");
+        assert_eq!(e["replyTo"], serde_json::json!([{ "email": "sam@outside.example" }]), "{e}");
+        assert_eq!(e["from"][0]["email"], format!("bot@{domain}"), "{e}");
+        drop(st);
+        let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(outbox["outbound"]["replyTo"], serde_json::json!(["sam@outside.example"]), "{outbox}");
+        assert_eq!(outbox["outbound"]["attachments"]["names"], serde_json::json!(["original.eml"]), "{outbox}");
+        done(&path, &project_id, &domain);
+    }
+
+    /// Reply-To on the forward verb, with injection refused before any fetch;
+    /// and an original with a broken sender can't become a Reply-To.
+    #[test]
+    fn forward_reply_to_is_checked_and_a_bad_original_sender_is_refused() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        let (path, project_id, domain) = seed_files_sender("fwdrto", "approval");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({ "replyTo": "here@acme.example" })));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        assert_eq!(store.load_message(&id).unwrap().reply_to, vec!["here@acme.example".to_string()]);
+        send::deny(&store, &id, "owner", "cleanup", now_secs()).expect("deny");
+
+        fake.state.lock().unwrap().emails.get_mut("e1").unwrap()["from"] =
+            serde_json::json!([{ "email": "x@y.example\r\nBcc: evil@z.example" }]);
+        let before = outbound_count(&project_id);
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({ "replyToOriginal": true })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("--reply-to-original"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), before, "nothing recorded");
+        done(&path, &project_id, &domain);
+    }
+
+    /// DMARC-fail originals need a person; the same message queues under approval.
+    #[test]
+    fn forward_of_a_dmarc_failure_is_refused_on_and_queued_under_approval() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        fake.state.lock().unwrap().emails.get_mut("e1").unwrap()["header:Authentication-Results:asText:all"] =
+            serde_json::json!(["mail.box.test; dmarc=fail header.from=outside.example"]);
+        let (path, project_id, domain) = seed_files_sender("fwddmarc", "on");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "guardrail");
+        assert_eq!(outbound_count(&project_id), 0);
+        set_gating(&path, "approval");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    /// A workspace with a read grant can read the message, and may forward it
+    /// from its own mailbox; it can't send as the mailbox it only reads.
+    #[test]
+    fn a_read_grant_forwards_only_from_a_mailbox_of_its_own() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        let (owner_path, owner_id, owner_domain) = seed_files_sender("fwdsrc", "on");
+        let (reader_path, reader_id, reader_domain) = seed_files_sender("fwdrdr", "approval");
+        let source = format!("bot@{owner_domain}");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, created_at) \
+                 SELECT 'hosted', id, ?1, 'read', 100 FROM mail_addresses WHERE address = ?2",
+                rusqlite::params![reader_id, source],
+            )
+            .expect("grant");
+        }
+        let token = messages::encode_message_id(&source, "e1");
+        let resp = handle_forward_message(&forward_body_json(&reader_path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("--from"), "{}", resp.body);
+        let resp = handle_forward_message(&forward_body_json(&reader_path, &token, serde_json::json!({ "from": source })));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(outbound_count(&reader_id), 0);
+
+        let own = format!("bot@{reader_domain}");
+        let resp = handle_forward_message(&forward_body_json(&reader_path, &token, serde_json::json!({ "from": own })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        let stored = store.load_message(&id).unwrap();
+        assert_eq!(stored.from, own);
+        assert_eq!(stored.forward_of.as_ref().map(|f| f.mailbox.as_str()), Some(source.as_str()));
+        send::deny(&store, &id, "owner", "cleanup", now_secs()).expect("deny");
+        let _ = fake;
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM mail_inbox_grants WHERE project_id = ?1", rusqlite::params![reader_id]).unwrap();
+        }
+        done(&reader_path, &reader_id, &reader_domain);
+        done(&owner_path, &owner_id, &owner_domain);
+    }
+
+    /// The send's hourly cap counts forwards; a message gone from the server
+    /// answers as a stranger's does.
+    #[test]
+    fn forward_counts_toward_the_rate_limit_and_masks_a_missing_message() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let _fake = seed_forward_fake();
+        let (path, project_id, domain) = seed_files_sender("fwdrate", "approval");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        for i in 0..send::RATE_LIMIT_HOURLY {
+            let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+            assert_eq!(resp.status, "200 OK", "{i}: {}", resp.body);
+        }
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "429 Too Many Requests", "{}", resp.body);
+
+        let missing = messages::encode_message_id(&format!("bot@{domain}"), "gone");
+        let resp = handle_forward_message(&forward_body_json(&path, &missing, serde_json::json!({})));
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["hint"], format!("no message '{missing}' in this workspace"));
         done(&path, &project_id, &domain);
     }
 }

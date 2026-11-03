@@ -158,24 +158,22 @@ fn is_home_client(app: &str) -> R<bool> {
     Ok(rows.iter().any(|r| r.subject == hook::home::HOME_SUBJECT && r.body.get("app_id").and_then(Value::as_str) == Some(app)))
 }
 
-/// `GET /cli/sew/app-chat?app=<app>`. The App's steps toward Sew (each
-/// Space's `sync`: the current step, Sew's last answer, a blocked row, what
-/// `k2 app grant hooks` shows the owner for the whole box) go to a person
-/// and the App's own agent; another workspace's agent reads the rest as
-/// before.
+/// `GET /cli/sew/app-chat?app=<app>`, for a person and the App's own agent:
+/// its Spaces, usernames and channels, and its steps toward Sew (each Space's
+/// `sync`: the current step, Sew's last answer, a blocked row, what `k2 app
+/// grant hooks` shows the owner for the whole box). Another workspace's agent
+/// is refused (re-review 2026-11-02).
 pub fn view(who: &Who, app_in: &str) -> R<Value> {
     if app_in.trim().is_empty() {
         return Err(no("bad_request", 400, "name the App (app=<app>)"));
     }
     let (app, name) = super::home::resolve_app(app_in)?;
-    let mut v = hook::governed_view(&app).map_err(|e| no("db_error", 500, e))?;
     if let Who::Agent { project_id, .. } = who {
         if k2_core::skin::ties::app_workspace(&app).as_deref() != Some(project_id.as_str()) {
-            for s in &mut v.spaces {
-                s.sync.clear();
-            }
+            return Err(no("forbidden", 403, format!("{name} is another workspace's App: only its own agent or a person reads its chat setup")));
         }
     }
+    let v = hook::governed_view(&app).map_err(|e| no("db_error", 500, e))?;
     Ok(json!({"ok": true, "name": name, "chat": v}))
 }
 
@@ -217,7 +215,8 @@ mod tests {
         };
         assert_eq!(steps(&Who::Owner), 1);
         assert_eq!(steps(&Who::Agent { project_id: "w-own".into(), session_id: "s".into() }), 1, "the App's own agent");
-        assert_eq!(steps(&Who::Agent { project_id: "w-else".into(), session_id: "s".into() }), 0, "another workspace's agent");
+        let refused = view(&Who::Agent { project_id: "w-else".into(), session_id: "s".into() }, &svc).expect_err("another workspace's agent");
+        assert_eq!((refused.code, refused.status), ("forbidden", 403));
     }
 
     /// AG-7: "Manage Sew" is never enough; an agent asks on the card.

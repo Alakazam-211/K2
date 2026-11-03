@@ -4209,6 +4209,10 @@ pub struct MailOutbound {
     /// matches is neither shown nor sent. NULL on rows from before 0261.
     #[serde(default)]
     pub body_sha256: Option<String>,
+    /// 0261: what a `k2 mail forward-message` forwarded (mailbox, sender,
+    /// asEml), as JSON. NULL for every other message.
+    #[serde(default)]
+    pub forward_of_json: Option<String>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

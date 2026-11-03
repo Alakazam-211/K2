@@ -579,6 +579,7 @@ mod tests {
                     status: "pending",
                     decided_by: None,
                     attachment_names: &[],
+                    attachment_files: &[],
                     send_after: Some(t + 60),
                     now: t,
                 })

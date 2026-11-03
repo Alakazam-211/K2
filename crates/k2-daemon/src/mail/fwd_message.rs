@@ -64,9 +64,14 @@ pub fn forward_subject(raw: &str) -> String {
 }
 
 /// A plain `type/subtype` from a value the original's sender wrote, or
-/// `application/octet-stream`.
+/// `application/octet-stream`. Of `message/*` only `rfc822` passes:
+/// `external-body` and `partial` make a client fetch or reassemble something
+/// the approver never saw. A multipart isn't a file.
 pub fn safe_media_type(raw: &str) -> String {
     let media = raw.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if media.starts_with("multipart/") || (media.starts_with("message/") && media != "message/rfc822") {
+        return "application/octet-stream".to_string();
+    }
     let token = |s: &str| {
         !s.is_empty()
             && s.len() <= 127
@@ -121,8 +126,10 @@ fn stored(filename: String, content_type: String, bytes: Vec<u8>) -> StoredAttac
     StoredAttachment::from_out(&OutAttachment { scanned: false, filename, content_type, bytes })
 }
 
-/// `--as-eml`: the original's raw bytes as one `message/rfc822` file, read off
-/// the mail server and never parsed or rewritten here.
+/// `--as-eml`: the original's raw bytes as one file named `original.eml`, read
+/// off the mail server and never parsed or rewritten here. Typed as a plain file:
+/// the mail server sends a part as base64, which RFC 2046 doesn't allow for
+/// `message/rfc822`, so a strict gateway could refuse it or a scanner skip it.
 fn original_as_eml(
     read: &dyn ReadBackend,
     account_id: &str,
@@ -141,7 +148,7 @@ fn original_as_eml(
     if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
         return Err(too_big(bytes.len() as u64));
     }
-    Ok(stored(EML_NAME.to_string(), "message/rfc822".to_string(), bytes))
+    Ok(stored(EML_NAME.to_string(), "application/octet-stream".to_string(), bytes))
 }
 
 /// A normal forward's files: the original's attachments, byte for byte, under
@@ -256,6 +263,9 @@ mod tests {
             ("IMAGE/PNG", "image/png"),
             ("text/plain; charset=utf-8", "text/plain"),
             ("message/rfc822", "message/rfc822"),
+            ("message/external-body", "application/octet-stream"),
+            ("message/partial", "application/octet-stream"),
+            ("multipart/mixed", "application/octet-stream"),
             ("text/plain\r\nX-Evil: 1", "application/octet-stream"),
             ("nonsense", "application/octet-stream"),
             ("a/b/c", "application/octet-stream"),
@@ -400,7 +410,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `--as-eml`: the raw message unchanged, as message/rfc822, under its
+    /// `--as-eml`: the raw message unchanged, as a plain file, under its
     /// fixed name; and under approval the bytes are the ones captured, whatever
     /// happens to the original before someone approves.
     #[test]
@@ -413,7 +423,7 @@ mod tests {
         assert_eq!(c.text_body, "The original message is attached.");
         assert_eq!(c.attachments.len(), 1, "one file, the attachments inside it");
         assert_eq!(c.attachments[0].filename, EML_NAME);
-        assert_eq!(c.attachments[0].content_type, "message/rfc822");
+        assert_eq!(c.attachments[0].content_type, "application/octet-stream");
 
         let m = out_message(c);
         let (store, dir) = temp_store();
@@ -436,7 +446,7 @@ mod tests {
         assert_eq!(out, send::ApproveOutcome::Submitted);
         let st = fake.state.lock().unwrap();
         assert_eq!(st.uploads, vec![raw], "the raw bytes, unchanged");
-        assert_eq!(st.created[0]["attachments"][0]["type"], "message/rfc822", "{}", st.created[0]);
+        assert_eq!(st.created[0]["attachments"][0]["type"], "application/octet-stream", "{}", st.created[0]);
         assert_eq!(st.created[0]["attachments"][0]["name"], EML_NAME, "{}", st.created[0]);
         drop(st);
         cleanup_rows(&project);

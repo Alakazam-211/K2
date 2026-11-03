@@ -995,6 +995,9 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             if let Err(resp) = crate::mail::capabilities::mail_scope_gate(&inbox, "mail.send") {
                 return resp;
             }
+            if let Err(e) = send::check_rate_limits(&DbOutboundStore::default(), &inbox.email_address, now_secs()) {
+                return send_error_response(e);
+            }
             // Read the attachment files from THIS workspace (caps enforced).
             let attachments = match read_workspace_attachments(&path, &attach_specs) {
                 Ok(a) => a,
@@ -1059,6 +1062,9 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 Ok(t) => t,
                 Err(e) => return send_error_response(e),
             };
+            if let Err(e) = send::check_rate_limits(&DbOutboundStore::default(), &from_inbox.address, now_secs()) {
+                return send_error_response(e);
+            }
             // The files, only now that the send is allowed (a workspace with
             // sending off never has one read), carried on the message itself
             // so the approval queue and a schedule hold exactly these bytes.
@@ -1257,6 +1263,9 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             if let Err(resp) = crate::mail::capabilities::mail_scope_gate(&inbox, "mail.send") {
                 return resp;
             }
+            if let Err(e) = send::check_rate_limits(&DbOutboundStore::default(), &inbox.email_address, now_secs()) {
+                return send_error_response(e);
+            }
             let attachments = match read_workspace_attachments(&path, &attach_specs) {
                 Ok(a) => a,
                 Err(resp) => return resp,
@@ -1327,6 +1336,9 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 return send_error_response(SendError::Gated(send::agent_send_off_hint()));
             }
             if let Err(e) = send::check_hosted_text_size("", body_text) {
+                return send_error_response(e);
+            }
+            if let Err(e) = send::check_rate_limits(&DbOutboundStore::default(), &from_address, now_secs()) {
                 return send_error_response(e);
             }
             // The files first: a refused file must not use up the thread's
@@ -1605,6 +1617,9 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
         return send_error_response(e);
     }
 
+    if let Err(e) = send::check_rate_limits(&DbOutboundStore::default(), &from_inbox.address, now_secs()) {
+        return send_error_response(e);
+    }
     // Everything allowed so far: now read the original.
     let (client, hostname) = match domains::engine_from_db() {
         Ok(c) => c,
@@ -3216,6 +3231,7 @@ mod tests {
                     status: "pending",
                     decided_by: None,
                     attachment_names: &[],
+                    attachment_files: &[],
                     send_after: None,
                     now,
                 })
@@ -3373,6 +3389,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                attachment_files: &[],
                 send_after: None,
                 now: now_secs(),
             })
@@ -4917,7 +4934,7 @@ mod tests {
             reply_source: None,
             attachments: vec![send::StoredAttachment::from_out(&external_smtp::OutAttachment {
                 scanned: false, filename: "original.eml".to_string(),
-                content_type: "message/rfc822".to_string(),
+                content_type: "application/octet-stream".to_string(),
                 bytes: b"raw".to_vec(),
             })],
             ephemeral: false,
@@ -5065,13 +5082,15 @@ mod tests {
         let st = fake.state.lock().unwrap();
         assert_eq!(st.uploads, vec![b"Subject: Quote\r\n\r\nraw bytes\r\n".to_vec()]);
         let e = &st.created[0];
-        assert_eq!(e["attachments"][0]["type"], "message/rfc822", "{e}");
+        assert_eq!(e["attachments"][0]["type"], "application/octet-stream", "{e}");
         assert_eq!(e["attachments"][0]["name"], "original.eml", "{e}");
         assert_eq!(e["replyTo"], serde_json::json!([{ "email": "sam@outside.example" }]), "{e}");
         assert_eq!(e["from"][0]["email"], format!("bot@{domain}"), "{e}");
         drop(st);
         let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
         assert_eq!(outbox["outbound"]["replyTo"], serde_json::json!(["sam@outside.example"]), "{outbox}");
+        assert_eq!(outbox["outbound"]["forwardOf"]["sender"], "Sam@Outside.Example", "{outbox}");
+        assert_eq!(outbox["outbound"]["forwardOf"]["asEml"], true, "{outbox}");
         assert_eq!(outbox["outbound"]["attachments"]["names"], serde_json::json!(["original.eml"]), "{outbox}");
         done(&path, &project_id, &domain);
     }
@@ -5195,6 +5214,39 @@ mod tests {
         let resp = handle_forward_message(&forward_body_json(&path, &missing, serde_json::json!({})));
         assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
         assert_eq!(body_json(&resp)["error"]["hint"], format!("no message '{missing}' in this workspace"));
+        done(&path, &project_id, &domain);
+    }
+
+    /// Over the limit, a send is refused before a file is read: the path here
+    /// doesn't exist, and reading it first would answer 404.
+    #[test]
+    fn the_rate_limit_comes_before_any_file_is_read() {
+        let (path, project_id, domain) = seed_files_sender("attrate", "approval");
+        let store = DbOutboundStore::default();
+        let m = OutboundMessage {
+            from_name: None,
+            from: format!("bot@{domain}"),
+            to: vec!["a@b.example".to_string()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
+            subject: "s".to_string(),
+            text_body: "t".to_string(),
+            in_reply_to: None,
+            references: None,
+            reply_source: None,
+            attachments: Vec::new(),
+            ephemeral: false,
+            notify: None,
+            forward_of: None,
+        };
+        for _ in 0..send::RATE_LIMIT_HOURLY {
+            let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &m, send_after: None };
+            send::gate_and_dispatch(&store, None, Gate::Approval, &req, now_secs()).expect("queue");
+        }
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["ghost.bin"] })));
+        assert_eq!(resp.status, "429 Too Many Requests", "{}", resp.body);
         done(&path, &project_id, &domain);
     }
 }

@@ -6,3 +6,5 @@ ALTER TABLE mail_outbound ADD COLUMN reply_to_json TEXT;
 -- The hex SHA-256 of the row's body file. A body that no longer matches is
 -- neither shown nor sent. NULL on older rows.
 ALTER TABLE mail_outbound ADD COLUMN body_sha256 TEXT;
+-- What a `k2 mail forward-message` forwarded, as JSON, for the outbox.
+ALTER TABLE mail_outbound ADD COLUMN forward_of_json TEXT;

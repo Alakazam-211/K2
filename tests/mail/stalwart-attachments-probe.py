@@ -16,7 +16,7 @@ loopback SMTP sink this script runs: an `x:MtaRoute` relay sends every
   A3  K2's own limits fit: 10 files adding up to 25 MiB
   A4  three 25 MiB sends in a row (one file each; the upload quota)
   A5  an upload bigger than the session's limit (recorded: K2's service key)
-  A6  --as-eml: the original's raw blob, attached as message/rfc822, arrives
+  A6  --as-eml: the original's raw blob, attached as a plain file, arrives
       with its bytes unchanged
   A7  default forward: an inbound message's attachment, downloaded and
       re-uploaded, arrives with its bytes unchanged
@@ -229,22 +229,6 @@ def parts(msg):
         else:
             out.append((name, p.get_content_type(), cte, p.get_payload(decode=True)))
     return out
-
-
-def rfc822_part_bytes(outer):
-    """The decoded bytes of the one message/rfc822 part, read off the wire
-    form: Python's parser treats a message/* part as a nested message and
-    would not undo its transfer encoding."""
-    at = outer.index(b"message/rfc822")
-    start = outer.rfind(b"\r\n--", 0, at)
-    head_end = outer.index(b"\r\n\r\n", at)
-    head = outer[start:head_end].lower()
-    boundary = outer[start + 2:].split(b"\r\n", 1)[0]
-    end = outer.index(b"\r\n" + boundary, head_end)
-    body = outer[head_end + 4:end]
-    if b"content-transfer-encoding: base64" in head:
-        return base64.b64decode(body), "base64"
-    return body, "as is"
 
 
 def main():
@@ -495,22 +479,20 @@ def main():
         check("A6 raw blob downloaded", st == 200 and b"Original" in raw, f"{st} {len(raw)} bytes")
         b, err = svc.upload(alice, raw)
         subj = f"a6-eml-{tag}"
-        ok, r = send(subj, [(b, "message/rfc822", "original.eml")])
+        ok, r = send(subj, [(b, "application/octet-stream", "original.eml")])
         check("A6 .eml forward submitted", ok, summ(r))
         got = received(subj)
         check("A6 .eml reached the sink", bool(got), "")
         if got:
             outer = got[0]["data"]
             m0 = parse(outer)
-            rfc = [p for p in m0.walk() if p.get_content_type() == "message/rfc822"]
-            check("A6 a message/rfc822 part", len(rfc) == 1, str([p.get_content_type() for p in m0.walk()]))
-            if rfc:
-                info("A6 part headers", str(rfc[0].items()))
-                inner_bytes, how = rfc822_part_bytes(outer)
-                check("A6 the part's bytes are exactly the stored message", inner_bytes == raw, f"{how}; {len(inner_bytes)} vs {len(raw)}")
-                inner = parse(inner_bytes)
+            ps = parts(m0)
+            check("A6 one file named original.eml, typed as a plain file", len(ps) == 1 and ps[0][0] == "original.eml" and ps[0][1] == "application/octet-stream", str([(p[0], p[1]) for p in ps]))
+            if ps:
+                check("A6 the file's bytes are exactly the stored message", ps[0][3] == raw, f"{len(ps[0][3])} vs {len(raw)}")
+                inner = parse(ps[0][3])
                 check("A6 inner message parses, Subject and attachment intact",
-                      inner.get("Subject") == subj_in and any(x[3] == att_bytes for x in parts(inner)), how)
+                      inner.get("Subject") == subj_in and any(x[3] == att_bytes for x in parts(inner)), "")
 
         # ── A7 default forward, attachment re-uploaded ─────────────
         at = row["attachments"][0]

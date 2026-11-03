@@ -704,6 +704,7 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
         status: "pending",
         decided_by: None,
         attachment_names: &[],
+        attachment_files: &[],
         send_after: None,
         now,
     });

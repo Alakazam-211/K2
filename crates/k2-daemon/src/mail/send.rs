@@ -737,10 +737,28 @@ pub struct NewOutbound<'a> {
     /// that rode this send. Stored as a compact JSON array of strings in
     /// `attachments_ref`; empty leaves the column NULL.
     pub attachment_names: &'a [String],
+    /// The same files with size and hash, when known: `attachments_ref` then
+    /// holds these instead of bare names.
+    pub attachment_files: &'a [FileAudit],
     /// Unix seconds when the message may leave. None = immediate.
     /// Rate limits apply at enqueue time.
     pub send_after: Option<i64>,
     pub now: i64,
+}
+
+/// What the outbox keeps of a file that rode a message: enough to show later
+/// which bytes left, and never the bytes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FileAudit {
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+impl From<&StoredAttachment> for FileAudit {
+    fn from(a: &StoredAttachment) -> Self {
+        FileAudit { name: a.filename.clone(), size: a.size(), sha256: a.sha256.clone() }
+    }
 }
 
 /// Everything S5 needs from the audit/queue storage, behind a trait so
@@ -797,7 +815,8 @@ pub trait OutboundStore {
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
                              cc_json, subject, body_ref, attachments_ref, status, \
                              decided_by, note, created_at, updated_at, decided_at, sent_at, \
-                             send_after, bcc_json, policy_bcc_json, reply_to_json, body_sha256";
+                             send_after, bcc_json, policy_bcc_json, reply_to_json, body_sha256, \
+                             forward_of_json";
 
 fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
     Ok(MailOutbound {
@@ -822,6 +841,7 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
         policy_bcc_json: r.get(18)?,
         reply_to_json: r.get(19)?,
         body_sha256: r.get(20)?,
+        forward_of_json: r.get(21)?,
     })
 }
 
@@ -1022,9 +1042,20 @@ impl OutboundStore for DbOutboundStore {
         let bcc_json = json_or_null(&new.message.bcc, "bcc")?;
         let policy_bcc_json = json_or_null(&new.message.policy_bcc, "policy bcc")?;
         let reply_to_json = json_or_null(&new.message.reply_to, "reply-to")?;
+        let forward_of_json = new
+            .message
+            .forward_of
+            .as_ref()
+            .map(|f| serde_json::to_string(f).map_err(|e| format!("forward serialize: {e}")))
+            .transpose()?;
         // Filenames only — basenames, never paths, never bytes (they're
         // non-secret display names). Empty leaves the column NULL.
-        let attachments_ref = if new.attachment_names.is_empty() {
+        let attachments_ref = if !new.attachment_files.is_empty() {
+            Some(
+                serde_json::to_string(new.attachment_files)
+                    .map_err(|e| format!("attachments serialize: {e}"))?,
+            )
+        } else if new.attachment_names.is_empty() {
             None
         } else {
             Some(
@@ -1040,9 +1071,9 @@ impl OutboundStore for DbOutboundStore {
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
                  to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
                  decided_at, created_at, updated_at, send_after, bcc_json, policy_bcc_json, \
-                 reply_to_json, body_sha256) \
+                 reply_to_json, body_sha256, forward_of_json) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, \
-                 ?15, ?16, ?17, ?18)",
+                 ?15, ?16, ?17, ?18, ?19)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -1062,6 +1093,7 @@ impl OutboundStore for DbOutboundStore {
                     policy_bcc_json,
                     reply_to_json,
                     body_sha256,
+                    forward_of_json,
                 ],
             )
         };
@@ -1265,6 +1297,7 @@ pub fn record_linked_submitted(
         status: "approved",
         decided_by: None,
         attachment_names,
+        attachment_files: &[],
         send_after: None,
         now,
     })?;
@@ -1458,9 +1491,22 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
     // filenames that rode a send so an agent can verify its own attachment
     // send without opening the recipient inbox. Filenames only — the row
     // never stores bytes or paths. Omitted entirely when there were none.
-    let names = list(row.attachments_ref.as_deref());
+    // A row from before 0.46.8 holds bare names; a newer one size and hash too.
+    let refs: Vec<serde_json::Value> =
+        row.attachments_ref.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+    let names: Vec<&str> = refs
+        .iter()
+        .filter_map(|r| r.as_str().or_else(|| r["name"].as_str()))
+        .collect();
     if !names.is_empty() {
         v["attachments"] = serde_json::json!({ "count": names.len(), "names": names });
+        if refs.iter().all(serde_json::Value::is_object) {
+            v["attachments"]["files"] = serde_json::Value::Array(refs.clone());
+        }
+    }
+    // What a forward forwarded (`k2 mail forward-message`).
+    if let Some(f) = row.forward_of_json.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) {
+        v["forwardOf"] = f;
     }
     v
 }
@@ -1721,6 +1767,7 @@ pub fn gate_and_dispatch(
     // The outbox keeps the filenames. The bytes stay on disk only while
     // something still has to send them (approval, a schedule).
     let names: Vec<String> = req.message.attachments.iter().map(|a| a.filename.clone()).collect();
+    let files: Vec<FileAudit> = req.message.attachments.iter().map(FileAudit::from).collect();
     if gate != Gate::Off && (gate == Gate::Approval || future_after.is_some()) {
         check_can_hold_files(store, &req.message.attachments, future_after, now)?;
     }
@@ -1735,6 +1782,7 @@ pub fn gate_and_dispatch(
                     status: "pending",
                     decided_by: None,
                     attachment_names: &names,
+                    attachment_files: &files,
                     send_after: future_after.or(req.send_after),
                     now,
                 })
@@ -1754,6 +1802,7 @@ pub fn gate_and_dispatch(
                         status: "scheduled",
                         decided_by: Some("policy:agent-send-on"),
                         attachment_names: &names,
+                        attachment_files: &files,
                         send_after: Some(after),
                         now,
                     })
@@ -1779,6 +1828,7 @@ pub fn gate_and_dispatch(
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
                     attachment_names: &names,
+                    attachment_files: &files,
                     send_after: None,
                     now,
                 })
@@ -1942,6 +1992,10 @@ pub fn gate_and_dispatch_linked(
 ) -> Result<(SendOutcome, Option<crate::mail::submit::Receipt>), SendError> {
     check_rate_limits(store, &req.message.from, now)?;
     let names: Vec<String> = attachments.iter().map(|a| a.filename.clone()).collect();
+    let files: Vec<FileAudit> = attachments
+        .iter()
+        .map(|a| FileAudit { name: a.filename.clone(), size: a.bytes.len() as u64, sha256: sha256_hex(&a.bytes) })
+        .collect();
     match gate {
         Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
         Gate::Approval => {
@@ -1956,6 +2010,7 @@ pub fn gate_and_dispatch_linked(
                     status: "pending",
                     decided_by: None,
                     attachment_names: &names,
+                    attachment_files: &files,
                     send_after: None,
                     now,
                 })
@@ -1971,6 +2026,7 @@ pub fn gate_and_dispatch_linked(
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
                     attachment_names: &names,
+                    attachment_files: &files,
                     send_after: None,
                     now,
                 })
@@ -2490,6 +2546,7 @@ mod tests {
             policy_bcc_json: None,
             reply_to_json: None,
             body_sha256: None,
+            forward_of_json: None,
         };
         let v = outbound_json(&base);
         assert_eq!(v["attachments"]["count"], 2);
@@ -2652,6 +2709,7 @@ mod tests {
             policy_bcc_json: None,
             reply_to_json: None,
             body_sha256: None,
+            forward_of_json: None,
         }
     }
 
@@ -3387,6 +3445,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                attachment_files: &[],
                 send_after: None,
                 now: t0,
             })
@@ -3458,6 +3517,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                attachment_files: &[],
                 send_after: None,
                 now: now - APPROVAL_EXPIRE_SECS - 10,
             })
@@ -3470,6 +3530,7 @@ mod tests {
                 status: "pending",
                 decided_by: None,
                 attachment_names: &[],
+                attachment_files: &[],
                 send_after: None,
                 now: now - 100,
             })
@@ -4054,5 +4115,32 @@ mod tests {
         let m: OutboundMessage = serde_json::from_str(raw).expect("parse");
         assert_eq!(m.attachments[0].size(), 2);
         assert_eq!(m.attachments[0].bytes_now().unwrap(), b"hi");
+    }
+
+    /// The outbox can show later which bytes left: names, sizes and hashes. A
+    /// row from before this keeps reading as names.
+    #[test]
+    fn the_outbox_keeps_each_files_size_and_hash_never_its_bytes() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", b"the bytes");
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let SendOutcome::Submitted { id } = gate_and_dispatch(&store, Some(&client), Gate::On, &req, now_unix()).expect("send") else {
+            panic!("expected a submit")
+        };
+        let row = store.load(&id).unwrap().unwrap();
+        assert!(!row.attachments_ref.as_deref().unwrap_or("").contains("dGhl"), "no bytes");
+        let v = outbound_json(&row);
+        assert_eq!(v["attachments"]["names"], serde_json::json!(["a.bin"]), "{v}");
+        assert_eq!(v["attachments"]["files"][0]["size"], 9, "{v}");
+        assert_eq!(v["attachments"]["files"][0]["sha256"], sha256_hex(b"the bytes"), "{v}");
+        let old = MailOutbound { attachments_ref: Some(r#"["old.pdf"]"#.to_string()), ..row };
+        let v = outbound_json(&old);
+        assert_eq!(v["attachments"]["names"], serde_json::json!(["old.pdf"]), "{v}");
+        assert!(v["attachments"].get("files").is_none(), "{v}");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

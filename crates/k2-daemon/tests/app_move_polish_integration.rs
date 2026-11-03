@@ -1253,7 +1253,7 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "decoy-guest", "app": decoy_app})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     for (path, want, body) in [
-        ("/cli/skin/roles/assign", "outside_app_rooms", json!({"username": "decoy-guest", "role": victim.id})),
+        ("/cli/skin/roles/assign", "owner_only", json!({"username": "decoy-guest", "role": victim.id})),
         ("/cli/skin/roles/update", "owner_only", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
         ("/cli/skin/roles/room", "owner_only", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
         ("/cli/skin/roles/paths", "owner_only", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),

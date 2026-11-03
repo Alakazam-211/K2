@@ -68,16 +68,16 @@ fn only_the_owner_grants_and_the_grant_lists() {
         assert_eq!(st, 403, "{who:?}: {v}");
     }
     // The App's own agent (0.46.4): without "Let this agent manage its
-    // Apps' users", or naming another workspace's room, one held request
-    // for the owner; nothing is granted until they approve.
+    // Apps' users", one held request for the owner; nothing is granted until
+    // they approve.
     let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), body.clone());
     assert_eq!((st, v["status"].clone()), (202, json!("held")), "{v}");
     assert_eq!(gr::get_grant(&f.jobs).unwrap(), None);
     k2_core::workspace::settings::set_agents_can_manage_app_users(&f.ws_a, true).unwrap();
+    // With the switch: at once, any room (Rosson 2026-11-03).
     let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), body.clone());
-    assert_eq!((st, v["status"].clone()), (202, json!("held")), "another workspace's room is the owner's: {v}");
-    assert_eq!(gr::get_grant(&f.jobs).unwrap(), None);
-    // Its own room, with the switch: at once.
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(gr::get_grant(&f.jobs).unwrap().expect("granted").rooms, vec![f.acme.clone()]);
     let (st, v) = post("/cli/app/grant", &agent(&f.ws_a), json!({ "app": "jobs", "kind": "guests-rooms", "rooms": [f.ws_a] }));
     assert_eq!(st, 200, "{v}");
     assert_eq!(gr::get_grant(&f.jobs).unwrap().expect("granted").rooms, vec![f.ws_a.clone()]);
@@ -119,7 +119,7 @@ fn revoke_narrows_for_the_apps_own_agent() {
 }
 
 #[test]
-fn agents_set_within_the_grant_and_the_owner_with_owner_rights() {
+fn an_agent_with_the_switch_sets_any_room_with_no_grant() {
     let f = fx("set");
     let body = |rooms: &[&str]| json!({ "app": "jobs", "username": "dana", "rooms": rooms });
     // An agent sets its guests' rooms only with "Let this agent manage its
@@ -127,21 +127,18 @@ fn agents_set_within_the_grant_and_the_owner_with_owner_rights() {
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
     assert_eq!((st, code(&v)), (403, "app_users_off"), "{v}");
     k2_core::workspace::settings::set_agents_can_manage_app_users(&f.ws_a, true).unwrap();
-    // No grant: the App's own agent is refused; the owner isn't.
+    // No grant: the App's own agent and the owner both.
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_a]));
-    assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");
+    assert_eq!((st, v["changed"].clone()), (200, json!(true)), "{v}");
     let (st, v) = get(GUEST_ROOMS, &agent(&f.ws_a), &[("app", "jobs"), ("username", "dana")]);
-    assert_eq!((st, code(&v)), (403, "grant_required"), "{v}");
+    assert_eq!(st, 200, "{v}");
     let (st, v) = post(GUEST_ROOMS, &Who::Owner, body(&[&f.ws_b]));
     assert_eq!((st, v["changed"].clone()), (200, json!(true)), "owner rights reach any room: {v}");
-    assert_eq!(v["before"], json!([]));
+    assert_eq!(v["before"], json!([f.ws_a]));
 
-    gr::grant(&f.jobs, &[f.acme.clone()], "owner").unwrap();
     let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.acme, &f.ws_a]));
     assert_eq!((st, v["changed"].clone()), (200, json!(true)), "{v}");
     assert_eq!(v["beforeHandles"], json!([f.ws_b]));
-    let (st, v) = post(GUEST_ROOMS, &agent(&f.ws_a), body(&[&f.ws_b]));
-    assert_eq!((st, code(&v)), (403, "outside_app_rooms"), "{v}");
     let (st, v) = get(GUEST_ROOMS, &agent(&f.ws_a), &[("app", "jobs"), ("username", "dana")]);
     assert_eq!(st, 200, "{v}");
     assert_eq!(v["rooms"].as_array().unwrap().len(), 2);

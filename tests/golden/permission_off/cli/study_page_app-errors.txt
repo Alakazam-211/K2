@@ -530,17 +530,16 @@ GENERAL (any App route)
       fix: Pick another username. Reserved: owner, root, admin,
       administrator, system, k2, and anyone who signs in to K2 itself.
   outside_app_rooms (exit 3)
-      fix: Ask for it once for the whole App: k2 app grant <app-id> --kind
-      guests-rooms --room <room>, adding a --room for each room it has
-      already (k2 app guest ceiling <app-id>). The owner approves it on a
-      card. A login an agent set up reaches it only after the person uses a
-      reset link on K2's own page.
+      fix: Add it for the whole App: k2 app grant <app-id> --kind
+      guests-rooms --room <room>. That replaces the list, so repeat the
+      rooms it has (k2 app guest ceiling <app-id>). An agent with "Let this
+      agent manage its Apps' users" on can set any room itself: k2 app user
+      rooms.
   skin_room (exit 3)
       fix: Use a room the pass holds, or have the owner add it. Agent-tied:
-      the person uses a reset link the owner sends on K2's own page (k2 app
-      user reset <username>; an agent asks on a card: k2 permission request
-      apps.user-password-reset user=<username> app=<app> mode=link --why
-      "<why>").
+      it clears when the person chooses their own password: first sign-in
+      with a temporary password, an invite or reset link, or the App's
+      forgot-password flow.
   state_write_failed (exit 3)
       fix: Check the box's disk, then run it again. If it repeats, report
       it.

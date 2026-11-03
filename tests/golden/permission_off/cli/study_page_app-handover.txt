@@ -39,7 +39,7 @@ WHAT MOVES, AND HOW
   rooms       the rooms the owner approved for the App's guests (its
               guests-rooms grant) stay with the App: B hands them out as A
               could, and the card lists them. A login B sets up reaches them
-              only after the person uses a reset link on K2's own page.
+              once the person chooses their own password.
   secrets     A's secrets only this App uses move to B; ones A uses too are
               copied (rotate them: A knew them). A name B already has keeps
               the App's value as NAME__<app>. The Seed's k2v://ws/<A>/NAME

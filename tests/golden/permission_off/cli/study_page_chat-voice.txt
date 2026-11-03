@@ -40,9 +40,9 @@ THE ORDER
     Never an agent. Never a username that is also a Connect login on this
     box (anyone who signs in to the box itself, the owner too): on this
     version those get not_found for chat through an App. Anyone the Agent
-    or your App creates, invites or sets a password for is tied to the
-    agent: no chat pass (403 tied_pending_reset) until they use a reset
-    link the Owner sends (k2 app user reset <user> --app <app>).
+    or your App creates or sets a password for is tied to the agent: no chat
+    pass (403 tied_pending_reset) until they choose their own password
+    (first sign-in, an invite or reset link, your App's forgot-password flow).
  4. Chat for that person, BEFORE the Space (Sew needs their account):
       k2 app user chat <owner-user> member --app <app>        (Owner)
     For everyone after (step 8), better: the Owner runs k2 app grant <app>
@@ -89,7 +89,7 @@ THE ORDER
 WHAT GOES WRONG
   origin null, no calls from outside → no public URL (step 2)
   403 no_chat_caps → the role holds none of your chat caps (6)
-  403 tied_pending_reset → the agent or App set them up: Owner's reset link (3)
+  403 tied_pending_reset → the agent or App set them up: their own password (3)
   not_found from k2 app user chat → not your App's user, or a Connect login (3)
   sign-in 502/504 → sew-api still held for the Owner (7)
   /rtc* 404 → sew-signal not approved (approved late: k2 app restart <app>)

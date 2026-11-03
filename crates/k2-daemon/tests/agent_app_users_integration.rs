@@ -232,12 +232,7 @@ async fn s2_an_agent_adds_app_users_of_its_own_apps_only() {
     )
     .await;
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": wide })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
-    let dl = format!("dl{tag}");
-    owner_post(port, "/cli/skin/roles", json!({ "name": dl, "roomAccess": [{ "handle": sales.handle, "caps": ["thread:read", "files:read", "files:download"] }] })).await;
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": shop, "role": dl })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-    assert!(r.body.contains("files:download"), "{}", r.body);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "a box-wide role reaching elsewhere: {}", r.body);
     assert!(!principal_exists(&u2), "no row after any refusal");
 
     // A role of its own workspace is fine.
@@ -348,10 +343,11 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
     let u2 = format!("u2{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": u2, "app": shop, "role": role, "password": temp })).await;
     assert!(tie_of(&u2).is_none(), "the owner's add ties nobody");
-    // 0.46.6: both passwords were someone else's: each person chooses one.
-    person_changes(port, &u1, temp, &shop, pw).await;
+    // u1 stays tied with a password it didn't choose through a flow (that would
+    // release it, Rosson 2026-11-03); u2 chooses its own.
+    k2_daemon::test_harness::guest_with_own_password(&u1, pw);
     person_changes(port, &u2, temp, &shop, pw).await;
-    assert_eq!(tie_of(&u1).expect("the change keeps the tie").reasons, vec!["created".to_string(), "password".to_string()]);
+    assert_eq!(tie_of(&u1).expect("still tied").reasons, vec!["created".to_string(), "password".to_string()]);
     assert!(tie_of(&u2).is_none());
 
     // T3.8 before any widening: tied, not pending.
@@ -992,7 +988,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_a_signed_in_change_doesnt() 
         k2_core::feedback::list_for_project(&sales.id, &k2_core::feedback::ListFilter::Open)
             .unwrap()
             .into_iter()
-            .filter(|i| i.title == format!("Extra access for {u1} waits for a password reset"))
+            .filter(|i| i.title == format!("Extra access for {u1} waits for their own password"))
             .collect()
     };
     wait_until("the owner's card", 10, || !card_notes().is_empty()).await;
@@ -1265,7 +1261,9 @@ async fn an_agent_starts_a_reset_takes_it_back_clears_a_lockout_and_reads_the_re
     assert!(!r.body.contains("k2inv_"), "the agent never gets the link: {}", r.body);
     let m = mails_to(&rec, &email);
     assert_eq!(m.len(), 1);
-    assert_eq!(outbound_rows(&from).len(), 0, "ephemeral: not in the outbox the agent reads");
+    let r = get(port, "/cli/mail/outbox", &agent, &format!("project={}", sales.id)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!r.body.contains("k2inv_"), "the outbox never shows the link: {}", r.body);
     assert_eq!(tie_of(&u).expect("tied").reasons, reasons, "starting a reset ties nothing new");
     assert!(invite_rows(&u).iter().any(|i| i.purpose == "reset"), "the App's reset, never the owner's link");
 

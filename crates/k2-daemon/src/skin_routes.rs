@@ -658,8 +658,9 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
                         .filter(|g| r.app_id.as_deref().is_none_or(|a| a == g.target_id))
                         .map(|g| g.target_id.as_str())
                         .collect();
-                    if !role_in_workspace(&r, ws) && own_apps.is_empty() {
-                        return Err(outside_workspace(format!("role '{}' belongs to another App", r.name)));
+                    // A box-wide role reaching elsewhere isn't the App's to hand out.
+                    if !role_in_workspace(&r, ws) && (r.app_id.is_none() || own_apps.is_empty()) {
+                        return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
                     }
                 }
             }
@@ -728,6 +729,9 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
         if app.is_none() && policy.keys().any(|k| k != ws) {
             return Err(outside_workspace("a box-wide role of yours may name only your workspace's room: name the App (--app) for any other".to_string()));
         }
+        if let Some(cap) = skin::person_only_cap_in_policy(policy).filter(|_| app.is_none()) {
+            return Err(person_only_refused(cap));
+        }
         if !users_switch && (policy.keys().any(|k| k != ws) || skin::person_only_cap_in_policy(policy).is_some()) {
             return Err(app_users_off_response());
         }
@@ -740,6 +744,9 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
         let elsewhere = ids.iter().any(|id| id != ws);
         if own_app_of(role).is_none() && elsewhere {
             return Err(outside_workspace("a box-wide role of yours may name only your workspace's room: name the App (--app) for any other".to_string()));
+        }
+        if let Some(cap) = skin::person_only_cap_in(caps_field(&v).unwrap_or_default().iter()).filter(|_| own_app_of(role).is_none()) {
+            return Err(person_only_refused(cap));
         }
         if !users_switch && (elsewhere || skin::person_only_cap_in(caps_field(&v).unwrap_or_default().iter()).is_some()) {
             return Err(app_users_off_response());
@@ -780,8 +787,13 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
         }
         "/cli/skin/roles/paths" => {
             existing(&["name", "role", "id"])?;
-            if !users_switch && !matches!(v.get("download"), None | Some(serde_json::Value::Null)) {
-                return Err(app_users_off_response());
+            if !matches!(v.get("download"), None | Some(serde_json::Value::Null)) {
+                if own_app_of(found(&["name", "role", "id"])?.as_ref()).is_none() {
+                    return Err(person_only_refused(skin::CAP_FILES_DOWNLOAD));
+                }
+                if !users_switch {
+                    return Err(app_users_off_response());
+                }
             }
         }
         "/cli/skin/roles/remove" => existing(&["id", "name", "role"])?,
@@ -952,8 +964,9 @@ pub(crate) fn principal_in_workspace(p: &skin::SkinPrincipal, roles: &[skin::Ski
         let scope_ok = scope.as_ref().is_some_and(|rooms| own_app || rooms.iter().all(|r| allowed.contains(r)));
         let grant_role_ok = match role(&g.role_id) {
             None => true,
-            Some(found) => found.is_some_and(|r| {
-                (own_app || role_within(r, &allowed)) && r.app_id.as_deref().map_or(true, |app| app_of_workspace(app, ws))
+            Some(found) => found.is_some_and(|r| match r.app_id.as_deref() {
+                Some(app) => app_of_workspace(app, ws),
+                None => role_within(r, &allowed),
             }),
         };
         if !(target_ok && scope_ok && grant_role_ok) {
@@ -1029,7 +1042,7 @@ pub(crate) fn password_sets_must_change(actor: &str, username: &str) -> bool {
 /// 2026-11-03).
 fn agent_config_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:agentconfig on a platform pass is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:write,files:agentconfig",
+        "files:agentconfig on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:write,files:agentconfig",
     )
 }
 
@@ -1037,7 +1050,7 @@ fn agent_config_refused() -> CliResponse {
 /// same way.
 fn files_download_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:download on a platform pass is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:download",
+        "files:download on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:download",
     )
 }
 
@@ -1098,6 +1111,9 @@ fn agent_add_app(ws: &str, v: &serde_json::Value) -> Result<String, CliResponse>
             Some(r) => {
                 if r.app_id.as_deref().is_some_and(|a| a != app) {
                     return Err(outside_workspace(format!("role '{}' belongs to another App", r.name)));
+                }
+                if r.app_id.is_none() && !role_in_workspace(&r, ws) {
+                    return Err(outside_workspace(format!("role '{}' reaches outside your workspace", r.name)));
                 }
             }
             // Unknown: the add's own 400.

@@ -8,7 +8,7 @@
 //!   read and set their own guests' rooms once the owner grants
 //!   `guests-rooms` (`POST /cli/app/grant`), and not before;
 //! - a guest's own session pass is refused even on its App's link;
-//! - an agent sets its own App's guests within the grant over the CLI
+//! - an agent sets its own App's guests over the CLI
 //!   routes; it can't grant itself.
 
 #[path = "support/app_fixture.rs"]
@@ -126,8 +126,8 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     assert_eq!((r.status, r.code()), (403, "app_pass_required".to_string()), "{}", r.body);
     gateway::close(&format!("jobs{tag}"), None, true);
 
-    // An agent, end to end over the CLI routes, within the grant: with
-    // "Let this agent manage its Apps' users" (0.46.4: without it, refused).
+    // An agent, end to end over the CLI routes: with "Let this agent manage its
+    // Apps' users" (without it, refused) any room, no grant (Rosson 2026-11-03).
     let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [acme.handle] })).await;
     assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
     k2_core::workspace::settings::set_agents_can_manage_app_users(&own.id, true).unwrap();
@@ -135,14 +135,14 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["beforeHandles"], json!([own.handle]));
     let r = post(port, "/cli/app/guest/rooms", &agent, json!({ "app": svc, "username": dana, "rooms": [beta.handle] })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
+    assert_eq!(r.status, 200, "off the App's grant: {}", r.body);
     let r = get(port, "/cli/app/guest/rooms", &agent, &format!("app={svc}&username={dana}")).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
     // Every change is audited with before and after.
     let rows = k2_core::skin::guest_rooms::audit_rows(&svc, 20).unwrap();
     let changes: Vec<_> = rows.iter().filter(|r| r.event == k2_core::skin::guest_rooms::AUDIT_CHANGE).collect();
-    assert_eq!(changes.len(), 3, "remote, link, agent: {rows:?}");
+    assert_eq!(changes.len(), 4, "remote, link, agent twice: {rows:?}");
     assert!(changes[1].actor.starts_with("app:jobs"), "{:?}", changes[1].actor);
     assert_eq!(changes[2].actor, format!("app-remote:{svc}"));
     drop(env);

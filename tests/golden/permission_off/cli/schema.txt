@@ -2776,11 +2776,12 @@ exit: 0
     },
     {
       "name": "app user reset",
-      "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
-      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
+      "usage": "k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]",
+      "description": "An agent with the App-users switch: K2 mails the person the App's reset link, to the email on the login (never shown to the agent; starting it ties nobody); --revoke takes back unused links. The owner, or an admin for App-only users: a one-time reset link on K2's own page. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
+        {"name": "--revoke", "arg": null, "description": "Take back this login's unused links on the App."},
         {"name": "--to", "arg": "email", "description": "Mail it here instead; becomes their email when used."},
         {"name": "--code", "arg": null, "description": "Show the link once instead of mailing it."},
         {"name": "--from", "arg": "address", "description": "The hosted address to send from."},
@@ -3116,12 +3117,12 @@ exit: 0
     {
       "name": "app grant guests-rooms",
       "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
-      "description": "The owner; or the App's own agent in its own room with \"Let this agent manage its Apps' users\" (else, or another workspace's room, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "description": "The owner; or the App's own agent with \"Let this agent manage its Apps' users\" (with it off, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). That agent doesn't need this to give people rooms. Lets <app>'s own code read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},
         {"name": "--room", "arg": "handle", "description": "A room the App may hand its guests (repeatable)."},
-        {"name": "--revoke", "arg": null, "description": "Take the grant back."},
+        {"name": "--revoke", "arg": null, "description": "Take the grant back: the App's code can't hand out more; rooms already on a login or role stay."},
         {"name": "--json", "arg": null, "description": "Print the daemon body."}
       ]
     },

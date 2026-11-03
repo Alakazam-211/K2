@@ -334,8 +334,10 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
         k2_core::workspace::settings::set_agents_can_manage_app_users(&a.id, true).expect("app users on");
         let r = post(port, &hook, "/cli/skin/users", serde_json::json!({"username": "agentguest", "app": app}));
         assert_eq!(r.status, 200, "agent adds an App user; {}", r.body);
+        // Rosson 2026-11-03: its App's people may hold it; the tie cuts it until
+        // the person chooses their own password.
         let r = post(port, &hook, "/cli/skin/roles/assign", serde_json::json!({"username": "agentguest", "role": "r-gopt"}));
-        owner_only(&r, "agent hands out the owner's opted-in role");
+        assert_eq!(r.status, 200, "agent hands out a role in its own room; {}", r.body);
         let r = post(port, &hook, "/cli/skin-tokens", serde_json::json!({"name": "agent-tok", "caps": flagged, "rooms": [a.handle]}));
         owner_only(&r, "agent mints a flagged platform token");
         let tok = owner_ok(port, "/cli/skin-tokens", serde_json::json!({"name": "owner-tok", "caps": flagged, "rooms": [a.handle]}));

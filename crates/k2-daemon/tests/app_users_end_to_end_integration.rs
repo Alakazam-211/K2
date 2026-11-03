@@ -257,6 +257,7 @@ async fn the_agent_that_owns_the_app_gives_any_room_and_any_cap() {
     let port = d.port;
     let t = tag();
     let b = box2(&env, &t);
+    pin_chat(&b.ops);
     let u = format!("u{t}");
     let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "password": TEMP })).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -356,7 +357,7 @@ async fn an_agent_cant_touch_a_role_the_owner_made_reaching_elsewhere() {
 }
 
 /// Finding 1: an agent-made login can't borrow a name people here use, and
-/// can't read or post in another agent's Thread on the App's approved rooms.
+/// while tied can't read or post in another agent's Thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_login_cant_take_a_persons_name_or_reach_another_agents_thread() {
     let env = setup(&[]);
@@ -389,11 +390,12 @@ async fn an_agent_login_cant_take_a_persons_name_or_reach_another_agents_thread(
     let u = format!("u{t}");
     let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "generate": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let temp = r.json()["generatedPassword"].as_str().unwrap().to_string();
     let r = post(port, "/cli/skin/users/rooms", &b.agent, json!({ "username": u, "app": b.shop, "rooms": [b.ops.handle] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["waitingForReset"]["rooms"], json!([b.ops.handle]), "{}", r.body);
-    person_chooses(port, &u, &temp, &b.shop, PW).await;
+    // Still tied (a password nobody chose through a flow): the agent itself could
+    // sign in with it.
+    k2_daemon::test_harness::guest_with_own_password(&u, PW);
     let s = session(port, &u, &b.shop).await;
     let q = format!("/cli/thread?addr={}", b.ops.handle);
     let r = bearer(port, "GET", &q, &s, None).await;
@@ -521,6 +523,8 @@ async fn the_persons_own_password_releases_the_tie_and_an_agents_ties_it_again()
     assert_eq!(user_row(port, &u).await["tiedTo"], Value::Null);
     let r = bearer(port, "POST", "/cli/sew/pass", &s, Some(json!({}))).await;
     assert_ne!(r.code(), "tied_pending_reset", "the tie's refusal is gone: {}", r.body);
+    let chat = k2_core::skin::list_grants().unwrap().into_iter().find(|g| g.subject_id == principal_id(&u) && g.kind != "app").expect("the chat grant");
+    assert!(k2_core::skin::delete_grant_by_id(&chat.id).unwrap());
 
     // An agent's later set-password ties it again, and the room goes.
     let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": u, "password": "another-pass-22" })).await;
@@ -600,7 +604,16 @@ async fn an_apps_flow_never_frees_a_box_login_or_an_agents_own_login() {
     // A box login on the App, with a temporary password from the owner, tied.
     let bx = format!("bx{t}");
     owner_post(port, "/cli/skin/users", json!({ "username": bx })).await;
-    owner_post(port, "/cli/skin/users", json!({ "username": bx, "app": shop })).await.as_object().expect("granted");
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: principal_id(&bx),
+        kind: "app".into(),
+        target_id: shop.clone(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("the App login");
     k2_core::skin::creators::tie(&principal_id(&bx), &b.sales.id, "agent:legacy", k2_core::skin::ties::REASON_EMAIL).expect("tie");
     owner_post(port, "/cli/skin/users/password", json!({ "username": bx, "password": TEMP })).await;
     person_chooses(port, &bx, TEMP, &shop, PW).await;

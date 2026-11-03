@@ -109,35 +109,46 @@ PER-APP LOGINS (0.45.5)
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
-  owner step. A room on the App's guests-rooms grant waits until the person uses
-  a reset link on K2's own page: the answer says what waits and names the card
-  (k2 permission request apps.user-password-reset user=<u> mode=link). A role
-  naming another room, or holding more than thread:read and thread:post on
-  another workspace's room, is refused. A name people on this box use is refused
+  owner step. Its role says what else it gets: the agent that owns the App may
+  put any room on this box and any cap on that App's roles and logins, with no
+  grant and no card (k2 app role room <role> <room> --caps thread:read,files:read).
+  A login the agent set up gets the rest once the person
+  chooses their own password: the answer says what waits and how. A role of
+  another App is refused, and a box login stays the owner's. A name people on
+  this box use is refused
   (login_name_reserved). --temp-password or an invite lets the person choose
   their own password at first sign-in. Signed-in people get new rooms and caps
   at their next request; nobody signs out for it. An agent may end its App's
   people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
-  the password of or removes only people its own agent added, and a box login's
+  the password of, names or removes only people its own agent added, and a box login's
   access is a card for the owner (k2 permission request apps.user-grant-box).
-  WAITS FOR A RESET: a person an agent created, or whose password or
-  email it set, or invited (or an App key made) is tied to that agent's
-  workspace: an agent could know their password. If you give them more than
-  that workspace's room (the box login, another App or room, a room on the App's
-  guests-rooms grant, files:download, chat), the extra waits until they use your
-  reset link. A password they choose on the App's own page doesn't count:
-  that page could see it. Sign-in, refresh and live sessions stay held back
-  until then, no chat pass. Settings → User Access shows "Waiting for reset"; K2 also
-  posts one card (its answers point to your terminal or Settings: no
-  link is ever minted on, or shown in, a Thread). k2 app user reset <u>
-  --code gives you a one-time link on K2's own page (never the App's);
-  using it starts the rest. Mail it with --from <an address no agent
-  reads> and --to <an email you know is theirs>: a tied person's stored
-  email is never used (the agent could have chosen it), nor is an email
-  stored before 0.46.4 until you set it yourself (k2 app user email).
+  WAITS FOR THEIR OWN PASSWORD: a person an agent created, or whose password
+  or email it set (or an App key made) is tied to that agent's workspace. If
+  you give them more than that workspace's room (another App or room, a room on
+  the App's guests-rooms grant, files:download, chat), the extra waits, and
+  there is no chat pass. The tie is released when the person chooses their own
+  password: at first sign-in with a temporary password, with an invite or reset
+  link, or with your reset link. An App can host all of that under its own name.
+  A release means the person chose this password, not that the agent can't know
+  it: until a form posts straight to K2, the App's server could still see it.
+  The auth audit log says which path released it and who set the login up.
+  An agent setting the password or email ties them again; sending a link doesn't.
+  An agent starts a reset with k2 app user reset <u> --app <app> (K2 mails the
+  email on the login, the agent never sees the link; --revoke takes it back),
+  clears a lockout with k2 app user unlock <u>, and reads what happened with
+  k2 app history <app> --users.
+  Never released this way: a box login (only your reset), an agent's own login,
+  a test guest, or a password change while signed in. Settings → User Access
+  shows "Waiting for reset"; K2 also posts one card (its answers point to your
+  terminal or Settings: no link is ever minted on, or shown in, a Thread).
+  k2 app user reset <u> --code gives you a one-time link on K2's own page (never
+  the App's). Mail it with --from <an address no agent reads> and --to <an email
+  you know is theirs>: a tied person's stored email is never used for your reset
+  (the agent could have chosen it), nor is an email stored before 0.46.4 until
+  you set it yourself (k2 app user email).
   An owner reset link lives 24 hours whatever the App's setting. A person
   is tied to one workspace: another workspace's App can't invite or
-  reset them until your reset lifts the tie. Your reset also clears an
+  reset them until the tie is released. Your reset also clears an
   agent mark (k2 app user agent); re-marking a login to another workspace
   needs that reset first.
 
@@ -186,8 +197,8 @@ INVITES (0.46.4)
 GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   An App resets its OWN guests' rooms (say at login) with its own pass:
     owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
-                  (or the App's own agent in its own room, with "Let this
-                  agent manage its Apps' users")
+                  (or the App's own agent, with "Let this agent manage its
+                  Apps' users")
     the App:      GET  /cli/skin/guests/rooms?username=dana
                   POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
                   Authorization: Bearer <its App pass: K2_PASS_FILE in the
@@ -202,7 +213,8 @@ GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   60 calls a minute per App (429 rate_limited, retryAfterMs); no grant =
   403 grant_required; a guest's pass, a platform pass or the owner token =
   403 app_pass_required. Every change is audited (k2 app history <app>).
-  Agents, end to end within the grant: k2 app guest rooms <app> <u> [set a,b].
+  Agents: k2 app guest rooms <app> <u> [set a,b]: any room with the App-users
+  switch on, within the grant with it off.
   Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
   any local App (cap guests:rooms); every write asks you on K2's own sheet.
   This replaces POST /cli/skin/users/rooms with the owner token.
@@ -252,7 +264,9 @@ PASSWORD RESET
       bundled /reset page also reads an old ?token=). Does not mint a
       session. Password 8 to 256 bytes. Per-client limit (429). A used
       link ends every session, clears the login lock and voids the
-      person's other unused links (an owner reset: every one).
+      person's other unused links (an owner reset: every one). The person
+      chose this password, so it releases an agent tie; that doesn't mean the
+      agent can't know it: the App's server could see a form it hosts.
     POST /cli/skin/password/change  {"oldPassword":"…","password":"…","stay":true?}
       session k2skn_ only (session=1), browser or the App's link (its
       server, for the person) or the main port. No username field.

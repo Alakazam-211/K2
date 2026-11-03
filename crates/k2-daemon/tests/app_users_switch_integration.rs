@@ -145,10 +145,10 @@ async fn an_agent_sets_up_a_fresh_app_and_a_test_guest_that_signs_in_with_only_i
     .unwrap();
     assert_eq!(r.status, 401, "never the box login: {}", r.body);
 
-    // Never: another workspace's room (a held request, the owner's), a box
-    // login, another workspace's App.
+    // The App's own code may get any room from its agent (Rosson 2026-11-03).
     let r = post(d.port, "/cli/app/grant", &agent, json!({"app": "uswapp", "kind": "guests-rooms", "rooms": [ws.handle, other.handle]})).await;
-    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Never: a test guest in another room, a box login, another workspace's App.
     let r = post(d.port, "/cli/app/test-guest/add", &agent, json!({"app": "uswapp", "username": "usw-wide", "rooms": [other.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "usw-boxlogin"})).await;

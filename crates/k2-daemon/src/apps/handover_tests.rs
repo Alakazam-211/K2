@@ -827,11 +827,11 @@ fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
     k2_core::skin::creators::tie(&pid, &f.a, "agent:gr1", k2_core::skin::ties::REASON_CREATED).unwrap();
     let s = k2_core::skin::create_app_session_token("tia-gr1", &f.svc).unwrap();
-    assert_eq!(k2_core::skin::resolve_skin_token(&s.raw).expect("live").rooms, vec![f.a.clone()], "the approved room waits for a reset");
+    assert_eq!(k2_core::skin::resolve_skin_token(&s.raw).expect("live").rooms, vec![f.a.clone()], "the other room waits for their own password");
 
     let (_, v) = ask(&f);
     let lines = v["plan"]["lines"].as_array().expect("lines");
-    let line = lines.iter().filter_map(|l| l.as_str()).find(|l| l.starts_with("Rooms you approved")).unwrap_or_else(|| panic!("the card says so: {v}"));
+    let line = lines.iter().filter_map(|l| l.as_str()).find(|l| l.contains("own code may hand its guests")).unwrap_or_else(|| panic!("the card says so: {v}"));
     assert!(line.contains(&handle_of(&f.c)) && line.contains(&handle_of(&f.b)), "{line}");
     let rid = req_id(&v);
 

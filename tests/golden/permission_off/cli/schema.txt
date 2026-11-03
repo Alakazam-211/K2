@@ -1159,7 +1159,7 @@ exit: 0
     {
       "name": "mail send",
       "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
+      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) work on HOSTED and LINKED senders. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
         {"name": "--to", "arg": "addr", "description": "Recipient (repeatable / comma-separated)."},
@@ -1169,7 +1169,7 @@ exit: 0
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address is unchanged. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
         {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
         {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
         {"name": "--wait", "arg": null, "description": "Block until DECIDED (not with --at/--in). Exit 2 on timeout — still queued."},
@@ -1180,13 +1180,13 @@ exit: 0
     {
       "name": "mail reply",
       "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
+      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) work on HOSTED and LINKED replies. For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
         {"name": "--body-file", "arg": "f", "description": "Read the reply from a file."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address stays the one that received the message. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
         {"name": "--wait", "arg": null, "description": "Block until decided (exit 2 on timeout, still queued)."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}

@@ -30,7 +30,7 @@ pub struct Receipt {
 }
 
 /// A submission failure. `Usage` = the caller's to fix (e.g.
-/// `attachment_too_large`, attachments on a hosted inbox); `NotFound` =
+/// `attachment_too_large`); `NotFound` =
 /// the masked missing reply source; `Engine` = the provider said no.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SubmitError {
@@ -106,8 +106,9 @@ pub trait MailSubmit {
 
 /// The hosted backend: the existing [`crate::mail::send::SubmitBackend`]
 /// (JMAP `EmailSubmission` on the local Stalwart) for one account. A
-/// hosted message carries its threading headers itself, so a reply is a
-/// submit.
+/// hosted message carries its threading headers and its files itself
+/// (`msg.attachments`), so a reply is a submit and the `attachments` the
+/// approval path decoded are the same files.
 pub struct HostedSubmit<'a> {
     pub backend: &'a dyn crate::mail::send::SubmitBackend,
     pub account_id: String,
@@ -122,12 +123,12 @@ impl MailSubmit for HostedSubmit<'_> {
         msg: &OutboundMessage,
         attachments: &[OutAttachment],
     ) -> Result<Receipt, SubmitError> {
-        if !attachments.is_empty() {
-            return Err(SubmitError::Usage {
-                code: "usage",
-                hint: "attachments aren't supported yet when sending from a hosted K2 mailbox"
-                    .to_string(),
-            });
+        // A hosted message's files ride the message; a file that came only
+        // through this parameter would be dropped silently, so it refuses.
+        if attachments.len() != msg.attachments.len() {
+            return Err(SubmitError::Engine(
+                "a hosted message's attachments must ride the message — nothing sent".to_string(),
+            ));
         }
         self.backend
             .submit(&self.account_id, msg)
@@ -136,7 +137,7 @@ impl MailSubmit for HostedSubmit<'_> {
             to: msg.to.clone(),
             cc: msg.cc.clone(),
             subject: msg.subject.clone(),
-            attachments: Vec::new(),
+            attachments: msg.attachments.iter().map(|a| a.filename.clone()).collect(),
         })
     }
     fn reply(

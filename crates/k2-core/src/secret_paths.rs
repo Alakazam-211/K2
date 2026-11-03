@@ -105,6 +105,26 @@ pub fn classify(rel: &str, abs: &Path) -> Option<SecretHit> {
     content_has_credential(abs).then_some(SecretHit::Content)
 }
 
+/// [`classify`] over bytes the caller already holds, so what is checked is
+/// exactly what is used (mail attachments read a file once, through one
+/// handle; a file swapped between a check and a read can't pass). Same
+/// rules as [`classify`]; `rel` is workspace-relative.
+pub fn classify_bytes(rel: &str, bytes: &[u8]) -> Option<SecretHit> {
+    if is_secret_rel(rel) {
+        return Some(SecretHit::Path);
+    }
+    if final_component(rel).eq_ignore_ascii_case(".env.k2") {
+        // Not UTF-8 = unreadable = a secret, as in [`env_k2_secret`].
+        let hit = std::str::from_utf8(bytes).map_or(true, env_k2_text_secret);
+        return hit.then_some(SecretHit::Content);
+    }
+    let text = small_text(bytes)?;
+    if is_git_config(rel) && git_config_text_has_login(&text) {
+        return Some(SecretHit::Content);
+    }
+    content_has_credential_str(&text).then_some(SecretHit::Content)
+}
+
 fn final_component(rel: &str) -> &str {
     rel.rsplit(['/', '\\']).next().unwrap_or(rel)
 }
@@ -117,7 +137,10 @@ fn is_git_config(rel: &str) -> bool {
 
 /// A `url = scheme://user[:pass]@host` line in a git config.
 fn git_config_has_login(abs: &Path) -> bool {
-    let Some(text) = read_small_text(abs) else { return false };
+    read_small_text(abs).is_some_and(|t| git_config_text_has_login(&t))
+}
+
+fn git_config_text_has_login(text: &str) -> bool {
     text.lines().any(|l| {
         let l = l.trim();
         let Some((k, v)) = l.split_once('=') else { return false };
@@ -149,6 +172,10 @@ fn sensitive_key(k: &str) -> bool {
 /// non-reference lines, makes it a secret. Unreadable = secret.
 fn env_k2_secret(abs: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(abs) else { return true };
+    env_k2_text_secret(&text)
+}
+
+fn env_k2_text_secret(text: &str) -> bool {
     let literal_sensitive = text.lines().any(|l| {
         let l = l.trim().trim_start_matches("export ");
         if l.starts_with('#') {
@@ -179,11 +206,15 @@ fn read_small_text(abs: &Path) -> Option<String> {
     if !meta.is_file() || meta.len() > MAX_SCAN_BYTES {
         return None;
     }
-    let bytes = std::fs::read(abs).ok()?;
-    if bytes[..bytes.len().min(8192)].contains(&0u8) {
+    small_text(&std::fs::read(abs).ok()?)
+}
+
+/// `bytes` as text when they are small enough to scan and not binary.
+fn small_text(bytes: &[u8]) -> Option<String> {
+    if bytes.len() as u64 > MAX_SCAN_BYTES || bytes[..bytes.len().min(8192)].contains(&0u8) {
         return None;
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// The content scan over one file (text, ≤ [`MAX_SCAN_BYTES`]). Binary,
@@ -394,5 +425,35 @@ mod tests {
         assert!(content_has_credential_str("API_KEY = abc"));
         assert!(!content_has_credential_str("the password field is required"));
         assert!(!content_has_credential_str("eyJshort"));
+    }
+
+    /// `classify_bytes` answers as `classify` does, over bytes in hand.
+    #[test]
+    fn classify_bytes_matches_classify() {
+        let dir = std::env::temp_dir().join(format!("k2-secret-bytes-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases: &[(&str, &[u8], Option<SecretHit>)] = &[
+            (".env", b"A=1\n", Some(SecretHit::Path)),
+            ("sub/.ssh/known", b"x\n", Some(SecretHit::Path)),
+            ("server.pem", b"x\n", Some(SecretHit::Path)),
+            ("notes.txt", b"nothing to see\n", None),
+            ("notes.txt", b"password = hunter2hunter2\n", Some(SecretHit::Content)),
+            ("key.txt", b"-----BEGIN RSA PRIVATE KEY-----\n", Some(SecretHit::Content)),
+            ("photo.bin", b"\0password = hunter2hunter2\n", None),
+            (".env.k2", b"API_KEY=k2v://vault/x\n", None),
+            (".env.k2", b"API_KEY=literal\n", Some(SecretHit::Content)),
+            (".env.k2", b"\xff\xfe", Some(SecretHit::Content)),
+            ("repo/.git/config", b"[remote]\n url = https://me:tok@host/x\n", Some(SecretHit::Content)),
+            ("repo/.git/config", b"[remote]\n url = https://host/x\n", None),
+        ];
+        for (rel, bytes, want) in cases {
+            let abs = dir.join("f");
+            std::fs::write(&abs, bytes).unwrap();
+            assert_eq!(classify_bytes(rel, bytes), *want, "bytes: {rel} {bytes:?}");
+            assert_eq!(classify(rel, &abs), *want, "path: {rel} {bytes:?}");
+        }
+        let big = vec![b'a'; MAX_SCAN_BYTES as usize + 1];
+        assert_eq!(classify_bytes("big.txt", &big), None, "past the scan limit, as classify");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

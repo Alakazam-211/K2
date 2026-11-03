@@ -640,103 +640,158 @@ fn content_type_for(filename: &str) -> String {
     ct.to_string()
 }
 
-/// Resolve each spec workspace-relative (the read-side mirror of the
-/// `--out` guard — rejects absolute/`..`/symlink escapes), enforce the
-/// per-file + total size caps (checking metadata BEFORE reading the
-/// bytes), and read them into [`external_smtp::OutAttachment`]s. The
-/// filename is the basename; the content-type is derived from it. Bytes
-/// are never logged. Any resolve/read/cap failure names the path and
-/// aborts the whole send (nothing is submitted).
+/// A filename that is safe to show an approver and to put in a message: the
+/// last path segment, with control and invisible formatting characters (line
+/// breaks, bidi overrides that make `gpj.exe` read as `exe.jpg`) replaced, at
+/// most 200 characters. Workspace files and a forwarded message's attachment
+/// names both come through here. Never empty.
+pub(crate) fn safe_attachment_name(raw: &str) -> String {
+    let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = last
+        .chars()
+        .map(|c| if c.is_control() || send::is_spoofy_format_char(c) { '_' } else { c })
+        .take(200)
+        .collect();
+    let clean = clean.trim();
+    if clean.is_empty() || clean == "." || clean == ".." {
+        "attachment".to_string()
+    } else {
+        clean.to_string()
+    }
+}
+
+fn mib(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+/// The one size refusal (workspace files and forwards).
+pub(crate) fn attachment_too_large(what: &str, bytes: u64, per: &str) -> CliResponse {
+    error_response(
+        "400 Bad Request",
+        "attachment_too_large",
+        &format!(
+            "{what} is too large ({}) — the limit is 25 MiB {per}. Send a link to the file instead",
+            mib(bytes)
+        ),
+    )
+}
+
+/// Why a workspace path may not leave in an email, whatever its content: K2's
+/// private folder (`.k2/`, and the old `.k2so/`, at any depth: notes, vault,
+/// tokens), or a secret by its path ([`k2_core::secret_paths`]: `.env*`,
+/// `.ssh/`, `.auth/`, keys and token files).
+fn attachment_path_refusal(rel: &str) -> Option<&'static str> {
+    let in_k2 = rel
+        .split(['/', '\\'])
+        .any(|p| p.eq_ignore_ascii_case(".k2") || p.eq_ignore_ascii_case(".k2so"));
+    if in_k2 {
+        return Some("it is in K2's private .k2 folder. Copy what you mean to send out of .k2/ first");
+    }
+    if k2_core::secret_paths::is_secret_rel(rel) {
+        return Some("it looks like a secret. Secrets travel through the vault (k2 vault), not email");
+    }
+    None
+}
+
+fn attachment_refused(spec: &str, why: &str) -> CliResponse {
+    error_response(
+        "400 Bad Request",
+        "attachment_secret",
+        &format!("attachment '{spec}' can't be sent: {why}"),
+    )
+}
+
+/// Read one workspace file for mail. The ONE reader for every mail attachment
+/// (send, reply and draft, hosted and linked). Resolves workspace-relative
+/// ([`messages::resolve_in_path`]: no absolute path, no `..`, no symlink out),
+/// refuses private and secret paths ([`attachment_path_refusal`], on the path
+/// as written AND as resolved, so a link can't rename its way past it), then
+/// opens the resolved path with no symlink at any step and works from that one
+/// handle: its size, its bytes and the content scan all see the same file, so
+/// a path swapped after the checks can't change what is read. `budget` is what
+/// the message's total still allows.
+fn read_one_attachment(
+    ws_root: &str,
+    spec: &str,
+    budget: u64,
+) -> Result<external_smtp::OutAttachment, CliResponse> {
+    let path = match messages::resolve_in_path(ws_root, spec) {
+        Ok(p) => p,
+        Err(messages::InPathError::Usage(hint)) => {
+            return Err(error_response("400 Bad Request", "usage", &hint))
+        }
+        Err(messages::InPathError::NotFound(p)) => {
+            return Err(error_response(
+                "404 Not Found",
+                "not_found",
+                &format!("attachment file not found in this workspace: {p}"),
+            ))
+        }
+    };
+    let unreadable = |e: &dyn std::fmt::Display| {
+        error_response("400 Bad Request", "usage", &format!("cannot read attachment '{spec}': {e}"))
+    };
+    let root = dunce::canonicalize(ws_root).map_err(|e| unreadable(&e))?;
+    let rel_path = path.strip_prefix(&root).map_err(|e| unreadable(&e))?;
+    let rel = rel_path.to_string_lossy().replace('\\', "/");
+    if let Some(why) = attachment_path_refusal(spec).or_else(|| attachment_path_refusal(&rel)) {
+        return Err(attachment_refused(spec, why));
+    }
+    let parts: Vec<String> = rel_path.iter().map(|c| c.to_string_lossy().into_owned()).collect();
+    let mut file = crate::apps::data_files::open_nofollow(&root, &parts).map_err(|e| unreadable(&e))?;
+    let meta = file.metadata().map_err(|e| unreadable(&e))?;
+    if !meta.is_file() {
+        return Err(error_response(
+            "400 Bad Request",
+            "usage",
+            &format!("attachment '{spec}' is not a regular file"),
+        ));
+    }
+    let size = meta.len();
+    if size > MAX_ATTACHMENT_BYTES {
+        return Err(attachment_too_large(&format!("attachment '{spec}'"), size, "per file"));
+    }
+    if size > budget {
+        return Err(attachment_too_large(
+            "these attachments together",
+            MAX_ATTACHMENTS_TOTAL_BYTES - budget + size,
+            "in total",
+        ));
+    }
+    // Bounded: a file growing after the size check still can't pass the cap.
+    let mut bytes = Vec::with_capacity(size as usize);
+    std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, budget + 1), &mut bytes)
+        .map_err(|e| unreadable(&e))?;
+    if bytes.len() as u64 > budget {
+        return Err(attachment_too_large(&format!("attachment '{spec}'"), bytes.len() as u64, "in total"));
+    }
+    if k2_core::secret_paths::classify_bytes(&rel, &bytes).is_some() {
+        return Err(attachment_refused(
+            spec,
+            "it looks like a secret (its content holds a credential). Secrets travel through the \
+             vault (k2 vault), not email",
+        ));
+    }
+    let filename = safe_attachment_name(path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
+    let content_type = content_type_for(&filename);
+    Ok(external_smtp::OutAttachment { filename, content_type, bytes })
+}
+
+/// Read every requested file ([`read_one_attachment`]) under the per-message
+/// total. Any failure names the path and aborts the whole send (nothing is
+/// audited, queued or submitted). Bytes are never logged.
 pub(crate) fn read_workspace_attachments(
     ws_root: &str,
     specs: &[String],
 ) -> Result<Vec<external_smtp::OutAttachment>, CliResponse> {
     let mut out = Vec::with_capacity(specs.len());
-    let mut total: u64 = 0;
+    let mut left = MAX_ATTACHMENTS_TOTAL_BYTES;
     for spec in specs {
-        let path = match messages::resolve_in_path(ws_root, spec) {
-            Ok(p) => p,
-            Err(messages::InPathError::Usage(hint)) => {
-                return Err(error_response("400 Bad Request", "usage", &hint))
-            }
-            Err(messages::InPathError::NotFound(p)) => {
-                return Err(error_response(
-                    "404 Not Found",
-                    "not_found",
-                    &format!("attachment file not found in this workspace: {p}"),
-                ))
-            }
-        };
-        let meta = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(error_response(
-                    "400 Bad Request",
-                    "usage",
-                    &format!("cannot read attachment '{spec}': {e}"),
-                ))
-            }
-        };
-        if !meta.is_file() {
-            return Err(error_response(
-                "400 Bad Request",
-                "usage",
-                &format!("attachment '{spec}' is not a regular file"),
-            ));
-        }
-        let size = meta.len();
-        if size > MAX_ATTACHMENT_BYTES {
-            return Err(error_response(
-                "400 Bad Request",
-                "usage",
-                &format!(
-                    "attachment '{spec}' is too large ({size} bytes) — max {} bytes per file",
-                    MAX_ATTACHMENT_BYTES
-                ),
-            ));
-        }
-        total = total.saturating_add(size);
-        if total > MAX_ATTACHMENTS_TOTAL_BYTES {
-            return Err(error_response(
-                "400 Bad Request",
-                "usage",
-                &format!(
-                    "attachments total too large ({total} bytes) — max {} bytes across all files",
-                    MAX_ATTACHMENTS_TOTAL_BYTES
-                ),
-            ));
-        }
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(error_response(
-                    "400 Bad Request",
-                    "usage",
-                    &format!("cannot read attachment '{spec}': {e}"),
-                ))
-            }
-        };
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "attachment".to_string());
-        let content_type = content_type_for(&filename);
-        out.push(external_smtp::OutAttachment { filename, content_type, bytes });
+        let a = read_one_attachment(ws_root, spec, left)?;
+        left -= a.bytes.len() as u64;
+        out.push(a);
     }
     Ok(out)
-}
-
-/// The stable refusal when a HOSTED (K2 mailbox) send carries
-/// attachments — the linked SMTP path is fully built, the hosted JMAP
-/// blob-upload path is a documented follow-up (§17.5).
-fn hosted_attachments_unsupported() -> CliResponse {
-    error_response(
-        "400 Bad Request",
-        "usage",
-        "attachments aren't supported yet when sending from a hosted K2 mailbox — send from a \
-         linked inbox (see 'k2 mail access'), or include a link in the body",
-    )
 }
 
 // ── POST /cli/mail/send ─────────────────────────────────────────────────
@@ -951,10 +1006,8 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         }
         // ── HOSTED: the existing governed Stalwart path ──
         Source::Hosted => {
-            // Hosted attachments are a documented follow-up (JMAP blob
-            // upload) — refuse cleanly rather than silently drop them.
-            if !attach_specs.is_empty() {
-                return hosted_attachments_unsupported();
+            if let Err(e) = send::check_hosted_text_size(subject, body_text) {
+                return send_error_response(e);
             }
             let Some(account_id) = from_inbox.account_id.clone() else {
                 return error_response(
@@ -988,6 +1041,13 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             ) {
                 Ok(t) => t,
                 Err(e) => return send_error_response(e),
+            };
+            // The files, only now that the send is allowed (a workspace with
+            // sending off never has one read), carried on the message itself
+            // so the approval queue and a schedule hold exactly these bytes.
+            msg.attachments = match read_workspace_attachments(&path, &attach_specs) {
+                Ok(a) => a.iter().map(send::StoredAttachment::from_out).collect(),
+                Err(resp) => return resp,
             };
             dispatch_and_respond(
                 &project_id,
@@ -1225,11 +1285,6 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         }
         // ── HOSTED: the existing governed reply path ──
         Source::Hosted => {
-            // Hosted attachments are a documented follow-up (JMAP blob
-            // upload) — refuse cleanly rather than silently drop them.
-            if !attach_specs.is_empty() {
-                return hosted_attachments_unsupported();
-            }
             let from_address = from_inbox.address.clone();
             let Some(account_id) = from_inbox.account_id.clone() else {
                 return masked();
@@ -1242,6 +1297,16 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             if gate == Gate::Off {
                 return send_error_response(SendError::Gated(send::agent_send_off_hint()));
             }
+            if let Err(e) = send::check_hosted_text_size("", body_text) {
+                return send_error_response(e);
+            }
+            // The files first: a refused file must not use up the thread's
+            // reply budget below, and needs no engine dial.
+            let attachments: Vec<send::StoredAttachment> =
+                match read_workspace_attachments(&path, &attach_specs) {
+                    Ok(a) => a.iter().map(send::StoredAttachment::from_out).collect(),
+                    Err(resp) => return resp,
+                };
             // Fetch the original's reply context (sender, threading
             // headers, auth verdicts) from its backend.
             let (client, hostname) = match domains::engine_from_db() {
@@ -1291,7 +1356,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     ctx.message_id.as_deref(),
                 ),
                 reply_source: None,
-                attachments: Vec::new(),
+                attachments,
                 ephemeral: false,
                 notify: None,
             };
@@ -1465,6 +1530,13 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             let preview: Option<String> =
                 stored.as_ref().map(|m| send::hide_links(&m.text_body).chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
+            // Every file that would leave, with its size. `k2 hostmail approvals
+            // show` opens it (GET /cli/mail/approvals/show).
+            if let Some(m) = stored.as_ref().filter(|m| !m.attachments.is_empty()) {
+                v["files"] = serde_json::Value::Array(
+                    m.attachments.iter().enumerate().map(|(i, f)| f.view_json(i + 1)).collect(),
+                );
+            }
             // The From display name the recipient will see (agent name
             // or the agent's --from-name) — the approver sees it first.
             v["fromName"] = serde_json::json!(stored.as_ref().and_then(|m| m.from_name.clone()));
@@ -1478,6 +1550,81 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
         "count": list.len(),
         "pending": list,
     }))
+}
+
+/// One waiting message as the approver decides it: the whole text (the list
+/// carries 280 characters) and the files; with `file=<n>` (1-based, as the
+/// list numbers them) that file's bytes, base64. Read-only; same gate as the
+/// list (Admin route, mail-manage surface), and a mail-manage agent can't open
+/// a held App email here, as it can't see one in the list.
+pub fn handle_approvals_show(params: &HashMap<String, String>) -> CliResponse {
+    let Some(id) = params.get("id").map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'id' — an outbound id from the approvals list (out_…)",
+        );
+    };
+    let file_n: Option<usize> = match params.get("file").map(|v| v.parse::<usize>()) {
+        None => None,
+        Some(Ok(n)) if n >= 1 => Some(n),
+        _ => {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "invalid 'file' — the file number from the approvals list (1, 2, …)",
+            )
+        }
+    };
+    send::auto_deny_expired(now_secs());
+    let store = DbOutboundStore::default();
+    let masked = || error_response("404 Not Found", "not_found", &format!("no outbound message '{id}'"));
+    let row = match store.load(id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return masked(),
+        Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
+    };
+    if row.status != "pending" {
+        return send_error_response(SendError::Conflict(format!(
+            "outbound '{id}' is {} — only a message waiting for approval can be opened here",
+            send::wire_status(&row.status)
+        )));
+    }
+    let msg = match store.load_message(id) {
+        Ok(m) => m,
+        Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
+    };
+    let agent = crate::mail::agent_creds::mail_caller().is_agent();
+    if agent && (crate::email_notify::send::is_sender_address(&row.from_address) || msg.notify.is_some()) {
+        return masked();
+    }
+    if let Some(n) = file_n {
+        let Some(f) = msg.attachments.get(n - 1) else {
+            return error_response(
+                "404 Not Found",
+                "not_found",
+                &format!("outbound '{id}' has no file {n} ({} attached)", msg.attachments.len()),
+            );
+        };
+        return ok_json(serde_json::json!({
+            "ok": true,
+            "id": id,
+            "n": n,
+            "name": f.filename,
+            "size": f.size(),
+            "contentType": f.content_type,
+            "dataBase64": f.data_b64,
+        }));
+    }
+    let mut v = send::outbound_json(&row);
+    v["fromName"] = serde_json::json!(msg.from_name);
+    v["text"] = serde_json::json!(send::hide_links(&msg.text_body));
+    v["files"] = serde_json::Value::Array(
+        msg.attachments.iter().enumerate().map(|(i, f)| f.view_json(i + 1)).collect(),
+    );
+    v["workspace"] = serde_json::json!(project_name(&row.owner_project_id));
+    v["expiresAt"] = serde_json::json!(row.created_at + send::APPROVAL_EXPIRE_SECS);
+    ok_json(serde_json::json!({ "ok": true, "message": v }))
 }
 
 /// Workspace display name for the Approvals queue rows.
@@ -3717,5 +3864,439 @@ mod tests {
         ) -> Result<Option<(String, String)>, crate::mail::submit::SubmitError> {
             self.0.reply_preview(src)
         }
+    }
+
+    // ── hosted attachments through the real handlers ──
+
+    fn seed_files_sender(label: &str, mode: &str) -> (String, String, String) {
+        let (path, project_id, domain) = seed_approval_sender(label);
+        std::fs::create_dir_all(&path).expect("workspace folder");
+        set_gating(&path, mode);
+        (path, project_id, domain)
+    }
+
+    fn done(path: &str, project_id: &str, domain: &str) {
+        cleanup(project_id, Some(domain));
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[derive(Default)]
+    struct KeepSubmit {
+        seen: std::sync::Mutex<Vec<OutboundMessage>>,
+    }
+
+    impl SubmitBackend for KeepSubmit {
+        fn submit(&self, _account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
+            self.seen.lock().unwrap().push(msg.clone());
+            Ok(())
+        }
+    }
+
+    fn decoded(f: &send::StoredAttachment) -> Vec<u8> {
+        f.to_out().expect("stored file decodes").bytes
+    }
+
+    /// Off: refused before a file is read, nothing recorded.
+    #[test]
+    fn attach_gated_off_exits_3_and_reads_nothing() {
+        let (path, project_id, domain) = seed_files_sender("attoff", "off");
+        // The path doesn't exist: reading it first would answer 404.
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["ghost.bin"] })));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "gated");
+        assert_eq!(outbound_count(&project_id), 0);
+        done(&path, &project_id, &domain);
+    }
+
+    /// Approval: the file is captured when queued. The approver sees its name
+    /// and size and can open the bytes; changing or deleting the workspace
+    /// file changes nothing; what leaves is what was captured; afterwards the
+    /// body file holds no bytes and the outbox keeps the name.
+    #[test]
+    fn attach_under_approval_sends_the_captured_bytes_whatever_happens_to_the_file() {
+        let (path, project_id, domain) = seed_files_sender("attappr", "approval");
+        let file = std::path::Path::new(&path).join("report.pdf");
+        std::fs::write(&file, b"the bytes the approver sees").unwrap();
+
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["report.pdf"] })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+
+        // The swap the approver must not be fooled by.
+        std::fs::write(&file, b"swapped after queueing, must not leave").unwrap();
+
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["files"][0]["name"], "report.pdf", "{ours}");
+        assert_eq!(ours["files"][0]["size"], 27, "{ours}");
+        assert_eq!(ours["attachments"]["names"], serde_json::json!(["report.pdf"]), "{ours}");
+
+        let shown = body_json(&handle_approvals_show(&params(&[("id", &id)])));
+        assert_eq!(shown["message"]["text"], "All green.", "{shown}");
+        assert_eq!(shown["message"]["files"][0]["size"], 27, "{shown}");
+        let one = handle_approvals_show(&params(&[("id", &id), ("file", "1")]));
+        assert_eq!(one.status, "200 OK", "{}", one.body);
+        use base64::Engine as _;
+        let got = base64::engine::general_purpose::STANDARD
+            .decode(body_json(&one)["dataBase64"].as_str().expect("data"))
+            .expect("base64");
+        assert_eq!(got, b"the bytes the approver sees");
+        let none = handle_approvals_show(&params(&[("id", &id), ("file", "2")]));
+        assert_eq!(none.status, "404 Not Found", "{}", none.body);
+
+        let store = DbOutboundStore::default();
+        let rec = KeepSubmit::default();
+        let mut acct = |_from: &str| Ok("acc-1".to_string());
+        let out = send::approve_and_submit(&store, Ok(&rec), &mut acct, &id, "owner", None, now_secs()).expect("approve");
+        assert_eq!(out, send::ApproveOutcome::Submitted);
+        let seen = rec.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(decoded(&seen[0].attachments[0]), b"the bytes the approver sees", "not the swapped file");
+        drop(seen);
+
+        assert!(store.load_message(&id).unwrap().attachments.is_empty(), "no bytes once decided");
+        let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(outbox["outbound"]["attachments"]["names"], serde_json::json!(["report.pdf"]), "{outbox}");
+        // Decided: it can't be opened here any more.
+        let late = handle_approvals_show(&params(&[("id", &id)]));
+        assert_eq!(late.status, "409 Conflict", "{}", late.body);
+        done(&path, &project_id, &domain);
+    }
+
+    /// Denied: the note goes back, the bytes go away.
+    #[test]
+    fn attach_denied_keeps_no_bytes() {
+        let (path, project_id, domain) = seed_files_sender("attdeny", "approval");
+        std::fs::write(std::path::Path::new(&path).join("a.bin"), [1u8, 2, 3]).unwrap();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["a.bin"] })));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        assert_eq!(store.load_message(&id).unwrap().attachments.len(), 1);
+        send::deny(&store, &id, "owner", "no", now_secs()).expect("deny");
+        assert!(store.load_message(&id).unwrap().attachments.is_empty());
+        done(&path, &project_id, &domain);
+    }
+
+    /// On, through the handler: a good file gets as far as the engine (no
+    /// server here: 503, no row), a refused one never does. The On round trip
+    /// itself is `send::tests::on_mode_uploads_the_files_and_keeps_only_their_names`.
+    #[test]
+    fn attach_on_mode_reads_the_file_then_needs_the_engine() {
+        let _mail = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (path, project_id, domain) = seed_files_sender("atton", "on");
+        std::fs::write(std::path::Path::new(&path).join("a.bin"), [1u8]).unwrap();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["a.bin"] })));
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["../a.bin"] })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        done(&path, &project_id, &domain);
+    }
+
+    /// Point the singleton `mail_server` row at the fake engine. The caller
+    /// holds the env guard, then the mail lock, then a `MailServerRowCleanup`.
+    fn seed_fake_engine(fake: &crate::mail::fake_jmap::FakeJmap) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        conn.execute(
+            "INSERT INTO mail_server (id, status, pinned_version, api_url, api_key_ref, updated_at) \
+             VALUES (1, 'running', '0.16.25', ?1, 'env:K2_TEST_MAIL_API_KEY', 1)",
+            rusqlite::params![format!("http://127.0.0.1:{}", fake.port)],
+        )
+        .expect("mail_server");
+    }
+
+    /// A stored message as the reply path reads it.
+    fn reply_source(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "threadId": format!("t-{id}"),
+            "from": [{ "name": "Customer", "email": "cust@dest.example" }],
+            "subject": "Quote",
+            "header:Message-ID:asText": format!("<{id}@dest.example>"),
+            "header:References:asText": null,
+            "header:Authentication-Results:asText:all": [],
+        })
+    }
+
+    /// On, all the way through the handler against the fake engine: the file
+    /// reaches the engine, no bytes stay, and the outbox keeps the name.
+    #[test]
+    fn attach_on_mode_goes_all_the_way_through_the_handler() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        seed_fake_engine(&fake);
+        let (path, project_id, domain) = seed_files_sender("attfull", "on");
+        std::fs::write(std::path::Path::new(&path).join("report.pdf"), b"pdf bytes").unwrap();
+
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["report.pdf"] })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["status"], "submitted", "{v}");
+        let id = v["id"].as_str().expect("id").to_string();
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.uploads, vec![b"pdf bytes".to_vec()]);
+        assert_eq!(st.created[0]["attachments"][0]["name"], "report.pdf", "{}", st.created[0]);
+        assert_eq!(st.created[0]["from"][0]["email"], format!("bot@{domain}"), "{}", st.created[0]);
+        drop(st);
+        let store = DbOutboundStore::default();
+        assert!(store.load_message(&id).unwrap().attachments.is_empty(), "no bytes at rest");
+        let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(outbox["outbound"]["attachments"]["names"], serde_json::json!(["report.pdf"]), "{outbox}");
+        done(&path, &project_id, &domain);
+    }
+
+    /// A hosted reply with a file, approval then on, against the fake engine:
+    /// the recipient stays locked to the original sender and the file leaves.
+    #[test]
+    fn a_hosted_reply_carries_its_file_under_approval_and_on() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        seed_fake_engine(&fake);
+        {
+            let mut st = fake.state.lock().unwrap();
+            st.emails.insert("M1".to_string(), reply_source("M1"));
+            st.emails.insert("M2".to_string(), reply_source("M2"));
+        }
+        let (path, project_id, domain) = seed_files_sender("attreply2", "approval");
+        let file = std::path::Path::new(&path).join("a.bin");
+        std::fs::write(&file, b"captured").unwrap();
+        let reply = |id: &str| {
+            handle_reply(
+                &serde_json::to_vec(&serde_json::json!({
+                    "project": path,
+                    "id": messages::encode_message_id(&format!("bot@{domain}"), id),
+                    "body": "thanks",
+                    "attachments": ["a.bin"],
+                }))
+                .unwrap(),
+            )
+        };
+
+        let resp = reply("M1");
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        std::fs::write(&file, b"swapped").unwrap();
+        let store = DbOutboundStore::default();
+        let stored = store.load_message(&id).unwrap();
+        assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "recipient locked");
+        assert_eq!(decoded(&stored.attachments[0]), b"captured");
+        assert!(fake.state.lock().unwrap().uploads.is_empty(), "nothing left before approval");
+        let client = fake.client();
+        let mut acct = |_: &str| Ok("acc-1".to_string());
+        send::approve_and_submit(&store, Ok(&client), &mut acct, &id, "owner", None, now_secs()).expect("approve");
+        assert_eq!(fake.state.lock().unwrap().uploads, vec![b"captured".to_vec()], "not the swapped file");
+
+        set_gating(&path, "on");
+        let resp = reply("M2");
+        assert_eq!(body_json(&resp)["status"], "submitted", "{}", resp.body);
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.uploads[1], b"swapped".to_vec(), "on mode reads the file as it is now");
+        assert_eq!(st.created[1]["to"], serde_json::json!([{ "email": "cust@dest.example" }]), "{}", st.created[1]);
+        assert_eq!(st.created[1]["attachments"][0]["name"], "a.bin", "{}", st.created[1]);
+        drop(st);
+        done(&path, &project_id, &domain);
+    }
+
+    /// Every path the shared reader refuses, through the hosted handler under
+    /// approval (the mode where a slip would be queued). Nothing is recorded.
+    #[cfg(unix)]
+    #[test]
+    fn attach_refusals_record_nothing() {
+        use std::os::unix::fs::symlink;
+        let (path, project_id, domain) = seed_files_sender("attrefuse", "approval");
+        let ws = std::path::Path::new(&path);
+        let outside = std::env::temp_dir().join(format!("mail-att-outside-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("private.txt"), b"outside the workspace").unwrap();
+        symlink(outside.join("private.txt"), ws.join("link-out.txt")).unwrap();
+        symlink(&outside, ws.join("dir-out")).unwrap();
+        for (rel, bytes) in [
+            (".k2/wiki/note.md", &b"note"[..]),
+            ("sub/.k2/x.md", b"note"),
+            (".k2so/old.md", b"note"),
+            (".env", b"A=1"),
+            ("cfg/.env.local", b"A=1"),
+            (".ssh/config", b"Host x"),
+            (".auth/session", b"x"),
+            ("id_ed25519", b"x"),
+            ("server.pem", b"x"),
+            ("cred.txt", b"password = hunter2hunter2\n"),
+            ("ok.txt", b"fine"),
+        ] {
+            let p = ws.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        }
+        // A link INSIDE the workspace that dresses up a private file.
+        symlink(ws.join(".k2/wiki/note.md"), ws.join("innocent.md")).unwrap();
+        symlink(ws.join("server.pem"), ws.join("innocent2.txt")).unwrap();
+        std::fs::create_dir_all(ws.join("real")).unwrap();
+        symlink(ws.join("real"), ws.join(".ssh-link")).unwrap();
+        let abs = ws.join("ok.txt").to_string_lossy().into_owned();
+        for (spec, status, code) in [
+            ("../escape.bin", "400 Bad Request", "usage"),
+            ("a/../../b", "400 Bad Request", "usage"),
+            (abs.as_str(), "400 Bad Request", "usage"),
+            ("link-out.txt", "400 Bad Request", "usage"),
+            ("dir-out/private.txt", "400 Bad Request", "usage"),
+            ("missing.txt", "404 Not Found", "not_found"),
+            ("sub", "400 Bad Request", "usage"),
+            (".k2/wiki/note.md", "400 Bad Request", "attachment_secret"),
+            ("sub/.k2/x.md", "400 Bad Request", "attachment_secret"),
+            (".k2so/old.md", "400 Bad Request", "attachment_secret"),
+            (".env", "400 Bad Request", "attachment_secret"),
+            ("cfg/.env.local", "400 Bad Request", "attachment_secret"),
+            (".ssh/config", "400 Bad Request", "attachment_secret"),
+            (".auth/session", "400 Bad Request", "attachment_secret"),
+            ("id_ed25519", "400 Bad Request", "attachment_secret"),
+            ("server.pem", "400 Bad Request", "attachment_secret"),
+            ("cred.txt", "400 Bad Request", "attachment_secret"),
+            ("innocent.md", "400 Bad Request", "attachment_secret"),
+            ("innocent2.txt", "400 Bad Request", "attachment_secret"),
+        ] {
+            let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["ok.txt", spec] })));
+            assert_eq!(resp.status, status, "{spec}: {}", resp.body);
+            assert_eq!(body_json(&resp)["error"]["code"], code, "{spec}: {}", resp.body);
+        }
+        assert_eq!(outbound_count(&project_id), 0, "every refusal refuses the whole send");
+        let _ = std::fs::remove_dir_all(&outside);
+        done(&path, &project_id, &domain);
+    }
+
+    /// The same refusals hold for a LINKED sender and `k2 mail draft`: there
+    /// is one reader.
+    #[test]
+    fn the_reader_every_sender_shares_refuses_secrets() {
+        let root = std::env::temp_dir().join(format!("mail-att-shared-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join(".k2")).unwrap();
+        std::fs::write(root.join(".k2/x.md"), b"x").unwrap();
+        std::fs::write(root.join(".env"), b"A=1").unwrap();
+        let root_s = root.to_string_lossy().into_owned();
+        for spec in [".k2/x.md", ".env"] {
+            let resp = read_workspace_attachments(&root_s, &[spec.to_string()]).err().expect("refused");
+            assert_eq!(body_json(&resp)["error"]["code"], "attachment_secret", "{spec}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attach_over_the_limits_is_refused_with_one_clear_line() {
+        let (path, project_id, domain) = seed_files_sender("attbig", "approval");
+        let ws = std::path::Path::new(&path);
+        let write_sparse = |name: &str, len: u64| {
+            let f = std::fs::File::create(ws.join(name)).unwrap();
+            f.set_len(len).unwrap();
+        };
+        write_sparse("huge.bin", MAX_ATTACHMENT_BYTES + 1);
+        write_sparse("half-a.bin", MAX_ATTACHMENT_BYTES / 2 + 1);
+        write_sparse("half-b.bin", MAX_ATTACHMENT_BYTES / 2 + 1);
+        write_sparse("exact.bin", MAX_ATTACHMENT_BYTES);
+
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["huge.bin"] })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "attachment_too_large", "{v}");
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("huge.bin") && hint.contains("25 MiB per file"), "{hint}");
+
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["half-a.bin", "half-b.bin"] })));
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "attachment_too_large", "{v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("in total"), "{v}");
+
+        let many: Vec<String> = (0..11).map(|i| format!("f{i}")).collect();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": many })));
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("too many attachments"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+
+        // Exactly the limit is fine.
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["exact.bin"] })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        assert_eq!(store.load_message(&id).unwrap().attachments[0].size(), MAX_ATTACHMENT_BYTES);
+        send::deny(&store, &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    #[test]
+    fn hosted_send_refuses_text_the_engine_could_not_take() {
+        let (path, project_id, domain) = seed_files_sender("attlong", "approval");
+        let long = "y".repeat(send::MAX_HOSTED_TEXT_JSON_BYTES + 1);
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "body": long })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("too large"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        done(&path, &project_id, &domain);
+    }
+
+    /// A hosted reply takes files now: a good one gets as far as the engine,
+    /// a refused one never does, and neither uses the thread's reply budget.
+    #[test]
+    fn hosted_reply_takes_attachments_under_the_same_refusals() {
+        let _mail = crate::mail::mail_server_test_lock();
+        clear_mail_server();
+        let (path, project_id, domain) = seed_files_sender("attreply", "approval");
+        std::fs::write(std::path::Path::new(&path).join("a.bin"), [1u8]).unwrap();
+        std::fs::write(std::path::Path::new(&path).join(".env"), b"A=1").unwrap();
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let reply = |attachments: serde_json::Value| {
+            handle_reply(
+                &serde_json::to_vec(&serde_json::json!({
+                    "project": path, "id": token, "body": "thanks", "attachments": attachments,
+                }))
+                .unwrap(),
+            )
+        };
+        let resp = reply(serde_json::json!([".env"]));
+        assert_eq!(body_json(&resp)["error"]["code"], "attachment_secret", "{}", resp.body);
+        let resp = reply(serde_json::json!(["a.bin"]));
+        assert_eq!(resp.status, "503 Service Unavailable", "the next step is the engine: {}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        done(&path, &project_id, &domain);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_workspace_sends_its_target_under_the_target_name() {
+        let root = std::env::temp_dir().join(format!("mail-att-link-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("real.txt"), b"real").unwrap();
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("alias.txt")).unwrap();
+        let root_s = root.to_string_lossy().into_owned();
+        let atts = match read_workspace_attachments(&root_s, &["alias.txt".to_string()]) {
+            Ok(a) => a,
+            Err(resp) => panic!("expected it to read: {}", resp.body),
+        };
+        assert_eq!(atts[0].filename, "real.txt");
+        assert_eq!(atts[0].bytes, b"real");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_names_are_safe_to_show_and_send() {
+        for (raw, want) in [
+            ("report.pdf", "report.pdf"),
+            ("a/b/c.txt", "c.txt"),
+            ("..\\..\\win.exe", "win.exe"),
+            ("a\r\nX-Evil: 1.txt", "a__X-Evil: 1.txt"),
+            ("inv\u{202E}gpj.exe", "inv_gpj.exe"),
+            ("Zoë résumé.pdf", "Zoë résumé.pdf"),
+            ("", "attachment"),
+            ("  ", "attachment"),
+            ("..", "attachment"),
+            ("a/", "attachment"),
+        ] {
+            assert_eq!(safe_attachment_name(raw), want, "{raw:?}");
+        }
+        assert_eq!(safe_attachment_name(&"x".repeat(500)).chars().count(), 200);
     }
 }

@@ -307,7 +307,7 @@ fn lwalk(root: &Path, parts: &[String]) -> R<(PathBuf, Option<std::fs::Metadata>
 /// Open `root/parts` for reading with no symlink at any step: `openat`
 /// from the data folder down, `O_NOFOLLOW` each time.
 #[cfg(unix)]
-fn open_nofollow(root: &Path, parts: &[String]) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_nofollow(root: &Path, parts: &[String]) -> std::io::Result<std::fs::File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::OpenOptionsExt;
@@ -332,7 +332,7 @@ fn open_nofollow(root: &Path, parts: &[String]) -> std::io::Result<std::fs::File
 }
 
 #[cfg(not(unix))]
-fn open_nofollow(root: &Path, parts: &[String]) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_nofollow(root: &Path, parts: &[String]) -> std::io::Result<std::fs::File> {
     let mut p = root.to_path_buf();
     for c in parts {
         p.push(c);

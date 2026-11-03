@@ -164,8 +164,17 @@ export interface OutboundItem {
  *  rides ONLY as this bounded plain-text preview (≤280 chars); it is
  *  never HTML and never auto-rendered (§8.4 / pre-mortem: bodies are
  *  untrusted external content). */
+export interface ApprovalFile {
+  n: number
+  name: string
+  size: number
+  contentType: string
+}
+
 export interface ApprovalItem extends OutboundItem {
   bodyPreview: string | null
+  /** Every file that would leave. Absent on older daemons and when none. */
+  files?: ApprovalFile[]
   workspace: string | null
   expiresAt: number
 }
@@ -298,6 +307,20 @@ export interface RotatedMailboxPassword {
 /** Rotate IMAP+SMTP (one secret). Shown once; does not persist. */
 export async function rotateAddressPassword(address: string): Promise<RotatedMailboxPassword> {
   return daemonCliPost(primaryScope(), 'mail/address/password', { address })
+}
+
+/** The whole text of a waiting message (the list carries 280 characters). */
+export async function fetchApprovalText(id: string): Promise<string> {
+  const res = await daemonCliGet<{ ok: boolean; message: { text: string } }>(primaryScope(), 'mail/approvals/show', { id })
+  return res.message.text
+}
+
+/** One waiting file's bytes, as a Blob to save. Never rendered. */
+export async function fetchApprovalFile(id: string, n: number): Promise<Blob> {
+  const res = await daemonCliGet<{ ok: boolean; dataBase64: string }>(primaryScope(), 'mail/approvals/show', { id, file: String(n) })
+  const bin = atob(res.dataBase64)
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0))
+  return new Blob([bytes], { type: 'application/octet-stream' })
 }
 
 export async function fetchApprovals(): Promise<ApprovalItem[]> {

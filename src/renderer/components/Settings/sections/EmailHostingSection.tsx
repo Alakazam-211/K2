@@ -50,7 +50,10 @@ import {
   disableServer,
   enableServer,
   fetchAllAddresses,
+  type ApprovalFile,
+  fetchApprovalFile,
   fetchApprovals,
+  fetchApprovalText,
   fetchDoctor,
   fetchDomainDetail,
   fetchDomains,
@@ -108,6 +111,12 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.El
       {children}
     </h3>
   )
+}
+
+function fmtFileSize(n: number): string {
+  if (n < 1024) return `${n} bytes`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`
 }
 
 function fmtDate(unixSecs: number | null | undefined): string {
@@ -1403,6 +1412,28 @@ function ApprovalCard({
   const [denying, setDenying] = useState(false)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState<'approve' | 'deny' | null>(null)
+  const [fullText, setFullText] = useState<string | null>(null)
+
+  const loadFullText = async (): Promise<void> => {
+    try {
+      setFullText(await fetchApprovalText(item.id))
+    } catch (e) {
+      useToastStore.getState().addToast(mailErrorMessage(e), 'error')
+    }
+  }
+
+  const saveFile = async (file: ApprovalFile): Promise<void> => {
+    try {
+      const url = URL.createObjectURL(await fetchApprovalFile(item.id, file.n))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.name
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      useToastStore.getState().addToast(mailErrorMessage(e), 'error')
+    }
+  }
 
   const approve = async (): Promise<void> => {
     setBusy('approve')
@@ -1459,6 +1490,27 @@ function ApprovalCard({
         {item.workspace ? ` · ${item.workspace}` : ''} · expires {fmtDate(item.expiresAt)} (auto-deny)
       </p>
 
+      {(item.files?.length ?? 0) > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            Files that will leave, as they were when the agent sent this:
+          </p>
+          {item.files?.map((f) => (
+            <div key={f.n} className="flex items-center gap-2 min-w-0 text-[10px]">
+              <span className="font-mono truncate text-[var(--color-text-secondary)]" title={f.name}>{f.name}</span>
+              <span className="flex-shrink-0 text-[var(--color-text-muted)]">{fmtFileSize(f.size)}</span>
+              <button
+                type="button"
+                onClick={() => void saveFile(f)}
+                className="flex-shrink-0 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              >
+                Save a copy
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Body — NEVER auto-rendered; explicit expand, plain text only
           (untrusted external content, §8.1). */}
       <button
@@ -1474,13 +1526,16 @@ function ApprovalCard({
             Agent-composed content — plain-text preview
           </p>
           <pre className="text-[10px] font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto">
-            {item.bodyPreview ?? '(body preview unavailable)'}
+            {fullText ?? item.bodyPreview ?? '(body preview unavailable)'}
           </pre>
-          {item.bodyPreview !== null && item.bodyPreview.length >= 280 && (
-            <p className="text-[9px] text-[var(--color-text-muted)]">
-              Preview truncated at 280 characters — the full message is what gets sent on
-              approval.
-            </p>
+          {fullText === null && item.bodyPreview !== null && item.bodyPreview.length >= 280 && (
+            <button
+              type="button"
+              onClick={() => void loadFullText()}
+              className="text-[9px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+            >
+              Preview stops at 280 characters. Show the whole message
+            </button>
           )}
         </div>
       )}

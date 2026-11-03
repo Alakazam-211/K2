@@ -137,6 +137,7 @@ pub fn cancel_scheduled(
             "outbound '{id}' is no longer scheduled — it may have already flushed"
         )));
     }
+    send::scrub(store, id);
     Ok(())
 }
 
@@ -286,6 +287,7 @@ pub fn flush_one_scheduled(
     let fail = |store: &dyn OutboundStore, reason: &str| {
         let _ = store.transition(id, "approved", "failed", None, None, now);
         let _ = store.append_note(id, &format!("submit failed: {reason}"), now);
+        send::scrub(store, id);
         Ok(Some(FlushOutcome::Failed(reason.to_string())))
     };
     let backend = match backend {
@@ -301,6 +303,7 @@ pub fn flush_one_scheduled(
             if let Err(e) = store.transition(id, "approved", "sent", None, None, now) {
                 k2_core::log_debug!("[mail/send] sent-mark failed for {id}: {e}");
             }
+            send::scrub(store, id);
             Ok(Some(FlushOutcome::Sent))
         }
         Err(e) => fail(store, &e),

@@ -57,6 +57,12 @@ pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 /// Longest agent-chosen From display name (`k2 mail send --from-name`),
 /// in characters (Unicode scalar values, after trimming).
 pub const MAX_FROM_NAME_CHARS: usize = 128;
+/// The most text a HOSTED send can hand the mail server. The text rides the
+/// JSON of one JMAP request and Stalwart refuses a request over its
+/// `maxSizeRequest` (10,000,000 bytes, tests/mail/stalwart-attachments-probe.py
+/// A9), so this counts the JSON-escaped text and leaves room for the rest of
+/// the request. Attachments ride uploads and don't count.
+pub const MAX_HOSTED_TEXT_JSON_BYTES: usize = 9_500_000;
 /// §8.4 loop caps.
 pub const MAX_REPLY_REFERENCES: usize = 100;
 pub const MAX_THREAD_REPLIES_PER_HOUR: usize = 4;
@@ -209,10 +215,12 @@ pub struct OutboundMessage {
     /// replies (which carry their own threading headers above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_source: Option<String>,
-    /// MCS2, LINKED sends under approval: the attachment files, captured at
-    /// queue time (the workspace file may change before a human decides).
-    /// Stored base64 inside the 0600 body file, never in the DB, never
-    /// logged. Empty for hosted sends (hosted attachments aren't built).
+    /// The attachment files, captured when the message is composed: what an
+    /// approver sees is what leaves, whatever happens to the workspace file
+    /// afterwards. A HOSTED message always carries them here; a LINKED one
+    /// only while it waits for approval (MCS2). Stored base64 inside the 0600
+    /// body file, never in the DB, never logged, and dropped from the file
+    /// once the message is decided ([`at_rest`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<StoredAttachment>,
     /// A one-time-link mail (an App user's invite or reset,
@@ -247,16 +255,21 @@ pub struct NotifyHeld {
     pub headers: std::collections::BTreeMap<String, String>,
 }
 
-/// The copy of `msg` kept at rest (`~/.k2/mail-outbound/out_*.json`): a
-/// one-time-link mail (`ephemeral`) keeps its text with every link hidden
-/// (verification review 2026-10-26, item 4); any other mail as is.
+/// The copy of `msg` kept at rest once nothing needs to send it again
+/// (`~/.k2/mail-outbound/out_*.json`): never the attachment bytes (the outbox
+/// keeps their names), and a one-time-link mail (`ephemeral`) keeps its text
+/// with every link hidden (verification review 2026-10-26, item 4). Any other
+/// mail as is.
 pub fn at_rest(msg: &OutboundMessage) -> std::borrow::Cow<'_, OutboundMessage> {
-    if !msg.ephemeral {
+    if !msg.ephemeral && msg.attachments.is_empty() {
         return std::borrow::Cow::Borrowed(msg);
     }
     let mut m = msg.clone();
-    m.subject = hide_links(&m.subject);
-    m.text_body = hide_links(&m.text_body);
+    m.attachments = Vec::new();
+    if m.ephemeral {
+        m.subject = hide_links(&m.subject);
+        m.text_body = hide_links(&m.text_body);
+    }
     std::borrow::Cow::Owned(m)
 }
 
@@ -298,6 +311,24 @@ impl std::fmt::Debug for StoredAttachment {
 }
 
 impl StoredAttachment {
+    /// The file's size in bytes, from its base64 length (no decoding: the
+    /// approvals list reads this for every waiting file).
+    pub fn size(&self) -> u64 {
+        let b = self.data_b64.as_bytes();
+        let pad = b.iter().rev().take(2).filter(|c| **c == b'=').count() as u64;
+        (b.len() as u64 / 4 * 3).saturating_sub(pad)
+    }
+
+    /// What the approver is shown for this file.
+    pub fn view_json(&self, one_based: usize) -> serde_json::Value {
+        serde_json::json!({
+            "n": one_based,
+            "name": self.filename,
+            "size": self.size(),
+            "contentType": self.content_type,
+        })
+    }
+
     pub fn from_out(a: &crate::mail::external_smtp::OutAttachment) -> StoredAttachment {
         use base64::Engine as _;
         StoredAttachment {
@@ -411,6 +442,72 @@ pub fn new_message_id_for(from_address: &str) -> String {
     format!("{}@{}", uuid::Uuid::new_v4().simple(), domain)
 }
 
+/// Refuse text a HOSTED send could never hand the mail server, up front with
+/// a clear line ([`MAX_HOSTED_TEXT_JSON_BYTES`]; before this the send failed
+/// at the engine with `maxSizeRequest`).
+pub fn check_hosted_text_size(subject: &str, text: &str) -> Result<(), SendError> {
+    let json_len = |s: &str| serde_json::to_string(s).map(|j| j.len()).unwrap_or(usize::MAX);
+    let n = json_len(subject).saturating_add(json_len(text));
+    if n > MAX_HOSTED_TEXT_JSON_BYTES {
+        return Err(SendError::Usage(format!(
+            "message text too large for a hosted mailbox ({n} bytes as sent to the mail server; \
+             the limit is {MAX_HOSTED_TEXT_JSON_BYTES}) — shorten it, or attach the long part as a file"
+        )));
+    }
+    Ok(())
+}
+
+/// One attachment uploaded to the mail server, ready to go in an Email object.
+pub struct UploadedAttachment<'a> {
+    pub blob_id: String,
+    pub file: &'a StoredAttachment,
+}
+
+/// A stored `type/subtype[; charset=x]` split into what an RFC 8621 body part
+/// takes: a bare `type`, and `charset` only on a text type.
+fn jmap_type_and_charset(content_type: &str) -> (String, Option<String>) {
+    let mut bits = content_type.split(';');
+    let media = bits.next().unwrap_or("").trim().to_ascii_lowercase();
+    if !media.starts_with("text/") {
+        return (media, None);
+    }
+    let charset = bits.find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        k.trim().eq_ignore_ascii_case("charset").then(|| v.trim().trim_matches('"').to_ascii_lowercase())
+    });
+    (media, charset)
+}
+
+/// Pure builder: [`submission_email_json`] plus an `attachments` list naming
+/// blobs already uploaded to the account. Stalwart's composer picks each
+/// part's transfer encoding (probe A2, A10: the bytes arrive unchanged).
+pub fn submission_email_json_with(
+    msg: &OutboundMessage,
+    uploaded: &[UploadedAttachment<'_>],
+) -> serde_json::Value {
+    let mut v = submission_email_json(msg);
+    if !uploaded.is_empty() {
+        let parts: Vec<serde_json::Value> = uploaded
+            .iter()
+            .map(|u| {
+                let (media, charset) = jmap_type_and_charset(&u.file.content_type);
+                let mut p = serde_json::json!({
+                    "blobId": u.blob_id,
+                    "type": media,
+                    "name": u.file.filename,
+                    "disposition": "attachment",
+                });
+                if let Some(c) = charset {
+                    p["charset"] = serde_json::json!(c);
+                }
+                p
+            })
+            .collect();
+        v["attachments"] = serde_json::Value::Array(parts);
+    }
+    v
+}
+
 /// Pure builder: the RFC 8621 Email object for `Email/set create`
 /// (bodyValues text part; threading headers only when set). The JMAP
 /// layer adds `mailboxIds` — everything content-shaped lives here so
@@ -445,7 +542,7 @@ pub fn submission_email_json(msg: &OutboundMessage) -> serde_json::Value {
 /// can reorder or hide what a mail client shows (bidi overrides, zero-
 /// width space, BOM, line/paragraph separators). ZWJ/ZWNJ (U+200C/D) stay
 /// allowed — emoji sequences and several scripts need them.
-fn is_spoofy_format_char(c: char) -> bool {
+pub(crate) fn is_spoofy_format_char(c: char) -> bool {
     matches!(
         c,
         '\u{200B}'
@@ -658,6 +755,21 @@ impl DbOutboundStore {
     }
 }
 
+/// Create a body file readable by this user only from its first byte: it can
+/// hold a person's mail and, under approval, the files attached to it.
+#[cfg(unix)]
+fn write_private_new(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)?;
+    f.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_private_new(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(file, bytes)
+}
+
 #[cfg(unix)]
 fn restrict_mode(file: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -681,9 +793,8 @@ impl OutboundStore for DbOutboundStore {
         let path = self.body_path(&id);
         let body = serde_json::to_string(new.message)
             .map_err(|e| format!("outbound message serialize: {e}"))?;
-        std::fs::write(&path, body.as_bytes())
+        write_private_new(&path, body.as_bytes())
             .map_err(|e| format!("outbound body write: {e}"))?;
-        restrict_mode(&path);
         let to_json = serde_json::to_string(&new.message.to)
             .map_err(|e| format!("to serialize: {e}"))?;
         let cc_json = if new.message.cc.is_empty() {
@@ -841,7 +952,7 @@ impl OutboundStore for DbOutboundStore {
 
     fn scrub_body(&self, id: &str) -> Result<(), String> {
         let msg = self.load_message(id)?;
-        if !msg.ephemeral {
+        if !msg.ephemeral && msg.attachments.is_empty() {
             return Ok(());
         }
         let path = self.body_path(id);
@@ -1077,11 +1188,22 @@ pub trait SubmitBackend {
 
 impl SubmitBackend for StalwartClient {
     fn submit(&self, account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
+        // The files go up first, then one request composes and submits. A
+        // failed upload sends nothing; an upload the send never uses is
+        // Stalwart's to expire.
+        let mut uploaded = Vec::with_capacity(msg.attachments.len());
+        for file in &msg.attachments {
+            let bytes = file.to_out()?.bytes;
+            let blob_id = self
+                .blob_upload(account_id, &bytes)
+                .map_err(|e| format!("attachment '{}' didn't upload: {e}", file.filename))?;
+            uploaded.push(UploadedAttachment { blob_id, file });
+        }
         self.submission_send_opts(
             account_id,
             &msg.from,
             &msg.all_recipients(),
-            submission_email_json(msg),
+            submission_email_json_with(msg, &uploaded),
             msg.ephemeral,
         )
     }
@@ -1268,6 +1390,9 @@ pub fn gate_and_dispatch(
 ) -> Result<SendOutcome, SendError> {
     check_rate_limits(store, &req.message.from, now)?;
     let future_after = req.send_after.filter(|t| *t > now);
+    // The outbox keeps the filenames. The bytes stay in the body file only
+    // while something still has to send them (approval, a schedule).
+    let names: Vec<String> = req.message.attachments.iter().map(|a| a.filename.clone()).collect();
     match gate {
         Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
         Gate::Approval => {
@@ -1278,7 +1403,7 @@ pub fn gate_and_dispatch(
                     message: req.message,
                     status: "pending",
                     decided_by: None,
-                    attachment_names: &[],
+                    attachment_names: &names,
                     send_after: future_after.or(req.send_after),
                     now,
                 })
@@ -1297,7 +1422,7 @@ pub fn gate_and_dispatch(
                         message: req.message,
                         status: "scheduled",
                         decided_by: Some("policy:agent-send-on"),
-                        attachment_names: &[],
+                        attachment_names: &names,
                         send_after: Some(after),
                         now,
                     })
@@ -1312,8 +1437,8 @@ pub fn gate_and_dispatch(
                     "no submit backend available — refusing to send (fail-closed)".to_string(),
                 )
             })?;
-            // A one-time-link mail is never read back after this send:
-            // only its link-hidden copy is written (review item 4).
+            // Nothing reads this copy back to send it: no attachment bytes,
+            // and a one-time-link mail's links hidden (review item 4).
             let kept = at_rest(req.message);
             let id = store
                 .insert(&NewOutbound {
@@ -1322,7 +1447,7 @@ pub fn gate_and_dispatch(
                     message: &kept,
                     status: "approved",
                     decided_by: Some("policy:agent-send-on"),
-                    attachment_names: &[],
+                    attachment_names: &names,
                     send_after: None,
                     now,
                 })
@@ -3225,5 +3350,179 @@ mod tests {
         let err = check_domain_send_mode(&secrets, &format!("bot@{d}")).expect_err("refuse");
         assert!(matches!(&err, SendError::SendMode(h) if h.contains("mailgun")), "{err:?}");
         cleanup_domain(&d, Some(&relay));
+    }
+
+    // ── hosted attachments ──
+
+    fn with_file(mut m: OutboundMessage, name: &str, ct: &str, bytes: &[u8]) -> OutboundMessage {
+        use crate::mail::external_smtp::OutAttachment;
+        m.attachments.push(StoredAttachment::from_out(&OutAttachment {
+            filename: name.to_string(),
+            content_type: ct.to_string(),
+            bytes: bytes.to_vec(),
+        }));
+        m
+    }
+
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    fn unique_from(mut m: OutboundMessage) -> OutboundMessage {
+        m.from = format!("bot-{}@acme.dev", uuid::Uuid::new_v4().simple());
+        m
+    }
+
+    #[test]
+    fn a_stored_file_knows_its_size_without_decoding() {
+        for n in [0usize, 1, 2, 3, 4, 5, 1000, 1001, 1002] {
+            let m = with_file(msg(), "f.bin", "application/octet-stream", &vec![7u8; n]);
+            assert_eq!(m.attachments[0].size(), n as u64, "{n} bytes");
+        }
+    }
+
+    /// On: the files go up, the composed message names them, the outbox keeps
+    /// only their names, and the body file never held the bytes.
+    #[test]
+    fn on_mode_uploads_the_files_and_keeps_only_their_names() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let secret_bytes: &[u8] = b"%PDF the real report bytes";
+        let m = with_file(
+            with_file(unique_from(msg()), "report.pdf", "application/pdf", secret_bytes),
+            "notes.txt",
+            "text/plain; charset=utf-8",
+            b"hello\n",
+        );
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let out = gate_and_dispatch(&store, Some(&client), Gate::On, &req, now_unix()).expect("dispatch");
+        let SendOutcome::Submitted { id } = out else { panic!("expected a submit, got {out:?}") };
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.uploads, vec![secret_bytes.to_vec(), b"hello\n".to_vec()], "the bytes, in order");
+        let e = &st.created[0];
+        assert_eq!(e["attachments"][0]["blobId"], "up-1", "{e}");
+        assert_eq!(e["attachments"][0]["name"], "report.pdf", "{e}");
+        assert_eq!(e["attachments"][0]["type"], "application/pdf", "{e}");
+        assert!(e["attachments"][0].get("charset").is_none(), "{e}");
+        assert_eq!(e["attachments"][1]["type"], "text/plain", "a bare type: {e}");
+        assert_eq!(e["attachments"][1]["charset"], "utf-8", "{e}");
+        assert_eq!(e["attachments"][1]["disposition"], "attachment", "{e}");
+        assert_eq!(st.envelopes.len(), 1, "one submission");
+        drop(st);
+
+        let row = store.load(&id).unwrap().expect("row");
+        assert_eq!(row.status, "sent");
+        let v = outbound_json(&row);
+        assert_eq!(v["attachments"]["names"], serde_json::json!(["report.pdf", "notes.txt"]), "{v}");
+        let at_rest = std::fs::read_to_string(dir.join(format!("{id}.json"))).expect("body file");
+        assert!(!at_rest.contains("dataB64"), "no bytes at rest: {at_rest}");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refused upload sends nothing and says which file.
+    #[test]
+    fn a_refused_upload_fails_the_row_and_composes_nothing() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        fake.state.lock().unwrap().upload_status = Some(413);
+        let client = fake.client();
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let m = with_file(unique_from(msg()), "big.zip", "application/zip", b"zip");
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let out = gate_and_dispatch(&store, Some(&client), Gate::On, &req, now_unix()).expect("dispatch");
+        let SendOutcome::SubmitFailed { id, error } = out else { panic!("expected a failure, got {out:?}") };
+        assert!(error.contains("big.zip"), "{error}");
+        assert_eq!(store.load(&id).unwrap().unwrap().status, "failed");
+        let st = fake.state.lock().unwrap();
+        assert!(st.created.is_empty() && st.envelopes.is_empty(), "nothing composed or submitted");
+        drop(st);
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Scheduled: the bytes stay until the flush sends them, then go.
+    #[test]
+    fn a_scheduled_message_holds_its_files_until_it_leaves() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let now = now_unix();
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", b"scheduled bytes");
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: Some(now + 3600) };
+        let SendOutcome::Scheduled { id, .. } = gate_and_dispatch(&store, Some(&client), Gate::On, &req, now).expect("dispatch") else {
+            panic!("expected a schedule")
+        };
+        assert_eq!(store.load_message(&id).unwrap().attachments.len(), 1, "held for the flush");
+        assert!(fake.state.lock().unwrap().uploads.is_empty(), "nothing left yet");
+        let mut acct = |_: &str| Ok("acct".to_string());
+        let mut rules = |_: &str| Ok(crate::mail::schedule::FlushRules { gate: Gate::On, policy_bcc: Vec::new() });
+        let out = crate::mail::schedule::flush_one_scheduled(&store, Ok(&client), &mut acct, &mut rules, &id, now + 3601).expect("flush");
+        assert_eq!(out, Some(crate::mail::schedule::FlushOutcome::Sent));
+        assert_eq!(fake.state.lock().unwrap().uploads, vec![b"scheduled bytes".to_vec()]);
+        assert!(store.load_message(&id).unwrap().attachments.is_empty(), "gone once sent");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling a schedule drops the bytes too.
+    #[test]
+    fn a_cancelled_schedule_drops_its_files() {
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let now = now_unix();
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", b"x");
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: Some(now + 3600) };
+        let keep = crate::mail::fake_jmap::FakeJmap::start().client();
+        let SendOutcome::Scheduled { id, .. } = gate_and_dispatch(&store, Some(&keep), Gate::On, &req, now).expect("dispatch") else {
+            panic!("expected a schedule")
+        };
+        crate::mail::schedule::cancel_scheduled(&store, &id, &project, "agent:bot", now).expect("cancel");
+        assert!(store.load_message(&id).unwrap().attachments.is_empty());
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The hosted backend never drops a file it was handed apart from the
+    /// message: it refuses.
+    #[test]
+    fn hosted_submit_refuses_files_that_did_not_ride_the_message() {
+        use crate::mail::submit::{HostedSubmit, MailSubmit, SubmitError};
+        let client = crate::mail::fake_jmap::FakeJmap::start().client();
+        let hosted = HostedSubmit { backend: &client, account_id: "acct".to_string() };
+        let stray = crate::mail::external_smtp::OutAttachment {
+            filename: "a".to_string(),
+            content_type: "text/plain".to_string(),
+            bytes: vec![1],
+        };
+        assert!(matches!(hosted.submit(&msg(), &[stray]), Err(SubmitError::Engine(_))));
+    }
+
+    #[test]
+    fn hosted_text_limit_counts_the_json_form() {
+        assert!(check_hosted_text_size("s", &"y".repeat(MAX_HOSTED_TEXT_JSON_BYTES - 100)).is_ok());
+        let err = check_hosted_text_size("s", &"y".repeat(MAX_HOSTED_TEXT_JSON_BYTES + 1)).unwrap_err();
+        assert!(matches!(err, SendError::Usage(ref h) if h.contains("too large")), "{err:?}");
+        // Control characters take six bytes each once escaped.
+        let err = check_hosted_text_size("s", &"\u{1}".repeat(MAX_HOSTED_TEXT_JSON_BYTES / 4)).unwrap_err();
+        assert!(matches!(err, SendError::Usage(_)), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_waiting_body_file_is_private_and_never_overwrites() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("k2-body-mode-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("out_x.json");
+        write_private_new(&f, b"{}").expect("first write");
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+        assert!(write_private_new(&f, b"again").is_err(), "an id is never reused");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

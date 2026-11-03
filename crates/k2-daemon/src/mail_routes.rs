@@ -37,6 +37,7 @@
 //! | POST /cli/mail/reply              | mail/routes_send.rs     |
 //! | GET  /cli/mail/outbox             | mail/routes_send.rs     |
 //! | GET  /cli/mail/approvals/list     | mail/routes_send.rs     |
+//! | GET  /cli/mail/approvals/show     | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/approve  | mail/routes_send.rs     |
 //! | POST /cli/mail/approvals/deny     | mail/routes_send.rs     |
 //! | POST /cli/mail/credentials/keep   | mail/agent_creds.rs     |
@@ -209,6 +210,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/wait" => routes_messages::handle_wait(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
+        "/cli/mail/approvals/show" => routes_send::handle_approvals_show(params),
         // S11/E1: unified inbox catalog (agent view via proven principal
         // or residual project=; owner view — no identity — is
         // owner-or-admin-gated in the dispatcher's dual-auth arm).
@@ -658,6 +660,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/access/set-manage"
             | "/cli/mail/doctor"
             | "/cli/mail/approvals/list"
+            | "/cli/mail/approvals/show"
             | "/cli/mail/approvals/approve"
             | "/cli/mail/approvals/deny"
             | "/cli/mail/config/set"
@@ -1076,6 +1079,7 @@ mod tests {
             "/cli/mail/access/set-manage",
             "/cli/mail/doctor",
             "/cli/mail/approvals/list",
+            "/cli/mail/approvals/show",
             "/cli/mail/approvals/approve",
             "/cli/mail/approvals/deny",
             "/cli/mail/config/set",

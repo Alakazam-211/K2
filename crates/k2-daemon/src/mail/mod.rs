@@ -183,6 +183,8 @@ pub mod routes_send;
 pub mod routes_server;
 pub mod schedule;
 pub mod secrets;
+#[cfg(test)]
+mod fake_jmap;
 pub mod send;
 pub mod submit;
 pub mod sieve_user;

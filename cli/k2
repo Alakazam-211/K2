@@ -42814,7 +42814,7 @@ cmd_schema() {
     {
       "name": "mail send",
       "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
+      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) work on HOSTED and LINKED senders. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
         {"name": "--to", "arg": "addr", "description": "Recipient (repeatable / comma-separated)."},
@@ -42824,7 +42824,7 @@ cmd_schema() {
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address is unchanged. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
         {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
         {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
         {"name": "--wait", "arg": null, "description": "Block until DECIDED (not with --at/--in). Exit 2 on timeout — still queued."},
@@ -42835,13 +42835,13 @@ cmd_schema() {
     {
       "name": "mail reply",
       "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
+      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) work on HOSTED and LINKED replies. For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
         {"name": "--body-file", "arg": "f", "description": "Read the reply from a file."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address stays the one that received the message. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
         {"name": "--wait", "arg": null, "description": "Block until decided (exit 2 on timeout, still queued)."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -61582,7 +61582,7 @@ _mail_py() {
     M_FOLDER="${M_FOLDER:-}" M_JUNK="${M_JUNK:-false}" \
     M_FROM="${M_FROM:-}" M_FROM_NAME="${M_FROM_NAME:-}" \
     M_HTML="${M_HTML:-false}" M_RAW="${M_RAW:-false}" \
-    M_GET="${M_GET:-}" M_OUT="${M_OUT:-}" \
+    M_GET="${M_GET:-}" M_OUT="${M_OUT:-}" M_FILE="${M_FILE:-}" \
     M_TO="${M_TO:-}" M_SUBJECT="${M_SUBJECT:-}" M_TIMEOUT="${M_TIMEOUT:-}" \
     M_SEND_AT="${M_SEND_AT:-}" M_SEND_IN="${M_SEND_IN:-}" \
     M_LABEL="${M_LABEL:-}" M_SELECTOR="${M_SELECTOR:-}" \
@@ -61690,7 +61690,7 @@ def die(err, exit_code=None, permission=None):
         # owner surfaces for valid agent passports (not "invalid token").
         # 0.45.0: agent_send_path_only = an agent asked for an IMAP/SMTP
         # secret; the hint already names `k2 mail send` + the owner verb.
-        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing") else 2 if code == "usage" else 1
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing") else 2 if code in ("usage", "attachment_secret", "attachment_too_large") else 1
     sys.exit(exit_code)
 
 def _is_socket_timeout(exc):
@@ -61889,6 +61889,25 @@ def print_full(m):
     if m.get("html"):
         print()
         print(m.get("html"))
+
+def term_safe(s):
+    # Text from an agent or from outside mail, printed for a person deciding:
+    # keep line breaks and tabs, and show no other control character, so an
+    # escape sequence can't redraw what the approver reads.
+    return "".join(c if c in "\n\t" or (c >= " " and c != "\x7f" and not "\x80" <= c <= "\x9f") else "?"
+                   for c in str(s))
+
+def human_size(n):
+    n = int(n or 0)
+    if n < 1024:
+        return "%d bytes" % n
+    if n < 1024 * 1024:
+        return "%.1f KiB" % (n / 1024.0)
+    return "%.1f MiB" % (n / (1024.0 * 1024.0))
+
+def file_line(f):
+    return "%s (%s, %s)" % (term_safe(f.get("name") or "?"), human_size(f.get("size")),
+                            term_safe(f.get("contentType") or "?"))
 
 def print_outbound_row(r):
     print("%s  %-17s %-11s to %s — %s" % (
@@ -62321,7 +62340,8 @@ elif verb == "send":
         body["wait"] = True
         if env("M_TIMEOUT"):
             body["timeout"] = int(env("M_TIMEOUT"))
-    d = call("POST", "/cli/mail/send", body=body, timeout=(t + 30) if waiting else 30)
+    # Files go up to the mail server inside the call.
+    d = call("POST", "/cli/mail/send", body=body, timeout=(t + 30) if waiting else (180 if attach else 30))
     send_outcome(d, waiting, t)
 
 elif verb == "reply":
@@ -62340,7 +62360,7 @@ elif verb == "reply":
         body["wait"] = True
         if env("M_TIMEOUT"):
             body["timeout"] = int(env("M_TIMEOUT"))
-    d = call("POST", "/cli/mail/reply", body=body, timeout=(t + 30) if waiting else 30)
+    d = call("POST", "/cli/mail/reply", body=body, timeout=(t + 30) if waiting else (180 if attach else 30))
     send_outcome(d, waiting, t)
 
 elif verb == "outbox_cancel":
@@ -63032,12 +63052,61 @@ elif verb == "approvals_list":
                 print("  bcc     : %s" % ", ".join(r["bcc"]))
             if r.get("policyBcc"):
                 print("  bcc (owner policy): %s" % ", ".join(r["policyBcc"]))
-            print("  subject : %s" % (r.get("subject") or "(no subject)"))
+            print("  subject : %s" % term_safe(r.get("subject") or "(no subject)"))
+            for f in r.get("files") or []:
+                print("  file %-3s: %s" % (f.get("n", "?"), file_line(f)))
             if r.get("bodyPreview") is not None:
-                print("  preview : %s" % r["bodyPreview"])
-            print("  decide  : k2 mail approvals approve %s | deny %s --note \"...\""
+                print("  preview : %s" % term_safe(r["bodyPreview"]))
+            print("  open    : k2 hostmail approvals show %s" % r.get("id", ""))
+            print("  decide  : k2 hostmail approvals approve %s | deny %s --note \"...\""
                   % (r.get("id", ""), r.get("id", "")))
             print()
+
+elif verb == "approvals_show":
+    d = call("GET", "/cli/mail/approvals/show", params={"id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        m = d.get("message") or {}
+        who = m.get("workspace") or m.get("agentName") or "?"
+        print("%s  from %s (%s), waiting for approval" % (m.get("id", ""), m.get("from") or "?", who))
+        print("to      : %s" % (", ".join(m.get("to") or []) or "?"))
+        if m.get("cc"):
+            print("cc      : %s" % ", ".join(m["cc"]))
+        if m.get("bcc"):
+            print("bcc     : %s" % ", ".join(m["bcc"]))
+        if m.get("policyBcc"):
+            print("bcc (owner policy): %s" % ", ".join(m["policyBcc"]))
+        print("subject : %s" % term_safe(m.get("subject") or "(no subject)"))
+        for f in m.get("files") or []:
+            print("file %-3s: %s" % (f.get("n", "?"), file_line(f)))
+        if m.get("files"):
+            print("          save one to look at it: k2 hostmail approvals save %s --file <n> --out <path>" % m.get("id", ""))
+        print()
+        print(term_safe(m.get("text") or ""))
+
+elif verb == "approvals_save":
+    out = env("M_OUT")
+    # Never over a file: the name and the bytes came from an agent or from
+    # outside mail. O_EXCL + O_NOFOLLOW below hold this against a race.
+    if os.path.lexists(out):
+        die({"code": "usage", "hint": "--out '%s' already exists — pick a new path" % out})
+    d = call("GET", "/cli/mail/approvals/show",
+             params={"id": env("M_ID"), "file": env("M_FILE")}, timeout=120)
+    data = base64.b64decode(d.get("dataBase64") or "")
+    try:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        die({"code": "usage", "hint": "can't write --out '%s': %s" % (out, e)})
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    if as_json:
+        print(dumps({"ok": True, "id": d.get("id"), "n": d.get("n"), "name": d.get("name"),
+                     "size": len(data), "path": out}))
+    else:
+        print("saved %s (%s) to %s. It isn't opened: it would leave exactly as it is, and it "
+              "may have come from outside, so treat it as untrusted."
+              % (term_safe(d.get("name") or "?"), human_size(len(data)), out))
 
 elif verb == "approvals_approve":
     body = {"id": env("M_ID")}
@@ -65473,22 +65542,28 @@ cmd_mail_approvals() {
     if _wants_help "$@"; then cmd_help_mail_approvals; exit 0; fi
     local sub="list"
     case "${1:-}" in
-        list|approve|deny) sub="$1"; shift ;;
+        list|show|save|approve|deny) sub="$1"; shift ;;
         "") ;;
-        -*) ;;  # bare `k2 mail approvals --json` = list
+        -*) ;;  # bare `k2 hostmail approvals --json` = list
         *)
-            _mail_err "usage" "unknown approvals command '${1:-}' — usage: k2 mail approvals [list | approve <id> [--note …] | deny <id> --note …]"
+            _mail_err "usage" "unknown approvals command '${1:-}' — usage: k2 hostmail approvals [list | show <id> | save <id> --file <n> --out <path> | approve <id> [--note …] | deny <id> --note …]"
             exit 2 ;;
     esac
-    local id="" note="" as_json=false
+    local id="" note="" as_json=false file_n="" out=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --note)
                 [ $# -ge 2 ] || { _mail_err "usage" "--note requires a value"; exit 2; }
                 note="$2"; shift 2 ;;
+            --file)
+                [ $# -ge 2 ] || { _mail_err "usage" "--file requires a file number (from k2 hostmail approvals show <id>)"; exit 2; }
+                file_n="$2"; shift 2 ;;
+            --out)
+                [ $# -ge 2 ] || { _mail_err "usage" "--out requires a path to write the file to"; exit 2; }
+                out="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — see k2 mail approvals --help"
+                _mail_err "usage" "unknown flag '$1' — see k2 hostmail approvals --help"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -65501,21 +65576,35 @@ cmd_mail_approvals() {
     case "$sub" in
         list)
             if [ -n "$id" ] || [ -n "$note" ]; then
-                _mail_err "usage" "approvals list takes no <id>/--note — usage: k2 mail approvals [--json]"
+                _mail_err "usage" "approvals list takes no <id>/--note — usage: k2 hostmail approvals [--json]"
                 exit 2
             fi
             local M_VERB="approvals_list" M_JSON="$as_json"
             _mail_py ;;
+        show)
+            if [ -z "$id" ]; then
+                _mail_err "usage" "show requires an <id> (out_… from 'k2 hostmail approvals')"
+                exit 2
+            fi
+            local M_VERB="approvals_show" M_JSON="$as_json" M_ID="$id"
+            _mail_py ;;
+        save)
+            if [ -z "$id" ] || [ -z "$file_n" ] || [ -z "$out" ]; then
+                _mail_err "usage" "usage: k2 hostmail approvals save <id> --file <n> --out <path>"
+                exit 2
+            fi
+            local M_VERB="approvals_save" M_JSON="$as_json" M_ID="$id" M_FILE="$file_n" M_OUT="$out"
+            _mail_py ;;
         approve)
             if [ -z "$id" ]; then
-                _mail_err "usage" "approve requires an <id> (out_… from 'k2 mail approvals')"
+                _mail_err "usage" "approve requires an <id> (out_… from 'k2 hostmail approvals')"
                 exit 2
             fi
             local M_VERB="approvals_approve" M_JSON="$as_json" M_ID="$id" M_NOTE="$note"
             _mail_py ;;
         deny)
             if [ -z "$id" ]; then
-                _mail_err "usage" "deny requires an <id> (out_… from 'k2 mail approvals')"
+                _mail_err "usage" "deny requires an <id> (out_… from 'k2 hostmail approvals')"
                 exit 2
             fi
             if [ -z "$note" ]; then
@@ -71776,8 +71865,17 @@ ARGUMENTS / FLAGS
                          control characters.
   --attach <path>        Workspace-relative path to a file to attach
                          (repeatable). The DAEMON reads the file — you pass a
-                         path, not bytes. LINKED inboxes only (not hosted K2
-                         mailboxes yet). Max 10 files, 25MB each / 25MB total.
+                         path, not bytes. Max 10 files, 25 MiB each and 25 MiB
+                         in total (a linked Microsoft 365 inbox: 3 MiB each).
+                         Refused: anything outside the workspace, anything in
+                         .k2/ (copy it out first if you mean to send it), and
+                         secrets (.env, keys, .ssh/, a file holding a
+                         credential). Under approval the file is captured
+                         when you send: changing it later changes nothing, and
+                         your human sees each file's name and size. Files grow
+                         by a third in the email: many mail servers refuse a
+                         message over 25 MB, so a file over about 18 MiB may
+                         bounce. `k2 mail outbox` lists the filenames.
   --wait                 Block until the message is DECIDED:
                          approved-and-submitted or denied (approval mode) /
                          accepted-for-delivery (on mode). Exit 2 on timeout —
@@ -71827,8 +71925,10 @@ FLAGS
                          message. HOSTED mailboxes only. Max 128 chars; no
                          '@', line breaks or control characters.
   --attach <path>        Workspace-relative path to a file to attach
-                         (repeatable). The DAEMON reads the file. LINKED
-                         inboxes only. Max 10 files, 25MB each / 25MB total.
+                         (repeatable). The DAEMON reads the file. Same limits
+                         and refusals as `k2 mail send --attach`: 10 files, 25
+                         MiB each and in total; nothing outside the workspace,
+                         in .k2/, or secret.
   --wait                 Block until decided — same clause as `send --wait`:
                          exit 2 on timeout, message still queued.
   --timeout <secs>       With --wait: 1-900 (default 300)
@@ -72088,7 +72188,11 @@ mail server; deny requires a --note, which lands in the agent's outbox.
 Pending items auto-deny after 7 days.
 
 USAGE
-  k2 hostmail approvals [list] [--json]          The queue (default)
+  k2 hostmail approvals [list] [--json]          The queue (default), with each file's name and size
+  k2 hostmail approvals show <id> [--json]       The whole message and its files
+  k2 hostmail approvals save <id> --file <n> --out <path>
+                                                 Write file number <n> to a new path, to look at it.
+                                                 A path that already exists is refused.
   k2 hostmail approvals approve <id> [--note "..."] [--json]
   k2 hostmail approvals deny <id> --note "..." [--json]
 

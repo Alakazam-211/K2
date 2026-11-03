@@ -610,6 +610,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/doctor", Some("{}")),
             ("GET", "/cli/mail/doctor", None),
             ("GET", "/cli/mail/approvals/list", None),
+            ("GET", "/cli/mail/approvals/show", None),
             // approvals approve/deny + config/set agentSend are asserted
             // below: the gate opens, the handler refuses agents (0.45.0).
             ("POST", "/cli/mail/config/set", Some("{}")),

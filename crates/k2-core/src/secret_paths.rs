@@ -352,28 +352,84 @@ fn after_key(s: &str) -> &str {
     &s[..end]
 }
 
+/// What follows a key word, when it's assigned something.
+enum KeyValue<'a> {
+    Quoted(&'a str),
+    Bare {
+        first: &'a str,
+        /// Nothing else on the line but a `#` or `//` comment.
+        alone: bool,
+        /// `=` directly after the key, as in a shell or on a command line.
+        joined: bool,
+    },
+}
+
+/// `rest` is the line after a key word. A quote may close the key first, as in
+/// JSON.
+fn key_value(rest: &str) -> Option<KeyValue<'_>> {
+    let raw = after_key(rest).trim_start_matches(['"', '\'']);
+    let joined = raw.starts_with('=');
+    let value = raw.trim_start().strip_prefix([':', '='])?.trim();
+    if let Some(q @ ('"' | '\'')) = value.chars().next() {
+        // A quoted value ends at its quote, whatever follows on the line.
+        let inner = &value[1..];
+        return Some(KeyValue::Quoted(inner.find(q).map_or(inner, |end| &inner[..end])));
+    }
+    let mut words = value.split_whitespace();
+    let first = words.next().unwrap_or("").trim_end_matches([',', ';', '"', '\'']);
+    let alone = words.next().is_none_or(|w| w.starts_with('#') || w.starts_with("//"));
+    Some(KeyValue::Bare { first, alone, joined })
+}
+
+/// Written out here, not fetched from somewhere: not `$DB_PASS`, `<password>`,
+/// `${X}`, `input("…")` or `os.environ["X"]`.
+fn looks_literal(word: &str) -> bool {
+    !word.starts_with(['=', '$', '{', '%']) && !word.contains(['(', '[', '<'])
+}
+
+/// A word that can't be a sentence going on: at least 6 characters, and either
+/// alone on the line or joined to its key by `=`.
+fn secret_word_follows(rest: &str, key: &str) -> bool {
+    match key_value(rest) {
+        Some(KeyValue::Quoted(v)) => v.len() >= 6 && !v.contains(char::is_whitespace),
+        Some(KeyValue::Bare { first, alone, joined }) => {
+            first.len() >= 6 && (alone || (joined && looks_literal(first) && first != key))
+        }
+        None => false,
+    }
+}
+
+/// `secret_key` and its kin name types and settings as often as values
+/// (`secret_key: String,`, `SECRET_KEY = settings.SECRET_KEY`), so what follows
+/// needs a digit too, and 16 characters without quotes around it.
+fn secret_key_value_follows(rest: &str) -> bool {
+    let digit = |v: &str| v.contains(|c: char| c.is_ascii_digit());
+    match key_value(rest) {
+        Some(KeyValue::Quoted(v)) => {
+            v.len() >= 6 && !v.contains(char::is_whitespace) && digit(v) && looks_literal(v)
+        }
+        Some(KeyValue::Bare { first, alone, joined }) => {
+            first.len() >= 16 && (alone || joined) && digit(first) && looks_literal(first) && !first.contains('.')
+        }
+        None => false,
+    }
+}
+
 /// [`assignment_present`] for the key words, counting a line only when what
-/// follows looks like a value: one unbroken token of at least 6 characters. A
-/// quote may close the key first, as in JSON.
+/// follows looks like a value. "Reset your password = see the wiki page." is a
+/// sentence; `PGPASSWORD=hunter2hunter2 psql -h db` isn't.
 fn value_assignment_present(text: &str) -> bool {
     text.lines().any(|line| {
         let lower = line.to_ascii_lowercase();
-        ["password", "secret", "api_key", "api-key", "apikey"].iter().any(|key| {
-            lower.match_indices(key).any(|(i, _)| {
-                let rest = after_key(&lower[i + key.len()..]).trim_start_matches(['"', '\'']).trim_start();
-                let Some(value) = rest.strip_prefix([':', '=']) else { return false };
-                let value = value.trim();
-                // A quoted value ends at its quote, whatever follows on the line.
-                let value = match value.chars().next() {
-                    Some(q @ ('"' | '\'')) => {
-                        let inner = &value[1..];
-                        inner.find(q).map_or(inner, |end| &inner[..end])
-                    }
-                    _ => value.trim_end_matches([',', ';', '"', '\'']),
-                };
-                value.len() >= 6 && !value.contains(char::is_whitespace)
-            })
-        })
+        let found = |key: &str, follows: &dyn Fn(&str) -> bool| {
+            lower.match_indices(key).any(|(i, _)| follows(&lower[i + key.len()..]))
+        };
+        ["password", "secret", "api_key", "api-key", "apikey"]
+            .iter()
+            .any(|key| found(key, &|rest| secret_word_follows(rest, key)))
+            || ["secret_key", "secret-key", "secretkey", "secret_access_key", "secretaccesskey"]
+                .iter()
+                .any(|key| found(key, &secret_key_value_follows))
     })
 }
 
@@ -588,6 +644,34 @@ mod tests {
             ("help.txt", b"The password: field is required.\n", None),
             ("help.txt", b"secret: true\n", None),
             ("help.txt", b"Reset your password = see the wiki page.\n", None),
+            // Something after the value on its line.
+            ("run.sh", b"PGPASSWORD=hunter2hunter2 psql -h db\n", Some(SecretHit::Content)),
+            ("a.conf", b"password = hunter2hunter2 # prod\n", Some(SecretHit::Content)),
+            ("a.yml", b"password: hunter2hunter2 # prod\n", Some(SecretHit::Content)),
+            ("a.conf", b"password = hunter2hunter2 // prod\n", Some(SecretHit::Content)),
+            ("run.sh", b"--password=abc123456 --host x\n", Some(SecretHit::Content)),
+            // The same shapes with no secret in them.
+            ("run.sh", b"PASSWORD=$DB_PASS psql -h db\n", None),
+            ("run.sh", b"--password=<password> --host x\n", None),
+            ("run.sh", b"--password=PASSWORD --host x\n", None),
+            ("a.py", b"password=input(\"Enter it\") or fallback\n", None),
+            ("a.py", b"if password == expected and ok:\n", None),
+            ("a.py", b"if password==expected and ok:\n", None),
+            ("help.txt", b"The password = changeable in Settings\n", None),
+            // `_key` after the key word.
+            ("a.py", b"SECRET_KEY = 'abc123def456'\n", Some(SecretHit::Content)),
+            ("a.js", b"secretKey: 'abc123def456',\n", Some(SecretHit::Content)),
+            ("a.conf", b"aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLE\n", Some(SecretHit::Content)),
+            ("a.yml", b"aws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLE # prod\n", Some(SecretHit::Content)),
+            ("run.sh", b"AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLE aws s3 ls\n", Some(SecretHit::Content)),
+            // And `_key` naming a type or a setting.
+            ("a.py", b"SECRET_KEY = os.environ[\"SECRET_KEY\"]\n", None),
+            ("a.py", b"SECRET_KEY = os.environ.get('SECRET_KEY')\n", None),
+            ("a.py", b"SECRET_KEY = settings.SECRET_KEY\n", None),
+            ("a.rs", b"secret_key: String,\n", None),
+            ("a.ts", b"secretKey: string;\n", None),
+            ("a.py", b"SECRET_KEY = 'your-secret-key-here'\n", None),
+            ("a.conf", b"aws_secret_access_key = YOUR_SECRET_ACCESS_KEY\n", None),
             (".env.k2", b"API_KEY=k2v://vault/x\n", None),
             (".env.k2", b"API_KEY=literal\n", Some(SecretHit::Content)),
             (".env.k2", b"\xff\xfe", Some(SecretHit::Content)),

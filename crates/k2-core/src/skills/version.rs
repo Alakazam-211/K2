@@ -227,7 +227,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `k2 store` writes): the grant line, the cascade, typed refusals, people
 /// by stable key. `k2.store.grantees()` (catalog v43).
 /// (Integrator: renumber if another held branch took 46.)
-pub const SKILL_VERSION_ZEN: u32 = 46;
+/// Bumped to 47 (0.46.8): a context line can't hold `[guest` either.
+pub const SKILL_VERSION_ZEN: u32 = 47;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).
@@ -305,7 +306,8 @@ pub const SKILL_VERSION_ZEN: u32 = 46;
 /// k2-cli skill gains a "Live docs" block (`k2 doc`, edit live docs through
 /// it; live docs are switched per kind of file, `k2 doc cores`, `core_off`).
 /// Bumped to 47 (0.46.8): the Study topics gain `voice-rooms` and `board`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 47;
+/// Bumped to 48 (0.46.8): the `[guest …]` stamp on an App guest's Thread post.
+pub const SKILL_VERSION_WORKSPACE: u32 = 48;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

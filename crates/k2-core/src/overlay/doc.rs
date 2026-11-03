@@ -250,7 +250,7 @@ pub const THREAD_CONTEXT_MAX_CHARS: usize = 120;
 
 /// Text a context line may never hold (ASCII case-insensitive): the
 /// markers of K2's own stamps, so a widget can't forge one.
-pub const THREAD_CONTEXT_FORBIDDEN: &[&str] = &["[thread:", "[from", "[context"];
+pub const THREAD_CONTEXT_FORBIDDEN: &[&str] = &["[thread:", "[from", "[guest", "[context"];
 
 /// Unicode that breaks a line or reorders what the person sees: line and
 /// paragraph separators, bidi embeddings, overrides and isolates.

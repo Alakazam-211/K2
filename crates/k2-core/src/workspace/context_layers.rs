@@ -1194,7 +1194,7 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
         "These are **humans** who can sign into this K2 box — not workspace-agents.\n\
-         They write to you from the app as `[from <name>]`. Do **not** `k2 msg` these names.\n\
+         They write to you from the app as `[from <name>]`; someone signed in to an App is `[guest <login> on App <app>]`, never one of them. Do **not** `k2 msg` these names.\n\
          CLI lookup: `k2 connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     if any_named {

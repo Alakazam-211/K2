@@ -13,7 +13,7 @@
 //
 // The rule for the text is the daemon's (`check_context_text`, k2-core
 // overlay/doc.rs): one line, at most 120 characters, no control or bidi
-// characters, none of `[thread:`, `[from`, `[context`.
+// characters, none of `[thread:`, `[from`, `[guest`, `[context`.
 //
 // Cleared by `setContext(null)`, a new text, the widget unloading or
 // stopping (its layer's dispose), or a Garden switch (the frames unmount;
@@ -33,7 +33,7 @@ export const ZEN_THREAD_CONTEXT_MAX_CHARS = 120
 /** `setContext` calls a widget may make in a second. */
 export const ZEN_THREAD_CONTEXT_PER_SECOND = 2
 
-const FORBIDDEN = ['[thread:', '[from', '[context'] as const
+const FORBIDDEN = ['[thread:', '[from', '[guest', '[context'] as const
 
 /** Line breaks and bidi controls: they change what the person sees. */
 const BREAKS = new RegExp('[' + '\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069' + ']')

@@ -1077,6 +1077,29 @@ fn skin_from_stamp(pass: &SkinPass) -> String {
     }
 }
 
+/// `dana on App shop; login set up by sales's agent`: what a guest's post
+/// says it is, in the agent's terminal. The tie or the creator stamp says an
+/// agent could know the password. An App's own pass names no person.
+fn guest_stamp_label(pass: &SkinPass) -> String {
+    let mut out = skin_from_stamp(pass);
+    let app_name = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_id(&conn, &pass.app).ok().flatten().map(|s| s.name)
+    };
+    if let Some(name) = app_name {
+        out.push_str(&format!(" on App {name}"));
+    }
+    if let Some(pid) = pass.principal_id.as_deref() {
+        let tie = k2_core::skin::ties::get(pid).ok().flatten().map(|t| t.workspace_id);
+        let made = tie.or_else(|| k2_core::skin::creators::workspace_of(pid).ok().flatten());
+        if let Some(ws) = made {
+            out.push_str(&format!("; login set up by {}'s agent", crate::apps::routes::ws_handle(&ws)));
+        }
+    }
+    out
+}
+
 /// Human Message-the-agent on Thread: token identity, never body `from`.
 /// Owner token (`"owner"`) → the stamp rule (linked username, else `owner`). Connect-user → username.
 fn compose_from_for_session(session_author: &str) -> String {
@@ -1342,7 +1365,7 @@ const CONTEXT_NOT_ALLOWED: &str = "context_not_allowed";
 /// CA6): the post's `context` = `{text, origin}`.
 /// - Absent: `Ok(None)`.
 /// - Malformed (not JSON, not `{text, origin}`, a text that isn't one line
-///   of ≤ 120 plain characters or holds `[from` / `[thread:` / `[context`,
+///   of ≤ 120 plain characters or holds `[from` / `[guest` / `[thread:` / `[context`,
 ///   a bad origin): 400 `bad_args`, nothing stored. The app checks the same
 ///   rule first, so only a forged body gets here.
 /// - Well formed but not usable here: `Ok(Some(Err(_)))`, and the post goes
@@ -1709,8 +1732,8 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                         &from,
                     );
                 }
-            } else if request_skin().is_some() {
-                inject_skin_thread(&resolved, &from, &inject_text, ThreadTurn::new(&resolved, &item.id, received_at));
+            } else if let Some(pass) = request_skin() {
+                inject_skin_thread(&resolved, &pass, &inject_text, ThreadTurn::new(&resolved, &item.id, received_at));
             } else {
                 // TW4 (a): the agent answered in Thread (not the compose
                 // bar, not an app guest): the strip ends with the reply.
@@ -3397,16 +3420,18 @@ fn inject_thread_compose(
     deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, from, "compose", &command, Some(turn)));
 }
 
-/// Skin Thread post (default `via=thread`): same `[from user] [thread:addr]`
-/// line as compose, delivered as `via=thread` so it is not compose-bar
-/// (no slash-command, no compose-history). Skin `via=compose` stays 403.
-fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: ThreadTurn<'_>) {
-    let line = format_thread_compose_pty_line(from, &resolved.addr, text);
+/// Skin Thread post (default `via=thread`): `[guest <login> …] [thread:addr]`,
+/// delivered as `via=thread` so it is not compose-bar (no slash-command, no
+/// compose-history). Skin `via=compose` stays 403. Never the `[from X]` shape
+/// of a person on this box, and a login an agent could know says so.
+fn inject_skin_thread(resolved: &ResolvedOverlay, pass: &SkinPass, text: &str, turn: ThreadTurn<'_>) {
+    let from = crate::workspace_msg::guest_sender(&guest_stamp_label(pass));
+    let line = format_thread_compose_pty_line(&from, &resolved.addr, text);
     record_test_inject(&line);
     deliver_thread_later(ThreadDeliveryJob::new(
         resolved,
         format!("[thread:{}] {text}", resolved.addr),
-        from,
+        &from,
         "thread",
         "",
         Some(turn),
@@ -6265,6 +6290,43 @@ mod tests {
         body["status"].as_str().expect("status").to_string()
     }
 
+    /// Security review 2026-11-02: a guest's post reaches the agent stamped
+    /// `[guest …]`, never `[from X]`, whatever its login is called, with the
+    /// App it signed in to, and says so when an agent could know the password.
+    #[test]
+    fn a_guest_post_reaches_the_agent_stamped_guest() {
+        let handle = format!("ovlguest{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let app_name = format!("shop{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+        let app = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::insert(&conn, &project_id, &app_name, "node s.js", "/tmp", 47_541, "local", "stopped", "cmd", "").expect("App").id
+        };
+        let name = format!("g{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+        let person = k2_core::skin::add_principal_for_app(&name, None, &app, None, "owner-token").expect("person");
+        let post = |text: &str| {
+            let mut pass = skin_pass(&[project_id.clone()]);
+            pass.username = name.clone();
+            pass.principal_id = Some(person.id.clone());
+            pass.app = app.clone();
+            let r = with_request_skin(Some(pass), || {
+                dispatch_post("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": handle, "text": text }).to_string().as_bytes())
+            });
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+        };
+        post("hello from a person");
+        let want = format!("[guest {name} on App {app_name}] [thread:{handle}] hello from a person");
+        assert!(recorded_injects().iter().any(|l| l == &want), "want {want:?} got {:?}", recorded_injects());
+        // A login an agent could know says so.
+        k2_core::skin::creators::tie(&person.id, &project_id, "agent:test", k2_core::skin::ties::REASON_CREATED).expect("tie");
+        post("hello again");
+        let want = format!("[guest {name} on App {app_name}; login set up by {handle}'s agent] [thread:{handle}] hello again");
+        assert!(recorded_injects().iter().any(|l| l == &want), "want {want:?} got {:?}", recorded_injects());
+        assert!(!recorded_injects().iter().any(|l| l.contains(&format!("[from {name}]"))), "never the shape of a person on this box");
+    }
+
     /// Rosson 2026-10-13: a person may talk about a card before answering
     /// it. Their prose (compose bar, a Garden widget, the exact option
     /// label, an app guest) never closes a pending choice or secret card,
@@ -6933,17 +6995,17 @@ mod tests {
             "guest",
             "must stamp SkinPass.username, not body from; {posted}"
         );
-        let want = format_thread_compose_pty_line("guest", &handle, &body);
+        let want = format!("[guest guest] [thread:{handle}] {body}");
         let injects = recorded_injects();
         assert!(
             injects.iter().any(|l| l == &want),
-            "skin Thread post must inject [from guest] [thread:addr] into the agent PTY; want {want:?} got {injects:?}"
+            "skin Thread post must inject [guest guest] [thread:addr] into the agent PTY; want {want:?} got {injects:?}"
         );
         assert!(
             injects
                 .iter()
                 .filter(|l| l.contains(&body))
-                .all(|l| l.contains("[from guest]") && !l.contains("[from owner]")),
+                .all(|l| l.contains("[guest guest]") && !l.contains("[from")),
             "must not stamp spoofed body from; got {injects:?}"
         );
 

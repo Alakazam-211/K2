@@ -881,7 +881,7 @@ them, so you never rebuild a chat panel:\n\n\
   (`agents = \"<your id>\"`, or through an Agents widget's `list-from`); with none following it\n\
   answers `not_bound`. It rides only on the person's own send, as K2's quoted line before their\n\
   `[from]` stamp, never as their words, and they can remove it. One line, at most 120\n\
-  characters, plain text, no `[thread:`, `[from ` or `[context`, at most 2 calls a second.\n\
+  characters, plain text, no `[thread:`, `[from `, `[guest` or `[context`, at most 2 calls a second.\n\
   `null`, your widget stopping or unloading, or a Garden switch clears it. An older server\n\
   doesn't get it (the chip says so). A message that carried one has `doc.context`\n\
   (`{text, widget, placement}`).\n\n\

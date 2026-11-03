@@ -6,6 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.8
 
 ### When you update
+- **A guest with `files:write` can no longer write the agent's root `CLAUDE.md`, `AGENTS.md` or `GEMINI.md`**, the files its CLI loads as standing orders. A role that needs to adds `files:agentconfig`. Reading them and files of those names in subfolders are unchanged.
 - **Going back to your earlier Sew after upgrading to 0.7.2 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.2 changes Sew's data.
 - **Outside mail forwards still waiting for a confirm:** K2 no longer asks for one. Those set in the 7 days before you update turn on by themselves over a few minutes, and each address gets an email first with a link to stop it. Older ones stay off and send nothing until someone sets them again (`k2 hostmail forward add`). You get one notice listing both, and `k2 hostmail forward list` shows them.
 - **Access changes reach signed-in people at their next request.** A role, room or cap you changed sometimes waited until the person signed in again. Now adding and removing both apply at once, so the `--apply-tokens` flag on `k2 app user rooms` is gone.

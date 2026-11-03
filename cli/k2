@@ -8090,7 +8090,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         for its own workspace's Apps (from its workspace's address,
                                         under its email sending mode). Links expire (k2 app login settings)
   k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
-                                        An agent with "Let this agent manage its Apps' users" on: K2 mails
+                                        An agent with "Let this agent manage its Apps' users" on, for a login
+                                        that signs in only on your workspace's Apps: K2 mails
                                         the person the App's reset link, to the email on the login, from the
                                         App's address (you never see the link). Sending it takes nothing away; access
                                         held back until they set a password starts when they do.
@@ -8135,7 +8136,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user unlock <username> [--json]
                                         Clear K2's sign-in lockout (the owner, an admin for App-only users,
                                         or an agent with the App-users switch for a login on its own App;
-                                        audited). The password stays the same.
+                                        audited). The password stays the same. An agent clears one login
+                                        at most 6 times an hour (429 unlock_limit); the owner has no cap.
   k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
                                         A person's chat (their chat account, k2:principal:<id>); no scope = show it.
                                         The owner: anyone (--app: that App's user). An agent: its own App's
@@ -8605,8 +8607,9 @@ See and run it:
                                        which you can still roll back to.
   k2 app history <app-id> --users      What happened to its people: a login released (the
                                        person chose their own password, so held access started; says who
-                                       set it up; a record, not proof no one else knows it), a reset started,
-                                       a link taken back, a lockout cleared,
+                                       set it up; a record, not proof no one else knows it), a login added,
+                                       its password or email set (never the password itself), a role or its
+                                       rooms, caps or folders changed, a reset started, a link taken back, a lockout cleared,
                                        sessions ended, a login removed, rooms changed.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]

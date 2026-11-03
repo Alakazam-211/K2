@@ -46,7 +46,7 @@ import {
 import { errorText, useLlmAccountsStore, type LlmAccountsDoc } from '@/stores/llm-accounts'
 import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
-import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
+import { BrowserGlobe, BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
@@ -120,7 +120,7 @@ export function buildPlusMenuItems(
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: 'Terminal', shortcut: metaChordLabel('Meta+T') ?? undefined },
     { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
-    { id: 'browser', label: 'Browser' },
+    { id: 'browser', label: 'Browser', icon: <BrowserGlobe className="w-3.5 h-3.5" /> },
   ]
   items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
   if (mobile) {

@@ -303,6 +303,7 @@ describe('tab bar plus menu', () => {
     const items = useContextMenuStore.getState().items
     expect(items.map((item) => item.label)).toEqual(['Terminal', 'New File', 'Browser', 'Design', 'Mobile', 'Changes'])
     expect(items.some((item) => item.type === 'separator')).toBe(false)
+    expect(items.find((item) => item.id === 'browser')?.icon).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Off' })).toBeNull()
   })
 

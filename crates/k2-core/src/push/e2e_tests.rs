@@ -106,6 +106,8 @@ const CANARIES: &[&str] = &[
     "pr_c4a2f00d",
     "CanarySettingWv",
     "out_canary7q",
+    // A chat named in a `read` hint (push-read-hints-v1).
+    "read-canary-31",
 ];
 
 fn canary_events() -> Vec<PushEvent> {
@@ -161,6 +163,7 @@ fn canary_events() -> Vec<PushEvent> {
             unread_total: "3".into(),
             waiting_total: "1".into(),
             stale: Default::default(),
+            read: ReadHint::of(vec![ReadEntry { kind: ReadKind::Thread, id: "read-canary-31".into(), seq: 7 }]),
         }),
         // Sew S30: an agent's chat post waits for approval (no body ever).
         PushEvent::ChatApprovalRequested {
@@ -237,8 +240,8 @@ fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
                 assert!(!sealed);
                 let wire = body.to_string();
                 if matches!(event, PushEvent::Badge(_)) {
-                    // This badge has no `stale`, so it's today's payload.
-                    assert_eq!(body["payload"], K2Cloud::payload(&event, &PushStamp { subdomain: "rosson".into(), instance_id: legacy_golden::GOLDEN_INSTANCE.into() }, "0123456789abcdef0123456789abcdef"));
+                    // Today's payload, with no hints.
+                    assert_eq!(body["payload"], K2Cloud::payload(&event.without_hints(), &PushStamp { subdomain: "rosson".into(), instance_id: legacy_golden::GOLDEN_INSTANCE.into() }, "0123456789abcdef0123456789abcdef"));
                     continue;
                 }
                 for c in CANARIES.iter().filter(|c| **c != "rosson" && **c != "9f2c0a1b3d4e5f60") {
@@ -399,6 +402,7 @@ fn the_stale_hint_carries_ids_and_seqs_only() {
         unread_total: "3".into(),
         waiting_total: "1".into(),
         stale: stale.clone(),
+        read: Default::default(),
     });
     let (sk2, mut k2) = phone_key(51);
     k2.v = 2;
@@ -464,6 +468,7 @@ fn the_stale_hint_carries_ids_and_seqs_only() {
         unread_total: "9".into(),
         waiting_total: "0".into(),
         stale: StaleHint::of(many),
+        read: Default::default(),
     };
     let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
     let fitted = e2e::fit_nudge_in(&e2e::nudge_plaintext_in(&b, &ctx, seal::Format::V2), seal::Format::V2).expect("fits");
@@ -478,6 +483,243 @@ fn the_stale_hint_carries_ids_and_seqs_only() {
     let nine = StaleHint::of((0..9).map(|i| (format!("c{i}"), i)).collect());
     assert_eq!(nine.pairs.len(), STALE_MAX_PAIRS);
     assert!(nine.more);
+}
+
+fn read_entry(kind: ReadKind, id: &str, seq: i64) -> ReadEntry {
+    ReadEntry { kind, id: id.into(), seq }
+}
+
+/// A UUID-shaped id, as real conversation and group ids are.
+fn uuid_id(i: usize) -> String {
+    format!("7f3c2a1e-0b4d-4c8e-9a1f-{i:012x}")
+}
+
+/// push-read-hints-v1: the wire value. Newest read first, `t:` and `p:`, at
+/// most 8, and an id the comma list can't hold is left out with `more` set.
+#[test]
+fn the_read_hint_wire_value() {
+    let two = ReadHint::of(vec![read_entry(ReadKind::Thread, "c-1", 42), read_entry(ReadKind::Project, "g-9", 7)]);
+    assert_eq!(two.wire(), "t:c-1:42,p:g-9:7");
+    assert!(!two.more);
+
+    let nine = ReadHint::of((0..9).map(|i| read_entry(ReadKind::Thread, &format!("c{i}"), i)).collect());
+    assert_eq!(nine.entries.len(), READ_MAX_ENTRIES);
+    assert!(nine.more);
+    assert!(nine.wire().starts_with("t:c0:0,t:c1:1,"), "the newest are kept: {}", nine.wire());
+    assert!(!nine.wire().contains("c8"), "{}", nine.wire());
+
+    let eight = ReadHint::of((0..8).map(|i| read_entry(ReadKind::Thread, &format!("c{i}"), i)).collect());
+    assert_eq!(eight.entries.len(), 8);
+    assert!(!eight.more, "exactly 8 leaves nothing out");
+
+    // A colon in an id is fine: the kind is before the first, the seq after the last.
+    assert_eq!(ReadHint::of(vec![read_entry(ReadKind::Thread, "a:b", 3)]).wire(), "t:a:b:3");
+
+    for bad in ["with,comma", "", &"x".repeat(READ_ID_MAX_BYTES + 1)] {
+        let h = ReadHint::of(vec![read_entry(ReadKind::Thread, bad, 5), read_entry(ReadKind::Project, "g-1", 2)]);
+        assert_eq!(h.wire(), "p:g-1:2", "{bad:?} is left out");
+        assert!(h.more, "{bad:?} sets more");
+    }
+    let longest = "x".repeat(READ_ID_MAX_BYTES);
+    assert!(!ReadHint::of(vec![read_entry(ReadKind::Thread, &longest, 5)]).more, "the longest id allowed stays");
+
+    // Bad ids don't use up the 8.
+    let mut mixed = vec![read_entry(ReadKind::Thread, "a,b", 1)];
+    mixed.extend((0..8).map(|i| read_entry(ReadKind::Thread, &format!("c{i}"), i)));
+    let h = ReadHint::of(mixed);
+    assert_eq!(h.entries.len(), 8);
+    assert!(h.more);
+}
+
+fn read_badge(read: ReadHint) -> PushEvent {
+    PushEvent::Badge(BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "3".into(),
+        waiting_total: "1".into(),
+        stale: StaleHint::of(vec![("c-stale".into(), 11)]),
+        read,
+    })
+}
+
+/// push-read-hints-v1: on today's path `read` is in the clear for an iPhone
+/// and missing for an Android phone (that's a second call); a format-2 nudge
+/// seals it and a format-1 nudge never carries it. Nothing else is new.
+#[test]
+fn the_read_hint_rides_each_lane_as_the_contract_says() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    const ID: &str = "read-canary-31";
+    let read = ReadHint::of(vec![read_entry(ReadKind::Thread, ID, 42), read_entry(ReadKind::Project, "g-9", 7)]);
+    let (sk2, mut k2) = phone_key(61);
+    k2.v = 2;
+    let (sk1, k1) = phone_key(62);
+    let (sk2f, mut k2f) = phone_key(63);
+    k2f.v = 2;
+    let devices = vec![
+        register("rd-v2", "apns", "tok-rd-v2", true, Some(&k2)),
+        register("rd-v2-fcm", "fcm", "tok-rd-v2-fcm", true, Some(&k2f)),
+        register("rd-v1", "apns", "tok-rd-v1", true, Some(&k1)),
+        register("rd-apns", "apns", "tok-rd-apns", true, None),
+        register("rd-fcm", "fcm", "tok-rd-fcm", true, None),
+    ];
+    let url = unique_url("read");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+    cloud
+        .dispatch_in_mode(&read_badge(read.clone()), "bk-test", &devices, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 4, "plain APNs, plain FCM, format 1, format 2: {calls:?}");
+
+    // Today's path, split by platform.
+    let plain = |platform: &str| -> serde_json::Value {
+        let hits: Vec<_> = calls.iter().filter(|c| !c.2 && c.1["devices"][0]["platform"] == platform).collect();
+        assert_eq!(hits.len(), 1, "one plain call for {platform}");
+        assert_eq!(hits[0].1["devices"].as_array().expect("devices").len(), 1, "{platform} only");
+        hits[0].1["payload"].clone()
+    };
+    let apns = plain("apns");
+    assert_eq!(apns["data"]["read"], format!("t:{ID}:42,p:g-9:7"));
+    assert!(apns["data"].get("readMore").is_none(), "only when entries were left out");
+    assert!(apns.get("title").is_none() && apns.get("body").is_none() && apns.get("sound").is_none(), "silent");
+    for (k, v) in apns["data"].as_object().expect("data") {
+        assert!(v.is_string(), "{k}: every data value is a string");
+        assert!(
+            ["kind", "unreadTotal", "waitingTotal", "badgeKey", "subdomain", "instanceId", "stale", "read"].contains(&k.as_str()),
+            "unexpected key {k}"
+        );
+    }
+    let fcm = plain("fcm");
+    assert!(!fcm.to_string().contains(ID), "Google is never shown a read id: {fcm}");
+    assert!(fcm["data"].get("read").is_none() && fcm["data"].get("readMore").is_none());
+    assert_eq!(fcm["data"]["unreadTotal"], "3", "the rest of the badge stays");
+    assert_eq!(fcm["data"]["stale"], "c-stale:11", "stale as today");
+
+    // Sealed: nothing outside the blob names a chat.
+    let nudge = |v: &str| calls.iter().find(|c| c.2 && c.1["payload"]["data"]["v"] == v).expect("nudge").1.clone();
+    for v in ["1", "2"] {
+        let mut outside = nudge(v);
+        for d in outside["devices"].as_array_mut().expect("devices") {
+            d["e2e"] = "".into();
+        }
+        let text = outside.to_string();
+        assert!(!text.contains(ID) && !text.contains("g-9") && !text.contains("read"), "{text}");
+    }
+    let open = |sk: &[u8], psk: &[u8], body: &serde_json::Value, i: usize| -> serde_json::Value {
+        let blob = body["devices"][i]["e2e"].as_str().expect("e2e");
+        serde_json::from_slice(&seal::open(SealKind::Nudge, sk, psk, blob).expect("open")).expect("json")
+    };
+    let n2 = nudge("2");
+    assert_eq!(n2["devices"].as_array().expect("devices").len(), 2, "both format-2 phones in one call");
+    let at = |token: &str| {
+        n2["devices"].as_array().expect("devices").iter().position(|d| d["token"] == token).expect("device")
+    };
+    let want2 = serde_json::json!({
+        "unreadTotal": "3", "waitingTotal": "1", "stale": "c-stale:11", "read": format!("t:{ID}:42,p:g-9:7"),
+    });
+    assert_eq!(open(&sk2, &k2.psk, &n2, at("tok-rd-v2"))["data"], want2);
+    assert_eq!(open(&sk2f, &k2f.psk, &n2, at("tok-rd-v2-fcm"))["data"], want2, "sealed, Google sees nothing");
+    assert_eq!(
+        open(&sk1, &k1.psk, &nudge("1"), 0)["data"],
+        serde_json::json!({ "unreadTotal": "3", "waitingTotal": "1" }),
+        "format 1: totals only"
+    );
+
+    // `readMore` rides with it, in the clear and sealed.
+    relay.clear();
+    let more = ReadHint { more: true, ..read.clone() };
+    let keyed = vec![devices[0].clone(), devices[3].clone()];
+    // The fake relay's answers don't list `s2`, which took it away just now.
+    e2e::note_relay_caps(&url, true, true);
+    cloud.dispatch_in_mode(&read_badge(more), "bk-test", &keyed, PushE2eMode::SealedWhenSupported).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2);
+    let plain = &calls.iter().find(|c| !c.2).expect("plain").1;
+    assert_eq!(plain["payload"]["data"]["readMore"], "1");
+    let sealed = &calls.iter().find(|c| c.2).expect("sealed").1;
+    assert_eq!(open(&sk2, &k2.psk, sealed, 0)["data"]["readMore"], "1");
+
+    // A badge with no hint is one call, as today.
+    relay.clear();
+    let plain_only = vec![devices[3].clone(), devices[4].clone()];
+    cloud
+        .dispatch_in_mode(&read_badge(ReadHint::default()), "bk-test", &plain_only, PushE2eMode::SealedWhenSupported)
+        .expect("dispatch");
+    assert_eq!(relay.calls().len(), 1, "no hint, no split");
+}
+
+/// push-read-hints-v1: the fitter drops `stale` before `read`. The worst
+/// case (8 + 8 UUID pairs, a 63-character server name) fits with every read
+/// entry kept; a hint too big even so loses `read` from its end; the totals
+/// never shrink, and it's never `TooLarge` while pairs remain.
+#[test]
+fn the_nudge_fitter_trims_stale_first_then_read() {
+    let stale: Vec<(String, i64)> = (0..8).map(|i| (uuid_id(i), 9_000_000 + i as i64)).collect();
+    let read: Vec<ReadEntry> = (0..8).map(|i| read_entry(ReadKind::Thread, &uuid_id(0x10 + i), 9_100_000 + i as i64)).collect();
+    let badge = |stale: Vec<(String, i64)>, read: Vec<ReadEntry>| BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec![],
+        unread_total: "9".into(),
+        waiting_total: "2".into(),
+        stale: StaleHint { pairs: stale, more: true },
+        read: ReadHint { entries: read, more: false },
+    };
+    let ctx = |sub: String| e2e::SealCtx {
+        kid: "0011223344556677".into(),
+        ctr: 1_760_960_000_123,
+        ts: 1_760_960_000,
+        stamp: PushStamp { subdomain: sub, instance_id: "9f2c0a1b3d4e5f60".into() },
+        badge_key: "0123456789abcdef0123456789abcdef".into(),
+    };
+    let max = seal::Format::V2.max_json(SealKind::Nudge);
+    let fit = |b: &BadgePush, sub: &str| -> Result<serde_json::Value, seal::SealError> {
+        let bytes = e2e::fit_nudge_in(&e2e::nudge_plaintext_in(b, &ctx(sub.into()), seal::Format::V2), seal::Format::V2)?;
+        assert!(bytes.len() <= max, "{} > {max}", bytes.len());
+        Ok(serde_json::from_slice(&bytes).expect("json"))
+    };
+
+    // Short server name: everything fits, nothing is touched.
+    let out = fit(&badge(stale.clone(), read.clone()), "rosson").expect("fits");
+    assert_eq!(out["data"]["stale"].as_str().expect("stale").split(',').count(), 8);
+    assert_eq!(out["data"]["read"].as_str().expect("read").split(',').count(), 8);
+    assert!(out["data"].get("readMore").is_none());
+
+    // 63-character server name: `stale` pays, every read entry stays.
+    let long = "s".repeat(63);
+    let out = fit(&badge(stale.clone(), read.clone()), &long).expect("fits");
+    let left = out["data"]["stale"].as_str().expect("some stale kept").split(',').count();
+    assert!((1..8).contains(&left), "{left}");
+    assert_eq!(out["data"]["staleMore"], "1");
+    assert_eq!(out["data"]["read"].as_str().expect("read").split(',').count(), 8, "read is untouched");
+    assert!(out["data"].get("readMore").is_none());
+    assert_eq!(out["data"]["unreadTotal"], "9");
+    assert_eq!(out["data"]["waitingTotal"], "2");
+    assert_eq!(out["srv"]["sub"], long.as_str());
+
+    // Eight 128-byte ids alone don't fit: `stale` is gone, `read` shrinks from the end.
+    let big: Vec<ReadEntry> =
+        (0..8).map(|i| read_entry(ReadKind::Thread, &format!("{i}-{}", "x".repeat(READ_ID_MAX_BYTES - 2)), i as i64)).collect();
+    let out = fit(&badge(stale.clone(), big), "rosson").expect("fits");
+    assert!(out["data"].get("stale").is_none(), "stale goes first");
+    assert_eq!(out["data"]["staleMore"], "1");
+    assert_eq!(out["data"]["readMore"], "1");
+    let kept: Vec<&str> = out["data"]["read"].as_str().expect("some read kept").split(',').collect();
+    assert!((1..8).contains(&kept.len()), "{}", kept.len());
+    assert!(kept[0].starts_with("t:0-"), "the newest stay: {}", kept[0]);
+    assert_eq!(out["data"]["unreadTotal"], "9");
+
+    // Format 1 never gets there: no hint in its plaintext at all.
+    let v1 = e2e::nudge_plaintext_in(&badge(stale, read), &ctx("rosson".into()), seal::Format::V1);
+    assert_eq!(v1["data"], serde_json::json!({ "unreadTotal": "9", "waitingTotal": "2" }));
+    e2e::fit_nudge(&v1).expect("totals fit format 1");
+
+    // A server name that can't fit is still too large, as today, once no pair is left.
+    let huge = "s".repeat(max + 1);
+    let b = badge(vec![], vec![read_entry(ReadKind::Thread, "c-1", 1)]);
+    assert!(matches!(fit(&b, &huge), Err(seal::SealError::TooLarge { .. })));
 }
 
 /// Today's bodies, byte for byte, with keys registered: the switch `off`,
@@ -1032,7 +1274,7 @@ fn msg_rides_only_inside_sealed_alerts() {
     assert!(!wire.contains(MSG_CANARY) && !wire.contains("\"msg\""), "{wire}");
     // The nudge plaintext never has msg (a badge push has no post).
     let ctx = e2e::SealCtx { kid: "k".into(), ctr: 1, ts: 1, stamp: PushStamp::default(), badge_key: "b".into() };
-    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into(), stale: Default::default() };
+    let badge = BadgePush { principal: "o".into(), device_usernames: vec![], unread_total: "1".into(), waiting_total: "0".into(), stale: Default::default(), read: Default::default() };
     assert!(e2e::nudge_plaintext(&badge, &ctx).get("msg").is_none());
 }
 
@@ -1365,7 +1607,7 @@ fn has_totals(event: &PushEvent) -> bool {
     matches!(event, PushEvent::ThreadPost(_) | PushEvent::ProjectPost(_))
 }
 
-/// A badge whose `stale` names a chat, with more left out.
+/// A badge whose `stale` and `read` name chats, with more left out.
 fn stale_badge() -> BadgePush {
     let mut pairs: Vec<(String, i64)> = vec![("conv-canary-77".into(), 42)];
     pairs.extend((0..8).map(|i| (format!("grp-canary-9-{i}"), i)));
@@ -1375,6 +1617,10 @@ fn stale_badge() -> BadgePush {
         unread_total: "3".into(),
         waiting_total: "1".into(),
         stale: StaleHint::of(pairs),
+        read: ReadHint {
+            entries: vec![ReadEntry { kind: ReadKind::Project, id: "read-canary-31".into(), seq: 9 }],
+            more: true,
+        },
     }
 }
 
@@ -1391,7 +1637,8 @@ fn assert_bare_badge(body: &serde_json::Value, what: &str) {
     let wire = body.to_string();
     assert_no_content(&wire, what);
     assert!(!wire.contains("stale"), "{what}: {wire}");
-    let bare = PushEvent::Badge(BadgePush { stale: StaleHint::default(), ..stale_badge() });
+    assert!(body["payload"]["data"].get("read").is_none() && body["payload"]["data"].get("readMore").is_none(), "{what}: {wire}");
+    let bare = PushEvent::Badge(BadgePush { stale: StaleHint::default(), read: ReadHint::default(), ..stale_badge() });
     let stamp = PushStamp { subdomain: "rosson".into(), instance_id: instance_id() };
     assert_eq!(body["payload"], K2Cloud::payload(&bare, &stamp, LEAK_BK), "{what}: today's badge, no hints");
     let data = body["payload"]["data"].as_object().expect("data");

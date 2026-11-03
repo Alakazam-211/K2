@@ -151,6 +151,7 @@ pub(crate) fn build() -> serde_json::Value {
                     unread_total: "4".into(),
                     waiting_total: "1".into(),
                     stale: Default::default(),
+                    read: Default::default(),
                 },
                 &ctx(1_760_960_000_128),
             ),
@@ -389,7 +390,12 @@ fn badge(stale: StaleHint) -> BadgePush {
         unread_total: "4".into(),
         waiting_total: "1".into(),
         stale,
+        read: Default::default(),
     }
+}
+
+fn read_entry(kind: ReadKind, id: &str, seq: i64) -> ReadEntry {
+    ReadEntry { kind, id: id.into(), seq }
 }
 
 /// The format-2 vectors document: the same recipient, PSK and shape as the
@@ -407,6 +413,9 @@ pub(crate) fn build_v2() -> serde_json::Value {
     let reply_long = "Release notes draft, section by section. ".repeat(120);
     let stale9: Vec<(String, i64)> =
         (0..9).map(|i| (format!("7f3c2a1e-0b4d-4c8e-9a1f-{:012x}", 0xa0 + i), 400 - i as i64)).collect();
+    let read9: Vec<ReadEntry> = (0..9)
+        .map(|i| read_entry(ReadKind::Thread, &format!("7f3c2a1e-0b4d-4c8e-9a1f-{:012x}", 0xb0 + i), 500 - i as i64))
+        .collect();
     let cases: Vec<(&str, SealKind, serde_json::Value, String)> = vec![
         (
             "v2-alert-thread-msg-full",
@@ -445,6 +454,33 @@ pub(crate) fn build_v2() -> serde_json::Value {
             SealKind::Nudge,
             e2e::nudge_plaintext_in(&badge(StaleHint::of(stale9)), &ctx(1_760_960_000_205), f),
             "Nine stale chats: the newest 8 ride, `staleMore: \"1\"` says more changed (catch up on foreground).".into(),
+        ),
+        (
+            "v2-nudge-read",
+            SealKind::Nudge,
+            e2e::nudge_plaintext_in(
+                &BadgePush {
+                    read: ReadHint::of(vec![read_entry(ReadKind::Thread, "c-77", 418), read_entry(ReadKind::Project, "pg-9", 7)]),
+                    ..badge(StaleHint::of(vec![("c-9".into(), 12)]))
+                },
+                &ctx(1_760_960_000_206),
+                f,
+            ),
+            "push-read-hints-v1: `data.read` = t:<conversationId>:<seq> and p:<groupId>:<seq>, newest read first. The \
+             phone removes that chat's notifications with seq <= the given seq. Ids and seqs only."
+                .into(),
+        ),
+        (
+            "v2-nudge-read-more",
+            SealKind::Nudge,
+            e2e::nudge_plaintext_in(
+                &BadgePush { read: ReadHint::of(read9), ..badge(StaleHint::default()) },
+                &ctx(1_760_960_000_207),
+                f,
+            ),
+            "Nine chats read at once: the newest 8 ride, `readMore: \"1\"` says more were left out (they clear on \
+             the next open)."
+                .into(),
         ),
     ];
 
@@ -496,7 +532,7 @@ pub(crate) fn build_v2() -> serde_json::Value {
                   PSK, psk_id, padding rule, plaintext schema with \"v\":1) except: blob byte 0 = 0x02 (in the \
                   AAD), the alert plaintext is padded to 2880 bytes and the nudge to 1024, so a blob is 2963 / 1107 \
                   bytes = 3951 / 1476 base64url characters, and the relay's data.v is \"2\". A format-2 nudge may \
-                  carry data.stale / data.staleMore. Pick the format by length; byte 0 must agree.",
+                  carry data.stale / data.staleMore and data.read / data.readMore. Pick the format by length; byte 0 must agree.",
         "version": 2,
         "suite": {
             "name": seal::SUITE_NAME,
@@ -588,7 +624,7 @@ fn the_daemon_seals_the_v2_vectors_byte_for_byte() {
     assert_eq!(doc["sizes"]["alertPaddedPlaintext"], 2880);
     assert_eq!(doc["sizes"]["nudgePaddedPlaintext"], 1024);
     let cases = doc["cases"].as_array().expect("cases");
-    assert_eq!(cases.len(), 5);
+    assert_eq!(cases.len(), 7);
     for c in cases {
         let name = c["name"].as_str().expect("name");
         let kind = if c["kind"] == "nudge" { SealKind::Nudge } else { SealKind::Alert };
@@ -620,4 +656,11 @@ fn the_daemon_seals_the_v2_vectors_byte_for_byte() {
     let more = pt("v2-nudge-stale-more");
     assert_eq!(more["data"]["staleMore"], "1");
     assert_eq!(more["data"]["stale"].as_str().expect("stale").split(',').count(), 8);
+    let read = pt("v2-nudge-read");
+    assert_eq!(read["data"]["read"], "t:c-77:418,p:pg-9:7");
+    assert_eq!(read["data"]["stale"], "c-9:12", "both hints ride together");
+    assert!(read["data"].get("readMore").is_none());
+    let read_more = pt("v2-nudge-read-more");
+    assert_eq!(read_more["data"]["readMore"], "1");
+    assert_eq!(read_more["data"]["read"].as_str().expect("read").split(',').count(), 8);
 }

@@ -136,6 +136,7 @@ pub(crate) fn golden_events() -> Vec<(String, PushEvent)> {
                 unread_total: "3".into(),
                 waiting_total: "1".into(),
                 stale: Default::default(),
+                read: Default::default(),
             }),
         ),
     ];

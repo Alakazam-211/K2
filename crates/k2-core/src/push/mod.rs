@@ -151,6 +151,9 @@ pub struct BadgePush {
     /// push-content-available-v1 (0.46.7): which of the person's chats
     /// changed without an alert to them. Empty = a plain badge push.
     pub stale: StaleHint,
+    /// push-read-hints-v1: which of the person's chats they read, so a
+    /// phone can clear those notifications. Empty = a plain badge push.
+    pub read: ReadHint,
 }
 
 /// The `stale` hint on a silent push (push-content-available-v1, 0.46.7):
@@ -183,6 +186,85 @@ impl StaleHint {
     /// The wire value: `"c-1:42,c-9:7"`.
     pub fn wire(&self) -> String {
         self.pairs.iter().map(|(c, s)| format!("{c}:{s}")).collect::<Vec<_>>().join(",")
+    }
+}
+
+/// Which kind of chat a [`ReadEntry`] names (`t:` or `p:` on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReadKind {
+    Thread,
+    Project,
+}
+
+impl ReadKind {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Thread => "t",
+            Self::Project => "p",
+        }
+    }
+
+    /// The kind of a read cursor ([`crate::read_state::KIND_THREAD`] or
+    /// [`crate::read_state::KIND_PROJECT`]).
+    pub fn of_cursor(kind: &str) -> Option<Self> {
+        match kind {
+            crate::read_state::KIND_THREAD => Some(Self::Thread),
+            crate::read_state::KIND_PROJECT => Some(Self::Project),
+            _ => None,
+        }
+    }
+}
+
+/// One chat a person read: their cursor in it after the read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadEntry {
+    pub kind: ReadKind,
+    pub id: String,
+    pub seq: i64,
+}
+
+impl ReadEntry {
+    /// Can this entry ride the comma list? An id with a `,` would split it.
+    fn fits_the_list(&self) -> bool {
+        !self.id.is_empty() && !self.id.contains(',') && self.id.len() <= READ_ID_MAX_BYTES
+    }
+}
+
+/// The `read` hint on a silent push (push-read-hints-v1): the chats a
+/// person just read, newest read first, as `t:<conversationId>:<seq>` and
+/// `p:<groupId>:<seq>`. A phone clears that chat's notifications up to
+/// `seq`. Ids and seqs only, never content or names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadHint {
+    /// At most [`READ_MAX_ENTRIES`], newest read first.
+    pub entries: Vec<ReadEntry>,
+    /// Entries were left out (`readMore: "1"`).
+    pub more: bool,
+}
+
+/// Most `read` entries one silent push carries.
+pub const READ_MAX_ENTRIES: usize = 8;
+/// A longer id is left out of `read`, so one odd id can't crowd out the rest.
+pub const READ_ID_MAX_BYTES: usize = 128;
+
+impl ReadHint {
+    /// Up to [`READ_MAX_ENTRIES`] of `entries` (newest first); `more` when
+    /// some were left out, either over the limit or with an id the list
+    /// can't hold.
+    pub fn of(entries: Vec<ReadEntry>) -> Self {
+        let total = entries.len();
+        let usable: Vec<ReadEntry> = entries.into_iter().filter(ReadEntry::fits_the_list).take(READ_MAX_ENTRIES).collect();
+        let more = usable.len() < total;
+        Self { entries: usable, more }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The wire value: `"t:c-1:42,p:g-9:7"`.
+    pub fn wire(&self) -> String {
+        self.entries.iter().map(|e| format!("{}:{}:{}", e.kind.wire(), e.id, e.seq)).collect::<Vec<_>>().join(",")
     }
 }
 
@@ -569,11 +651,20 @@ impl PushEvent {
     }
 
     /// The same push with nothing that names a chat: a badge without its
-    /// `stale` pairs, for anything outside the seal. Other kinds are
-    /// returned unchanged.
+    /// `stale` pairs or `read` entries, for anything outside the seal. Other
+    /// kinds are returned unchanged.
     pub fn without_hints(&self) -> PushEvent {
         match self {
-            Self::Badge(b) => Self::Badge(BadgePush { stale: StaleHint::default(), ..b.clone() }),
+            Self::Badge(b) => Self::Badge(BadgePush { stale: StaleHint::default(), read: ReadHint::default(), ..b.clone() }),
+            other => other.clone(),
+        }
+    }
+
+    /// The same push without its `read` hint. Other kinds are returned
+    /// unchanged.
+    pub fn without_read(&self) -> PushEvent {
+        match self {
+            Self::Badge(b) => Self::Badge(BadgePush { read: ReadHint::default(), ..b.clone() }),
             other => other.clone(),
         }
     }
@@ -596,7 +687,13 @@ impl PushEvent {
             unread_total: unread_total.clone(),
             waiting_total: waiting_total.clone(),
             stale: StaleHint::default(),
+            read: ReadHint::default(),
         }))
+    }
+
+    /// True for a badge push carrying a `read` hint.
+    fn has_read_hint(&self) -> bool {
+        matches!(self, Self::Badge(b) if !b.read.is_empty() || b.read.more)
     }
 
     /// The local budget a send of this event draws from (TP2).
@@ -1514,6 +1611,13 @@ impl K2Cloud {
                     data.insert("staleMore", "1");
                 }
             }
+            // push-read-hints-v1: plus `read` (ids + seqs only).
+            if !b.read.is_empty() {
+                data.insert("read", b.read.wire());
+            }
+            if b.read.more {
+                data.insert("readMore", "1");
+            }
             return serde_json::json!({ "data": data });
         }
         let mut payload = serde_json::json!({
@@ -1633,6 +1737,19 @@ impl K2Cloud {
         event: &PushEvent,
         devices: &'a [crate::push_devices::PushDevice],
     ) -> Vec<(PushEvent, Vec<&'a crate::push_devices::PushDevice>)> {
+        // push-read-hints-v1: on this path `read` is in the clear, and only
+        // iOS clears notifications from it, so Google is never shown it.
+        if event.has_read_hint() {
+            let (apns, other): (Vec<_>, Vec<_>) = devices.iter().partition(|d| d.platform == "apns");
+            let mut out = Vec::new();
+            if !apns.is_empty() {
+                out.push((event.clone(), apns));
+            }
+            if !other.is_empty() {
+                out.push((event.without_read(), other));
+            }
+            return out;
+        }
         if !event.has_preview() {
             return if devices.is_empty() { Vec::new() } else { vec![(event.clone(), devices.iter().collect())] };
         }
@@ -2448,6 +2565,7 @@ mod tests {
             unread_total: "3".into(),
             waiting_total: "1".into(),
             stale: Default::default(),
+            read: Default::default(),
         })
     }
 

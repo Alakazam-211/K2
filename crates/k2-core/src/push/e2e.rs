@@ -401,7 +401,9 @@ pub fn nudge_plaintext(b: &BadgePush, ctx: &SealCtx) -> serde_json::Value {
 /// [`nudge_plaintext`] in `format`. Format 2 (push-content-available-v1,
 /// 0.46.7) also carries the stale hint inside the blob: `data.stale` =
 /// `"<conversationId>:<seq>,…"` (newest first) and `data.staleMore` =
-/// `"1"` when pairs were left out. Ids and seqs only, never content.
+/// `"1"` when pairs were left out, and the read hint (push-read-hints-v1):
+/// `data.read` = `"t:<conversationId>:<seq>,p:<groupId>:<seq>,…"` and
+/// `data.readMore` = `"1"`. Ids and seqs only, never content.
 pub fn nudge_plaintext_in(b: &BadgePush, ctx: &SealCtx, format: seal::Format) -> serde_json::Value {
     let mut m = head(super::seal::WIRE_KIND_NUDGE, ctx);
     let mut data = serde_json::json!({ "unreadTotal": b.unread_total, "waitingTotal": b.waiting_total });
@@ -409,6 +411,14 @@ pub fn nudge_plaintext_in(b: &BadgePush, ctx: &SealCtx, format: seal::Format) ->
         data["stale"] = b.stale.wire().into();
         if b.stale.more {
             data["staleMore"] = "1".into();
+        }
+    }
+    if format == seal::Format::V2 {
+        if !b.read.is_empty() {
+            data["read"] = b.read.wire().into();
+        }
+        if b.read.more {
+            data["readMore"] = "1".into();
         }
     }
     m.insert("data".into(), data);
@@ -514,8 +524,11 @@ pub fn fit_nudge(v: &serde_json::Value) -> Result<Vec<u8>, SealError> {
     fit_nudge_in(v, seal::Format::V1)
 }
 
-/// [`fit_nudge`] within `format`'s bucket. A stale hint that doesn't fit
-/// loses pairs from its end (`staleMore: "1"`); the totals never shrink.
+/// [`fit_nudge`] within `format`'s bucket. A hint that doesn't fit loses
+/// pairs from its end: all of `stale` first (`staleMore: "1"`), then `read`
+/// (`readMore: "1"`). A clear on the lock screen is what the person sees; a
+/// stale marker is invisible and the foreground catch-up covers it. The
+/// totals never shrink.
 pub fn fit_nudge_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u8>, SealError> {
     let max = format.max_json(SealKind::Nudge);
     let bytes = json_bytes(v);
@@ -523,21 +536,22 @@ pub fn fit_nudge_in(v: &serde_json::Value, format: seal::Format) -> Result<Vec<u
         return Ok(bytes);
     }
     let mut v = v.clone();
-    loop {
-        let Some(stale) = v.pointer("/data/stale").and_then(|s| s.as_str()).map(str::to_string) else { break };
-        let mut pairs: Vec<&str> = stale.split(',').collect();
-        pairs.pop();
-        if pairs.is_empty() {
-            if let Some(d) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
-                d.remove("stale");
+    for (list, more) in [("stale", "staleMore"), ("read", "readMore")] {
+        while let Some(pairs) = v.pointer(&format!("/data/{list}")).and_then(|s| s.as_str()).map(str::to_string) {
+            let mut pairs: Vec<&str> = pairs.split(',').collect();
+            pairs.pop();
+            if pairs.is_empty() {
+                if let Some(d) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
+                    d.remove(list);
+                }
+            } else {
+                v["data"][list] = pairs.join(",").into();
             }
-        } else {
-            v["data"]["stale"] = pairs.join(",").into();
-        }
-        v["data"]["staleMore"] = "1".into();
-        let bytes = json_bytes(&v);
-        if bytes.len() <= max {
-            return Ok(bytes);
+            v["data"][more] = "1".into();
+            let bytes = json_bytes(&v);
+            if bytes.len() <= max {
+                return Ok(bytes);
+            }
         }
     }
     let bytes = json_bytes(&v);
@@ -579,7 +593,7 @@ pub fn sealed_dispatch_body_in(kind: SealKind, format: seal::Format, entries: &[
 /// legacy-generic): "K2" / "New message", `data = {kind, badgeKey,
 /// subdomain, instanceId, unreadTotal, waitingTotal}`. No names, preview,
 /// ids, `threadId` or `collapseId`. A badge push keeps today's payload
-/// minus its `stale` chat ids.
+/// minus its `stale` and `read` chat ids.
 pub fn generic_payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) -> serde_json::Value {
     if let PushEvent::Badge(_) = event {
         return super::K2Cloud::payload(&event.without_hints(), stamp, badge_key);

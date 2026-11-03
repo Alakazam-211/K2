@@ -200,6 +200,7 @@ impl Coalescer {
             unread_total: totals.total.to_string(),
             waiting_total: totals.waiting_total.to_string(),
             stale: k2_core::push::StaleHint::of(pairs),
+            read: Default::default(),
         }));
     }
 
@@ -593,6 +594,7 @@ mod tests {
             unread_total: "1".into(),
             waiting_total: "0".into(),
             stale: Default::default(),
+            read: Default::default(),
         });
         assert_eq!(e.budget_class(), k2_core::push::budget::BudgetClass::Badge);
     }

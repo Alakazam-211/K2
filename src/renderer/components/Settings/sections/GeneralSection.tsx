@@ -67,10 +67,10 @@ import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
 import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
   { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools: one click to install them (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
+  { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
@@ -208,7 +208,6 @@ export function GeneralSection(): React.JSX.Element {
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] w-full max-w-xl">
       {tab === 'general' && (
       <div className="space-y-4">
-        <StartPageRow />
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">
@@ -363,6 +362,8 @@ export function GeneralSection(): React.JSX.Element {
         {/* Git (0.46.4): the server's git, and on a Mac without Apple's
             command line tools the one-click install. Daemon-owned state. */}
         <GitToolsRow />
+
+        <StartPageRow />
 
         {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
             Sits below the app and CLI versions (Rosson 2026-10-16). */}

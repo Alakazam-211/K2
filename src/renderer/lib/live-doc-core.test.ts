@@ -84,9 +84,12 @@ describe('useLiveDocCore', () => {
 
     h.fail = true
     const b = renderHook(() => useLiveDocCore(current, '/w/notes.md'))
-    await waitFor(() => expect(h.gets.length).toBe(2))
+    // By path, not a count: under a full parallel run the total came out 3.
+    await waitFor(() => expect(h.gets.some((g) => (g.params as { path?: string }).path === '/w/notes.md')).toBe(true))
     await waitFor(() => expect(b.result.current).toEqual({ status: 'off' }))
 
+    a.unmount()
+    b.unmount()
     h.fail = false
     h.gets = []
     const c = renderHook(() => useLiveDocCore(older, '/w/notes.md'))

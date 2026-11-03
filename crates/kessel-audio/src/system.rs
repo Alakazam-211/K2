@@ -109,6 +109,55 @@ fn find_device(host: &cpal::Host, choice: &DeviceChoice, dir: Dir) -> Result<cpa
     }
 }
 
+/// What a stream's error means for the engine.
+#[derive(Debug, PartialEq, Eq)]
+enum StreamAct {
+    /// The device is gone or the stream can't continue: report it and reopen.
+    Lost,
+    /// Keeps playing: the OS rerouted it, or it's a glitch.
+    Ignore,
+    /// Report it; the stream stays.
+    Raise(ErrorCode),
+}
+
+fn stream_act(kind: ErrorKind) -> StreamAct {
+    match kind {
+        ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated => StreamAct::Lost,
+        ErrorKind::DeviceChanged | ErrorKind::Xrun | ErrorKind::RealtimeDenied => StreamAct::Ignore,
+        ErrorKind::DeviceBusy => StreamAct::Raise(ErrorCode::DeviceBusy),
+        ErrorKind::PermissionDenied => StreamAct::Raise(ErrorCode::NoPermission),
+        _ => StreamAct::Raise(ErrorCode::Backend),
+    }
+}
+
+/// What a changed device list means for one direction.
+#[derive(Debug, PartialEq, Eq)]
+enum ListAct {
+    Lost(String),
+    Reopen,
+    Nothing,
+}
+
+fn list_act(list: &[DeviceInfo], open: Option<&DeviceInfo>, want: &DeviceChoice) -> ListAct {
+    let Some(o) = open else {
+        // Nothing open (an earlier failure): try again now the list changed.
+        return ListAct::Reopen;
+    };
+    let listed = list.iter().any(|d| d.id == o.id);
+    let lost = || ListAct::Lost(format!("{} was removed", o.name));
+    match want {
+        // The chosen device disappeared without a stream error.
+        DeviceChoice::Id(_) if !listed => lost(),
+        DeviceChoice::Id(_) => ListAct::Nothing,
+        // Following the default, and the default moved.
+        DeviceChoice::Default if list.iter().any(|d| d.is_default && d.id != o.id) => ListAct::Reopen,
+        // The default disappeared and nothing took over. Without this the
+        // stream sits on a device that's gone, and nobody hears about it.
+        DeviceChoice::Default if !listed => lost(),
+        DeviceChoice::Default => ListAct::Nothing,
+    }
+}
+
 const FORMATS: [SampleFormat; 3] = [SampleFormat::F32, SampleFormat::I16, SampleFormat::I32];
 
 /// Prefer 48 kHz (no resampling) in f32, then i16, then i32, with the
@@ -411,23 +460,12 @@ impl System {
             if current != Some(generation) {
                 continue;
             }
-            match err.kind() {
-                ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated => {
-                    self.lost(shared, dir, err.to_string())
+            match stream_act(err.kind()) {
+                StreamAct::Lost => self.lost(shared, dir, err.to_string()),
+                StreamAct::Ignore => {}
+                StreamAct::Raise(code) => {
+                    shared.emit(Event::Error(AudioError::new(code, err.to_string())))
                 }
-                ErrorKind::DeviceChanged | ErrorKind::Xrun | ErrorKind::RealtimeDenied => {}
-                ErrorKind::DeviceBusy => shared.emit(Event::Error(AudioError::new(
-                    ErrorCode::DeviceBusy,
-                    err.to_string(),
-                ))),
-                ErrorKind::PermissionDenied => shared.emit(Event::Error(AudioError::new(
-                    ErrorCode::NoPermission,
-                    err.to_string(),
-                ))),
-                _ => shared.emit(Event::Error(AudioError::new(
-                    ErrorCode::Backend,
-                    err.to_string(),
-                ))),
             }
         }
 
@@ -449,39 +487,16 @@ impl System {
             return;
         }
         for dir in [Dir::In, Dir::Out] {
-            enum Act {
-                Lost(String),
-                Reopen,
-                Nothing,
-            }
-            let act = {
-                let (list, open) = match dir {
-                    Dir::In => (&self.list.inputs, &self.input),
-                    Dir::Out => (&self.list.outputs, &self.output),
-                };
-                match (open, self.want(dir)) {
-                    // The chosen device disappeared without a stream error.
-                    (Some(o), DeviceChoice::Id(_)) if !list.iter().any(|d| d.id == o.info.id) => {
-                        Act::Lost(format!("{} was removed", o.info.name))
-                    }
-                    // Following the default, and the default moved.
-                    (Some(o), DeviceChoice::Default)
-                        if list.iter().any(|d| d.is_default && d.id != o.info.id) =>
-                    {
-                        Act::Reopen
-                    }
-                    // Nothing open (an earlier failure): try again now the
-                    // list changed.
-                    (None, _) => Act::Reopen,
-                    _ => Act::Nothing,
-                }
+            let (list, open) = match dir {
+                Dir::In => (&self.list.inputs, &self.input),
+                Dir::Out => (&self.list.outputs, &self.output),
             };
-            match act {
-                Act::Lost(detail) => self.lost(shared, dir, detail),
-                Act::Reopen => {
+            match list_act(list, open.as_ref().map(|o| &o.info), self.want(dir)) {
+                ListAct::Lost(detail) => self.lost(shared, dir, detail),
+                ListAct::Reopen => {
                     let _ = self.open(shared, dir);
                 }
-                Act::Nothing => {}
+                ListAct::Nothing => {}
             }
         }
     }
@@ -504,6 +519,77 @@ mod tests {
         for (kind, code) in cases {
             assert_eq!(open_err(cpal::Error::new(kind)).code, code, "{kind:?}");
         }
+    }
+
+    #[test]
+    fn stream_errors_raise_their_codes() {
+        let cases = [
+            (ErrorKind::DeviceNotAvailable, StreamAct::Lost),
+            (ErrorKind::StreamInvalidated, StreamAct::Lost),
+            (ErrorKind::DeviceChanged, StreamAct::Ignore),
+            (ErrorKind::Xrun, StreamAct::Ignore),
+            (ErrorKind::RealtimeDenied, StreamAct::Ignore),
+            (ErrorKind::DeviceBusy, StreamAct::Raise(ErrorCode::DeviceBusy)),
+            (ErrorKind::PermissionDenied, StreamAct::Raise(ErrorCode::NoPermission)),
+            (ErrorKind::BackendError, StreamAct::Raise(ErrorCode::Backend)),
+        ];
+        for (kind, act) in cases {
+            assert_eq!(stream_act(kind), act, "{kind:?}");
+        }
+    }
+
+    fn dev(id: &str, is_default: bool) -> DeviceInfo {
+        DeviceInfo {
+            id: id.into(),
+            name: format!("{id} name"),
+            is_default,
+        }
+    }
+
+    #[test]
+    fn a_chosen_device_removed_from_the_list_is_lost() {
+        let want = DeviceChoice::Id("usb".into());
+        let open = dev("usb", false);
+        assert_eq!(
+            list_act(&[dev("built-in", true)], Some(&open), &want),
+            ListAct::Lost("usb name was removed".into())
+        );
+        assert_eq!(
+            list_act(&[dev("usb", false), dev("built-in", true)], Some(&open), &want),
+            ListAct::Nothing
+        );
+    }
+
+    #[test]
+    fn following_the_default_moves_with_it() {
+        let open = dev("built-in", false);
+        let list = [dev("built-in", false), dev("headset", true)];
+        assert_eq!(list_act(&list, Some(&open), &DeviceChoice::Default), ListAct::Reopen);
+        // The old default was unplugged and another took over.
+        assert_eq!(list_act(&[dev("headset", true)], Some(&open), &DeviceChoice::Default), ListAct::Reopen);
+        assert_eq!(
+            list_act(&[dev("built-in", true)], Some(&dev("built-in", true)), &DeviceChoice::Default),
+            ListAct::Nothing
+        );
+    }
+
+    #[test]
+    fn the_default_removed_with_nothing_to_follow_is_lost() {
+        let open = dev("built-in", true);
+        assert_eq!(
+            list_act(&[], Some(&open), &DeviceChoice::Default),
+            ListAct::Lost("built-in name was removed".into())
+        );
+        assert_eq!(
+            list_act(&[dev("line-in", false)], Some(&open), &DeviceChoice::Default),
+            ListAct::Lost("built-in name was removed".into())
+        );
+    }
+
+    #[test]
+    fn nothing_open_retries_when_the_list_changes() {
+        assert_eq!(list_act(&[], None, &DeviceChoice::Default), ListAct::Reopen);
+        assert_eq!(list_act(&[], None, &DeviceChoice::Id("usb".into())), ListAct::Reopen);
     }
 
     use crate::config::EngineConfig;

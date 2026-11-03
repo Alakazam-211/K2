@@ -105,7 +105,8 @@ pub trait SieveIo {
     fn read(&self, account_id: &str) -> Result<Current, String>;
     fn write(&self, account_id: &str, current: &Current, next: &UserSieve) -> Result<(), String>;
     /// Write a source K2 didn't compose (someone's rules, less an outbound action).
-    fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String>;
+    /// `activate`: false leaves a script that isn't running not running.
+    fn write_source(&self, account_id: &str, current: &Current, source: &str, activate: bool) -> Result<(), String>;
     /// Make sure a script may run [`REDIRECT_LIMIT`] redirects, loaded and live.
     fn ensure_redirects(&self) -> Result<(), String>;
 }
@@ -127,8 +128,8 @@ impl SieveIo for StalwartClient {
     fn write(&self, account_id: &str, current: &Current, next: &UserSieve) -> Result<(), String> {
         sieve_user::save_user_sieve(self, account_id, &current.scripts, next)
     }
-    fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String> {
-        sieve_user::save_user_source(self, account_id, &current.scripts, source)
+    fn write_source(&self, account_id: &str, current: &Current, source: &str, activate: bool) -> Result<(), String> {
+        sieve_user::save_user_source(self, account_id, &current.scripts, source, activate)
     }
     fn ensure_redirects(&self) -> Result<(), String> {
         // "Owed" is written before the save and cleared after the reload, so a
@@ -422,6 +423,8 @@ pub fn verified_ok(conn: &rusqlite::Connection, f: &Forward) -> bool {
 fn apply_holds(f: Forward, mb: &Mailbox, ctx: &Ctx) -> Result<(Forward, Option<String>), String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // As it is now, under this lock: a pause that landed since it was read counts.
+    let f = store::get(&conn, &f.id)?.unwrap_or(f);
     // After the reasons above: a mail server too old for outside forwards
     // holds an active one visibly (paused `upgrade_required`), and lifts
     // the hold after `k2 hostmail upgrade`.
@@ -481,12 +484,42 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
         return Ok(out);
     }
     let mut rows = Vec::with_capacity(live.len());
+    let (mut sending_off, mut sending_on) = (Vec::new(), Vec::new());
     for f in live {
+        let was = f.pause_reason.clone();
         let (f, held) = apply_holds(f, &mb, ctx)?;
+        match held.as_deref() {
+            Some(store::P_AGENT_SEND_OFF) => sending_off.push(f.dest.clone()),
+            Some("") if was.as_deref() == Some(store::P_AGENT_SEND_OFF) => sending_on.push(f.dest.clone()),
+            _ => {}
+        }
         if held.is_some() {
             out.held = held;
         }
         rows.push(f);
+    }
+    // One notice per change. Back on restarts outside mail, so the owner hears.
+    if !sending_off.is_empty() {
+        super::forward_verify::tell_owner(
+            &format!("Forwarding from {} is paused", mb.address),
+            &format!(
+                "Agent sending is off for this mailbox's workspace, so K2 paused the outside forwards its agent set: {}. New mail stays in the mailbox. They go back on by themselves if agent sending is turned on again. To keep one on anyway, resume it, and it no longer follows agent sending: k2 hostmail forward resume {} --to <address>.",
+                sending_off.join(", "),
+                mb.address
+            ),
+            &[],
+        );
+    }
+    if !sending_on.is_empty() {
+        super::forward_verify::tell_owner(
+            &format!("Forwarding from {} is back on", mb.address),
+            &format!(
+                "Agent sending is on again for this mailbox's workspace, so K2 turned back on the outside forwards its agent set: {}. New mail goes there again. To stop it: k2 hostmail forward pause {}.",
+                sending_on.join(", "),
+                mb.address
+            ),
+            &[],
+        );
     }
     let Some(account) = mb.account_id.as_deref() else {
         return Err(format!("mail forwards: mailbox {address_id} has no mail-server account"));
@@ -600,6 +633,27 @@ pub fn change_and_sync(
     }
 }
 
+/// [`change_and_sync`] for a change that has to read the row and decide under
+/// the sync lock: `f` takes the database lock itself, so it may call anything
+/// that does. An `Err` from `f` changes nothing and writes nothing.
+pub fn locked_change<E>(address_id: &str, f: impl FnOnce(i64) -> Result<Forward, E>) -> Result<Result<Forward, ChangeError>, E> {
+    let ctx = ctx();
+    let guard = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    let row = f(ctx.now)?;
+    let synced = with_io(|io| sync_locked(io, address_id, Why::Change, &ctx));
+    let id = row.id.clone();
+    let row = reread(&id, row);
+    drop(guard);
+    super::forward_outcomes::after_change(&row);
+    Ok(match synced {
+        Ok(_) => Ok(row),
+        Err(e) => {
+            k2_core::log_debug!("{P} forward {} saved, Sieve write deferred: {}", row.id, crate::email_notify::send::mask_addresses(&e));
+            Err(ChangeError::Sieve(Box::new(row), e))
+        }
+    })
+}
+
 /// Move a forward and write its mailbox's Sieve.
 pub fn transition_and_sync(id: &str, to: &str, change: &store::Change<'_>) -> Result<Forward, ChangeError> {
     let address_id = {
@@ -703,6 +757,7 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
         }
     }
     strip_unbacked(io, ctx, &unread, &mut r);
+    purge_kept_scripts(ctx.now);
     // Rows that can't arrive are listed for the owner, never silently changed.
     super::forward_verify::note_cant_arrive(ctx.host.as_deref(), ctx.now);
     // A notice that "went" and has since bounced is corrected here too.
@@ -743,7 +798,9 @@ pub(crate) fn plan_strip(current: &Current, address: &str, is_here: &dyn Fn(&str
     let legacy_own = legacy.is_none_or(|src| own(sieve_user::LEGACY_FORWARD_NAME, src));
     let without_forward = || StripPlan::Compose(UserSieve { ooo: current.sieve.ooo.clone(), forward: None });
     if k2_own && legacy_own {
-        let same_box = current.sieve.forward.as_ref().filter(|f| f.guard.is_none() && f.redirects() == 1 && is_here(&f.dest) && !f.dest.eq_ignore_ascii_case(address));
+        // Only a script that's running: importing one that isn't would start it.
+        let running = outbound_is_running(current);
+        let same_box = current.sieve.forward.as_ref().filter(|f| running && f.guard.is_none() && f.redirects() == 1 && is_here(&f.dest) && !f.dest.eq_ignore_ascii_case(address));
         return same_box.map_or_else(without_forward, |f| StripPlan::Import(f.clone()));
     }
     let legacy_changes = legacy.is_some_and(|src| remove_outbound(src, is_here) != src);
@@ -771,6 +828,17 @@ pub(crate) fn plan_strip(current: &Current, address: &str, is_here: &dyn Fn(&str
         },
     }
 }
+
+/// Is a script holding an outbound action the mailbox's active one?
+fn outbound_is_running(current: &Current) -> bool {
+    [(sieve_user::SCRIPT_NAME, &current.k2_src), (sieve_user::LEGACY_FORWARD_NAME, &current.legacy_src)].into_iter().any(|(name, src)| {
+        src.as_deref().is_some_and(|src| !super::sieve_lockdown::outbound_actions(src).is_empty())
+            && current.scripts.iter().any(|s| s.name == name && s.is_active)
+    })
+}
+
+/// How long K2 keeps a script it changed.
+const REMOVED_KEEP_SECS: i64 = 90 * 86_400;
 
 /// Where the scripts K2 changed are kept: `~/.k2/mail-sieve-removed/`, 0600.
 fn removed_dir() -> std::path::PathBuf {
@@ -803,10 +871,16 @@ pub(crate) fn take_strip_audit() -> Vec<serde_json::Value> {
     TEST_AUDIT.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
+/// The start of a kept copy's file name: readable, short enough for any address
+/// (a file name stops at 255 bytes), and exact through the hash.
+pub(crate) fn kept_prefix(address: &str) -> String {
+    let safe: String = address.chars().take(120).map(|c| if c.is_ascii_alphanumeric() || "@._-".contains(c) { c } else { '_' }).collect();
+    format!("{safe}-{}-", &k2_core::email_verify::sha256_hex(address)[..12])
+}
+
 /// Keep what's about to change, whole, for the owner. The name follows the
 /// content, so a write that keeps failing doesn't pile up copies.
 fn keep_old_scripts(address: &str, current: &Current) -> Result<std::path::PathBuf, String> {
-    use std::hash::{Hash, Hasher};
     use std::io::Write;
     let mut text = String::new();
     for (name, src) in [(sieve_user::SCRIPT_NAME, &current.k2_src), (sieve_user::LEGACY_FORWARD_NAME, &current.legacy_src)] {
@@ -814,11 +888,8 @@ fn keep_old_scripts(address: &str, current: &Current) -> Result<std::path::PathB
             text.push_str(&format!("# ---- {address}, script {name}, as it was before K2 changed it ----\n{src}\n"));
         }
     }
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hash);
     let dir = removed_dir();
-    let safe: String = address.chars().map(|c| if c.is_ascii_alphanumeric() || "@._-".contains(c) { c } else { '_' }).collect();
-    let path = dir.join(format!("{safe}-{:016x}.sieve", hash.finish()));
+    let path = dir.join(format!("{}{}.sieve", kept_prefix(address), &k2_core::email_verify::sha256_hex(&text)[..16]));
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create(true).truncate(true);
@@ -831,6 +902,40 @@ fn keep_old_scripts(address: &str, current: &Current) -> Result<std::path::PathB
     let mut f = open.open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
     f.write_all(text.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// Drop kept copies older than [`REMOVED_KEEP_SECS`], and any whose mailbox isn't
+/// active here any more.
+fn purge_kept_scripts(now: i64) {
+    let Ok(entries) = std::fs::read_dir(removed_dir()) else { return };
+    let prefixes: Result<Vec<String>, String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.prepare("SELECT address FROM mail_addresses WHERE status = 'active'")
+            .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>())
+            .map(|v| v.iter().map(|a| kept_prefix(a)).collect())
+            .map_err(|e| e.to_string())
+    };
+    let prefixes = match prefixes {
+        Ok(p) => p,
+        Err(e) => {
+            k2_core::log_debug!("{P} kept scripts not purged: {e}");
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".sieve") {
+            continue;
+        }
+        let saved = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+        let expired = saved.is_some_and(|t| now - t >= REMOVED_KEEP_SECS);
+        if expired || !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                k2_core::log_debug!("{P} kept script not purged: {e}");
+            }
+        }
+    }
 }
 
 /// The outbound targets about to go, by domain only.
@@ -847,12 +952,13 @@ fn strip_targets(current: &Current, plan: &StripPlan, is_here: &dyn Fn(&str) -> 
 }
 
 /// The audit line, before the write.
-fn audit_strip(id: &str, address: &str, account: &str, targets: &[super::sieve_lockdown::Target], kept: &std::path::Path) {
+fn audit_strip(id: &str, address: &str, account: &str, targets: &[super::sieve_lockdown::Target], kept: &std::path::Path, running: bool) {
     let detail = json!({
         "accountId": account,
         "address": address,
         "script": sieve_user::SCRIPT_NAME,
         "action": "remove-outbound",
+        "running": running,
         "targets": targets.iter().map(super::sieve_lockdown::Target::to_json).collect::<Vec<_>>(),
         "keptAt": kept.display().to_string(),
     });
@@ -942,16 +1048,23 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
             Err(e) => {
                 r.failed += 1;
                 k2_core::log_debug!("{P} mailbox {id} not cleaned: the old script can't be kept: {}", crate::email_notify::send::mask_addresses(&e));
+                if TOLD_LEFT.lock().unwrap_or_else(|p| p.into_inner()).insert(address.clone()) {
+                    left.push(format!("{address}: its script is as it was, because K2 couldn't save a copy of it first."));
+                }
                 continue;
             }
         };
         let targets = strip_targets(&current, &plan, &is_minted);
-        audit_strip(&id, &address, &account, &targets, &kept);
+        let running = outbound_is_running(&current);
+        audit_strip(&id, &address, &account, &targets, &kept, running);
+        // What's active stays what's active: cleaning a script that isn't
+        // running mustn't start it, or an out-of-office kept in it.
+        let activate = current.scripts.iter().any(|s| super::sieve_lockdown::is_k2_name(&s.name) && s.is_active);
         let wrote = match &plan {
-            StripPlan::Compose(want) => io.write(&account, &current, want),
+            StripPlan::Compose(want) => io.write_source(&account, &current, &sieve_user::compose(want).unwrap_or_else(|| "keep;\n".to_string()), activate),
             StripPlan::Source(src) => {
                 if super::sieve_lockdown::removed_targets(src, &is_minted, &|_| true).is_empty() {
-                    io.write_source(&account, &current, src)
+                    io.write_source(&account, &current, src, activate)
                 } else {
                     Err("something outbound would still be in the script".to_string())
                 }
@@ -967,7 +1080,8 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
                 let mut domains: Vec<String> = targets.into_iter().map(|t| t.domain).collect();
                 domains.sort();
                 domains.dedup();
-                stripped.push(format!("{address}: it sent mail to {}. The old script is kept in {} on this server.", domains.join(", "), kept.display()));
+                let what = if running { "it forwarded mail to" } else { "that script wasn't running, so nothing went through it to" };
+                stripped.push(format!("{address}: {what} {}. The old script is kept in {} on this server for 90 days.", domains.join(", "), kept.display()));
             }
             Err(e) => {
                 r.failed += 1;
@@ -982,7 +1096,7 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
         super::forward_outcomes::notice(
             "K2 removed a forward nobody set",
             &format!(
-                "These mail filters sent mail somewhere with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed only that; any other rules in the script are still there.\n\n{}\n\nThe removal is in the audit log (k2 users audit --json). Check who could change these mailboxes, and their recent activity.",
+                "These mail filters had a redirect with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed only that; any other rules in the script are still there.\n\n{}\n\nThe removal is in the audit log (k2 users audit --json). Check who could change these mailboxes, and their recent activity.",
                 stripped.join("\n")
             ),
             &[],
@@ -992,7 +1106,7 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
         super::forward_outcomes::notice(
             "K2 couldn't remove a forward nobody set",
             &format!(
-                "These mail filters send mail somewhere with no forward on record behind it, and K2 couldn't take that out. K2 keeps trying each hour. Until it works, mail may still leave.\n\n{}",
+                "These mail filters have a redirect with no forward on record behind it, and K2 couldn't take that out. K2 keeps trying each hour. Until it works, if the script is running, mail may still leave.\n\n{}",
                 left.join("\n")
             ),
             &[],

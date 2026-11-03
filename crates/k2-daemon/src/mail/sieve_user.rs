@@ -564,20 +564,25 @@ pub fn save_user_sieve(
     // ("Deactivate Sieve script before deletion"). So an empty remainder
     // replaces `k2` with a no-op `keep;` (still the active script).
     let source = compose(sieve).unwrap_or_else(|| "keep;\n".to_string());
-    save_user_source(client, account_id, scripts, &source)
+    save_user_source(client, account_id, scripts, &source, true)
 }
 
-/// Write `source` as the active `k2` script, then destroy a leftover
-/// `k2-forward`.
+/// Write `source` as the `k2` script, active if `activate`, then destroy a
+/// leftover `k2-forward`.
 pub fn save_user_source(
     client: &StalwartClient,
     account_id: &str,
     scripts: &[SieveScriptInfo],
     source: &str,
+    activate: bool,
 ) -> Result<(), String> {
     let k2 = scripts.iter().find(|s| s.name == SCRIPT_NAME);
     let blob_id = client.blob_upload(account_id, source.as_bytes())?;
-    client.sieve_script_put_k2(account_id, k2.map(|s| s.id.as_str()), &blob_id, &[])?;
+    if activate {
+        client.sieve_script_put_k2(account_id, k2.map(|s| s.id.as_str()), &blob_id, &[])?;
+    } else {
+        client.sieve_script_put_k2_inactive(account_id, k2.map(|s| s.id.as_str()), &blob_id)?;
+    }
     let destroy_ids: Vec<String> = scripts.iter().filter(|s| s.name == LEGACY_FORWARD_NAME).map(|s| s.id.clone()).collect();
     if !destroy_ids.is_empty() {
         client.sieve_scripts_destroy(account_id, &destroy_ids)?;

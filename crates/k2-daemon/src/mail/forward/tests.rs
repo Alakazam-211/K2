@@ -1622,8 +1622,8 @@ impl crate::mail::forward_sync::SieveIo for HookIo {
     fn write(&self, account_id: &str, current: &crate::mail::forward_sync::Current, next: &crate::mail::sieve_user::UserSieve) -> Result<(), String> {
         self.inner.write(account_id, current, next)
     }
-    fn write_source(&self, account_id: &str, current: &crate::mail::forward_sync::Current, source: &str) -> Result<(), String> {
-        self.inner.write_source(account_id, current, source)
+    fn write_source(&self, account_id: &str, current: &crate::mail::forward_sync::Current, source: &str, activate: bool) -> Result<(), String> {
+        self.inner.write_source(account_id, current, source, activate)
     }
     fn ensure_redirects(&self) -> Result<(), String> {
         self.inner.ensure_redirects()
@@ -1737,8 +1737,16 @@ fn the_hourly_pass_writes_nothing_it_cant_keep_and_says_when_it_cant_clean() {
     assert_eq!(r.failed, 1, "{r:?}");
     assert_eq!(t.io.src(ACC).as_deref(), Some(HAND), "not written");
     assert!(crate::mail::forward_sync::take_strip_audit().is_empty());
+    // The redirect keeps running, so the owner hears.
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].0.contains("couldn't remove") && n[0].1.contains(MB) && n[0].1.contains("couldn't save a copy"), "{n:?}");
     crate::mail::forward_sync::set_test_removed_dir(None);
     std::fs::remove_file(&blocked).expect("clean up");
+    // Cleaned; then a later failure is news again.
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    t.io.put(ACC, HAND);
 
     *t.io.source_fail.borrow_mut() = true;
     let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
@@ -2342,4 +2350,155 @@ fn text_tricks_neither_make_a_forward_nor_hide_a_redirect() {
     let ctx = crate::mail::forward_sync::ctx();
     crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
     assert!(!t.io.src(ACC).unwrap_or_default().contains("evil@"), "stripped");
+}
+
+// ── the last review round ───────────────────────────────────────────
+
+/// A long address fits: a file name stops at 255 bytes.
+#[test]
+fn a_very_long_address_can_still_keep_its_old_script() {
+    let t = t("rv3long");
+    let dir = std::env::temp_dir().join(format!("k2-strip-test-{}-long", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    crate::mail::forward_sync::set_test_removed_dir(Some(dir.clone()));
+    let _ = crate::mail::forward_sync::take_strip_audit();
+    let local = "x".repeat(240);
+    seed_mailbox(&format!("{local}@notify.brand.test"), "direct");
+    t.io.put(&format!("acc-{local}"), HAND);
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.drift, r.failed), (1, 0), "{r:?}");
+    let audit = crate::mail::forward_sync::take_strip_audit();
+    let kept = audit[0]["keptAt"].as_str().expect("kept path");
+    assert!(std::fs::read_to_string(kept).expect("kept").contains(HAND));
+    crate::mail::forward_sync::set_test_removed_dir(None);
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}
+
+/// Kept copies go after 90 days, and when their mailbox isn't active any more.
+#[test]
+fn kept_scripts_are_purged_by_age_and_when_the_mailbox_is_gone() {
+    let t = t("rv3purge");
+    let dir = std::env::temp_dir().join(format!("k2-strip-test-{}-purge", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    crate::mail::forward_sync::set_test_removed_dir(Some(dir.clone()));
+    let prefix = crate::mail::forward_sync::kept_prefix(MB);
+    let (fresh, old, gone) = (dir.join(format!("{prefix}aa.sieve")), dir.join(format!("{prefix}bb.sieve")), dir.join(format!("{}aa.sieve", crate::mail::forward_sync::kept_prefix("gone@notify.brand.test"))));
+    for f in [&fresh, &old, &gone] {
+        std::fs::write(f, "x").expect("write");
+    }
+    let other = dir.join("not-ours.txt");
+    std::fs::write(&other, "x").expect("write");
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .expect("open")
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(91 * 86_400))
+        .expect("age");
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(fresh.exists(), "young, and its mailbox is here");
+    assert!(!old.exists(), "older than 90 days");
+    assert!(!gone.exists(), "its mailbox isn't active");
+    assert!(other.exists(), "not one of K2's");
+    crate::mail::forward_sync::set_test_removed_dir(None);
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}
+
+/// A script that isn't running stays that way when it's cleaned, the notice
+/// doesn't say it sent anything, and a same-box redirect in it isn't imported.
+#[test]
+fn cleaning_a_script_that_isn_t_running_doesn_t_start_it() {
+    let t = t("rv3inactive");
+    seed_mailbox("team@notify.brand.test", "direct");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    t.io.put(ACC, HAND);
+    t.io.inactive.borrow_mut().insert(ACC.to_string());
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(!t.io.src(ACC).expect("script").contains("boss@"));
+    assert!(t.io.inactive.borrow().contains(ACC), "still not running");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("wasn't running") && !n[0].1.contains("forwarded mail"), "{}", n[0].1);
+
+    // K2's own script, not running, with a same-box redirect: gone, no row, still off.
+    t.io.put(ACC, "# k2-forward\nredirect \"team@notify.brand.test\";\n");
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(r.imported, 0, "{r:?}");
+    assert!(forwards_on(MB).is_none());
+    assert!(t.io.forward(ACC).is_none());
+    assert!(t.io.inactive.borrow().contains(ACC));
+}
+
+/// The owner hears once when K2 applies the sending hold and once when it lifts:
+/// turning sending back on restarts outside mail.
+#[test]
+fn the_owner_hears_when_the_sending_hold_goes_on_and_off() {
+    let t = t("rv3sendnote");
+    system_sender_on();
+    let (st, _) = as_agent("ws-fw", || post(FORWARD_PATH, json!({ "address": MB, "to": ["a@outside.test", "b@outside.test"] })));
+    assert_eq!(st, 200);
+    let ctx = crate::mail::forward_sync::ctx();
+    let _ = crate::mail::forward_outcomes::take_notices();
+    agent_sending("off");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "one, for both: {n:?}");
+    assert!(n[0].0.contains("paused") && n[0].1.contains("a@outside.test") && n[0].1.contains("b@outside.test"), "{n:?}");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "not again");
+    agent_sending("on");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].0.contains("back on") && n[0].1.contains("a@outside.test"), "{n:?}");
+}
+
+/// A person's pause holds same-box forwards against an agent's rm and add too.
+#[test]
+fn an_agent_can_t_rm_and_add_past_a_person_s_pause_of_a_same_box_forward() {
+    let t = t("rv3samebox");
+    seed_mailbox(RV_B, "direct");
+    post(FORWARD_PATH, json!({ "address": MB, "to": RV_B }));
+    post(PAUSE_PATH, json!({ "address": MB }));
+    let (st, v) = as_agent("ws-fw", || post(RM_PATH, json!({ "address": MB, "to": RV_B })));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = as_agent("ws-fw", || post(ADD_PATH, json!({ "address": MB, "to": RV_B })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    assert!(t.io.forward(ACC).is_none());
+}
+
+/// Race: a retry holds a row read before its email went. A pause since then counts.
+#[test]
+fn a_notice_retry_works_from_the_row_as_it_is_now() {
+    let t = t("rv3race");
+    system_sender_on();
+    *t.f.engine.fail_submit.lock().unwrap() = Some("down".to_string());
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    let at = email_notify::now();
+    for hours in [1, 3, 8, 14, 20, 26] {
+        forward_verify::minute_pass(at + hours * 3600);
+    }
+    let stale = rv_row(MB, OUT);
+    assert_eq!(stale.pause_reason.as_deref(), Some(store::P_NOT_TOLD));
+    post(PAUSE_PATH, json!({ "address": MB }));
+    *t.f.engine.fail_submit.lock().unwrap() = None;
+    assert!(forward_verify::retry_notice(&stale, at + 40 * 3600));
+    let row = rv_row(MB, OUT);
+    assert_eq!((row.state.as_str(), row.pause_reason.as_deref(), row.paused_by.as_deref()), (store::ST_PAUSED, Some(store::P_MANUAL), Some("owner")));
+    assert!(t.io.forward(ACC).is_none());
+
+    // The other way: read while on, paused by a person since, the email fails a day
+    // later: their pause isn't turned into K2's.
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!(st, 200, "{v}");
+    *t.f.engine.fail_submit.lock().unwrap() = Some("down".to_string());
+    let mut stale = rv_row(MB, OUT);
+    assert!(stale.is_active());
+    stale.notice_failed_at = Some(at);
+    post(PAUSE_PATH, json!({ "address": MB }));
+    assert!(!forward_verify::retry_notice(&stale, at + 40 * 3600));
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_MANUAL));
 }

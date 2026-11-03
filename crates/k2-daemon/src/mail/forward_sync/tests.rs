@@ -19,6 +19,8 @@ pub(crate) struct FakeSieve {
     pub legacy: RefCell<HashMap<String, String>>,
     /// Refuse a source K2 didn't compose (Stalwart wouldn't compile it).
     pub source_fail: RefCell<bool>,
+    /// Accounts whose K2 scripts aren't the active one.
+    pub inactive: RefCell<std::collections::HashSet<String>>,
     pub writes: RefCell<usize>,
     pub fail: RefCell<bool>,
     /// How many times K2 raised the redirect limit, and whether it can.
@@ -41,10 +43,14 @@ impl FakeSieve {
 impl SieveIo for FakeSieve {
     fn read(&self, account_id: &str) -> Result<Current, String> {
         let src = self.src(account_id);
-        let scripts = src
+        let is_active = !self.inactive.borrow().contains(account_id);
+        let mut scripts = src
             .as_ref()
-            .map(|_| vec![SieveScriptInfo { id: "s1".into(), name: "k2".into(), blob_id: "b1".into(), is_active: true }])
+            .map(|_| vec![SieveScriptInfo { id: "s1".into(), name: "k2".into(), blob_id: "b1".into(), is_active }])
             .unwrap_or_default();
+        if self.legacy.borrow().contains_key(account_id) {
+            scripts.push(SieveScriptInfo { id: "s2".into(), name: "k2-forward".into(), blob_id: "b2".into(), is_active: is_active && src.is_none() });
+        }
         let legacy_src = self.legacy.borrow().get(account_id).cloned();
         let mut sieve = src.as_deref().map(sieve_user::parse).unwrap_or_default();
         if sieve.forward.is_none() {
@@ -60,11 +66,15 @@ impl SieveIo for FakeSieve {
         let src = sieve_user::compose(next).unwrap_or_else(|| "keep;\n".to_string());
         self.put(account_id, &src);
         self.legacy.borrow_mut().remove(account_id);
+        self.inactive.borrow_mut().remove(account_id);
         Ok(())
     }
-    fn write_source(&self, account_id: &str, _current: &Current, source: &str) -> Result<(), String> {
+    fn write_source(&self, account_id: &str, _current: &Current, source: &str, activate: bool) -> Result<(), String> {
         if *self.fail.borrow() || *self.source_fail.borrow() {
             return Err("fake: the mail server refused the script".into());
+        }
+        if activate {
+            self.inactive.borrow_mut().remove(account_id);
         }
         *self.writes.borrow_mut() += 1;
         self.put(account_id, source);

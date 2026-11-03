@@ -744,7 +744,7 @@ fn turn_on_due(f: &store::Forward, now: i64) -> bool {
     }
 }
 
-fn retry_notice(f: &store::Forward, now: i64) -> bool {
+pub(crate) fn retry_notice(f: &store::Forward, now: i64) -> bool {
     let account = super::forward_sync::mailbox(&f.address_id).ok().flatten().and_then(|m| m.account_id);
     let Ok(told) = tell_destination(&f.address, account.as_deref(), &f.dest, &asker_of(&f.set_by), false, now) else { return false };
     {
@@ -755,18 +755,28 @@ fn retry_notice(f: &store::Forward, now: i64) -> bool {
         }
     }
     if told.via.is_some() {
-        // The email went: a forward K2 paused for it goes back on, and the owner hears.
-        if f.pause_reason.as_deref() == Some(store::P_NOT_TOLD) && f.held_by.is_some() {
-            // Someone paused it too: K2 lets go, and it stays paused for them.
+        // The email went: a forward K2 paused for it goes back on, and the owner
+        // hears. The row as it is now, under the lock: `f` was read before the
+        // email, and someone may have paused it since.
+        let mut back_on = false;
+        let r = super::forward_sync::locked_change(&f.address_id, |at| -> Result<store::Forward, String> {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            if let Err(e) = store::hold_to_manual(&conn, &f.id, now) {
-                k2_core::log_debug!("{P} WARN forward {} hold: {e}", f.id);
+            let cur = store::get(&conn, &f.id)?.ok_or_else(|| "the row is gone".to_string())?;
+            if cur.pause_reason.as_deref() != Some(store::P_NOT_TOLD) {
+                return Ok(cur);
             }
-        } else if f.pause_reason.as_deref() == Some(store::P_NOT_TOLD) {
-            if let Err(e) = super::forward_sync::resume(&f.id, super::forward_sync::ACTOR_K2) {
-                k2_core::log_debug!("{P} forward {} resume: {}", f.id, email_notify::send::mask_addresses(&e.to_string()));
+            // Someone paused it too: K2 lets go, and it stays paused for them.
+            if cur.held_by.is_some() {
+                return store::hold_to_manual(&conn, &cur.id, at);
             }
+            back_on = true;
+            store::transition(&conn, &cur.id, store::ST_ACTIVE, &store::Change { actor: super::forward_sync::ACTOR_K2, ..Default::default() }, at).map_err(|e| e.to_string())
+        });
+        if let Err(e) = r {
+            k2_core::log_debug!("{P} forward {} resume: {}", f.id, email_notify::send::mask_addresses(&e));
+        }
+        if back_on {
             tell_owner(
                 &format!("Forwarding from {} to {} is back on", f.address, f.dest),
                 &format!("K2 could finally email {} its link to stop this, so forwarding from {} went back on.", f.dest, f.address),
@@ -775,17 +785,37 @@ fn retry_notice(f: &store::Forward, now: i64) -> bool {
         }
         return true;
     }
-    // A day of failing: an opt-out with no stop link isn't an opt-out.
-    if f.is_active() && f.notice_failed_at.is_some_and(|t| now - t >= store::NOT_TOLD_PAUSE_SECS) {
-        let r = super::forward_sync::pause(&f.id, store::P_NOT_TOLD, super::forward_sync::ACTOR_K2, Some(json!({ "since": f.notice_failed_at })));
-        if let Err(super::forward_sync::ChangeError::Row(e)) = r {
+    // A day of failing: an opt-out with no stop link isn't an opt-out. Only if it's
+    // still on: a person's pause since then stays theirs.
+    if f.notice_failed_at.is_some_and(|t| now - t >= store::NOT_TOLD_PAUSE_SECS) {
+        let mut paused = false;
+        let r = super::forward_sync::locked_change(&f.address_id, |at| -> Result<store::Forward, String> {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let cur = store::get(&conn, &f.id)?.ok_or_else(|| "the row is gone".to_string())?;
+            if !cur.is_active() {
+                return Ok(cur);
+            }
+            paused = true;
+            store::transition(
+                &conn,
+                &cur.id,
+                store::ST_PAUSED,
+                &store::Change { reason: Some(store::P_NOT_TOLD), actor: super::forward_sync::ACTOR_K2, detail: Some(json!({ "since": f.notice_failed_at })), ..Default::default() },
+                at,
+            )
+            .map_err(|e| e.to_string())
+        });
+        if let Err(e) = r {
             k2_core::log_debug!("{P} WARN forward {} not paused: {e}", f.id);
-        } else {
+        }
+        if paused {
             note_not_told(f, "K2 paused it, and new mail stays in the mailbox", now);
         }
     }
     false
 }
+
 
 /// Tell the owner once that an address still has no stop link.
 fn note_not_told(f: &store::Forward, what: &str, now: i64) {

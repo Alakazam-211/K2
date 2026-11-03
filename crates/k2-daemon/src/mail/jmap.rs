@@ -2917,6 +2917,23 @@ impl StalwartClient {
         blob_id: &str,
         destroy_ids: &[String],
     ) -> Result<(), String> {
+        self.sieve_script_put(account_id, existing_id, blob_id, destroy_ids, true)
+    }
+
+    /// [`Self::sieve_script_put_k2`], leaving which script is active as it is:
+    /// cleaning a script that isn't running mustn't start it.
+    pub fn sieve_script_put_k2_inactive(&self, account_id: &str, existing_id: Option<&str>, blob_id: &str) -> Result<(), String> {
+        self.sieve_script_put(account_id, existing_id, blob_id, &[], false)
+    }
+
+    fn sieve_script_put(
+        &self,
+        account_id: &str,
+        existing_id: Option<&str>,
+        blob_id: &str,
+        destroy_ids: &[String],
+        activate_it: bool,
+    ) -> Result<(), String> {
         let mut args = serde_json::Map::new();
         let activate = match existing_id {
             Some(id) => {
@@ -2936,10 +2953,12 @@ impl StalwartClient {
                 format!("#{CREATE_TAG}")
             }
         };
-        args.insert(
-            "onSuccessActivateScript".to_string(),
-            serde_json::Value::String(activate),
-        );
+        if activate_it {
+            args.insert(
+                "onSuccessActivateScript".to_string(),
+                serde_json::Value::String(activate),
+            );
+        }
         if !destroy_ids.is_empty() {
             args.insert(
                 "destroy".to_string(),
@@ -8594,6 +8613,25 @@ mod sieve_jmap_tests {
         assert_eq!(env["methodCalls"][0][0], "SieveScript/set");
         assert_ne!(env["methodCalls"][0][0], "x:SieveScript/set");
         assert_ne!(env["methodCalls"][0][0], "VacationResponse/set");
+    }
+
+    #[test]
+    fn sieve_script_put_k2_inactive_doesn_t_activate_it() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "uploadUrl": "http://127.0.0.1/upload/{accountId}", "accounts": {"d": {}}, "primaryAccounts": {"urn:ietf:params:jmap:core": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["SieveScript/set", { "updated": { "s1": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.sieve_script_put_k2_inactive("acct-e", Some("s1"), "blob-k2").expect("SieveScript/set");
+        let _sess = rx.recv().expect("session");
+        let set = body_json(&rx.recv().expect("SieveScript/set"));
+        let args = &set["methodCalls"][0][1];
+        assert_eq!(args["update"]["s1"]["blobId"], "blob-k2");
+        assert!(args.get("onSuccessActivateScript").is_none(), "{args}");
     }
 
     #[test]

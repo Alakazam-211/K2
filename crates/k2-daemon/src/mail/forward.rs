@@ -672,7 +672,8 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         if !outside.is_empty() {
             agent_own_mailbox_limit(row, caller)?;
         }
-        for d in &outside {
+        // Same-box forwards too: a person's pause holds either way.
+        for d in dests.iter().map(|d| d.address()) {
             let recent = db(|c| store::recent_pause_agents_keep(c, &row.address, d, now - store::WINDOW_SECS))?;
             if let Some(reason) = recent {
                 let who = if reason == store::P_MANUAL {
@@ -1000,7 +1001,7 @@ fn state_answer(row: &MailAddress, rows: &[Forward], skipped: Vec<J>, note: Opti
 /// takes over one an agent paused, and on a row K2 holds and lifts by itself it's
 /// recorded beside K2's reason: the reason stays, so an agent can't resume past it,
 /// and when K2 lets go the row stays paused. An agent never overrides a person.
-fn pause_again(f: Forward, caller: &Caller) -> R<(Forward, bool)> {
+fn pause_again(f: Forward, caller: &Caller, now: i64) -> R<(Forward, bool)> {
     let reason = f.pause_reason.as_deref().unwrap_or("");
     let lifts = store::auto_lifts(reason) || reason == store::P_NOT_TOLD;
     let me = caller.pauser();
@@ -1012,7 +1013,6 @@ fn pause_again(f: Forward, caller: &Caller) -> R<(Forward, bool)> {
     if !moves {
         return Ok((f, false));
     }
-    let now = email_notify::now();
     let f = db(|c| store::record_pause_on_paused(c, &f.id, &caller.actor(), &me, as_hold, now))?;
     Ok((f, true))
 }
@@ -1025,27 +1025,29 @@ fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     let mut told = Vec::new();
     let one = rows.len() == 1;
     for f in rows {
-        if f.state == store::ST_PAUSED {
-            let (f, moved) = pause_again(f, caller)?;
-            if moved && f.is_external() {
-                told.push(f.dest.clone());
-            }
-            done.push(f);
-            continue;
-        }
         if f.state == store::ST_PENDING_VERIFY && !one {
             skipped.push(json!({ "to": f.dest, "why": "it isn't on, so there's nothing to pause" }));
             continue;
         }
-        let actor = caller.actor();
-        let pauser = caller.pauser();
-        let (f, n) = changed(forward_sync::transition_and_sync(
-            &f.id,
-            store::ST_PAUSED,
-            &store::Change { reason: Some(store::P_MANUAL), actor: &actor, pauser: Some(&pauser), ..Default::default() },
-        ))?;
+        let mut moved = true;
+        // The row as it is now, under the lock: K2 may have lifted or set a hold
+        // since it was read, and this pause mustn't be lost to that.
+        let r = forward_sync::locked_change(&row.id, |at| -> R<Forward> {
+            let cur = db(|c| store::get(c, &f.id)?.ok_or_else(|| "the row is gone".to_string()))?;
+            if cur.state == store::ST_PAUSED {
+                let (cur, m) = pause_again(cur, caller, at)?;
+                moved = m;
+                return Ok(cur);
+            }
+            let (actor, pauser) = (caller.actor(), caller.pauser());
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::transition(&conn, &cur.id, store::ST_PAUSED, &store::Change { reason: Some(store::P_MANUAL), actor: &actor, pauser: Some(&pauser), ..Default::default() }, at)
+                .map_err(|e| change_fail(ChangeError::Row(e)))
+        });
+        let (f, n) = changed(r?)?;
         note = note.or(n);
-        if f.is_external() {
+        if moved && f.is_external() {
             told.push(f.dest.clone());
         }
         done.push(f);
@@ -1069,44 +1071,54 @@ fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
             }
             continue;
         }
-        let reason = f.pause_reason.clone().unwrap_or_default();
-        // A hold beside K2's own reason: the one who can take it back does, and
-        // K2's reason still decides when it comes back on.
-        let k2_decides = reason == store::P_NOT_TOLD || (store::auto_lifts(&reason) && reason != store::P_AGENT_SEND_OFF);
-        if k2_decides && f.held_by.is_some() && (!caller.is_agent() || f.held_by.as_deref() == Some(caller.pauser().as_str())) {
-            let now = email_notify::now();
-            let f = db(|c| store::clear_hold(c, &f.id, now))?;
-            note = note.or_else(|| Some(format!("Your pause is lifted, but K2 still holds this forward because {}; it comes back by itself when that changes", reason_words(&reason))));
-            done.push(f);
-            continue;
-        }
-        if let Err(no) = caller.may_resume(&reason, f.paused_by.as_deref()) {
-            skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
-            refused = refused.or(Some(no));
-            continue;
-        }
-        if f.is_external() {
-            if let Err(no) = agent_own_mailbox_limit(row, caller) {
-                skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
+        // Decided on the row as it is now, under the lock: a pause or a hold that
+        // landed since it was read counts.
+        let mut went_on = false;
+        let r = forward_sync::locked_change(&row.id, |at| -> R<Forward> {
+            let f = db(|c| store::get(c, &f.id)?.ok_or_else(|| "the row is gone".to_string()))?;
+            if f.state != store::ST_PAUSED {
+                return Err(fail(409, "bad_state", format!("the forward is {}, not paused", f.state)));
+            }
+            let reason = f.pause_reason.clone().unwrap_or_default();
+            // A hold beside K2's own reason: the one who can take it back does, and
+            // K2's reason still decides when it comes back on.
+            let k2_decides = reason == store::P_NOT_TOLD || (store::auto_lifts(&reason) && reason != store::P_AGENT_SEND_OFF);
+            if k2_decides && f.held_by.is_some() && (!caller.is_agent() || f.held_by.as_deref() == Some(caller.pauser().as_str())) {
+                let f = db(|c| store::clear_hold(c, &f.id, at))?;
+                note = note.take().or_else(|| Some(format!("Your pause is lifted, but K2 still holds this forward because {}; it comes back by itself when that changes", reason_words(&reason))));
+                return Ok(f);
+            }
+            caller.may_resume(&reason, f.paused_by.as_deref())?;
+            if f.is_external() {
+                agent_own_mailbox_limit(row, caller)?;
+            }
+            // Resuming may close a loop that wasn't there when it was set.
+            if !f.is_external() && db(|c| store::same_box_loop(c, &row.address, &f.dest))? {
+                return Err(fail(409, "forward_loop", format!("{} forwards back to {}, directly or through other mailboxes here, so resuming this would loop. Nothing changed", f.dest, row.address)));
+            }
+            // A person's resume of a sending hold makes it their forward: otherwise
+            // the next pass would pause it again.
+            if reason == store::P_AGENT_SEND_OFF {
+                db(|c| store::set_agent_ws(c, &f.id, None))?;
+            }
+            went_on = true;
+            let actor = caller.actor();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::transition(&conn, &f.id, store::ST_ACTIVE, &store::Change { actor: &actor, ..Default::default() }, at).map_err(|e| change_fail(ChangeError::Row(e)))
+        });
+        let dest = f.dest.clone();
+        let r = match r {
+            Ok(r) => r,
+            Err(no) => {
+                skipped.push(json!({ "to": dest, "why": no.hint, "code": no.code }));
                 refused = refused.or(Some(no));
                 continue;
             }
-        }
-        // Resuming may close a loop that wasn't there when it was set.
-        if !f.is_external() && db(|c| store::same_box_loop(c, &row.address, &f.dest))? {
-            let no = fail(409, "forward_loop", format!("{} forwards back to {}, directly or through other mailboxes here, so resuming this would loop. Nothing changed", f.dest, row.address));
-            skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
-            refused = refused.or(Some(no));
-            continue;
-        }
-        // A person's resume of a sending hold makes it their forward: otherwise
-        // the next pass would pause it again.
-        if reason == store::P_AGENT_SEND_OFF {
-            db(|c| store::set_agent_ws(c, &f.id, None))?;
-        }
-        let (f, n) = changed(forward_sync::resume(&f.id, &caller.actor()))?;
+        };
+        let (f, n) = changed(r)?;
         note = note.or(n);
-        if f.is_external() {
+        if went_on && f.is_external() {
             resumed.push(f.dest.clone());
         }
         done.push(f);

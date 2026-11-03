@@ -202,7 +202,8 @@ async fn channels_bulk(app: String, space: String, actor: String, v: J) -> CliRe
         Err(r) => return r,
     };
     let client = MgmtClient::new(&target.socket, &target.token_file);
-    let bytes = match serde_json::to_vec(&req) {
+    // `req` keeps each slug for the ledger below; Sew takes it on `ensure` only.
+    let bytes = match serde_json::to_string(&req).map_err(|e| e.to_string()).and_then(|b| sew_wire::channels_bulk_wire(&b)) {
         Ok(b) => b,
         Err(e) => return error(500, "internal", format!("body: {e}"), None),
     };

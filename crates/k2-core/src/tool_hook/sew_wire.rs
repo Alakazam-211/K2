@@ -1045,6 +1045,25 @@ pub struct ChannelsBulkRequest {
 /// Most ops one I6 call carries.
 pub const CHANNELS_BULK_MAX: usize = 200;
 
+/// A `channels/bulk` body as Sew takes it. K2 keeps each op's `slug` in its
+/// row for its own ledger, but Sew's `MgmtChannelOp` (tagged by `op`,
+/// `deny_unknown_fields`, sew-proto 0.6.0 through 0.7.1) has `slug` on `ensure`
+/// only: `rename`, `archive` and `unarchive` take `channel_id`, and one stray key
+/// answers `400` for the whole call.
+pub fn channels_bulk_wire(body: &str) -> Result<Vec<u8>, String> {
+    let mut v: Value = serde_json::from_str(body).map_err(|e| format!("channels body: {e}"))?;
+    if let Some(ops) = v.get_mut("ops").and_then(Value::as_array_mut) {
+        for op in ops {
+            if op.get("op").and_then(Value::as_str) != Some(channel_ops::ENSURE) {
+                if let Some(o) = op.as_object_mut() {
+                    o.remove("slug");
+                }
+            }
+        }
+    }
+    serde_json::to_vec(&v).map_err(|e| format!("channels body: {e}"))
+}
+
 /// One answered I6 op (in request order), read leniently.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelOpResult {
@@ -1072,8 +1091,9 @@ pub struct ChannelsBulkResponse {
 
 // ── K2 voice rooms: Sew 0.7.0 (sew-56 v1.1d §2.2, frozen 11-01) ───────
 //
-// The shared interface, word for word (K2 PRD v1.9 §6.6 2.2). Sew 0.7.0 is
-// not released; K2's fake Sew speaks exactly these. Feature flags:
+// The shared interface, word for word (K2 PRD v1.9 §6.6 2.2). Checked by hand
+// against sew-proto at v0.7.1 (K2 has never run these against a real Sew: T3
+// does); K2's fake Sew speaks exactly these. Feature flags:
 // [`super::features::SERVER_GOVERNED_SPACE`] (SW-1),
 // [`super::features::MGMT_VOICE_STATES`] (SW-3),
 // [`super::features::VOICE_CHANNEL_CLOSING`] (SW-4),
@@ -1825,6 +1845,76 @@ mod tests {
             serde_json::json!({"space_id": "77", "ops": [{"op": "ensure", "slug": "room-1", "name": "Room 1", "type": "voice", "private": false, "user_limit": 25}]})
         );
         assert_eq!(SERVER_LEVELS, ["member", "moderator"]);
+    }
+
+    /// Sew's `MgmtChannelOp`, by shape and serde attributes (sew-proto v0.7.1,
+    /// the same at v0.6.0): what real Sew parses a `channels/bulk` op into.
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+    #[allow(dead_code)]
+    enum SewChannelOp {
+        Ensure {
+            slug: String,
+            name: String,
+            private: bool,
+            #[serde(rename = "type", default)]
+            kind: Option<String>,
+            #[serde(default)]
+            user_limit: Option<u8>,
+        },
+        Rename {
+            channel_id: String,
+            name: String,
+        },
+        Archive {
+            channel_id: String,
+        },
+        Unarchive {
+            channel_id: String,
+        },
+    }
+
+    /// A row keeps every op's slug for K2's ledger; what goes to Sew carries
+    /// the slug on `ensure` alone. Real Sew refuses the row as it stands.
+    #[test]
+    fn a_channels_bulk_row_goes_to_sew_as_sew_takes_it() {
+        let op = |o: &str, slug: &str, id: Option<&str>, name: Option<&str>| ChannelOp {
+            op: o.into(),
+            slug: Some(slug.into()),
+            channel_id: id.map(str::to_string),
+            name: name.map(str::to_string),
+            kind: (o == channel_ops::ENSURE).then(|| CHANNEL_TYPE_VOICE.into()),
+            private: (o == channel_ops::ENSURE).then_some(false),
+            user_limit: (o == channel_ops::ENSURE).then_some(25),
+        };
+        let ops = vec![
+            op(channel_ops::ENSURE, "room-1", None, Some("Room 1")),
+            op(channel_ops::RENAME, "room-2", Some("7002"), Some("Standup")),
+            op(channel_ops::ARCHIVE, "room-3", Some("7003"), None),
+            op(channel_ops::UNARCHIVE, "room-4", Some("7004"), None),
+        ];
+        let server = serde_json::to_string(&ServerChannelsBulkRequest { space_id: "77".into(), ops: ops.clone() }).unwrap();
+        let app = serde_json::to_string(&ChannelsBulkRequest { space_id: "77".into(), app_id: "jobs".into(), ops }).unwrap();
+        for row in [server, app] {
+            let raw: Value = serde_json::from_str(&row).unwrap();
+            for o in raw["ops"].as_array().unwrap().iter().skip(1) {
+                let e = serde_json::from_value::<SewChannelOp>(o.clone()).expect_err("real Sew refuses a slug here");
+                assert!(e.to_string().contains("slug"), "{e}");
+            }
+            let wire: Value = serde_json::from_slice(&channels_bulk_wire(&row).unwrap()).unwrap();
+            let sent = wire["ops"].as_array().unwrap();
+            assert_eq!(sent.len(), 4);
+            for o in sent {
+                serde_json::from_value::<SewChannelOp>(o.clone()).unwrap_or_else(|e| panic!("real Sew takes {o}: {e}"));
+            }
+            assert_eq!(sent[0]["slug"], "room-1", "ensure keeps it");
+            assert_eq!(sent[1], serde_json::json!({"op": "rename", "channel_id": "7002", "name": "Standup"}));
+            assert_eq!(sent[2], serde_json::json!({"op": "archive", "channel_id": "7003"}));
+            assert_eq!(sent[3], serde_json::json!({"op": "unarchive", "channel_id": "7004"}));
+            assert_eq!(wire["space_id"], raw["space_id"]);
+            assert_eq!(wire.get("app_id"), raw.get("app_id"), "the App form still names its App");
+        }
+        assert!(channels_bulk_wire("not json").is_err());
     }
 
     /// SW-3: the feed path, the snapshot and a change, as sew-56 names them.

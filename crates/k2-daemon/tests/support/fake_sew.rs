@@ -27,7 +27,7 @@
 //!   without the flag refuses the field like an older Sew (400, recorded in
 //!   `bad_bodies`).
 //! - App settings (decision 13 + Sew 0.6.0 I7): `hidden_from_home`,
-//!   `display_name`, `origin`; with `app_origins` (not in Sew 0.6.1) also
+//!   `display_name`, `origin`; with `app_origins` (not in Sew 0.7.1) also
 //!   `origins`; with `app_governed_spaces` also `max_level`
 //!   (`member | moderator | admin`) and `uploads` (bool). `max_level` on the
 //!   home-client App → 409 `conflict` reason `home_client_cannot_govern`.
@@ -1799,6 +1799,18 @@ fn channels_bulk(s: &mut State, body: &str) -> (u16, String) {
 /// ends the room's calls (`channel_archived`) and clears `closing`;
 /// unarchive clears it too (SW-4).
 fn apply_channel_ops(s: &mut State, space_id: &str, ops: &[sew_wire::ChannelOp], body: &str) -> (u16, String) {
+    // Sew's `MgmtChannelOp` (tagged, `deny_unknown_fields`): `ensure` names a
+    // slug, the others a `channel_id`, and anything else fails the whole call.
+    for op in ops {
+        let shape_ok = if op.op == "ensure" {
+            op.slug.is_some() && op.channel_id.is_none() && op.name.is_some() && op.private.is_some()
+        } else {
+            op.slug.is_none() && op.channel_id.is_some() && op.kind.is_none() && op.private.is_none() && op.user_limit.is_none()
+        };
+        if !shape_ok {
+            return bad_body(s, "channels/bulk", format!("real Sew refuses this {} op", op.op), body);
+        }
+    }
     let mut results = Vec::new();
     let mut archived: Vec<u64> = Vec::new();
     for op in ops {
@@ -1810,7 +1822,7 @@ fn apply_channel_ops(s: &mut State, space_id: &str, ops: &[sew_wire::ChannelOp],
             .clone()
             .or_else(|| op.channel_id.as_ref().and_then(|id| sp.channels.iter().find(|(_, c)| c.id.to_string() == *id).map(|(k, _)| k.clone())));
         let Some(slug) = slug.filter(|x| sew_wire::is_channel_slug(x)) else {
-            results.push(json!({"op": op.op, "error": {"code": "not_found", "hint": "no such channel", "details": {"reason": "not_found"}}}));
+            results.push(json!({"op": op.op, "ok": false, "channel_id": op.channel_id, "error": {"code": "not_found", "hint": "no such channel", "details": {"reason": "channel_not_found"}}}));
             continue;
         };
         let r = match op.op.as_str() {
@@ -1818,12 +1830,12 @@ fn apply_channel_ops(s: &mut State, space_id: &str, ops: &[sew_wire::ChannelOp],
                 let kind = op.kind.clone().unwrap_or_else(|| "text".into());
                 match sp.channels.get(&slug) {
                     Some(c) if (if c.kind.is_empty() { "text" } else { c.kind.as_str() }) != kind => {
-                        json!({"op": "ensure", "slug": slug, "error": {"code": "conflict", "hint": "type", "details": {"reason": "channel_type_mismatch"}}})
+                        json!({"op": "ensure", "ok": false, "error": {"code": "conflict", "hint": "type", "details": {"reason": "channel_type_mismatch"}}})
                     }
-                    Some(c) => json!({"op": "ensure", "slug": slug, "channel_id": c.id.to_string(), "name": c.name, "created": false}),
+                    Some(c) => json!({"op": "ensure", "ok": true, "channel_id": c.id.to_string(), "created": false}),
                     None => {
                         let c = Channel { id: fresh, name: op.name.clone().unwrap_or_else(|| slug.clone()), private: op.private.unwrap_or(false), kind, user_limit: op.user_limit, ..Default::default() };
-                        let v = json!({"op": "ensure", "slug": slug, "channel_id": c.id.to_string(), "name": c.name, "created": true});
+                        let v = json!({"op": "ensure", "ok": true, "channel_id": c.id.to_string(), "created": true});
                         sp.channels.insert(slug.clone(), c);
                         v
                     }
@@ -1845,9 +1857,9 @@ fn apply_channel_ops(s: &mut State, space_id: &str, ops: &[sew_wire::ChannelOp],
                             c.closing = false;
                         }
                     }
-                    json!({"op": op.op, "slug": slug, "channel_id": c.id.to_string(), "name": c.name})
+                    json!({"op": op.op, "ok": true, "channel_id": c.id.to_string(), "changed": true})
                 }
-                None => json!({"op": op.op, "slug": slug, "error": {"code": "not_found", "hint": "no such channel", "details": {"reason": "not_found"}}}),
+                None => json!({"op": op.op, "ok": false, "channel_id": op.channel_id, "error": {"code": "not_found", "hint": "no such channel", "details": {"reason": "channel_not_found"}}}),
             },
             _ => return bad_body(s, "channels/bulk", "op", body),
         };

@@ -949,6 +949,16 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                             continue;
                         }
                     }
+                } else if matches!(op, Op::ChannelsBulk | Op::AdminRooms) {
+                    // The row keeps each op's slug for K2's ledger; Sew takes it on `ensure` only.
+                    match sew_wire::channels_bulk_wire(&row.payload_raw) {
+                        Ok(body) => client.post(&path, &body, &row.idem_key, &row.actor).await,
+                        Err(e) => {
+                            let id = row.id.clone();
+                            blocking(move || hook::record_blocked(&id, None, &e)).await?;
+                            continue;
+                        }
+                    }
                 } else {
                     client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await
                 }

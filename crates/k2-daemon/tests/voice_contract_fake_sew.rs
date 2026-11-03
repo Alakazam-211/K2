@@ -251,8 +251,8 @@ fn ensure(n: u32) -> sew_wire::ChannelOp {
     }
 }
 
-fn by_slug(op: &str, slug: &str, name: Option<&str>) -> sew_wire::ChannelOp {
-    sew_wire::ChannelOp { op: op.into(), slug: Some(slug.into()), channel_id: None, name: name.map(str::to_string), kind: None, private: None, user_limit: None }
+fn by_id(op: &str, id: &str, name: Option<&str>) -> sew_wire::ChannelOp {
+    sew_wire::ChannelOp { op: op.into(), slug: None, channel_id: Some(id.into()), name: name.map(str::to_string), kind: None, private: None, user_limit: None }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -262,9 +262,11 @@ async fn sw1_rooms_sw3_feed_sw4_closing() {
     env.post(sew_wire::MGMT_SPACE_MEMBERS_ADD, json!({"space_id": id, "external_ids": [OWNER, ADMIN, MEMBER]})).await;
     let a = rooms(&env, &id, vec![ensure(1), ensure(2)]).await;
     assert!(a.results.iter().all(|r| r.created && r.error.is_none()), "{a:?}");
+    let room1 = a.results[0].channel_id.clone().expect("id");
     let room2 = a.results[1].channel_id.clone().expect("id");
-    let renamed = rooms(&env, &id, vec![by_slug("rename", "room-1", Some("Standup"))]).await;
-    assert_eq!(renamed.results[0].name.as_deref(), Some("Standup"));
+    let renamed = rooms(&env, &id, vec![by_id("rename", &room1, Some("Standup"))]).await;
+    assert!(renamed.results[0].error.is_none(), "{renamed:?}");
+    assert_eq!(env.sew.channels(&id)["room-1"].name, "Standup");
     assert_eq!(env.sew.channels(&id)["room-1"].user_limit, Some(25));
 
     // SW-3 snapshot.
@@ -306,14 +308,14 @@ async fn sw1_rooms_sw3_feed_sw4_closing() {
     let r = env.post(&sew_wire::channel_closing_path(&room1), json!({"closing": true})).await;
     assert_eq!(json_of(&r), json!({"closing": true, "archived": true}));
     // Unarchive brings it back, not closing.
-    rooms(&env, &id, vec![by_slug("unarchive", "room-1", None)]).await;
+    rooms(&env, &id, vec![by_id("unarchive", &room1, None)]).await;
     let ch = &env.sew.channels(&id)["room-1"];
     assert!(!ch.archived && !ch.closing);
     // Archive with people in the call: everyone leaves channel_archived.
     env.sew.voice_join(&id, "room-1", OWNER).expect("join");
     let before = env.get(&sew_wire::voice_states_path(&id)).await;
     let cur: sew_wire::VoiceStatesResponse = serde_json::from_str(&before.body_text()).unwrap();
-    rooms(&env, &id, vec![by_slug("archive", "room-1", None)]).await;
+    rooms(&env, &id, vec![by_id("archive", &room1, None)]).await;
     let r = env.get(&sew_wire::voice_changes_path(&id, &cur.cursor, 0, 500)).await;
     let f: sew_wire::VoiceChangesResponse = serde_json::from_str(&r.body_text()).unwrap();
     assert_eq!(f.changes[0].reason.as_deref(), Some(sew_wire::leave_reasons::CHANNEL_ARCHIVED));

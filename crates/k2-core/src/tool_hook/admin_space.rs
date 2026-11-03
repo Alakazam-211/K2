@@ -758,7 +758,10 @@ pub fn after_done(conn: &Connection, id: &str, result: &str, now: i64) -> Result
                         conn.execute(
                             "UPDATE tool_admin_rooms SET channel_id = COALESCE(?2, channel_id), name = COALESCE(?3, name),
                                 state = 'active', why = NULL, updated_at = ?4 WHERE slug = ?1",
-                            params![slug, r.channel_id, r.name, now],
+                            // Sew's bulk answer has no name: a room this op made
+                            // has the name it asked for; one that was there is
+                            // renamed next, if it holds another.
+                            params![slug, r.channel_id, r.name.clone().or_else(|| if r.created { o.name.clone() } else { None }), now],
                         )
                         .map_err(|e| format!("admin room ensure: {e}"))?;
                     }

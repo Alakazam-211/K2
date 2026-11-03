@@ -8092,15 +8092,15 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
                                         An agent with "Let this agent manage its Apps' users" on: K2 mails
                                         the person the App's reset link, to the email on the login, from the
-                                        App's address (you never see the link). Sending it adds no limit;
-                                        when they choose a password with it, anything waiting starts.
+                                        App's address (you never see the link). Sending it takes nothing away; access
+                                        held back until they set a password starts when they do.
                                         --revoke takes back that login's unused links on the App and sends nothing.
                                         The owner, or an admin for App-only users (box logins stay
                                         the owner's). A one-time reset link on K2's own page: when used,
                                         extra access waiting for the person's own password starts. --code: the link is printed for you to hand over. Mailing it needs --from
                                         <an address no agent reads>; a tied person's stored email
                                         (or one from before 0.46.4 you haven't set) needs --to.
-                                        An agent wanting one of those asks a person on a card,
+                                        An agent wanting --code, --to or --from asks a person on a card,
                                         k2 permission request apps.user-password-reset user=<username>
                                         [app=<app>] [mode=password|link|email] --why "<why>". The
                                         person who allows it sees the new password (or a one-time
@@ -8134,8 +8134,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         except an agent's own test guest (k2 app user add <app> <name> --test)
   k2 app user unlock <username> [--json]
                                         Clear K2's sign-in lockout (the owner, an admin for App-only users,
-                                        or an agent with the App-users switch for a login on its own App; audited)
-                                        Clear an app guest login lock (does not change the password)
+                                        or an agent with the App-users switch for a login on its own App;
+                                        audited). The password stays the same.
   k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
                                         A person's chat (their chat account, k2:principal:<id>); no scope = show it.
                                         The owner: anyone (--app: that App's user). An agent: its own App's
@@ -8219,7 +8219,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         <app>'s own code sets its OWN guests' rooms with its own pass (no
                                         owner token): its --room rooms plus its own, never above a role.
                                         An agent with "Let this agent manage its Apps' users" on doesn't
-                                        need this to give people rooms (k2 app user rooms). The
+                                        need this to give people rooms (k2 app user rooms). --revoke stops
+                                        the App's code handing out more; rooms already on a login or role
+                                        stay until they're changed. The
                                         owner; or the App's own agent in its own room with "Let this
                                         agent manage its Apps' users" (else, or another workspace's
                                         room, one held request: a card for the owner, exit 2).

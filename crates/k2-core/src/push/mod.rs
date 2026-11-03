@@ -568,6 +568,37 @@ impl PushEvent {
         }
     }
 
+    /// The same push with nothing that names a chat: a badge without its
+    /// `stale` pairs, for anything outside the seal. Other kinds are
+    /// returned unchanged.
+    pub fn without_hints(&self) -> PushEvent {
+        match self {
+            Self::Badge(b) => Self::Badge(BadgePush { stale: StaleHint::default(), ..b.clone() }),
+            other => other.clone(),
+        }
+    }
+
+    /// The silent badge this alert's totals make, with no chat named. It's
+    /// what's left to send, sealed, when the relay is rate limiting sealed
+    /// alerts. `None` for an alert that carries no totals.
+    pub fn totals_nudge(&self) -> Option<PushEvent> {
+        let (principal, device_usernames, unread_total, waiting_total) = match self {
+            Self::ThreadPost(t) => (&t.principal, &t.device_usernames, &t.unread_total, &t.waiting_total),
+            Self::ProjectPost(p) => (&p.principal, &p.device_usernames, &p.unread_total, &p.waiting_total),
+            _ => return None,
+        };
+        if unread_total.is_empty() || waiting_total.is_empty() {
+            return None;
+        }
+        Some(Self::Badge(BadgePush {
+            principal: principal.clone(),
+            device_usernames: device_usernames.clone(),
+            unread_total: unread_total.clone(),
+            waiting_total: waiting_total.clone(),
+            stale: StaleHint::default(),
+        }))
+    }
+
     /// The local budget a send of this event draws from (TP2).
     pub fn budget_class(&self) -> budget::BudgetClass {
         match self {
@@ -926,6 +957,14 @@ pub struct GatewayResponse {
 impl GatewayResponse {
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
+    }
+
+    /// True when this answer says what the relay can do. A 429 or 5xx with
+    /// no S0 marker came from something in front of the relay, or says only
+    /// that it's busy. Taking its missing caps as "no `s1`" would send the
+    /// next push to a keyed phone in the clear.
+    pub fn tells_caps(&self) -> bool {
+        self.s0 || !(self.status == 429 || self.status >= 500)
     }
 
     /// The gateway's error code (`error.code`, `error` or `code` in the
@@ -1325,12 +1364,12 @@ pub struct LanePlan<'a> {
     pub legacy: Vec<&'a crate::push_devices::PushDevice>,
     /// Sealed, each with its active key.
     pub sealed: Vec<SealedDevice<'a>>,
-    /// `sealed-only` generic ("K2 / New message").
+    /// No content: "K2 / New message", or a badge with no chat ids.
     pub generic: Vec<&'a crate::push_devices::PushDevice>,
 }
 
 /// One device on the sealed lane.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SealedDevice<'a> {
     pub device: &'a crate::push_devices::PushDevice,
     /// Its active key.
@@ -1338,10 +1377,11 @@ pub struct SealedDevice<'a> {
     /// The blob format it gets (2 only for a `v: 2` phone on an `s2`
     /// relay).
     pub format: seal::Format,
-    /// If the relay refuses the sealed send (a stale stored `s1`), this
-    /// push may go today's way: `sealed-when-supported` or a `sealed`
-    /// override. Never under `sealed-only`.
-    pub legacy_fallback: bool,
+    /// If the relay answers 400 to the sealed send (a stale stored `s1`),
+    /// this push may go on without content, so the phone still hears
+    /// something: `sealed-when-supported` or a `sealed` override. Never
+    /// under `sealed-only`.
+    pub contentless_on_400: bool,
 }
 
 /// Why one device's sealed push was skipped (logged by class only).
@@ -1542,8 +1582,10 @@ impl K2Cloud {
                 let resp = self.sender.post(url, &auth, body).inspect_err(|e| out.observe_err("s0", e))?;
                 out.observe("s0", &resp);
                 // prd-e2e-push-v1: learn the relay's `s1` capability from
-                // every per-daemon response (a rollback clears it).
-                e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+                // its per-daemon responses (a rollback clears it).
+                if resp.tells_caps() {
+                    e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+                }
                 if resp.is_success() {
                     note_tunnel_accepted();
                     return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
@@ -1675,8 +1717,6 @@ impl K2Cloud {
 
     /// Split one person's devices into lanes (prd-e2e-push-v1 §4). Kinds
     /// the sealed path doesn't handle (the desktop-era events) are all
-    /// today's path. A badge push to a `sealed-only` unkeyed phone is
-    /// today's badge payload (it carries no names or ids), so it stays on
     /// today's path.
     pub fn plan_lanes<'a>(
         config: Option<&GatewayConfig>,
@@ -1688,16 +1728,15 @@ impl K2Cloud {
         if !e2e::is_sealable(event) {
             return LanePlan { legacy: devices.iter().collect(), ..Default::default() };
         }
-        Self::plan_device_lanes(config, devices, mode, now, matches!(event, PushEvent::Badge(_)))
+        Self::plan_device_lanes(config, devices, mode, now)
     }
 
-    /// [`Self::plan_lanes`] for a sealable kind (`badge` = a badge push).
+    /// [`Self::plan_lanes`] for a sealable kind.
     pub fn plan_device_lanes<'a>(
         config: Option<&GatewayConfig>,
         devices: &'a [crate::push_devices::PushDevice],
         mode: e2e::PushE2eMode,
         now: i64,
-        badge: bool,
     ) -> LanePlan<'a> {
         let mut plan = LanePlan::default();
         if devices.is_empty() {
@@ -1707,9 +1746,11 @@ impl K2Cloud {
         let states = match crate::push_device_keys::states(&ids) {
             Ok(s) => s,
             Err(e) => {
-                // No keys known: every device falls to its no-key lane.
+                // We can't tell which phones hold a key or what they chose,
+                // so nothing with content goes: this one push is generic.
                 crate::log_debug!("[push] e2e state read failed: {e}");
-                Default::default()
+                plan.generic = devices.iter().collect();
+                return plan;
             }
         };
         let sealed_ok = config.is_some_and(|c| c.sealed_ready(now));
@@ -1720,20 +1761,21 @@ impl K2Cloud {
             let key = st.key.filter(|k| k.is_active(now));
             match e2e::lane(eff, key.is_some(), sealed_ok) {
                 e2e::Lane::Legacy => plan.legacy.push(d),
-                e2e::Lane::Generic if badge => plan.legacy.push(d),
                 e2e::Lane::Generic => plan.generic.push(d),
                 e2e::Lane::Sealed => plan.sealed.push(SealedDevice {
                     device: d,
                     format: key.as_ref().map_or(seal::Format::V1, |k| k.format(v2_ok)),
                     key: key.expect("sealed lane has a key"),
-                    legacy_fallback: eff == e2e::Effective::Sealed,
+                    contentless_on_400: eff == e2e::Effective::Sealed,
                 }),
             }
         }
         plan
     }
 
-    /// `sealed-only`: "K2 / New message" to phones without a key.
+    /// No content: "K2 / New message", or a badge with no chat ids. For
+    /// phones without a key under `sealed-only`, and for a sealed send the
+    /// relay answered 400.
     fn dispatch_generic(
         &self,
         event: &PushEvent,
@@ -1816,27 +1858,49 @@ impl K2Cloud {
             attempts::record_call(event, attempts::Lane::Sealed, &who, &out, sent.as_ref().ok(), started.elapsed());
             match sent {
                 Ok(response) => Self::prune_dead(&response),
-                // The relay refused the sealed send (e.g. a stale stored
-                // `s1` after a relay rollback; the refusal already cleared
-                // it). Under `sealed-when-supported` (or a `sealed`
-                // override) this one push goes today's way so delivery is
-                // never blocked; under `sealed-only`, never.
-                Err(PushError::Remote { status, body: reason }) => {
-                    let fallback: Vec<crate::push_devices::PushDevice> =
-                        chunk.iter().filter(|(_, sd)| sd.legacy_fallback).map(|(_, sd)| sd.device.clone()).collect();
-                    let dropped = chunk.len() - fallback.len();
+                // What was going to be sealed never goes in the clear, whatever
+                // the relay said.
+                //
+                // A 400 is the relay not taking the sealed form (a stale
+                // stored `s1` after a relay rollback; the refusal already
+                // cleared it). No sealed retry can work, so under
+                // `sealed-when-supported` (or a `sealed` override) this push
+                // goes without content; under `sealed-only`, not at all.
+                Err(PushError::Remote { status: 400, body: reason }) => {
+                    let contentless: Vec<&crate::push_devices::PushDevice> =
+                        chunk.iter().filter(|(_, sd)| sd.contentless_on_400).map(|(_, sd)| sd.device).collect();
+                    let dropped = chunk.len() - contentless.len();
                     crate::log_debug!(
-                        "[push] sealed send refused (HTTP {status}, {reason}); {} device(s) get today's push, {dropped} (sealed-only) get nothing",
-                        fallback.len()
+                        "[push] sealed send refused (HTTP 400, {reason}); {} device(s) get a push with no content, {dropped} (sealed-only) get nothing",
+                        contentless.len()
                     );
-                    if !fallback.is_empty() {
-                        if let Err(e) = self.dispatch_legacy(event, badge_key, &fallback) {
+                    if !contentless.is_empty() {
+                        if let Err(e) = self.dispatch_generic(event, badge_key, &contentless) {
                             if result.is_ok() {
                                 result = Err(e);
                             }
                         }
                     }
                     if dropped > 0 && result.is_ok() {
+                        result = Err(PushError::Remote { status: 400, body: reason });
+                    }
+                }
+                // Anything else is dropped. A 429 means the relay's hourly
+                // window for sealed alerts is full, so retrying within
+                // seconds can't help, but nudges have their own, larger
+                // window: a sealed one still sets the phone's badge. The
+                // caller hears the alert's error either way.
+                Err(PushError::Remote { status, body: reason }) => {
+                    crate::log_debug!("[push] sealed send refused (HTTP {status}, {reason}); dropped, nothing in the clear");
+                    if status == 429 {
+                        if let Some(nudge) = event.totals_nudge() {
+                            let keyed: Vec<SealedDevice<'_>> = chunk.iter().map(|(_, sd)| (*sd).clone()).collect();
+                            if let Err(e) = self.dispatch_sealed(&nudge, badge_key, &keyed, now) {
+                                crate::log_debug!("[push] nudge after a 429 dropped too: {e}");
+                            }
+                        }
+                    }
+                    if result.is_ok() {
                         result = Err(PushError::Remote { status, body: reason });
                     }
                 }
@@ -1897,7 +1961,9 @@ impl K2Cloud {
         let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
         let resp = self.sender.post_sealed(url, &auth, body).inspect_err(|e| out.observe_err("s1", e))?;
         out.observe("s1", &resp);
-        e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+        if resp.tells_caps() {
+            e2e::note_relay_caps(&self.config.url, resp.s1, resp.s2);
+        }
         if resp.is_success() {
             note_tunnel_accepted();
             return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));

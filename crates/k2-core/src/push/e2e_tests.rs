@@ -237,7 +237,7 @@ fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
                 assert!(!sealed);
                 let wire = body.to_string();
                 if matches!(event, PushEvent::Badge(_)) {
-                    // A badge push is today's badge payload (no names or ids).
+                    // This badge has no `stale`, so it's today's payload.
                     assert_eq!(body["payload"], K2Cloud::payload(&event, &PushStamp { subdomain: "rosson".into(), instance_id: legacy_golden::GOLDEN_INSTANCE.into() }, "0123456789abcdef0123456789abcdef"));
                     continue;
                 }
@@ -689,9 +689,9 @@ fn restart_with_stored_s1_seals_the_first_push() {
 }
 
 /// A stale stored `s1` and a relay that no longer has it: the sealed send
-/// is refused, that push goes today's way under sealed-when-supported, the
-/// caps are cleared (memory and store), and the next push is legacy from
-/// the start. Under sealed-only it never falls back.
+/// is refused, that push goes with no content under sealed-when-supported,
+/// the caps are cleared (memory and store), and the next push is legacy
+/// from the start. Under sealed-only nothing else goes.
 #[test]
 fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
     let _db = crate::db::scoped_for_test();
@@ -707,7 +707,7 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
         s2: false,
     };
 
-    // sealed-when-supported: refused, then today's push.
+    // sealed-when-supported: refused, then a push with no content.
     let url = unique_url("stale");
     e2e::note_relay_caps(&url, true, false);
     e2e::forget_relay_caps_memory(&url);
@@ -715,12 +715,12 @@ fn stale_stored_s1_falls_back_once_and_clears_the_caps() {
     relay.script.lock().expect("relay").push_back(old_relay_refusal());
     tunnel_cloud(&url, relay.clone())
         .dispatch_in_mode(&event, "bk", &d, PushE2eMode::SealedWhenSupported)
-        .expect("delivered the legacy way");
+        .expect("delivered without content");
     let calls = relay.calls();
-    assert_eq!(calls.len(), 2, "sealed (refused), then today's push");
+    assert_eq!(calls.len(), 2, "sealed (refused), then the push with no content");
     assert!(calls[0].2 && !calls[1].2);
-    assert!(calls[1].0.is_tunnel(), "the legacy push still goes per-daemon first");
-    assert_eq!(calls[1].1["payload"]["body"], "Cortana needs you on a ticket", "today's payload");
+    assert!(calls[1].0.is_tunnel(), "it still goes per-daemon first");
+    assert_eq!(calls[1].1["payload"]["body"], "New message", "never today's payload");
     assert!(!e2e::relay_s1(&url), "caps cleared in memory");
     assert_eq!(e2e::load_relay_caps(&url).expect("load"), Some(false), "and in the store");
     relay.clear();
@@ -1319,4 +1319,619 @@ fn attempt_lines_and_ring_carry_no_content_or_tokens() {
         assert_eq!(keys, vec!["atMs", "bytes", "device", "error", "key", "kind", "lane", "ms", "path", "relay", "status", "vendor"]);
     }
     super::reset_relay_state_for_test();
+}
+
+// ── A refused sealed send never goes in the clear ─────────────────────────
+
+const LEAK_BK: &str = "0123456789abcdef0123456789abcdef";
+
+/// Every relay answer that isn't the old relay's 400: (status, S0 marker,
+/// `s1` in the caps). Unmarked ones are what a proxy in front of the relay
+/// says.
+const NOT_400: &[(u16, bool, bool)] = &[
+    (429, true, true),
+    (429, false, false),
+    (401, true, true),
+    (401, false, false),
+    (403, true, true),
+    (403, false, false),
+    (404, false, false),
+    (413, false, false),
+    (500, true, true),
+    (502, false, false),
+    (503, true, true),
+    (503, false, false),
+    (504, false, false),
+];
+
+fn relay_answer(status: u16, s0: bool, s1: bool) -> GatewayResponse {
+    GatewayResponse { status, body: "{\"error\":\"refused\"}".into(), s0, s1, s2: false }
+}
+
+fn alert_events() -> Vec<PushEvent> {
+    canary_events().into_iter().filter(|e| !matches!(e, PushEvent::Badge(_))).collect()
+}
+
+/// A Thread alert with a preview and its `msg`: everything a leak would show.
+fn canary_thread() -> PushEvent {
+    let event = canary_events().into_iter().nth(1).expect("the text alert");
+    assert!(event.has_preview(), "{event:?}");
+    assert!(matches!(&event, PushEvent::ThreadPost(t) if t.msg.is_some()), "{event:?}");
+    event
+}
+
+/// An alert that carries the person's totals.
+fn has_totals(event: &PushEvent) -> bool {
+    matches!(event, PushEvent::ThreadPost(_) | PushEvent::ProjectPost(_))
+}
+
+/// A badge whose `stale` names a chat, with more left out.
+fn stale_badge() -> BadgePush {
+    let mut pairs: Vec<(String, i64)> = vec![("conv-canary-77".into(), 42)];
+    pairs.extend((0..8).map(|i| (format!("grp-canary-9-{i}"), i)));
+    BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "3".into(),
+        waiting_total: "1".into(),
+        stale: StaleHint::of(pairs),
+    }
+}
+
+/// `plain` on the wire holds nothing but the server stamp: no name, id or
+/// preview (the stamp is what a phone with no key routes on).
+fn assert_no_content(plain: &str, what: &str) {
+    for c in CANARIES.iter().filter(|c| **c != "rosson" && **c != "9f2c0a1b3d4e5f60") {
+        assert!(!plain.contains(c), "{what}: {c:?} in the clear: {plain}");
+    }
+}
+
+/// The exact bare badge: what every phone got before `stale` existed.
+fn assert_bare_badge(body: &serde_json::Value, what: &str) {
+    let wire = body.to_string();
+    assert_no_content(&wire, what);
+    assert!(!wire.contains("stale"), "{what}: {wire}");
+    let bare = PushEvent::Badge(BadgePush { stale: StaleHint::default(), ..stale_badge() });
+    let stamp = PushStamp { subdomain: "rosson".into(), instance_id: instance_id() };
+    assert_eq!(body["payload"], K2Cloud::payload(&bare, &stamp, LEAK_BK), "{what}: today's badge, no hints");
+    let data = body["payload"]["data"].as_object().expect("data");
+    let mut keys: Vec<&str> = data.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["badgeKey", "instanceId", "kind", "subdomain", "unreadTotal", "waitingTotal"], "{what}: {wire}");
+    assert_eq!(data["kind"], "badge", "{what}");
+    assert_eq!(data["unreadTotal"], "3", "{what}");
+    assert_eq!(data["waitingTotal"], "1", "{what}");
+    assert_eq!(body["payload"].as_object().expect("payload").len(), 1, "{what}: silent, data only: {wire}");
+}
+
+/// The exact generic alert: "K2 / New message", no thread or collapse id.
+fn assert_generic_alert(body: &serde_json::Value, what: &str) {
+    let wire = body.to_string();
+    assert_no_content(&wire, what);
+    assert_eq!(body["payload"]["title"], "K2", "{what}: {wire}");
+    assert_eq!(body["payload"]["body"], "New message", "{what}: {wire}");
+    assert!(body["payload"].get("threadId").is_none() && body["payload"].get("collapseId").is_none(), "{what}: {wire}");
+    assert!(body["payload"]["data"].get("msg").is_none(), "{what}: {wire}");
+}
+
+/// Sends a sealed alert into every answer but the old relay's 400. Nothing
+/// plain leaves, ever: no title, preview, name, id, count or stamp. A 429
+/// on an alert with totals sends one sealed nudge with the totals alone.
+#[test]
+fn no_relay_answer_sends_a_sealed_alert_in_the_clear() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (sk, k) = phone_key(71);
+    let (_, k2) = phone_key(72);
+    let devices = vec![
+        register("rf-on", "apns", "tok-rf-on", true, Some(&k)),
+        register("rf-off", "fcm", "tok-rf-off", false, Some(&k2)),
+    ];
+    let mut nudged = 0;
+    for &(status, s0, s1) in NOT_400 {
+        for event in alert_events() {
+            for mode in [PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
+                let what = format!("HTTP {status} s0={s0} s1={s1} {mode:?} {event:?}");
+                super::reset_relay_state_for_test();
+                let url = unique_url("refused-alert");
+                let relay = Relay::new(true);
+                e2e::note_relay_caps(&url, true, false);
+                relay.script.lock().expect("relay").push_back(relay_answer(status, s0, s1));
+                let sent = tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &devices, mode);
+                assert!(sent.is_err(), "the caller hears the alert was refused: {what}");
+                let calls = relay.calls();
+                for (_, body, sealed) in &calls {
+                    assert!(*sealed, "a plain call went out: {what}: {body}");
+                    assert_no_canary(&body.to_string(), &what);
+                    assert_eq!(body["payload"]["data"].as_object().expect("data").len(), 2, "{what}: {body}");
+                }
+                assert_eq!(calls[0].1["payload"]["data"]["kind"], "e2e", "{what}");
+                if status == 429 && has_totals(&event) {
+                    assert_eq!(calls.len(), 2, "{what}");
+                    let nudge = &calls[1].1;
+                    assert_eq!(nudge["payload"]["data"]["kind"], "nudge", "{what}");
+                    assert_eq!(nudge["devices"].as_array().expect("devices").len(), 2, "both phones: {what}");
+                    let mine = nudge["devices"].as_array().expect("devices").iter().find(|d| d["token"] == "tok-rf-on").expect("its entry");
+                    let blob = mine["e2e"].as_str().expect("e2e");
+                    let pt: serde_json::Value =
+                        serde_json::from_slice(&seal::open(SealKind::Nudge, &sk, &k.psk, blob).expect("opens")).expect("json");
+                    let data = pt["data"].as_object().expect("data");
+                    assert_eq!(data.len(), 2, "totals only, no chat named: {what}: {pt}");
+                    assert!(data["unreadTotal"].is_string() && data["waitingTotal"].is_string(), "{what}: {pt}");
+                    nudged += 1;
+                } else {
+                    assert_eq!(calls.len(), 1, "no second call: {what}");
+                }
+            }
+        }
+    }
+    assert!(nudged > 0, "the 429 path ran");
+    super::reset_relay_state_for_test();
+
+    // The relay's sealed window and its nudge window both full: still nothing plain.
+    let url = unique_url("refused-both");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, false);
+    for _ in 0..2 {
+        relay.script.lock().expect("relay").push_back(relay_answer(429, true, true));
+    }
+    let event = canary_thread();
+    assert!(tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &devices, PushE2eMode::SealedWhenSupported).is_err());
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "the alert, then its nudge, and nothing after");
+    assert!(calls.iter().all(|c| c.2), "all sealed");
+
+    // A `sealed` override under a server `off` is held to the same rule.
+    keys::set_override("rf-on", Some(DeviceOverride::Sealed)).expect("override");
+    let url = unique_url("refused-override");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, false);
+    relay.script.lock().expect("relay").push_back(relay_answer(429, true, true));
+    let one = std::slice::from_ref(&devices[0]);
+    assert!(tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, one, PushE2eMode::Off).is_err());
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.iter().all(|c| c.2), "all sealed: {calls:?}");
+    keys::set_override("rf-on", None).expect("clear");
+}
+
+/// A sealed nudge refused with anything but a 400 is dropped: no plain
+/// badge, so no chat ids, and no second call of any kind.
+#[test]
+fn a_refused_sealed_nudge_is_dropped_with_its_chat_ids() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, mut k) = phone_key(73);
+    k.v = 2;
+    let d = vec![register("rn-v2", "apns", "tok-rn-v2", true, Some(&k))];
+    let badge = PushEvent::Badge(stale_badge());
+    for &(status, s0, s1) in NOT_400 {
+        let what = format!("HTTP {status} s0={s0} s1={s1}");
+        super::reset_relay_state_for_test();
+        let url = unique_url("refused-nudge");
+        let relay = Relay::new(true);
+        e2e::note_relay_caps(&url, true, true);
+        relay.script.lock().expect("relay").push_back(relay_answer(status, s0, s1));
+        let sent = tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&badge, LEAK_BK, &d, PushE2eMode::SealedWhenSupported);
+        assert!(sent.is_err(), "{what}");
+        let calls = relay.calls();
+        assert_eq!(calls.len(), 1, "dropped: {what}: {calls:?}");
+        assert!(calls[0].2, "{what}");
+        assert_no_canary(&calls[0].1.to_string(), &what);
+    }
+    super::reset_relay_state_for_test();
+}
+
+/// A relay we can't reach at all: no other way is tried.
+struct SealedSendsFail(Arc<Relay>);
+
+impl DispatchSender for SealedSendsFail {
+    fn post(&self, url: &str, auth: &GatewayAuth, body: &serde_json::Value) -> Result<GatewayResponse, PushError> {
+        self.0.post(url, auth, body)
+    }
+    fn post_sealed(&self, _url: &str, auth: &GatewayAuth, body: &serde_json::Value) -> Result<GatewayResponse, PushError> {
+        self.0.calls.lock().expect("relay").push((auth.clone(), body.clone(), true));
+        Err(PushError::Transport("connection reset".into()))
+    }
+}
+
+#[test]
+fn a_sealed_send_that_cannot_connect_tries_nothing_else() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (_, k) = phone_key(74);
+    let d = vec![register("rt-key", "apns", "tok-rt-key", true, Some(&k))];
+    for event in canary_events().into_iter().chain([PushEvent::Badge(stale_badge())]) {
+        let url = unique_url("transport");
+        let relay = Relay::new(true);
+        e2e::note_relay_caps(&url, true, false);
+        let cloud = K2Cloud::with_config(
+            GatewayConfig {
+                url: url.clone(),
+                tunnel: Some(("tunnel-tok".into(), "rosson".into())),
+                shared_token: Some("shared-tok".into()),
+                subdomain: "rosson".into(),
+            },
+            Arc::new(SealedSendsFail(relay.clone())),
+        );
+        assert!(cloud.dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).is_err(), "{event:?}");
+        let calls = relay.calls();
+        assert_eq!(calls.len(), 1, "{event:?}: {calls:?}");
+        assert!(calls[0].2, "{event:?}");
+        assert!(e2e::relay_s1(&url), "a failed connection says nothing about the relay");
+    }
+}
+
+/// The old relay's 400 (a stale stored `s1`): sealed-when-supported phones
+/// get the push with no content, and sealed-only phones get nothing.
+#[test]
+fn a_400_sends_only_a_contentless_push() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(75);
+    let (_, mut k2) = phone_key(76);
+    k2.v = 2;
+    let d = vec![
+        register("r4-v1", "apns", "tok-r4-v1", true, Some(&k)),
+        register("r4-v2", "apns", "tok-r4-v2", true, Some(&k2)),
+    ];
+    let old_relay = || GatewayResponse {
+        status: 400,
+        body: "{\"error\":\"invalid_title\"}".into(),
+        s0: true,
+        s1: false,
+        s2: false,
+    };
+    let run = |event: &PushEvent, mode: PushE2eMode| {
+        let url = unique_url("refused-400");
+        let relay = Relay::new(false);
+        e2e::note_relay_caps(&url, true, false);
+        relay.script.lock().expect("relay").push_back(old_relay());
+        let sent = tunnel_cloud(&url, relay.clone()).dispatch_in_mode(event, LEAK_BK, &d, mode);
+        (sent, relay.calls())
+    };
+    for event in alert_events() {
+        let (sent, calls) = run(&event, PushE2eMode::SealedWhenSupported);
+        sent.expect("the phone still heard something");
+        assert_eq!(calls.len(), 2, "{event:?}");
+        assert!(calls[0].2 && !calls[1].2, "{event:?}");
+        assert!(calls[1].0.is_tunnel(), "{event:?}");
+        assert_generic_alert(&calls[1].1, &format!("{event:?}"));
+        let (sent, calls) = run(&event, PushE2eMode::SealedOnly);
+        assert!(sent.is_err(), "{event:?}");
+        assert_eq!(calls.len(), 1, "sealed-only: nothing plain: {event:?}");
+    }
+    let badge = PushEvent::Badge(stale_badge());
+    let (sent, calls) = run(&badge, PushE2eMode::SealedWhenSupported);
+    sent.expect("bare badge");
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].2 && !calls[1].2);
+    assert_bare_badge(&calls[1].1, "refused nudge");
+    let (sent, calls) = run(&badge, PushE2eMode::SealedOnly);
+    assert!(sent.is_err());
+    assert_eq!(calls.len(), 1, "sealed-only: nothing plain");
+}
+
+/// `sealed-only`, phone with no key (and a keyed one on a relay without
+/// `s1`): the badge carries no chat ids, and is exactly what an old phone
+/// has always had, so it keeps working.
+#[test]
+fn a_sealed_only_phone_with_no_key_gets_a_bare_badge() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(77);
+    let d = vec![
+        register("bb-apns", "apns", "tok-bb-apns", true, None),
+        register("bb-fcm", "fcm", "tok-bb-fcm", false, None),
+        register("bb-keyed", "apns", "tok-bb-keyed", true, Some(&k)),
+    ];
+    let badge = PushEvent::Badge(stale_badge());
+    // Keyless phones next to a keyed one on a sealing relay.
+    let url = unique_url("bare");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, false);
+    tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&badge, LEAK_BK, &d, PushE2eMode::SealedOnly).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls[1].2, "the keyed phone is sealed");
+    assert!(!calls[0].2);
+    assert_bare_badge(&calls[0].1, "sealed-only, no key");
+    let mut tokens: Vec<&str> = calls[0].1["devices"].as_array().expect("d").iter().map(|d| d["token"].as_str().expect("t")).collect();
+    tokens.sort_unstable();
+    assert_eq!(tokens, vec!["tok-bb-apns", "tok-bb-fcm"]);
+    // A relay without `s1`: the keyed phone is on the same lane.
+    let url = unique_url("bare-no-s1");
+    let relay = Relay::new(false);
+    e2e::note_relay_caps(&url, false, false);
+    tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&badge, LEAK_BK, &d, PushE2eMode::SealedOnly).expect("dispatch");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(!calls[0].2);
+    assert_bare_badge(&calls[0].1, "sealed-only, no s1");
+    assert_eq!(calls[0].1["devices"].as_array().expect("d").len(), 3);
+}
+
+/// A 429 or 5xx from something in front of the relay carries no caps. It
+/// mustn't read as "this relay can't seal", or the next push to a keyed
+/// phone goes plain. A marked answer without `s1` still means a rollback.
+#[test]
+fn an_answer_from_in_front_of_the_relay_does_not_turn_sealing_off() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(78);
+    let keyed = vec![register("cp-key", "apns", "tok-cp-key", true, Some(&k))];
+    let old = vec![register("cp-old", "apns", "tok-cp-old", true, None)];
+    let event = canary_thread();
+    for status in [429, 500, 502, 503, 504] {
+        // The sealed call gets it, then the legacy call of a keyless phone.
+        for lane_devices in [&keyed, &old] {
+            let what = format!("HTTP {status} on {}", lane_devices[0].device_id);
+            let url = unique_url("caps");
+            e2e::note_relay_caps(&url, true, false);
+            let relay = Relay::new(true);
+            relay.script.lock().expect("relay").push_back(relay_answer(status, false, false));
+            let cloud = tunnel_cloud(&url, relay.clone());
+            assert!(cloud.dispatch_in_mode(&event, LEAK_BK, lane_devices, PushE2eMode::SealedWhenSupported).is_err(), "{what}");
+            assert!(e2e::relay_s1(&url), "{what}");
+            assert_eq!(e2e::load_relay_caps(&url).expect("load"), Some(true), "{what}");
+            relay.clear();
+            cloud.dispatch_in_mode(&event, LEAK_BK, &keyed, PushE2eMode::SealedWhenSupported).expect("next push");
+            let calls = relay.calls();
+            assert_eq!(calls.len(), 1, "{what}");
+            assert!(calls[0].2, "the next push is still sealed: {what}");
+            assert_no_canary(&calls[0].1.to_string(), &what);
+        }
+    }
+    // The relay itself saying no `s1`, on any status, is a rollback.
+    for status in [200, 429, 503] {
+        let url = unique_url("caps-rollback");
+        e2e::note_relay_caps(&url, true, false);
+        let relay = Relay::new(false);
+        relay.script.lock().expect("relay").push_back(GatewayResponse { body: "{}".into(), ..relay_answer(status, true, false) });
+        let sent = tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &keyed, PushE2eMode::SealedWhenSupported);
+        assert_eq!(sent.is_ok(), status == 200, "HTTP {status}");
+        assert!(!e2e::relay_s1(&url), "HTTP {status}");
+    }
+}
+
+/// K2 can't read which phones hold a key (a database error). Nothing with
+/// content goes: not knowing must not read as "no key, so plain".
+#[test]
+fn an_unreadable_key_table_sends_only_contentless_pushes() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(79);
+    let d = vec![register("kt-key", "apns", "tok-kt-key", true, Some(&k))];
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("DROP TABLE push_device_keys", []).expect("drop");
+    }
+    assert!(keys::states(&["kt-key"]).is_err(), "the read fails");
+    for mode in [PushE2eMode::SealedWhenSupported, PushE2eMode::SealedOnly] {
+        for event in alert_events() {
+            let url = unique_url("key-read");
+            e2e::note_relay_caps(&url, true, false);
+            let relay = Relay::new(true);
+            tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &d, mode).expect("generic");
+            let calls = relay.calls();
+            assert_eq!(calls.len(), 1, "{event:?}");
+            assert_generic_alert(&calls[0].1, &format!("{mode:?} {event:?}"));
+        }
+        let url = unique_url("key-read-badge");
+        e2e::note_relay_caps(&url, true, false);
+        let relay = Relay::new(true);
+        tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&PushEvent::Badge(stale_badge()), LEAK_BK, &d, mode).expect("bare");
+        let calls = relay.calls();
+        assert_eq!(calls.len(), 1);
+        assert_bare_badge(&calls[0].1, "key table unreadable");
+    }
+}
+
+/// The real sender against a real socket on loopback: the request bytes,
+/// the real header parsing, and what the daemon does next.
+struct LoopbackRelay {
+    url: String,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<Vec<String>>,
+}
+
+impl LoopbackRelay {
+    /// Answers each request with the next of `answers`, then a plain 200.
+    fn start(answers: Vec<String>) -> Self {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = done.clone();
+        let thread = std::thread::spawn(move || {
+            let mut answers: std::collections::VecDeque<String> = answers.into();
+            let mut seen = Vec::new();
+            loop {
+                let mut sock = match listener.accept() {
+                    Ok((s, _)) => s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                            return seen;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                };
+                sock.set_nonblocking(false).expect("blocking");
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = sock.read(&mut buf).expect("read");
+                    assert!(n > 0, "the request ended early");
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let len = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                let (k, v) = l.split_once(':')?;
+                                k.eq_ignore_ascii_case("content-length").then(|| v.trim().parse::<usize>().expect("length"))
+                            })
+                            .expect("content-length");
+                        if raw.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let answer = answers.pop_front().unwrap_or_else(|| http_answer(200, &["X-K2-Push-Gateway: s0", "X-K2-Push-Caps: s1"]));
+                sock.write_all(answer.as_bytes()).expect("answer");
+                seen.push(String::from_utf8(raw).expect("utf8"));
+            }
+        });
+        Self { url, done, thread }
+    }
+
+    /// Stop, and hand back each request, whole, as (head, JSON body).
+    fn requests(self) -> Vec<(String, serde_json::Value)> {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.thread
+            .join()
+            .expect("relay thread")
+            .into_iter()
+            .map(|raw| {
+                let (head, body) = raw.split_once("\r\n\r\n").expect("a head and a body");
+                (head.to_string(), serde_json::from_str(body).expect("json body"))
+            })
+            .collect()
+    }
+}
+
+fn http_answer(status: u16, headers: &[&str]) -> String {
+    let body = if status == 200 { "{\"ok\":true,\"results\":[]}" } else { "{\"error\":\"refused\"}" };
+    let mut out = format!("HTTP/1.1 {status} Answer\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n", body.len());
+    for h in headers {
+        out.push_str(h);
+        out.push_str("\r\n");
+    }
+    out.push_str("\r\n");
+    out.push_str(body);
+    out
+}
+
+fn loopback_cloud(url: &str) -> K2Cloud {
+    K2Cloud::with_config(
+        GatewayConfig {
+            url: url.into(),
+            tunnel: Some(("tunnel-tok".into(), "rosson".into())),
+            shared_token: Some("shared-tok".into()),
+            subdomain: "rosson".into(),
+        },
+        Arc::new(HttpDispatchSender),
+    )
+}
+
+#[test]
+fn over_a_real_socket_a_refused_sealed_alert_shows_nothing() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let (_, k) = phone_key(80);
+    let d = vec![register("sk-key", "apns", "tok-sk-key", true, Some(&k))];
+    let event = canary_thread();
+    let marked = ["X-K2-Push-Gateway: s0", "X-K2-Push-Caps: s1"];
+
+    // The relay's own 429: the alert, then one sealed nudge. Caps stay.
+    let relay = LoopbackRelay::start(vec![http_answer(429, &marked)]);
+    let url = relay.url.clone();
+    e2e::note_relay_caps(&url, true, false);
+    assert!(loopback_cloud(&url).dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).is_err());
+    assert!(e2e::relay_s1(&url), "the 429 carried s1");
+    let seen = relay.requests();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].1["payload"], serde_json::json!({ "data": { "kind": "e2e", "v": "1" } }));
+    assert_eq!(seen[1].1["payload"], serde_json::json!({ "data": { "kind": "nudge", "v": "1" } }));
+    for (head, body) in &seen {
+        assert!(head.starts_with("POST /push/dispatch "), "{head}");
+        assert!(head.to_ascii_lowercase().contains("x-k2-subdomain: rosson"), "the per-daemon path: {head}");
+        assert!(!head.contains("shared-tok"), "{head}");
+        assert_no_content(head, "headers");
+        assert_no_canary(&body.to_string(), "429 body");
+    }
+
+    // A proxy's bare 502: dropped, and the next push is still sealed.
+    let relay = LoopbackRelay::start(vec![http_answer(502, &[])]);
+    let url = relay.url.clone();
+    e2e::note_relay_caps(&url, true, false);
+    let cloud = loopback_cloud(&url);
+    assert!(cloud.dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).is_err());
+    cloud.dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).expect("next push");
+    let seen = relay.requests();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    for (_, body) in &seen {
+        assert_eq!(body["payload"], serde_json::json!({ "data": { "kind": "e2e", "v": "1" } }));
+        assert_no_canary(&body.to_string(), "502 body");
+    }
+
+    // The old relay's 400: then the contentless alert.
+    let relay = LoopbackRelay::start(vec![http_answer(400, &["X-K2-Push-Gateway: s0"])]);
+    let url = relay.url.clone();
+    e2e::note_relay_caps(&url, true, false);
+    loopback_cloud(&url).dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).expect("generic");
+    let seen = relay.requests();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0].1["payload"]["data"]["kind"], "e2e");
+    assert_generic_alert(&seen[1].1, "400 body");
+    assert_no_content(&seen[1].0, "400 headers");
+}
+
+/// K2 Companion's A3: a delivered sealed alert is matched on `kind` inside
+/// `data`, not only the blob's top-level `kind`. On every alert kind, in
+/// both formats, whole or cut down to fit, through the real dispatch.
+#[test]
+fn sealed_alerts_keep_kind_inside_data() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    let (sk1, k1) = phone_key(81);
+    let (sk2, mut k2) = phone_key(82);
+    k2.v = 2;
+    let d = vec![
+        register("kd-v1", "apns", "tok-kd-v1", true, Some(&k1)),
+        register("kd-v2", "apns", "tok-kd-v2", true, Some(&k2)),
+    ];
+    let long = "Very-long-name-".repeat(400);
+    let oversized = PushEvent::ProjectPost(ProjectPush {
+        project_name: long.clone(),
+        group_id: "pg-9".into(),
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "7".into(),
+        waiting_total: "2".into(),
+    });
+    let PushEvent::ThreadPost(mut long_thread) = msg_thread(&long) else { unreachable!("a thread push") };
+    long_thread.agent_name = long.clone();
+    long_thread.preview = long.clone();
+    let mut events = alert_events();
+    events.extend([oversized, PushEvent::ThreadPost(long_thread)]);
+    for event in events {
+        let want = e2e::alert_kind(&event).expect("an alert");
+        let url = unique_url("kind");
+        e2e::note_relay_caps(&url, true, true);
+        let relay = Relay::new(true);
+        tunnel_cloud(&url, relay.clone()).dispatch_in_mode(&event, LEAK_BK, &d, PushE2eMode::SealedWhenSupported).expect("dispatch");
+        let calls = relay.calls();
+        assert_eq!(calls.len(), 2, "one call per format: {event:?}");
+        for (_, body, sealed) in &calls {
+            assert!(*sealed);
+            let (sk, psk) = if body["payload"]["data"]["v"] == "2" { (&sk2, &k2.psk) } else { (&sk1, &k1.psk) };
+            let blob = body["devices"][0]["e2e"].as_str().expect("e2e");
+            let pt: serde_json::Value =
+                serde_json::from_slice(&seal::open(SealKind::Alert, sk, psk, blob).expect("opens")).expect("json");
+            assert_eq!(pt["kind"], want, "{event:?}: {pt}");
+            assert_eq!(pt["data"]["kind"], want, "kind inside data: {event:?}: {pt}");
+        }
+    }
 }

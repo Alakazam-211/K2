@@ -532,7 +532,6 @@ pub(crate) fn thread_lane_split(devices: &[push_devices::PushDevice]) -> crate::
         devices,
         k2_core::push::e2e::server_mode(),
         unix_now(),
-        false,
     );
     let on = plan.legacy.iter().filter(|d| d.previews).count();
     crate::thread_push::PreviewSplit {

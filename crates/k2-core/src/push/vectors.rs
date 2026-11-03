@@ -308,6 +308,38 @@ fn vectors_file_has_not_drifted() {
     );
 }
 
+/// K2 Companion's A3: every sealed alert in the files the phones build
+/// against keeps `kind` inside `data` as well as at the top of the blob.
+/// The phone matches a delivered notification on the one in `data`.
+#[test]
+fn committed_alert_vectors_keep_kind_inside_data() {
+    let want: &[(&str, &str)] = &[
+        ("alert-thread-preview", "thread"),
+        ("alert-thread-no-preview", "thread"),
+        ("alert-ticket", "ticket"),
+        ("alert-project", "project"),
+        ("alert-max-truncated", "project"),
+        ("alert-thread-long-agent-name", "thread"),
+        ("alert-thread-msg-full", "thread"),
+        ("alert-thread-msg-truncated", "thread"),
+        ("v2-alert-thread-msg-full", "thread"),
+        ("v2-alert-thread-msg-truncated", "thread"),
+    ];
+    let mut seen = Vec::new();
+    for path in [VECTORS_PATH, VECTORS_V2_PATH] {
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json");
+        for c in doc["cases"].as_array().expect("cases").iter().filter(|c| c["kind"] == "e2e") {
+            let name = c["name"].as_str().expect("name");
+            let (_, kind) = want.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("add {name} to this list"));
+            let pt: serde_json::Value = serde_json::from_str(c["plaintextJson"].as_str().expect("plaintext")).expect("json");
+            assert_eq!(pt["kind"], *kind, "{name}");
+            assert_eq!(pt["data"]["kind"], *kind, "{name}: kind inside data");
+            seen.push(name.to_string());
+        }
+    }
+    assert_eq!(seen.len(), want.len(), "every listed case is in the files: {seen:?}");
+}
+
 /// Every case in the committed file decrypts with the recipient key, its
 /// blob has the relay's exact length, and its relay body carries nothing
 /// but `{kind, v}` + per-device `e2e`.

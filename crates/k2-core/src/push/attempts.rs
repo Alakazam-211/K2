@@ -32,7 +32,7 @@ pub enum Lane {
     Sealed,
     /// Today's path.
     Legacy,
-    /// `sealed-only` generic ("K2 / New message") to an unkeyed phone.
+    /// No content: "K2 / New message", or a badge with no chat ids.
     Generic,
 }
 

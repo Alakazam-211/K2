@@ -171,8 +171,9 @@ fn relay_map() -> std::sync::MutexGuard<'static, Option<CapsMap>> {
     RELAY_CAPS.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Cache the relay's capability from a per-daemon-path response (any
-/// status). A response without `s1` (a rollback, or a failover to an
+/// Cache the relay's capability from a per-daemon-path response (any status
+/// the relay itself answered: [`super::GatewayResponse::tells_caps`]). A
+/// response without `s1` (a rollback, or a failover to an
 /// older relay) sends the next dispatch back to today's path; one without
 /// `s2` sends format-2 phones back to format 1. A change is persisted
 /// (`push_relay_caps`, migrations 0211 + 0252) so the first push after a
@@ -577,11 +578,11 @@ pub fn sealed_dispatch_body_in(kind: SealKind, format: seal::Format, entries: &[
 /// The `sealed-only` payload for a device without a key (§4
 /// legacy-generic): "K2" / "New message", `data = {kind, badgeKey,
 /// subdomain, instanceId, unreadTotal, waitingTotal}`. No names, preview,
-/// ids, `threadId` or `collapseId`. A badge push keeps today's payload (it
-/// already carries no names or ids).
+/// ids, `threadId` or `collapseId`. A badge push keeps today's payload
+/// minus its `stale` chat ids.
 pub fn generic_payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) -> serde_json::Value {
     if let PushEvent::Badge(_) = event {
-        return super::K2Cloud::payload(event, stamp, badge_key);
+        return super::K2Cloud::payload(&event.without_hints(), stamp, badge_key);
     }
     let full = event.data();
     let mut data = PushData::default();

@@ -200,7 +200,7 @@ fn footprint_conn(conn: &Connection, svc: &str, from: &str) -> Result<RoomFootpr
     let mut st = conn
         .prepare(
             "SELECT DISTINCT r.name, r.rooms, COALESCE(r.room_policy, '{}') FROM grants g JOIN roles r ON r.id = g.role_id \
-             WHERE g.kind = 'app' AND g.target_id = ?1 AND (r.app_id IS NULL OR r.app_id != ?1)",
+             WHERE g.kind = 'app' AND g.target_id = ?1 AND g.enabled != 0 AND (r.app_id IS NULL OR r.app_id != ?1)",
         )
         .map_err(|e| format!("handover shared roles: {e}"))?;
     let shared: Vec<(String, String, String)> = st

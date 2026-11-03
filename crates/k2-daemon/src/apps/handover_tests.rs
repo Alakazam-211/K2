@@ -865,6 +865,30 @@ fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
 /// the switch while the card says they talk to B. It refuses, naming the
 /// roles, and nothing moves; a role of the App itself is no such thing.
 #[test]
+fn a_switched_off_login_doesnt_block_the_handover() {
+    let f = fx("swr2");
+    let mut pol = k2_core::skin::RoomPolicy::new();
+    pol.insert(f.a.clone(), vec!["thread:read".into()]);
+    let role = k2_core::skin::create_role_for_app("swr2-boxwide", &pol, None).unwrap();
+    let p = k2_core::skin::add_principal("swr2-u").unwrap();
+    let g = k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: p.id.clone(),
+        kind: "app".into(),
+        target_id: f.svc.clone(),
+        role: Some(role.id.clone()),
+        scope: None,
+        created_by: Some("owner-token".into()),
+    })
+    .unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (409, "handover_shared_roles"), "{v}");
+    k2_core::skin::set_grant_enabled(&g.id, false).unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+}
+
+#[test]
 fn a_box_wide_role_naming_the_old_room_refuses_the_handover() {
     let f = fx("swr1");
     let mut pol = k2_core::skin::RoomPolicy::new();

@@ -40,6 +40,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An App can take phone push registration only from its own server:** `k2 app push set <app> --register server`. Off by default.
 - **A custom domain answers "open in app" links as soon as it goes live.** Before, a domain that went live after `k2 app links set` got no link files until the next deploy.
 - **A deploy held for your approval now starts with the box services its manifest asks for.** The held card names them, and approving it covers them: the App starts with `K2_BOX_*` and its firewall rule, with no second request or restart. `k2 app box-service request` also says which service it allowed now, instead of printing an empty `already allowed:`, and reports a request that failed to apply.
+- **`k2 app suspend` is for you, an Admin or the App's own agent, and its help now says so.** Members have been refused since 0.46.3, but the help still said anyone could, and the refusal printed only `role_required`. A `k2 app` or `k2 compute` command your login's role doesn't reach now says which role it needs.
 
 ### Chat and voice (Sew)
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.

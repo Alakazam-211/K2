@@ -2,7 +2,7 @@
 //! (`prd-k2-app-runtime-v1` §5.2, §5.4; S19, AR10).
 //!
 //! ```text
-//! POST /cli/app/suspend              {app, reason?}   any Member (an agent: its own workspace's Apps); narrows
+//! POST /cli/app/suspend              {app, reason?}   the owner or an Admin; an agent: its own workspace's Apps. Never a Member. Narrows
 //! POST /cli/app/resume               {app, start?}    the owner; the App's own agent for a suspension it made, with switch 2
 //! GET  /cli/app/remote-pass          ?app=            the App's remote passes (never the secret)
 //! POST /cli/app/remote-pass/rotate   {app, ttl?, keepOld?}   the owner: a new remote pass, shown once
@@ -11,9 +11,11 @@
 //!
 //! **Suspend is one step**: mark the App suspended (deploys and starts
 //! frozen), revoke every live pass it holds (link and remote, one UPDATE,
-//! so the very next call is `401`), then stop it (which closes its link). Anyone
-//! who may see the App may suspend it: it only narrows. Only the owner
-//! resumes.
+//! so the very next call is `401`), then stop it (which closes its link). It
+//! only narrows, so an agent needs no switch for its own App, but a Member
+//! login changes nothing on an App: the route floor (`route_policy`) and
+//! `member_read_only` (`routes::handle_inner`, every door) refuse it. Only the
+//! owner resumes.
 //!
 //! **A remote App pass** (an App hosted elsewhere) is the App's own pass
 //! with an expiry and no link: refused on every link listener, accepted

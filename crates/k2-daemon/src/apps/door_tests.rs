@@ -128,6 +128,44 @@ fn recorded(app: &str) -> Option<Vec<String>> {
     super::grants::recorded(&conn, app).unwrap()
 }
 
+/// Rosson (0.46.8): the owner, an Admin or the App's own agent suspend. A
+/// Member never does (the route floor is `route_policy`'s test; this is the
+/// handler's door, which every door passes through).
+#[test]
+fn a_member_cannot_suspend_an_admin_the_owner_and_its_own_agent_can() {
+    let f = fx("suspend-who");
+    let remote = k2_core::skin::link::mint_remote_pass(&svc("jobs"), "jobs", &["thread:read".to_string()], &[f.ws_a.clone()], 3600).unwrap();
+
+    let member = Who::Login { username: "mo".into(), role: Role::Member };
+    let (st, v) = call("/cli/app/suspend", &member, json!({"app": "jobs"}));
+    assert_eq!((st, code(&v)), (403, super::access::MEMBER_READ_ONLY), "{v}");
+    assert_eq!(v["error"]["hint"], "Members can see Apps but not change them: ask an Admin or the owner", "{v}");
+    assert!(!super::suspend::is_suspended("jobs"), "the Member changed nothing");
+    assert!(k2_core::skin::resolve_skin_token(&remote.raw).is_some(), "its pass still works");
+
+    // The owner and an Admin: any App, whichever workspace holds it.
+    for who in [admin(), owner_login(), Who::Owner] {
+        for app in ["jobs", "other"] {
+            let (st, v) = call("/cli/app/suspend", &who, json!({"app": app}));
+            assert_eq!(st, 200, "{who:?} on {app}: {v}");
+            assert!(super::suspend::is_suspended(app), "{who:?} on {app}: {v}");
+            let (st, v) = call("/cli/app/resume", &Who::Owner, json!({"app": app}));
+            assert_eq!(st, 200, "{v}");
+            assert!(!super::suspend::is_suspended(app), "{v}");
+        }
+    }
+
+    // An agent: another workspace's App doesn't exist for it, and its own
+    // needs no switch.
+    switch(&f.ws_a, false);
+    let (st, v) = call("/cli/app/suspend", &agent(&f.ws_a), json!({"app": "other"}));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    assert!(!super::suspend::is_suspended("other"), "{v}");
+    let (st, v) = call("/cli/app/suspend", &agent(&f.ws_a), json!({"app": "jobs"}));
+    assert_eq!(st, 200, "{v}");
+    assert!(super::suspend::is_suspended("jobs"), "{v}");
+}
+
 #[test]
 fn suspend_revokes_every_pass_in_one_step_and_only_the_owner_resumes() {
     let f = fx("suspend");

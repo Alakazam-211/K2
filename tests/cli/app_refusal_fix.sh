@@ -7,6 +7,8 @@
 #   GET /cli/app/errors    → 403 apps_manage_off    (exit 3)
 #   GET /cli/app/status    → 400 bad_request        (exit 2)
 #   GET /cli/compute/nodes → 403 owner_only         (another family: unchanged)
+#   POST /cli/app/suspend  → 403 role_required      (the route floor's own shape,
+#                                                    {"error": <code>, "message": …})
 # For each App refusal, the plain form is the JSON line with `next` and
 # `explain` added, then `fix: <next>`; the --json form is the same JSON line
 # and no fix: line. Exit codes are what they were. `k2 compute` refusals
@@ -64,6 +66,10 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         st, code, hint = ANSWERS.get(path, (404, "not_found", "no such route"))
         body = json.dumps({"error": {"code": code, "hint": hint}}).encode()
+        if path == "/cli/app/suspend":
+            st = 403
+            body = json.dumps({"error": "role_required", "required": "admin", "role": "member",
+                               "message": "This needs an admin login on this server. You are signed in as member."}).encode()
         self.send_response(st)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -127,6 +133,21 @@ rc="$(rc_of compute nodes)"
 expect_eq "compute nodes: exit 3" "$rc" "3"
 expect_eq "compute nodes: another family is unchanged" "$(cat "$SANDBOX/err")" \
 '{"error": "owner_only", "hint": "only the server'"'"'s owner may do this"}'
+
+echo "== A login below the route's floor (a Member on k2 app suspend) =="
+rc="$(rc_of app suspend jobs)"
+expect_eq "suspend, Member: exit 3" "$rc" "3"
+expect_eq "suspend, Member: says which role, who to ask, and the fix" "$(cat "$SANDBOX/err")" \
+'{"error": "role_required", "hint": "This needs an admin login on this server. You are signed in as member.", "next": "Ask someone with that role to do it: an Admin or the owner.", "explain": "k2 explain role_required"}
+fix: Ask someone with that role to do it: an Admin or the owner.'
+rc=0; K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2" app suspend --help >"$SANDBOX/out" 2>&1 </dev/null || rc=$?
+expect_eq "suspend --help: exit 0" "$rc" "0"
+expect_has "suspend --help: who may" "$(cat "$SANDBOX/out")" "(the owner, an Admin or its own agent;"
+expect_has "suspend --help: not a Member" "$(cat "$SANDBOX/out")" "not a Member); k2 app resume (owner)."
+rc=0; K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2" app door >"$SANDBOX/out" 2>&1 </dev/null || rc=$?
+expect_eq "app door: exit 0" "$rc" "0"
+expect_has "app door: who may" "$(cat "$SANDBOX/out")" "Admin, on any App; an agent, on its own"
+expect_has "app door: not a Member" "$(cat "$SANDBOX/out")" "workspace's Apps. Not a Member."
 
 echo "== k2 explain (no daemon) =="
 ex() { local rc=0; K2_PORT=1 "$K2" explain "$@" >"$SANDBOX/out" 2>"$SANDBOX/err" </dev/null || rc=$?; echo "$rc"; }

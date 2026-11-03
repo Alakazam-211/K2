@@ -442,7 +442,8 @@ pub const ROUTES: &[Route] = &[
     // each part keeps its own route's rule).
     get("/cli/app/status", Member),
     post("/cli/app/stop", Admin),
-    // S19: suspend narrows: any Member (a passport: its own workspace's Apps).
+    // S19: suspend narrows, for the owner and Admins (Rosson 0.46.8: never a
+    // Member). A passport: its own workspace's Apps, with no switch (handler).
     post("/cli/app/suspend", Admin),
     // 0.46.4: test guests scoped to one App. Guests are the owner's, as
     // `/cli/skin/users` (an agent passport is refused `owner_only` in the
@@ -3356,6 +3357,25 @@ mod tests {
         for p in ["/cli/app/suspend", "/cli/app/install", "/cli/app/uninstall", "/cli/app/deny", "/cli/app/guest/rooms"] {
             assert_eq!(lookup(p).and_then(|r| r.post).expect("POST").as_wire(), "admin", "{p}");
         }
+    }
+
+    #[test]
+    fn a_member_login_cannot_suspend_an_app_at_the_route_floor() {
+        // Rosson (0.46.8): the owner, an Admin or the App's own agent suspend.
+        crate::test_support::with_temp_home(|| {
+            let member = session("susp_member", Role::Member);
+            let admin = session("susp_admin", Role::Admin);
+            let owner = session("susp_owner", Role::Owner);
+            let r = role_gate("POST", "/cli/app/suspend", &format!("token={member}"), OWNER).expect("member refused");
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+            assert_eq!(v["error"], "role_required", "{v}");
+            assert_eq!(v["message"], "This needs an admin login on this server. You are signed in as member.", "{v}");
+            assert!(role_gate("POST", "/cli/app/suspend", &format!("token={admin}"), OWNER).is_none(), "admin passes");
+            assert!(role_gate("POST", "/cli/app/suspend", &format!("token={owner}"), OWNER).is_none(), "owner login passes");
+            assert!(role_gate("POST", "/cli/app/suspend", &format!("token={OWNER}"), OWNER).is_none(), "owner token passes");
+            assert!(role_gate("POST", "/cli/app/suspend", "token=sess.secret", OWNER).is_none(), "a passport reaches the handler");
+        });
     }
 
     #[test]

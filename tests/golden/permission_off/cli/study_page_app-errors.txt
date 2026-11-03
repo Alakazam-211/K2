@@ -271,8 +271,7 @@ BOX (box prep, box services, Podman)
       fix: Pick another port, or ask that App's agent (k2 msg <address>
       "…") or the owner.
   role_required (exit 3)
-      fix: Ask an Admin or the owner, or read your own Apps: k2 app
-      resources --app <app-id>
+      fix: Ask someone with that role to do it: an Admin or the owner.
   root_busy (exit 3)
       fix: Wait for it to finish, then run the command again.
   unprep_failed (exit 3)

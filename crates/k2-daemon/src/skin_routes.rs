@@ -896,6 +896,10 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
                     return Err(app_users_off_response());
                 }
             }
+            // Clearing a line's folders opens the whole room to the role.
+            if !users_switch && v.get("clear").and_then(|x| x.as_bool()) == Some(true) {
+                return Err(app_users_off_response());
+            }
         }
         "/cli/skin/roles/remove" => existing(&["id", "name", "role"])?,
         "/cli/skin/roles/from-template" => {

@@ -623,6 +623,30 @@ async fn an_admins_revoke_leaves_the_owners_live_reset() {
     assert!(!k2_core::skin::invites::owner_reset_pending(&principal_id(&u)).unwrap());
 }
 
+/// With the App-users switch off, clearing a role line's folder limits is the
+/// switch's to allow: it opens the whole room to the role, like `download`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_folder_limits_needs_the_app_users_switch() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let role = format!("mine{t}");
+    let line = json!({ "handle": b.sales.handle, "caps": ["files:read"] });
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": role, "app": b.shop, "roomAccess": [line] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.sales.handle, "read": ["public"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&b.sales.id, false).unwrap();
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.sales.handle, "clear": true })).await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&b.sales.id, true).unwrap();
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.sales.handle, "clear": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
 /// The App's own record of its people (`k2 app history <app> --users`), newest first.
 async fn people_record(port: u16, agent: &str, app_name: &str) -> Vec<Value> {
     let r = get(port, "/cli/app/history", agent, &format!("app={app_name}&users=1&limit=200")).await;

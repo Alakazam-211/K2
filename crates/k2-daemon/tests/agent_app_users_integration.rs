@@ -1232,6 +1232,43 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
 /// 0.46.8: an agent runs its App's users end to end. It starts a reset (K2 mails
 /// the person, the agent never gets the link), takes a pending link back, clears a
 /// lockout, and reads what happened in the App's own record.
+/// A set-password page was on one of the App's hosts when it was set; a domain can
+/// lapse. Whoever holds the name next gets no tokens: the check runs at send time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_set_password_host_gets_no_tokens() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    seed_mail(&sales, &format!("rst{tag}.example.test"), "on");
+    let old = format!("https://old{tag}.example.test");
+    set_front_door(port, &old).await;
+    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "setPasswordUrl": format!("{old}/set") })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let u = format!("u{tag}");
+    let email = format!("{u}@example.test");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "email": email })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(mails_to(&rec, &email)[0].text_body.contains(&format!("{old}/set#k2inv_")), "while it's the App's host, the App's page");
+
+    // The host lapses.
+    let new = format!("https://new{tag}.example.test");
+    set_front_door(port, &new).await;
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let body = mails_to(&rec, &email)[1].text_body.clone();
+    assert!(!body.contains(&old), "the lapsed host never sees a token: {body}");
+    assert!(body.contains(&format!("{new}/reset#k2inv_")), "this box's own door instead: {body}");
+}
+
 /// One password, two workspaces: an agent's reset on its own App would let that
 /// App's page see the password that also opens the other App.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

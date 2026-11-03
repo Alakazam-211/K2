@@ -447,10 +447,19 @@ pub(crate) fn box_label() -> String {
 /// Never a derived `skin.<sub>` host: the relay routes that label only
 /// once the Caddy front door registered it. The daemon itself serves no
 /// `/reset`, so the box-host fallback is K2's page (same `#token`, same
-/// `POST /cli/skin/password/reset`).
-pub fn set_password_page(settings: &invites::InviteSettings) -> Option<String> {
+/// `POST /cli/skin/password/reset`). The App's own page is checked again at
+/// send time: it was on one of `app`'s hosts when it was set, but a custom domain
+/// can lapse, and whoever holds that name next must not get the tokens.
+pub fn set_password_page(app: &str, settings: &invites::InviteSettings) -> Option<String> {
     let stored = skin::get_front_door().ok().and_then(|d| d.url);
-    app_set_password_page(settings.set_password_url.as_deref(), stored.as_deref(), box_public_url().as_deref(), &app_hosts())
+    let own = settings.set_password_url.as_deref().filter(|u| match invites::check_set_password_url(u, &page_hosts(app)) {
+        Ok(_) => true,
+        Err(_) => {
+            k2_core::log_debug!("[skin] {app}: its set-password page isn't on one of its hosts any more; using K2's");
+            false
+        }
+    });
+    app_set_password_page(own, stored.as_deref(), box_public_url().as_deref(), &app_hosts())
 }
 
 /// [`set_password_page`] on its inputs.
@@ -754,7 +763,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
         Ok(s) => s,
         Err(e) => return CliResponse::internal_error(e),
     };
-    let Some(page) = set_password_page(&settings) else {
+    let Some(page) = set_password_page(&app, &settings) else {
         return refusal("409 Conflict", "no_set_password_page", &no_page_hint(raw_app));
     };
     let sender = match invite_sender(&app, app_ws.as_deref(), &by, text(&v, &["from"])) {
@@ -1202,7 +1211,7 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
         return Err((409, "no_email", "a reset needs an email on the person".to_string()));
     };
     let settings = invites::settings(app).map_err(|e| (500, "store", e))?;
-    let Some(page) = set_password_page(&settings) else {
+    let Some(page) = set_password_page(app, &settings) else {
         return Err((409, "no_set_password_page", no_page_hint(app)));
     };
     let by = By::App { ws: ws.clone(), actor: actor.to_string() };
@@ -1299,7 +1308,7 @@ pub fn forgot_by_pass_now(pass: &skin::SkinPass, username: &str) {
         Ok(s) => s,
         Err(e) => return skip(&e),
     };
-    let Some(page) = set_password_page(&settings) else { return skip("no set-password page") };
+    let Some(page) = set_password_page(&app, &settings) else { return skip("no set-password page") };
     let by = By::App { ws: ws.to_string(), actor: format!("pass:{}", pass.id) };
     let sender = match invite_sender(&app, Some(ws), &by, None) {
         Ok(Some(s)) if s.gate != Gate::Off => s,

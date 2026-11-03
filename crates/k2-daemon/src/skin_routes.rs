@@ -942,15 +942,8 @@ fn agent_may_write_role(ws: &str, path: &str, body: &[u8]) -> Result<(), CliResp
         }
         "/cli/skin/roles/paths" => {
             existing(&["name", "role", "id"])?;
-            if !matches!(v.get("download"), None | Some(serde_json::Value::Null)) {
-                if own_app_of(found(&["name", "role", "id"])?.as_ref()).is_none() {
-                    return Err(person_only_refused(skin::CAP_FILES_DOWNLOAD));
-                }
-                if !users_switch {
-                    return Err(app_users_off_response());
-                }
-            }
-            // Clearing a line's folders opens the whole room to the role.
+            // Adding or widening a download entry is checked against the stored
+            // line, in the handler's own transaction. Clearing a line's folders opens the whole room to the role.
             if !users_switch && v.get("clear").and_then(|x| x.as_bool()) == Some(true) {
                 return Err(app_users_off_response());
             }
@@ -2795,6 +2788,14 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
         }
         Some(PathsBody { download_sent, sent_download, folders_sent, read, write, upload_dir, upload })
     };
+    // Adding or widening a download entry: the agent that owns the App, with the
+    // App-users switch on (Rosson 2026-11-03). Any other agent only narrows.
+    let role_app = skin::find_role(id_or_name).ok().flatten().and_then(|r| r.app_id);
+    let may_widen = !actor_is_agent(actor)
+        || role_app
+            .as_deref()
+            .and_then(skin::ties::app_workspace)
+            .is_some_and(|w| k2_core::workspace::settings::agents_can_manage_app_users(&w));
     // Review A5: the stored line is read, the widening checked and the new
     // line written in ONE transaction (`update_role_room_paths`).
     let written = skin::paths::update_role_room_paths(id_or_name, &ids[0], |stored| {
@@ -2802,6 +2803,11 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
         // The stored line: kept download entries, the widening check, and a
         // download-only body's other folders.
         let download = if b.download_sent {
+            if !may_widen {
+                if let Some(entry) = skin::paths::download_widening(&stored.download, &b.sent_download) {
+                    return Err(skin::paths::PathsUpdateError::Refused(entry.to_string()));
+                }
+            }
             b.sent_download.clone()
         } else {
             stored.download.clone()
@@ -2819,7 +2825,8 @@ pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
         })
     });
     match written {
-        Err(skin::paths::PathsUpdateError::Refused(entry)) => CliResponse::bad_request(entry),
+        Err(skin::paths::PathsUpdateError::Refused(_)) if role_app.is_some() => app_users_off_response(),
+        Err(skin::paths::PathsUpdateError::Refused(_)) => person_only_refused(skin::CAP_FILES_DOWNLOAD),
         Err(skin::paths::PathsUpdateError::Bad(e)) => CliResponse::bad_request(e),
         Ok(role) => {
             let scope = role.room_paths.get(&ids[0]).cloned().unwrap_or_default();

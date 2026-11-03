@@ -588,6 +588,41 @@ async fn an_agent_holding_the_temp_password_can_release_the_tie_itself() {
     assert_eq!(release_lines(&u).len(), 1, "it shows in the audit log like any other");
 }
 
+/// An Admin's `--revoke` takes back the App's links; the owner's live reset is the
+/// owner's. The owner's own `--revoke` does take it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_admins_revoke_leaves_the_owners_live_reset() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let shop = b.shop.clone();
+    let name = format!("ad{t}");
+    let r = post(port, "/cli/users/add", OWNER, json!({ "username": name, "password": "password123", "mustChangePassword": false })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/users/set-role", OWNER, json!({ "username": name, "role": "admin" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let body = json!({ "username": name, "password": "password123" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    let admin = r.json()["token"].as_str().expect("token").to_string();
+    let u = format!("u{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": u, "app": shop })).await;
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u, "app": shop, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let r = post(port, "/cli/skin/users/reset-link", &admin, json!({ "username": u, "app": shop, "revoke": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["revoked"], json!(0), "{}", r.body);
+    assert!(k2_core::skin::invites::owner_reset_pending(&principal_id(&u)).unwrap(), "the owner's reset is still live");
+
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u, "app": shop, "revoke": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["revoked"], json!(1), "{}", r.body);
+    assert!(!k2_core::skin::invites::owner_reset_pending(&principal_id(&u)).unwrap());
+}
+
 /// The App's own record of its people (`k2 app history <app> --users`), newest first.
 async fn people_record(port: u16, agent: &str, app_name: &str) -> Vec<Value> {
     let r = get(port, "/cli/app/history", agent, &format!("app={app_name}&users=1&limit=200")).await;

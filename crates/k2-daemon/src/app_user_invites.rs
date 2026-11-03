@@ -945,7 +945,8 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         }
     };
     if v.get("revoke").and_then(Value::as_bool) == Some(true) {
-        return revoke_links(&person, &app, true, actor);
+        // An Admin takes back the App's links, never the owner's live reset.
+        return revoke_links(&person, &app, admin.is_none(), actor);
     }
     let code = v.get("code").and_then(Value::as_bool).unwrap_or(false);
     let to = match text(&v, &["to"]) {

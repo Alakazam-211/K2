@@ -665,6 +665,7 @@ async fn a_card_answer_says_who_set_up_the_login() {
     person_chooses(port, &u, TEMP, &b.shop, PW).await;
     let s = session(port, &u, &b.shop).await;
 
+    pin_chat(&b.sales);
     let r = post(port, "/cli/thread/ask", &b.agent, json!({ "addr": b.sales.handle, "prompt": "Ship it?", "options": "Go,Stop", "from": b.sales.handle })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let id = r.json()["id"].as_str().expect("card id").to_string();
@@ -725,7 +726,10 @@ async fn every_write_on_an_apps_people_leaves_a_line_and_never_a_password() {
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/roles/unassign", &agent, json!({ "username": u })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u, "app": shop, "rooms": [b.ops.handle] })).await;
+    let w = format!("w{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": w, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": w, "app": shop, "rooms": [b.ops.handle] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u, "email": format!("{u}@example.test") })).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -758,7 +762,7 @@ async fn every_write_on_an_apps_people_leaves_a_line_and_never_a_password() {
     assert_eq!(written["payload"]["roomAccess"][0]["handle"], json!(b.ops.handle), "the room: {written}");
     let rooms = line_named(&rows, "app_user_rooms_changed");
     assert_eq!(rooms["payload"]["rooms"], json!([b.ops.handle]), "the rooms: {rooms}");
-    assert_eq!(rooms["payload"]["username"], json!(u), "{rooms}");
+    assert_eq!(rooms["payload"]["username"], json!(w), "{rooms}");
     let assigned = line_named(&rows, "app_user_role_assigned");
     assert_eq!(assigned["payload"]["role"], json!(role), "the role: {assigned}");
     assert_eq!(line_named(&rows, "app_user_role_removed")["payload"]["name"], json!(tmpl), "a removed role's App still gets the line");
@@ -777,7 +781,7 @@ async fn every_write_on_an_apps_people_leaves_a_line_and_never_a_password() {
 
     // An owner's `k2 app user rooms` shows too: the record is the App's, not the agent's.
     let n = rows.iter().filter(|x| x["event"] == "app_user_rooms_changed").count();
-    let r = post(port, "/cli/skin/users/rooms", OWNER, json!({ "username": u, "app": shop, "rooms": [b.desk.handle] })).await;
+    let r = post(port, "/cli/skin/users/rooms", OWNER, json!({ "username": w, "app": shop, "rooms": [b.desk.handle] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let rows = people_record(port, &agent, &b.shop_name).await;
     assert_eq!(rows.iter().filter(|x| x["event"] == "app_user_rooms_changed").count(), n + 1);
@@ -800,6 +804,7 @@ async fn a_live_owners_reset_holds_the_tie_through_every_door() {
     let t = tag();
     let b = box2(&env, &t);
     let (shop, agent) = (b.shop.clone(), b.agent.clone());
+    owner_post(port, "/cli/skin/front-door", json!({ "mode": "direct", "url": format!("https://door{t}.example.test"), "apply": false })).await;
 
     // The temporary password's door.
     let u = format!("u{t}");

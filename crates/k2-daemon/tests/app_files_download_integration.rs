@@ -287,10 +287,8 @@ async fn widening_entries_is_person_only_and_omitted_entries_are_kept() {
     // An agent adding or widening an entry: 403 owner_only, nothing changes.
     for download in [json!(["reports", "private/secret.txt"]), json!(["private"]), json!(["."])] {
         let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": docs.handle, "download": download })).await;
-        if download == json!(["."]) {
-            assert_eq!(r.status, 400, "the room root is never an entry: {}", r.body);
-            continue;
-        }
+        // This role is box-wide: refused before its entries are read. (The room
+        // root is never an entry on any role: `skin_paths`' own tests.)
         assert_eq!(r.status, 403, "{download}: {}", r.body);
         assert_eq!(r.code(), "owner_only", "{}", r.body);
     }

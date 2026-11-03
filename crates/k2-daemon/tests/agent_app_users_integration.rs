@@ -1298,14 +1298,16 @@ async fn an_agents_unlocks_of_one_login_are_capped_per_hour() {
         assert_eq!(r.status, 200, "{}", r.body);
     }
 
+    // Nothing to clear: doesn't count.
+    for _ in 0..k2_daemon::skin_routes::AGENT_UNLOCKS_PER_HOUR + 1 {
+        let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
+        assert_eq!(r.json()["cleared"], json!(false), "{}", r.body);
+    }
     for i in 0..k2_daemon::skin_routes::AGENT_UNLOCKS_PER_HOUR {
         lock(&u);
         let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
         assert_eq!(r.status, 200, "unlock {i}: {}", r.body);
         assert_eq!(r.json()["cleared"], json!(true), "{}", r.body);
-        // Nothing to clear: doesn't count against the person.
-        let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
-        assert_eq!(r.json()["cleared"], json!(false), "{}", r.body);
     }
     lock(&u);
     let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
@@ -1336,7 +1338,7 @@ async fn a_lapsed_set_password_host_gets_no_tokens() {
     seed_mail(&sales, &format!("rst{tag}.example.test"), "on");
     let old = format!("https://old{tag}.example.test");
     set_front_door(port, &old).await;
-    let r = post(port, "/cli/skin/access/invites", &agent, json!({ "app": shop, "setPasswordUrl": format!("{old}/set") })).await;
+    let r = post(port, "/cli/skin/access/invites", OWNER, json!({ "app": shop, "setPasswordUrl": format!("{old}/set") })).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
     let u = format!("u{tag}");

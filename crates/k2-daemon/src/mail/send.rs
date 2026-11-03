@@ -582,6 +582,12 @@ pub trait OutboundStore {
     fn scrub_body(&self, _id: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Store a message's blind copies after the owner's always-BCC policy
+    /// changed while it waited: its body and its audit row. No-op for a store
+    /// that keeps no body.
+    fn update_blind_copies(&self, _id: &str, _msg: &OutboundMessage) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
@@ -853,6 +859,29 @@ impl OutboundStore for DbOutboundStore {
         restrict_mode(&path);
         Ok(())
     }
+
+    fn update_blind_copies(&self, id: &str, msg: &OutboundMessage) -> Result<(), String> {
+        let path = self.body_path(id);
+        let body = serde_json::to_string(msg).map_err(|e| format!("outbound message serialize: {e}"))?;
+        std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound body write: {e}"))?;
+        restrict_mode(&path);
+        let json_or_null = |list: &[String]| -> Result<Option<String>, String> {
+            if list.is_empty() {
+                Ok(None)
+            } else {
+                serde_json::to_string(list).map(Some).map_err(|e| format!("bcc serialize: {e}"))
+            }
+        };
+        let (bcc, policy) = (json_or_null(&msg.bcc)?, json_or_null(&msg.policy_bcc)?);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE mail_outbound SET bcc_json = ?2, policy_bcc_json = ?3 WHERE id = ?1",
+            rusqlite::params![id, bcc, policy],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("outbound bcc update: {e}"))
+    }
 }
 
 /// Record a SUCCESSFUL linked-SMTP submission in the outbox (issue
@@ -921,17 +950,19 @@ pub fn list_pending() -> Vec<MailOutbound> {
         .unwrap_or_default()
 }
 
-/// §12 lazy expiry: auto-deny pending rows older than 7 days (called
-/// on every outbox/approvals read + before approve/deny — no separate
-/// background loop). Emits `MailSendDecided` per expired row. Returns
-/// how many expired.
+/// §12 lazy expiry: auto-deny rows that have been pending for 7 days
+/// (called on every outbox/approvals read + before approve/deny — no
+/// separate background loop). The clock is the row's last change, so a
+/// scheduled message that goes back to approval at its send time gets its
+/// full 7 days. Emits `MailSendDecided` per expired row. Returns how many
+/// expired.
 pub fn auto_deny_expired(now: i64) -> usize {
     let cutoff = now - APPROVAL_EXPIRE_SECS;
     let ids: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id FROM mail_outbound WHERE status = 'pending' AND created_at < ?1",
+            "SELECT id FROM mail_outbound WHERE status = 'pending' AND updated_at < ?1",
         ) else {
             return 0;
         };
@@ -1433,7 +1464,7 @@ pub fn approve_and_submit_with<'r>(
 }
 
 /// [`OutboundStore::scrub_body`], logged on failure (the send itself is done).
-fn scrub(store: &dyn OutboundStore, id: &str) {
+pub(crate) fn scrub(store: &dyn OutboundStore, id: &str) {
     if let Err(e) = store.scrub_body(id) {
         k2_core::log_debug!("[mail/send] scrub {id}: {e}");
     }

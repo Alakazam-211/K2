@@ -1469,7 +1469,7 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             // or the agent's --from-name) — the approver sees it first.
             v["fromName"] = serde_json::json!(stored.as_ref().and_then(|m| m.from_name.clone()));
             v["workspace"] = serde_json::json!(project_name(&row.owner_project_id));
-            v["expiresAt"] = serde_json::json!(row.created_at + send::APPROVAL_EXPIRE_SECS);
+            v["expiresAt"] = serde_json::json!(row.updated_at + send::APPROVAL_EXPIRE_SECS);
             v
         })
         .collect();

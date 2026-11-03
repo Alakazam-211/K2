@@ -271,11 +271,12 @@ pub(crate) static MAIL_APPROVE: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
-/// `(owner_project_id, status, created_at)` of a queued send.
+/// `(owner_project_id, status, last change)` of a queued send: pending is
+/// timed from the last change, as `auto_deny_expired` times it.
 fn outbound(id: &str) -> Option<(String, String, i64)> {
     db(|c| {
         c.query_row(
-            "SELECT owner_project_id, status, created_at FROM mail_outbound WHERE id = ?1",
+            "SELECT owner_project_id, status, updated_at FROM mail_outbound WHERE id = ?1",
             rusqlite::params![id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )

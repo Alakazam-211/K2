@@ -62,7 +62,7 @@ export const K2_CAPS = {
     sentence: "Read files in the agents' rooms on this computer (the room's files, never a path outside it).",
     exposure: ['app', 'garden-local'],
   },
-  'files:write': { label: "Write files (not the agent's .k2 folder)", exposure: ['app'] },
+  'files:write': { label: "Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.md, GEMINI.md)", exposure: ['app'] },
   'push:send': { label: "Send notifications to this App's users' phones", exposure: ['app'] },
   'email:send': { label: "Send email from this App's sender", exposure: ['app'] },
   'tickets:read': {
@@ -100,7 +100,7 @@ export const K2_CAPS = {
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
   'agent:identity': { label: "Change the agent's name, color and picture", exposure: ['app'] },
   'agent:handle': { label: "Change the agent's handle (its address)", exposure: ['app'] },
-  'files:agentconfig': { label: "Also allow writing the agent's .k2 folder (not recommended)", exposure: ['app'] },
+  'files:agentconfig': { label: "Also allow writing the agent's .k2 folder and root instruction files (not recommended)", exposure: ['app'] },
   'room:members': {
     label: 'See who has access to the room',
     sentence: 'See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles.',

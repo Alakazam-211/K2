@@ -104,7 +104,7 @@ files:read (Read files (also shows heartbeat instructions))
   files.stat               GET  /cli/fs/stat                                  One file's or folder's kind, size, modified time and content type, under the room's folder scope.
   files.events             WS   /cli/fs/events?workspace=                     Live file changes in one room (paths only; refetch what you show).
   resources.list           GET  /cli/workspace/resources                      The room's pinned resources (its links drawer).
-files:write (Write files (not the agent's .k2 folder))
+files:write (Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.md, GEMINI.md))
   files.write              POST /cli/fs/write-file                            Write (or overwrite) a text file; its folder must exist.
   files.uploadBinary       POST /cli/fs/upload-binary                         Upload a file in one request; a taken name becomes name (1).ext. files:write, or files:upload into a drop folder (it lands in your own subfolder).
   files.uploadChunk        POST /cli/fs/upload-chunk                          Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file. files:write, or files:upload into a drop folder.

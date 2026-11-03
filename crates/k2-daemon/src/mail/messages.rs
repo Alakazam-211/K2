@@ -119,6 +119,11 @@ pub trait ReadBackend {
         name: &str,
         mime: &str,
     ) -> Result<Vec<u8>, String>;
+    /// Whose Authentication-Results this backend's messages can be read by.
+    /// Believes nothing unless a backend says otherwise.
+    fn auth_authority(&self) -> AuthAuthority {
+        AuthAuthority::ThisBox(None)
+    }
 }
 
 /// The production backend: the S1-minted JMAP client + a per-instance
@@ -126,12 +131,14 @@ pub trait ReadBackend {
 /// per poll — pre-mortem #10's "don't melt the mgmt API").
 pub struct StalwartReadBackend {
     client: StalwartClient,
+    /// This box's mail host name: the authserv-id of its own stamp.
+    mail_host: Option<String>,
     inbox_cache: Mutex<HashMap<String, String>>,
 }
 
 impl StalwartReadBackend {
-    pub fn new(client: StalwartClient) -> Self {
-        Self { client, inbox_cache: Mutex::new(HashMap::new()) }
+    pub fn new(client: StalwartClient, mail_host: Option<String>) -> Self {
+        Self { client, mail_host, inbox_cache: Mutex::new(HashMap::new()) }
     }
 
     fn inbox_id(&self, account_id: &str) -> Result<String, String> {
@@ -212,6 +219,9 @@ impl ReadBackend for StalwartReadBackend {
     }
     fn mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String> {
         self.client.email_mark_seen(account_id, email_id)
+    }
+    fn auth_authority(&self) -> AuthAuthority {
+        AuthAuthority::ThisBox(self.mail_host.clone())
     }
     fn fetch_blob(
         &self,
@@ -776,33 +786,125 @@ fn collapse_ws(s: &str) -> String {
 
 // ── Auth-results verdicts (§8.1 authResults) ────────────────────────────
 
-/// Parse SPF/DKIM/DMARC verdicts out of raw Authentication-Results
-/// header lines. First occurrence of each wins (the topmost header is
-/// our own server's). Missing → null in the JSON.
-pub fn parse_auth_results(lines: &[String]) -> serde_json::Value {
-    let mut verdicts: HashMap<&'static str, String> = HashMap::new();
-    for line in lines {
-        let lower = line.to_lowercase();
-        for key in ["spf", "dkim", "dmarc"] {
-            if verdicts.contains_key(key) {
-                continue;
+/// Whose Authentication-Results a reader may believe. Anyone can write one of
+/// these headers into a message; it means something only when it comes from
+/// the server that checked the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthAuthority {
+    /// A hosted mailbox: only the topmost header, and only when its
+    /// authserv-id is this box's mail host name (Stalwart stamps above
+    /// whatever arrived, and only on port 25). `None` = the host name isn't
+    /// known, so nothing can be believed. No stamp means no verdict.
+    ThisBox(Option<String>),
+    /// A linked inbox: the provider's topmost header. Its authserv-id isn't
+    /// known here, and Microsoft 365 writes none.
+    Provider,
+}
+
+/// Split one header into its `;`-separated parts per RFC 8601: a `;` inside a
+/// quoted string or a comment doesn't split, and comments are dropped. The
+/// `bool` is false when a quote or comment never closes, so the rest of the
+/// line can't be read with any confidence.
+fn auth_results_segments(line: &str) -> (Vec<String>, bool) {
+    let mut segments = Vec::new();
+    let mut cur = String::new();
+    let (mut in_quote, mut escaped, mut depth) = (false, false, 0usize);
+    for c in line.chars() {
+        if escaped {
+            escaped = false;
+            if depth == 0 {
+                cur.push(c);
             }
-            let needle = format!("{key}=");
-            if let Some(pos) = lower.find(&needle) {
-                let verdict: String = lower[pos + needle.len()..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect();
-                if !verdict.is_empty() {
-                    verdicts.insert(key, verdict);
+        } else if in_quote {
+            match c {
+                '\\' => escaped = true,
+                '"' => in_quote = false,
+                _ => {}
+            }
+            if !escaped {
+                cur.push(c);
+            }
+        } else if depth > 0 {
+            match c {
+                '\\' => escaped = true,
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        } else {
+            match c {
+                '"' => {
+                    in_quote = true;
+                    cur.push(c);
                 }
+                '(' => {
+                    depth = 1;
+                    cur.push(' ');
+                }
+                ';' => segments.push(std::mem::take(&mut cur)),
+                _ => cur.push(c),
             }
         }
     }
+    segments.push(cur);
+    let balanced = !in_quote && depth == 0 && !escaped;
+    (segments.iter().map(|s| s.trim().to_string()).collect(), balanced)
+}
+
+/// The result in a part that reports `method` (`dmarc=pass header.from=…`):
+/// `None` = this part is about something else, `Some(None)` = it claims to
+/// report `method` but its result isn't a plain word.
+fn auth_method_result(segment: &str, method: &str) -> Option<Option<String>> {
+    let lower = segment.to_ascii_lowercase();
+    let rest = lower.strip_prefix(method)?;
+    // An optional `/version` (RFC 8601), then `=`.
+    let rest = match rest.strip_prefix('/') {
+        Some(v) => v.trim_start_matches(|c: char| c.is_ascii_digit()),
+        None => rest,
+    };
+    let rest = rest.trim_start().strip_prefix('=')?;
+    let word = rest.trim_start().split_whitespace().next().unwrap_or("");
+    let plain = !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric());
+    Some(plain.then(|| word.to_string()))
+}
+
+/// SPF/DKIM/DMARC verdicts from raw Authentication-Results lines, topmost
+/// first as served. Only the first line counts, only if `authority` believes
+/// it, and only a part that STARTS with the method: text elsewhere (an
+/// attacker-chosen `smtp.mailfrom`, a comment) is never a verdict. A DMARC
+/// answer that can't be read cleanly (more than one, a malformed one, a quote
+/// or comment that never closes) is `fail`. Missing → null in the JSON.
+pub fn parse_auth_results(lines: &[String], authority: &AuthAuthority) -> serde_json::Value {
+    let none = serde_json::json!({ "spf": null, "dkim": null, "dmarc": null });
+    let Some(first) = lines.first() else {
+        return none;
+    };
+    let (segments, balanced) = auth_results_segments(first);
+    let results: &[String] = match authority {
+        AuthAuthority::ThisBox(None) => return none,
+        AuthAuthority::ThisBox(Some(host)) => {
+            let id = segments.first().and_then(|s| s.split_whitespace().next()).unwrap_or("");
+            if !id.trim_end_matches('.').eq_ignore_ascii_case(host.trim().trim_end_matches('.')) {
+                return none;
+            }
+            &segments[1..]
+        }
+        AuthAuthority::Provider => &segments,
+    };
+    let first_plain = |method: &str| -> Option<String> {
+        results.iter().find_map(|s| auth_method_result(s, method).flatten())
+    };
+    let dmarc_claims: Vec<Option<String>> =
+        results.iter().filter_map(|s| auth_method_result(s, "dmarc")).collect();
+    let dmarc: Option<String> = match dmarc_claims.as_slice() {
+        [] if balanced => None,
+        [Some(one)] if balanced => Some(one.clone()),
+        _ => Some("fail".to_string()),
+    };
     serde_json::json!({
-        "spf": verdicts.get("spf"),
-        "dkim": verdicts.get("dkim"),
-        "dmarc": verdicts.get("dmarc"),
+        "spf": first_plain("spf"),
+        "dkim": first_plain("dkim"),
+        "dmarc": dmarc,
     })
 }
 
@@ -836,7 +938,12 @@ pub fn shape_summary_json(address: &str, s: &EmailSummary) -> serde_json::Value 
 /// inside the markers, `html` on demand (also wrapped), attachments
 /// with 1-BASED indexes (§11.1.11), threadId, authResults. `unread`
 /// is false by contract — every caller marks read first (§11.1.6).
-pub fn shape_full_json(address: &str, full: &EmailFull, include_html: bool) -> serde_json::Value {
+pub fn shape_full_json(
+    address: &str,
+    full: &EmailFull,
+    include_html: bool,
+    authority: &AuthAuthority,
+) -> serde_json::Value {
     let text_raw = match (&full.text, &full.html) {
         (Some(t), _) => t.clone(),
         (None, Some(h)) => html_to_text(h),
@@ -865,7 +972,7 @@ pub fn shape_full_json(address: &str, full: &EmailFull, include_html: bool) -> s
         },
         "attachments": attachments,
         "threadId": full.summary.thread_id,
-        "authResults": parse_auth_results(&full.auth_results),
+        "authResults": parse_auth_results(&full.auth_results, authority),
     })
 }
 
@@ -1160,7 +1267,7 @@ pub fn wait_for_match(
                         full.summary.subject,
                         w.address
                     );
-                    return Ok(Some(shape_full_json(&w.address, &full, false)));
+                    return Ok(Some(shape_full_json(&w.address, &full, false, &backend.auth_authority())));
                 }
             }
         }
@@ -1289,7 +1396,7 @@ pub(crate) mod tests {
     fn shape_full_wraps_bodies_and_indexes_attachments_one_based() {
         let s = summary("M1", ("GitHub", "noreply@github.com"), "Verify", "2026-07-08T10:15:00Z");
         let full = full_from(&s);
-        let v = shape_full_json("bot@acme.dev", &full, false);
+        let v = shape_full_json("bot@acme.dev", &full, false, &AuthAuthority::Provider);
         let text = v["text"].as_str().unwrap();
         assert!(text.starts_with(MARKER_BEGIN), "{text}");
         assert!(text.ends_with(MARKER_END), "{text}");
@@ -1304,7 +1411,7 @@ pub(crate) mod tests {
         assert_eq!(v["authResults"]["dkim"], "fail");
         assert_eq!(v["authResults"]["dmarc"], "none");
         // html on demand is wrapped too.
-        let v = shape_full_json("bot@acme.dev", &full, true);
+        let v = shape_full_json("bot@acme.dev", &full, true, &AuthAuthority::Provider);
         let html = v["html"].as_str().unwrap();
         assert!(html.starts_with(MARKER_BEGIN) && html.ends_with(MARKER_END), "{html}");
         // The id round-trips through the opaque token.
@@ -1317,7 +1424,7 @@ pub(crate) mod tests {
         let s = summary("M2", ("", "a@b.c"), "s", "2026-07-08T10:15:00Z");
         let mut full = full_from(&s);
         full.text = None;
-        let v = shape_full_json("bot@acme.dev", &full, false);
+        let v = shape_full_json("bot@acme.dev", &full, false, &AuthAuthority::Provider);
         let text = v["text"].as_str().unwrap();
         assert!(text.contains("Your code is 424242."), "{text}");
         assert!(!text.contains('<'), "tags stripped: {text}");
@@ -1353,16 +1460,120 @@ pub(crate) mod tests {
 
     // ── auth results ──
 
+    /// What Stalwart 0.16.25 really stamps (tests/mail/stalwart-auth-results-probe.py).
+    const BOX: &str = "mail.example.test";
+    fn stamp(mailfrom: &str, dmarc: &str) -> String {
+        format!(
+            "{BOX}; spf=none ({BOX}: no SPF records found for postmaster@sender.example) \
+             smtp.helo=sender.example; spf=none ({BOX}: no SPF records found for x@evil.example) \
+             smtp.mailfrom={mailfrom}; iprev=pass policy.iprev=127.0.0.1; dmarc={dmarc} \
+             (policy not aligned) header.from=gmail.com policy.dmarc=none"
+        )
+    }
+    fn on_box() -> AuthAuthority {
+        AuthAuthority::ThisBox(Some(BOX.to_string()))
+    }
+    fn dmarc_of(lines: &[String], authority: &AuthAuthority) -> serde_json::Value {
+        parse_auth_results(lines, authority)["dmarc"].clone()
+    }
+
     #[test]
-    fn auth_results_parse_first_verdicts_and_null_missing() {
-        let v = parse_auth_results(&[
-            "mx; spf=pass a; dkim=pass b".to_string(),
-            "older; spf=fail".to_string(),
-        ]);
-        assert_eq!(v["spf"], "pass", "first occurrence wins");
-        assert_eq!(v["dkim"], "pass");
-        assert!(v["dmarc"].is_null());
-        let v = parse_auth_results(&[]);
+    fn this_box_reads_its_own_stamp() {
+        let v = parse_auth_results(&[stamp("bounce@evil.example", "fail")], &on_box());
+        assert_eq!(v["dmarc"], "fail", "{v}");
+        assert_eq!(v["spf"], "none", "first part wins: {v}");
+        assert!(v["dkim"].is_null(), "{v}");
+        let v = parse_auth_results(&[stamp("bounce@evil.example", "pass")], &on_box());
+        assert_eq!(v["dmarc"], "pass", "{v}");
+        // The host name's case and a trailing dot don't matter.
+        let lines = [format!("MAIL.Example.TEST. 1; dmarc=pass header.from=x.example")];
+        assert_eq!(dmarc_of(&lines, &on_box()), "pass");
+        let cased = AuthAuthority::ThisBox(Some("mail.example.test.".to_string()));
+        assert_eq!(dmarc_of(&[stamp("a@b.example", "pass")], &cased), "pass");
+    }
+
+    /// A sender controls `smtp.mailfrom`, which comes before the real verdict.
+    #[test]
+    fn a_verdict_is_only_a_part_that_starts_with_the_method() {
+        for mailfrom in [
+            r#""dmarc=pass@evil.example""#,
+            "dmarc=pass@evil.example",
+            r#""x dmarc=pass y"@evil.example"#,
+            r#""dmarc=pass;x"@evil.example"#,
+            // As the live probe recorded them.
+            r#""x;dmarc=pass@evil.example""#,
+            r#""x(y@evil.example""#,
+            r#""x)y@evil.example""#,
+            r#""x\"y;dmarc=pass@evil.example""#,
+            r#""x ; dmarc=pass ; y@evil.example""#,
+        ] {
+            let lines = [stamp(mailfrom, "fail")];
+            assert_eq!(dmarc_of(&lines, &on_box()), "fail", "{mailfrom}");
+        }
+        let lines = [format!("{BOX}; spf=none (dmarc=pass) smtp.mailfrom=a@b.example; dmarc=fail")];
+        assert_eq!(dmarc_of(&lines, &on_box()), "fail", "a comment isn't a verdict");
+        let lines = [format!("{BOX}; x=y (; dmarc=pass; ) z=w; dmarc=fail")];
+        assert_eq!(dmarc_of(&lines, &on_box()), "fail", "nor a `;` inside one");
+        let lines = [format!("{BOX}; dmarcish=pass; dmarc=fail")];
+        assert_eq!(dmarc_of(&lines, &on_box()), "fail");
+    }
+
+    /// Anything that makes the verdict unclear reads as a failure.
+    #[test]
+    fn an_unclear_dmarc_answer_is_a_fail() {
+        for line in [
+            format!("{BOX}; dmarc=pass; dmarc=fail"),
+            format!("{BOX}; dmarc=pass; dmarc=pass"),
+            format!("{BOX}; smtp.mailfrom=x;dmarc=pass@evil.example; dmarc=pass"),
+            format!("{BOX}; dmarc=pass@evil.example"),
+            format!("{BOX}; dmarc="),
+            format!("{BOX}; smtp.mailfrom=\"open; dmarc=pass"),
+            format!("{BOX}; smtp.mailfrom=(open; dmarc=pass"),
+            format!("{BOX}; dmarc/1=pass; dmarc=pass"),
+        ] {
+            assert_eq!(dmarc_of(&[line.clone()], &on_box()), "fail", "{line}");
+        }
+        assert_eq!(dmarc_of(&[format!("{BOX}; dmarc/1=pass")], &on_box()), "pass", "a version is fine");
+    }
+
+    /// Only the topmost header, only when this box wrote it. A header that
+    /// came in with the message says nothing, on a path with no stamp too.
+    #[test]
+    fn a_header_this_box_did_not_stamp_is_no_verdict() {
+        let forged = "mx.evil.example; dmarc=pass header.from=gmail.com".to_string();
+        assert_eq!(
+            dmarc_of(&[stamp("a@b.example", "fail"), forged.clone()], &on_box()),
+            "fail",
+            "the stamp is on top"
+        );
+        for lines in [
+            vec![forged.clone()],
+            vec![forged.clone(), stamp("a@b.example", "pass")],
+            vec!["dmarc=pass".to_string()],
+            vec![String::new()],
+            Vec::new(),
+        ] {
+            let v = parse_auth_results(&lines, &on_box());
+            assert!(v["dmarc"].is_null() && v["spf"].is_null() && v["dkim"].is_null(), "{lines:?} → {v}");
+        }
+        // No host name: nothing can be believed, even a real-looking stamp.
+        let v = parse_auth_results(&[stamp("a@b.example", "pass")], &AuthAuthority::ThisBox(None));
+        assert!(v["dmarc"].is_null(), "{v}");
+    }
+
+    #[test]
+    fn a_linked_inbox_reads_its_providers_top_header_by_the_same_rules() {
+        let p = AuthAuthority::Provider;
+        // Microsoft 365 writes no authserv-id.
+        let v = parse_auth_results(
+            &["spf=pass (sender IP is 1.2.3.4) smtp.mailfrom=a.example; dkim=fail; dmarc=none action=none header.from=a.example".to_string()],
+            &p,
+        );
+        assert_eq!((v["spf"].as_str(), v["dkim"].as_str(), v["dmarc"].as_str()), (Some("pass"), Some("fail"), Some("none")), "{v}");
+        let v = parse_auth_results(&["mx.google.com; spf=pass; dkim=pass; dmarc=pass".to_string(), "older; spf=fail".to_string()], &p);
+        assert_eq!(v["spf"], "pass", "{v}");
+        assert_eq!(dmarc_of(&[r#"mx; smtp.mailfrom="dmarc=pass@x.example"; dmarc=fail"#.to_string()], &p), "fail");
+        let v = parse_auth_results(&[], &p);
         assert!(v["spf"].is_null() && v["dkim"].is_null() && v["dmarc"].is_null());
     }
 

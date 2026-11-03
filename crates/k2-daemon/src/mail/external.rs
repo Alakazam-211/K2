@@ -525,6 +525,9 @@ impl ExternalImapBackend {
 }
 
 impl ReadBackend for ExternalImapBackend {
+    fn auth_authority(&self) -> crate::mail::messages::AuthAuthority {
+        crate::mail::messages::AuthAuthority::Provider
+    }
     fn list_inbox(
         &self,
         account_id: &str,
@@ -2610,7 +2613,7 @@ a,b\r\n1,2\r\n\
         assert_eq!(full.auth_results.len(), 1);
         assert!(full.auth_results[0].contains("spf=pass"), "{:?}", full.auth_results);
         // And the §8.1 shaping applies to it EXACTLY like local mail.
-        let v = crate::mail::messages::shape_full_json("rosson@example.com", &full, false);
+        let v = crate::mail::messages::shape_full_json("rosson@example.com", &full, false, &crate::mail::messages::AuthAuthority::Provider);
         let text = v["text"].as_str().unwrap();
         assert!(text.starts_with(crate::mail::messages::MARKER_BEGIN), "{text}");
         assert!(text.ends_with(crate::mail::messages::MARKER_END), "{text}");

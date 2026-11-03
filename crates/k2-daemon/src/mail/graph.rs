@@ -1145,6 +1145,9 @@ struct ReplyDraft {
 }
 
 impl ReadBackend for GraphBackend {
+    fn auth_authority(&self) -> crate::mail::messages::AuthAuthority {
+        crate::mail::messages::AuthAuthority::Provider
+    }
     fn list_inbox(
         &self,
         account_id: &str,
@@ -1522,7 +1525,7 @@ mod tests {
             "ccRecipients":[{"emailAddress":{"address":"cc@company.com"}}],
             "body":{"contentType":"html","content":"<p>Your code is <b>424242</b>.</p>"},
             "internetMessageHeaders":[
-              {"name":"Authentication-Results","value":"spf=pass dkim=fail dmarc=none"}]}"#;
+              {"name":"Authentication-Results","value":"spf=pass; dkim=fail; dmarc=none"}]}"#;
         let atts = r#"{"value":[{"id":"ATT1","name":"invite.ics","contentType":"text/calendar","size":512}]}"#;
         let mock = MockGraph::new(vec![(200, None, msg), (200, None, atts)]);
         let be = backend(mock.clone());
@@ -1533,7 +1536,7 @@ mod tests {
         assert_eq!(full.attachments[0].filename.as_deref(), Some("invite.ics"));
         assert!(full.html.is_some() && full.text.is_none());
         // The route-layer shaping wraps the (html-stripped) body + verdicts.
-        let v = shape_full_json("user@company.com", &full, false);
+        let v = shape_full_json("user@company.com", &full, false, &crate::mail::messages::AuthAuthority::Provider);
         let text = v["text"].as_str().unwrap();
         assert!(text.starts_with(MARKER_BEGIN) && text.ends_with(MARKER_END));
         assert!(text.contains("Your code is 424242."));

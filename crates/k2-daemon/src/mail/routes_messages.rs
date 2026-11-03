@@ -200,10 +200,10 @@ fn mail_from_filter(params: &HashMap<String, String>) -> Option<String> {
 fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
     match messages::backend_for_address(address) {
         MailBackend::LocalStalwart => {
-            let (client, _hostname) = domains::engine_from_db().map_err(|hint| {
+            let (client, hostname) = domains::engine_from_db().map_err(|hint| {
                 error_response("503 Service Unavailable", "not_ready", &hint)
             })?;
-            Ok(Box::new(messages::StalwartReadBackend::new(client)))
+            Ok(Box::new(messages::StalwartReadBackend::new(client, hostname)))
         }
         MailBackend::ExternalImap => {
             // A remove can race the seam answer — mask, like any
@@ -637,7 +637,7 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
     let include_html = crate::cli::bool_param(params, "html");
     ok_json(serde_json::json!({
         "ok": true,
-        "message": messages::shape_full_json(&address, &full, include_html),
+        "message": messages::shape_full_json(&address, &full, include_html, &backend.auth_authority()),
     }))
 }
 

@@ -1576,6 +1576,7 @@ pub fn check_reply_guardrails(
     ctx: &ReplyContext,
     from_address: &str,
     gate: Gate,
+    authority: &messages::AuthAuthority,
 ) -> Result<String, SendError> {
     let sender = ctx
         .from
@@ -1603,7 +1604,7 @@ pub fn check_reply_guardrails(
              refusing per the §8.4 loop cap"
         )));
     }
-    let verdicts = messages::parse_auth_results(&ctx.auth_results);
+    let verdicts = messages::parse_auth_results(&ctx.auth_results, authority);
     if verdicts["dmarc"].as_str() == Some("fail") && gate != Gate::Approval {
         return Err(SendError::Guardrail(
             "the original message FAILED DMARC — replying is blocked unless send gating \
@@ -2574,6 +2575,10 @@ mod tests {
 
     // ── reply guardrails ──
 
+    fn mx() -> messages::AuthAuthority {
+        messages::AuthAuthority::ThisBox(Some("mx".to_string()))
+    }
+
     fn ctx(from_email: &str, dmarc: &str, refs: Option<&str>) -> ReplyContext {
         ReplyContext {
             from: vec![MailAddr { name: None, email: from_email.to_string() }],
@@ -2589,39 +2594,74 @@ mod tests {
     fn reply_guardrails_lock_recipient_and_refuse_loops_and_dmarc_fail() {
         // Recipient is LOCKED to the original sender, normalized.
         let c = ctx("Sender@Example.COM", "pass", None);
-        let rcpt = check_reply_guardrails(&c, "bot@acme.dev", Gate::On).expect("allowed");
+        let rcpt = check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()).expect("allowed");
         assert_eq!(rcpt, "sender@example.com");
 
         // Reply-to-self refused.
         let c = ctx("bot@acme.dev", "pass", None);
-        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On).expect_err("loop");
+        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()).expect_err("loop");
         assert!(matches!(&err, SendError::Guardrail(h) if h.contains("loop")), "{err:?}");
 
         // No sender refused.
         let mut c = ctx("x@y.z", "pass", None);
         c.from.clear();
         assert!(matches!(
-            check_reply_guardrails(&c, "bot@acme.dev", Gate::On),
+            check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()),
             Err(SendError::Guardrail(_))
         ));
 
         // >100 references refused (thread-depth loop cap).
         let deep = "<r@x> ".repeat(101);
         let c = ctx("sender@example.com", "pass", Some(deep.trim()));
-        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On).expect_err("deep");
+        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()).expect_err("deep");
         assert!(matches!(&err, SendError::Guardrail(h) if h.contains("References")), "{err:?}");
         // 100 exactly is allowed.
         let ok = "<r@x> ".repeat(100);
         let c = ctx("sender@example.com", "pass", Some(ok.trim()));
-        check_reply_guardrails(&c, "bot@acme.dev", Gate::On).expect("at the cap");
+        check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()).expect("at the cap");
 
         // DMARC fail: blocked in on-mode, allowed under approval (the
         // human overrides, §8.4).
         let c = ctx("sender@example.com", "fail", None);
-        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On).expect_err("dmarc");
+        let err = check_reply_guardrails(&c, "bot@acme.dev", Gate::On, &mx()).expect_err("dmarc");
         assert!(matches!(&err, SendError::Guardrail(h) if h.contains("DMARC")), "{err:?}");
-        check_reply_guardrails(&c, "bot@acme.dev", Gate::Approval)
+        check_reply_guardrails(&c, "bot@acme.dev", Gate::Approval, &mx())
             .expect("approval mode lets the human decide");
+    }
+
+    /// The gate reads this box's own verdict and nothing else.
+    #[test]
+    fn the_dmarc_gate_only_believes_this_boxes_stamp() {
+        let with = |lines: Vec<String>| {
+            let mut c = ctx("sender@example.com", "pass", None);
+            c.auth_results = lines;
+            c
+        };
+        let host = messages::AuthAuthority::ThisBox(Some("mail.example.test".to_string()));
+        // The sender chose smtp.mailfrom; the box's real verdict is `fail`.
+        let crafted = with(vec![
+            "mail.example.test; spf=none smtp.mailfrom=\"dmarc=pass@evil.example\"; iprev=pass; \
+             dmarc=fail (policy not aligned) header.from=gmail.com"
+                .to_string(),
+        ]);
+        let err = check_reply_guardrails(&crafted, "bot@acme.dev", Gate::On, &host).expect_err("blocked");
+        assert!(matches!(&err, SendError::Guardrail(h) if h.contains("DMARC")), "{err:?}");
+        check_reply_guardrails(&crafted, "bot@acme.dev", Gate::Approval, &host).expect("a person decides");
+        // More than one answer is a failure.
+        let two = with(vec!["mail.example.test; dmarc=pass; dmarc=fail".to_string()]);
+        assert!(check_reply_guardrails(&two, "bot@acme.dev", Gate::On, &host).is_err());
+        // A failure below this box's stamp doesn't count; a header that came
+        // in with the message isn't this box's, whatever it says.
+        let forged_pass_below = with(vec![
+            "mail.example.test; dmarc=fail".to_string(),
+            "mx.evil.example; dmarc=pass".to_string(),
+        ]);
+        assert!(check_reply_guardrails(&forged_pass_below, "bot@acme.dev", Gate::On, &host).is_err());
+        let v = messages::parse_auth_results(
+            &["mx.evil.example; dmarc=pass".to_string()],
+            &host,
+        );
+        assert!(v["dmarc"].is_null(), "not reported as passing: {v}");
     }
 
     #[test]

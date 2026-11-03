@@ -1244,7 +1244,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             }
             // Fetch the original's reply context (sender, threading
             // headers, auth verdicts) from its backend.
-            let (client, _hostname) = match domains::engine_from_db() {
+            let (client, hostname) = match domains::engine_from_db() {
                 Ok(c) => c,
                 Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
             };
@@ -1255,7 +1255,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             };
 
             // §8.4 guardrails: locked recipient, loop caps, DMARC gate.
-            let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate) {
+            let authority = messages::AuthAuthority::ThisBox(hostname);
+            let recipient = match send::check_reply_guardrails(&ctx, &from_address, gate, &authority) {
                 Ok(r) => r,
                 Err(e) => return send_error_response(e),
             };
@@ -2652,6 +2653,64 @@ mod tests {
         );
 
         clear_mail_server();
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// The reply route reads the verdict with this box's host name: a stamped
+    /// failure blocks, whatever else the line holds, and nothing is recorded.
+    #[test]
+    fn hosted_reply_gate_reads_this_boxes_stamp() {
+        use crate::mail::jmap::tests::{spawn_mock_server, NORMAL_SESSION_FIXTURE};
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let (name, path) = unique("rdmarc");
+        let project_id = insert_project(&name, &path);
+        let domain = format!("{name}.example");
+        let laura = format!("laura@{domain}");
+        seed_domain(&domain, "direct");
+        seed_address(&project_id, &laura, Some("acc-1"));
+        set_gating(&path, "on");
+        let email_get = |id: &str, auth: &str| {
+            serde_json::json!({
+                "methodResponses": [["Email/get", {
+                    "accountId": "acc-1",
+                    "list": [{
+                        "id": id,
+                        "threadId": format!("t-{id}"),
+                        "from": [{ "email": "cust@dest.example" }],
+                        "subject": "Quote",
+                        "header:Message-ID:asText": format!("<{id}@dest.example>"),
+                        "header:References:asText": null,
+                        "header:Authentication-Results:asText:all": [auth],
+                    }],
+                    "notFound": [],
+                }, "0"]]
+            })
+            .to_string()
+        };
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            email_get(
+                "M1",
+                "mail.box.test; spf=none smtp.mailfrom=\"dmarc=pass@evil.example\"; dmarc=fail header.from=gmail.com",
+            ),
+        ]);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, api_url, api_key_ref, updated_at) \
+                 VALUES (1, 'running', '0.16.25', 'mail.box.test', ?1, 'env:K2_TEST_MAIL_API_KEY', 1)",
+                rusqlite::params![format!("http://127.0.0.1:{port}")],
+            )
+            .expect("mail_server");
+        }
+        let resp = handle_reply(&reply_body(&path, &messages::encode_message_id(&laura, "M1"), serde_json::json!({})));
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "guardrail", "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0, "nothing recorded");
         cleanup(&project_id, Some(&domain));
     }
 

@@ -77,6 +77,31 @@ fn the_renderers_contract_file_matches_the_plugin() {
     assert_eq!(f["rejoinReasons"], json!([RejoinReason::AdmitLost, RejoinReason::CredentialExpired]));
 }
 
+/// Sew's own contract file: the renderer's copy is byte for byte the vendored
+/// one, and every payload parses to the plugin's real types and back.
+#[test]
+fn sews_live_access_contract_matches_the_plugin_and_the_renderers_copy() {
+    let root = repo_root();
+    let vendored = std::fs::read(root.join("third_party/sew-crates/tauri-plugin-sew-voice/tests/native-voice-contract.json")).expect("Sew's file");
+    let copy = std::fs::read(root.join("src/renderer/lib/voice/sew-native-voice-contract.json")).expect("the renderer's copy");
+    assert_eq!(copy, vendored, "the renderer's copy of Sew's contract is stale");
+    let f: Value = serde_json::from_slice(&vendored).expect("JSON");
+    for group in ["sew_reasons", "fallbacks"] {
+        for r in f["ended"][group].as_array().expect(group) {
+            let want = CallState::Ended { reason: r["reason"].as_str().expect("reason").into() };
+            assert_eq!(exact::<CallState>(&r["payload"]), want);
+        }
+    }
+    for (name, list) in f["participants"].as_object().expect("participants") {
+        if name != "event" {
+            let _: Vec<Participant> = exact(list);
+        }
+    }
+    let denied: Vec<Participant> = serde_json::from_value(f["participants"]["self_speak_denied"].clone()).expect("list");
+    assert!(denied[0].speak_denied && denied[0].muted && !denied[0].server_muted);
+    assert_eq!(exact::<StateSnapshot>(&f["state_snapshot"]["speak_denied"]).participants.len(), 1);
+}
+
 /// Lane C's `POST /cli/voice/join` answer around Sew's `VoiceJoinResponse`.
 fn daemon_answer() -> Value {
     json!({

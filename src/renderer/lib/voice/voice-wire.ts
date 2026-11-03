@@ -321,7 +321,16 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
     case 'media_path_down':
       return `The call ended: voice on ${serverLabel} is unavailable (its network lane is down).`
     case 'channel_archived':
+    case 'room_closed':
       return `${roomName} closed.`
+    case 'perms_lost':
+      return `You no longer have access to ${roomName}.`
+    case 'timed_out':
+      return `You were timed out, so you left ${roomName}.`
+    case 'account_removed':
+      return `Your account was removed from ${serverLabel}.`
+    case 'device_revoked':
+      return `This device was signed out of ${serverLabel}.`
     case 'removed_by_moderator':
     case 'removed_from_space':
     case 'kicked':
@@ -342,12 +351,18 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
     case 'e2ee_refused':
       return `The call to ${roomName} ended: the secure connection failed. Join again to continue.`
     case 'credential_lost':
-      return `The call to ${roomName} ended: your login joined from another device.`
+      // Sew's `replaced`; a Sew older than 0.7.1 also ends a sign-out this way.
+      return `The call to ${roomName} ended: you were signed out, or joined from another device.`
     case 'mic_denied':
       return `The call to ${roomName} ended: K2 lost your microphone. Allow it in your system's privacy settings.`
     default:
       return `The call to ${roomName} ended.`
   }
+}
+
+/** Why this person's mic is off and not theirs to turn on (live access §11). */
+export function micBlockedText(why: 'speak_denied' | 'server_muted', roomName: string): string {
+  return why === 'speak_denied' ? `You can't speak in ${roomName}. You can still listen.` : `A moderator muted you in ${roomName}.`
 }
 
 /** What an `errors` event from the native engine says during a call. Null: not

@@ -25,6 +25,7 @@ import {
   callEndedText,
   engineErrorText,
   joinErrorText,
+  micBlockedText,
   nativeJoinErrorCode,
   type VoiceJoinAnswer,
   type VoiceErrorCode,
@@ -77,6 +78,10 @@ export interface VoiceCall {
   phase: CallPhase
   muted: boolean
   deafened: boolean
+  /** Native: this person's role or a room rule took away speaking. */
+  speakDenied: boolean
+  /** Native: a moderator muted this person. */
+  serverMuted: boolean
   relayOnly: boolean
   /** When media came up (the call timer). */
   connectedAt: number | null
@@ -420,12 +425,24 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     const list: EngineParticipant[] = nativePeople.map((p) => ({
       user: nameOfMember(c.hostKey, p.memberId) ?? (p.isSelf ? deps.selfNames(c.hostKey)[0] ?? 'You' : 'Someone'),
       speaking: nativeSpeaking.has(p.memberId),
-      muted: p.muted || p.serverMuted,
+      muted: p.muted || p.serverMuted || p.speakDenied,
     }))
     const muted = self ? self.muted : c.muted
     const deafened = self ? self.deafened : c.deafened
-    if (JSON.stringify(list) === JSON.stringify(c.participants) && muted === c.muted && deafened === c.deafened) return
-    store.setState({ call: { ...c, participants: list, muted, deafened } })
+    const speakDenied = self ? self.speakDenied : c.speakDenied
+    const serverMuted = self ? self.serverMuted : c.serverMuted
+    const same =
+      JSON.stringify(list) === JSON.stringify(c.participants) &&
+      muted === c.muted &&
+      deafened === c.deafened &&
+      speakDenied === c.speakDenied &&
+      serverMuted === c.serverMuted
+    if (same) return
+    store.setState({ call: { ...c, participants: list, muted, deafened, speakDenied, serverMuted } })
+    // Each says so once, when it changes.
+    if (speakDenied && !c.speakDenied) notice(micBlockedText('speak_denied', c.roomName), 'error')
+    else if (!speakDenied && c.speakDenied) notice(`You can speak in ${c.roomName} again.`, 'info')
+    if (serverMuted && !c.serverMuted && !speakDenied) notice(micBlockedText('server_muted', c.roomName), 'error')
   }
 
   /** A moderator can move someone to another room with no break in the call
@@ -455,6 +472,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     const roomName = store.getState().rooms[hostKey]?.list?.rooms.find((r) => r.id === snap.room)?.name ?? snap.room
     nativePeople = snap.participants
+    const self = snap.participants.find((p) => p.isSelf)
     callGen += 1
     store.setState({
       call: {
@@ -464,8 +482,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         roomName,
         callId: snap.callId,
         phase,
-        muted: false,
-        deafened: false,
+        muted: self?.muted ?? false,
+        deafened: self?.deafened ?? false,
+        speakDenied: self?.speakDenied ?? false,
+        serverMuted: self?.serverMuted ?? false,
         relayOnly: false,
         connectedAt: phase === 'connected' ? deps.now() : null,
         participants: [],
@@ -620,6 +640,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         phase: 'joining',
         muted: prefs.joinMuted,
         deafened: false,
+        speakDenied: false,
+        serverMuted: false,
         relayOnly: false,
         connectedAt: null,
         participants: [],
@@ -695,6 +717,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         phase: 'joining',
         muted: prefs.joinMuted,
         deafened: false,
+        speakDenied: false,
+        serverMuted: false,
         relayOnly: false,
         connectedAt: null,
         participants: [],
@@ -776,6 +800,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     const c = store.getState().call
     if (!c) return
     if (native) {
+      // The mic isn't this person's to turn on right now.
+      if (c.speakDenied || c.serverMuted) return
       // Optimistic; the engine's `participants` event is the truth.
       store.setState({ call: { ...c, muted } })
       void native.mute({ muted }).catch((err: unknown) => console.warn('[voice] mute failed:', err))

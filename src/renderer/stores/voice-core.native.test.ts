@@ -1,6 +1,9 @@
 // The store over the native engine (N2): every event comes through a fake of the
-// plugin, with the shapes pinned in native-voice-contract.json.
+// plugin, with the shapes pinned in native-voice-contract.json and Sew's own
+// sew-native-voice-contract.json.
 
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { HostEntry } from '@/lib/host-pool'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -8,6 +11,8 @@ import { NativeVoiceEngine, PLUGIN_COMMAND_PREFIX, type NativeVoiceBridge } from
 import { SeatOnlyEngine } from '@/lib/voice/voice-engine'
 import type { VoiceRoom, VoiceRoomsList } from '@/lib/voice/voice-wire'
 import { createVoiceController, type VoiceDeps } from './voice-core'
+
+const sewContract = JSON.parse(readFileSync(resolve(__dirname, '../lib/voice/sew-native-voice-contract.json'), 'utf8'))
 
 const SEW = 'sewlab.k2.dev'
 const ME = '48831765147549699'
@@ -313,7 +318,7 @@ describe.each(['admit_lost', 'credential_expired'])('a re-join for %s', (reason)
   it.each([
     ['signin_required', 'You were signed out of sewlab.'],
     ['network', 'The call to Standup dropped: the connection was lost.'],
-    ['credential_lost', 'The call to Standup ended: your login joined from another device.'],
+    ['credential_lost', 'The call to Standup ended: you were signed out, or joined from another device.'],
     ['room_closing', 'The call to Standup ended.'],
   ])('ends %s with its own line', async (ending, line) => {
     const s = await inCall()
@@ -430,5 +435,102 @@ describe('a build without the native engine', () => {
     expect(join).toHaveBeenCalledTimes(1)
     expect(s.joins()).toEqual([])
     expect(s.ctl.store.getState().engineKind).toBe('seat')
+  })
+})
+
+// Live access §11, against Sew's exact JSON.
+describe('live access: how a call ends', () => {
+  const lines: Record<string, string> = {
+    perms_lost: 'You no longer have access to Standup.',
+    removed_from_space: 'You were removed from Standup.',
+    timed_out: 'You were timed out, so you left Standup.',
+    channel_archived: 'Standup closed.',
+    account_removed: 'Your account was removed from sewlab.',
+    removed_by_moderator: 'You were removed from Standup.',
+    session_revoked: 'You were signed out of sewlab.',
+    device_revoked: 'This device was signed out of sewlab.',
+    kicked: 'You were removed from Standup.',
+    room_closed: 'Standup closed.',
+    credential_lost: 'The call to Standup ended: you were signed out, or joined from another device.',
+  }
+
+  it("has a line for every reason in Sew's contract", () => {
+    const named = [...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks].map((r: { reason: string }) => r.reason).sort()
+    expect(named).toEqual(Object.keys(lines).sort())
+    expect(sewContract.ended.event).toBe('sew-voice://state')
+  })
+
+  it.each([...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks].map((r: { reason: string; payload: unknown }) => [r.reason, r.payload]))('%s ends the call with its line', async (reason, payload) => {
+    const s = await inCall()
+    s.fire('state', payload)
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: lines[reason as string], kind: 'error' })
+  })
+
+  it('a reason nobody has heard of still ends the call, in plain words', async () => {
+    const s = await inCall()
+    s.fire('state', { state: 'ended', reason: 'some_new_reason' })
+    expect(s.ctl.store.getState().call).toBeNull()
+    expect(s.ctl.store.getState().notice?.text).toBe('The call to Standup ended.')
+  })
+})
+
+describe('live access: the mic', () => {
+  const p = sewContract.participants
+
+  it('speaking taken away: the call stays, the mic is blocked, it says so once', async () => {
+    const s = await inCall()
+    s.fire('participants', p.joined)
+    expect(s.ctl.store.getState().call).toMatchObject({ speakDenied: false, muted: false })
+    s.fire('participants', p.self_speak_denied)
+    s.fire('participants', p.self_speak_denied)
+    expect(s.ctl.store.getState().call).toMatchObject({ phase: 'connected', speakDenied: true, serverMuted: false, muted: true })
+    expect(s.toasts.filter((t) => t === "You can't speak in Standup. You can still listen.")).toHaveLength(1)
+    s.ctl.setMuted(false)
+    expect(s.calls.filter(([c]) => c === `${P}mute`)).toEqual([])
+    expect(s.ctl.store.getState().call?.muted).toBe(true)
+  })
+
+  it('speaking back: the same call, one line, no re-join', async () => {
+    const s = await inCall()
+    s.fire('participants', p.self_speak_denied)
+    s.fire('participants', p.self_speak_back_unmuted)
+    expect(s.ctl.store.getState().call).toMatchObject({ speakDenied: false, muted: false, callId: 'r_x' })
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: 'You can speak in Standup again.', kind: 'info' })
+    expect(s.joins()).toHaveLength(1)
+  })
+
+  it('speaking back honours a self-mute', async () => {
+    const s = await inCall()
+    s.fire('participants', p.self_speak_denied)
+    s.fire('participants', p.self_speak_back_still_self_muted)
+    expect(s.ctl.store.getState().call).toMatchObject({ speakDenied: false, muted: true })
+  })
+
+  it('a moderator mute is its own line, not speak_denied', async () => {
+    const s = await inCall()
+    s.fire('participants', p.self_server_muted)
+    expect(s.ctl.store.getState().call).toMatchObject({ speakDenied: false, serverMuted: true, muted: true })
+    expect(s.ctl.store.getState().notice?.text).toBe('A moderator muted you in Standup.')
+    s.ctl.setMuted(false)
+    expect(s.calls.filter(([c]) => c === `${P}mute`)).toEqual([])
+  })
+
+  it('someone else who lost speaking shows muted, and says nothing to me', async () => {
+    const s = await inCall()
+    s.fire('participants', p.remote_speak_denied)
+    const call = s.ctl.store.getState().call
+    expect(call?.participants.map((x) => x.muted)).toEqual([false, true])
+    expect(call).toMatchObject({ speakDenied: false, muted: false })
+    expect(s.ctl.store.getState().notice).toBeNull()
+  })
+
+  it('a window opened mid-call reads it from the snapshot, with no line', async () => {
+    const s = setup({ plugin: { state: sewContract.state_snapshot.speak_denied, call: { target: 'host-1', room: 'room-1' } } })
+    const stop = s.ctl.start()
+    await settle()
+    expect(s.ctl.store.getState().call).toMatchObject({ speakDenied: true, muted: true, phase: 'connected' })
+    expect(s.toasts).toEqual([])
+    stop()
   })
 })

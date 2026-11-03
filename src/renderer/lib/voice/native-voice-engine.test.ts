@@ -79,7 +79,13 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
       deafened: false,
       serverMuted: false,
       serverDeafened: true,
+      speakDenied: false,
     })
+    // Sew writes it only when true: missing reads as false.
+    const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+    expect(parseParticipants(sew.participants.joined)[0].speakDenied).toBe(false)
+    expect(parseParticipants(sew.participants.self_speak_denied)[0]).toMatchObject({ speakDenied: true, muted: true, serverMuted: false })
+    expect(parseParticipants(sew.participants.self_server_muted)[0]).toMatchObject({ speakDenied: false, serverMuted: true })
     expect(parseSpeaking(contract.speaking)).toEqual([{ memberId: '7', level: 0.25 }])
     const d = parseDevices(contract.devices)
     expect(d.inputs).toEqual([{ id: 'in:1', label: 'Mic', isDefault: true }])

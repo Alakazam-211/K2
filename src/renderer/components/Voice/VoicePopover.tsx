@@ -11,7 +11,7 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
-import { hostingStateText, isLaneReconnecting, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
+import { hostingStateText, isLaneReconnecting, micBlockedText, type VoiceOccupant, type VoiceRoom } from '@/lib/voice/voice-wire'
 import { lastSeenText, type VoiceServer } from '@/lib/voice/voice-servers'
 import { isWebClient } from '@/lib/is-web'
 import { callDuration, roomStateText } from './voice-labels'
@@ -61,6 +61,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
           ? 'Reconnecting…'
           : callDuration(call.connectedAt, Date.now())
   const busy = call.phase === 'joining'
+  const micBlocked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   return (
     <section data-testid="voice-call" data-phase={call.phase} className="border-b border-[var(--color-border)] -mx-3 px-3 pb-2 mb-2">
       <div className="flex items-center justify-between">
@@ -90,7 +91,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
         </div>
       ) : null}
       <div className="mt-2 flex items-center gap-1">
-        <button type="button" data-testid="voice-mute" disabled={busy} className={SMALL_BTN} onClick={() => voice.setMuted(!call.muted)}>
+        <button type="button" data-testid="voice-mute" disabled={busy || micBlocked !== null} title={micBlocked ?? undefined} className={SMALL_BTN} onClick={() => voice.setMuted(!call.muted)}>
           {call.muted ? 'Unmute' : 'Mute'}
         </button>
         <button type="button" data-testid="voice-deafen" disabled={busy} className={SMALL_BTN} onClick={() => voice.setDeafened(!call.deafened)}>

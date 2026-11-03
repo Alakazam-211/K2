@@ -35,8 +35,11 @@ export interface NativeParticipant {
   isSelf: boolean
   muted: boolean
   deafened: boolean
+  /** A moderator muted them. */
   serverMuted: boolean
   serverDeafened: boolean
+  /** Their role or a room rule took away speaking (Sew writes it only when true). */
+  speakDenied: boolean
 }
 
 export interface NativeLevel {
@@ -123,6 +126,7 @@ export function parseParticipants(v: unknown): NativeParticipant[] {
       deafened: r.deafened === true,
       serverMuted: r.server_muted === true,
       serverDeafened: r.server_deafened === true,
+      speakDenied: r.speak_denied === true,
     }
   })
 }

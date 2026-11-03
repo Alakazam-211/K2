@@ -706,7 +706,7 @@ def main():
     got = sink.with_id(mid)
     check("X11 on the shipped limit only the first redirect goes", [m["rcpt"] for m in got] == [["me@outside.test"]], json.dumps([m["rcpt"] for m in got]))
     check("X11 and the mailbox keeps its copy", kept_eventually(mid), "")
-    n, a = admin.call("x:SieveUserInterpreter/set", {"update": {"singleton": {"maxRedirects": 5, "maxOutMessages": 6}}})
+    n, a = admin.call("x:SieveUserInterpreter/set", {"update": {"singleton": {"maxRedirects": 100, "maxOutMessages": 101}}})
     check("X11 K2's limits are accepted", n == "x:SieveUserInterpreter/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:300]}")
     admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
     time.sleep(2)

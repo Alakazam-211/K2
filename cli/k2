@@ -42947,7 +42947,7 @@ cmd_schema() {
     {
       "name": "mail forward",
       "usage": "k2 mail forward set --to <dest> [--to <dest>…] [--keep|--no-keep] | add --to <dest> [--to <dest>…] [--keep|--no-keep] | rm --to <dest> [--to <dest>…] | show | unset | pause [--to <dest>] | resume [--to <dest>] [--address <addr>] [--json]",
-      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to up to 5 addresses; same rules as k2 hostmail forward (outside: on at once, the address gets an email with a stop link; keeps a copy unless --no-keep). set replaces the whole list, add and rm leave the others alone. The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that pressed Stop (only the owner or an Admin can choose it again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
+      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to up to 100 addresses; same rules as k2 hostmail forward (outside: on at once, the address gets an email with a stop link; keeps a copy unless --no-keep). set replaces the whole list, add and rm leave the others alone. The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that pressed Stop (only the owner or an Admin can choose it again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
       "args": [],
       "flags": [
         {"name": "--to", "arg": "dest", "description": "The destination address; repeat for several. pause and resume: only this one."},
@@ -43219,7 +43219,7 @@ cmd_schema() {
     {
       "name": "hostmail forward",
       "usage": "k2 hostmail forward set <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | add <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | rm <addr> --to <dest> [--to <dest>…] | show <addr> | unset <addr> | pause <addr> [--to <dest>] | resume <addr> [--to <dest>] | list [--paused|--active|--pending] [--external] [--json]",
-      "description": "Forward a hosted mailbox to up to 5 addresses: a mailbox on this server (no copy unless --keep) or an outside address (keeps a copy unless --no-keep). Every forward goes on at once. An outside address isn't asked: K2 emails it first, saying who set it, with a stop link that needs no login and never expires, and tells the owner (Inbox, plus email if the owner has a notice address). set replaces the whole list; add and rm leave the others alone. Refused: an address on one of this server's own domains with no mailbox here, because that mail would bounce here and never reach another provider whatever the MX says; over 5 per mailbox (too_many_destinations); over 20 new outside addresses a day on this server, a number only the owner can change with k2 hostmail config --forward-new-per-day (new_outside_limit); an address that pressed Stop (destination_stopped: the owner or an Admin can override with --restart-stopped; agents never). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server, counting every copy (mail waits in the queue); 500 copies/day per mailbox pauses all its outside forwards (daily_cap). Pause reasons (show gives them with words, per destination, with the notice state, last-24h counts and events): manual, dest_gone (3 no-such-user refusals in a row, or over 5% of at least 50), refused (over 20% refused as spam or by policy, of at least 10), daily_cap, revoked (destination pressed Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/add/rm/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only. list: owner/Admin; it shows notices that failed and old forwards K2 left off. A person's own mailbox: k2 mail forward.",
+      "description": "Forward a hosted mailbox to up to 100 addresses: a mailbox on this server (no copy unless --keep) or an outside address (keeps a copy unless --no-keep). Every forward goes on at once. An outside address isn't asked: K2 emails it first, saying who set it, with a stop link that needs no login and never expires, and tells the owner (Inbox, plus email if the owner has a notice address). set replaces the whole list; add and rm leave the others alone. Refused: an address on one of this server's own domains with no mailbox here, because that mail would bounce here and never reach another provider whatever the MX says; over 100 per mailbox (too_many_destinations); over 20 new outside addresses a day on this server, a number only the owner can change with k2 hostmail config --forward-new-per-day (new_outside_limit); an address that pressed Stop (destination_stopped: the owner or an Admin can override with --restart-stopped; agents never). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server, counting every copy (mail waits in the queue); 500 copies/day per mailbox pauses all its outside forwards (daily_cap). Pause reasons (show gives them with words, per destination, with the notice state, last-24h counts and events): manual, dest_gone (3 no-such-user refusals in a row, or over 5% of at least 50), refused (over 20% refused as spam or by policy, of at least 10), daily_cap, revoked (destination pressed Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/add/rm/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only. list: owner/Admin; it shows notices that failed and old forwards K2 left off. A person's own mailbox: k2 mail forward.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
         {"name": "--to", "arg": "dest", "description": "The destination address; repeat for several. pause and resume: only this one (default: all)."},
@@ -48960,7 +48960,7 @@ MAIL_MANAGE AGENTS
   team --write → --editor for the few who may delete it.
 
 FORWARDING (`k2 hostmail forward`)
-  Up to 5 destinations per mailbox: mailboxes on this server, or outside
+  Up to 100 destinations per mailbox: mailboxes on this server, or outside
   addresses (Gmail, Outlook, any). set replaces the whole list; add and
   rm leave the others alone.
   Outside  on at once; the outside address isn't asked. Before the first
@@ -48987,9 +48987,11 @@ FORWARDING (`k2 hostmail forward`)
            owner or an Admin can override it:
            k2 hostmail forward add <mailbox> --to <address> --restart-stopped
            An agent never can: tell your human on Thread. Don't work around it.
-  Limits   5 per mailbox (too_many_destinations). 20 new outside addresses
-           a day on this server (new_outside_limit, exit 1). Only the owner
-           can change that number, up to 1000, with k2 hostmail config
+  Limits   100 per mailbox (too_many_destinations). 20 new outside addresses
+           a day on this server (new_outside_limit, exit 1): a list that would
+           go over is refused whole, so more than 20 new ones at a time needs
+           the limit raised first. Only the owner can change that number, up
+           to 1000, with k2 hostmail config
            --forward-new-per-day <n>; an agent never can, so tell your human
            on Thread. Once K2 has sent 60 of its emails to new addresses in
            the last hour, a new outside forward waits its turn (state
@@ -48998,6 +49000,10 @@ FORWARDING (`k2 hostmail forward`)
            outside address counts: 100/hour per mailbox and 1,000/hour per
            server (above them mail waits in the queue), and 500 copies in any
            24 hours per mailbox (K2 pauses all its outside forwards: daily_cap).
+           At 100 outside addresses one message uses the whole hour's 100,
+           and the fifth message in a day reaches the 500. Same-box copies
+           count toward the hourly limits too (Stalwart 0.16.25 or later), but
+           not toward the 500.
   Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
            couldn't be checked, several From addresses), bounce reports, and
            mail K2 already forwarded. They stay in the mailbox.
@@ -62849,8 +62855,8 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
             sys.exit(3)
         die(err, permission=permission)
 
-    def fwd_call(method, route, params=None, body=None):
-        d = request(method, route, params, body)
+    def fwd_call(method, route, params=None, body=None, timeout=30):
+        d = request(method, route, params, body, timeout)
         if d is None:
             die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
         if d.get("error"):
@@ -62953,7 +62959,9 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
         if env("M_RESTART") == "true":
             body["restartStopped"] = True
         route = base_route if op == "set" else base_route + "/add"
-        d = fwd_call("POST", route, body=body)
+        # K2 emails each new outside address before it answers, so a long list
+        # takes longer than the usual wait.
+        d = fwd_call("POST", route, body=body, timeout=30 + 2 * len(tos))
         if as_json:
             print(dumps(d))
         else:
@@ -71789,7 +71797,7 @@ CONNECT & SHARE
                               Show or set whether a workspace's agents may SEND
                               (hosted and linked inboxes; every OS). Owner/admin
   forward set|add|rm|show|unset|pause|resume
-                              A PERSON's own hosted mailbox → up to 5 addresses
+                              A PERSON's own hosted mailbox → up to 100 addresses
                               (agents: k2 hostmail forward; k2 mail forward --help)
 
 SERVER ADMIN → k2 hostmail
@@ -72393,7 +72401,7 @@ FLAGS
                          with mail-manage). How many new outside addresses
                          this server may add a day, across all mailboxes.
                          Default 20; 0 stops new ones; above 1000 is refused.
-                         It doesn't change the limit of 5 forward addresses
+                         It doesn't change the limit of 100 forward addresses
                          per mailbox. Nothing else relaxes: every new address
                          still gets K2's email with a stop link, you're still
                          told, and K2 still pauses an address that bounces or
@@ -73990,7 +73998,7 @@ EOF
 
 cmd_help_hostmail_forward() {
     cat <<'EOF'
-Forward a hosted mailbox's new mail to up to 5 addresses: other mailboxes
+Forward a hosted mailbox's new mail to up to 100 addresses: other mailboxes
 on this server, or outside addresses (Gmail, Outlook, any). Each one has
 its own state, so one can pause or stop while the others carry on.
 
@@ -74025,9 +74033,11 @@ the mailbox. With neither flag, a mailbox with any outside address keeps a
 copy, and one with only same-box addresses doesn't. Spam, mail whose sender nothing vouches for, bounces and mail K2 already
 forwarded stay in the mailbox and aren't forwarded.
 
-Limits on addresses: 5 per mailbox (too_many_destinations). 20 new outside
-addresses a day on this server, across all mailboxes (new_outside_limit);
-only the owner can change that number: k2 hostmail config --forward-new-per-day.
+Limits on addresses: 100 per mailbox (too_many_destinations). 20 new outside
+addresses a day on this server, across all mailboxes (new_outside_limit): a
+list that would go over is refused whole, so more than 20 new ones at a time
+needs the limit raised first. Only the owner can change that number, up to
+1000: k2 hostmail config --forward-new-per-day <n>.
 Pacing: once K2 has sent 60 of those emails to new addresses in the last
 hour, a new outside forward waits its turn (state pending_verify, no mail
 goes there yet): K2 emails the address, then turns the forward on, 2 a minute.
@@ -74036,10 +74046,15 @@ You do nothing.
 Limits on volume, where every copy to an outside address counts: 100 an
 hour per mailbox and 1,000 an hour per server (above them mail waits in the
 queue, nothing is lost); 500 in any 24 hours per mailbox (K2 pauses all its
-outside forwards, reason daily_cap; new mail stays in the mailbox).
+outside forwards, reason daily_cap; new mail stays in the mailbox). At 100
+outside addresses one message uses the whole hour's 100, and the fifth message
+in a day reaches the 500. Same-box copies count toward the hourly limits too
+(Stalwart 0.16.25 or later), and wait in the queue the same way, but not toward
+the 500.
 
-Paused = new mail stays in the mailbox and isn't sent to that address. show
-gives the reason:
+Paused = new mail stays in the mailbox and isn't sent to that address, not
+even after a resume. Copies already in the queue still go. show gives the
+reason:
   manual        someone paused it (k2 hostmail forward pause)
   dest_gone     the destination says the address doesn't exist: 3 times
                 in a row, or for over 5% of a day's messages once 50 were sent
@@ -74097,7 +74112,7 @@ EOF
 cmd_help_hostmail_forward_set() {
     cat <<'EOF'
 Set the whole list of addresses a hosted mailbox forwards to: exactly the
---to addresses you give, up to 5. Any it forwarded to before and you don't
+--to addresses you give, up to 100. Any it forwarded to before and you don't
 name are removed. To change one without touching the others, use add or rm.
 
   dest is a mailbox on this server   on at once; keeps no copy
@@ -74107,15 +74122,19 @@ name are removed. To change one without touching the others, use add or rm.
                                      has to confirm; keeps a copy unless
                                      --no-keep
 --keep and --no-keep together: exit 2.
+If K2 has sent 60 of these emails in the last hour, a new outside address
+waits its turn: state pending_verify until K2 has emailed it (2 a minute), then
+it goes on by itself.
 Refused, and then nothing changes and nobody is emailed: no way to give the
 address a stop link (no_front_door, no_mail_path, or suppressed because it
 bounced or complained before); K2 emailed it 3 times in 24 hours (notice_limit);
 a same-box forward that would loop (forward_loop). If you're an agent: your
 own mailbox, unless agent sending is on (agent_send_required; ask your human);
 an address K2 paused by itself in the 24 hours before this, even if it was
-removed since (owner_only). More than 5
+removed since (owner_only). More than 100
 addresses (too_many_destinations); over this server's daily limit on new
-outside addresses, 20 unless the owner changed it (new_outside_limit); an address that pressed Stop
+outside addresses, 20 unless the owner changed it with k2 hostmail config
+--forward-new-per-day, all of the list or none (new_outside_limit); an address that pressed Stop
 (destination_stopped); an address on one of this server's domains that
 isn't a mailbox here, because that mail would never reach another provider,
 whatever the domain's MX says; the mailbox itself; a notification sender address; outside destinations under
@@ -74137,8 +74156,9 @@ Add addresses to a hosted mailbox's forwards. The others stay as they are,
 and the mailbox keeps a copy or not as it does now unless you say. The
 rules and refusals are the same as set (k2 hostmail forward set --help):
 an outside address goes on at once after K2 emails it a stop link, at
-most 5 addresses per mailbox, and this server's daily limit on new outside
-addresses (20 unless the owner changed it).
+most 100 addresses per mailbox, and this server's daily limit on new outside
+addresses (20 unless the owner changed it with k2 hostmail config
+--forward-new-per-day).
 
 If K2 has sent 60 of these emails in the last hour, the new forward waits
 its turn: state pending_verify until K2 has emailed the address, then it goes
@@ -74254,7 +74274,7 @@ EOF
 
 cmd_help_mail_forward() {
     cat <<'EOF'
-Forward your own hosted mailbox to up to 5 addresses. For people: a box
+Forward your own hosted mailbox to up to 100 addresses. For people: a box
 login whose mailbox the owner linked (k2 hostmail person link), or the
 owner. Same rules as k2 hostmail forward: it goes on at once; an outside
 address gets an email first saying who set it, with a link to stop it,

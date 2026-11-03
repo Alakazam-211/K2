@@ -44,5 +44,35 @@ case "$cmd" in
     target="${CARGO_TARGET_DIR:-$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}"
     K2_E2E_DAEMON="$target/debug/k2-daemon" STALWART_PROBE=stalwart-forward-daemon-e2e.py \
       exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.25 ;;
-  *) echo "usage: $0 check|test|targeted|contract|landing|e2e [cargo args…]" >&2; exit 2 ;;
+  # A mailbox at the forward limit on real Stalwart, both versions in the fleet;
+  # counts what arrives (tests/mail/stalwart-forward-many-probe.py). Needs no cargo.
+  many-probe)
+    STALWART_PROBE=stalwart-forward-many-probe.py \
+      exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
+  # The same through K2's own routes and client, both versions
+  # (tests/mail/stalwart-forward-many-e2e.py).
+  many-e2e)
+    cargo build -p k2-daemon --bin k2-daemon || exit 1
+    target="${CARGO_TARGET_DIR:-$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}"
+    K2_E2E_DAEMON="$target/debug/k2-daemon" STALWART_PROBE=stalwart-forward-many-e2e.py \
+      exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
+  # Every real-Stalwart proof the forward limit rests on, one after the other.
+  proofs)
+    rc=0
+    bash "$0" many-probe || rc=1
+    bash "$0" many-e2e || rc=1
+    bash "$0" e2e || rc=1
+    STALWART_PROBE=stalwart-forward-external-probe.py bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.25 || rc=1
+    exit $rc ;;
+  # Any of the above with its whole output kept in a file and printed at the end,
+  # with the real exit code on the last line.
+  logged)
+    log="$(mktemp)"
+    bash "$0" "$@" >"$log" 2>&1
+    rc=$?
+    cat "$log"
+    rm -f "$log"
+    echo "== forward-cargo.sh $*: exit $rc =="
+    exit $rc ;;
+  *) echo "usage: $0 check|test|targeted|contract|landing|e2e|many-probe|many-e2e|proofs|logged <cmd> [cargo args…]" >&2; exit 2 ;;
 esac

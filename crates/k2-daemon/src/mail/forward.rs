@@ -698,13 +698,22 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         return Err(fail(
             409,
             "too_many_destinations",
-            format!(
-                "a mailbox forwards to at most {} addresses, and this would make {} for {}. Remove one first: k2 hostmail forward rm {} --to <address>",
-                store::MAX_DESTINATIONS,
-                others_left + dests.len(),
-                row.address,
-                row.address
-            ),
+            match mode {
+                Mode::Add => format!(
+                    "a mailbox forwards to at most {} addresses, and this would make {} for {}. Nothing changed. Remove one first: k2 hostmail forward rm {} --to <address>",
+                    store::MAX_DESTINATIONS,
+                    others_left + dests.len(),
+                    row.address,
+                    row.address
+                ),
+                Mode::Set => format!(
+                    "a mailbox forwards to at most {} addresses, and this list has {} for {}. Nothing changed. Give at most {}",
+                    store::MAX_DESTINATIONS,
+                    dests.len(),
+                    row.address,
+                    store::MAX_DESTINATIONS
+                ),
+            },
         ));
     }
     let fresh: Vec<&Dest> = dests.iter().filter(|d| !live.iter().any(|f| row_stands(f, d))).collect();
@@ -739,7 +748,8 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 429,
                 "new_outside_limit",
                 format!(
-                    "this server adds at most {cap} new outside addresses a day, and {used} went on in the last 24 hours. Nothing changed; try later, or forward to a mailbox on this server. Only the owner can change the limit: k2 hostmail config --forward-new-per-day <n>"
+                    "this server adds at most {cap} new outside addresses a day: {used} went on in the last 24 hours, and this would add {fresh_outside}. Nothing changed. Add fewer, try later, or forward to a mailbox on this server. Only the owner can raise the limit, up to {}: k2 hostmail config --forward-new-per-day <n>",
+                    store::NEW_OUTSIDE_PER_DAY_MAX
                 ),
             );
             f.retry_after_ms = Some(3_600_000);

@@ -417,8 +417,61 @@ fn stalwart_s_default_limit_is_raised_only_when_low_and_never_lowered() {
     assert_eq!(plan_redirect_limits(None, None), Some((REDIRECT_LIMIT, OUT_MESSAGE_LIMIT)));
     assert_eq!(plan_redirect_limits(Some(1), Some(3)), Some((REDIRECT_LIMIT, OUT_MESSAGE_LIMIT)));
     assert_eq!(plan_redirect_limits(Some(REDIRECT_LIMIT), Some(OUT_MESSAGE_LIMIT)), None, "already high enough: no write, no reload");
-    assert_eq!(plan_redirect_limits(Some(50), Some(2)), Some((50, OUT_MESSAGE_LIMIT)), "an operator's higher value stays");
-    assert_eq!(plan_redirect_limits(Some(50), Some(60)), None);
+    assert_eq!(plan_redirect_limits(Some(500), Some(2)), Some((500, OUT_MESSAGE_LIMIT)), "an operator's higher value stays");
+    assert_eq!(plan_redirect_limits(Some(500), Some(600)), None);
+}
+
+/// A box that updates has the limits the last release wrote. The numbers K2
+/// writes follow the mailbox limit, and the old ones count as too low.
+#[test]
+fn a_box_on_the_old_limit_is_raised_to_fit_the_mailbox_limit() {
+    assert_eq!((REDIRECT_LIMIT, OUT_MESSAGE_LIMIT), (100, 101));
+    assert_eq!(plan_redirect_limits(Some(5), Some(6)), Some((100, 101)));
+    assert_eq!(plan_redirect_limits(Some(100), Some(100)), Some((100, 101)), "an out-of-office reply needs room too");
+}
+
+/// A mailbox set up under the old limit keeps forwarding through the update:
+/// nothing rewrites its script, and the hourly pass raises the limit anyway.
+/// If the limit can't go up it still runs as it was, and growing it waits.
+#[test]
+fn a_mailbox_from_the_old_limit_keeps_working_and_can_grow() {
+    let _g = setup();
+    let io = install(false);
+    let aid = seed_mailbox("old@brand.test", "direct");
+    let dest = |i: usize| format!("d{i}@outside.test");
+    for i in 0..5 {
+        let v = verified_row("old@brand.test", &dest(i));
+        add_row(&aid, "old@brand.test", &dest(i), store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v), true);
+    }
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    let script = io.src("acc-old").expect("script");
+    let (writes, calls) = (*io.writes.borrow(), *io.limit_calls.borrow());
+    // The update: the same rows, the next pass. It raises the limit, leaves the script.
+    let r = reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!((r.wrote, r.drift, r.failed), (0, 0, 0), "{r:?}");
+    assert_eq!(*io.limit_calls.borrow(), calls + 1, "the pass asks for the new limit");
+    assert_eq!(*io.writes.borrow(), writes, "the script isn't touched");
+    // The mail server won't raise it: still forwarding to all five.
+    *io.limit_fail.borrow_mut() = true;
+    let r = reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!((r.wrote, r.failed), (0, 0), "{r:?}");
+    assert_eq!(io.src("acc-old").as_deref(), Some(script.as_str()));
+    // A sixth waits for the limit rather than being skipped by the mail server.
+    let v = verified_row("old@brand.test", &dest(5));
+    add_row(&aid, "old@brand.test", &dest(5), store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v), true);
+    let e = sync_mailbox(&aid, Why::Change).expect_err("deferred");
+    assert!(e.contains("redirect limit"), "{e}");
+    assert_eq!(io.src("acc-old").as_deref(), Some(script.as_str()), "the five still run");
+    // It can go up again: the pass finishes it, all the way to the new limit.
+    *io.limit_fail.borrow_mut() = false;
+    reconcile_with(io.as_ref(), false, &ctx());
+    assert_eq!(io.forward("acc-old").expect("written").redirects(), 6);
+    for i in 6..100 {
+        let v = verified_row("old@brand.test", &dest(i));
+        add_row(&aid, "old@brand.test", &dest(i), store::KIND_EXTERNAL, store::ST_ACTIVE, Some(&v), true);
+    }
+    sync_mailbox(&aid, Why::Change).expect("sync");
+    assert_eq!(io.forward("acc-old").expect("written").redirects(), 100);
 }
 
 #[test]

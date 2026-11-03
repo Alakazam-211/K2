@@ -169,7 +169,7 @@ pub const BRAKE_MIN: i64 = 50;
 /// Destinations one mailbox may forward to (live rows of any state). The
 /// mail server's redirect limit is raised to match
 /// (`forward_sync::REDIRECT_LIMIT`).
-pub const MAX_DESTINATIONS: usize = 5;
+pub const MAX_DESTINATIONS: usize = 100;
 /// New outside addresses per box per trailing 24 h, across every mailbox and
 /// caller, unless the owner set another number ([`new_outside_cap`]). There is
 /// no confirm step, so this is what bounds how many strangers a careless or
@@ -1398,7 +1398,7 @@ mod tests {
         assert_eq!(new_outside_cap(&c).unwrap(), NEW_OUTSIDE_PER_DAY, "unset");
         assert!(set_new_outside_cap(&c, 300).unwrap());
         assert_eq!(new_outside_cap(&c).unwrap(), 300);
-        assert!(MAX_DESTINATIONS == 5, "the per-mailbox limit doesn't move with it");
+        assert_eq!(MAX_DESTINATIONS, 100, "the per-mailbox limit doesn't move with it");
     }
 
     #[test]

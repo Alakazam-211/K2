@@ -370,7 +370,8 @@ export function MailboxForwardingPanel({
     return <p className={`text-[11px] ${muted}`}>Loading forwarding…</p>
   }
 
-  const max = data.maxDestinations ?? 5
+  // A server that doesn't say is from before several destinations.
+  const max = data.maxDestinations ?? 1
   const events = data.events ?? []
 
   return (

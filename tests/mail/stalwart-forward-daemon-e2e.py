@@ -86,7 +86,7 @@ class Daemon:
         print(open(self.log.name).read()[-3000:])
         sys.exit(f"E0 {why}")
 
-    def call(self, method, path, body=None, params=None, token=True):
+    def call(self, method, path, body=None, params=None, token=True, timeout=60):
         q = dict(params or {})
         if token:
             q["token"] = self.token
@@ -98,7 +98,7 @@ class Daemon:
         if body is not None and not isinstance(body, bytes):
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 raw, status = r.read().decode(), r.status
         except urllib.error.HTTPError as e:
             raw, status = e.read().decode(), e.code
@@ -224,7 +224,7 @@ def main():
         check("E1 the notice comes from the mailbox (no system sender here)", all((m["from"] or "").lower() == alice_addr.lower() for m in notices), json.dumps([m["from"] for m in notices]))
         check("E1 the notice says who and which mailbox, and asks no confirm", all(alice_addr in m["data"] and "k2ev_" not in m["data"] for m in notices), notices[0]["data"][:400] if notices else "")
         lim = limits()
-        check("E1 K2's own call raised the mail server's limit", lim == (5, 6), json.dumps(lim))
+        check("E1 K2's own call raised the mail server's limit", lim == (100, 101), json.dumps(lim))
 
         # E2 real mail: every active destination gets its copy, and one stays.
         mid = f"e2-{tag}"
@@ -305,9 +305,9 @@ def main():
             check("E9 the forward from the rows still runs, and nothing else", got == ["me@outside.test"], json.dumps(got))
 
         # E8 the caps.
-        many = [f"x{i}@outside.test" for i in range(6)]
+        many = [f"x{i}@outside.test" for i in range(101)]
         st, v = d.call("POST", "/cli/mail/forward", {"address": bob_addr, "to": many})
-        check("E8 six destinations are refused", st == 409 and v["error"]["code"] == "too_many_destinations", f"{st}")
+        check("E8 101 destinations are refused", st == 409 and v["error"]["code"] == "too_many_destinations", f"{st}")
         st, v = d.call("POST", "/cli/mail/config/forward-new-per-day", {"perDay": 5000})
         check("E8 above the ceiling is refused", st == 400 and "at most 1000" in v["error"]["hint"], f"{st} {json.dumps(v)[:200]}")
         st, v = d.call("POST", "/cli/mail/config/forward-new-per-day", {"perDay": 300})

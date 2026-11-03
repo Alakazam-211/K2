@@ -103,10 +103,10 @@ class H(BaseHTTPRequestHandler):
             addr = body.get("address") or "me@brand.test"
             if to == "stopped@gmail.test" and not body.get("restartStopped"):
                 return reply(self, 409, {"ok": False, "error": {"code": "destination_stopped", "hint": "stopped@gmail.test pressed Stop in K2's email, so K2 won't forward to it. To override that, add --restart-stopped; ask them first"}})
-            if to == "sixth@gmail.test":
-                return reply(self, 409, {"ok": False, "error": {"code": "too_many_destinations", "hint": "a mailbox forwards to at most 5 addresses, and this would make 6"}})
+            if to == "onetoomany@gmail.test":
+                return reply(self, 409, {"ok": False, "error": {"code": "too_many_destinations", "hint": "a mailbox forwards to at most 100 addresses, and this would make 101"}})
             if to == "onemore@gmail.test":
-                return reply(self, 429, {"ok": False, "error": {"code": "new_outside_limit", "hint": "this server adds at most 20 new outside addresses a day"}})
+                return reply(self, 429, {"ok": False, "error": {"code": "new_outside_limit", "hint": "this server adds at most 20 new outside addresses a day: 0 went on in the last 24 hours, and this would add 100. Nothing changed. Add fewer, try later, or forward to a mailbox on this server. Only the owner can raise the limit, up to 1000: k2 hostmail config --forward-new-per-day <n>"}})
             if isinstance(to, list):
                 dests = [{"to": t, "keep": True, "kind": "external", "state": "active", "new": True, "notice": "sent", "sentVia": "system",
                           "message": "Forwarding to %s is on. K2 emailed %s to say so, with a link to stop it." % (t, t), "note": None} for t in to]
@@ -256,7 +256,7 @@ set -e
 printf '%s' "$out" | grep -q -- '--restart-stopped' || fail "destination_stopped must name the override: $out"
 "$K2" hostmail forward set sales@brand.test --to stopped@gmail.test --restart-stopped >/dev/null
 last_body | grep -q '"restartStopped":true' || fail "--restart-stopped must reach the daemon: $(last_body)"
-for t in sixth@gmail.test onemore@gmail.test; do
+for t in onetoomany@gmail.test onemore@gmail.test; do
     set +e
     out="$("$K2" hostmail forward add sales@brand.test --to "$t" 2>&1)"; rc=$?
     set -e

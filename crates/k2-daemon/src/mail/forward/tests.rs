@@ -752,10 +752,14 @@ fn pause_and_resume_take_one_destination_or_all() {
 fn the_destination_cap_refuses_clearly() {
     let t = t("fwcap");
     system_sender_on();
+    // The cap is 100; the day's limit on new outside addresses is lower.
+    seed_server();
+    assert_eq!(set_cap(store::NEW_OUTSIDE_PER_DAY_MAX).0, 200);
     let many: Vec<String> = (0..store::MAX_DESTINATIONS + 1).map(|i| format!("d{i}@outside.test")).collect();
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
     assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("at most {}", store::MAX_DESTINATIONS)), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains(&format!("this list has {}", store::MAX_DESTINATIONS + 1)), "{v}");
     assert_eq!((sent(&t), forwards().len()), (0, 0), "nobody mailed, nothing changed");
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many[..store::MAX_DESTINATIONS].to_vec() }));
     assert_eq!(st, 200, "{v}");
@@ -775,7 +779,7 @@ fn the_destination_cap_refuses_clearly() {
 fn new_outside_addresses_are_capped_per_box_per_day() {
     let t = t("fwday");
     system_sender_on();
-    // Across mailboxes: five destinations each, up to the day's limit.
+    // Across mailboxes, up to the day's limit.
     let mut added = 0;
     for m in 0.. {
         let mailbox = format!("day{m}@notify.brand.test");
@@ -812,6 +816,69 @@ fn new_outside_addresses_are_capped_per_box_per_day() {
     assert_eq!(st, 200, "{v}");
 }
 
+/// Rosson's number. A mailbox takes 100 (K2 writes every one, past the mail
+/// server's old limit), the 101st is refused, set or add, with what to do.
+#[test]
+fn a_mailbox_forwards_to_100_addresses_and_the_101st_is_refused() {
+    let t = t("fw100");
+    system_sender_on();
+    seed_server();
+    assert_eq!(store::MAX_DESTINATIONS, 100);
+    assert_eq!(set_cap(store::NEW_OUTSIDE_PER_DAY_MAX).0, 200);
+    let many: Vec<String> = (0..100).map(|i| format!("d{i}@outside.test")).collect();
+    let calls = *t.io.limit_calls.borrow();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["destinations"].as_array().map(Vec::len), Some(100), "{v}");
+    assert_eq!(forwards().len(), 100);
+    assert!(*t.io.limit_calls.borrow() > calls, "the mail server's limit goes up before the script");
+    // Past the hour's burst of emails the rest wait their turn, then go on.
+    let on = forwards().iter().filter(|f| f["state"] == "active").count();
+    assert_eq!(on, store::NOTICES_BURST_PER_HOUR as usize, "the emails are paced");
+    assert_eq!(t.io.forward(ACC).expect("written").redirects(), on, "one redirect per active address");
+    let mut pass = 0;
+    while forwards().iter().any(|f| f["state"] != "active") {
+        forward_verify::minute_pass(email_notify::now() + 3600 * 2 + pass * 60);
+        pass += 1;
+        assert!(pass < 100, "stalled");
+    }
+    assert_eq!(t.io.forward(ACC).expect("written").redirects(), 100, "every address, written");
+    // The 101st.
+    let before = sent(&t);
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "one-more@outside.test" }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or("");
+    assert!(hint.contains("at most 100 addresses") && hint.contains("would make 101") && hint.contains("forward rm"), "{v}");
+    let over: Vec<String> = (0..101).map(|i| format!("o{i}@outside.test")).collect();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": over }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or("");
+    assert!(hint.contains("at most 100 addresses") && hint.contains("this list has 101"), "{v}");
+    assert_eq!((sent(&t), forwards().len()), (before, 100), "nobody mailed, nothing changed");
+    assert_eq!(t.io.forward(ACC).expect("still there").redirects(), 100);
+    // Re-adding one already there isn't one more.
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "d0@outside.test" }));
+    assert_eq!(st, 200, "{v}");
+}
+
+/// The day's limit on new outside addresses stays 20 whatever the mailbox's
+/// is. A list past it is refused whole, and the refusal says how to raise it.
+#[test]
+fn a_long_list_past_the_day_s_limit_says_how_to_raise_it() {
+    let t = t("fw100day");
+    system_sender_on();
+    seed_server();
+    assert_eq!(store::NEW_OUTSIDE_PER_DAY, 20);
+    let many: Vec<String> = (0..100).map(|i| format!("d{i}@outside.test")).collect();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
+    assert_eq!((st, v["error"]["code"].clone()), (429, json!("new_outside_limit")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or("");
+    assert!(hint.contains("at most 20 new outside addresses a day"), "{v}");
+    assert!(hint.contains("this would add 100"), "{v}");
+    assert!(hint.contains("k2 hostmail config --forward-new-per-day"), "{v}");
+    assert_eq!((sent(&t), forwards().len()), (0, 0), "nobody mailed, nothing changed");
+}
+
 fn seed_server() {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -827,7 +894,7 @@ fn set_cap(n: i64) -> (u16, J) {
     (status(&r), body(&r))
 }
 
-/// `n` new outside addresses on fresh mailboxes (five each), from `from`.
+/// `n` new outside addresses on fresh mailboxes (as many each as a mailbox takes), from `from`.
 fn add_many(from: i64, n: i64) -> Vec<(u16, J)> {
     (from..from + n)
         .map(|i| {
@@ -877,8 +944,8 @@ fn the_daily_cap_is_the_owner_s_to_raise_and_has_a_ceiling() {
     // config shows it, and the per-mailbox limit hasn't moved.
     let cfg: J = serde_json::from_str(&crate::mail::routes_server::handle_config_get(&HashMap::new()).body).expect("json");
     assert_eq!(cfg["forwarding"]["newOutsidePerDay"], 25, "{cfg}");
-    assert_eq!(cfg["forwarding"]["maxDestinationsPerMailbox"], 5, "{cfg}");
-    let many: Vec<String> = (0..6).map(|i| format!("x{i}@outside.test")).collect();
+    assert_eq!(cfg["forwarding"]["maxDestinationsPerMailbox"], json!(store::MAX_DESTINATIONS), "{cfg}");
+    let many: Vec<String> = (0..=store::MAX_DESTINATIONS).map(|i| format!("x{i}@outside.test")).collect();
     let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": many }));
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
 }

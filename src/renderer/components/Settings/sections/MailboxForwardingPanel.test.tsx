@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   forward: null as Fwd,
   forwards: null as Fwd[] | null,
   events: [] as unknown[],
+  maxDestinations: 100 as number | undefined,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }))
@@ -34,7 +35,7 @@ vi.mock('@/lib/daemon-cli', async () => {
         throw new Error(JSON.stringify({ ok: false, error: { code: 'forbidden', hint: 'not linked to you' } }))
       }
       if (route === 'mail/forward' || route === 'mail/self/forward') {
-        return { ok: true, address: params?.address, forward: h.forward, forwards: h.forwards ?? (h.forward ? [h.forward] : []), maxDestinations: 5, events: h.events }
+        return { ok: true, address: params?.address, forward: h.forward, forwards: h.forwards ?? (h.forward ? [h.forward] : []), maxDestinations: h.maxDestinations, events: h.events }
       }
       throw new Error(`unexpected GET ${route}`)
     }),
@@ -88,6 +89,7 @@ beforeEach(() => {
   h.forward = null
   h.forwards = null
   h.events = []
+  h.maxDestinations = 100
 })
 afterEach(cleanup)
 
@@ -147,7 +149,21 @@ describe('MailboxForwardingPanel', () => {
     await waitFor(() => expect(h.posts[3].route).toBe('mail/forward/add'))
     expect(h.posts[3].body.to).toBe('three@gmail.test')
     cleanup()
-    h.forwards = [1, 2, 3, 4, 5].map((n) => ({ ...base, id: `f${n}`, to: `d${n}@gmail.test` }))
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ ...base, id: `f${i}`, to: `d${i}@gmail.test` }))
+    h.forwards = rows(99)
+    render(<MailboxForwardingPanel address="sales@brand.test" canMutate />)
+    await screen.findAllByTestId('forward-row')
+    expect(screen.getByRole('button', { name: 'Add another address…' })).toBeTruthy()
+    cleanup()
+    h.forwards = rows(100)
+    render(<MailboxForwardingPanel address="sales@brand.test" canMutate />)
+    await screen.findAllByTestId('forward-row')
+    expect(screen.queryByRole('button', { name: 'Add another address…' })).toBeNull()
+  })
+
+  it('a server from before several destinations (it names no limit) offers no Add', async () => {
+    h.maxDestinations = undefined
+    h.forwards = [{ ...base, id: 'f1', to: 'one@gmail.test' }]
     render(<MailboxForwardingPanel address="sales@brand.test" canMutate />)
     await screen.findAllByTestId('forward-row')
     expect(screen.queryByRole('button', { name: 'Add another address…' })).toBeNull()

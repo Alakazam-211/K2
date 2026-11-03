@@ -996,6 +996,33 @@ mod tests {
         assert!(src.find("redirect").expect("redirect") > last_guard, "every outside redirect is behind the guard: {src}");
     }
 
+    /// The biggest script K2 can write: 100 addresses of the longest K2 takes,
+    /// out-of-office text at its cap, and the guard. It fits Stalwart's limit
+    /// on a user script (tests/mail/stalwart-forward-many-probe.py reads the
+    /// limit and runs a script this size), and K2 reads back all 100: `had` and
+    /// `in_sync` depend on that.
+    #[test]
+    fn the_biggest_forward_script_fits_and_reads_back() {
+        // `maxScriptSize` as shipped, 0.16.10 and 0.16.25; K2 doesn't set it.
+        const STALWART_USER_SCRIPT_LIMIT: usize = 102_400;
+        let domain = format!("{}.{}.{}.outside.test", "b".repeat(60), "c".repeat(60), "d".repeat(54));
+        let addr = |i: usize| format!("d{i:03}{}@{domain}", "a".repeat(60));
+        assert_eq!(addr(0).len(), crate::mail::addresses::MAX_ADDRESS_BYTES);
+        let mut o = ooo(&"x".repeat(TEXT_CAP));
+        o.from = "sales@brand.test".to_string();
+        let mut fwd = outside(true);
+        fwd.dest = addr(0);
+        fwd.more = (1..k2_core::mail_forward::MAX_DESTINATIONS).map(addr).collect();
+        let want = UserSieve { ooo: Some(o), forward: Some(fwd) };
+        let src = compose(&want).expect("script");
+        assert_eq!(src.matches("redirect :copy").count(), k2_core::mail_forward::MAX_DESTINATIONS);
+        assert!(src.len() < STALWART_USER_SCRIPT_LIMIT, "{} bytes", src.len());
+        assert!(src.len() < 40 * 1024, "this size is what the live probe runs: {} bytes", src.len());
+        let back = parse(&src);
+        assert_eq!(back.forward.as_ref().map(ForwardBlock::redirects), Some(k2_core::mail_forward::MAX_DESTINATIONS));
+        assert_eq!(back, want, "it reads back exactly");
+    }
+
     #[test]
     fn golden_same_box_destinations_come_before_the_guard() {
         let mut o = ooo("Away until Monday.");

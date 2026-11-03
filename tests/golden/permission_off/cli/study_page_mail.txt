@@ -153,7 +153,7 @@ MAIL_MANAGE AGENTS
   team --write → --editor for the few who may delete it.
 
 FORWARDING (`k2 hostmail forward`)
-  Up to 5 destinations per mailbox: mailboxes on this server, or outside
+  Up to 100 destinations per mailbox: mailboxes on this server, or outside
   addresses (Gmail, Outlook, any). set replaces the whole list; add and
   rm leave the others alone.
   Outside  on at once; the outside address isn't asked. Before the first
@@ -180,9 +180,11 @@ FORWARDING (`k2 hostmail forward`)
            owner or an Admin can override it:
            k2 hostmail forward add <mailbox> --to <address> --restart-stopped
            An agent never can: tell your human on Thread. Don't work around it.
-  Limits   5 per mailbox (too_many_destinations). 20 new outside addresses
-           a day on this server (new_outside_limit, exit 1). Only the owner
-           can change that number, up to 1000, with k2 hostmail config
+  Limits   100 per mailbox (too_many_destinations). 20 new outside addresses
+           a day on this server (new_outside_limit, exit 1): a list that would
+           go over is refused whole, so more than 20 new ones at a time needs
+           the limit raised first. Only the owner can change that number, up
+           to 1000, with k2 hostmail config
            --forward-new-per-day <n>; an agent never can, so tell your human
            on Thread. Once K2 has sent 60 of its emails to new addresses in
            the last hour, a new outside forward waits its turn (state
@@ -191,6 +193,10 @@ FORWARDING (`k2 hostmail forward`)
            outside address counts: 100/hour per mailbox and 1,000/hour per
            server (above them mail waits in the queue), and 500 copies in any
            24 hours per mailbox (K2 pauses all its outside forwards: daily_cap).
+           At 100 outside addresses one message uses the whole hour's 100,
+           and the fifth message in a day reaches the 500. Same-box copies
+           count toward the hourly limits too (Stalwart 0.16.25 or later), but
+           not toward the 500.
   Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
            couldn't be checked, several From addresses), bounce reports, and
            mail K2 already forwarded. They stay in the mailbox.

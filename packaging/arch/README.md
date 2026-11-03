@@ -98,4 +98,4 @@ Omarchy default is Wayland. No `WEBKIT_*` / GSK env hacks until a real window sm
 
 ## License
 
-`FSL-1.1-Apache-2.0` — see `LICENSE.md`.
+`FSL-1.1-ALv2` (the SPDX id for the licence `LICENSE.md` calls FSL-1.1-Apache-2.0) — see `LICENSE.md`.

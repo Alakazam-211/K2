@@ -93,8 +93,9 @@ fn host_of(raw: &str) -> Option<String> {
 
 fn response(status: &str, extra: &str, body: &str) -> String {
     format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n{extra}{frame}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     )
 }
 

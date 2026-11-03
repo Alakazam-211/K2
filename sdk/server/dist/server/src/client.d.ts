@@ -117,7 +117,7 @@ export declare class K2App {
         }) => Promise<AppKeyUserCreated>;
         setRooms: (body: {
             username: string;
-            rooms: string[];
+            rooms: string[]; /** @deprecated Does nothing: a signed-in person gets the change at their next request. */
             applyTokens?: boolean;
         }) => Promise<AppKeyRoomsSet>;
         disable: (body: {
@@ -140,7 +140,7 @@ export declare class K2App {
         /** A user's rooms in this App ([] takes every room away). */
         set: (body: {
             username: string;
-            rooms: string[];
+            rooms: string[]; /** @deprecated Does nothing: a signed-in person gets the change at their next request. */
             applyTokens?: boolean;
         }) => Promise<AppKeyRoomsSet>;
     };

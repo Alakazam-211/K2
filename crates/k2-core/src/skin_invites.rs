@@ -7,8 +7,10 @@
 //! - `invite`: bring a person in to set their first password;
 //! - `reset`: an App's own forgot-password flow (`password.forgot` through
 //!   a platform pass), mailed to the person, never returned to the caller;
-//! - `owner_reset`: the owner's reset (`k2 app user reset`): the only
-//!   token whose use drops an agent tie ([`super::ties`]).
+//! - `owner_reset`: the owner's reset (`k2 app user reset`), on K2's own page.
+//!
+//! Using any of them means the person chose their password, which releases an
+//! agent tie ([`super::ties`], with its limits).
 //!
 //! The token is `k2inv_` + 32 random bytes (hex); only its SHA-256 is
 //! stored. A new link for the same (person, App) voids the older unused
@@ -488,7 +490,7 @@ pub enum MintError {
     Throttled,
     /// The link would tie the person to a workspace other than the one
     /// they are tied to (verification review 2026-10-26, item 5): never
-    /// minted; only an owner reset lifts the first tie.
+    /// minted; a release lifts the first tie.
     TiedElsewhere,
     /// The owner's reset for this person is live (app-user-profile §5.4):
     /// an App's reset (forgot through a pass, an App key) mints nothing
@@ -767,9 +769,10 @@ pub enum Consume {
 
 /// Use a `k2inv_` link: set the password and end every session of the
 /// person, in one IMMEDIATE transaction behind a compare-and-set on
-/// `used_at` (two uses at once: one wins). An `owner_reset` also drops
-/// the person's agent tie and, when the owner sent it to another address,
-/// stores that address as their email. Nothing else drops a tie.
+/// `used_at` (two uses at once: one wins). The person chose this password,
+/// so it releases their agent tie ([`ties::release_by_person_conn`]). An
+/// `owner_reset` always does and, when the owner sent it to another address,
+/// stores that address as their email.
 pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
     let token = token.trim();
     if password.trim().is_empty() {
@@ -801,7 +804,7 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
     }
     // argon2 before the skin mutex.
     let pw_hash = hash_password(password.trim())?;
-    with_conn(|conn| {
+    let used = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         type Row = (String, String, String, Option<String>, i64, Option<String>, Option<String>);
         let row: Option<Row> = tx
@@ -813,7 +816,7 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
             )
             .optional()
             .map_err(|e| format!("invite lookup: {e}"))?;
-        let Some((id, principal_id, purpose, sent_to, set_email, tie_ws, tie_reason)) = row else { return Ok(Consume::BadToken) };
+        let Some((id, principal_id, purpose, sent_to, set_email, tie_ws, tie_reason)) = row else { return Ok(None) };
         let claimed = tx
             .execute(
                 "UPDATE app_user_invites SET used_at = ?2
@@ -822,7 +825,7 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
             )
             .map_err(|e| format!("invite use: {e}"))?;
         if claimed != 1 {
-            return Ok(Consume::BadToken);
+            return Ok(None);
         }
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("invite password: {e}"))?;
@@ -842,17 +845,29 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         if let Some(addr) = sent_to.as_deref() {
             mark_proven_conn(&tx, &principal_id, addr)?;
         }
-        // A link an App page, App key or workspace mailbox could see ties
-        // the person to that workspace as it is used (never dropped by it).
-        if let Some(ws) = tie_ws.as_deref().filter(|w| !w.is_empty()) {
-            let set_by = format!("link:{purpose}");
-            ties::set_conn(&tx, &principal_id, ties::TieWrite { workspace_id: ws, set_by: &set_by, reason: tie_reason.as_deref().unwrap_or(ties::REASON_INVITE) })?;
-        }
+        // A password that opens K2 itself never comes free through an App's
+        // page: a box login that uses an App's link is tied to that workspace.
+        // Another workspace's tie stays refused (one workspace per tie).
+        let released = if purpose == PURPOSE_OWNER_RESET {
+            None
+        } else {
+            if let Some(ws) = tie_ws.as_deref().filter(|w| !w.is_empty()) {
+                if ties::has_box_login_conn(&tx, &principal_id)? {
+                    let set_by = format!("link:{purpose}");
+                    ties::set_conn(&tx, &principal_id, ties::TieWrite { workspace_id: ws, set_by: &set_by, reason: tie_reason.as_deref().unwrap_or(ties::REASON_INVITE) })?;
+                } else if let Some(t) = ties::get_conn(&tx, &principal_id)?.filter(|t| t.workspace_id != ws) {
+                    return Err(format!("{}: this person is tied to another workspace ({})", ties::TIED_ELSEWHERE, t.workspace_id));
+                }
+            }
+            let via = if purpose == PURPOSE_INVITE { ties::VIA_APP_INVITE } else { ties::VIA_APP_RESET };
+            ties::release_by_person_conn(&tx, &principal_id, via)?
+        };
+        let mut owner_released = None;
         if purpose == PURPOSE_OWNER_RESET {
             // The tie and the owner's agent mark go; an email kept from the
             // tied time stays unconfirmed, unless the owner gave the
             // address this link went to (then it is theirs, confirmed).
-            ties::release_conn(&tx, &principal_id)?;
+            owner_released = ties::release_conn(&tx, &principal_id, ties::VIA_OWNER_RESET)?;
             if set_email != 0 {
                 if let Some(addr) = sent_to.as_deref() {
                     super::ensure_email_free(&tx, addr, Some(&principal_id))?;
@@ -863,7 +878,16 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
             }
         }
         tx.commit().map_err(|e| format!("invite commit: {e}"))?;
-        Ok(Consume::Ok)
+        Ok(Some(released.or(owner_released)))
+    })?;
+    Ok(match used {
+        None => Consume::BadToken,
+        Some(released) => {
+            if let Some(r) = released {
+                r.audit();
+            }
+            Consume::Ok
+        }
     })
 }
 

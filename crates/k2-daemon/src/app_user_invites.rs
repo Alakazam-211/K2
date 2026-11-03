@@ -4,8 +4,8 @@
 //! - `POST /cli/skin/users/invite` (owner, or an agent with "manage Apps"
 //!   for its own workspace's Apps): mail a person a one-time link to set
 //!   their own password, creating them App-only when they're new.
-//! - `POST /cli/skin/users/reset-link` (owner only): a reset link that, once
-//!   used, drops the person's agent tie (`owner_reset`). Mailed to the
+//! - `POST /cli/skin/users/reset-link` (owner only): a reset link on K2's own
+//!   page that, once used, drops the person's agent tie (`owner_reset`). Mailed to the
 //!   stored email by default; `to` mails another address (which becomes
 //!   their email on use); `code` hands the link to the owner instead.
 //! - `POST /cli/skin/access/invites` (owner, or the App's own agent with
@@ -796,14 +796,9 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
             }
         }
     };
-    if let By::Agent { ws, actor } = &by {
-        let t = skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_INVITE };
-        if let Err(e) = skin::ties::set(&person.id, t) {
-            return CliResponse::internal_error(e);
-        }
-    }
-    // An App page or a workspace mailbox can see an invite: using it ties
-    // the person to the App's workspace (security review item 5).
+    // Sending a link only starts things: nothing is tied for it. The person's
+    // own password, set with it, releases any tie (a box login's ties instead:
+    // `invites::consume`).
     let tie_on_use = app_ws.as_deref().map(|w| (w, skin::ties::REASON_INVITE));
     let minted = match invites::mint(&person.id, &app, invites::PURPOSE_INVITE, settings.invite_ttl_secs, sender.as_ref().map(|_| email.as_str()), false, tie_on_use, by.actor()) {
         Ok(m) => m,
@@ -814,7 +809,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
             return refusal(
                 "409 Conflict",
                 skin::ties::TIED_ELSEWHERE,
-                &format!("{} is tied to another workspace's agent; only the owner's reset lifts that", person.username),
+                &format!("{} is tied to another workspace's agent: that lifts when they choose their own password through that workspace's App, or with the owner's reset", person.username),
             )
         }
         Err(invites::MintError::OwnerResetPending) => return CliResponse::internal_error("an invite never waits for a reset"),
@@ -1084,10 +1079,9 @@ fn returned_code(minted: &invites::Minted, person: &skin::SkinPrincipal, app: &s
 
 // ── an App key's reset (security review item 4) ──────────────────────
 
-/// `/v1/apps/<id>/users/password-reset`: the App key never sees the
-/// token. The person is tied to the App's workspace (`app_key`) now, and
-/// the reset link is mailed to their own email from that workspace's
-/// address under its governance. `Err((status, code, hint))`.
+/// `/v1/apps/<id>/users/password-reset`: the App key never sees the token. The
+/// reset link is mailed to their own email from that workspace's address under
+/// its governance. Starting a reset ties nobody. `Err((status, code, hint))`.
 pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u16, &'static str, String)> {
     let person = match principal(username) {
         Ok(Some(p)) => p,
@@ -1114,7 +1108,7 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
         return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string()));
     }
     // The owner's reset is live: the App waits for it (app-user-profile
-    // §5.4), and nothing is tied or minted.
+    // §5.4), and nothing is minted.
     if invites::owner_reset_pending(&person.id).map_err(|e| (500, "store", e))? {
         audit("blocked_by_owner_reset", actor, &format!("{} app={app} (App key reset)", person.username));
         return Err((409, OWNER_RESET_PENDING, "the owner sent this person a reset; it stays the only one until it is used or runs out".to_string()));
@@ -1123,7 +1117,7 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
     if !skin::guard::take_reset_mail(&person.id, app) {
         return Err((429, "rate_limited", "too many reset mails for this person or this App lately; try again later".to_string()));
     }
-    let r = app_key_reset_send(app, &person, &ws, &email, &settings, &page, &sender, &by, actor);
+    let r = app_key_reset_send(app, &person, &ws, &email, &settings, &page, &sender, &by);
     if !matches!(r, Ok(ref v) if v["delivered"] == "sent") {
         skin::guard::return_reset_mail(&person.id, app);
     }
@@ -1140,10 +1134,8 @@ fn app_key_reset_send(
     page: &str,
     sender: &Sender,
     by: &By,
-    actor: &str,
 ) -> Result<Value, (u16, &'static str, String)> {
     let (ws, email) = (ws.to_string(), email.to_string());
-    skin::ties::set(&person.id, skin::ties::TieWrite { workspace_id: &ws, set_by: actor, reason: skin::ties::REASON_APP_KEY }).map_err(|e| (500, "store", e))?;
     let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), actor) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return Err((429, "throttled", "wait a minute".to_string())),
@@ -1520,9 +1512,9 @@ fn card_text(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
         Some(e) => format!("{agent} could have chosen the stored email ({e}), so the reset never goes there: send it to an email you know is theirs, or get a one-time link to hand them."),
         None => format!("{u} has no email: send it to an email you know is theirs, or get a one-time link to hand them."),
     };
-    let title = format!("Extra access for {u} waits for a password reset");
+    let title = format!("Extra access for {u} waits for their own password");
     let body = format!(
-        "{title}\n\n{agent} {}, so the extra access you gave ({what}) starts only after {u} resets their password. Until then {u} keeps {agent}'s workspace access.\n{to}",
+        "{title}\n\n{agent} {}, so the extra access you gave ({what}) starts only after {u} chooses their own password ({agent}'s App can ask them to, or you can send a link). Until then {u} keeps {agent}'s workspace access.\n{to}",
         did.join(" and ")
     );
     (title, body)
@@ -1574,7 +1566,7 @@ pub fn run_card(params: &Value, answer: &str, _by: &str) -> Result<Value, String
         CARD_OTHER_EMAIL => Ok(json!({
             "message": format!("Mail it to an address you know is theirs: k2 app user reset {u} --to <email> --from <an address no agent reads> from a terminal outside K2, or Settings → User Access → {u}.")
         })),
-        _ => Ok(json!({ "message": "Not now. Settings → User Access shows who waits for a reset." })),
+        _ => Ok(json!({ "message": "Not now. Settings → User Access shows who is waiting." })),
     }
 }
 

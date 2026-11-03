@@ -341,7 +341,7 @@ pub fn link_admits(ident: &PassIdentity, link: OnLink<'_>) -> bool {
 }
 
 /// agent-app-users §9: the tied person's chat-pass refusal.
-pub const TIED_PENDING_RESET_MESSAGE: &str = "An agent or App set this person up and could know their password, so they get no chat pass yet. It starts after they use a reset link the owner sends on K2's own page (k2 app user reset <username>); choosing a new password on the App's own page doesn't count.";
+pub const TIED_PENDING_RESET_MESSAGE: &str = "An agent or App set this person up, so they get no chat pass yet. It starts once they choose their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow.";
 
 /// `POST /cli/sew/pass` with the live keyring, link and limiter.
 pub fn handle_pass(req: &PassRequest<'_>) -> Reply {

@@ -744,7 +744,7 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert!(!r.body.contains("k2inv_"), "an agent never sees the link: {}", r.body);
     assert_eq!(grants_of(&u3), vec![("app".to_string(), shop.clone())]);
     assert_eq!(creator_of(&u3).as_deref(), Some(sales.id.as_str()));
-    assert_eq!(tie_of(&u3).expect("tied").reasons, vec!["created".to_string(), "invite".to_string()]);
+    assert_eq!(tie_of(&u3).expect("tied").reasons, vec!["created".to_string()], "sending the link adds nothing");
     let mails = mails_to(&rec, &e3);
     assert_eq!(mails.len(), 1, "one mail");
     let m = &mails[0];
@@ -768,11 +768,11 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     let r = get(port, "/cli/mail/outbox", &agent, &format!("project={}", sales.id)).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(!r.body.contains("k2inv_"), "the outbox never shows the link: {}", r.body);
-    // Use it: the password is set; the tie stays (only an owner reset drops it).
+    // Use it: the person chose their password, so the tie goes (Rosson 2026-11-03).
     let tok = token_in(&m.text_body);
     let r = reset_with(port, &tok, "my-own-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert!(tie_of(&u3).is_some(), "an invite never drops the tie");
+    assert!(tie_of(&u3).is_none(), "an invite the person used releases the tie");
     let r = login(port, json!({ "username": u3, "password": "my-own-pass-1", "app": shop })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = reset_with(port, &tok, "again-pass-12").await;
@@ -930,15 +930,14 @@ async fn s5_an_agent_invites_through_its_own_mail_under_its_governance() {
     assert_eq!(r.json()["delivered"], "returned");
     let link = r.json()["link"].as_str().expect("the owner's link").to_string();
     assert!(link.starts_with(&format!("{page}#k2inv_")), "{link}");
-    assert!(tie_of(&lo).is_none(), "nobody is tied until the link is used");
+    assert!(tie_of(&lo).is_none(), "nobody is tied by the link going out");
     let r = reset_with(port, link.split('#').nth(1).unwrap(), "owner-made-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let t = tie_of(&lo).expect("an invite an App page could see ties as it is used");
-    assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), (lone.id.as_str(), vec!["invite".to_string()]));
+    assert!(tie_of(&lo).is_none(), "the person chose it: an App's page is fine (Rosson 2026-11-03)");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
+async fn s4_the_owners_reset_link_drops_the_tie_and_a_signed_in_change_doesnt() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -1046,19 +1045,14 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let r = get(port, "/cli/mail/messages", &agent, &format!("project={}&address={}", sales.id, enc(&system))).await;
     assert_ne!(r.status, 200, "the agent can't read the system sender: {}", r.body);
 
-    // T4.5: none of these drop the tie.
-    // - the old forgot → reset;
-    let r = post(port, "/cli/skin/password/forgot", OWNER, json!({ "username": u1 })).await;
-    let old_tok = r.json()["token"].as_str().expect("owner forgot token").to_string();
-    let r = reset_with(port, &old_tok, "forgot-pass-123").await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert!(tie_of(&u1).is_some(), "forgot → reset keeps the tie");
-    // - password/change;
+    // T4.5: a password change while signed in keeps the tie: it needs only the
+    // old password, which an agent could know.
+    k2_daemon::test_harness::guest_with_own_password(&u1, "forgot-pass-123");
     let s = login(port, json!({ "username": u1, "password": "forgot-pass-123", "app": shop })).await.json()["token"].as_str().unwrap().to_string();
     let r = post(port, "/cli/skin/password/change", &s, json!({ "oldPassword": "forgot-pass-123", "password": "changed-pass-12" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(tie_of(&u1).is_some(), "password/change keeps the tie");
-    // - an App key's reset: mailed (never returned to the key), tying.
+    // An App key's reset: mailed (never returned to the key).
     let (_, key) = k2_core::api_keys::create_app_key("t4", &shop, r#"{"scopes":["users","rooms"]}"#).expect("app key");
     let u2 = format!("u2{tag}");
     let e2 = format!("{u2}@example.test");
@@ -1097,7 +1091,9 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     );
     let r = reset_with(port, &token_in(&mk[0].text_body), "key-reset-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert!(tie_of(&u2).is_some(), "an App key's reset keeps the tie");
+    assert!(tie_of(&u2).is_none(), "the person used the App key's reset: released");
+    // The App key sets a password again: tied, for what follows.
+    k2_core::skin::creators::tie(&principal_id(&u2), &sales.id, "app-key:test", k2_core::skin::ties::REASON_APP_KEY).expect("tie");
 
     // T4.1: the owner's reset: K2's own page and fixed text, from the
     // system sender, to another email; using it sets the password, ends
@@ -1192,7 +1188,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
 
 /// Review item 7: an App's forgot answers the same for everyone (one
 /// throttle per person across every pass, taken first), never returns a token, and a
-/// used App reset link ties the person to the App's workspace.
+/// used App reset link ties nobody.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
     let env = setup(&[]);
@@ -1230,9 +1226,8 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
     wait_until("the App's reset mail", 10, || !mails_to(&rec, &e).is_empty()).await;
     let m = mails_to(&rec, &e);
     assert!(m[0].ephemeral);
-    assert!(tie_of(&g).is_none(), "nothing ties until the link is used");
+    assert!(tie_of(&g).is_none(), "nothing ties when the link goes out");
     let r = reset_with(port, &token_in(&m[0].text_body), "app-reset-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let t = tie_of(&g).expect("a used App reset link ties");
-    assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), (sales.id.as_str(), vec!["app_reset".to_string()]));
+    assert!(tie_of(&g).is_none(), "the person chose it: an App's reset ties nobody (Rosson 2026-11-03)");
 }

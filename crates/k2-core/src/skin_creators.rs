@@ -31,7 +31,7 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
 // credentials: [`super::ties`] is the one record (who, which workspace,
 // why). A tied guest is not "a person" for person-only actions (answering a
 // card) and is held to its workspace's access. Only the owner lifts a tie:
-// a used owner reset link, or [`clear_agent_tie`] (an owner claim, which
+// a released tie, or [`clear_agent_tie`] (an owner claim, which
 // also wipes the password the agent may know). The creator stamps stay a
 // pure record of who added the guest.
 
@@ -44,7 +44,7 @@ pub fn agent_tie(principal_id: &str) -> Result<Option<String>, String> {
 
 /// Tie a guest an agent of `workspace_id` could now control (`reason`: one
 /// of [`super::ties`]'s reasons). A person tied to another workspace is
-/// refused (`tied_elsewhere`): one workspace per tie until an owner reset.
+/// refused (`tied_elsewhere`): one workspace per tie until it is released.
 pub fn tie(principal_id: &str, workspace_id: &str, set_by: &str, reason: &str) -> Result<(), String> {
     super::ties::set(principal_id, super::ties::TieWrite { workspace_id, set_by, reason })
 }

@@ -155,8 +155,8 @@ function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null 
 function tieLine(person: PersonRow): string | null {
   if (!person.tiedTo) return null
   return person.pendingReset
-    ? `${person.tiedTo}’s agent set ${person.username} up, so the extra access you gave them starts only after they use a reset link from you.`
-    : `${person.tiedTo}’s agent set ${person.username} up, so they use ${person.tiedTo}’s room only. A reset link from you, once they use it, lifts that limit.`
+    ? `${person.tiedTo}’s agent set ${person.username} up, so the extra access you gave them starts once they choose their own password, here or through the App.`
+    : `${person.tiedTo}’s agent set ${person.username} up, so they use ${person.tiedTo}’s room only until they choose their own password, here or through the App.`
 }
 
 type ResetResult =

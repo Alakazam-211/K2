@@ -3298,7 +3298,7 @@ pub fn set_principal_agent(
         .map_err(|e| format!("skin agent mark update: {e}"))?;
         // agent-app-users: an agent's own login is that workspace's to
         // control, so the mark agrees with the tie store (clearing the mark
-        // leaves the tie: only an owner reset or claim lifts it).
+        // leaves the tie: only an owner reset or claim lifts this one).
         if let Some(ws) = workspace_id.as_deref() {
             ties::set_conn(&tx, &p.id, ties::TieWrite { workspace_id: ws, set_by: "owner-mark", reason: ties::REASON_AGENT_LOGIN })?;
         }
@@ -3757,7 +3757,7 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
             )
             .optional()
             .map_err(|e| format!("skin reset consume lookup: {e}"))?;
-        let Some((id, principal_id)) = row else { return Ok(false) };
+        let Some((id, principal_id)) = row else { return Ok(None) };
         let claimed = tx
             .execute(
                 "UPDATE password_reset_tokens SET used_at = ?1
@@ -3766,7 +3766,7 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
             )
             .map_err(|e| format!("skin reset mark used: {e}"))?;
         if claimed != 1 {
-            return Ok(false);
+            return Ok(None);
         }
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("skin password update: {e}"))?;
@@ -3778,10 +3778,20 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
         // (`clear_login_lockout` would take the skin mutex again).
         invites::void_unused_conn(&tx, &principal_id, invites::Void::KeepOwnerReset, None)?;
         clear_lockouts_for_principal_conn(&tx, &principal_id)?;
+        // The person chose this password (a token only the owner is handed).
+        let released = ties::release_by_person_conn(&tx, &principal_id, ties::VIA_OWNER_TOKEN)?;
         tx.commit().map_err(|e| format!("skin reset commit: {e}"))?;
-        Ok(true)
+        Ok(Some(released))
     })?;
-    Ok(if used { SkinResetConsume::Ok } else { SkinResetConsume::BadToken })
+    Ok(match used {
+        None => SkinResetConsume::BadToken,
+        Some(released) => {
+            if let Some(r) = released {
+                r.audit();
+            }
+            SkinResetConsume::Ok
+        }
+    })
 }
 
 /// The dummy argon2 verify a miss spends, for callers that answer a miss

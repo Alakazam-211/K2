@@ -149,8 +149,9 @@ pub enum ChangeConsume {
 /// Use a change token: set the person's new password (it must differ
 /// from the temporary one), clear the flag, end every session and void
 /// their unused links and change tokens, in one IMMEDIATE transaction
-/// behind a compare-and-set on `used_at`. Never mints a session: the
-/// person signs in again with the new password.
+/// behind a compare-and-set on `used_at`. The person chose this password, so it
+/// releases an agent tie ([`ties::release_by_person_conn`]). Never mints a
+/// session: the person signs in again with the new password.
 pub fn consume(token: &str, password: &str) -> Result<ChangeConsume, String> {
     let token = token.trim();
     let password = password.trim();
@@ -183,7 +184,7 @@ pub fn consume(token: &str, password: &str) -> Result<ChangeConsume, String> {
     }
     // argon2 before the skin mutex.
     let pw_hash = hash_password(password)?;
-    with_conn(|conn| {
+    let used = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         let row: Option<(String, String, Option<String>)> = tx
             .query_row(
@@ -194,11 +195,11 @@ pub fn consume(token: &str, password: &str) -> Result<ChangeConsume, String> {
             )
             .optional()
             .map_err(|e| format!("change token lookup: {e}"))?;
-        let Some((id, principal_id, hash_now)) = row else { return Ok(ChangeConsume::BadToken) };
+        let Some((id, principal_id, hash_now)) = row else { return Ok(None) };
         // The temporary password changed between the check and the lock
         // (the owner set another): this token went out for the old one.
         if hash_now != current {
-            return Ok(ChangeConsume::BadToken);
+            return Ok(None);
         }
         let claimed = tx
             .execute(
@@ -207,7 +208,7 @@ pub fn consume(token: &str, password: &str) -> Result<ChangeConsume, String> {
             )
             .map_err(|e| format!("change token use: {e}"))?;
         if claimed != 1 {
-            return Ok(ChangeConsume::BadToken);
+            return Ok(None);
         }
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("change password: {e}"))?;
@@ -215,8 +216,18 @@ pub fn consume(token: &str, password: &str) -> Result<ChangeConsume, String> {
         revoke_sessions_for_principal(&tx, &principal_id)?;
         invites::void_unused_conn(&tx, &principal_id, invites::Void::KeepOwnerReset, None)?;
         clear_lockouts_for_principal_conn(&tx, &principal_id)?;
+        let released = ties::release_by_person_conn(&tx, &principal_id, ties::VIA_FIRST_PASSWORD)?;
         tx.commit().map_err(|e| format!("change commit: {e}"))?;
-        Ok(ChangeConsume::Ok)
+        Ok(Some(released))
+    })?;
+    Ok(match used {
+        None => ChangeConsume::BadToken,
+        Some(released) => {
+            if let Some(r) = released {
+                r.audit();
+            }
+            ChangeConsume::Ok
+        }
     })
 }
 

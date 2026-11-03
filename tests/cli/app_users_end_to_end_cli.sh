@@ -131,7 +131,7 @@ run app user rooms lee --app shop --agent ops --apply-tokens
 expect_eq "--apply-tokens: exit 2" "$RC" "2"
 expect_has "--apply-tokens: says why" "$(cat "$SANDBOX/err")" "next request"
 run app user add wes --app shop
-expect_has "add: what waits and the card" "$(cat "$SANDBOX/out")" "Waiting: everything else works now, but they can't use room ops until they use a reset link on K2's own page"
+expect_has "add: what waits and the card" "$(cat "$SANDBOX/out")" "Waiting: everything else works now, but they can't use room ops until they choose their own password"
 expect_has "add: the card line" "$(cat "$SANDBOX/out")" "k2 permission request apps.user-password-reset user=wes app=shop mode=link"
 
 echo "== k2 app user sessions =="

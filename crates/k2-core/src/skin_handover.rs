@@ -69,7 +69,7 @@ pub fn guests(service_id: &str, from: &str, other_services_of_from: &[String]) -
 }
 
 /// The guest's tie on an open connection (the one tie store, skin.db step
-/// 6: an owner reset or claim drops the row, so no row = a person).
+/// 6: a release or claim drops the row, so no row = a person).
 pub(crate) fn tie_conn(conn: &Connection, pid: &str) -> Result<Option<super::ties::Tie>, String> {
     super::ties::get_conn(conn, pid)
 }
@@ -549,9 +549,10 @@ pub struct GuestReport {
 /// guests over (their tie is dropped and their known password retired, so
 /// they keep the App and set a new password).
 pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[String], handover_id: &str, reset_shared: bool) -> Result<GuestReport, String> {
-    with_conn(|conn| {
+    let (rep, released) = with_conn(|conn| {
         let tx = conn.unchecked_transaction().map_err(|e| format!("handover guests: {e}"))?;
         let mut rep = GuestReport::default();
+        let mut released = Vec::new();
         let guests = guests_conn(&tx, service_id, from, others_of_from)?;
         for g in &guests {
             match g.class {
@@ -580,7 +581,7 @@ pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[St
                     // keep their grants and sign in again with the owner's
                     // new password or reset link.
                     journal_conn(&tx, handover_id, g, true)?;
-                    super::ties::release_conn(&tx, &g.principal_id)?;
+                    released.extend(super::ties::release_conn(&tx, &g.principal_id, super::ties::VIA_HANDOVER_CLAIM)?);
                     rep.reset_links_voided += retire_conn(&tx, &g.principal_id)?;
                     super::revoke_sessions_for_principal(&tx, &g.principal_id)?;
                     rep.shared_reset += 1;
@@ -591,8 +592,12 @@ pub fn apply_guests(service_id: &str, from: &str, to: &str, others_of_from: &[St
         }
         rep.rooms = move_rooms_conn(&tx, service_id, from, to, true)?;
         tx.commit().map_err(|e| format!("handover guests commit: {e}"))?;
-        Ok(rep)
-    })
+        Ok((rep, released))
+    })?;
+    for r in released {
+        r.audit();
+    }
+    Ok(rep)
 }
 
 /// Keep the before-values of one guest (first write wins: a roll-forward

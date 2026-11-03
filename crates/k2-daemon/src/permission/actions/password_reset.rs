@@ -277,17 +277,16 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself. The next time they sign in, K2 asks them to choose a new password."),
         ),
     };
-    // Whether this reset ends an agent tie (0.46.8): only the owner-reset
-    // link on K2's own page does; a password someone was handed doesn't,
-    // and neither does the one they choose at next sign-in on the App's page.
+    // Whether this reset ends an agent tie (Rosson 2026-11-03): it ends when the
+    // person chooses their own password, at next sign-in or with a link.
     let tied = user.is_some() && target(ctx).ok().is_some_and(|t| matches!(skin::ties::get(&t.person.id), Ok(Some(_))));
     let effects = match (tied, mode_of(ctx)) {
         (false, _) => effects,
         (true, "password") => format!(
-            "{effects} This doesn't free {who} from {ws}'s agent: {who} stays tied to {ws}, with only its App's own room, and anything more keeps waiting, because the password they choose at sign-in may pass through the App's own page, where {ws} could see it. Only a reset link on K2's own page unties them.",
+            "{effects} When {who} chooses their own password at sign-in, they stop being limited to {ws}'s room, and any access waiting starts.",
             ws = ctx.workspace_handle
         ),
-        (true, _) => format!("{effects} Using it also unties {who} from {}: any access waiting for a reset starts.", ctx.workspace_handle),
+        (true, _) => format!("{effects} Using it also ends {who}'s limit to {}'s room: any access waiting starts.", ctx.workspace_handle),
     };
     out.params.insert("made".into(), Value::String(made));
     out.params.insert("effects".into(), Value::String(effects));

@@ -416,7 +416,7 @@ fn create_user(c: &Ctx, v: &J) -> R {
         }
     })?;
     // Round-2 review B1: the key holder may set this guest's password, so
-    // it is tied (not "a person" for card answers) until an owner reset:
+    // it is tied (not "a person" for card answers) until the person chooses their own:
     // written above, in the same transaction as the guest (`app_key`).
     if let Some(ids) = room_ids.filter(|_| role_id.is_none()) {
         skin::set_app_grant_rooms(&user, &c.app, &ids, true, &actor).map_err(|e| err(400, "bad_request", e))?;

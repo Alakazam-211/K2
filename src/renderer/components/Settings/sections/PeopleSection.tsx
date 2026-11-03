@@ -42,7 +42,7 @@ export type PersonRow = {
   email: string | null
   /** An agent tie (agent-app-users R2): the workspace handle it holds them to. */
   tiedTo: string | null
-  /** Tied, and given more than that workspace: the extra waits for a reset. */
+  /** Tied, and given more than that workspace: the extra waits for their own password. */
   pendingReset: boolean
   /** Why the tie exists: created | password | email | invite | app_key | app_reset. */
   tiedReasons: string[]
@@ -758,10 +758,10 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
 
 /**
  * agent-app-users §5.5: a person an agent set up is tied to that agent's
- * workspace. When you gave them more, the extra waits for their own reset.
- * The owner's Reset password (a one-time link, or mailed to an address
- * you give) is what lifts the tie. The stored email is never used: an
- * agent could have chosen it. Nothing for an untied person. `onReset`:
+ * workspace. When you gave them more, the extra waits until they choose their
+ * own password, through the App or the owner's Reset password (a one-time link,
+ * or mailed to an address you give). The stored email is never used for the
+ * owner's reset: an agent could have chosen it. Nothing for an untied person. `onReset`:
  * opens the Reset password sheet (the owner, or an Admin for someone who
  * only uses Apps; null hides it).
  */
@@ -771,10 +771,10 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
     <SettingsGroup title={person.pendingReset ? 'Waiting for reset' : 'Set up by an agent'}>
       <p className="text-[10px] text-[var(--color-text-muted)]">
         {person.pendingReset
-          ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
-          : `${person.tiedTo}'s agent set ${person.username} up, so they use ${person.tiedTo}'s room only. Anything more you give waits for a reset link from you, rooms you approved for its App included.`}
-        {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so a reset never goes there: send it to an email you know is theirs, or get a one-time link.`}
-        {' '}Links open K2's own page.
+          ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts once ${person.username} chooses their own password. Until then they keep ${person.tiedTo}'s access.`
+          : `${person.tiedTo}'s agent set ${person.username} up, so they use ${person.tiedTo}'s room only until they choose their own password, through the App or a reset link from you. Anything more you give waits until then, rooms you approved for its App included.`}
+        {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so your reset never goes there: send it to an email you know is theirs, or get a one-time link.`}
+        {' '}Your links open K2's own page.
       </p>
       {onReset ? (
         <div className="pt-1">

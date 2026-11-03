@@ -22357,14 +22357,14 @@
                 },
                 "pendingReset": {
                   "type": "boolean",
-                  "description": "Owner, agent and Garden views only (never an App's): an agent set this person up and the extra access the owner gave waits for their password reset."
+                  "description": "Owner, agent and Garden views only (never an App's): an agent set this person up and the extra access the owner gave waits for them to choose their own password."
                 },
                 "tiedTo": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "Owner, agent and Garden views only: the workspace whose agent set this person up (their access stays there until an owner reset), or null."
+                  "description": "Owner, agent and Garden views only: the workspace whose agent set this person up (their access stays there until they choose their own password), or null."
                 }
               },
               "required": [

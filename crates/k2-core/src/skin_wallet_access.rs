@@ -29,12 +29,12 @@ pub struct Person {
     /// App's enabled grant. `host` (the box login) is listed too; callers
     /// decide whether it counts. A tied person (agent-app-users R2) shows
     /// only what their ceiling lets them use, never the wider access the
-    /// owner gave them that waits for their password reset.
+    /// owner gave them that waits for them to choose their own password.
     pub apps: BTreeMap<String, Vec<String>>,
     /// The workspace an agent tie holds this person to (`None`: untied).
     pub tied_to: Option<String>,
     /// Tied, and their grants reach past the ceiling: the extra access
-    /// waits for their own password reset.
+    /// waits for them to choose their own password.
     pub pending_reset: bool,
 }
 

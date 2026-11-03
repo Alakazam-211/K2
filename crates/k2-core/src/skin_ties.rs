@@ -14,18 +14,34 @@
 //! - no chat-only box login and no chat pass (a chat grant is box-wide).
 //!
 //! The owner may widen a tied user at any time; what reaches past the
-//! ceiling just waits (**pending reset**) until that person uses an
-//! owner-minted reset link (`owner_reset`), the only thing that drops the
-//! tie. A must-change `password.reset` with the change token doesn't: an
-//! App's server can host that screen and see the new password, so only K2's
-//! own page proves the agent doesn't know it.
+//! ceiling just waits (**pending reset**) until the tie is **released**.
 //!
-//! **Why an App's approved rooms wait too (security review 2026-11-02).** A
-//! `guests-rooms` approval lets an App hand a room to its guests. With a real
-//! person that needs them to sign in. With a login whose password the agent
-//! could know, the agent could sign in alone and read and post in another
-//! agent's Thread, so those rooms wait for the reset like any other.
-//! Rosson may still rule on this: flip [`TIED_REACHES_APPROVED_ROOMS`].
+//! **Release (Rosson 2026-11-03).** The tie drops when the person chooses
+//! their own password, on any of these ([`release_by_person_conn`]):
+//! `password.reset` with an invite or reset link, the first-password step with
+//! the change token, or the owner's reset link. An App may white-label all of
+//! it: "we should never prevent people from building a professional
+//! experience", and past that point the trust is placed in the agent.
+//!
+//! **What a release means.** "The person chose this password", not "the agent
+//! can't know it". Until a form posts straight to K2, the App's server can still
+//! see it, and K2 can't tell the person from anyone else holding the token (an
+//! agent that made a temporary password can take the first-password step
+//! itself). The audit line says so.
+//!
+//! **What doesn't release.** A login holding a box login (a password that opens
+//! K2 itself never comes free through an App's page; a link's use still ties
+//! them, and only the owner's reset lifts it), an agent's own login (the owner's
+//! mark says it is the agent), and an agent's test guest. A password change
+//! while signed in doesn't either: it needs only the old password.
+//!
+//! **What ties again.** An agent setting the password (directly or `generate`)
+//! or the email. Mailing a link doesn't: that only starts a reset.
+//!
+//! **Until then, an App's approved rooms wait too (security review
+//! 2026-11-02).** With a login whose password the agent set, the agent could
+//! sign in alone and read and post in another agent's Thread, so those rooms
+//! wait like any other: [`TIED_REACHES_APPROVED_ROOMS`].
 //!
 //! skin.db step 6 adds the table (and `app_user_invites`, used by the
 //! invite and owner-reset slices): a numbered step, so a K2 older than
@@ -198,9 +214,9 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, String> {
 /// password, ends every session and device sign-in, and voids the links an
 /// App or agent could see.
 pub(super) fn owner_claim(principal_id: &str, by: &str) -> Result<(), String> {
-    with_conn(|conn| {
+    let released = with_conn(|conn| {
         let tx = super::immediate_tx(conn)?;
-        release_conn(&tx, principal_id)?;
+        let released = release_conn(&tx, principal_id, VIA_OWNER_CLAIM)?;
         tx.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![principal_id])
             .map_err(|e| format!("owner claim: {e}"))?;
         super::revoke_sessions_for_principal(&tx, principal_id)?;
@@ -211,8 +227,12 @@ pub(super) fn owner_claim(principal_id: &str, by: &str) -> Result<(), String> {
         .map_err(|e| format!("owner claim: {e}"))?;
         tx.commit().map_err(|e| format!("owner claim commit: {e}"))?;
         crate::log_debug!("[skin] owner claim of {principal_id} by {by}: tie dropped, password wiped");
-        Ok(())
-    })
+        Ok(released)
+    })?;
+    if let Some(r) = released {
+        r.audit();
+    }
+    Ok(())
 }
 
 /// One tie.
@@ -284,9 +304,9 @@ pub(super) fn set_conn(conn: &Connection, principal_id: &str, w: TieWrite<'_>) -
         // One workspace per tie: a second workspace (another App's forgot,
         // another workspace's mark) is refused, never folded in, so the tie,
         // the mark and every clamp name the same workspace (verification
-        // review 2026-10-26, items 3 and 5). An owner reset lifts it first.
+        // review 2026-10-26, items 3 and 5). A release lifts it first.
         Some(t) if t.workspace_id != ws => {
-            return Err(format!("{TIED_ELSEWHERE}: this person is tied to another workspace ({}); only an owner reset lifts it", t.workspace_id));
+            return Err(format!("{TIED_ELSEWHERE}: this person is tied to another workspace ({}); it lifts when they choose their own password through that workspace's App, or with an owner reset", t.workspace_id));
         }
         None => {
             conn.execute(
@@ -340,19 +360,74 @@ pub fn list() -> Result<Vec<Tie>, String> {
     })
 }
 
-/// Drop the tie (an owner reset was used), inside the caller's transaction.
+/// Drop the tie row, inside the caller's transaction.
 pub(super) fn drop_conn(conn: &Connection, principal_id: &str) -> Result<bool, String> {
     conn.execute("DELETE FROM principal_agent_ties WHERE principal_id = ?1", params![principal_id])
         .map(|n| n > 0)
         .map_err(|e| format!("tie delete: {e}"))
 }
 
+/// Which path released a tie, in its audit line.
+pub const VIA_OWNER_RESET: &str = "owner_reset_link";
+pub const VIA_OWNER_CLAIM: &str = "owner_claim";
+pub const VIA_HANDOVER_CLAIM: &str = "handover_owner_claim";
+pub const VIA_APP_INVITE: &str = "invite_link";
+pub const VIA_APP_RESET: &str = "reset_link";
+pub const VIA_FIRST_PASSWORD: &str = "first_password_change_token";
+pub const VIA_OWNER_TOKEN: &str = "owner_forgot_token";
+
+/// A released tie, for its audit line once the transaction has committed.
+#[derive(Debug, Clone)]
+pub struct Released {
+    pub tie: Tie,
+    pub username: String,
+    pub via: &'static str,
+}
+
+impl Released {
+    /// The words of the audit line. A person's own choice is exactly that: an
+    /// App's server could still see a password chosen on its page.
+    fn line(&self) -> String {
+        let what = match self.via {
+            VIA_OWNER_CLAIM | VIA_HANDOVER_CLAIM => "the owner took this login over".to_string(),
+            VIA_OWNER_RESET => "the person chose this password on K2's own page".to_string(),
+            _ => "the person chose this password; until a form posts straight to K2, the App's server could still have seen it".to_string(),
+        };
+        format!(
+            "tie released via {}: {what}. Set up by {} ({}) for workspace {}",
+            self.via,
+            self.tie.set_by,
+            self.tie.reasons.join(", "),
+            self.tie.workspace_id
+        )
+    }
+
+    /// Write the audit line. Every release has one. Call after the commit, so a
+    /// rollback never leaves a line for something that didn't happen.
+    pub fn audit(&self) {
+        crate::auth_audit::record(&crate::auth_audit::AuditEvent::new(AUDIT_EVENT, &self.username, self.line(), "-", "-", "cli"));
+    }
+}
+
+/// `auth_audit`'s event name for a release.
+pub const AUDIT_EVENT: &str = "app_user_tie_released";
+
 /// The owner takes `principal_id` over (an owner reset used, or an owner
 /// claim), inside the caller's transaction: the tie goes, the owner's
 /// agent mark goes with it (mark and tie stay in step), and a stored
 /// email kept from the tied time stays unconfirmed (an agent could have
-/// chosen it), so the next owner reset still won't mail it.
-pub(super) fn release_conn(conn: &Connection, principal_id: &str) -> Result<(), String> {
+/// chosen it), so the next owner reset still won't mail it. `via` names the
+/// path; `None` when there was no tie.
+pub(super) fn release_conn(conn: &Connection, principal_id: &str, via: &'static str) -> Result<Option<Released>, String> {
+    let released = match get_conn(conn, principal_id)? {
+        Some(tie) => {
+            let username: String = conn
+                .query_row("SELECT username FROM principals WHERE id = ?1", params![principal_id], |r| r.get(0))
+                .map_err(|e| format!("tie release (name): {e}"))?;
+            Some(Released { tie, username, via })
+        }
+        None => None,
+    };
     if drop_conn(conn, principal_id)? {
         conn.execute(
             "INSERT OR IGNORE INTO principal_email_unconfirmed (principal_id, since)
@@ -363,7 +438,33 @@ pub(super) fn release_conn(conn: &Connection, principal_id: &str) -> Result<(), 
     }
     conn.execute("UPDATE principals SET agent_workspace = NULL WHERE id = ?1", params![principal_id])
         .map_err(|e| format!("tie release (mark): {e}"))?;
-    Ok(())
+    Ok(released)
+}
+
+/// Does `principal_id` hold a box login, switched on or off? Its password opens
+/// K2 itself, so an App's flow never frees it ([`release_by_person_conn`]).
+pub(super) fn has_box_login_conn(conn: &Connection, principal_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM grants WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'app' AND target_id = ?2)",
+        params![principal_id, HOST_APP_ID],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(|e| format!("tie box login lookup: {e}"))
+}
+
+/// The person chose their own password through an App's flow, inside the
+/// caller's transaction: the tie goes (see the module's **Release**), unless
+/// this login is one a person's choice can't free: a box login, an agent's own
+/// login, an agent's test guest. `None`: nothing was released.
+pub(super) fn release_by_person_conn(conn: &Connection, principal_id: &str, via: &'static str) -> Result<Option<Released>, String> {
+    let Some(tie) = get_conn(conn, principal_id)? else { return Ok(None) };
+    if tie.reasons.iter().any(|r| r == REASON_AGENT_LOGIN)
+        || has_box_login_conn(conn, principal_id)?
+        || super::test_guests::get_conn(conn, principal_id)?.is_some()
+    {
+        return Ok(None);
+    }
+    release_conn(conn, principal_id, via)
 }
 
 /// The owner confirmed `principal_id`'s stored email (set it, or gave the
@@ -447,9 +548,8 @@ pub fn app_rooms(app: &str) -> Result<Vec<String>, String> {
 }
 
 /// THE rule on a tied login and its App's `guests-rooms` rooms: `false`, it
-/// reaches only its App's own room, and those rooms wait for a reset link on
-/// K2's own page (the default since the 2026-11-02 security review; Rosson
-/// may rule otherwise). `true` would let them through, each cut to
+/// reaches only its App's own room, and those rooms wait until the tie is
+/// released (Rosson 2026-11-03). `true` would let them through, each cut to
 /// [`CAPS_ELSEWHERE`] by [`clamp`].
 pub const TIED_REACHES_APPROVED_ROOMS: bool = false;
 

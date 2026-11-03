@@ -345,7 +345,8 @@ pub struct TieDisplay {
     pub tie: skin::ties::Tie,
     /// The tie's workspace handle (its id when the workspace is gone).
     pub handle: String,
-    /// Grants reach past the ceiling: the extra access waits for a reset.
+    /// Grants reach past the ceiling: the extra access waits for the person's
+    /// own password.
     pub pending: bool,
 }
 
@@ -499,7 +500,8 @@ pub fn agent_scoped(
 }
 
 /// What a tied login's App grant names that the tie holds back, as handles
-/// (agent-app-users: "waiting for reset"), and the card that clears it.
+/// (agent-app-users: "waiting for reset"), and how to ask the person to choose
+/// their own password, which clears it.
 pub(crate) fn waiting_note(username: &str) -> Option<serde_json::Value> {
     let p = principal_named(username).ok()??;
     let tie = skin::ties::get(&p.id).ok()??;
@@ -526,7 +528,7 @@ pub(crate) fn waiting_note(username: &str) -> Option<serde_json::Value> {
     let app = on_app?;
     Some(serde_json::json!({
         "rooms": held,
-        "ask": format!("k2 permission request apps.user-password-reset user={} app={app} mode=link --why \"<what you need it for>\"", p.username),
+        "ask": format!("k2 app user invite {} --app {app}", p.username),
     }))
 }
 
@@ -3142,7 +3144,7 @@ fn tied_room_hint(raw: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up and could know its password, so {} stays held back. What clears it: the person uses a reset link the owner sends on K2's own page (the owner: k2 app user reset {user}; the agent asks on a card: k2 permission request apps.user-password-reset user={user} app={app} mode=link --why \"<what you need it for>\"). Approving the room for the App doesn't clear it, and neither does choosing a new password on the App's own page.",
+        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up, so {} stays held back. What clears it: the person chooses their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow (an agent: k2 app user invite {user} --app {app}). Approving the room for the App doesn't clear it.",
         held.join(", "),
         user = pass.username,
         app = app_name_of(&pass.app),

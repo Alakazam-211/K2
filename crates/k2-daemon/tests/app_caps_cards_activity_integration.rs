@@ -185,11 +185,10 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     assert_eq!(r.status, 200, "an agent with manage Apps adds a guest: {}", r.body);
     let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": sock, "password": "s3cret-horse" })).await;
     assert_eq!(r.status, 200, "and sets its password: {}", r.body);
-    // 0.46.6: the person chooses their own at the first sign-in; the
-    // change keeps the tie (only the owner's reset ends it).
-    person_changes(port, &sock, "s3cret-horse", &app, "socks-own-pw-1").await;
-    // Thread rights come with the role on its App grant (nothing here
-    // clears the tie).
+    // A tied login with a session: the password set directly, not chosen
+    // through a flow (that would release the tie, Rosson 2026-11-03). Thread
+    // rights come with the role on its App grant.
+    k2_daemon::test_harness::guest_with_own_password(&sock, "socks-own-pw-1");
     let body = json!({ "username": sock, "password": "socks-own-pw-1", "app": app }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);

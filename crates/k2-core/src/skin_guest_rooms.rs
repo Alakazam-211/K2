@@ -387,7 +387,7 @@ impl Refusal {
 pub fn outside_app_hint(app: &str, rooms: &[String]) -> String {
     let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
     format!(
-        "not a room this App may hand out: {}. Ask for it once for the whole App: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them; the owner approves it on a card on your Thread). Then people on the App can be given it; a login you set up reaches it only after the person uses a reset link on K2's own page",
+        "not a room this App may hand out: {}. Ask for it once for the whole App: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them; the owner approves it on a card on your Thread). Then people on the App can be given it; a login you set up reaches it once the person chooses their own password",
         rooms.join(", "),
         flags.join(" "),
     )

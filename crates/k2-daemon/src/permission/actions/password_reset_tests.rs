@@ -164,8 +164,8 @@ fn only_an_agent_of_the_apps_workspace_asks_for_its_own_apps_users() {
     let _ = &e.f;
 }
 
-/// 0.46.8: the card says whether the reset unties. A password someone is
-/// handed doesn't; a reset link on K2's own page does. An untied person's
+/// Rosson 2026-11-03: the card says when the limit ends: when the person chooses
+/// their own password, at sign-in or with the link. An untied person's
 /// card says nothing about it.
 #[test]
 fn the_card_says_whether_it_unties() {
@@ -174,7 +174,7 @@ fn the_card_says_whether_it_unties() {
         let v = ask_ok(&e.ws, ACTION, json!({ "user": user, "app": e.app, "mode": mode }));
         view(&e.ws, &card_of(&v))["consequences"].as_str().expect("consequences").to_string()
     };
-    for (name, mode, says) in [("ta", "password", "stays tied"), ("tb", "link", "also unties")] {
+    for (name, mode, says) in [("ta", "password", "chooses their own password at sign-in"), ("tb", "link", "also ends")] {
         let (u, pid) = person(&e.app, name, None);
         skin::creators::tie(&pid, &e.ws.id, "agent:test", skin::ties::REASON_PASSWORD).expect("tie");
         let c = consequences(&u, mode);
@@ -183,7 +183,7 @@ fn the_card_says_whether_it_unties() {
     }
     let (u, _) = person(&e.app, "tc", None);
     let c = consequences(&u, "password");
-    assert!(!c.contains("tied") && !c.contains("untie"), "an untied person's card doesn't raise it: {c}");
+    assert!(!c.contains("limited to") && !c.contains("limit to"), "an untied person's card doesn't raise it: {c}");
     let _ = &e.f;
 }
 

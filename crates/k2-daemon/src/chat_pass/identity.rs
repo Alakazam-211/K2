@@ -136,7 +136,7 @@ pub enum Refusal {
     AgentSubject { actor: String },
     /// 403 `tied_pending_reset` (agent-app-users A3): an agent could know
     /// this person's credentials, and a chat grant is box-wide, so no chat
-    /// pass until their own password reset drops the tie.
+    /// pass until they choose their own password, which drops the tie.
     TiedPendingReset { actor: String },
     /// 403 `no_chat_caps` (Sew for Apps A1): the App declares chat caps in
     /// its manifest, and this person's App role holds none of them that

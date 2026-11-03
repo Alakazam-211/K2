@@ -1,6 +1,7 @@
 //! The phone door and a Garden's mobile layout (contract-gardens-phone rev 2
 //! §A–§C, §H): the merged hello, the height rule, `frameVersion`, what a
-//! Garden with no `page.phone` still answers. Temp HOME, a scoped DB, the door's own fixture. Fail loudly.
+//! Garden with no `page.phone` still answers, and saves kept apart from the
+//! desktop's. Temp HOME, a scoped DB, the door's own fixture. Fail loudly.
 
 use serde_json::{json, Value as J};
 
@@ -285,4 +286,106 @@ fn a_bad_address_in_a_phone_config_is_reported() {
     assert!(errors[0]["message"].as_str().is_some_and(|m| m.starts_with("'not an address' isn't a source address")), "{errors:?}");
     let line = text.lines().position(|l| l.starts_with("latest")).expect("the line") + 1;
     assert_eq!(errors[0]["line"], json!(line), "{errors:?}");
+}
+
+// ── saves on a phone (§H) ───────────────────────────────────────────
+
+fn phone_call(fx: &Fx, verb: &str, args: J) -> J {
+    ok_of(CALL, &fx.phone, &[], call_body(fx, verb, args))["result"].clone()
+}
+
+#[test]
+fn a_phone_s_save_never_touches_the_desktop_s() {
+    let fx = fx(&["store:read", "store:write"]);
+    fx.d.call("save.set", json!(["camera", { "zoom": 1 }]));
+    // A read of a key the phone hasn't set falls back to the desktop's.
+    assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), json!({ "zoom": 1 }));
+    // A phone write is the phone's: the desktop still reads its own.
+    phone_call(&fx, "save.set", json!(["camera", { "zoom": 3 }]));
+    assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), json!({ "zoom": 3 }));
+    assert_eq!(fx.d.call("save.get", json!(["camera"])), json!({ "zoom": 1 }), "panning on the phone didn't move the desktop");
+    // A later desktop write doesn't move the phone's.
+    fx.d.call("save.set", json!(["camera", { "zoom": 2 }]));
+    assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), json!({ "zoom": 3 }));
+    // Remove takes only the phone's: the desktop's shows through again.
+    phone_call(&fx, "save.remove", json!(["camera"]));
+    assert_eq!(fx.d.call("save.get", json!(["camera"])), json!({ "zoom": 2 }), "a phone's remove never reaches the desktop");
+    assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), json!({ "zoom": 2 }));
+    // Neither has it: null, on both.
+    assert_eq!(phone_call(&fx, "save.get", json!(["nothing"])), J::Null);
+}
+
+#[test]
+fn a_phone_s_save_is_the_desktop_s_null_too() {
+    let fx = fx(&["store:read", "store:write"]);
+    fx.d.call("save.set", json!(["k", 1]));
+    phone_call(&fx, "save.set", json!(["k", null]));
+    assert_eq!(phone_call(&fx, "save.get", json!(["k"])), J::Null, "a saved null is the phone's value, not a miss");
+    assert_eq!(fx.d.call("save.get", json!(["k"])), json!(1));
+}
+
+#[test]
+fn save_keys_lists_both_on_a_phone_and_only_its_own_on_the_desktop() {
+    let fx = fx(&["store:read", "store:write"]);
+    fx.d.call("save.set", json!(["both", 1]));
+    fx.d.call("save.set", json!(["desk", 1]));
+    phone_call(&fx, "save.set", json!(["both", 2]));
+    phone_call(&fx, "save.set", json!(["phone", 2]));
+    phone_call(&fx, "save.set", json!(["other/x", 2]));
+    assert_eq!(phone_call(&fx, "save.keys", json!([])), json!(["both", "desk", "other/x", "phone"]), "sorted, once each");
+    assert_eq!(fx.d.call("save.keys", json!([])), json!(["both", "desk"]), "the desktop is untouched");
+    assert_eq!(phone_call(&fx, "save.keys", json!([{ "prefix": "other/" }])), json!(["other/x"]));
+}
+
+/// Every phone shares one set of saves: a second phone reads the first's.
+#[test]
+fn a_person_s_phones_share_their_saves() {
+    let fx = fx(&["store:read", "store:write"]);
+    let second = pair("rosphone", "ios-rosson-2");
+    phone_call(&fx, "save.set", json!(["camera", 9]));
+    let v = ok_of(CALL, &second, &[], call_body(&fx, "save.get", json!(["camera"])));
+    assert_eq!(v["result"], json!(9));
+}
+
+/// `store.*` is the widget's data, one for every device.
+#[test]
+fn the_store_stays_shared() {
+    let fx = fx(&["store:read", "store:write"]);
+    phone_call(&fx, "store.put", json!(["card/1", { "t": "from a phone" }]));
+    assert_eq!(fx.d.call("store.get", json!(["card/1"]))["value"], json!({ "t": "from a phone" }));
+}
+
+/// The desktop's door has no way to name a phone's space.
+#[test]
+fn no_widget_reaches_the_phone_s_saves_by_name() {
+    let fx = fx(&["store:read", "store:write"]);
+    phone_call(&fx, "save.set", json!(["secret-pan", 1]));
+    assert_eq!(fx.d.call("save.get", json!(["secret-pan"])), J::Null);
+    assert_eq!(fx.d.call("save.keys", json!([])), json!([]));
+    assert!(k2_core::garden_data::Space::save("phone~board").is_err());
+}
+
+/// Bad keys are refused the same on either door.
+#[test]
+fn a_bad_key_refuses_on_a_phone_as_on_a_desktop() {
+    let fx = fx(&["store:read", "store:write"]);
+    let (s, code) = refused(CALL, &fx.phone, &[], call_body(&fx, "save.set", json!(["/bad", 1])));
+    assert_eq!((s, code.as_str()), (400, fx.d.refuse("save.set", json!(["/bad", 1])).as_str()));
+}
+
+/// Deleting or moving a widget's data takes the phone's saves with the rest.
+#[test]
+fn a_phone_s_saves_go_with_the_widget_s_data() {
+    use crate::garden_data::agent_routes::tests::ok as data;
+    use crate::zen_data_routes::DataWho;
+    let fx = fx(&["store:read", "store:write"]);
+    phone_call(&fx, "save.set", json!(["camera", 9]));
+    fx.d.call("save.set", json!(["camera", 1]));
+    let listed = data(&DataWho::Owner, "GET", "/cli/zen/data/spaces", json!({}), &[]);
+    let saves = listed["saves"].as_array().expect("saves");
+    assert_eq!(saves.len(), 1, "one row a widget: {saves:?}");
+    assert_eq!(saves[0]["widget"], "board", "{saves:?}");
+    assert_eq!(saves[0]["keys"], json!(2), "both devices' keys: {saves:?}");
+    data(&DataWho::Owner, "POST", "/cli/zen/data/space/delete", json!({ "widget": "board", "confirm": "board" }), &[]);
+    assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), J::Null, "gone with the widget's data");
 }

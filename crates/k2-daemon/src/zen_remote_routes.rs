@@ -58,7 +58,7 @@ use k2_core::zen::widget_shot::{self, Scheme};
 use k2_core::zen::{phone as garden_phone, ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
-use crate::garden_data::call::CallBody;
+use crate::garden_data::call::{CallBody, Device};
 
 pub const GARDENS: &str = "/cli/zen/remote/gardens";
 pub const PAGE: &str = "/cli/zen/remote/page";
@@ -732,7 +732,7 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
     }
     audit("zen.remote.call", p, format!("{}/{} verb={}", b.garden, b.placement, b.verb));
     let cb = CallBody { garden: b.garden, placement: b.placement, hash: b.hash, verb: b.verb, args: b.args, confirm_token: None };
-    call_envelope(crate::garden_data::call::run_call(&cb))
+    call_envelope(crate::garden_data::call::run_call_on(&cb, Device::Phone))
 }
 
 // ── blobs ───────────────────────────────────────────────────────────

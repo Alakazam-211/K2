@@ -373,10 +373,14 @@ fn spaces() -> Result<Value, DataError> {
         grants::summary(&conn)?
     };
     let mut rows = Vec::new();
-    let mut saves = Vec::new();
+    // One row per widget: a phone's saves count with the desktop's.
+    let mut saves: std::collections::BTreeMap<String, (i64, i64)> = std::collections::BTreeMap::new();
     for s in all {
         if s.space.starts_with("save:") {
-            saves.push(json!({ "widget": s.widget, "bytes": s.bytes, "keys": s.keys }));
+            let widget = s.widget.strip_prefix(k2_core::garden_data::PHONE_SAVE_MARK).unwrap_or(&s.widget).to_string();
+            let row = saves.entry(widget).or_default();
+            row.0 += s.bytes;
+            row.1 += s.keys;
             continue;
         }
         let (count, admins) = summary
@@ -401,6 +405,7 @@ fn spaces() -> Result<Value, DataError> {
             "madeBy": if s.orphaned_at.is_some() { Value::Null } else { made_by_view(&s.widget)? },
         }));
     }
+    let saves: Vec<Value> = saves.into_iter().map(|(widget, (bytes, keys))| json!({ "widget": widget, "bytes": bytes, "keys": keys })).collect();
     Ok(json!({ "spaces": rows, "saves": saves }))
 }
 
@@ -448,12 +453,14 @@ fn space_delete(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
         return Err(refused("confirm_required", 400, format!("confirm with the widget's name: \"{}\"", space.widget())));
     }
     let save = Space::save(space.widget())?;
-    if store().info(&space)?.is_none() && store().info(&save)?.is_none() {
+    let phone_save = Space::phone_save(space.widget())?;
+    if store().info(&space)?.is_none() && store().info(&save)?.is_none() && store().info(&phone_save)?.is_none() {
         return Err(DataError::NotFound("space_not_found"));
     }
     let snapshot = pre_op(PreOp::Delete)?;
     store().drop_space(&space)?;
     store().drop_space(&save)?;
+    store().drop_space(&phone_save)?;
     let removed = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -480,6 +487,10 @@ fn space_move(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let (from_save, to_save) = (Space::save(from.widget())?, Space::save(to.widget())?);
     if store().info(&from_save)?.is_some() {
         store().move_space(&from_save, &to_save)?;
+    }
+    let (from_phone, to_phone) = (Space::phone_save(from.widget())?, Space::phone_save(to.widget())?);
+    if store().info(&from_phone)?.is_some() {
+        store().move_space(&from_phone, &to_phone)?;
     }
     let moved = {
         let db = k2_core::db::shared();

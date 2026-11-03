@@ -110,10 +110,16 @@ pub const PROJECT_GRANT_WARNING: &str = "project_grant_convenience";
 
 // ── spaces ───────────────────────────────────────────────────────────
 
+/// What marks a phone's own saves in a space name: `save:phone~<widget>`. A
+/// `~` can't be in a widget's name, so this can never be a widget's.
+pub const PHONE_SAVE_MARK: &str = "phone~";
+
 /// A keyspace: `data:<widget>` (shared, grantable, pushed) or
-/// `save:<widget>` (private to the widget; never granted, never pushed).
-/// `<widget>` is a widget folder name (`zen::valid_theme_name`) or a
-/// built-in ref without its version (`k2:diary`).
+/// `save:<widget>` (private to the widget; never granted, never pushed), or
+/// `save:phone~<widget>`, the same widget's saves on the person's phones
+/// (contract-gardens-phone rev 2 §H). `<widget>` is a widget folder name
+/// (`zen::valid_theme_name`) or a built-in ref without its version
+/// (`k2:diary`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Space(String);
 
@@ -126,11 +132,19 @@ impl Space {
         Ok(Space(format!("save:{}", valid_widget(widget)?)))
     }
 
+    /// The widget's saves on a phone, apart from the desktop's.
+    pub fn phone_save(widget: &str) -> Result<Space, DataError> {
+        Ok(Space(format!("save:{PHONE_SAVE_MARK}{}", valid_widget(widget)?)))
+    }
+
     pub fn parse(s: &str) -> Result<Space, DataError> {
         if let Some(w) = s.strip_prefix("data:") {
             Space::data(w)
         } else if let Some(w) = s.strip_prefix("save:") {
-            Space::save(w)
+            match w.strip_prefix(PHONE_SAVE_MARK) {
+                Some(phone) => Space::phone_save(phone),
+                None => Space::save(w),
+            }
         } else {
             Err(DataError::BadRequest(format!("'{s}' isn't a Garden data space (data:<widget> or save:<widget>)")))
         }
@@ -440,6 +454,13 @@ mod tests {
         assert!(Space::data("Board").is_err());
         assert!(Space::data("../x").is_err());
         assert!(Space::parse("other:board").is_err());
+        // A phone's saves: their own space, and no widget can be named this.
+        let p = Space::parse("save:phone~board").expect("a phone's saves");
+        assert_eq!(p, Space::phone_save("board").expect("space"));
+        assert_ne!(p, Space::save("board").expect("space"));
+        assert!(!p.is_data());
+        assert!(Space::save("phone~board").is_err(), "a widget's name can't reach them");
+        assert!(Space::parse("save:phone~k2:diary").is_ok(), "a built-in's too");
     }
 
     #[test]

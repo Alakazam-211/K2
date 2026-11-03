@@ -131,6 +131,20 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
 /// (`zen_remote_routes`, a paired phone of the owner person) after its own.
 /// Neither door is reachable through the other's gate: each keeps its own.
 pub(crate) fn run_call(b: &CallBody) -> CliResponse {
+    run_call_on(b, Device::Desktop)
+}
+
+/// Which device's door a call came through. It decides one thing: whose
+/// `save.*` it reads and writes (contract-gardens-phone rev 2 §H), so panning
+/// a canvas on a phone never moves it on the desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Device {
+    Desktop,
+    Phone,
+}
+
+/// [`run_call`] from a device's door.
+pub(crate) fn run_call_on(b: &CallBody, device: Device) -> CliResponse {
     // RS-A15: `guests.*` run as the owner with a confirm sheet on every
     // write (its refusals carry the change the sheet shows).
     if crate::garden_data::guest_rooms::is_verb(&b.verb) {
@@ -146,7 +160,7 @@ pub(crate) fn run_call(b: &CallBody) -> CliResponse {
     if crate::garden_data::workbench_rows::is_verb(&b.verb) {
         return crate::garden_data::workbench_rows::handle(b);
     }
-    match run(b) {
+    match run(b, device) {
         Ok(v) => crate::garden_data::ok(json!({ "ok": true, "result": v })),
         Err(e) => response(&e),
     }
@@ -252,7 +266,7 @@ pub(crate) fn check_cap(w: &Placed, verb: &str, cap: &str) -> Result<(), DataErr
     Err(refused("cap_not_granted", 403, format!("{verb} needs {cap}; add it to the widget's manifest caps")))
 }
 
-fn run(b: &CallBody) -> Result<J, DataError> {
+fn run(b: &CallBody, device: Device) -> Result<J, DataError> {
     let c = catalog();
     let row = match c.verb(&b.verb) {
         Some(r) if r.exposed_to(Exposure::GardenLocal) => r,
@@ -302,7 +316,7 @@ fn run(b: &CallBody) -> Result<J, DataError> {
         v if v.starts_with("save.") => {
             let spend = if row.effect == Effect::Write { Spend::Save } else { Spend::Read };
             budget::spend(&key, spend)?;
-            save_verb(&w, v, args)
+            save_verb(&w, v, args, device)
         }
         v => {
             // 0.46.1 (gap 5): `{from: "<widget>"}` reads another widget's
@@ -855,14 +869,25 @@ fn conflict_counted(space: &Space, label: &str, made: &str, e: DataError) -> Dat
 
 // ── save.* (private to the widget; never granted, never pushed) ──────
 
-fn save_verb(w: &Placed, verb: &str, args: &[J]) -> Result<J, DataError> {
-    let space = Space::save(w.space_widget())?;
+fn save_verb(w: &Placed, verb: &str, args: &[J], device: Device) -> Result<J, DataError> {
+    let desktop = Space::save(w.space_widget())?;
+    // On a phone, writes go to the phone's own space. A read of a key it
+    // hasn't set falls back to the desktop's, and nothing a phone does ever
+    // touches the desktop's. So a removed key shows the desktop's value again.
+    let space = match device {
+        Device::Desktop => desktop.clone(),
+        Device::Phone => Space::phone_save(w.space_widget())?,
+    };
     let s = store();
     match verb {
         "save.get" => {
             let k = arg_str(args, 0, verb, "a key")?;
             keys::validate_key(k)?;
-            Ok(s.get(&space, k)?.map(|e| e.value).unwrap_or(J::Null))
+            match s.get(&space, k)? {
+                Some(e) => Ok(e.value),
+                None if device == Device::Phone => Ok(s.get(&desktop, k)?.map(|e| e.value).unwrap_or(J::Null)),
+                None => Ok(J::Null),
+            }
         }
         "save.set" => {
             let k = arg_str(args, 0, verb, "a key")?;
@@ -883,16 +908,20 @@ fn save_verb(w: &Placed, verb: &str, args: &[J]) -> Result<J, DataError> {
             let prefix: String = opt_field(o, "prefix", verb)?.unwrap_or_default();
             keys::validate_prefix(&prefix)?;
             let mut out = Vec::new();
-            let mut after: Option<String> = None;
-            loop {
-                let page = s.list(&space, &prefix, after.as_deref(), MAX_LIST_LIMIT, None)?;
-                out.extend(page.items.into_iter().map(|e| J::String(e.key)));
-                match page.next {
-                    Some(n) => after = Some(n),
-                    None => break,
+            for sp in if device == Device::Phone { vec![&space, &desktop] } else { vec![&space] } {
+                let mut after: Option<String> = None;
+                loop {
+                    let page = s.list(sp, &prefix, after.as_deref(), MAX_LIST_LIMIT, None)?;
+                    out.extend(page.items.into_iter().map(|e| e.key));
+                    match page.next {
+                        Some(n) => after = Some(n),
+                        None => break,
+                    }
                 }
             }
-            Ok(J::Array(out))
+            out.sort();
+            out.dedup();
+            Ok(json!(out))
         }
         _ => Err(refused("unknown_verb", 400, format!("no verb {verb}"))),
     }

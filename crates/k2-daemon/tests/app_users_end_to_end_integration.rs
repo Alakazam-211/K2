@@ -291,8 +291,7 @@ async fn the_agent_that_owns_the_app_gives_any_room_and_any_cap() {
     let r = bearer(port, "POST", "/cli/thread/post", &s, Some(json!({ "addr": b.ops.handle, "text": "hello from the App" }))).await;
     assert_eq!(r.status, 200, "posts there: {}", r.body);
     std::fs::write(b.ops.path.join("note.txt"), "in the other room").unwrap();
-    let path = b.ops.path.join("note.txt");
-    let r = bearer(port, "GET", &format!("/cli/fs/read-file?path={}", enc(&path.to_string_lossy())), &s, None).await;
+    let r = bearer(port, "GET", &format!("/cli/fs/read-file?workspace={}&path=note.txt", b.ops.handle), &s, None).await;
     assert_eq!(r.status, 200, "reads files there: {}", r.body);
     assert!(r.body.contains("in the other room"), "{}", r.body);
 

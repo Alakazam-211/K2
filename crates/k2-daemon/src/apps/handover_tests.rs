@@ -841,7 +841,7 @@ fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
         assert_eq!(st, 200, "{s}");
         let h = &s["handovers"][0];
         assert_eq!(h["requestId"], json!(rid), "{who:?}: {h}");
-        assert!(h["plan"]["lines"].as_array().expect("lines").iter().any(|l| l.as_str().is_some_and(|l| l.starts_with("Rooms you approved"))), "{who:?}: {h}");
+        assert!(h["plan"]["lines"].as_array().expect("lines").iter().any(|l| l.as_str().is_some_and(|l| l.contains("own code may hand its guests"))), "{who:?}: {h}");
         if who.passport().is_some() {
             assert!(h["plan"]["to"].get("folder").is_none(), "an agent never reads B's folder here: {h}");
         }

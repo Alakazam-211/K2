@@ -154,9 +154,10 @@ fn an_agent_with_the_switch_sets_any_room_with_no_grant() {
     assert_eq!((st, code(&v)), (404, "not_found"), "{v}");
     let rows = gr::audit_rows(&f.jobs, 10).unwrap();
     let changes: Vec<_> = rows.iter().filter(|r| r.event == gr::AUDIT_CHANGE).collect();
-    assert_eq!(changes.len(), 2, "{rows:?}");
+    assert_eq!(changes.len(), 3, "agent, owner, agent: {rows:?}");
     assert_eq!(changes[0].actor, format!("agent:{}", f.ws_a));
     assert_eq!(changes[1].actor, "owner");
+    assert_eq!(changes[2].actor, format!("agent:{}", f.ws_a));
     assert_eq!(changes[0].payload["via"], json!("cli"));
 }
 

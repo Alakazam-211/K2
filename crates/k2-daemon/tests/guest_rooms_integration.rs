@@ -143,8 +143,8 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     let rows = k2_core::skin::guest_rooms::audit_rows(&svc, 20).unwrap();
     let changes: Vec<_> = rows.iter().filter(|r| r.event == k2_core::skin::guest_rooms::AUDIT_CHANGE).collect();
     assert_eq!(changes.len(), 4, "remote, link, agent twice: {rows:?}");
-    assert!(changes[1].actor.starts_with("app:jobs"), "{:?}", changes[1].actor);
-    assert_eq!(changes[2].actor, format!("app-remote:{svc}"));
+    assert!(changes[2].actor.starts_with("app:jobs"), "{:?}", changes[2].actor);
+    assert_eq!(changes[3].actor, format!("app-remote:{svc}"));
     drop(env);
 }
 

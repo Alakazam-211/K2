@@ -1034,10 +1034,9 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert!(k2_core::skin::must_change::is_flagged(&user("scope-fresh").id).unwrap());
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
-    // 0.46.8: the role's room is outside what this App may hand out; the
-    // refusal names the App's guests-rooms grant.
+    // A box-wide role reaching another room isn't the App's to hand out.
     let r = post(d.port, "/cli/skin/roles/assign", &agent, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "another workspace's role: {}", r.body);
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's role: {}", r.body);
     assert_eq!((user("scope-fresh").default_rooms, user("scope-fresh").role_id), (Vec::<String>::new(), None));
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [a.handle]})).await;
     assert_eq!(r.status, 200, "its own room: {}", r.body);

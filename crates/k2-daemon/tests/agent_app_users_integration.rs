@@ -958,7 +958,8 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_a_signed_in_change_doesnt() 
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u1, "email": e1 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    person_changes(port, &u1, "agent-temp-1", &shop, pw).await;
+    // Still tied: its password didn't come through a flow (that would release it).
+    k2_daemon::test_harness::guest_with_own_password(&u1, pw);
     let s_old = login(port, json!({ "username": u1, "password": pw, "app": shop })).await.json()["token"].as_str().unwrap().to_string();
 
     // No front door yet: K2 has no page of its own; only --code works, and
@@ -1299,7 +1300,16 @@ async fn an_agent_starts_a_reset_takes_it_back_clears_a_lockout_and_reads_the_re
     assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "one answer: {}", r.body);
     let bx = format!("bx{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": bx, "email": format!("{bx}@example.test") })).await;
-    owner_post(port, "/cli/skin/users", json!({ "username": bx, "app": shop })).await;
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: principal_id(&bx),
+        kind: "app".into(),
+        target_id: shop.clone(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("the App login");
     let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": bx, "app": shop })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
 

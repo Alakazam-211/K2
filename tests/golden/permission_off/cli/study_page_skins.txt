@@ -172,8 +172,9 @@ INVITES (0.46.4)
   reset link the same way; the App never gets the token, and reaches only
   people of its own workspace (and App). An App key's reset
   (/v1/apps/<id>/users/password-reset) mails the link too, never returns
-  it. A person who uses an invite, an App's reset or an App key's reset is
-  tied to that workspace (the App's page, key or mailbox could see it).
+  it. A person who uses an invite, an App's reset or an App key's reset chose
+  their own password, so any limit from an agent setting them up ends. A box
+  login is the exception: using one of those ties it to that workspace.
   Every link mail leaves no copy in the sending mailbox.
   LINK LIVES (named settings): invites 72 hours, resets 24 hours by
   default. The App's builder (its own agent with "…manage them end to

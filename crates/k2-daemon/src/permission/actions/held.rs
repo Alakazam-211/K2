@@ -284,6 +284,31 @@ fn outbound(id: &str) -> Option<(String, String, i64)> {
     })
 }
 
+/// Why a one-click card can't release this message, if it can't. The card
+/// names only the message id, so what it can't show has to be looked at: files
+/// (`attachments_ref`), a Reply-To, a forward. Unknown or unreadable counts.
+fn needs_a_closer_look(id: &str) -> Option<String> {
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = db(|c| {
+        c.query_row(
+            "SELECT attachments_ref, reply_to_json, forward_of_json FROM mail_outbound WHERE id = ?1",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok()
+    });
+    let what = match row {
+        None => "something this card can't show",
+        Some((Some(_), _, _)) => "files",
+        Some((_, Some(_), _)) => "a Reply-To",
+        Some((_, _, Some(_))) => "a forwarded message",
+        Some(_) => return None,
+    };
+    Some(format!(
+        "email {id} carries {what}, which this card can't show, so a person approves it in Settings → \
+         Email Hosting → Approvals or with k2 hostmail approvals show {id}"
+    ))
+}
+
 fn check_mail(ctx: &Ctx) -> Check {
     let Some(id) = text_param(ctx, "message") else {
         return Check::Moved("name the held email: message=<its out_… id> (k2 mail outbox)".into());
@@ -293,7 +318,10 @@ fn check_mail(ctx: &Ctx) -> Check {
         _ => return Check::Moved(format!("no held email {id} of {}'s (k2 mail outbox)", ctx.workspace_handle)),
     };
     match status.as_str() {
-        "pending" if created + crate::mail::send::APPROVAL_EXPIRE_SECS > now() => Check::Needed,
+        "pending" if created + crate::mail::send::APPROVAL_EXPIRE_SECS > now() => match needs_a_closer_look(id) {
+            Some(why) => Check::Moved(why),
+            None => Check::Needed,
+        },
         "pending" => Check::Moved(format!("email {id} waited more than 7 days and was rejected")),
         "approved" | "sent" | "scheduled" => Check::AlreadyDone,
         "denied" => Check::Moved(format!("email {id} was rejected meanwhile")),
@@ -307,6 +335,9 @@ fn apply_mail(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
     };
     if let Err(refused) = route_floor(MAIL_APPROVE_ROUTE, who) {
         return refused;
+    }
+    if let Some(why) = needs_a_closer_look(id) {
+        return Applied::Refused { code: "needs_a_person".into(), message: why };
     }
     let body = json!({ "id": id, "decidedBy": decider(who) });
     let resp = crate::mail::routes_send::handle_approvals_approve(body.to_string().as_bytes());

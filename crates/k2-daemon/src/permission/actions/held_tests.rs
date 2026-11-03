@@ -690,4 +690,43 @@ fn garden_proposal_approve_follows_the_queue() {
     assert_eq!(s, "200 OK", "{r}");
     let (s, v) = ask(&ws, "garden.proposal.approve", json!({ "proposal": done }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+
+#[test]
+fn mail_approve_refuses_a_message_the_card_cannot_show() {
+    let _home = crate::test_support::TempHome::new();
+    let ws = seed("e2mc");
+    for (column, value) in [
+        ("attachments_ref", r#"[{"name":"a.pdf","size":1,"sha256":"x"}]"#),
+        ("reply_to_json", r#"["x@y.example"]"#),
+        ("forward_of_json", r#"{"mailbox":"a@b.example","sender":"c@d.example","asEml":true}"#),
+    ] {
+        let msg = held_mail(&ws, now(), None);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                &format!("UPDATE mail_outbound SET {column} = ?2 WHERE id = ?1"),
+                rusqlite::params![msg, value],
+            )
+            .expect("update");
+        }
+        let refused = ask_refused(&ws, "mail.approve", json!({ "message": msg }));
+        assert!(refused.contains("a person approves it"), "{column}: {refused}");
+        assert_eq!(mail_row(&msg).0, "pending", "{column}: nothing moved");
+    }
+    // A card already open when the row is found to carry one: refused on click.
+    let msg = held_mail(&ws, now(), Some(now() + 3600));
+    let v = ask_ok(&ws, "mail.approve", json!({ "message": msg }));
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE mail_outbound SET attachments_ref = '[\"a.pdf\"]' WHERE id = ?1",
+            rusqlite::params![msg],
+        )
+        .expect("update");
+    }
+    let (_, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(mail_row(&msg).0, "pending", "not released: {a}");
+}
 }

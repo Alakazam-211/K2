@@ -257,6 +257,10 @@ pub struct OutboundMessage {
     /// decides it. Never a header. `None` for every other message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward_of: Option<ForwardOf>,
+    /// A reply or forward: the DMARC verdict this box stamped on the original,
+    /// for whoever decides. `None` = no verdict, or no original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dmarc: Option<String>,
 }
 
 /// What a forward forwards ([`OutboundMessage::forward_of`]): shown to the
@@ -305,6 +309,17 @@ pub fn at_rest(msg: &OutboundMessage) -> std::borrow::Cow<'_, OutboundMessage> {
         m.text_body = hide_links(&m.text_body);
     }
     std::borrow::Cow::Owned(m)
+}
+
+/// A message's text as the person deciding it sees it: exactly what leaves,
+/// except that a one-time-link mail hides its links. Only that kind: anything
+/// else could hide data from the approver by dressing it as a link.
+pub fn text_for_approver(msg: &OutboundMessage) -> String {
+    if msg.ephemeral {
+        hide_links(&msg.text_body)
+    } else {
+        msg.text_body.clone()
+    }
 }
 
 /// `k2inv_…` tokens in `text` replaced by `k2inv_[hidden]` (previews of
@@ -2285,6 +2300,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         }
     }
 

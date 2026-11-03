@@ -464,6 +464,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         }
     }
 

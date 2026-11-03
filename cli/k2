@@ -61919,6 +61919,11 @@ def term_safe(s):
     return "".join(c if c in "\n\t" or (c >= " " and c != "\x7f" and not "\x80" <= c <= "\x9f") else "?"
                    for c in str(s))
 
+def term_line(s):
+    # term_safe for a value that must stay on one line: a line break in a subject
+    # or a name could otherwise fake a `to:` or `file:` line.
+    return term_safe(s).replace("\n", " ").replace("\t", " ")
+
 def human_size(n):
     n = int(n or 0)
     if n < 1024:
@@ -61928,12 +61933,19 @@ def human_size(n):
     return "%.1f MiB" % (n / (1024.0 * 1024.0))
 
 def file_line(f):
-    return "%s (%s, %s)" % (term_safe(f.get("name") or "?"), human_size(f.get("size")),
-                            term_safe(f.get("contentType") or "?"))
+    return "%s (%s, %s)" % (term_line(f.get("name") or "?"), human_size(f.get("size")),
+                            term_line(f.get("contentType") or "?"))
+
+def shown_as(r):
+    # The display name the recipient sees, which the sender chose.
+    return " shown as \"%s\"" % term_line(r["fromName"]) if r.get("fromName") else ""
+
+def dmarc_note(verdict):
+    return " (its sender may be forged)" if verdict == "fail" else ""
 
 def forward_line(f):
     return "a message in %s from %s (unverified)%s" % (
-        term_safe(f.get("mailbox") or "?"), term_safe(f.get("sender") or "?"),
+        term_line(f.get("mailbox") or "?"), term_line(f.get("sender") or "?"),
         ", whole, as an .eml file" if f.get("asEml") else "")
 
 def print_outbound_row(r):
@@ -63105,8 +63117,8 @@ elif verb == "approvals_list":
             if r.get("expiresAt"):
                 u = until(r["expiresAt"])
                 exp = ", auto-denies soon" if u == "expired" else ", expires %s" % u
-            print("%s  from %s (%s) — queued %s%s" % (r.get("id", ""),
-                  r.get("from") or "?", who, unix_ago(r.get("createdAt")), exp))
+            print("%s  from %s%s (%s) — queued %s%s" % (r.get("id", ""),
+                  r.get("from") or "?", shown_as(r), who, unix_ago(r.get("createdAt")), exp))
             print("  to      : %s" % (", ".join(r.get("to") or []) or "?"))
             if r.get("cc"):
                 print("  cc      : %s" % ", ".join(r["cc"]))
@@ -63118,7 +63130,9 @@ elif verb == "approvals_list":
                 print("  reply-to: %s (answers go here, not to the sender)" % ", ".join(r["replyTo"]))
             if r.get("forwardOf"):
                 print("  forwards: %s" % forward_line(r["forwardOf"]))
-            print("  subject : %s" % term_safe(r.get("subject") or "(no subject)"))
+            print("  subject : %s" % term_line(r.get("subject") or "(no subject)"))
+            if r.get("sourceDmarc"):
+                print("  original: DMARC %s%s" % (term_line(r["sourceDmarc"]), dmarc_note(r["sourceDmarc"])))
             for f in r.get("files") or []:
                 print("  file %-3s: %s" % (f.get("n", "?"), file_line(f)))
             if r.get("bodyPreview") is not None:
@@ -63135,7 +63149,7 @@ elif verb == "approvals_show":
     else:
         m = d.get("message") or {}
         who = m.get("workspace") or m.get("agentName") or "?"
-        print("%s  from %s (%s), waiting for approval" % (m.get("id", ""), m.get("from") or "?", who))
+        print("%s  from %s%s (%s), waiting for approval" % (m.get("id", ""), m.get("from") or "?", shown_as(m), who))
         print("to      : %s" % (", ".join(m.get("to") or []) or "?"))
         if m.get("cc"):
             print("cc      : %s" % ", ".join(m["cc"]))
@@ -63147,7 +63161,9 @@ elif verb == "approvals_show":
             print("reply-to: %s (answers go here, not to the sender)" % ", ".join(m["replyTo"]))
         if m.get("forwardOf"):
             print("forwards: %s" % forward_line(m["forwardOf"]))
-        print("subject : %s" % term_safe(m.get("subject") or "(no subject)"))
+        print("subject : %s" % term_line(m.get("subject") or "(no subject)"))
+        if m.get("sourceDmarc"):
+            print("original: DMARC %s%s" % (term_line(m["sourceDmarc"]), dmarc_note(m["sourceDmarc"])))
         for f in m.get("files") or []:
             print("file %-3s: %s" % (f.get("n", "?"), file_line(f)))
         if m.get("files"):

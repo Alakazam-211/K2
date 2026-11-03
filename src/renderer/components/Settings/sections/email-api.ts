@@ -177,6 +177,10 @@ export interface ApprovalItem extends OutboundItem {
   bodyPreview: string | null
   /** Every file that would leave. Absent on older daemons and when none. */
   files?: ApprovalFile[]
+  /** The display name the recipient sees, which the sender chose. */
+  fromName?: string | null
+  /** A reply or forward: the DMARC verdict on the original. */
+  sourceDmarc?: string
   /** `k2 mail forward-message`: what this message forwards. */
   forwardOf?: { mailbox: string; sender: string; asEml: boolean }
   workspace: string | null

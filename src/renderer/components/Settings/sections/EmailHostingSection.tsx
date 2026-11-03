@@ -1475,6 +1475,7 @@ function ApprovalCard({
       </div>
       <p className="text-[10px] text-[var(--color-text-muted)] break-words">
         <span className="font-mono">{item.from}</span>
+        {item.fromName ? <span> shown as “{item.fromName}”</span> : null}
         {' → '}
         <span className="font-mono">{item.to.join(', ')}</span>
         {item.cc.length > 0 && <span className="font-mono"> · cc {item.cc.join(', ')}</span>}
@@ -1485,6 +1486,12 @@ function ApprovalCard({
           <span className="font-mono"> · bcc (owner policy) {item.policyBcc?.join(', ')}</span>
         )}
       </p>
+      {item.sourceDmarc && (
+        <p className={`text-[10px] break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn)]' : 'text-[var(--color-text-muted)]'}`}>
+          The original message&apos;s DMARC check: {item.sourceDmarc}
+          {item.sourceDmarc === 'fail' ? '. Its sender may be forged.' : '.'}
+        </p>
+      )}
       {item.forwardOf && (
         <p className="text-[10px] text-[var(--color-text-muted)] break-words">
           Forwards a message in <span className="font-mono">{item.forwardOf.mailbox}</span> from{' '}

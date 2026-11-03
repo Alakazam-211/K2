@@ -935,6 +935,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         ephemeral: false,
         notify: None,
         forward_of: None,
+        source_dmarc: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1304,6 +1305,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 ephemeral: false,
                 notify: None,
                 forward_of: None,
+                source_dmarc: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1402,6 +1404,9 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 ephemeral: false,
                 notify: None,
                 forward_of: None,
+                source_dmarc: messages::parse_auth_results(&ctx.auth_results, &authority)["dmarc"]
+                    .as_str()
+                    .map(String::from),
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1611,6 +1616,7 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
         ephemeral: false,
         notify: None,
         forward_of: None,
+        source_dmarc: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1668,6 +1674,12 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
     msg.subject = composed.subject;
     msg.text_body = composed.text_body;
     msg.attachments = composed.attachments;
+    msg.source_dmarc = messages::parse_auth_results(
+        &src.full.auth_results,
+        &messages::ReadBackend::auth_authority(&read),
+    )["dmarc"]
+        .as_str()
+        .map(String::from);
     msg.forward_of = Some(send::ForwardOf {
         mailbox: address.clone(),
         sender: crate::mail::fwd_message::one_line(original_sender.as_deref().unwrap_or("")),
@@ -1841,10 +1853,10 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             }
             let mut v = send::outbound_json(row);
             let preview: Option<String> =
-                stored.as_ref().map(|m| send::hide_links(&m.text_body).chars().take(280).collect());
+                stored.as_ref().map(|m| send::text_for_approver(m).chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
-            if let Some(f) = stored.as_ref().and_then(|m| m.forward_of.as_ref()) {
-                v["forwardOf"] = serde_json::json!(f);
+            if let Some(d) = stored.as_ref().and_then(|m| m.source_dmarc.as_ref()) {
+                v["sourceDmarc"] = serde_json::json!(d);
             }
             // Every file that would leave, with its size. `k2 hostmail approvals
             // show` opens it (GET /cli/mail/approvals/show).
@@ -1937,10 +1949,10 @@ pub fn handle_approvals_show(params: &HashMap<String, String>) -> CliResponse {
     }
     let mut v = send::outbound_json(&row);
     v["fromName"] = serde_json::json!(msg.from_name);
-    if let Some(f) = msg.forward_of.as_ref() {
-        v["forwardOf"] = serde_json::json!(f);
+    if let Some(d) = msg.source_dmarc.as_ref() {
+        v["sourceDmarc"] = serde_json::json!(d);
     }
-    v["text"] = serde_json::json!(send::hide_links(&msg.text_body));
+    v["text"] = serde_json::json!(send::text_for_approver(&msg));
     v["files"] = serde_json::Value::Array(
         msg.attachments.iter().enumerate().map(|(i, f)| f.view_json(i + 1)).collect(),
     );
@@ -1962,6 +1974,18 @@ fn project_name(project_id: &str) -> Option<String> {
 }
 
 // ── POST /cli/mail/approvals/approve ────────────────────────────────────
+
+/// Who a decision is recorded under. An IT agent is recorded as itself, whatever
+/// its request says; only a person's route may name who decided.
+fn decided_by_for(caller: &crate::mail::agent_creds::MailCaller, asked: Option<&str>) -> String {
+    use crate::mail::agent_creds::MailCaller;
+    match caller {
+        MailCaller::ItAgent { workspace_uuid } | MailCaller::Agent { workspace_uuid } => {
+            format!("agent:{}", project_name(workspace_uuid).unwrap_or_else(|| workspace_uuid.clone()))
+        }
+        MailCaller::Owner => asked.unwrap_or("owner").to_string(),
+    }
+}
 
 /// S5: owner-or-admin approve → ATOMIC `pending → approved` → submit
 /// via the LOCAL Stalwart (the audit row has existed since queue
@@ -1998,7 +2022,7 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
         return crate::email_notify::fence::owner_only("approve an App's held email");
     }
     let note = v["note"].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let decided_by = v["decidedBy"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let decided_by = decided_by_for(&caller, v["decidedBy"].as_str().map(str::trim).filter(|s| !s.is_empty()));
     let now = now_secs();
     // Expired items flip to denied FIRST — a 7-day-old approve answers
     // the conflict, it never sends (§12).
@@ -2056,7 +2080,7 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
         &store,
         &mut resolve,
         id,
-        decided_by.unwrap_or("owner"),
+        &decided_by,
         note,
         now,
     ) {
@@ -2168,15 +2192,11 @@ pub fn handle_approvals_deny(body: &[u8]) -> CliResponse {
             "missing 'note' — the reason flows back to the agent (required on deny)",
         );
     };
-    let decided_by = v["decidedBy"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("owner");
+    let decided_by = decided_by_for(&caller, v["decidedBy"].as_str().map(str::trim).filter(|s| !s.is_empty()));
     let now = now_secs();
     send::auto_deny_expired(now);
     let store = DbOutboundStore::default();
-    match send::deny(&store, id, decided_by, note, now) {
+    match send::deny(&store, id, &decided_by, note, now) {
         Ok(()) => {
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::MailSendDecided,
@@ -2666,6 +2686,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2723,6 +2744,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -3220,6 +3242,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -3380,6 +3403,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -4053,6 +4077,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         }
     }
 
@@ -4944,6 +4969,7 @@ mod tests {
                 sender: "sam@outside.example".to_string(),
                 as_eml: true,
             }),
+            source_dmarc: None,
         };
         let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &msg, send_after: None };
         let SendOutcome::Queued { id, .. } = send::gate_and_dispatch(&store, None, Gate::Approval, &req, now_secs()).expect("queue") else {
@@ -5240,6 +5266,7 @@ mod tests {
             ephemeral: false,
             notify: None,
             forward_of: None,
+            source_dmarc: None,
         };
         for _ in 0..send::RATE_LIMIT_HOURLY {
             let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &m, send_after: None };
@@ -5248,5 +5275,63 @@ mod tests {
         let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["ghost.bin"] })));
         assert_eq!(resp.status, "429 Too Many Requests", "{}", resp.body);
         done(&path, &project_id, &domain);
+    }
+
+    /// The approver reads exactly what leaves: only a one-time-link mail hides
+    /// anything, and an agent can't hide data by dressing it as a link.
+    #[test]
+    fn the_approver_sees_what_leaves() {
+        let (path, project_id, domain) = seed_files_sender("seeall", "approval");
+        let secret = "k2inv_ThisIsTheDataTheAgentWantsToHide";
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "body": secret, "fromName": "Rosson" })));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["bodyPreview"], secret, "{ours}");
+        assert_eq!(ours["fromName"], "Rosson", "{ours}");
+        let shown = body_json(&handle_approvals_show(&params(&[("id", &id)])));
+        assert_eq!(shown["message"]["text"], secret, "{shown}");
+        assert_eq!(shown["message"]["fromName"], "Rosson", "{shown}");
+
+        let store = DbOutboundStore::default();
+        let stored = store.load_message(&id).unwrap();
+        let link_mail = OutboundMessage { ephemeral: true, ..stored };
+        assert_eq!(send::text_for_approver(&link_mail), "k2inv_[hidden]");
+        done(&path, &project_id, &domain);
+    }
+
+    /// A reply or forward carries the original's verdict to the approver.
+    #[test]
+    fn the_approver_sees_the_originals_dmarc_verdict() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        let failed = "mail.box.test; spf=none; dmarc=fail header.from=outside.example";
+        fake.state.lock().unwrap().emails.get_mut("e1").unwrap()["header:Authentication-Results:asText:all"] =
+            serde_json::json!([failed]);
+        let (path, project_id, domain) = seed_files_sender("seedmarc", "approval");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["sourceDmarc"], "fail", "{ours}");
+        let shown = body_json(&handle_approvals_show(&params(&[("id", &id)])));
+        assert_eq!(shown["message"]["sourceDmarc"], "fail", "{shown}");
+        done(&path, &project_id, &domain);
+    }
+
+    #[test]
+    fn who_decided_is_recorded_as_who_they_are() {
+        use crate::mail::agent_creds::MailCaller;
+        let (name, path) = unique("decider");
+        let project_id = insert_project(&name, &path);
+        let it = MailCaller::ItAgent { workspace_uuid: project_id.clone() };
+        assert_eq!(decided_by_for(&it, Some("owner")), format!("agent:{name}"), "an agent can't claim to be the owner");
+        assert_eq!(decided_by_for(&it, None), format!("agent:{name}"));
+        assert_eq!(decided_by_for(&MailCaller::Owner, Some("rosson")), "rosson");
+        assert_eq!(decided_by_for(&MailCaller::Owner, None), "owner");
+        cleanup(&project_id, None);
     }
 }

@@ -57,6 +57,10 @@ fn bad(m: impl Into<String>) -> (&'static str, String) {
 }
 
 /// The running engine.
+/// `seeds-gc` leaves a Seed the daemon asked about this recently to a later
+/// sweep: a deploy of it may be on its way, its unit not written yet.
+pub(crate) const SEED_ASK_HOLD: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 pub struct Engine {
     pub home: PathBuf,
     pub runtime_dir: String,
@@ -64,6 +68,10 @@ pub struct Engine {
     pub pass_root: PathBuf,
     /// Serializes slot changes and unit-file writes + `daemon-reload`.
     lock: Mutex<()>,
+    /// When the daemon last asked about each Seed: it is about to use it.
+    /// `seeds-gc` holds this across its check and rename, so an ask either
+    /// comes first (the Seed stays) or finds the Seed gone (and sends it).
+    pub(crate) seed_asks: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// `/etc/subuid` and `/etc/subgid` (tests point these elsewhere).
     subid_files: (PathBuf, PathBuf),
     /// `disk-usage`'s per-App measuring command (tests: plain `du`, no
@@ -113,6 +121,7 @@ impl Engine {
             runtime_dir,
             pass_root: PathBuf::from(PASS_ROOT),
             lock: Mutex::new(()),
+            seed_asks: Mutex::new(std::collections::HashMap::new()),
             subid_files: (PathBuf::from(SUBUID_FILE), PathBuf::from(SUBGID_FILE)),
             du_override: None,
         }
@@ -127,6 +136,16 @@ impl Engine {
 
     pub(crate) fn du_override(&self) -> Option<&[String]> {
         self.du_override.as_deref()
+    }
+
+    pub(crate) fn seed_asks(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, std::time::Instant>> {
+        self.seed_asks.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn seed_asked(&self, hash: &str) {
+        let mut asks = self.seed_asks();
+        asks.retain(|_, at| at.elapsed() < SEED_ASK_HOLD);
+        asks.insert(hash.to_string(), std::time::Instant::now());
     }
 
     /// The unit-file lock (writes + `daemon-reload`).
@@ -295,6 +314,7 @@ impl Engine {
                 if !seed_hash_ok(&hash) {
                     return Err(bad("seed hash"));
                 }
+                self.seed_asked(&hash);
                 Ok(json!({ "present": self.seeds().join(&hash).is_dir() }))
             }
             Request::SeedPut { hash, len } => {
@@ -304,6 +324,7 @@ impl Engine {
                 if len > MAX_SEED_BYTES {
                     return Err((codes::TOO_LARGE, format!("Seed tar is {len} bytes; the cap is {MAX_SEED_BYTES}")));
                 }
+                self.seed_asked(&hash);
                 let stored = crate::seeds::put(&self.seeds(), &hash, len, body).map_err(|e| (codes::IO, e))?;
                 Ok(json!({ "stored": stored }))
             }
@@ -315,7 +336,10 @@ impl Engine {
                 Ok(json!({ "present": o.ok() }))
             }
             Request::ImageLoad { image, len } => self.image_load(&image, len, body),
-            Request::Prepare { app, image, seed } => self.prepare(&app, &image, &seed),
+            Request::Prepare { app, image, seed } => {
+                self.seed_asked(&seed);
+                self.prepare(&app, &image, &seed)
+            }
             Request::Start(spec) => self.start(&spec),
             Request::Stop { app, deployment } => self.stop(&app, &deployment),
             Request::Liveness { app, deployment } => self.liveness(&app, &deployment),

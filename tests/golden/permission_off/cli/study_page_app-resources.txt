@@ -35,7 +35,7 @@ CLEAN (only what K2 made and can make again):
   databases, mail, uploads, workspace folders, transcripts, backups or
   the Trash. An agent cleans only its own Apps' and services' items and
   needs "Build and run Apps" for a real clean; the owner cleans the box.
-  K2 also clears old Seeds by itself once a day.
+  K2 also clears old Seeds by itself once a day, unless the guard is off.
 
 TRENDS:
   k2 app resources trends [--app A] [--window 1h|6h|24h|7d|30d]

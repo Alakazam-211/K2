@@ -159,6 +159,9 @@ for page in "study app-deploys" "study app-resources"; do
 done
 body="$(K2_PORT=1 "$K2" study app-resources </dev/null)"
 expect_not "study app-resources: no 30 days on Seeds" "$body" "unused 30"
+expect_has "study app-resources: the sweep and the guard" "$body" "unless the guard is off"
+body="$(K2_PORT=1 "$K2" study app-deploys </dev/null)"
+expect_has "study app-deploys: the sweep and the guard" "$body" "With the disk guard off the daily"
 
 echo
 echo "app_history_rollback: $pass passed, $fail failed"

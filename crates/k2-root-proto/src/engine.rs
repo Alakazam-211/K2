@@ -462,7 +462,8 @@ pub struct DiskUsage {
 #[serde(rename_all = "camelCase", default)]
 pub struct SeedsGcAnswer {
     pub removed: Vec<String>,
-    /// Still named by a run state or unit file: kept.
+    /// Still named by a run state or unit file, or asked about in the last
+    /// 30 minutes: kept.
     pub skipped: Vec<String>,
     /// Not on the engine.
     pub absent: Vec<String>,

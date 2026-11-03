@@ -31,7 +31,7 @@ use k2_root_proto::engine::{
 };
 use serde_json::Value;
 
-use crate::server::{podman_bin, Engine};
+use crate::server::{podman_bin, Engine, SEED_ASK_HOLD};
 
 type R<T> = Result<T, (&'static str, String)>;
 
@@ -326,9 +326,10 @@ impl Engine {
     }
 
     /// The `seeds-gc` verb (§9.2): remove exactly `remove`, never a Seed a
-    /// run state or unit file names. In use is read again for each hash,
-    /// right before its rename: a list can take minutes, and a deploy of the
-    /// same hash can start while it runs.
+    /// run state or unit file names, or one the daemon asked about in the
+    /// last [`SEED_ASK_HOLD`] (left to a later sweep). Both are read again for
+    /// each hash, right before its rename: a list can take minutes, and a
+    /// deploy of the same hash can start while it runs.
     pub(crate) fn seeds_gc(&self, remove: &[String]) -> R<Value> {
         if remove.len() > wire::MAX_SEEDS_GC {
             return Err((codes::TOO_LARGE, format!("at most {} Seeds per seeds-gc", wire::MAX_SEEDS_GC)));
@@ -350,10 +351,14 @@ impl Engine {
                 continue;
             }
             let bytes = tree_bytes(&dir, Instant::now() + Duration::from_secs(30)).unwrap_or_else(|b| b);
-            if self.seeds_in_use().iter().any(|u| u.contains(h.as_str())) {
+            let asks = self.seed_asks();
+            let asked = asks.get(h).is_some_and(|at| at.elapsed() < SEED_ASK_HOLD);
+            if asked || self.seeds_in_use().iter().any(|u| u.contains(h.as_str())) {
                 a.skipped.push(h.clone());
                 continue;
             }
+            #[cfg(test)]
+            gc_test_hook::saw_asks_held(self.seed_asks.try_lock().is_err());
             // Out of the store's name first (a Seed is whole or absent),
             // then delete. A leftover `.tmp-` is cleaned at the next start.
             let tmp = self.seeds().join(format!(".tmp-gc-{h}-{}", std::process::id()));
@@ -363,6 +368,7 @@ impl Engine {
                 a.skipped.push(h.clone());
                 continue;
             }
+            drop(asks);
             if let Err(e) = std::fs::remove_dir_all(&tmp) {
                 eprintln!("k2-app-engine: seeds-gc: remove {}: {e} (cleaned at the next start)", tmp.display());
             }
@@ -410,12 +416,22 @@ impl Engine {
 /// Runs at the start of each hash's turn in `seeds_gc`.
 #[cfg(test)]
 mod gc_test_hook {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     type Hook = Box<dyn Fn(&str)>;
 
     thread_local! {
         static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        static ASKS_HELD: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    /// Was the asks mutex held between the check and the rename?
+    pub fn saw_asks_held(held: bool) {
+        ASKS_HELD.with(|c| c.set(Some(held)));
+    }
+
+    pub fn asks_held() -> Option<bool> {
+        ASKS_HELD.with(|c| c.get())
     }
 
     pub fn set(f: Hook) {
@@ -556,6 +572,46 @@ mod tests {
         assert_eq!(a.removed, vec![hash('a')], "{v}");
         assert_eq!(a.skipped, vec![hash('b')], "{v}");
         assert!(home.join("seeds").join(hash('b')).join("s.js").is_file(), "the running App keeps its /app");
+    }
+
+    /// 0.46.8: a Seed the daemon just asked about (`seed-has`, `seed-put`,
+    /// `prepare`) has a deploy on its way with no unit yet, so seeds-gc leaves
+    /// it for a later sweep. The same mutex is held from the check through the
+    /// rename, and after 30 minutes the Seed goes.
+    #[test]
+    fn seeds_gc_leaves_a_seed_just_asked_about_to_a_later_sweep() {
+        use k2_root_proto::engine::Request;
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_path_buf();
+        for c in ['a', 'b', 'c', 'd'] {
+            let f = home.join("seeds").join(hash(c)).join("s.js");
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, vec![1u8; 8192]).unwrap();
+        }
+        let e = Engine::new(home.clone(), "/tmp".into());
+        assert_eq!(answer(&e, Request::SeedHas { hash: hash('a') })["present"], true);
+        assert_eq!(answer(&e, Request::SeedPut { hash: hash('b'), len: 0 })["stored"], false);
+        let refused = e.handle(Request::Prepare { app: "NOT AN APP".into(), image: "x".into(), seed: hash('c') }, &mut std::io::empty());
+        assert!(refused.is_err(), "a bad App id stops before Podman: {refused:?}");
+        let list = vec![hash('a'), hash('b'), hash('c'), hash('d')];
+
+        let a: SeedsGcAnswer = serde_json::from_value(answer(&e, Request::SeedsGc { remove: list.clone() })).unwrap();
+        assert_eq!(a.removed, vec![hash('d')], "{a:?}");
+        assert_eq!(a.skipped, vec![hash('a'), hash('b'), hash('c')], "{a:?}");
+        assert_eq!(super::gc_test_hook::asks_held(), Some(true), "held from the check through the rename");
+        for c in ['a', 'b', 'c'] {
+            assert!(home.join("seeds").join(hash(c)).join("s.js").is_file(), "{c}");
+        }
+        let age = |by: Duration| e.seed_asks().values_mut().for_each(|at| *at = Instant::now() - by);
+        age(SEED_ASK_HOLD - Duration::from_secs(60));
+        let a: SeedsGcAnswer = serde_json::from_value(answer(&e, Request::SeedsGc { remove: list.clone() })).unwrap();
+        assert!(a.removed.is_empty() && a.skipped.len() == 3, "a minute before the hold ends: {a:?}");
+        age(SEED_ASK_HOLD + Duration::from_secs(60));
+        let a: SeedsGcAnswer = serde_json::from_value(answer(&e, Request::SeedsGc { remove: list })).unwrap();
+        assert_eq!(a.removed, vec![hash('a'), hash('b'), hash('c')], "a later sweep: {a:?}");
+        // A new ask drops the old stamps, so the map can't grow for good.
+        answer(&e, Request::SeedHas { hash: hash('e') });
+        assert_eq!(e.seed_asks().keys().cloned().collect::<Vec<_>>(), vec![hash('e')]);
     }
 
     #[test]

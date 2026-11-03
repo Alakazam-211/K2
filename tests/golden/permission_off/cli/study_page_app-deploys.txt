@@ -51,7 +51,9 @@ HOW FAR BACK YOU CAN GO
   Neither does a deploy that failed or crashed in its watch window: its Seed
   just gets the 3 days, and history shows it with no mark. A deploy you
   rolled back from yourself keeps its place. A Seed live, deploying now, or
-  named by a held request is never freed.
+  named by a held request is never freed. With the disk guard off the daily
+  sweep doesn't run; k2 app resources clean still frees the Seeds past their
+  3 days.
   k2 app history <app-id>              marks each deploy: "can roll back",
                                        "can roll back (freed soon)" (past
                                        the 5, inside its 3 days), "across a

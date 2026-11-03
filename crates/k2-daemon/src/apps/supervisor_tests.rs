@@ -824,6 +824,35 @@ fn a_chosen_rollback_through_the_warm_instance_keeps_the_deploy_it_left() {
     settle(id);
 }
 
+/// 0.46.8, through the tick: a crash in the watch window with the warm
+/// instance already dead takes the crash path, not the auto-rollback. The
+/// row ends `exited` inside its window, so it didn't stay live.
+#[test]
+fn a_crash_in_the_watch_window_with_nothing_warm_didnt_stay_live() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-cold-crash";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let two = second_seed(&f);
+    let first = go_live_first(id, &f.seed);
+    let second = begin(&app_row(id), &two, store::KIND_DEPLOY, "owner", None).unwrap();
+    assert_eq!(wait_done(&second, 30).unwrap().result, store::RESULT_LIVE);
+    settle(id);
+    {
+        let mut gone = eng.stopped.lock().unwrap();
+        gone.insert(first.clone());
+        gone.insert(second.clone());
+    }
+    let only = ids(&[id]);
+    let seen = AtomicU64::new(super::super::engine_gate::generation());
+    let row = || db(|c| store::get_deployment(c, &second)).unwrap().unwrap();
+    tick_until(&only, &seen, 20, "the crash", || row().result == store::RESULT_EXITED);
+    let r = row();
+    assert!(r.live_at.is_some() && r.finished_at <= r.watch_until && r.finished_at.is_some(), "{r:?}");
+    assert!(!store::stayed_live(&r), "{r:?}");
+    settle(id);
+}
+
 /// 0.46.8: a Seed that goes between `begin`'s first read and its lock hold
 /// (the sweep's detach getting in there) is refused by the check under the
 /// lock: no deployment row, and the App isn't left busy. A start counts as a

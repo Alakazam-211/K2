@@ -206,14 +206,25 @@ fn referenced_by_apps(conn: &Connection, keep_deployments: usize) -> rusqlite::R
 pub const ROLLED_BACK_BY_CHOICE: &str = "rolled back";
 
 /// Did this deployment go live and hold? A rollback someone chose doesn't
-/// undo that; a crash in the watch window does.
+/// undo that; a crash in the watch window does, whether K2 switched back
+/// (`rolled_back`) or had nothing warm to switch to (`exited` by the end of
+/// the window: a deploy into a stopped App, extra ports, a warm instance
+/// that already died).
 pub fn stayed_live(d: &DeploymentRow) -> bool {
-    d.live_at.is_some() && (d.result != RESULT_ROLLED_BACK || d.error.as_deref() == Some(ROLLED_BACK_BY_CHOICE))
+    let crashed = match d.result.as_str() {
+        RESULT_ROLLED_BACK => d.error.as_deref() != Some(ROLLED_BACK_BY_CHOICE),
+        RESULT_EXITED => matches!((d.finished_at, d.watch_until), (Some(end), Some(until)) if end <= until),
+        _ => false,
+    };
+    d.live_at.is_some() && !crashed
 }
 
 /// [`stayed_live`] as SQL, over `deployments`' own columns.
 fn stayed_live_sql() -> String {
-    format!("live_at IS NOT NULL AND (result != '{RESULT_ROLLED_BACK}' OR error = '{ROLLED_BACK_BY_CHOICE}')")
+    format!(
+        "live_at IS NOT NULL AND (result != '{RESULT_ROLLED_BACK}' OR error = '{ROLLED_BACK_BY_CHOICE}') \
+         AND (result != '{RESULT_EXITED}' OR finished_at IS NULL OR watch_until IS NULL OR finished_at > watch_until)"
+    )
 }
 
 /// The Seeds that went live on an App and stayed live, newest first, each
@@ -1309,6 +1320,55 @@ pub(crate) mod tests {
         assert!(!stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
         assert!(!went_live_seeds(&c, "jim", 5).unwrap().contains(&hash('6')));
         assert!(rollback_targets(&c, "jim", Some(&hash('5')), SWEEP_KEEP_DEPLOYMENTS).unwrap().iter().all(|t| t.seed != hash('6')));
+    }
+
+    /// A crash in the watch window with nothing warm ends `exited`, not
+    /// `rolled_back`, and takes no place either; one after the window counts.
+    /// The Rust and the SQL agree on every shape, NULLs included.
+    #[test]
+    fn exited_inside_the_watch_window_takes_no_place_after_it_does() {
+        let c = conn();
+        app(&c, "jim", "jim");
+        let hash = |ch: char| seed(ch, 1).hash;
+        for ch in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] {
+            upsert_seed(&c, &seed(ch, 1)).unwrap();
+        }
+        // (Seed, finished_at, watch_until, stayed live)
+        let shapes = [
+            ('1', Some(99), Some(100), false),
+            ('2', Some(100), Some(100), false),
+            ('3', Some(101), Some(100), true),
+            ('4', Some(100), None, true),
+            ('5', None, Some(100), true),
+        ];
+        let mut rows = Vec::new();
+        for (i, (ch, end, until, _)) in shapes.iter().enumerate() {
+            let d = dep(&c, "jim", KIND_DEPLOY, &hash(*ch), 10 + i as i64, RESULT_LIVE);
+            c.execute("UPDATE deployments SET result = ?2, finished_at = ?3, watch_until = ?4 WHERE id = ?1", params![d, RESULT_EXITED, end, until]).unwrap();
+            rows.push(d);
+        }
+        // The real calls, as the crash path makes them: inside the window.
+        let d = dep(&c, "jim", KIND_DEPLOY, &hash('6'), 20, RESULT_LIVE);
+        set_went_live(&c, &d, super::super::now() + 300).unwrap();
+        set_result(&c, &d, RESULT_EXITED, Some("exited 1")).unwrap();
+        rows.push(d);
+        dep(&c, "jim", KIND_DEPLOY, &hash('0'), 30, RESULT_LIVE);
+        set_live(&c, "jim", Some(&hash('0')), None).unwrap();
+
+        let all = went_live_seeds(&c, "jim", 50).unwrap();
+        let want = [('1', false), ('2', false), ('3', true), ('4', true), ('5', true), ('6', false)];
+        for (d, (ch, stayed)) in rows.iter().zip(want) {
+            assert_eq!(stayed_live(&get_deployment(&c, d).unwrap().unwrap()), stayed, "Rust, Seed {ch}");
+            assert_eq!(all.contains(&hash(ch)), stayed, "SQL, Seed {ch}");
+        }
+        for (ch, _, _, stayed) in shapes {
+            assert_eq!(rollback_targets(&c, "jim", Some(&hash('0')), SWEEP_KEEP_DEPLOYMENTS).unwrap().iter().any(|t| t.seed == hash(ch)), stayed, "target, Seed {ch}");
+        }
+        // The crashes don't push out what stayed: the 5 are 0, 5, 4, 3 and
+        // the newest before them.
+        dep(&c, "jim", KIND_DEPLOY, &hash('8'), 5, RESULT_SUPERSEDED);
+        dep(&c, "jim", KIND_DEPLOY, &hash('9'), 4, RESULT_SUPERSEDED);
+        assert_eq!(went_live_seeds(&c, "jim", 5).unwrap(), vec![hash('0'), hash('5'), hash('4'), hash('3'), hash('8')]);
     }
 
     /// 0.46.8: a deploy that went live and crashed in its watch window takes

@@ -1,4 +1,5 @@
-// BoardExport: a board as a portable file. No K2 identifiers go in it: no board id, no project, no
+// BoardExport: K2's own JSON export and a picture of the board. The JSON isn't the board file (.k5board is another
+// format, converted by its own codec). No K2 identifiers go in it: no board id, no project, no
 // k2blob: refs and no K2 person ids.
 //   BoardExport.envelope({title, meta, objects, people, blobGet}) → Promise<object>   the JSON export
 //     people: {isMe(key), isAgent(key), nameOf(key), viewerName}; blobGet(ref) → Promise<{mime, name, blob}>

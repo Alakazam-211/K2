@@ -265,3 +265,92 @@ fn grantees_lists_each_agent_once_with_its_reach() {
         ] })
     );
 }
+
+
+// ---------- the format ----------
+
+fn put(key: &str, value: Value) {
+    use k2_core::garden_data::StoreBackend as _;
+    let space = k2_core::garden_data::Space::data("k2:board").expect("space");
+    crate::garden_data::store()
+        .apply(&space, &[k2_core::garden_data::backend::Op::Put { key: key.into(), value, if_rev: None }], &k2_core::garden_data::Actor::Owner)
+        .expect("put");
+}
+
+fn get(key: &str) -> Option<Value> {
+    use k2_core::garden_data::StoreBackend as _;
+    let space = k2_core::garden_data::Space::data("k2:board").expect("space");
+    crate::garden_data::store().get(&space, key).expect("get").map(|e| e.value)
+}
+
+const OLDER: &str = include_str!("../../../tests/board/fixtures/older-board.json");
+
+/// `k2 board` on a board from before `format`: the first write upgrades it
+/// once, with nothing lost; later writes don't touch it again.
+#[test]
+fn the_first_k2_board_write_upgrades_an_older_board_once() {
+    let _e = env();
+    let o = DataWho::Owner;
+    let v: Value = serde_json::from_str(OLDER).expect("fixture");
+    let seed = v["seed"].as_array().expect("seed");
+    for e in seed {
+        put(e[0].as_str().expect("key"), e[1].clone());
+    }
+    let b = "b0f0f0f";
+    // Reads show today's shape, and write nothing.
+    let card = ok(&o, json!({ "cmd": "read", "board": b, "id": "k-4d5e6f7081" }));
+    assert_eq!(card["object"]["checks"][0]["id"], "ck-0", "{card}");
+    assert_eq!(get("board/b0f0f0f/meta").expect("meta").get("format"), None);
+    // The first write.
+    ok(&o, json!({ "cmd": "update", "board": b, "id": "s-1a2b3c4d5e", "fields": { "text": "Edited" } }));
+    assert_eq!(get("board/b0f0f0f/meta").expect("meta")["format"], 1);
+    assert_eq!(get("boards/b0f0f0f").expect("row")["format"], 1);
+    let c = get("board/b0f0f0f/obj/k-4d5e6f7081").expect("card");
+    assert_eq!(c["checks"][1], json!({ "id": "ck-1", "text": "two", "done": true }));
+    assert_eq!(c["updatedBy"], "Ada", "an upgrade is nobody's edit");
+    let s = get("board/b0f0f0f/obj/s-1a2b3c4d5e").expect("sticky");
+    assert_eq!(s["text"], "Edited");
+    assert_eq!(s["keptField"], json!({ "from": "a newer tool" }));
+    assert_eq!(s["reactions"], json!({ "Ada": ["👍", "🎉"], "agent:helper": ["👍"] }));
+    assert_eq!(get("board/b0f0f0f/obj/i-a3b4c5d6e7").expect("image")["src"].as_str().map(|x| x.starts_with("data:image/png")), Some(true));
+    assert_eq!(get("access/b0f0f0f").expect("access"), json!({ "helper": "edit" }), "not the board's keys: untouched");
+    // Later writes change only what they name.
+    let before = get("board/b0f0f0f/obj/k-4d5e6f7081").expect("card");
+    ok(&o, json!({ "cmd": "update", "board": b, "id": "s-1a2b3c4d5e", "fields": { "text": "Again" } }));
+    assert_eq!(get("board/b0f0f0f/obj/k-4d5e6f7081").expect("card"), before);
+    // A rename on an older board: the upgrade writes the row the rename then reads.
+    put("boards/b0c0c0c", json!({ "id": "b0c0c0c", "name": "Old", "project": null }));
+    put("board/b0c0c0c/meta", json!({ "title": "Old" }));
+    ok(&o, json!({ "cmd": "board-rename", "board": "b0c0c0c", "name": "New" }));
+    assert_eq!(get("boards/b0c0c0c").expect("row"), json!({ "id": "b0c0c0c", "name": "New", "project": null, "format": 1 }));
+}
+
+/// A board from a newer K2: reads answer, every write and the export are
+/// refused, typed, and nothing changes.
+#[test]
+fn a_newer_board_reads_but_refuses_every_write_and_the_export() {
+    let _e = env();
+    let o = DataWho::Owner;
+    for (b, row_f, meta_f) in [("b0d0d0d", json!(1), json!(2)), ("b0e0e0e", json!(9), json!(1))] {
+        put(&format!("boards/{b}"), json!({ "id": b, "name": b, "project": null, "format": row_f }));
+        put(&format!("board/{b}/meta"), json!({ "format": meta_f, "title": b, "newer": true }));
+        let key = format!("board/{b}/obj/s-0000000001");
+        put(&key, json!({ "id": "s-0000000001", "type": "sticky", "text": "later", "shiny": [1] }));
+        assert_eq!(ok(&o, json!({ "cmd": "read", "board": b, "id": "s-0000000001" }))["object"]["text"], "later");
+        assert_eq!(objects(&o, b).len(), 1);
+        for body in [
+            json!({ "cmd": "add", "board": b, "type": "sticky", "fields": { "text": "x" } }),
+            json!({ "cmd": "update", "board": b, "id": "s-0000000001", "fields": { "text": "x" } }),
+            json!({ "cmd": "delete", "board": b, "id": "s-0000000001" }),
+            json!({ "cmd": "meta", "board": b, "fields": { "title": "x" } }),
+            json!({ "cmd": "board-rename", "board": b, "name": "x" }),
+            json!({ "cmd": "apply", "board": b, "ops": [{ "op": "add", "obj": { "type": "sticky" } }] }),
+            json!({ "cmd": "export", "board": b }),
+        ] {
+            assert_eq!(refused(&o, body.clone()), (409, "newer_format".into()), "{body}");
+        }
+        assert_eq!(get(&key).expect("object"), json!({ "id": "s-0000000001", "type": "sticky", "text": "later", "shiny": [1] }));
+        assert_eq!(get(&format!("board/{b}/meta")).expect("meta")["format"], meta_f);
+        assert_eq!(get(&format!("boards/{b}")).expect("row"), json!({ "id": b, "name": b, "project": null, "format": row_f }));
+    }
+}

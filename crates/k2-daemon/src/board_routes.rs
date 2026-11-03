@@ -60,7 +60,7 @@ impl From<DataError> for Fail {
 fn status_of(code: &str) -> u16 {
     match code {
         "no_object" | "no_board" | "no_template" | "no_project" | "blob_missing" => 404,
-        "locked" | "exists" | "voting_off" | "no_votes_left" | "board_trashed" | "conflict" => 409,
+        "locked" | "exists" | "voting_off" | "no_votes_left" | "board_trashed" | "conflict" | "newer_format" => 409,
         _ => 400,
     }
 }
@@ -206,6 +206,39 @@ fn load(space: &Space, acc: &Access, id: &str) -> Result<Board, DataError> {
     Ok(Board::from_entries(id, read_all(space, acc, &board::board_prefix(id))?))
 }
 
+/// A board this K2 can't read, on its meta or its list row: `newer_format`.
+/// Answers both, as stored.
+fn refuse_newer(space: &Space, id: &str) -> Result<(Option<Stored>, Option<Value>), Fail> {
+    let row = store().get(space, &board::row_key(id))?.map(|e| Stored { key: board::row_key(id), rev: e.rev, value: e.value });
+    let meta = store().get(space, &board::meta_key(id))?.map(|e| e.value);
+    bops::check_format(row.as_ref().and_then(|r| r.value.get("format")))?;
+    bops::check_format(meta.as_ref().and_then(|m| m.get("format")))?;
+    Ok((row, meta))
+}
+
+/// Before a write: refuse a newer board, and upgrade one from before
+/// `format`, once (the widget does the same when it opens one). What this
+/// caller may not write stays for someone who can; a conflict means someone
+/// else is writing, and the next write runs it again.
+fn ready_to_write(who: &DataWho, space: &Space, acc: &Access, id: &str) -> Result<(), Fail> {
+    let (row, meta) = refuse_newer(space, id)?;
+    let lacks = |v: Option<&Value>| v.is_some_and(|v| v.is_object() && v.get("format").is_none_or(Value::is_null));
+    if !lacks(row.as_ref().map(|r| &r.value)) && !lacks(meta.as_ref()) {
+        return Ok(());
+    }
+    let entries = read_all(space, acc, &board::board_prefix(id))?;
+    let batch = format!("cli-{}", schema::hex(10));
+    let ws: Vec<Write> = bops::upgrade_plan(id, &entries, row.as_ref(), &batch).into_iter().filter(|w| acc.can_write(&w.key)).collect();
+    for chunk in ws.chunks(MAX_OPS) {
+        match commit(who, space, acc, chunk) {
+            Ok(_) => {}
+            Err(DataError::Conflict { .. }) => return Ok(()),
+            Err(e) => return Err(Fail::Data(e)),
+        }
+    }
+    Ok(())
+}
+
 /// Write `ws` as one all-or-nothing commit with each key's `ifRev`.
 fn commit(who: &DataWho, space: &Space, acc: &Access, ws: &[Write]) -> Result<i64, DataError> {
     if ws.is_empty() {
@@ -244,6 +277,7 @@ fn write_cmd(
     id: &str,
     mut f: impl FnMut(&Board, &Ctx) -> Result<(Vec<Write>, Value), Fail>,
 ) -> Result<Value, Fail> {
+    ready_to_write(who, space, acc, id)?;
     let by = person_key(who);
     for attempt in 0.. {
         let b = load(space, acc, id)?;
@@ -306,6 +340,8 @@ fn run(who: &DataWho, body: &[u8]) -> Result<Value, Fail> {
             let id = resolve(&space, &acc, s(&b, "board"))?;
             let name = need(&b, "name", "board-rename")?.to_string();
             check_name(&name)?;
+            // First: an upgrade writes the row this reads.
+            ready_to_write(who, &space, &acc, &id)?;
             let row = store().get(&space, &board::row_key(&id))?;
             let (rev, mut v) = match row {
                 Some(e) => (e.rev, e.value.as_object().cloned().unwrap_or_default()),
@@ -509,6 +545,7 @@ fn run(who: &DataWho, body: &[u8]) -> Result<Value, Fail> {
         "export" => {
             let id = resolve(&space, &acc, s(&b, "board"))?;
             spend(who, &space, Spend::Read)?;
+            refuse_newer(&space, &id)?;
             let bd = load(&space, &acc, &id)?;
             let title = bd
                 .meta_value()

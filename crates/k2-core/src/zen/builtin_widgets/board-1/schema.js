@@ -3,10 +3,15 @@
 // Nothing here is ever cut or skipped silently: a value that doesn't fit is refused with a typed
 // error {code, field, max?} (codes: unknown_type, unknown_field, bad_field, too_long, too_many,
 // value_too_large). Numbers round to 0.1 (the canonical precision).
+// The format rule: a board's `format` is read on load. None: from before format 1, upgraded once (upgradeObject).
+// One this build can't read: the board is read only here, and nothing writes over it (newer_format).
 (function (g) {
   'use strict'
 
   const FORMAT = 1
+  const isNewerFormat = (v) => v != null && !(Number.isInteger(v) && v >= 1 && v <= FORMAT)
+  // An id a board file can carry: 1–24 of a-z 0-9 . _ - (opaque: nothing ever reads a type or a time from it).
+  const validId = (v) => typeof v === 'string' && /^[0-9a-z._-]{1,24}$/.test(v)
   // Sticky colours: [light, dark]. Muted in dark so they don't glare.
   const STICKY = {
     yellow: ['#fff1a8', '#d9c96a'], orange: ['#ffd8b0', '#d9a671'], pink: ['#ffd0e2', '#d895ad'],
@@ -80,8 +85,10 @@
   const REACTIONS = ['👍', '❤️', '😂', '🎉', '🤔', '👀', '🔥', '✅', '❌', '❓', '⭐']
   const STAMPS = ['✅', '❌', '❓', '⭐']   // reactions drawn big, as stamps on the object's corner
 
-  // Ids of list items inside one object (checklist items, replies, table rows and columns).
-  const ITEM_ID = { checks: /^ck-[0-9a-z]{1,16}$/, replies: /^rp-[0-9a-z]{1,16}$/, rowIds: /^rw-[0-9a-z]{1,16}$/, colIds: /^cl-[0-9a-z]{1,16}$/ }
+  // Ids of list items inside one object (checklist items, replies, table rows and columns): opaque and unique in
+  // their list. New ones are minted <prefix>-<8 hex>; any id of the shape below is read.
+  const ITEM_ID_RE = /^[0-9a-z._-]{1,24}$/
+  const ITEM_ID = { checks: ITEM_ID_RE, replies: ITEM_ID_RE, rowIds: ITEM_ID_RE, colIds: ITEM_ID_RE }
   // A new random item id: <prefix>-<8 hex>.
   function itemId(prefix) {
     const a = new Uint8Array(4); g.crypto.getRandomValues(a)
@@ -91,6 +98,15 @@
   const DATA_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/
   const isBlobRef = (v) => typeof v === 'string' && BLOB_REF.test(v)
   const isDataImage = (v) => typeof v === 'string' && DATA_IMAGE.test(v)
+  // The ids a list's items already have (null: one is used twice).
+  function usedIds(list) {
+    const used = new Set()
+    for (const x of list) if (x && typeof x === 'object' && x.id != null) { if (used.has(x.id)) return null; used.add(x.id) }
+    return used
+  }
+  // The id an older item at position i is read with: <p>-<i>, or with x added while another item holds that id.
+  // The Rust reader gives the same one, so every reader of an older list agrees.
+  function slotId(p, i, used) { let id = p + '-' + i; while (used.has(id)) id += 'x'; used.add(id); return id }
 
   // A typed refusal: {code, field, max?}. The message is for logs; the UI words its own.
   function refusal(code, field, max, why) {
@@ -163,7 +179,7 @@
       return v.map((r) => r.map((c) => strOf(c, key, 2000)))
     }
     if (kind === 'rowIds' || kind === 'colIds') {
-      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !ITEM_ID[kind].test(x))) bad('a list of ' + (kind === 'rowIds' ? 'rw-' : 'cl-') + '… ids')
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !ITEM_ID[kind].test(x))) bad('a list of ids: 1–24 of a-z, 0-9, . _ -')
       if (new Set(v).size !== v.length) bad('ids used twice')
       if (v.length > (kind === 'rowIds' ? LIMITS.rows : LIMITS.cols)) throw refusal('too_many', key, kind === 'rowIds' ? LIMITS.rows : LIMITS.cols)
       return v.slice()
@@ -186,19 +202,21 @@
       if (v == null) return null
       if (!Array.isArray(v)) bad('a list of {"text":..,"done":true|false}')
       if (v.length > LIMITS.checks) throw refusal('too_many', key, LIMITS.checks)
+      const used = usedIds(v); if (!used) bad('item ids used twice')
       return v.map((c, i) => {
-        if (!isObj(c)) return { id: 'ck-' + i, text: strOf(c, key, 500), done: false }
-        if (c.id != null && (typeof c.id !== 'string' || !ITEM_ID.checks.test(c.id))) bad('item ids are ck-…')
-        return { id: c.id || 'ck-' + i, text: strOf(c.text, key, 500), done: c.done === true || c.done === 'true' }
+        if (!isObj(c)) return { id: slotId('ck', i, used), text: strOf(c, key, 500), done: false }
+        if (c.id != null && (typeof c.id !== 'string' || !ITEM_ID.checks.test(c.id))) bad('item ids: 1–24 of a-z, 0-9, . _ -')
+        return { id: c.id || slotId('ck', i, used), text: strOf(c.text, key, 500), done: c.done === true || c.done === 'true' }
       })
     }
     if (kind === 'replies') {
       if (v == null) return []
       if (!Array.isArray(v)) bad('a list of {"by":..,"at":..,"text":..}')
+      const used = usedIds(v); if (!used) bad('reply ids used twice')
       return v.map((r, i) => {
         if (!isObj(r)) bad('a list of {"by":..,"at":..,"text":..}')
-        if (r.id != null && (typeof r.id !== 'string' || !ITEM_ID.replies.test(r.id))) bad('reply ids are rp-…')
-        return { id: r.id || 'rp-' + i, by: strOf(r.by, key, 80), at: strOf(r.at, key, 40), text: strOf(r.text, key, 5000) }
+        if (r.id != null && (typeof r.id !== 'string' || !ITEM_ID.replies.test(r.id))) bad('reply ids: 1–24 of a-z, 0-9, . _ -')
+        return { id: r.id || slotId('rp', i, used), by: strOf(r.by, key, 80), at: strOf(r.at, key, 40), text: strOf(r.text, key, 5000) }
       })
     }
     if (kind === 'reactions') {
@@ -281,6 +299,28 @@
       if (!Array.isArray(o.colIds) || o.colIds.length !== n) o.colIds = Array.from({ length: n }, (_, i) => 'cl-' + i)
     }
     return o
+  }
+  // An older stored object in today's shape. It only adds or restates, and drops nothing: an object with no id takes
+  // the one its key names, list items and table rows and columns get the ids readers already give them, and older
+  // reactions turn per person. Anything else, unknown fields too, stays as stored. Today's shape comes back as the
+  // same value, so running it again does nothing.
+  function upgradeObject(v, keyId) {
+    if (!isObj(v)) return v
+    const out = Object.assign({}, v)
+    if (out.id == null && validId(keyId)) out.id = keyId
+    const fill = (list, p) => { const used = new Set(list.map((x) => (isObj(x) ? x.id : null)).filter((x) => x != null)); return list.map((x, i) => (isObj(x) && x.id == null ? Object.assign({ id: slotId(p, i, used) }, x) : x)) }
+    if (Array.isArray(out.checks) && out.checks.some((x) => isObj(x) && x.id == null)) out.checks = fill(out.checks, 'ck')
+    if (Array.isArray(out.replies) && out.replies.some((x) => isObj(x) && x.id == null)) out.replies = fill(out.replies, 'rp')
+    if (out.type === 'table' && Array.isArray(out.rows) && out.rows.every(Array.isArray)) {
+      if (!Array.isArray(out.rowIds) || out.rowIds.length !== out.rows.length) out.rowIds = out.rows.map((_, i) => 'rw-' + i)
+      const n = colCount(out.rows)
+      if (!Array.isArray(out.colIds) || out.colIds.length !== n) out.colIds = Array.from({ length: n }, (_, i) => 'cl-' + i)
+    }
+    if (isObj(out.reactions) && Object.keys(out.reactions).some((k) => REACTIONS.includes(k))) {
+      // An older value that doesn't read stays as stored.
+      try { out.reactions = check('reactions', out.reactions, 'reactions') } catch (e) { if (!isRefusal(e)) throw e }
+    }
+    return JSON.stringify(out) === JSON.stringify(v) ? v : out
   }
   // A whole object's stored size, as K2 counts it (UTF-8 JSON).
   const bytesOf = (v) => new TextEncoder().encode(JSON.stringify(v)).length
@@ -449,7 +489,7 @@
   const TEMPLATE_NAMES = { kickoff: 'Project kickoff', kanban: 'Kanban', retro: 'Retrospective', flowchart: 'Flowchart', storymap: 'User story map', brainstorm: 'Brainstorm', mindmap: 'Mind map' }
 
 
-  g.BoardSchema = { FORMAT, STICKY, INK, FILL, SHAPES, CAPS, ROUTES, DASH, ANCHORS, TYPES, COMMON, DEFAULTS, PREFIX, META, REACTIONS, STAMPS, LIMITS, VALUE_MAX,
+  g.BoardSchema = { FORMAT, isNewerFormat, validId, upgradeObject, STICKY, INK, FILL, SHAPES, CAPS, ROUTES, DASH, ANCHORS, TYPES, COMMON, DEFAULTS, PREFIX, META, REACTIONS, STAMPS, LIMITS, VALUE_MAX,
     clean, cleanMeta, check, normalize, META_OFF, templates, TEMPLATE_NAMES, splitExtra, isExtraKey, dropsOnNull,
     refusal, isRefusal, ensureIds, itemId, isBlobRef, isDataImage, bytesOf, checkSize, chars }
 })(typeof window !== 'undefined' ? window : globalThis)

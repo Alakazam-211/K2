@@ -1,6 +1,7 @@
-//! The Board's JSON export (format `k2-board`, version 1): the same
-//! envelope the widget's in-frame export writes, and the input the later
-//! `.k5board` file codec takes (design-board-file-type v0.1 §3.1).
+//! The Board's JSON export (`k2-board`, version 1): the same envelope the
+//! widget's in-frame export writes. It's K2's own, for the Garden. It is
+//! **not** the board file: `.k5board` is another format, which K2 Cores'
+//! codec converts to and from the Garden's keys.
 //!
 //! ```text
 //! { "format": "k2-board", "version": 1, "title": …,
@@ -116,6 +117,8 @@ pub fn envelope(
     name_of: &dyn Fn(&str) -> (String, &'static str),
     blob: &mut dyn FnMut(&str) -> Result<BlobBytes, BoardError>,
 ) -> Result<Value, BoardError> {
+    // It says version 1, so it can't speak for a board this build can't read.
+    board.check_format()?;
     let mut people = People { tokens: BTreeMap::new(), table: Map::new() };
     let mut blobs = Map::new();
     let mut objects = Vec::new();

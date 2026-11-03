@@ -82,7 +82,7 @@ async function started(opts: Any = {}): Promise<Mounted> {
   await until('the board opens', () => m.fake.log.ready === 1 && !!m.App.store.boardId)
   return m
 }
-const statusOf = (m: Mounted): string => m.doc.querySelector('.status').textContent
+const statusOf = (m: Mounted): string => m.doc.querySelector('.status[data-state]').textContent   // a card has a .status too
 const toast = (m: Mounted): string => m.doc.getElementById('toast').textContent
 const stored = (m: Mounted, key: string): Any => { const e = m.fake.space.get(key); return e ? e.value : undefined }
 const boardKeys = (m: Mounted): string[] => [...m.fake.space.keys()].filter((k: string) => k.startsWith('boards/'))
@@ -617,5 +617,305 @@ describe('k2:board@1 in the Garden', () => {
     expect(stored(m, 'boards/b0a0a0a')).toEqual({ id: 'b0a0a0a', name: 'Renamed', project: null, format: 1, access: { helper: 'edit' }, accessApplied: { helper: 'edit' } })
     expect(stored(m, 'acl/board/b0a0a0a')).toEqual({ access: { helper: 'edit' } })
     expect(stored(m, 'access/b0a0a0a')).toEqual({ agents: [] })
+  })
+})
+
+// Stable ids and the format, before any board a person cares about exists: boards made in the Beta must become
+// board files later with no migration. tests/board/fixtures/older-board.json was made by the older Board build's own
+// schema.js and model.js; older-board.upgraded.json is the same board after its one upgrade (the Rust test uses it too).
+describe('k2:board@1 stable ids and the format', () => {
+  const fixture = (f: string): Array<[string, Any]> => JSON.parse(readFileSync(resolve(ROOT, 'tests/board/fixtures', f), 'utf8')).seed
+  const OLDER = fixture('older-board.json')
+  const UPGRADED = fixture('older-board.upgraded.json')
+  const OP = 'board/b0f0f0f/'
+  const ID_RULE = /^[0-9a-z._-]{1,24}$/
+  const noBatch = (v: Any): Any => { const c = JSON.parse(JSON.stringify(v)); if (c) delete c.batch; return c }
+  const upgraded = (m: Mounted): Promise<void> => until('the format is stored', () => stored(m, OP + 'meta')?.format === 1 && stored(m, 'boards/b0f0f0f')?.format === 1)
+  const dump = (m: Mounted, p = ''): string => JSON.stringify([...m.fake.space.entries()].filter(([k]: Any) => k.startsWith(p)).map(([k, e]: Any) => [k, e.value, e.rev]))
+
+  it('every new object id is <lowercase letter>-<10 hex>, inside the file rule, minted per type', async () => {
+    const m = await started({ seed: BOARD() })
+    expect(Object.values(m.S.PREFIX).every((l: Any) => /^[a-z]$/.test(l))).toBe(true)
+    expect(new Set(Object.values(m.S.PREFIX)).size).toBe(Object.keys(m.S.TYPES).length)
+    for (const type of Object.keys(m.S.TYPES)) {
+      const id = m.App.newId(type)
+      expect(id).toMatch(new RegExp('^' + m.S.PREFIX[type] + '-[0-9a-f]{10}$'))
+      expect(id).toMatch(ID_RULE)
+    }
+  })
+
+  it('never mints an id already on the board', async () => {
+    const m = await started({ seed: BOARD([sticky('s-0000000001')]) })
+    await until('shown', () => !!m.App.model.get('s-0000000001'))
+    const real = m.App.store.rid; let n = 0
+    m.App.store.rid = (p: string) => (n++ === 0 ? 's-0000000001' : real(p))
+    const id = m.App.newId('sticky')
+    expect(n).toBe(2)
+    expect(id).not.toBe('s-0000000001')
+  })
+
+  it('an object keeps its id through edit, move, undo, redo and a reload', async () => {
+    const m = await started({ seed: BOARD() })
+    const id = m.App.create('sticky', { x: 0, y: 0, text: 'a' })
+    await saved(m)
+    const key = P + 'obj/' + id
+    expect(stored(m, key).id).toBe(id)
+    const made = stored(m, key).createdBy
+    m.App.model.apply([{ op: 'set', id, f: { text: 'edited' } }])
+    m.App.model.apply([{ op: 'set', id, f: { x: 120, y: 90, z: 40 } }])
+    await saved(m)
+    expect(stored(m, key)).toMatchObject({ id, text: 'edited', x: 120, y: 90, z: 40 })
+    m.App.model.apply([{ op: 'del', id }])
+    await saved(m)
+    expect(stored(m, key)).toBeUndefined()
+    expect(m.App.model.undo()).toBe(true)   // the delete, undone: the same id and its first author
+    await saved(m)
+    expect(stored(m, key)).toMatchObject({ id, text: 'edited', x: 120, createdBy: made })
+    expect(m.App.model.undo()).toBe(true)   // the move
+    await saved(m)
+    expect(stored(m, key)).toMatchObject({ id, x: 0 })
+    expect(m.App.model.redo()).toBe(true)
+    await saved(m)
+    expect(stored(m, key)).toMatchObject({ id, x: 120 })
+    const again = mount({}, m.fake)
+    await until('the reloaded page opens', () => !!again.App.store.boardId && !!again.App.model.get(id))
+    expect(again.App.model.get(id)).toMatchObject({ id, text: 'edited', x: 120 })
+    expect(Object.keys(again.App.model.objects)).toEqual([id])
+  })
+
+  it('a copy gets a new id, and its lines follow the copy', async () => {
+    const m = await started({ seed: BOARD([sticky('s-0000000001'), sticky('s-0000000002'), [P + 'obj/c-0000000003', { id: 'c-0000000003', type: 'connector', from: { id: 's-0000000001', anchor: 'auto' }, to: { id: 's-0000000002', anchor: 'auto' } }]]) })
+    await until('shown', () => !!m.App.model.get('c-0000000003'))
+    const before = new Set(Object.keys(m.App.model.objects))
+    m.App.select(['s-0000000001', 's-0000000002', 'c-0000000003'], { raw: true })
+    m.App.duplicate(40)
+    const fresh = Object.keys(m.App.model.objects).filter((k) => !before.has(k))
+    expect(fresh).toHaveLength(3)
+    for (const id of fresh) expect(id).toMatch(/^[sc]-[0-9a-f]{10}$/)
+    const line = fresh.map((k) => m.App.model.get(k)).find((o: Any) => o.type === 'connector')
+    expect(fresh).toContain(line.from.id)
+    expect(fresh).toContain(line.to.id)
+    expect(m.App.model.get('s-0000000001').id).toBe('s-0000000001')   // the original keeps its own
+  })
+
+  it('new rows, columns, replies and check items mint their own ids; each is unique in its list; ids are opaque', async () => {
+    const m = await started({ seed: BOARD() })
+    const S = m.S
+    const t = m.App.model.get(m.App.create('table', { x: 0, y: 0 }))
+    for (const x of t.rowIds) expect(x).toMatch(/^rw-[0-9a-f]{8}$/)
+    for (const x of t.colIds) expect(x).toMatch(/^cl-[0-9a-f]{8}$/)
+    expect(S.itemId('ck')).toMatch(/^ck-[0-9a-f]{8}$/)
+    expect(S.itemId('rp')).toMatch(/^rp-[0-9a-f]{8}$/)
+    // An older item at a position another id already holds doesn't take it.
+    expect(S.check('checks', [{ id: 'ck-1', text: 'a' }, { text: 'b' }], 'checks').map((c: Any) => c.id)).toEqual(['ck-1', 'ck-1x'])
+    expect(S.check('replies', [{ id: 'rp-1', by: 'a', at: 't', text: 'x' }, { by: 'b', at: 't', text: 'y' }], 'replies').map((c: Any) => c.id)).toEqual(['rp-1', 'rp-1x'])
+    expect(S.upgradeObject({ id: 'k-1', type: 'card', checks: [{ id: 'ck-1', text: 'a' }, { text: 'b' }] }).checks.map((c: Any) => c.id)).toEqual(['ck-1', 'ck-1x'])
+    // Used twice: refused. Any id of the file's shape is taken as it is, whatever it looks like.
+    expect(() => S.check('checks', [{ id: 'ck-1', text: 'a' }, { id: 'ck-1', text: 'b' }], 'checks')).toThrow(/twice/)
+    expect(() => S.check('replies', [{ id: 'x', by: 'a', at: 't', text: 'x' }, { id: 'x', by: 'b', at: 't', text: 'y' }], 'replies')).toThrow(/twice/)
+    expect(() => S.check('rowIds', ['a', 'a'], 'rowIds')).toThrow(/twice/)
+    expect(S.check('checks', [{ id: 'item.1_a', text: 'a' }], 'checks')[0].id).toBe('item.1_a')
+    expect(S.check('colIds', ['col.1'], 'colIds')).toEqual(['col.1'])
+    expect(() => S.check('checks', [{ id: 'Not Valid', text: 'a' }], 'checks')).toThrow(/1–24/)
+  })
+
+  it('an older board loads and is upgraded once, to exactly the pinned shape, with no data lost', async () => {
+    // The fixture really is the older shape.
+    const before = new Map(OLDER)
+    expect(before.get(OP + 'meta').format).toBeUndefined()
+    expect(before.get('boards/b0f0f0f').format).toBeUndefined()
+    expect(before.get(OP + 'obj/k-4d5e6f7081').checks[0].id).toBeUndefined()
+    expect(before.get(OP + 'obj/q-5e6f708192').replies[0].id).toBeUndefined()
+    expect(before.get(OP + 'obj/b-6f708192a3').rowIds).toBeUndefined()
+    expect(Object.keys(before.get(OP + 'obj/s-1a2b3c4d5e').reactions)).toContain('👍')
+
+    const m = await started({ seed: OLDER })
+    expect(m.App.store.boardId).toBe('b0f0f0f')
+    await upgraded(m)
+    // Exactly the pinned shape, key by key; nothing else appeared.
+    expect([...m.fake.space.keys()].sort()).toEqual(UPGRADED.map(([k]) => k).sort())
+    for (const [k, want] of UPGRADED) expect(noBatch(stored(m, k)), k).toEqual(noBatch(want))
+    // Nothing lost: every field of every older value is still there, unchanged, but for the reactions turned round.
+    for (const [k, was] of OLDER) {
+      const { reactions, batch: _b, ...rest } = was as Any
+      expect(stored(m, k), k).toMatchObject(rest)
+      if (reactions) expect(stored(m, k).reactions).toEqual({ Ada: ['👍', '🎉'], 'agent:helper': ['👍'] })
+    }
+    expect(stored(m, OP + 'obj/s-1a2b3c4d5e').keptField).toEqual({ from: 'a newer tool' })
+    expect(stored(m, OP + 'meta').keptSetting).toEqual({ from: 'a newer tool' })
+    expect(stored(m, OP + 'obj/i-a3b4c5d6e7').src).toMatch(/^data:image\/png/)
+    // The people and times are the older ones: an upgrade is nobody's edit.
+    expect(stored(m, OP + 'obj/k-4d5e6f7081')).toMatchObject({ updatedBy: 'Ada', updatedAt: '2026-10-20T09:00:00.000Z' })
+    // The board shows what's stored.
+    expect(m.App.model.get('k-4d5e6f7081').checks.map((c: Any) => [c.id, c.text, c.done])).toEqual([['ck-0', 'one', false], ['ck-1', 'two', true]])
+    expect(m.App.model.get('c-3c4d5e6f70').from.id).toBe('s-1a2b3c4d5e')
+    expect(statusOf(m)).not.toMatch(/Read only/)
+  })
+
+  it('a second open of an upgraded board writes nothing, and the upgrade of today’s shape returns the same value', async () => {
+    const m = await started({ seed: OLDER })
+    await upgraded(m)
+    const after = dump(m)
+    const again = mount({}, m.fake)
+    await until('the reloaded page opens', () => !!again.App.store.boardId && !!again.App.model.get('k-4d5e6f7081'))
+    await sleep(100)
+    expect(dump(m)).toBe(after)
+    for (const [k, v] of UPGRADED) {
+      const hit = /obj\/(.+)$/.exec(k)
+      if (hit) expect(m.S.upgradeObject(v, hit[1]), k).toBe(v)
+    }
+    // Ids stored by the upgrade are the ones an edit keeps.
+    const card = again.App.model.get('k-4d5e6f7081')
+    again.App.model.apply([{ op: 'set', id: card.id, f: { checks: card.checks.map((c: Any) => Object.assign({}, c, { done: true })) } }])
+    await saved(again)
+    expect(stored(again, OP + 'obj/k-4d5e6f7081').checks.map((c: Any) => c.id)).toEqual(['ck-0', 'ck-1'])
+  })
+
+  it('an upgrade stopped part way leaves no format, and runs again at the next open', async () => {
+    const m = mount({ seed: OLDER })
+    const real = m.fake.k2.store.batch; let threw = 0
+    m.fake.k2.store.batch = async (ops: Any[]) => {
+      if (threw === 0 && ops.some((o) => o.key.includes('/obj/'))) { threw++; throw Object.assign(new Error('conflict'), { name: 'K2Error', code: 'conflict' }) }
+      return real(ops)
+    }
+    await until('the board opens', () => m.fake.log.ready === 1 && !!m.App.store.boardId)
+    await until('the first try failed', () => threw === 1)
+    await sleep(50)
+    expect(stored(m, OP + 'meta').format).toBeUndefined()
+    expect(stored(m, 'boards/b0f0f0f').format).toBeUndefined()
+    expect(m.App.model.get('k-4d5e6f7081').checks[0].id).toBe('ck-0')   // readers don't wait for it
+    const again = mount({}, m.fake)
+    await until('it reopens', () => !!again.App.store.boardId)
+    await upgraded(again)
+    for (const [k, want] of UPGRADED) expect(noBatch(stored(again, k)), k).toEqual(noBatch(want))
+  })
+
+  it('an edit made as the upgrade runs lands on the upgraded object', async () => {
+    const m = await started({ seed: OLDER, echoDelay: 5 })
+    m.App.model.apply([{ op: 'set', id: 'k-4d5e6f7081', f: { title: 'Edited' } }])
+    await upgraded(m)
+    await saved(m)
+    expect(stored(m, OP + 'obj/k-4d5e6f7081')).toMatchObject({ title: 'Edited', checks: [{ id: 'ck-0', text: 'one' }, { id: 'ck-1', text: 'two' }] })
+    expect(stored(m, OP + 'meta').format).toBe(1)
+  })
+
+  it('an object with no id takes the one its key names; a key that can’t be an id stays stored, unread', async () => {
+    const m = await started({ seed: [
+      ['seeded', { at: 'x' }], ['boards/b0a0a0a', { id: 'b0a0a0a', name: 'Plans', project: null }], [P + 'meta', { title: 'Plans' }],
+      [P + 'obj/s-00000000ab', { type: 'sticky', text: 'no id' }],
+      [P + 'obj/Not_An_Id', { type: 'sticky', text: 'kept' }],
+    ] })
+    await until('shown', () => !!m.App.model.get('s-00000000ab'))
+    await until('the format is stored', () => stored(m, P + 'meta')?.format === 1)
+    expect(stored(m, P + 'obj/s-00000000ab')).toMatchObject({ id: 's-00000000ab', text: 'no id' })
+    expect(stored(m, P + 'obj/Not_An_Id')).toEqual({ type: 'sticky', text: 'kept' })
+    expect(m.App.model.get('Not_An_Id')).toBeUndefined()
+  })
+
+  const NEWER = (over: Any = {}): Array<[string, unknown]> => [
+    ['seeded', { at: 'x' }],
+    ['boards/b0a0a0a', Object.assign({ id: 'b0a0a0a', name: 'Plans', project: null, format: 1 }, over.row)],
+    [P + 'meta', Object.assign({ format: 2, title: 'Plans', newerSetting: { a: 1 } }, over.meta)],
+    sticky('s-0000000001', { text: 'From later', shinyNewField: [1, 2] }),
+    ['boards/b0b0b0b', { id: 'b0b0b0b', name: 'Mine', project: null, format: 1 }],
+    ['board/b0b0b0b/meta', { format: 1, title: 'Mine' }],
+  ]
+  const open = async (over: Any = {}): Promise<Mounted> => {
+    const m = await started({ seed: NEWER(over), saves: [['prefs', { open: 'b0a0a0a' }]] })
+    await until('the newer board shows', () => !!m.App.model.get('s-0000000001'))
+    return m
+  }
+
+  it('a board from a newer format shows, read only; no edit or undo writes to it, and it says why', async () => {
+    const m = await open()
+    expect(m.App.store.readOnly).toBe(true)
+    expect(statusOf(m)).toBe('Read only: a newer K2 made this board. Update K2 to edit it')
+    const before = dump(m, P)
+    expect(m.App.model.get('s-0000000001').text).toBe('From later')
+    expect(m.App.model.apply([{ op: 'set', id: 's-0000000001', f: { text: 'over it' } }])).toBe(false)
+    expect(toast(m)).toBe('This board is read only: a newer K2 made it. Update K2 to edit it')
+    expect(m.App.model.apply([{ op: 'del', id: 's-0000000001' }])).toBe(false)
+    expect(m.App.model.apply([{ op: 'add', obj: { id: 's-00000000zz', type: 'sticky', text: 'new' } }])).toBe(false)
+    expect(m.App.model.apply([{ op: 'meta', f: { title: 'Mine now' } }])).toBe(false)
+    expect(m.App.create('sticky', { x: 0, y: 0 })).toBeNull()
+    expect(m.App.quickAdd('s-0000000001', 'right')).toBeNull()
+    m.App.model.preview('s-0000000001', { x: 500 })
+    m.App.model.commitPreview()
+    expect(m.App.model.get('s-0000000001').x).toBe(0)
+    m.App.store.flushNow()
+    await sleep(500)
+    expect(dump(m, P)).toBe(before)
+    // It's never stamped down, or upgraded, by being opened.
+    expect(stored(m, P + 'meta').format).toBe(2)
+    expect(stored(m, P + 'meta').newerSetting).toEqual({ a: 1 })
+    expect(stored(m, P + 'obj/s-0000000001').shinyNewField).toEqual([1, 2])
+  })
+
+  it('switching away edits as usual, and switching back is read only again', async () => {
+    const m = await open()
+    expect(m.App.switchBoard('b0b0b0b')).toBe(true)
+    expect(m.App.store.readOnly).toBe(false)
+    const id = m.App.create('sticky', { x: 0, y: 0 })
+    expect(id).toEqual(expect.any(String))
+    await saved(m)
+    expect(statusOf(m)).toBe('Saved')
+    expect(stored(m, 'board/b0b0b0b/obj/' + id)).toBeDefined()
+    expect(m.App.switchBoard('b0a0a0a')).toBe(true)
+    expect(m.App.store.readOnly).toBe(true)
+    expect(statusOf(m)).toMatch(/^Read only/)
+    expect(m.App.model.apply([{ op: 'set', id: 's-0000000001', f: { x: 1 } }])).toBe(false)
+  })
+
+  it('a newer format on the list row alone counts, and so does one this build can’t read at all', async () => {
+    for (const over of [{ row: { format: 7 }, meta: { format: 1 } }, { meta: { format: 'two' } }, { meta: { format: 1.5 } }, { meta: { format: 0 } }]) {
+      const m = await open(over)
+      expect(m.App.store.readOnly, JSON.stringify(over)).toBe(true)
+      expect(m.App.model.apply([{ op: 'set', id: 's-0000000001', f: { x: 1 } }]), JSON.stringify(over)).toBe(false)
+    }
+    const S = mount().S
+    expect(S.isNewerFormat(1)).toBe(false)
+    expect(S.isNewerFormat(undefined)).toBe(false)
+    expect(S.isNewerFormat(2)).toBe(true)
+  })
+
+  it('a board that turns newer while open goes read only, and an edit still waiting isn’t written over it', async () => {
+    const m = await started({ seed: BOARD([sticky('s-0000000001')]) })
+    await until('shown', () => !!m.App.model.get('s-0000000001'))
+    expect(m.App.store.readOnly).toBe(false)
+    m.App.model.apply([{ op: 'set', id: 's-0000000001', f: { text: 'waiting' } }])   // not saved yet
+    m.fake.agentWrite([{ key: P + 'meta', value: { format: 2, title: 'Plans' } }, { key: P + 'obj/s-0000000001', value: { id: 's-0000000001', type: 'sticky', text: 'newer', x: 9 } }], 'helper')
+    await until('read only', () => m.App.store.readOnly === true)
+    expect(statusOf(m)).toMatch(/^Read only/)
+    m.App.store.flushNow()
+    await sleep(500)
+    expect(stored(m, P + 'obj/s-0000000001')).toEqual({ id: 's-0000000001', type: 'sticky', text: 'newer', x: 9 })
+    expect(stored(m, P + 'meta').format).toBe(2)
+    expect(m.App.model.apply([{ op: 'set', id: 's-0000000001', f: { x: 1 } }])).toBe(false)
+  })
+
+  it('the JSON export refuses a newer board rather than call it format 1', async () => {
+    const m = await open()
+    await expect(m.App.exportJson()).rejects.toMatchObject({ code: 'newer_format' })
+  })
+
+  it('a board name is refused past 200 characters, never cut; a long one under that stays whole', async () => {
+    const m = await started({ seed: BOARD(), features: { boards: false, forAgents: false, chat: false } })
+    const rename = (v: string): void => {
+      m.doc.querySelector('.boardname .name').click()
+      const input = m.doc.querySelector('.boardname input.rename')
+      expect(input.maxLength).toBe(-1)
+      input.value = v
+      input.dispatchEvent(new m.win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    }
+    const long = 'n'.repeat(150)
+    rename(long)
+    await saved(m)
+    expect(stored(m, 'boards/b0a0a0a').name).toBe(long)
+    expect(stored(m, P + 'meta').title).toBe(long)
+    rename('n'.repeat(201))
+    await saved(m)
+    expect(toast(m)).toBe('That’s too long to save: at most 200 characters')
+    expect(stored(m, 'boards/b0a0a0a').name).toBe(long)
+    expect(stored(m, P + 'meta').title).toBe(long)
   })
 })

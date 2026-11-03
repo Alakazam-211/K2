@@ -262,6 +262,20 @@ fn round1(n: f64) -> Value {
     }
 }
 
+/// A number as stored: at most one decimal place. A finer one is refused,
+/// never rounded. Arithmetic's float noise (12.399999999) reads as its tenth.
+fn tenth(field: &str, n: f64) -> Result<Value, BoardError> {
+    if (n * 10.0 - (n * 10.0).round()).abs() > 1e-6 {
+        return Err(BoardError::bad_field(field, "a number with at most one decimal place (nothing was rounded)"));
+    }
+    Ok(round1(n))
+}
+
+/// A whole number (a pen's points are), within arithmetic's float noise.
+fn is_whole(n: f64) -> bool {
+    (n - n.round()).abs() <= 1e-6
+}
+
 fn num_of(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
@@ -302,7 +316,7 @@ fn check_str(field: &str, v: &Value, max: usize) -> Result<Value, BoardError> {
 pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardError> {
     let bad = |why: &str| BoardError::bad_field(field, why);
     Ok(Some(match kind {
-        Kind::Num => round1(num_of(v).ok_or_else(|| bad("a number"))?),
+        Kind::Num => tenth(field, num_of(v).ok_or_else(|| bad("a number"))?)?,
         Kind::Bool => match v {
             Value::Bool(b) => Value::Bool(*b),
             Value::String(s) if s == "true" => Value::Bool(true),
@@ -357,6 +371,9 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                 let p = p.as_array().filter(|p| p.len() >= 2).ok_or_else(|| bad("a list of [x, y]"))?;
                 let x = num_of(&p[0]).ok_or_else(|| bad("a list of [x, y]"))?;
                 let y = num_of(&p[1]).ok_or_else(|| bad("a list of [x, y]"))?;
+                if !is_whole(x) || !is_whole(y) {
+                    return Err(bad("whole numbers in [x, y] (nothing was rounded)"));
+                }
                 out.push(json!([x.round() as i64, y.round() as i64]));
             }
             Value::Array(out)
@@ -404,7 +421,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
             }
             let mut out = Vec::with_capacity(a.len());
             for x in a {
-                out.push(round1(num_of(x).ok_or_else(|| bad("a list of column widths"))?));
+                out.push(tenth(field, num_of(x).ok_or_else(|| bad("a list of column widths"))?)?);
             }
             Value::Array(out)
         }
@@ -431,7 +448,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                     // (faded) if its object goes.
                     for q in ["x", "y"] {
                         if let Some(n) = o.get(q).filter(|v| !v.is_null()) {
-                            e[q] = round1(num_of(n).ok_or_else(|| bad(&format!("{q}: a number")))?);
+                            e[q] = tenth(field, num_of(n).ok_or_else(|| bad(&format!("{q}: a number")))?)?;
                         }
                     }
                     e
@@ -439,7 +456,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                 Value::Object(o) => {
                     let x = o.get("x").and_then(num_of).ok_or_else(|| bad("an object id, {\"id\":..,\"anchor\":..} or {\"x\":..,\"y\":..}"))?;
                     let y = o.get("y").and_then(num_of).ok_or_else(|| bad("an object id, {\"id\":..,\"anchor\":..} or {\"x\":..,\"y\":..}"))?;
-                    json!({ "x": round1(x), "y": round1(y) })
+                    json!({ "x": tenth(field, x)?, "y": tenth(field, y)? })
                 }
                 _ => return Err(bad("an object id, {\"id\":..,\"anchor\":..} or {\"x\":..,\"y\":..}")),
             }
@@ -488,6 +505,9 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                 let x = o.get(q).and_then(num_of).ok_or_else(|| bad(&format!("crop.{q} a number from 0 to 1")))?;
                 if !(0.0..=1.0).contains(&x) {
                     return Err(bad(&format!("crop.{q} a number from 0 to 1")));
+                }
+                if (x * 10000.0 - (x * 10000.0).round()).abs() > 1e-6 {
+                    return Err(bad(&format!("crop.{q} with at most four decimal places (nothing was rounded)")));
                 }
                 c.insert(q.into(), json!((x * 10000.0).round() / 10000.0));
             }
@@ -676,6 +696,10 @@ pub fn normalize(ty: &str, f: &Map<String, Value>, base: Option<&Map<String, Val
     for p in a {
         let Some(p) = p.as_array().filter(|p| p.len() >= 2) else { return out };
         let (Some(x), Some(y)) = (num_of(&p[0]), num_of(&p[1])) else { return out };
+        // A point that isn't whole goes on as it came, and `check` refuses it.
+        if !is_whole(x) || !is_whole(y) {
+            return out;
+        }
         xy.push((x, y));
     }
     let x1 = xy.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
@@ -717,6 +741,102 @@ pub fn table_ids(obj: &mut Map<String, Value>) {
     obj.insert("colIds".into(), c);
 }
 
+/// The id an older list item at position `i` is read with: `<p>-<i>`, with
+/// `x` added while another item holds that (schema.js `slotId`).
+fn slot_id(p: &str, i: usize, used: &mut std::collections::HashSet<String>) -> String {
+    let mut id = format!("{p}-{i}");
+    while used.contains(&id) {
+        id.push('x');
+    }
+    used.insert(id.clone());
+    id
+}
+
+/// Give list items without an id of their own one by position. `own`: an
+/// `id` value that counts as the item's own.
+fn fill_item_ids(items: &mut [Value], p: &str, own: impl Fn(&Value) -> bool) {
+    let mut used: std::collections::HashSet<String> =
+        items.iter().filter_map(|x| x.get("id")).filter(|v| own(v)).filter_map(Value::as_str).map(str::to_string).collect();
+    for (i, it) in items.iter_mut().enumerate() {
+        if let Value::Object(m) = it {
+            if !m.get("id").is_some_and(&own) {
+                let id = slot_id(p, i, &mut used);
+                m.insert("id".into(), Value::String(id));
+            }
+        }
+    }
+}
+
+/// An older `{"👍": [names]}` per person, in the reaction list's order, so
+/// every reader turns the same old value into the same lists.
+fn turn_reactions(r: &Map<String, Value>) -> Map<String, Value> {
+    let mut per: Map<String, Value> = Map::new();
+    for (emoji, names) in r {
+        for n in names.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let e = per.entry(n.to_string()).or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(a) = e.as_array_mut() {
+                if !a.iter().any(|x| x.as_str() == Some(emoji)) {
+                    a.push(Value::String(emoji.clone()));
+                }
+            }
+        }
+    }
+    let rank = |e: &Value| REACTIONS.iter().position(|r| Some(*r) == e.as_str()).unwrap_or(usize::MAX);
+    for list in per.values_mut() {
+        if let Some(a) = list.as_array_mut() {
+            a.sort_by_key(rank);
+        }
+    }
+    per
+}
+
+/// A table's `rowIds`/`colIds` by position, where they aren't in step with
+/// its `rows`.
+fn fill_table_ids(o: &mut Map<String, Value>) {
+    let Some(rows) = o.get("rows").and_then(Value::as_array) else { return };
+    let (n_rows, n_cols) = (rows.len(), rows.iter().filter_map(Value::as_array).map(Vec::len).max().unwrap_or(0));
+    for (field, n, p) in [("rowIds", n_rows, "rw"), ("colIds", n_cols, "cl")] {
+        let ok = o.get(field).and_then(Value::as_array).is_some_and(|a| a.len() == n);
+        if !ok {
+            o.insert(field.into(), Value::Array((0..n).map(|i| Value::String(format!("{p}-{i}"))).collect()));
+        }
+    }
+}
+
+/// An older stored object in today's shape, to store (schema.js
+/// `upgradeObject`). It only adds or restates, and drops nothing: an object
+/// with no id takes the one its key names (`key_id`), list items and table
+/// rows and columns get the ids readers already give them, and older
+/// reactions turn per person. A value that doesn't read that way, and
+/// anything else, unknown fields too, stays as stored. Running it again
+/// changes nothing.
+pub fn upgrade_object(v: &Value, key_id: Option<&str>) -> Value {
+    let mut v = v.clone();
+    let Some(o) = v.as_object_mut() else { return v };
+    if o.get("id").is_none_or(Value::is_null) {
+        if let Some(id) = key_id.filter(|s| valid_item_id(s)) {
+            o.insert("id".into(), Value::String(id.into()));
+        }
+    }
+    if let Some(Value::Object(r)) = o.get("reactions") {
+        let older = !r.is_empty() && r.iter().all(|(k, names)| REACTIONS.contains(&k.as_str()) && names.as_array().is_some_and(|a| a.iter().all(Value::is_string)));
+        if older {
+            let turned = turn_reactions(r);
+            o.insert("reactions".into(), Value::Object(turned));
+        }
+    }
+    for (field, p) in [("checks", "ck"), ("replies", "rp")] {
+        if let Some(Value::Array(items)) = o.get_mut(field) {
+            fill_item_ids(items, p, |id| !id.is_null());
+        }
+    }
+    let all_rows = o.get("rows").and_then(Value::as_array).is_some_and(|r| r.iter().all(Value::is_array));
+    if o.get("type").and_then(Value::as_str) == Some("table") && all_rows {
+        fill_table_ids(o);
+    }
+    v
+}
+
 /// Read side: a stored object in today's shapes. Older boards' reactions
 /// (`{"👍": [names]}`) turn per person; checklist items, replies and table
 /// rows and columns without ids get positional ids (`ck-0`, `rp-0`,
@@ -726,48 +846,17 @@ pub fn read_shape(v: &Value) -> Value {
     let Some(o) = v.as_object_mut() else { return v };
     if let Some(Value::Object(r)) = o.get("reactions") {
         if r.keys().any(|k| REACTIONS.contains(&k.as_str())) {
-            let mut per: Map<String, Value> = Map::new();
-            for (emoji, names) in r {
-                for n in names.as_array().into_iter().flatten().filter_map(Value::as_str) {
-                    let e = per.entry(n.to_string()).or_insert_with(|| Value::Array(Vec::new()));
-                    if let Some(a) = e.as_array_mut() {
-                        if !a.iter().any(|x| x.as_str() == Some(emoji)) {
-                            a.push(Value::String(emoji.clone()));
-                        }
-                    }
-                }
-            }
-            // In the reaction list's order, so every reader (this one and
-            // the widget's) turns the same old value into the same lists.
-            let rank = |e: &Value| REACTIONS.iter().position(|r| Some(*r) == e.as_str()).unwrap_or(usize::MAX);
-            for list in per.values_mut() {
-                if let Some(a) = list.as_array_mut() {
-                    a.sort_by_key(rank);
-                }
-            }
+            let per = turn_reactions(r);
             o.insert("reactions".into(), Value::Object(per));
         }
     }
     for (field, p) in [("checks", "ck"), ("replies", "rp")] {
         if let Some(Value::Array(items)) = o.get_mut(field) {
-            for (i, it) in items.iter_mut().enumerate() {
-                if let Value::Object(m) = it {
-                    if !m.get("id").and_then(Value::as_str).is_some_and(valid_item_id) {
-                        m.insert("id".into(), Value::String(format!("{p}-{i}")));
-                    }
-                }
-            }
+            fill_item_ids(items, p, |id| id.as_str().is_some_and(valid_item_id));
         }
     }
     if o.get("type").and_then(Value::as_str) == Some("table") {
-        let rows = o.get("rows").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
-        let cols = o.get("rows").and_then(Value::as_array).map(|r| r.iter().filter_map(Value::as_array).map(Vec::len).max().unwrap_or(0)).unwrap_or(0);
-        for (field, n, p) in [("rowIds", rows, "rw"), ("colIds", cols, "cl")] {
-            let ok = o.get(field).and_then(Value::as_array).is_some_and(|a| a.len() == n);
-            if !ok {
-                o.insert(field.into(), Value::Array((0..n).map(|i| Value::String(format!("{p}-{i}"))).collect()));
-            }
-        }
+        fill_table_ids(o);
     }
     v
 }

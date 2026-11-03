@@ -24,7 +24,10 @@ pub mod templates;
 
 use serde_json::{json, Value};
 
-/// The board data format these rules write.
+/// The board data format these rules write. It's read too: a board with
+/// none is from before format 1 and is upgraded once ([`ops::upgrade_plan`]);
+/// one this build can't read is refused for writes (`newer_format`), never
+/// written over.
 pub const FORMAT: u64 = 1;
 
 /// The Board widget's data (built-in versions share it).
@@ -39,7 +42,8 @@ pub struct BoardError {
     /// `unknown_type`, `unknown_field`, `bad_field`, `too_long`,
     /// `too_many`, `value_too_large`, `no_object`, `exists`, `locked`,
     /// `no_board`, `board_required`, `board_trashed`, `bad_ops`,
-    /// `no_template`, `voting_off`, `no_votes_left`, `bad_request`.
+    /// `no_template`, `voting_off`, `no_votes_left`, `bad_request`,
+    /// `newer_format`.
     pub code: &'static str,
     pub message: String,
     pub field: Option<String>,

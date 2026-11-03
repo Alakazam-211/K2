@@ -7,9 +7,11 @@
 //   board/<b>/obj/<id>        the object: schema fields plus createdBy/At, updatedBy/At and batch (the write that last touched it)
 // Keys and fields this build doesn't know are never read for decisions, never deleted, and kept on every rewrite
 // (a write is the stored value with the changed fields merged in).
+// `format` is read: a board with none is upgraded once when it opens; one this build can't read stays read only.
 // People are keyed by a stable id: person:owner (the person at this computer) or agent:<handle>.
 // The UI uses:
 //   store.load() → {boardId, board}          store.start(applyRemote) → Promise
+//   store.readOnly / onReadOnly(cb)          the open board is from a newer K2: it shows, and nothing is written to it
 //   store.submit(ops)                        store.onStatus(cb) {state: 'saved'|'pending'|'saving'|'error', text, detail}
 //   store.boards() / projects()              store.open(id) → {board, later} | null
 //   store.create(name, project) → id         store.rename(id, name), renameProject, createProject, nest, reorder, move
@@ -31,6 +33,7 @@
   const PROJ_RE = /^projects\/([^/]+)$/
   const OWN = ['batch', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt']   // kept with an object, not schema fields
   const OFF_TEXT = 'Board is off. Turn it on in Settings → Cores → Multiplayer'
+  const NEWER_TEXT = 'Read only: a newer K2 made this board. Update K2 to edit it'
   const codeOf = (e) => (e && (e.code || e.message)) || 'error'
   const seg = (v) => String(v).replace(/[^A-Za-z0-9._~:@+-]/g, '_')   // a key segment
   const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -101,21 +104,6 @@
     return pending
   }
 
-  // An older stored object, read as format 1: list items without ids get them by position.
-  function withIds(v) {
-    if (!isObj(v)) return v
-    const out = Object.assign({}, v)
-    const fill = (list, p) => list.map((x, i) => (isObj(x) && x.id == null ? Object.assign({ id: p + '-' + i }, x) : x))
-    if (Array.isArray(out.checks) && out.checks.some((x) => isObj(x) && x.id == null)) out.checks = fill(out.checks, 'ck')
-    if (Array.isArray(out.replies) && out.replies.some((x) => isObj(x) && x.id == null)) out.replies = fill(out.replies, 'rp')
-    if (out.type === 'table' && Array.isArray(out.rows) && out.rows.every(Array.isArray)) {
-      if (!Array.isArray(out.rowIds) || out.rowIds.length !== out.rows.length) out.rowIds = out.rows.map((_, i) => 'rw-' + i)
-      const n = out.rows.reduce((m, r) => Math.max(m, r.length), 0)
-      if (!Array.isArray(out.colIds) || out.colIds.length !== n) out.colIds = Array.from({ length: n }, (_, i) => 'cl-' + i)
-    }
-    return out
-  }
-
   function create() {
     const known = new Map()      // key → {rev, value}: the store as last seen here
     const regs = new Map()       // board id → {id, name, project, ...}
@@ -128,17 +116,31 @@
     const prefs = {}; let back = null
     let status = { state: 'pending', text: 'Loading…' }
     const listeners = []
+    let readOnly = false; let onReadOnly = () => {}
     const setStatus = (state, text) => {
+      if (readOnly) { state = 'error'; text = NEWER_TEXT }
       status = { state, text: lostError && state !== 'saving' ? lostError : text, detail: 'Edits save on this computer, in Board’s K2 data' }
       listeners.forEach((f) => f(status))
     }
     const pfx = (id) => 'board/' + seg(id) + '/'
     const live = () => [...regs.values()].filter((r) => !r.trashedAt)
+    // This board's format, on its list row or its meta, is one this build can't read.
+    const isNewer = (id) => {
+      const row = known.get('boards/' + seg(id)); const meta = known.get(pfx(id) + 'meta')
+      return !!((row && isObj(row.value) && S.isNewerFormat(row.value.format)) || (meta && isObj(meta.value) && S.isNewerFormat(meta.value.format)))
+    }
+    function checkReadOnly() {
+      const now = !!boardId && isNewer(boardId)
+      if (now === readOnly) return
+      readOnly = now; onReadOnly(now)
+      setStatus(pending.length ? 'pending' : 'saved', pending.length ? 'Saving…' : 'Saved')
+    }
     const newBoardId = () => { let id; do id = 'b' + hex(3); while (regs.has(id) || known.has('boards/' + id)); return id }
 
     // A stored value → an object the model can show. A field that doesn't pass the schema isn't shown (it stays
     // stored as it is: writes merge into the stored value, so nothing is lost).
-    function toObj(v) {
+    function toObj(v, keyId) {
+      if (isObj(v) && v.id == null && S.validId(keyId)) v = Object.assign({}, v, { id: keyId })   // an older object known only by its key
       if (!isObj(v) || typeof v.id !== 'string' || !S.TYPES[v.type]) return null
       const o = Object.assign({ id: v.id, type: v.type, x: 0, y: 0, z: 0 }, clone(S.DEFAULTS[v.type] || {}))
       for (const k of Object.keys(v)) {
@@ -158,8 +160,8 @@
     // The ops that turn the object stored as pv into the one stored as v.
     function feedOps(id, pv, v) {
       if (!v) return pv ? [{ op: 'del', id }] : []
-      const o = toObj(v); if (!o || o.id !== id) return []
-      const a = pv && toObj(pv)
+      const o = toObj(v, id); if (!o || o.id !== id) return []
+      const a = pv && toObj(pv, id)
       if (!a) return [{ op: 'add', obj: o }, { op: 'set', id, f: fieldsOf(o) }]   // the set covers an object the page already had
       const f = {}; const fo = fieldsOf(o)
       for (const k of Object.keys(fo)) if (JSON.stringify(fo[k]) !== JSON.stringify(a[k])) f[k] = fo[k]
@@ -224,6 +226,7 @@
     function play(out) {
       const at = new Date().toISOString()
       for (const [by, ops] of out) if (ops.length) replay({ b: rid('k'), board: boardId, by, at, ops })
+      checkReadOnly()
     }
 
     function onFeed(d, prefix) {
@@ -270,6 +273,9 @@
       const val = (k) => (next.has(k) ? next.get(k) : known.has(k) ? known.get(k).value : null)
       for (const op of ops) {
         const p = pfx(op.bd)
+        // The board turned out newer while this waited: never written over. Its list row (name, project, the Trash)
+        // still takes a field merged in, which keeps everything there.
+        if (op.op !== 'reg' && op.op !== 'proj' && isNewer(op.bd)) continue
         if (op.op === 'add') {
           const k = p + 'obj/' + seg(op.obj.id); const v0 = isObj(val(k)) ? val(k) : {}
           const made = isObj(op.made) && typeof op.made.by === 'string' ? op.made : null   // an undo puts back the original author
@@ -277,7 +283,7 @@
         } else if (op.op === 'set') {
           const k = p + 'obj/' + seg(op.id); const v0 = val(k)
           if (isObj(v0)) {   // deleted meanwhile: it stays deleted
-            const v1 = withIds(Object.assign({}, v0, op.f, { updatedBy: ME, updatedAt: at, batch: b }))
+            const v1 = S.upgradeObject(Object.assign({ id: op.id }, v0, op.f, { updatedBy: ME, updatedAt: at, batch: b }))
             for (const f of Object.keys(op.f || {})) if (op.f[f] === null && S.dropsOnNull(v0.type, f)) delete v1[f]   // taken away (link, checks, crop, or unknown): no key, not null
             next.set(k, v1)
           }
@@ -335,6 +341,41 @@
           play(out)
         }
       }
+    }
+
+    // A board from before `format`: readers already show it as format 1, and this stores that, once, when it opens.
+    // Objects first and the format last, so a failure part way (a conflict, a pause) just runs again at the next open.
+    // Only ids and the format are added: no author, time or field changes. A value that wouldn't fit stays as it is
+    // (the readers' rule still holds for it).
+    const upgrading = new Set()
+    async function upgradeBoard(id) {
+      const rowKey = 'boards/' + seg(id); const metaKey = pfx(id) + 'meta'
+      const old = (k) => { const e = known.get(k); return !!e && isObj(e.value) && e.value.format == null }
+      if (isNewer(id) || !(old(rowKey) || old(metaKey)) || upgrading.has(id)) return
+      upgrading.add(id)
+      for (let i = 0; i < 100 && writing; i++) await later(50)
+      if (writing) { upgrading.delete(id); return }
+      writing = true
+      try {
+        const b = rid('w'); sent.add(b); const objs = []
+        for (const [k, e] of known) {
+          const m = KEY_RE.exec(k)
+          if (!m || !m[2] || k.indexOf(pfx(id)) !== 0 || !isObj(e.value)) continue
+          const u = S.upgradeObject(e.value, m[2])
+          if (u === e.value) continue
+          const v = Object.assign({}, u, { batch: b })
+          if (S.bytesOf(v) <= S.VALUE_MAX) objs.push({ op: 'put', key: k, value: v, ifRev: e.rev })
+        }
+        const put = async (w) => {
+          const r = await commit(w); const rev = r && typeof r.rev === 'number' ? r.rev : 0
+          for (const x of w) known.set(x.key, { rev, value: x.value })
+        }
+        for (let i = 0; i < objs.length; i += TX_MAX) await put(objs.slice(i, i + TX_MAX))
+        const stamp = (k) => ({ op: 'put', key: k, value: Object.assign({}, known.get(k).value, { format: S.FORMAT }), ifRev: known.get(k).rev })
+        await put([rowKey, metaKey].filter(old).map(stamp))
+      } catch (e) {
+        console.warn('Board: the upgrade of an older board waits for the next open (' + codeOf(e) + ')')
+      } finally { writing = false; upgrading.delete(id) }
     }
 
     function schedule(now) {
@@ -510,10 +551,13 @@
       },
       boards: () => Array.from(regs.values(), (b) => Object.assign({}, b)),
       get boardId() { return boardId },
+      get readOnly() { return readOnly },
+      onReadOnly(cb) { onReadOnly = cb },
       open(id) {
         if (id === boardId || !regs.has(id)) return null
         const first = !boardId
         boardId = id; prefs.open = id; savePrefs()
+        checkReadOnly(); upgradeBoard(id)
         if (first && early.length) { for (const op of early) pending = mergeOp(pending, op, id); early = []; schedule() }
         // Edits to that board made here and not stored yet still show.
         const ops = inflight.concat(pending).filter((p) => p.bd === id).map((p) => { const c = clone(p); delete c.bd; return c })
@@ -521,7 +565,7 @@
         for (const [k, e] of known) {
           if (k.indexOf(p) !== 0) continue
           if (k === p + 'meta') { meta = metaOf(e.value); continue }
-          const o = toObj(e.value); if (o && k === p + 'obj/' + seg(o.id)) objects[o.id] = o
+          const o = toObj(e.value, k.slice((p + 'obj/').length)); if (o && k === p + 'obj/' + seg(o.id)) objects[o.id] = o
         }
         return { board: { objects, meta }, later: ops.length ? [{ b: rid('w'), board: id, by: ME, at: new Date().toISOString(), ops }] : [] }
       },
@@ -639,6 +683,8 @@
       blobGet: (ref) => g.k2.blobs.get(ref),
       // ---------- the JSON export's source: the open board as stored (pending edits saved first) ----------
       async exportSource() {
+        // The export says format 1, so it can't speak for a board this build can't read.
+        if (readOnly) throw Object.assign(new Error('a newer format'), { code: 'newer_format' })
         api.flushNow()
         for (let i = 0; i < 150 && (pending.some((p) => p.bd === boardId) || writing); i++) await later(100)
         if (pending.some((p) => p.bd === boardId)) throw Object.assign(new Error('not saved yet'), { code: 'not_saved' })

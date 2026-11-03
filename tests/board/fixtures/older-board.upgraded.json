@@ -1,0 +1,343 @@
+{
+ "note": "older-board.json after its one upgrade; objects without batch (each upgrade stamps its own). The widget test and the Rust test both compare to this.",
+ "seed": [
+  [
+   "seeded",
+   {
+    "at": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "boards/b0f0f0f",
+   {
+    "id": "b0f0f0f",
+    "name": "Launch plan",
+    "project": "p00aa11",
+    "order": 2,
+    "agentEdit": "helper",
+    "format": 1
+   }
+  ],
+  [
+   "projects/p00aa11",
+   {
+    "id": "p00aa11",
+    "name": "Launch"
+   }
+  ],
+  [
+   "access/b0f0f0f",
+   {
+    "helper": "edit"
+   }
+  ],
+  [
+   "board/b0f0f0f/meta",
+   {
+    "title": "Launch plan",
+    "voting": {
+     "active": true,
+     "perPerson": 3
+    },
+    "batch": "w-00000000m1",
+    "keptSetting": {
+     "from": "a newer tool"
+    },
+    "format": 1
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/s-1a2b3c4d5e",
+   {
+    "id": "s-1a2b3c4d5e",
+    "type": "sticky",
+    "x": 10,
+    "y": 20,
+    "w": 200,
+    "h": 200,
+    "text": "Keep this note",
+    "color": "pink",
+    "fontSize": 0,
+    "align": "center",
+    "z": 1,
+    "tags": [
+     "alpha"
+    ],
+    "reactions": {
+     "Ada": [
+      "👍",
+      "🎉"
+     ],
+     "agent:helper": [
+      "👍"
+     ]
+    },
+    "votes": {
+     "Ada": 2
+    },
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z",
+    "keptField": {
+     "from": "a newer tool"
+    }
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/h-2b3c4d5e6f",
+   {
+    "id": "h-2b3c4d5e6f",
+    "type": "shape",
+    "x": 300,
+    "y": 20,
+    "w": 180,
+    "h": 120,
+    "shape": "diamond",
+    "text": "A",
+    "fill": "white",
+    "stroke": "ink",
+    "strokeWidth": 2,
+    "dash": "solid",
+    "color": "ink",
+    "fontSize": 18,
+    "z": 2,
+    "group": "g-aaaaaaaaaa",
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/c-3c4d5e6f70",
+   {
+    "id": "c-3c4d5e6f70",
+    "type": "connector",
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0,
+    "route": "elbow",
+    "stroke": "ink",
+    "strokeWidth": 2,
+    "dash": "solid",
+    "startCap": "none",
+    "endCap": "arrow",
+    "label": "",
+    "z": 3,
+    "from": {
+     "id": "s-1a2b3c4d5e",
+     "anchor": "right"
+    },
+    "to": {
+     "id": "h-2b3c4d5e6f",
+     "anchor": "left"
+    },
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/k-4d5e6f7081",
+   {
+    "id": "k-4d5e6f7081",
+    "type": "card",
+    "x": 0,
+    "y": 300,
+    "w": 280,
+    "h": 150,
+    "title": "Card",
+    "text": "",
+    "color": "blue",
+    "assignee": "",
+    "due": "",
+    "status": "Doing",
+    "z": 4,
+    "checks": [
+     {
+      "id": "ck-0",
+      "text": "one",
+      "done": false
+     },
+     {
+      "id": "ck-1",
+      "text": "two",
+      "done": true
+     }
+    ],
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/q-5e6f708192",
+   {
+    "id": "q-5e6f708192",
+    "type": "comment",
+    "x": 500,
+    "y": 300,
+    "w": 32,
+    "h": 32,
+    "text": "Why?",
+    "replies": [
+     {
+      "id": "rp-0",
+      "by": "Ada",
+      "at": "2026-10-20T10:00:00.000Z",
+      "text": "First reply"
+     },
+     {
+      "id": "rp-1",
+      "by": "agent:helper",
+      "at": "2026-10-20T10:05:00.000Z",
+      "text": "Second reply"
+     }
+    ],
+    "resolved": false,
+    "target": "k-4d5e6f7081",
+    "z": 5,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/b-6f708192a3",
+   {
+    "id": "b-6f708192a3",
+    "type": "table",
+    "x": 0,
+    "y": 600,
+    "w": 480,
+    "h": 160,
+    "rows": [
+     [
+      "a",
+      "b",
+      "c"
+     ],
+     [
+      "d",
+      "e",
+      "f"
+     ]
+    ],
+    "colW": [
+     100,
+     120,
+     90
+    ],
+    "fill": "white",
+    "z": 6,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z",
+    "rowIds": [
+     "rw-0",
+     "rw-1"
+    ],
+    "colIds": [
+     "cl-0",
+     "cl-1",
+     "cl-2"
+    ]
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/p-708192a3b4",
+   {
+    "id": "p-708192a3b4",
+    "type": "pen",
+    "x": 5,
+    "y": 5,
+    "w": 60,
+    "h": 40,
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      20,
+      40
+     ],
+     [
+      60,
+      10
+     ]
+    ],
+    "stroke": "ink",
+    "strokeWidth": 3,
+    "highlighter": false,
+    "z": 7,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/m-8192a3b4c5",
+   {
+    "id": "m-8192a3b4c5",
+    "type": "mind",
+    "x": 700,
+    "y": 0,
+    "w": 180,
+    "h": 48,
+    "text": "Root",
+    "parent": "",
+    "color": "violet",
+    "z": 8,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/f-92a3b4c5d6",
+   {
+    "id": "f-92a3b4c5d6",
+    "type": "frame",
+    "x": -50,
+    "y": -50,
+    "w": 1400,
+    "h": 1000,
+    "title": "Frame",
+    "fill": "white",
+    "order": 1.5,
+    "z": 9,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ],
+  [
+   "board/b0f0f0f/obj/i-a3b4c5d6e7",
+   {
+    "id": "i-a3b4c5d6e7",
+    "type": "image",
+    "x": 900,
+    "y": 300,
+    "w": 320,
+    "h": 240,
+    "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "alt": "a dot",
+    "z": 10,
+    "createdBy": "Ada",
+    "createdAt": "2026-10-20T09:00:00.000Z",
+    "updatedBy": "Ada",
+    "updatedAt": "2026-10-20T09:00:00.000Z"
+   }
+  ]
+ ]
+}

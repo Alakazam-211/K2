@@ -11,6 +11,7 @@
   const model = g.BoardModel.create(loaded.board, store.me)
   const R = g.BoardRender.create(world, model)
   model.onOps((ops) => store.submit(ops))
+  store.onReadOnly((on) => model.setReadOnly(on))
 
   const listeners = {}
   const on = (ev, f) => { (listeners[ev] = listeners[ev] || []).push(f) }
@@ -110,7 +111,10 @@
   App.selBox = () => G.bounds([...App.sel].map((id) => R.box(id)).filter(Boolean))
 
   // ---------- creating ----------
-  App.newId = (type) => store.rid(S.PREFIX[type] || 'o')
+  // A new object id, minted once: <type letter>-<10 hex>, never one already on the board (an add with an existing id
+  // counts as a replay and is skipped).
+  App.mintId = (p) => { let id; do id = store.rid(p); while (model.get(id)); return id }
+  App.newId = (type) => App.mintId(S.PREFIX[type] || 'o')
   App.create = (type, f, opts) => {
     const obj = Object.assign({ id: App.newId(type), type }, f)
     if (type === 'table' && !obj.rowIds) {   // a new table: its rows and columns get their own ids
@@ -812,7 +816,7 @@
     c.x = Math.round(x); c.y = Math.round(y)
     const last = App.lastConnector || {}
     const line = { id: App.newId('connector'), type: 'connector', from: { id: o.id, anchor: side }, to: { id: c.id, anchor: opp }, route: last.route || 'elbow', endCap: last.endCap || 'arrow', stroke: last.stroke || 'ink', strokeWidth: last.strokeWidth || 2, z: c.z + 1 }
-    model.apply([{ op: 'add', obj: c }, { op: 'add', obj: line }])   // one undo step
+    if (!model.apply([{ op: 'add', obj: c }, { op: 'add', obj: line }])) return null   // one undo step
     App.select([c.id], { raw: true })
     const b = R.box(c.id); const r = rect(); const [sx, sy] = App.toScreen(b.x, b.y); const [ex, ey] = App.toScreen(b.x + b.w, b.y + b.h)
     if (sx < 60 || sy < 60 || ex > r.width - 60 || ey > r.height - 80) App.animateTo({ s: App.cam.s, x: r.width / 2 - (b.x + b.w / 2) * App.cam.s, y: r.height / 2 - (b.y + b.h / 2) * App.cam.s }, 200)

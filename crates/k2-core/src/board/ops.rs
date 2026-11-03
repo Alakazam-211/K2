@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
-use super::schema::{self, clean, clean_meta, normalize, table_ids};
+use super::schema::{self, clean, clean_meta, normalize, table_ids, upgrade_object};
 use super::{meta_key, obj_key, BoardError, FORMAT};
 
 /// One stored key.
@@ -37,10 +37,17 @@ impl Board {
         for e in entries {
             if e.key == mk {
                 b.meta = Some(e);
-            } else if e.key.starts_with(&obj_prefix) {
-                if let Some(oid) = e.value.get("id").and_then(Value::as_str) {
-                    if e.key == obj_key(id, oid) {
-                        b.objects.insert(oid.to_string(), e);
+            } else if let Some(tail) = e.key.strip_prefix(&obj_prefix).map(str::to_string) {
+                let mut e = e;
+                // An older object known only by its key.
+                if e.value.get("id").is_none_or(Value::is_null) && schema::valid_item_id(&tail) {
+                    if let Some(o) = e.value.as_object_mut() {
+                        o.insert("id".into(), json!(tail));
+                    }
+                }
+                if let Some(oid) = e.value.get("id").and_then(Value::as_str).map(str::to_string) {
+                    if e.key == obj_key(id, &oid) {
+                        b.objects.insert(oid, e);
                     }
                 }
             }
@@ -55,6 +62,60 @@ impl Board {
     pub fn meta_value(&self) -> Map<String, Value> {
         self.meta.as_ref().and_then(|m| m.value.as_object().cloned()).unwrap_or_default()
     }
+
+    /// Refused when this board's meta names a format this build can't read.
+    pub fn check_format(&self) -> Result<(), BoardError> {
+        check_format(self.meta.as_ref().and_then(|m| m.value.get("format")))
+    }
+}
+
+/// A `format` value this build can write over: none (from before format 1)
+/// or 1..=[`FORMAT`]. Anything else is `newer_format`: reading still works,
+/// and nothing is written over it.
+pub fn check_format(format: Option<&Value>) -> Result<(), BoardError> {
+    let readable = |f: &Value| f.is_null() || f.as_f64().is_some_and(|n| n.fract() == 0.0 && n >= 1.0 && n <= FORMAT as f64);
+    match format {
+        Some(f) if !readable(f) => Err(BoardError::new(
+            "newer_format",
+            format!("a newer K2 made this board (format {f}; this K2 knows up to {FORMAT}), so it's read only here. Update K2 to change it. Nothing was written."),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The writes that upgrade a board from before `format`, once: each object
+/// in today's shape ([`upgrade_object`]), then `format` on its meta and list
+/// row, last, so a stop part way runs again next time. No author or time
+/// changes, and a value that wouldn't fit stays as it is (readers' rules
+/// still hold for it). Empty when the meta and row already say a format.
+pub fn upgrade_plan(board_id: &str, entries: &[Stored], row: Option<&Stored>, batch: &str) -> Vec<Write> {
+    let mk = meta_key(board_id);
+    let meta = entries.iter().find(|e| e.key == mk);
+    let stamps: Vec<&Stored> = meta.into_iter().chain(row).filter(|e| e.value.is_object() && e.value.get("format").is_none_or(Value::is_null)).collect();
+    if stamps.is_empty() {
+        return Vec::new();
+    }
+    let obj_prefix = format!("{}obj/", super::board_prefix(board_id));
+    let mut out = Vec::new();
+    for e in entries {
+        let Some(tail) = e.key.strip_prefix(&obj_prefix) else { continue };
+        let mut v = upgrade_object(&e.value, Some(tail));
+        if v == e.value {
+            continue;
+        }
+        if let Some(o) = v.as_object_mut() {
+            o.insert("batch".into(), json!(batch));
+        }
+        if v.to_string().len() <= schema::MAX_VALUE {
+            out.push(Write { key: e.key.clone(), value: Some(v), if_rev: e.rev });
+        }
+    }
+    for e in stamps {
+        let mut v = e.value.clone();
+        v["format"] = json!(FORMAT);
+        out.push(Write { key: e.key.clone(), value: Some(v), if_rev: e.rev });
+    }
+    out
 }
 
 /// One op, as `apply` takes them.
@@ -206,6 +267,7 @@ fn is_locked(v: &Map<String, Value>) -> bool {
 /// the ids the caller named (the lock rule applies to these); `None` =
 /// every op is named. Objects a cascade takes follow their parent.
 pub fn plan(board: &Board, ops: &[Op], named: Option<&HashSet<String>>, ctx: &Ctx) -> Result<Vec<Write>, BoardError> {
+    board.check_format()?;
     // The working copy: object id → value (None = deleted here).
     let mut work: BTreeMap<String, Option<Map<String, Value>>> = BTreeMap::new();
     let mut meta: Option<Map<String, Value>> = None;
@@ -267,9 +329,12 @@ pub fn plan(board: &Board, ops: &[Op], named: Option<&HashSet<String>>, ctx: &Ct
                 work.insert(id, Some(o));
             }
             Op::Set { id, f } => {
-                let Some(mut o) = current(&work, id) else {
+                let Some(o) = current(&work, id) else {
                     return Err(BoardError::new("no_object", format!("no object {id} on this board")).field(id));
                 };
+                // An older object is written in today's shape, with the
+                // ids its readers already give it.
+                let mut o = upgrade_object(&Value::Object(o), None).as_object().cloned().unwrap_or_default();
                 if is_named(id) && is_locked(&o) {
                     let ok = f.iter().all(|(k, v)| {
                         LOCK_FREE.contains(&k.as_str()) && (k != "locked" || matches!(v, Value::Bool(false)) || v.as_str() == Some("false"))

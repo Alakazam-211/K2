@@ -3,12 +3,12 @@
 //! value or a skipped op), the lock rule, people by stable key, and the
 //! export envelope.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
 use super::export::{envelope, BlobBytes};
-use super::ops::{add_vote, cascade, map_ids, parse_ops, plan, toggle_reaction, view, Board, Ctx, Op, Stored, Write};
+use super::ops::{add_vote, cascade, check_format, map_ids, parse_ops, plan, toggle_reaction, upgrade_plan, view, Board, Ctx, Op, Stored, Write};
 use super::schema::{self, read_shape};
 use super::templates::{build, TEMPLATES};
 use super::{meta_key, obj_key, BoardError};
@@ -400,4 +400,214 @@ fn view_shortens_data_images_and_fields_describes_every_type() {
     assert_eq!(d.as_object().expect("types").len(), schema::TYPES.len());
     assert_eq!(d["table"]["fields"]["rowIds"].as_str().map(|s| s.starts_with("ids")), Some(true));
     assert_eq!(schema::describe(Some("nope")).expect_err("unknown").code, "unknown_type");
+}
+
+
+// ---------- stable ids and the format (the widget's test uses the same fixtures) ----------
+
+const OLDER: &str = include_str!("../../../../tests/board/fixtures/older-board.json");
+const UPGRADED: &str = include_str!("../../../../tests/board/fixtures/older-board.upgraded.json");
+
+fn seed(s: &str) -> Vec<Stored> {
+    let v: Value = serde_json::from_str(s).expect("fixture JSON");
+    v["seed"].as_array().expect("seed").iter().map(|e| Stored { key: e[0].as_str().expect("key").to_string(), rev: 1, value: e[1].clone() }).collect()
+}
+
+fn without_batch(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("batch");
+    }
+    v
+}
+
+const OLD_BOARD: &str = "b0f0f0f";
+
+/// The fixture's keys under the board, and its list row.
+fn older() -> (Vec<Stored>, Stored) {
+    let all = seed(OLDER);
+    let row = all.iter().find(|e| e.key == "boards/b0f0f0f").expect("row").clone();
+    (all.into_iter().filter(|e| e.key.starts_with("board/b0f0f0f/")).collect(), row)
+}
+
+#[test]
+fn ids_are_lowercase_letter_and_hex_inside_the_file_rule() {
+    for ty in schema::type_names() {
+        let id = schema::new_id(ty);
+        let p = schema::prefix(ty).expect("a letter");
+        assert!(p.is_ascii_lowercase(), "{ty}: {p}");
+        assert_eq!(id.len(), 12, "{id}");
+        assert!(id.starts_with(&format!("{p}-")) && id[2..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{id}");
+        assert!(schema::valid_item_id(&id), "{id}");
+    }
+    let letters: HashSet<char> = schema::type_names().iter().map(|t| schema::prefix(t).expect("a letter")).collect();
+    assert_eq!(letters.len(), schema::type_names().len(), "one letter per type");
+    for p in ["ck", "rp", "rw", "cl"] {
+        let id = schema::new_item_id(p);
+        assert_eq!(id.len(), 11, "{id}");
+        assert!(schema::valid_item_id(&id), "{id}");
+    }
+}
+
+#[test]
+fn an_older_list_item_never_takes_an_id_another_item_holds() {
+    let v = read_shape(&json!({"id": "k-1", "type": "card", "checks": [{"id": "ck-1", "text": "a"}, {"text": "b"}]}));
+    assert_eq!(v["checks"][0]["id"], "ck-1");
+    assert_eq!(v["checks"][1]["id"], "ck-1x", "the widget's slotId gives the same");
+    let u = schema::upgrade_object(&json!({"id": "q-1", "type": "comment", "replies": [{"id": "rp-1", "by": "a", "text": "x"}, {"by": "b", "text": "y"}]}), None);
+    assert_eq!(u["replies"][1]["id"], "rp-1x");
+}
+
+#[test]
+fn an_older_board_upgrades_to_the_pinned_shape_with_nothing_lost_and_then_plans_nothing() {
+    let (entries, row) = older();
+    assert_eq!(entries.iter().find(|e| e.key.ends_with("/meta")).expect("meta").value.get("format"), None, "really the older shape");
+    assert_eq!(row.value.get("format"), None);
+    let ws = upgrade_plan(OLD_BOARD, &entries, Some(&row), "cli-test");
+    // Format last, so a stop part way runs it all again.
+    let n = ws.len();
+    assert_eq!(n, 6, "4 objects that change, then the meta and the row: {:?}", ws.iter().map(|w| &w.key).collect::<Vec<_>>());
+    assert!(ws[n - 2].key.ends_with("/meta") && ws[n - 1].key == "boards/b0f0f0f");
+    assert!(ws.iter().all(|w| w.if_rev == 1 && w.value.is_some()));
+
+    // Laid over the older keys: exactly the pinned shape, the same one the widget's test checks.
+    let mut after: BTreeMap<String, Value> = entries.iter().chain([&row]).map(|e| (e.key.clone(), e.value.clone())).collect();
+    for w in &ws {
+        after.insert(w.key.clone(), w.value.clone().expect("a put"));
+    }
+    let want = seed(UPGRADED);
+    for e in want.iter().filter(|e| after.contains_key(&e.key)) {
+        assert_eq!(without_batch(&after[&e.key]), without_batch(&e.value), "{}", e.key);
+    }
+    assert_eq!(want.iter().filter(|e| after.contains_key(&e.key)).count(), after.len(), "nothing else appeared");
+
+    // Nothing lost: every older field is there unchanged, but for the reactions turned round.
+    for e in entries.iter().chain([&row]) {
+        for (k, v) in e.value.as_object().expect("an object") {
+            if k == "batch" {
+                continue;
+            }
+            let now = &after[&e.key][k];
+            match k.as_str() {
+                "reactions" => assert_eq!(now, &json!({"Ada": ["👍", "🎉"], "agent:helper": ["👍"]}), "{}", e.key),
+                "checks" | "replies" => {
+                    for (a, b) in v.as_array().expect("a list").iter().zip(now.as_array().expect("a list")) {
+                        for (f, x) in a.as_object().expect("an item") {
+                            assert_eq!(&b[f], x, "{} {k}.{f}", e.key);
+                        }
+                    }
+                    assert_eq!(v.as_array().map(Vec::len), now.as_array().map(Vec::len));
+                }
+                _ => assert_eq!(now, v, "{} {k}", e.key),
+            }
+        }
+    }
+    assert_eq!(after["board/b0f0f0f/obj/s-1a2b3c4d5e"]["keptField"], json!({"from": "a newer tool"}));
+    assert_eq!(after["board/b0f0f0f/obj/k-4d5e6f7081"]["updatedBy"], "Ada", "an upgrade is nobody's edit");
+
+    // Twice: nothing to do.
+    let again: Vec<Stored> = after.iter().filter(|(k, _)| k.starts_with("board/")).map(|(k, v)| Stored { key: k.clone(), rev: 2, value: v.clone() }).collect();
+    let row2 = Stored { key: row.key.clone(), rev: 2, value: after[&row.key].clone() };
+    assert!(upgrade_plan(OLD_BOARD, &again, Some(&row2), "cli-test").is_empty());
+    for e in again.iter().filter(|e| e.key.contains("/obj/")) {
+        assert_eq!(schema::upgrade_object(&e.value, None), e.value, "{}", e.key);
+    }
+}
+
+#[test]
+fn an_upgrade_leaves_what_it_cant_read_as_stored() {
+    // Not the older reactions shape, or a list item with an id it wouldn't pick: kept.
+    let odd = json!({"id": "s-1", "type": "sticky", "reactions": {"👍": "not a list", "other": ["x"]}, "checks": [{"id": 7, "text": "a"}], "extra": [1]});
+    assert_eq!(schema::upgrade_object(&odd, None), odd);
+    // A key that can't be an id names nothing.
+    let no_id = json!({"type": "sticky", "text": "x"});
+    assert_eq!(schema::upgrade_object(&no_id, Some("Not An Id")), no_id);
+    assert_eq!(schema::upgrade_object(&no_id, Some("s-abc"))["id"], "s-abc");
+    // A value that wouldn't fit stays as it is; the format still goes on.
+    let big = json!({"id": "k-big", "type": "card", "checks": [{"text": "x".repeat(schema::MAX_VALUE - 60)}]});
+    let entries = vec![
+        Stored { key: obj_key(OLD_BOARD, "k-big"), rev: 1, value: big },
+        Stored { key: crate::board::meta_key(OLD_BOARD), rev: 1, value: json!({"title": "T"}) },
+    ];
+    let ws = upgrade_plan(OLD_BOARD, &entries, None, "cli-a-long-batch-id-that-tips-it-over");
+    assert_eq!(ws.iter().map(|w| w.key.as_str()).collect::<Vec<_>>(), vec!["board/b0f0f0f/meta"]);
+}
+
+#[test]
+fn an_object_known_only_by_its_key_is_read_and_a_set_stores_its_ids() {
+    let entries = vec![
+        Stored { key: obj_key("b1a2b3c", "k-old0000001"), rev: 1, value: json!({"type": "card", "title": "T", "checks": [{"text": "a", "done": false}]}) },
+        Stored { key: "board/b1a2b3c/obj/Not An Id".into(), rev: 1, value: json!({"type": "card"}) },
+    ];
+    let b = Board::from_entries("b1a2b3c", entries);
+    assert_eq!(b.objects.keys().map(String::as_str).collect::<Vec<_>>(), vec!["k-old0000001"]);
+    let ws = plan(&b, &[Op::Set { id: "k-old0000001".into(), f: obj(json!({"title": "U"})) }], None, &ctx()).expect("set");
+    let v = ws[0].value.as_ref().expect("a put");
+    assert_eq!(v["id"], "k-old0000001");
+    assert_eq!(v["checks"][0]["id"], "ck-0", "the id its readers gave it, kept");
+    // A table's readers' ids stay too: only a new row mints one.
+    let t = board(&[json!({"id": "b-old0000001", "type": "table", "rows": [["a"], ["b"]]})]);
+    let ws = plan(&t, &[Op::Set { id: "b-old0000001".into(), f: obj(json!({"rows": [["a"], ["b"], ["c"]]})) }], None, &ctx()).expect("set");
+    let ids = ws[0].value.as_ref().expect("a put")["rowIds"].as_array().expect("ids").clone();
+    assert_eq!((ids[0].as_str(), ids[1].as_str()), (Some("rw-0"), Some("rw-1")));
+    assert!(ids[2].as_str().expect("an id").starts_with("rw-") && ids[2] != "rw-2", "{ids:?}");
+}
+
+#[test]
+fn a_newer_format_is_refused_for_writes_and_the_export_and_never_stamped_down() {
+    let meta = |f: Value| Stored { key: crate::board::meta_key("b1a2b3c"), rev: 1, value: json!({"format": f, "title": "T"}) };
+    let o = Stored { key: obj_key("b1a2b3c", "s-iiiiiiiiii"), rev: 1, value: json!({"id": "s-iiiiiiiiii", "type": "sticky", "text": "later", "shiny": 1}) };
+    for f in [json!(2), json!(99), json!("two"), json!(1.5), json!(0)] {
+        let b = Board::from_entries("b1a2b3c", vec![meta(f.clone()), o.clone()]);
+        for op in [
+            Op::Set { id: "s-iiiiiiiiii".into(), f: obj(json!({"text": "over it"})) },
+            Op::Del { id: "s-iiiiiiiiii".into() },
+            Op::Add(obj(json!({"type": "sticky"}))),
+            Op::Meta(obj(json!({"title": "Mine now"}))),
+        ] {
+            let e = err(plan(&b, &[op], None, &ctx()));
+            assert_eq!(e.code, "newer_format", "{f}");
+            assert!(e.message.contains("read only") && e.message.contains("Update K2"), "{}", e.message);
+        }
+        let env = envelope(&b, "T", &|k| (k.to_string(), "person"), &mut |_| panic!("no blobs"));
+        assert_eq!(env.expect_err("refused").code, "newer_format", "{f}");
+        assert!(upgrade_plan("b1a2b3c", &[meta(f.clone())], None, "x").is_empty(), "it has a format: never stamped");
+    }
+    for ok in [None, Some(&Value::Null), Some(&json!(1))] {
+        check_format(ok).expect("readable");
+    }
+    // Format 1 stays as it was: a meta write keeps it.
+    let b = Board::from_entries("b1a2b3c", vec![meta(json!(1))]);
+    let ws = plan(&b, &[Op::Meta(obj(json!({"title": "U"})))], None, &ctx()).expect("meta");
+    assert_eq!(ws[0].value.as_ref().expect("a put")["format"], 1);
+}
+
+#[test]
+fn numbers_finer_than_the_schema_keeps_are_refused_never_rounded() {
+    let add = |f: Value| {
+        let mut o = obj(f);
+        o.insert("type".into(), json!(o.get("type").cloned().unwrap_or(json!("sticky"))));
+        plan(&Board { id: "b1a2b3c".into(), ..Board::default() }, &[Op::Add(o)], None, &ctx())
+    };
+    for f in [
+        json!({"x": 12.34}),
+        json!({"y": "1.25"}),
+        json!({"w": 0.05}),
+        json!({"z": 1.0001}),
+        json!({"type": "table", "colW": [100.25]}),
+        json!({"type": "connector", "from": {"x": 1.25, "y": 2}, "to": {"x": 0, "y": 0}}),
+        json!({"type": "connector", "from": {"id": "s-1", "x": 1.25, "y": 2}, "to": {"x": 0, "y": 0}}),
+        json!({"type": "pen", "points": [[0, 0], [1.5, 2]]}),
+        json!({"type": "image", "crop": {"x": 0.12345, "y": 0, "w": 0.5, "h": 0.5}}),
+    ] {
+        let e = err(add(f.clone()));
+        assert_eq!(e.code, "bad_field", "{f}: {}", e.message);
+        assert!(e.message.contains("nothing was rounded"), "{f}: {}", e.message);
+    }
+    // What it keeps goes in exactly, float noise from arithmetic included.
+    let ws = add(json!({"x": 12.3, "y": -0.5, "w": 12.399999999999, "h": 7})).expect("kept");
+    let v = ws[0].value.as_ref().expect("a put");
+    assert_eq!((v["x"].as_f64(), v["y"].as_f64(), v["w"].as_f64(), v["h"].as_f64()), (Some(12.3), Some(-0.5), Some(12.4), Some(7.0)));
+    let ws = add(json!({"type": "image", "crop": {"x": 0.1234, "y": 0, "w": 0.5, "h": 0.5}})).expect("four places");
+    assert_eq!(ws[0].value.as_ref().expect("a put")["crop"]["x"].as_f64(), Some(0.1234));
 }

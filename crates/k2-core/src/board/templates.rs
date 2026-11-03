@@ -144,7 +144,7 @@ pub fn build(name: &str, x: f64, y: f64) -> Option<Vec<Value>> {
             let colors = ["yellow", "pink", "blue", "green", "orange", "cyan"];
             for (i, c) in colors.iter().enumerate() {
                 let a = (i as f64 / 6.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
-                t.sticky(x + 420.0 + a.cos() * 340.0, y + 270.0 + a.sin() * 230.0, "", c);
+                t.sticky(x + (420.0 + a.cos() * 340.0).round(), y + (270.0 + a.sin() * 230.0).round(), "", c);
             }
         }
         "mindmap" => {

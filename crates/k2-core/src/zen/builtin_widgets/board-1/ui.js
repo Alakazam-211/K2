@@ -241,12 +241,18 @@
   const projectNames = () => { const out = {}; for (const x of App.store.projects()) out[x.id] = x.name; return out }
   const ownProject = (k) => App.store.projects().some((x) => x.id === k)
   // An inline name field in the popover: Enter keeps it, Escape or an empty name drops it.
+  const NAME_MAX = 200   // board and project names, as the title and the k2 board CLI take them
   function nameField(parent, value, placeholder, done, before) {
-    const input = mk('input', 'field rename'); input.value = value || ''; input.placeholder = placeholder; input.maxLength = 80
+    const input = mk('input', 'field rename'); input.value = value || ''; input.placeholder = placeholder
     input.setAttribute('aria-label', placeholder); input.dataset.autofocus = '1'
     if (before) parent.insertBefore(input, before); else parent.appendChild(input)
     let over = false
-    const finish = (keep) => { if (over) return; over = true; const v = input.value.replace(/\s+/g, ' ').trim().slice(0, 80); done(keep && v ? v : null) }
+    const finish = (keep) => {
+      if (over) return; over = true
+      const v = input.value.replace(/\s+/g, ' ').trim()
+      if (keep && S.chars(v) > NAME_MAX) { App.toast(App.refusalText(S.refusal('too_long', 'name', NAME_MAX))); done(null); return }   // refused, never cut
+      done(keep && v ? v : null)
+    }
     input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true) } else if (e.key === 'Escape') { e.preventDefault(); finish(false) } })
     input.addEventListener('blur', () => finish(true))
     input.focus({ preventScroll: true })
@@ -524,15 +530,16 @@
   function renameBoard() {
     if (nameEl.querySelector('input')) return
     const was = boardName()
-    const input = mk('input', 'field rename'); input.value = was; input.maxLength = 80; input.setAttribute('aria-label', 'Board name')
+    const input = mk('input', 'field rename'); input.value = was; input.setAttribute('aria-label', 'Board name')
     nameBtn.hidden = true; nameEl.insertBefore(input, statusEl)
     input.focus(); input.select(); shareHits()
     let done = false
     const finish = (keep) => {
       if (done) return; done = true
-      const v = input.value.replace(/\s+/g, ' ').trim().slice(0, 80)
+      const v = input.value.replace(/\s+/g, ' ').trim()
       input.remove(); nameBtn.hidden = false
-      if (keep && v && v !== was) { App.store.rename(App.store.boardId, v); model.apply([{ op: 'meta', f: { title: v } }]) }
+      // The title first: when it's refused (too long, or a board that's read only) the list keeps the old name too.
+      if (keep && v && v !== was && model.apply([{ op: 'meta', f: { title: v } }])) App.store.rename(App.store.boardId, v)
       drawName(); shareHits(); $('viewport').focus({ preventScroll: true })
     }
     input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) })
@@ -966,7 +973,7 @@
   // ---------- comments ----------
   function newComment(at, target) {
     const id = App.create('comment', { x: Math.round(at[0]), y: Math.round(at[1]), text: '', target: target || '' })
-    openComment(id, true)
+    if (id) openComment(id, true)
   }
   App.on('comment-new', (p, target) => newComment(p, target))
   App.on('comment-open', (id) => openComment(id))
@@ -1013,7 +1020,7 @@
     }
   }
   function insertTemplate(k) {
-    const ops = S.templates((t) => App.store.rid(t))[k](0, 0)
+    const ops = S.templates((t) => App.mintId(t))[k](0, 0)
     const boxes = ops.map((op) => ({ x: op.obj.x || 0, y: op.obj.y || 0, w: op.obj.w || (S.DEFAULTS[op.obj.type] || {}).w || 0, h: op.obj.h || (S.DEFAULTS[op.obj.type] || {}).h || 0 }))
     const b = G.bounds(boxes)
     const content = App.contentBox()
@@ -1578,7 +1585,7 @@
   })
 
   // ---------- export ----------
-  // JSON: the board as a portable file (no K2 ids, pictures inside). PNG: a picture of the board, when the
+  // JSON: K2's own export, not the .k5board file (no K2 ids, pictures inside). PNG: a picture of the board, when the
   // page has K2's PNG encoder. Both go to the person's Downloads through K2, right after the click.
   const fileName = (ext) => (boardName().replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Board') + '.' + ext
   App.exportJson = async () => {
@@ -1605,7 +1612,7 @@
     if (!host.canDownload()) { mk('div', 'note', p, 'Saving files isn’t available here.'); return }
     mk('div', 'note', p, 'Save “' + boardName() + '” to your Downloads.')
     const row = mk('div', 'frow end', p)
-    const fail = (e) => App.toast('Couldn’t export the board (' + ((e && (e.code || e.message)) || 'error') + ')')
+    const fail = (e) => App.toast(e && e.code === 'newer_format' ? 'A newer K2 made this board, so this K2 can’t export it as JSON. Update K2, or save a picture' : 'Couldn’t export the board (' + ((e && (e.code || e.message)) || 'error') + ')')
     btn(row, 'export', 'Download the board as a JSON file', () => {
       closePop()
       host.download(fileName('json'), () => App.exportJson(), { mime: 'application/json' }).then((r) => { if (r && r.saved === false) App.toast('Not saved') }, fail)
@@ -1622,6 +1629,7 @@
   const MANY = { 100: 'rows', 30: 'columns', 50: 'items', 200: 'tags', 5000: 'points' }
   App.refusalText = (e) => {
     if (e.code === 'too_long') return 'That’s too long to save: at most ' + Number(e.max).toLocaleString('en') + ' characters'
+    if (e.code === 'newer_format') return 'This board is read only: a newer K2 made it. Update K2 to edit it'
     if (e.code === 'too_many') return 'That’s too many to save: at most ' + Number(e.max).toLocaleString('en') + ' ' + (MANY[e.max] || 'entries')
     if (e.code === 'value_too_large') return 'That’s too big to save: one item holds at most ' + Math.round((e.max || S.VALUE_MAX) / 1024) + ' KB'
     if (e.code === 'unknown_field' || e.code === 'unknown_type') return 'That can’t be saved: Board doesn’t know “' + (e.field || 'it') + '”'

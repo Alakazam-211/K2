@@ -12,7 +12,7 @@
     const objects = clone(snap.objects || {})
     const meta = clone(snap.meta || {})
     const listeners = []; const opListeners = []; const refuseListeners = []
-    let undoStack = []; let redoStack = []
+    let undoStack = []; let redoStack = []; let readOnly = false
     const preview = new Map()   // id -> original values of fields changed by a live preview
 
     const emit = (ids, metaChanged) => listeners.forEach((f) => f(ids, !!metaChanged))
@@ -116,6 +116,7 @@
     function send(ops) { const w = wire(ops); if (w.length) opListeners.forEach((f) => f(w)) }
     // A person's edit, all or nothing: false (and onRefuse hears why) when the schema refuses it.
     function attempt(ops) {
+      if (readOnly) { refuse(S.refusal('newer_format', null)); return null }
       try { return applyRaw(ops, me, new Date().toISOString(), true) } catch (e) { if (!S.isRefusal(e)) throw e; refuse(e); return null }
     }
 
@@ -130,6 +131,8 @@
       onChange(f) { listeners.push(f) },
       onOps(f) { opListeners.push(f) },
       onRefuse(f) { refuseListeners.push(f) },
+      // A board from a newer K2: it shows, and every edit of a person's is refused (remote changes still show).
+      setReadOnly(on) { readOnly = !!on },
       // A user action: applied, saved, undoable. Returns false when refused (nothing changed).
       apply(ops, opts) {
         if (!ops.length) return true

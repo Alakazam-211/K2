@@ -1342,11 +1342,11 @@ describe('plus-menu column targets', () => {
     expect(vi.mocked(invoke).mock.calls.map((c) => c[0])).not.toContain('browser_create')
   })
 
-  it('openUrlInNewTab and openUntitledDocument with a group index append to that column', () => {
+  it('openUrlInNewTab and openUntitledDocument with a group index append to that column', async () => {
     column1()
     useTabsStore.getState().addTab('/tmp/proj', { title: 'Keep' })
     useTabsStore.getState().openUrlInNewTab('', 1)
-    useTabsStore.getState().openUntitledDocument('/tmp/proj', 1)
+    await useTabsStore.getState().openUntitledDocument('/tmp/proj', 1)
     expect(useTabsStore.getState().tabs.map((t) => t.title)).toEqual(['Keep'])
     const extra = useTabsStore.getState().extraGroups[0].tabs
     expect(extra.map((t) => t.title)).toEqual(['Browser', 'Untitled'])
@@ -1355,10 +1355,10 @@ describe('plus-menu column targets', () => {
     expect(useTabsStore.getState().extraGroups[0].activeTabId).toBe(extra[1].id)
   })
 
-  it('omitted group index stays on column 0 when another column is active', () => {
+  it('omitted group index stays on column 0 when another column is active', async () => {
     column1()
     useTabsStore.setState({ activeGroupIndex: 1 })
-    useTabsStore.getState().openUntitledDocument('/tmp/proj')
+    await useTabsStore.getState().openUntitledDocument('/tmp/proj')
     useTabsStore.getState().openUrlInNewTab('https://example.com')
     expect(useTabsStore.getState().tabs.map((t) => t.title)).toEqual(['Untitled', 'example.com'])
     expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(0)

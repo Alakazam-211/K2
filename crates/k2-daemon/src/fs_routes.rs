@@ -2533,6 +2533,74 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 }
 
 #[derive(Deserialize)]
+struct UntitledNameBody {
+    dir: String,
+    #[serde(default)]
+    ext: Option<String>,
+    #[serde(default)]
+    taken: Vec<String>,
+}
+
+fn untitled_answer(path: &std::path::Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    serde_json::json!({ "path": path.to_string_lossy(), "name": name }).to_string()
+}
+
+/// `POST /cli/fs/untitled-name` `{dir, ext?, taken?}` → `{path, name}`: the
+/// next free `Untitled[-N][.ext]` in `dir`, checked against the disk and
+/// `taken` (the caller's open tabs that aren't files yet). Writes nothing, so
+/// it's only a suggestion: the write goes through `fs/create-untitled`. POST
+/// because `taken` can outgrow a URL.
+pub fn handle_untitled_name(body: &[u8]) -> CliResponse {
+    let parsed: UntitledNameBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    match fsc::free_untitled_name(&parsed.dir, parsed.ext.as_deref(), &parsed.taken) {
+        Ok(path) => CliResponse::ok_json(untitled_answer(&path)),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateUntitledBody {
+    dir: String,
+    #[serde(default)]
+    ext: Option<String>,
+    #[serde(default)]
+    prefer: Option<String>,
+    #[serde(default)]
+    taken: Vec<String>,
+    #[serde(default)]
+    content: String,
+}
+
+/// `POST /cli/fs/create-untitled` `{dir, ext?, prefer?, taken?, content?}` →
+/// `{path, name}`: atomically create a new file under `prefer` if it's free,
+/// else the next free `Untitled[-N][.ext]`. Never overwrites; two racing
+/// creates get two files, so read `name` back (it may not be what you asked
+/// for). A new Board tab sends `{dir, ext: "k5board", content}`.
+pub fn handle_create_untitled(body: &[u8]) -> CliResponse {
+    let parsed: CreateUntitledBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    match fsc::create_untitled(
+        &parsed.dir,
+        parsed.ext.as_deref(),
+        parsed.prefer.as_deref(),
+        &parsed.taken,
+        parsed.content.as_bytes(),
+    ) {
+        Ok(path) => {
+            crate::session_events::emit_fs_changed_for_paths([path.to_string_lossy().to_string()]);
+            CliResponse::ok_json(untitled_answer(&path))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[derive(Deserialize)]
 struct UploadBinaryBody {
     dir: String,
     filename: String,
@@ -3098,6 +3166,69 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn untitled_tmp(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-fs-routes-untitled-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn untitled_name_answers_from_the_disk_and_writes_nothing() {
+        let dir = untitled_tmp("name");
+        std::fs::write(dir.join("Untitled.k5board"), "x").unwrap();
+        let body = serde_json::json!({
+            "dir": dir.to_string_lossy(), "ext": "k5board", "taken": ["Untitled-2.k5board"],
+        })
+        .to_string();
+        let r = handle_untitled_name(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["name"], "Untitled-3.k5board");
+        assert_eq!(v["path"], dir.join("Untitled-3.k5board").to_string_lossy().as_ref());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn create_untitled_never_overwrites_and_says_what_it_made() {
+        let dir = untitled_tmp("create");
+        std::fs::write(dir.join("Untitled"), "the real file").unwrap();
+        let body = serde_json::json!({
+            "dir": dir.to_string_lossy(), "prefer": "Untitled", "content": "typed",
+        })
+        .to_string();
+        let r = handle_create_untitled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["name"], "Untitled-2");
+        assert_eq!(std::fs::read_to_string(dir.join("Untitled-2")).unwrap(), "typed");
+        assert_eq!(std::fs::read_to_string(dir.join("Untitled")).unwrap(), "the real file");
+    }
+
+    #[test]
+    fn untitled_routes_refuse_a_bad_request() {
+        let dir = untitled_tmp("refuse");
+        let d = dir.to_string_lossy().to_string();
+        for body in [
+            "not json".to_string(),
+            serde_json::json!({ "ext": "md" }).to_string(),
+            serde_json::json!({ "dir": d, "ext": "../x" }).to_string(),
+            serde_json::json!({ "dir": dir.join("missing/deeper").to_string_lossy() }).to_string(),
+        ] {
+            assert!(handle_untitled_name(body.as_bytes()).status.starts_with("400"), "{body}");
+            assert!(handle_create_untitled(body.as_bytes()).status.starts_with("400"), "{body}");
+        }
+        let body = serde_json::json!({ "dir": d, "prefer": "notes.md" }).to_string();
+        assert!(handle_create_untitled(body.as_bytes()).status.starts_with("400"));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    }
 
     /// `fs/read-file`'s refusal carries the old `error` message AND a
     /// `code` the file viewer branches on: `not_found` opens a new,

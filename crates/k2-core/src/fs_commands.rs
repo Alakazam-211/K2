@@ -643,20 +643,142 @@ fn collision_free_path(dir: &Path, filename: &str) -> Result<PathBuf, String> {
 pub fn create_new_free(dir: &Path, filename: &str) -> Result<(PathBuf, fs::File), String> {
     for i in 0..MAX_NAME_TRIES {
         let candidate = dir.join(numbered_name(filename, i));
-        let mut o = fs::OpenOptions::new();
-        o.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            o.custom_flags(libc::O_NOFOLLOW);
-        }
-        match o.open(&candidate) {
+        match open_exclusive(&candidate) {
             Ok(f) => return Ok((candidate, f)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(map_io_err(e)),
         }
     }
     Err(format!("no free name for {filename:?} after {MAX_NAME_TRIES} tries; pick another name"))
+}
+
+/// `O_CREAT|O_EXCL` (plus `O_NOFOLLOW` on unix): open a file that didn't
+/// exist, or `AlreadyExists` for anything at that path, a dangling link too.
+fn open_exclusive(path: &Path) -> std::io::Result<fs::File> {
+    let mut o = fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.custom_flags(libc::O_NOFOLLOW);
+    }
+    o.open(path)
+}
+
+// ── New "Untitled" files (Cmd+N, the tab + menu, the Board tab) ────────
+
+/// `Untitled.<ext>`, `Untitled-2.<ext>`, ... (Rosson's naming ruling). `i` 0
+/// is the bare name. No extension gives `Untitled`, `Untitled-2`.
+fn untitled_name(ext: Option<&str>, i: usize) -> String {
+    let stem = if i == 0 { "Untitled".to_string() } else { format!("Untitled-{}", i + 1) };
+    match ext {
+        Some(ext) => format!("{stem}.{ext}"),
+        None => stem,
+    }
+}
+
+/// An extension is a file-name piece, never a path: letters, digits, `.`, `_`,
+/// `-` and `+`, with no dot at either end. `None` and `""` mean no extension.
+fn clean_untitled_ext(ext: Option<&str>) -> Result<Option<&str>, String> {
+    let Some(ext) = ext.filter(|e| !e.is_empty()) else {
+        return Ok(None);
+    };
+    let ok = ext.len() <= 32
+        && !ext.starts_with('.')
+        && !ext.ends_with('.')
+        && ext.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'));
+    if ok {
+        Ok(Some(ext))
+    } else {
+        Err(format!("invalid extension {ext:?}: give it without the dot, like \"md\" or \"k5board\""))
+    }
+}
+
+/// The extension in a name [`untitled_name`] could have made, `Err` for any
+/// other name. `Untitled-1` is refused: that number is never handed out.
+fn untitled_name_ext(name: &str) -> Result<Option<&str>, String> {
+    let refused = || format!("{name:?} is not an Untitled file name");
+    let rest = name.strip_prefix("Untitled").ok_or_else(refused)?;
+    let (number, ext) = match rest.split_once('.') {
+        Some((number, ext)) => (number, Some(ext)),
+        None => (rest, None),
+    };
+    if let Some(digits) = number.strip_prefix('-') {
+        let n: usize = digits.parse().map_err(|_| refused())?;
+        if n < 2 || digits.starts_with('0') {
+            return Err(refused());
+        }
+    } else if !number.is_empty() {
+        return Err(refused());
+    }
+    clean_untitled_ext(ext).map_err(|_| refused())
+}
+
+/// The folder as given (not canonicalized, so the answer's path starts with
+/// what the client sent), after checking it is a folder.
+fn untitled_dir(dir: &str) -> Result<&Path, String> {
+    if !validate_path(dir)?.is_dir() {
+        return Err(format!("Not a folder: {dir}"));
+    }
+    Ok(Path::new(dir))
+}
+
+/// The first free name for a new file in `dir`, without creating anything:
+/// nothing on disk has it (a folder or a dangling link counts) and it isn't in
+/// `taken` (the caller's open tabs that aren't on disk yet). Only a suggestion:
+/// someone else can take it next, so the write must go through
+/// [`create_untitled`], which never overwrites.
+pub fn free_untitled_name(dir: &str, ext: Option<&str>, taken: &[String]) -> Result<PathBuf, String> {
+    let ext = clean_untitled_ext(ext)?;
+    let dir = untitled_dir(dir)?;
+    for i in 0..MAX_NAME_TRIES {
+        let name = untitled_name(ext, i);
+        if !taken.contains(&name) && fs::symlink_metadata(dir.join(&name)).is_err() {
+            return Ok(dir.join(name));
+        }
+    }
+    Err(format!("no free Untitled name in {} after {MAX_NAME_TRIES} tries", dir.display()))
+}
+
+/// Create a new file in `dir` holding `content`, under `prefer` if that name is
+/// free, else the first free name from [`untitled_name`] not in `taken`. The
+/// create is atomic (see [`open_exclusive`]), so nothing is ever overwritten
+/// and two racing creates get two files. `ext` is for a brand-new file;
+/// `prefer` carries its own and the two can't disagree. A failed write leaves
+/// no stub.
+pub fn create_untitled(
+    dir: &str,
+    ext: Option<&str>,
+    prefer: Option<&str>,
+    taken: &[String],
+    content: &[u8],
+) -> Result<PathBuf, String> {
+    let mut ext = clean_untitled_ext(ext)?;
+    if let Some(name) = prefer {
+        let named = untitled_name_ext(name)?;
+        if ext.is_some() && ext != named {
+            return Err(format!("{name:?} does not have the extension {:?}", ext.unwrap_or("")));
+        }
+        ext = named;
+    }
+    let dir = untitled_dir(dir)?;
+    let walk = (0..MAX_NAME_TRIES).map(|i| untitled_name(ext, i)).filter(|n| !taken.contains(n));
+    for name in prefer.map(str::to_string).into_iter().chain(walk) {
+        let target = dir.join(&name);
+        let mut f = match open_exclusive(&target) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(map_io_err(e)),
+        };
+        use std::io::Write as _;
+        if let Err(e) = f.write_all(content) {
+            drop(f);
+            let _ = fs::remove_file(&target);
+            return Err(map_io_err(e));
+        }
+        return Ok(target);
+    }
+    Err(format!("no free Untitled name in {} after {MAX_NAME_TRIES} tries", dir.display()))
 }
 
 /// Write `bytes` into `dir` under a sanitized, collision-free name.
@@ -2279,5 +2401,204 @@ mod tests {
             .filter(|e| e.path().parent() == Some(parent))
             .collect();
         assert!(strays.is_empty(), "an .part escaped into the parent dir");
+    }
+}
+
+#[cfg(test)]
+mod untitled_tests {
+    use super::*;
+
+    fn tmp(label: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "k2-untitled-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn s(p: &Path) -> &str {
+        p.to_str().unwrap()
+    }
+
+    fn free(dir: &Path, ext: Option<&str>, taken: &[&str]) -> String {
+        let taken: Vec<String> = taken.iter().map(|t| t.to_string()).collect();
+        let p = free_untitled_name(s(dir), ext, &taken).unwrap();
+        p.file_name().unwrap().to_str().unwrap().to_string()
+    }
+
+    fn name_of(p: &Path) -> &str {
+        p.file_name().unwrap().to_str().unwrap()
+    }
+
+    #[test]
+    fn the_name_skips_what_is_on_disk() {
+        let d = tmp("disk");
+        assert_eq!(free(&d, None, &[]), "Untitled");
+        fs::write(d.join("Untitled"), "mine").unwrap();
+        assert_eq!(free(&d, None, &[]), "Untitled-2");
+        fs::write(d.join("Untitled-2"), "mine").unwrap();
+        assert_eq!(free(&d, None, &[]), "Untitled-3");
+        // A gap is free again.
+        fs::remove_file(d.join("Untitled")).unwrap();
+        assert_eq!(free(&d, None, &[]), "Untitled");
+        assert_eq!(fs::read_to_string(d.join("Untitled-2")).unwrap(), "mine");
+    }
+
+    #[test]
+    fn any_extension_numbers_on_its_own() {
+        let d = tmp("ext");
+        assert_eq!(free(&d, Some("k5board"), &[]), "Untitled.k5board");
+        fs::write(d.join("Untitled.k5board"), "b").unwrap();
+        assert_eq!(free(&d, Some("k5board"), &[]), "Untitled-2.k5board");
+        // Another extension (or none) is another name.
+        assert_eq!(free(&d, Some("md"), &[]), "Untitled.md");
+        assert_eq!(free(&d, None, &[]), "Untitled");
+        assert_eq!(free(&d, Some("tar.gz"), &[]), "Untitled.tar.gz");
+    }
+
+    #[test]
+    fn a_folder_counts_as_taken() {
+        let d = tmp("folder");
+        fs::create_dir(d.join("Untitled")).unwrap();
+        assert_eq!(free(&d, None, &[]), "Untitled-2");
+        let made = create_untitled(s(&d), None, None, &[], b"x").unwrap();
+        assert_eq!(name_of(&made), "Untitled-2");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_counts_as_taken_and_is_never_followed() {
+        let d = tmp("link");
+        let outside = d.join("outside.txt");
+        std::os::unix::fs::symlink(&outside, d.join("Untitled")).unwrap();
+        assert_eq!(free(&d, None, &[]), "Untitled-2");
+        let made = create_untitled(s(&d), None, Some("Untitled"), &[], b"x").unwrap();
+        assert_eq!(name_of(&made), "Untitled-2");
+        assert!(!outside.exists(), "wrote through the link");
+    }
+
+    #[test]
+    fn the_name_skips_open_unsaved_tabs() {
+        let d = tmp("tabs");
+        assert_eq!(free(&d, None, &["Untitled"]), "Untitled-2");
+        assert_eq!(free(&d, None, &["Untitled", "Untitled-2"]), "Untitled-3");
+        assert_eq!(free(&d, Some("md"), &["Untitled"]), "Untitled.md");
+        let taken = vec!["Untitled".to_string()];
+        let made = create_untitled(s(&d), None, None, &taken, b"x").unwrap();
+        assert_eq!(name_of(&made), "Untitled-2");
+        assert!(!d.join("Untitled").exists());
+    }
+
+    #[test]
+    fn asking_for_a_name_creates_nothing() {
+        let d = tmp("pick");
+        free(&d, None, &[]);
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn create_never_overwrites() {
+        let d = tmp("create");
+        fs::write(d.join("Untitled.md"), "the real file").unwrap();
+        let made = create_untitled(s(&d), Some("md"), None, &[], b"new").unwrap();
+        assert_eq!(name_of(&made), "Untitled-2.md");
+        assert_eq!(fs::read_to_string(&made).unwrap(), "new");
+        assert_eq!(fs::read_to_string(d.join("Untitled.md")).unwrap(), "the real file");
+    }
+
+    #[test]
+    fn create_keeps_the_preferred_name_when_it_is_free() {
+        let d = tmp("prefer");
+        // Untitled is free, but this tab is Untitled-3 and stays so.
+        let made = create_untitled(s(&d), None, Some("Untitled-3"), &[], b"x").unwrap();
+        assert_eq!(name_of(&made), "Untitled-3");
+    }
+
+    #[test]
+    fn create_moves_on_when_the_preferred_name_was_taken() {
+        let d = tmp("prefer-taken");
+        fs::write(d.join("Untitled-2.md"), "theirs").unwrap();
+        // Tab Untitled.md is another unsaved tab, so it isn't free for this one.
+        let taken = vec!["Untitled.md".to_string()];
+        let made = create_untitled(s(&d), None, Some("Untitled-2.md"), &taken, b"mine").unwrap();
+        assert_eq!(name_of(&made), "Untitled-3.md");
+        assert_eq!(fs::read_to_string(&made).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(d.join("Untitled-2.md")).unwrap(), "theirs");
+        assert!(!d.join("Untitled.md").exists());
+    }
+
+    #[test]
+    fn racing_creates_lose_nothing() {
+        let d = tmp("race");
+        fs::write(d.join("Untitled"), "already here").unwrap();
+        let threads: Vec<_> = (0..32)
+            .map(|i| {
+                let d = d.clone();
+                std::thread::spawn(move || {
+                    let body = format!("writer {i}");
+                    let path = create_untitled(s(&d), None, Some("Untitled"), &[], body.as_bytes()).unwrap();
+                    (path, body)
+                })
+            })
+            .collect();
+        let made: Vec<(PathBuf, String)> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        let names: std::collections::HashSet<&PathBuf> = made.iter().map(|(p, _)| p).collect();
+        assert_eq!(names.len(), 32, "two writers shared a file");
+        for (path, body) in &made {
+            assert_eq!(&fs::read_to_string(path).unwrap(), body, "{}", path.display());
+        }
+        assert_eq!(fs::read_to_string(d.join("Untitled")).unwrap(), "already here");
+    }
+
+    #[test]
+    fn a_path_is_not_an_extension_or_a_name() {
+        let d = tmp("refuse");
+        for ext in ["../x", "a/b", "a\\b", ".md", "md.", "a b", "é", &"x".repeat(33)] {
+            free_untitled_name(s(&d), Some(ext), &[]).expect_err(ext);
+            create_untitled(s(&d), Some(ext), None, &[], b"x").expect_err(ext);
+        }
+        for name in [
+            "notes.md",
+            "Untitled-1",
+            "Untitled-02",
+            "Untitled-x",
+            "Untitledx",
+            "Untitled/../../x",
+            "Untitled.../x",
+            "../Untitled",
+        ] {
+            create_untitled(s(&d), None, Some(name), &[], b"x").expect_err(name);
+        }
+        create_untitled(s(&d), Some("md"), Some("Untitled.txt"), &[], b"x").expect_err("two extensions");
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 0, "a refusal wrote something");
+    }
+
+    #[test]
+    fn the_folder_must_exist_and_be_a_folder() {
+        let d = tmp("dir");
+        let missing = d.join("nope/deeper");
+        free_untitled_name(s(&missing), None, &[]).expect_err("missing");
+        create_untitled(s(&missing), None, None, &[], b"x").expect_err("missing");
+        let file = d.join("file.txt");
+        fs::write(&file, "x").unwrap();
+        free_untitled_name(s(&file), None, &[]).expect_err("a file");
+        create_untitled(s(&file), None, None, &[], b"x").expect_err("a file");
+    }
+
+    /// The answer's path starts with what the client sent, so a linked folder
+    /// (macOS /tmp) doesn't look like a rename to the tab.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_keeps_the_folder_as_given() {
+        let d = tmp("given");
+        let real = d.join("real");
+        fs::create_dir(&real).unwrap();
+        let link = d.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(free_untitled_name(s(&link), None, &[]).unwrap(), link.join("Untitled"));
+        assert_eq!(create_untitled(s(&link), None, None, &[], b"x").unwrap(), link.join("Untitled"));
+        assert!(real.join("Untitled").exists());
     }
 }

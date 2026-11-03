@@ -859,6 +859,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/fs/compress-status", Member),
     post("/cli/fs/copy", Member),
     post("/cli/fs/create", Member),
+    // A new file's first save (Cmd+N, the Board tab): never overwrites.
+    post("/cli/fs/create-untitled", Member),
     post("/cli/fs/delete", Member),
     // prd-app-caps-0464-v1 AC34 (0.46.4): App guests save exposed files;
     // the handlers check the pass (a login gets a usage 400).
@@ -881,6 +883,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/fs/resolve-links", Member),
     post("/cli/fs/search-tree", Member),
     get("/cli/fs/stat", Member),
+    post("/cli/fs/untitled-name", Member),
     post("/cli/fs/upload-binary", Member),
     post("/cli/fs/upload-chunk", Member),
     post("/cli/fs/write-file", Member),

@@ -103,6 +103,7 @@ import {
   type FileCategory,
   type ViewMode,
 } from './fileCategory'
+import { isNewUntitledFile, saveNewUntitledFile, untitledNamesInUse } from '@/lib/untitled-file'
 export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
@@ -278,6 +279,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // guard, writes it back).
   const deletedRef = useRef(false)
   const [saving, setSaving] = useState(false)
+  // A new document's first save, while it runs. A second save waits for it,
+  // or it would create a second file.
+  const firstSaveRef = useRef<Promise<string> | null>(null)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
   // Latest buffer values for callbacks that outlive a render (the
   // autosave-on-leave cleanup, the read-failure handler).
@@ -346,6 +350,28 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   }, [filePath])
 
   const loadGenRef = useRef(0)
+
+  /** Create this new document's file (never overwriting), and point the tab
+   *  at the name it got. Resolves to the file's path. */
+  const firstSave = useCallback(
+    (path: string, text: string): Promise<string> => {
+      const tabs = room.tabs.getState()
+      const openTabs = [...tabs.tabs, ...tabs.extraGroups.flatMap((g) => g.tabs)]
+      const running = saveNewUntitledFile(room.scope, path, text, untitledNamesInUse(openTabs, tabId))
+        .then((saved) => {
+          readOkPathRef.current = saved
+          if (saved !== path) room.tabs.getState().retargetUntitledFile(tabId, path, saved)
+          return saved
+        })
+        .finally(() => {
+          firstSaveRef.current = null
+        })
+      firstSaveRef.current = running
+      return running
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabId],
+  )
 
   /** Unsaved edits right now (the buffer differs from what was read). */
   const pendingEdits = (): string | null => {
@@ -494,7 +520,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       if (deletedRef.current && !saveConfirmed) return
       // Host switch unmount: do not POST the old machine's path to the new daemon.
       if (room.scope.connectionKey !== mountHostKeyRef.current) return
-      void daemonCliPost(room.scope, 'fs/write-file', { path: fp, content: edited }).catch((err) => {
+      const flush = async (): Promise<void> => {
+        // A first save still running decides where this goes.
+        const target = firstSaveRef.current ? await firstSaveRef.current.catch(() => fp) : fp
+        if (isNewUntitledFile(target, readOkPathRef.current)) await firstSave(target, edited)
+        else await daemonCliPost(room.scope, 'fs/write-file', { path: target, content: edited })
+      }
+      void flush().catch((err) => {
         if (isHostSwitchedError(err)) return
         console.error('[file-viewer] autosave-on-leave failed:', err)
       })
@@ -571,7 +603,10 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       // A file that turned binary locks; one that vanished is marked
       // deleted (no silent recreate); transient failures stay quiet.
       onError: (err) => textReadFailed(err, true),
-      shouldSkip: () => hasSelectionWithin(rootRef.current),
+      // A new document stays yours: if a file takes its name while the tab is
+      // empty, the tab doesn't turn into that file. Its first save moves on.
+      shouldSkip: () =>
+        hasSelectionWithin(rootRef.current) || isNewUntitledFile(filePath, readOkPathRef.current),
     })
   }, [filePath, isDirty, textLock, textReadOk, textReadFailed])
 
@@ -584,12 +619,17 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     if (toSave === content) return // Nothing changed
     setSaving(true)
     try {
-      await daemonCliPost(room.scope, 'fs/write-file', { path: filePath, content: toSave })
+      const target = firstSaveRef.current ? await firstSaveRef.current.catch(() => filePath) : filePath
+      if (isNewUntitledFile(target, readOkPathRef.current)) {
+        await firstSave(target, toSave)
+      } else {
+        await daemonCliPost(room.scope, 'fs/write-file', { path: target, content: toSave })
+        // An explicit save is the person choosing to write (even a file that
+        // was deleted outside K2): the file is text on disk again.
+        readOkPathRef.current = target
+      }
       setContent(toSave)
       setEditedContent(null)
-      // An explicit save is the person choosing to write (even a file that
-      // was deleted outside K2): the file is text on disk again.
-      readOkPathRef.current = filePath
       deletedRef.current = false
       setRereadIssue(null)
     } catch (err) {
@@ -597,7 +637,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     } finally {
       setSaving(false)
     }
-  }, [filePath, editedContent, content])
+  }, [filePath, editedContent, content, firstSave])
 
   // Discard unsaved edits — drops the in-memory edited buffer so the
   // pane re-renders against the on-disk content. Used by the parent's

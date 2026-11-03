@@ -14,7 +14,7 @@ const setPlatform = vi.hoisted(() => {
 })
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { PresetsBar } from '@/components/PresetsBar/PresetsBar'
@@ -55,6 +55,7 @@ vi.mock('@/lib/daemon-cli', async () => {
     ...actual,
     daemonCliPost: vi.fn(async (_scope: unknown, route: string) => {
       if (route === 'agents/ensure-cli') return { ok: true, installed: false }
+      if (route === 'fs/untitled-name') return { name: 'Untitled' }
       return {}
     }),
   }
@@ -228,9 +229,10 @@ describe('tab bar plus menu', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^New File/ }))
     })
+    await waitFor(() =>
+      expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toContain('Untitled'),
+    )
     expect(useTabsStore.getState().tabs.map((t) => t.title)).not.toContain('Untitled')
-    const afterFile = useTabsStore.getState().extraGroups[0].tabs
-    expect(afterFile.map((t) => t.title)).toContain('Untitled')
 
     vi.mocked(invoke).mockClear()
     await openPlus()

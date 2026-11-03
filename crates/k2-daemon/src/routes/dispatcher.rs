@@ -15291,6 +15291,8 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         "/cli/fs/delete" => crate::fs_routes::handle_delete(body),
         "/cli/fs/rename" => crate::fs_routes::handle_rename(body),
         "/cli/fs/create" => crate::fs_routes::handle_create(body),
+        "/cli/fs/untitled-name" => crate::fs_routes::handle_untitled_name(body),
+        "/cli/fs/create-untitled" => crate::fs_routes::handle_create_untitled(body),
         "/cli/fs/duplicate" => crate::fs_routes::handle_duplicate(body),
         "/cli/fs/open-finder" => crate::fs_routes::handle_open_finder(body),
         "/cli/fs/open-external" => crate::fs_routes::handle_open_external(body),

@@ -1,6 +1,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
+import { pathBaseName, pickUntitledName, untitledNamesInUse } from '@/lib/untitled-file'
 import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { isBuiltinAgentType } from '@/lib/agent-type'
@@ -1003,7 +1004,11 @@ export interface TabsState {
     meta: { title?: string; icon?: string | null },
   ) => void
   /** `groupIndex` omitted or 0 appends to the primary strip. */
-  openUntitledDocument: (cwd: string, groupIndex?: number) => void
+  /** A new document's tab, under a name the daemon checked against the disk.
+   *  Resolves once the tab is placed; presses run one at a time. */
+  openUntitledDocument: (cwd: string, groupIndex?: number) => Promise<void>
+  /** A new document's first save landed on another name: point its tab there. */
+  retargetUntitledFile: (tabId: string, oldPath: string, newPath: string) => void
   /** Changes tab (C2) — open the workspace's Changes tab in column
    *  `groupIndex` (0 / omitted = primary). One per workspace: when one is
    *  already open (any column) it is focused instead. Returns its tab id. */
@@ -2727,6 +2732,8 @@ export type TabsStore = UseBoundStore<StoreApi<TabsState>> & { readonly room: Ta
 /** Build one room's tabs store. See "One tabs store per room" above. */
 export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   const { scope, deps } = binding
+  /** `openUntitledDocument`'s queue (see there). */
+  let untitledChain: Promise<void> = Promise.resolve()
   const isPrimary = binding.workspace === null
   /** Home M4: a view-only pinned room — no layout save, no close,
    *  no tab-title write on its server. Its scope's request layer refuses
@@ -5217,36 +5224,75 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     },
 
     openUntitledDocument: (cwd: string, groupIndex?: number) => {
-      // Count existing untitled docs to generate a unique name
-      const state = get()
-      const allTabs = [
-        ...state.tabs,
-        ...state.extraGroups.flatMap((g: { tabs: Tab[] }) => g.tabs)
-      ]
-      const untitledPattern = /^Untitled(?:-(\d+))?$/
-      let maxNum = 0
-      for (const t of allTabs) {
-        const m = untitledPattern.exec(t.title)
-        if (m) maxNum = Math.max(maxNum, m[1] ? parseInt(m[1], 10) : 1)
+      const open = async (): Promise<void> => {
+        const before = get()
+        let title: string
+        try {
+          title = await pickUntitledName(
+            scope,
+            cwd,
+            untitledNamesInUse([...before.tabs, ...before.extraGroups.flatMap((g) => g.tabs)]),
+          )
+        } catch {
+          return // The window left this host: no tab belongs here.
+        }
+        if (get().activeWorkspaceKey !== before.activeWorkspaceKey) return
+
+        const paneGroupId = crypto.randomUUID()
+        const tabId = crypto.randomUUID()
+        const filePath = `${cwd}/${title}`
+
+        const pg = makeFileViewerPaneGroup(paneGroupId, filePath, true)
+
+        const tab: Tab = {
+          id: tabId,
+          title,
+          mosaicTree: paneGroupId,
+          paneGroups: new Map([[paneGroupId, pg]]),
+          isDirty: true, // Mark as dirty since it's unsaved
+        }
+
+        set((state) => placedTab(state, groupIndex ?? 0, tab))
       }
-      const num = maxNum + 1
-      const title = num === 1 ? 'Untitled' : `Untitled-${num}`
+      // One at a time: each press's `taken` must see the tab the last one made.
+      untitledChain = untitledChain.then(open, open)
+      return untitledChain
+    },
 
-      const paneGroupId = crypto.randomUUID()
-      const tabId = crypto.randomUUID()
-      const filePath = `${cwd}/${title}`
-
-      const pg = makeFileViewerPaneGroup(paneGroupId, filePath, true)
-
-      const tab: Tab = {
-        id: tabId,
-        title,
-        mosaicTree: paneGroupId,
-        paneGroups: new Map([[paneGroupId, pg]]),
-        isDirty: true, // Mark as dirty since it's unsaved
+    retargetUntitledFile: (tabId: string, oldPath: string, newPath: string) => {
+      const retarget = (tab: Tab): Tab => {
+        const paneGroups = new Map(tab.paneGroups)
+        for (const [id, pg] of tab.paneGroups) {
+          paneGroups.set(id, {
+            ...pg,
+            items: pg.items.map((item) =>
+              item.type === 'file-viewer' && (item.data as FileViewerItemData).filePath === oldPath
+                ? { ...item, data: { ...(item.data as FileViewerItemData), filePath: newPath } }
+                : item,
+            ),
+          })
+        }
+        const title = tab.title === pathBaseName(oldPath) ? pathBaseName(newPath) : tab.title
+        return { ...tab, title, paneGroups }
       }
-
-      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      set((state) => {
+        if (findTabAcrossGroups(state, tabId)) {
+          const result = mapTabAcrossGroups(state, tabId, retarget)
+          return { tabs: result.tabs, extraGroups: result.extraGroups }
+        }
+        // The save ran as the workspace was left: the tab is in its snapshot.
+        for (const [key, snap] of Object.entries(state.backgroundWorkspaces)) {
+          if (!findTabAcrossGroups(snap, tabId)) continue
+          const result = mapTabAcrossGroups(snap, tabId, retarget)
+          return {
+            backgroundWorkspaces: {
+              ...state.backgroundWorkspaces,
+              [key]: { ...snap, tabs: result.tabs, extraGroups: result.extraGroups },
+            },
+          }
+        }
+        return {}
+      })
     },
 
     setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => {

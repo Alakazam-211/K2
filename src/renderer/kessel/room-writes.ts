@@ -71,6 +71,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'fs/move': 'drag and drop within B’s workspace',
   'fs/copy': 'copy within B’s workspace',
   'fs/duplicate': 'duplicate within B’s workspace',
+  'fs/untitled-name': 'a new file tab on B gets a name free on B’s disk (a read sent as POST)',
+  'fs/create-untitled': 'a new file tab’s first save on B, which never overwrites',
   'fs/write-file': 'save a file tab on B',
   'fs/upload-binary': 'a file dropped on B’s terminal is uploaded to B',
   'fs/upload-chunk': 'a large file dropped on B’s terminal is uploaded to B',

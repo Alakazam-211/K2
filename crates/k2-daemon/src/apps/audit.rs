@@ -68,6 +68,8 @@ pub const ALERT_EVERY: Duration = Duration::from_secs(300);
 /// The call a link connection is serving.
 struct Open {
     call: Call,
+    /// [`Begin::upgrade`].
+    upgrade: bool,
     /// K2's hint on a refusal (for the App's log line, never stored).
     hint: Option<String>,
     started: Instant,
@@ -105,6 +107,9 @@ pub struct Begin<'a> {
     /// Set when the gate refuses it.
     pub refused: Option<(u16, &'a str)>,
     pub subscribed: bool,
+    /// A WebSocket upgrade: it keeps its row, and never counts toward the
+    /// refused-calls alert ([`observe`]).
+    pub upgrade: bool,
 }
 
 /// Open the call for a request on `ctx`'s link (closing the previous one
@@ -125,7 +130,7 @@ pub fn begin(ctx: &LinkCtx, b: Begin<'_>) {
         bytes_out: 0,
         latency_ms: 0,
     };
-    let open = Open { call, hint: None, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id(), subscribed: b.subscribed };
+    let open = Open { call, hint: None, started: Instant::now(), ended: None, workspace_id: ctx.workspace_id(), subscribed: b.subscribed, upgrade: b.upgrade };
     if CONN.try_with(|c| *c.borrow_mut() = Some(open)).is_err() {
         // Off a scoped connection (a unit test): record at once.
         k2_core::log_debug!("[apps/audit] call outside a link connection scope");
@@ -204,7 +209,7 @@ pub fn finish() {
             o.call.result = 101;
         }
     }
-    observe(&o.workspace_id, &o.call);
+    observe(&o.workspace_id, &o.call, o.upgrade);
     if o.call.result >= 400 {
         let line = Refused { app_id: o.call.app_id.clone(), verb: o.call.verb.clone(), code: o.call.code.clone().unwrap_or_default(), hint: o.hint.take() };
         let _ = sender().lock().unwrap_or_else(|e| e.into_inner()).send(Msg::Refused(line));
@@ -458,8 +463,13 @@ pub(crate) fn set_app_workspace(app: &str, ws: &str) {
     alerts().lock().unwrap_or_else(|e| e.into_inner()).ws.insert(app.to_string(), ws.to_string());
 }
 
-/// Watch each finished call for alert conditions.
-fn observe(ws: &str, call: &Call) {
+/// Watch each finished call for alert conditions. A refused WebSocket upgrade
+/// keeps its row and its other alerts, but no spike: an open socket that lost
+/// access makes an older client re-dial about 30 times in 5 minutes, and that
+/// says nothing about who's calling. (Only the gate's own refusals get here with
+/// a status at all: a socket handler's 403 goes out through `refuse_upgrade`, so
+/// its row reads 101.)
+fn observe(ws: &str, call: &Call, upgrade: bool) {
     let app = call.app_id.as_str();
     alerts().lock().unwrap_or_else(|e| e.into_inner()).ws.insert(app.to_string(), ws.to_string());
     if let Some(code) = call.code.as_deref() {
@@ -480,7 +490,7 @@ fn observe(ws: &str, call: &Call) {
             );
         }
     }
-    if counts_toward_spike(call.result, call.code.as_deref()) {
+    if !upgrade && counts_toward_spike(call.result, call.code.as_deref()) {
         let spike = {
             let mut a = alerts().lock().unwrap_or_else(|e| e.into_inner());
             let v = a.denials.entry(app.to_string()).or_default();
@@ -763,16 +773,16 @@ mod tests {
         super::super::alerts::set_sink(Some(Box::new(move |_: &str, text: &str| s.lock().unwrap().push(text.to_string()))));
         let quiet = format!("spike-quiet-{}", uuid::Uuid::new_v4());
         for _ in 0..25 {
-            observe("ws-spike", &call(&quiet, 404, Some("not_found")));
-            observe("ws-spike", &call(&quiet, 400, None));
+            observe("ws-spike", &call(&quiet, 404, Some("not_found")), false);
+            observe("ws-spike", &call(&quiet, 400, None), false);
         }
         assert!(!spiked(&quiet), "50 missing folders and bad requests are no spike");
         let loud = format!("spike-loud-{}", uuid::Uuid::new_v4());
         for _ in 0..SPIKE_DENIALS {
-            observe("ws-spike", &call(&loud, 401, None));
+            observe("ws-spike", &call(&loud, 401, None), false);
         }
         assert!(!spiked(&loud), "{SPIKE_DENIALS} is not more than {SPIKE_DENIALS}");
-        observe("ws-spike", &call(&loud, 401, None));
+        observe("ws-spike", &call(&loud, 401, None), false);
         assert!(spiked(&loud), "the 21st wrong password is");
         let texts = said.lock().unwrap().clone();
         assert!(texts.iter().any(|t| t.contains(&loud) && t.contains("refused calls in 5 minutes")), "{texts:?}");

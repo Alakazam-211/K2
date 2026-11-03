@@ -1265,3 +1265,83 @@ async fn the_same_rows_hold_over_an_apps_link() {
     }
     gateway::close(app, None, true);
 }
+
+// ── An older client's refused re-dials ───────────────────────────────
+
+/// A vendored SDK from before the fix re-dials a socket it can't open: about 30
+/// times in 5 minutes. On a link that must not wake the App's agent through the
+/// owner's refused-calls alert, and each refusal keeps its audit row. The same
+/// refusals as plain calls still raise the alert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_socket_dials_keep_their_rows_and_raise_no_alert() {
+    use k2_daemon::apps::gateway::{self, LinkSpec};
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+    let ws = seed_ws(&env, &format!("redial{tag}"));
+    let conv = pin_chat(&ws);
+    let app = format!("redial{tag}");
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let svc = k2_core::published_services::insert(&conn, &ws.id, &app, k2_core::published_services::CMD_APP_SENTINEL, &ws.path.to_string_lossy(), 0, "local", "stopped", "cmd", "")
+            .expect("service")
+            .id;
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp { app_id: &app, service_id: &svc, seed_id: None, owner_workspace: &ws.id, isolation: "process", memory_limit_bytes: None, front_port: 0, created_by: "owner" },
+        )
+        .expect("insert app");
+        svc
+    };
+    let alerts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let a2 = alerts.clone();
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(move |_ws: &str, text: &str| {
+        a2.lock().expect("alerts").push(text.to_string());
+    })));
+
+    let spec = LinkSpec { app_id: app.clone(), service_id: svc.clone(), workspace_id: ws.id.clone(), port: 0, caps: vec!["thread:read".into()], rooms: vec![ws.id.clone()] };
+    gateway::open(spec, None).expect("open link");
+    let link = gateway::port_of(&app).expect("listening");
+    let dead_pass = "k2skn_redial_dead_pass_not_a_real_one_at_all";
+    let pq = format!("/cli/overlay/events?conversation={conv}");
+    for i in 0..25 {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = format!("ws://127.0.0.1:{link}{pq}").into_client_request().expect("request");
+        req.headers_mut().insert("Authorization", format!("Bearer {dead_pass}").parse().expect("header"));
+        match tokio_tungstenite::connect_async(req).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 401, "dial {i}"),
+            other => panic!("dial {i}: {:?}", other.map(|_| "opened")),
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    let said = alerts.lock().expect("alerts").clone();
+    assert!(!said.iter().any(|t| t.contains("refused calls")), "25 refused dials woke the agent: {said:?}");
+
+    // Every refused dial has its row.
+    let flush_and_read = get(port, "/cli/app/audit", OWNER, &format!("app={app}&denied=1&limit=100")).await;
+    assert_eq!(flush_and_read.status, 200, "{}", flush_and_read.body);
+    assert!(flush_and_read.body.matches("pass_invalid").count() >= 25, "the audit keeps each refusal: {}", flush_and_read.body);
+
+    // Control: the same refusals as plain calls are what the alert is for.
+    for _ in 0..25 {
+        let (p, dead) = (link, dead_pass.to_string());
+        let (status, _) = tokio::task::spawn_blocking(move || {
+            use std::io::{Read, Write};
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", p)).expect("connect link");
+            s.write_all(format!("GET /cli/thread HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {dead}\r\nConnection: close\r\n\r\n").as_bytes()).expect("write");
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("read");
+            (out.split_whitespace().nth(1).expect("status").to_string(), out)
+        })
+        .await
+        .expect("join");
+        assert_eq!(status, "401");
+    }
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    let said = alerts.lock().expect("alerts").clone();
+    k2_daemon::apps::alerts::set_sink(None);
+    assert!(said.iter().any(|t| t.contains("refused calls")), "plain refused calls still raise it: {said:?}");
+    gateway::close(&app, None, true);
+}

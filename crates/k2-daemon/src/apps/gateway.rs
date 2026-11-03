@@ -941,6 +941,7 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
             bytes_in,
             refused: refused.as_ref().map(|(n, code)| (*n, code.as_str())),
             subscribed: seen.subscribed,
+            upgrade: header(head, "upgrade").is_some_and(|u| u.eq_ignore_ascii_case("websocket")),
         },
     );
     g

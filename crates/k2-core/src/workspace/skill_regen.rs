@@ -738,12 +738,12 @@ Topics: what, source, map, identity, send, human, people, auth, errors, context,
 db, mail, connect-boundary, apps, app-deploys, app-move, app-api, app-errors,
 live, app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
 app-runtime, app-handover, app-push, app-pairing, app-profile, app-chat,
-chat-voice, chat-voice-rooms, tauri, skins, feedback-loop, ticket-brief, zen,
+chat-voice, chat-voice-rooms, voice-rooms, tauri, skins, feedback-loop, ticket-brief, zen,
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
 publish-visibility, publish-dev, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, docs, sim, design, db-upgrade, jobs, folder-trust,
-email-notifications, box-move.
+email-notifications, box-move, board.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

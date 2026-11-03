@@ -304,7 +304,8 @@ pub const SKILL_VERSION_ZEN: u32 = 46;
 /// Bumped to 46 (0.46.7, the multiplayer chain, one bump for all of it): the
 /// k2-cli skill gains a "Live docs" block (`k2 doc`, edit live docs through
 /// it; live docs are switched per kind of file, `k2 doc cores`, `core_off`).
-pub const SKILL_VERSION_WORKSPACE: u32 = 46;
+/// Bumped to 47 (0.46.8): the Study topics gain `voice-rooms` and `board`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 47;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

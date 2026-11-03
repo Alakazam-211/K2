@@ -145,8 +145,8 @@ fn refusals_are_typed_and_nothing_is_cut() {
     add(json!({"type": "sticky", "text": "😀".repeat(5000)})).expect("5000 emoji fit");
     assert_eq!(err(add(json!({"type": "sticky", "text": "😀".repeat(5001)}))).code, "too_long");
     // A connector end keeps its last point beside the id; a bad anchor is refused.
-    let ws = add(json!({"type": "connector", "from": {"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10.04, "y": 20}, "to": {"x": 1, "y": 2}})).expect("ends");
-    assert_eq!(ws[0].value.as_ref().expect("value")["from"], json!({"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10, "y": 20}));
+    let ws = add(json!({"type": "connector", "from": {"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10.5, "y": 20}, "to": {"x": 1, "y": 2}})).expect("ends");
+    assert_eq!(ws[0].value.as_ref().expect("value")["from"], json!({"id": "h-aaaaaaaaaa", "anchor": "top", "x": 10.5, "y": 20}));
     assert_eq!(err(add(json!({"type": "connector", "from": {"id": "h-aaaaaaaaaa", "anchor": "middle"}}))).code, "bad_field");
     let tags: Vec<String> = (0..201).map(|i| format!("t{i}")).collect();
     let e = err(add(json!({"type": "sticky", "tags": tags})));

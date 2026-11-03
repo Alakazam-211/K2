@@ -698,8 +698,9 @@ pub fn notify_feedback_commented(feedback_id: &str, assignees: &[String]) {
 /// - never to a person who muted the chat;
 /// - only to people whose server bell is on, removed/disabled logins never;
 /// - each carries that person's `badgeKey` (never their name) and `unreadTotal` /
-///   `waitingTotal` (strings). Content-free: project name + group id.
-pub fn notify_project_message_created(project_name: &str, group_id: &str, author_person: Option<&str>) {
+///   `waitingTotal` (strings), and the post's `seq`, so a phone can clear
+///   it once it's read. Content-free: project name + group id.
+pub fn notify_project_message_created(project_name: &str, group_id: &str, seq: i64, author_person: Option<&str>) {
     if airgap_blocks() {
         note_airgap_drop();
         return;
@@ -708,6 +709,7 @@ pub fn notify_project_message_created(project_name: &str, group_id: &str, author
         dispatch_push(PushEvent::ProjectPost(k2_core::push::ProjectPush {
             project_name: project_name.to_string(),
             group_id: group_id.to_string(),
+            seq,
             principal: person,
             device_usernames: logins,
             unread_total: totals.total.to_string(),
@@ -931,6 +933,7 @@ fn dispatch_push(event: PushEvent) {
     #[cfg(test)]
     {
         test_push_capture::capture(&event);
+        crate::badge_push::alert_sent(&event);
     }
     #[cfg(not(test))]
     {
@@ -950,6 +953,7 @@ fn dispatch_push(event: PushEvent) {
                     note_airgap_drop();
                     return;
                 }
+                crate::badge_push::alert_sent(&event);
                 if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                     k2_core::log_debug!("[push] dispatch failed ({}): {e}", cloud.label());
                 }
@@ -1051,6 +1055,10 @@ pub(crate) fn deliver_thread(event: PushEvent) {
         {
             note_budget_drop(budget::BudgetClass::Permission);
             return;
+        }
+        // The Thread coalescer notes its own alerts; a card never passes it.
+        if matches!(t.budget, k2_core::push::ThreadBudget::Permission { .. }) {
+            crate::badge_push::alert_sent(&event);
         }
     }
     #[cfg(test)]
@@ -1416,7 +1424,7 @@ mod tests {
         let gid = k2_core::project_groups::create_group(&format!("notify-{}", uuid::Uuid::new_v4())).expect("group").id;
         let mark = test_push_capture::mark();
         notify_feedback_created("cortana", &fid, &[]);
-        notify_project_message_created("Apollo", &gid, None);
+        notify_project_message_created("Apollo", &gid, 12, None);
         let events = test_push_capture::since(mark);
         let mine: Vec<_> = events
             .iter()
@@ -1436,9 +1444,34 @@ mod tests {
         assert_eq!(mine[1].body(), "New message in Apollo");
         assert_eq!(
             mine[1].data(),
-            serde_json::json!({ "kind": "project", "groupId": gid, "unreadTotal": "0", "waitingTotal": "0" }),
-            "content-free: ids and the person's totals only"
+            serde_json::json!({ "kind": "project", "groupId": gid, "seq": "12", "unreadTotal": "0", "waitingTotal": "0" }),
+            "content-free: ids, the post's seq and the person's totals only"
         );
+    }
+
+    /// push-read-hints-v1: a project alert updates `last_told` and the read
+    /// filter, for each person it went to. Without this, told 5, alert 6, read
+    /// back to 5 is skipped and the phone's badge stays at 6.
+    #[test]
+    fn a_project_alert_is_noted_as_sent_for_each_person() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::connect_users::add_user("prjnote", "password123").expect("user");
+        for (id, user) in [("pn1", "owner"), ("pn2", "prjnote")] {
+            push_devices::upsert_device(id, "apns", &format!("tok-{id}"), user).expect("device");
+        }
+        let gid = k2_core::project_groups::create_group(&format!("alertnote-{}", uuid::Uuid::new_v4())).expect("group").id;
+        let m = k2_core::project_groups::post_message_as(&gid, "cortana", "agent", "hi").expect("post");
+        notify_project_message_created("Apollo", &gid, m.seq, None);
+        let mut notes = crate::badge_push::test_read_capture::alerts_for(&gid);
+        notes.sort_by(|a, b| a.0.cmp(&b.0));
+        let want = |person: &str, total: i64| {
+            (person.to_string(), k2_core::push::ReadKind::Project, gid.clone(), m.seq, Some(k2_core::read_state::Totals { total, waiting_total: 0 }))
+        };
+        assert_eq!(notes, vec![want("owner", 1), want("prjnote", 1)]);
+        // A ticket push carries no totals to note.
+        notify_feedback_created("cortana", &format!("fb-note-{gid}"), &[]);
+        assert_eq!(crate::badge_push::test_read_capture::alerts_for(&format!("fb-note-{gid}")), Vec::new());
     }
 
     /// thread-read-v1: a project chat push is per person; the author's own
@@ -1468,7 +1501,7 @@ mod tests {
             v
         };
         let mark = test_push_capture::mark();
-        notify_project_message_created("Apollo", &gid, Some("prjalice"));
+        notify_project_message_created("Apollo", &gid, m.seq, Some("prjalice"));
         assert_eq!(
             principals(&test_push_capture::since(mark)),
             vec![("owner".to_string(), "1".to_string()), ("prjbob".to_string(), "1".to_string())],
@@ -1481,7 +1514,7 @@ mod tests {
             k2_core::read_state::set_mute(&conn, "owner", k2_core::read_state::KIND_PROJECT, &gid, true, None).expect("mute");
         }
         let mark = test_push_capture::mark();
-        notify_project_message_created("Apollo", &gid, None);
+        notify_project_message_created("Apollo", &gid, m.seq, None);
         assert_eq!(
             principals(&test_push_capture::since(mark)),
             vec![("prjalice".to_string(), "0".to_string()), ("prjbob".to_string(), "1".to_string())],
@@ -1598,7 +1631,7 @@ mod tests {
         set_test_airgap(true);
         let mark = test_push_capture::mark();
         notify_feedback_commented(&fid, &[]);
-        notify_project_message_created("Apollo", &fid, None);
+        notify_project_message_created("Apollo", &fid, 1, None);
         set_test_airgap(false);
         let after: Vec<_> = test_push_capture::since(mark)
             .into_iter()

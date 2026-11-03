@@ -7,6 +7,10 @@
 //! every kind × previews combination, must equal it exactly. The E2E work
 //! is additive; this test is what proves an unkeyed device (or any device
 //! with the switch `off`) still gets 0.46.3-r3's pushes.
+//!
+//! One edit since, on purpose: the `project-post/*` bodies gained `seq`
+//! (push-read-hints-v1 D4, so a phone can clear a project alert by seq). Those
+//! lines were edited by hand, not regenerated; every other case is still r3's.
 
 #![cfg(test)]
 
@@ -122,6 +126,7 @@ pub(crate) fn golden_events() -> Vec<(String, PushEvent)> {
             PushEvent::ProjectPost(ProjectPush {
                 project_name: "Apollo".into(),
                 group_id: "pg-9".into(),
+                seq: 12,
                 principal: "owner".into(),
                 device_usernames: vec!["owner".into()],
                 unread_total: "7".into(),

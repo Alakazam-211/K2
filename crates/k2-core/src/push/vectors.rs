@@ -103,6 +103,7 @@ pub(crate) fn build() -> serde_json::Value {
                 &PushEvent::ProjectPost(ProjectPush {
                     project_name: "Apollo".into(),
                     group_id: "pg-9".into(),
+                    seq: 12,
                     principal: "owner".into(),
                     device_usernames: vec!["owner".into()],
                     unread_total: "7".into(),
@@ -120,6 +121,7 @@ pub(crate) fn build() -> serde_json::Value {
                 &PushEvent::ProjectPost(ProjectPush {
                     project_name: long_body.clone(),
                     group_id: "pg-9".into(),
+                    seq: 12,
                     principal: "owner".into(),
                     device_usernames: vec!["owner".into()],
                     unread_total: "7".into(),

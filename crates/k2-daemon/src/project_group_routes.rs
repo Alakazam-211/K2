@@ -1855,7 +1855,7 @@ pub(crate) fn store_and_deliver(
     // muted the chat, each with that person's totals. Content-free:
     // project name + group id, NEVER the message text (§4.5).
     // Dormant/fire-and-forget inside push_routes.
-    crate::push_routes::notify_project_message_created(&group.name, group_id, author_person);
+    crate::push_routes::notify_project_message_created(&group.name, group_id, msg.seq, author_person);
 
     // §4.3 — best-effort PoC injection. PoC identity is read AT STORE
     // TIME (re-read after the insert, not from the pre-store snapshot).

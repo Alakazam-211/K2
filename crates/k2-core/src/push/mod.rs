@@ -131,6 +131,9 @@ pub enum PushEvent {
 pub struct ProjectPush {
     pub project_name: String,
     pub group_id: String,
+    /// The post's seq (`data.seq`, push-read-hints-v1): a phone clears this
+    /// notification once the person has read through it.
+    pub seq: i64,
     /// The recipient person key (TP29).
     pub principal: String,
     /// That person's device logins. Empty = nobody, never "everyone".
@@ -749,6 +752,7 @@ impl PushEvent {
             Self::ProjectPost(p) => PushData::of(&[
                 ("kind", PUSH_KIND_PROJECT.to_string()),
                 ("groupId", p.group_id.clone()),
+                ("seq", p.seq.to_string()),
                 ("unreadTotal", p.unread_total.clone()),
                 ("waitingTotal", p.waiting_total.clone()),
             ]),
@@ -2551,6 +2555,7 @@ mod tests {
         PushEvent::ProjectPost(ProjectPush {
             project_name: "Apollo".into(),
             group_id: "pg-9".into(),
+            seq: 12,
             principal: principal.into(),
             device_usernames: vec![principal.into()],
             unread_total: "7".into(),
@@ -2586,6 +2591,7 @@ mod tests {
                 "data": {
                     "kind": "project",
                     "groupId": "pg-9",
+                    "seq": "12",
                     "unreadTotal": "7",
                     "waitingTotal": "2",
                     "badgeKey": TEST_KEY,

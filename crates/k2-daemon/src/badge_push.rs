@@ -154,8 +154,9 @@ impl Coalescer {
         }
     }
 
-    /// The phones got these totals another way (a Thread / project push's
-    /// `unreadTotal`): a badge push with the same numbers is skipped.
+    /// The phones got these totals another way: a badge push with the same
+    /// numbers is skipped.
+    #[cfg(test)]
     pub fn note_told(&mut self, person: &str, totals: Totals) {
         self.people.entry(person.to_string()).or_default().last_told = Some(totals);
     }
@@ -199,9 +200,15 @@ impl Coalescer {
     }
 
     /// An alert for this chat, at `seq`, went to `person`: a read of it can
-    /// clear something now. A pending `read` entry stays.
-    pub fn note_alert_sent(&mut self, person: &str, kind: ReadKind, id: &str, seq: i64) {
-        let m = self.people.entry(person.to_string()).or_default().mark(kind, id);
+    /// clear something now, and the phones have its totals (`None` when it
+    /// carried none), so a badge push with the same ones is skipped. A
+    /// pending `read` entry stays.
+    pub fn note_alert_sent(&mut self, person: &str, kind: ReadKind, id: &str, seq: i64, totals: Option<Totals>) {
+        let e = self.people.entry(person.to_string()).or_default();
+        if totals.is_some() {
+            e.last_told = totals;
+        }
+        let m = e.mark(kind, id);
         m.alerted_through = m.alerted_through.max(seq);
     }
 
@@ -454,11 +461,6 @@ pub fn trigger_everyone() {
     });
 }
 
-/// A Thread or project push told `person`'s phones these totals.
-pub fn note_told(person: &str, totals: Totals) {
-    lock().note_told(person, totals);
-}
-
 /// push-content-available-v1: `conversation` changed with no alert to
 /// `person` (see the module docs). Off the caller's thread.
 pub fn note_stale(person: &str, conversation: &str) {
@@ -474,9 +476,43 @@ pub fn note_alerted(person: &str, conversation: &str) {
     lock().note_alerted(person, conversation);
 }
 
-/// An alert for this chat, at `seq`, went to `person`.
-pub fn note_alert_sent(person: &str, kind: ReadKind, id: &str, seq: i64) {
-    lock().note_alert_sent(person, kind, id, seq);
+/// A Thread alert for this chat, at `seq`, went to `person`. It runs inside
+/// the Thread coalescer, never under the DB lock. Everything else uses
+/// [`alert_sent`].
+pub fn note_alert_sent(person: &str, kind: ReadKind, id: &str, seq: i64, totals: Totals) {
+    lock().note_alert_sent(person, kind, id, seq, Some(totals));
+}
+
+/// What one alert tells the coalescer: who, which chat, which seq, and the
+/// totals it carried. `None` for an alert that names no read state.
+fn alert_note(event: &PushEvent) -> Option<(String, ReadKind, String, i64, Option<Totals>)> {
+    let totals = |total: &str, waiting: &str| Some(Totals { total: total.parse().ok()?, waiting_total: waiting.parse().ok()? });
+    match event {
+        PushEvent::ThreadPost(t) => Some((
+            t.principal.clone(),
+            ReadKind::Thread,
+            t.conversation_id.clone(),
+            t.seq,
+            totals(&t.unread_total, &t.waiting_total),
+        )),
+        PushEvent::ProjectPost(p) => {
+            Some((p.principal.clone(), ReadKind::Project, p.group_id.clone(), p.seq, totals(&p.unread_total, &p.waiting_total)))
+        }
+        _ => None,
+    }
+}
+
+/// A project alert or permission card, past its budget, went out. Off the
+/// caller's thread: the tick holds this lock while it waits for the DB, so a
+/// note made under the DB lock could deadlock.
+pub fn alert_sent(event: &PushEvent) {
+    let Some(note) = alert_note(event) else { return };
+    #[cfg(test)]
+    test_read_capture::capture_alert(note.clone());
+    run_off_thread(move || {
+        let (person, kind, id, seq, totals) = note;
+        lock().note_alert_sent(&person, kind, &id, seq, totals);
+    });
 }
 
 /// What [`read_moved`] was told, for the route tests (the daemon wiring is a
@@ -495,6 +531,19 @@ pub(crate) mod test_read_capture {
     /// Everything noted for chats in `ids`, in order.
     pub(crate) fn for_chats(ids: &[&str]) -> Vec<(String, String, String, i64)> {
         CAPTURED.lock().expect("read capture lock").iter().filter(|c| ids.contains(&c.2.as_str())).cloned().collect()
+    }
+
+    type AlertNote = (String, k2_core::push::ReadKind, String, i64, Option<k2_core::read_state::Totals>);
+
+    static ALERTS: Mutex<Vec<AlertNote>> = Mutex::new(Vec::new());
+
+    pub(crate) fn capture_alert(note: AlertNote) {
+        ALERTS.lock().expect("alert capture lock").push(note);
+    }
+
+    /// Every alert noted for this chat, in order.
+    pub(crate) fn alerts_for(id: &str) -> Vec<AlertNote> {
+        ALERTS.lock().expect("alert capture lock").iter().filter(|a| a.2 == id).cloned().collect()
     }
 }
 
@@ -742,9 +791,9 @@ mod tests {
         let t0 = Instant::now();
         read(&mut c, &env, ReadKind::Thread, "c-1", 40, t0);
         assert_eq!(wires(&env), ["t:c-1:40"], "the first goes at once");
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 45);
-        c.note_alert_sent("gina", ReadKind::Project, "g-1", 5);
-        c.note_alert_sent("gina", ReadKind::Thread, "c-2", 5);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 45, None);
+        c.note_alert_sent("gina", ReadKind::Project, "g-1", 5, None);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-2", 5, None);
         read(&mut c, &env, ReadKind::Thread, "c-1", 42, t0 + Duration::from_secs(1));
         read(&mut c, &env, ReadKind::Project, "g-1", 5, t0 + Duration::from_secs(2));
         read(&mut c, &env, ReadKind::Thread, "c-2", 3, t0 + Duration::from_secs(3));
@@ -830,7 +879,7 @@ mod tests {
         let mut c = Coalescer::new();
         let t0 = Instant::now();
         c.note_told("gina", told(2));
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 40);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 40, None);
         for i in 0..30 {
             read(&mut c, &env, ReadKind::Thread, "c-1", 40 + i, t0 + WINDOW * i as u32);
             c.tick(&env, t0 + WINDOW * i as u32);
@@ -839,14 +888,14 @@ mod tests {
         assert_eq!(wires(&env), ["t:c-1:40"], "one entry for the one alert");
 
         // A new alert makes the next read worth sending again, once.
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 80);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 80, None);
         let t1 = t0 + WINDOW * 100;
         read(&mut c, &env, ReadKind::Thread, "c-1", 80, t1);
         read(&mut c, &env, ReadKind::Thread, "c-1", 81, t1 + WINDOW * 2);
         assert_eq!(wires(&env), ["t:c-1:40", "t:c-1:80"]);
 
         // A read short of the alert leaves it showing, so the next one goes too.
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 100);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 100, None);
         let t2 = t1 + WINDOW * 100;
         read(&mut c, &env, ReadKind::Thread, "c-1", 90, t2);
         read(&mut c, &env, ReadKind::Thread, "c-1", 100, t2 + WINDOW * 2);
@@ -868,7 +917,7 @@ mod tests {
         assert_eq!(wires(&env), ["p:g-1:10"]);
         // Past the mark limit everything is unknown again: it sends once more.
         for i in 0..READ_MARKS_MAX {
-            c.note_alert_sent("gina", ReadKind::Thread, &format!("c-{i}"), 1);
+            c.note_alert_sent("gina", ReadKind::Thread, &format!("c-{i}"), 1, None);
         }
         read(&mut c, &env, ReadKind::Project, "g-1", 20, t0 + WINDOW * 40);
         assert_eq!(wires(&env), ["p:g-1:10", "p:g-1:20"]);
@@ -882,7 +931,7 @@ mod tests {
         let mut c = Coalescer::new();
         let t0 = Instant::now();
         c.note_told("gina", told(2));
-        c.note_alert_sent("gina", ReadKind::Thread, "c-m", 9);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-m", 9, None);
         // A mute goes through `trigger` alone: it isn't a read.
         c.trigger(&env, "gina", t0);
         assert!(env.sent().is_empty(), "the mute itself sends nothing");
@@ -902,7 +951,7 @@ mod tests {
         let mut c = Coalescer::new();
         let t0 = Instant::now();
         c.note_told("gina", told(2));
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5, None);
         read(&mut c, &env, ReadKind::Thread, "c-1", 5, t0);
         assert!(env.sent().is_empty(), "over budget: dropped");
         assert_eq!(c.due("gina"), None, "nothing queued");
@@ -952,7 +1001,7 @@ mod tests {
         c.note_stale("gina", "c-1", t0);
         c.note_stale("gina", "c-2", t0);
         c.note_alerted("gina", "c-1");
-        c.note_alert_sent("gina", ReadKind::Thread, "c-9", 5);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-9", 5, None);
         c.trigger(&env, "gina", t0 + Duration::from_secs(1));
         c.tick(&env, t0 + WINDOW);
         let last = env.sent().last().cloned().expect("a push");
@@ -966,9 +1015,80 @@ mod tests {
         let env = Fake::with("gina", &[], 2, 0);
         let mut c = Coalescer::new();
         let t0 = Instant::now();
-        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5);
+        c.note_alert_sent("gina", ReadKind::Thread, "c-1", 5, None);
         c.tick(&env, t0 + FORGET_AFTER * 2);
         assert_eq!(c.people["gina"].marks.len(), 1);
+    }
+
+    /// Test 17: told 5, an alert tells 6, a read brings it back to 5: a push
+    /// goes with 5. This was skipped before, so the phone's badge stayed at 6.
+    #[test]
+    fn a_read_after_an_alert_corrects_the_badge() {
+        for kind in [ReadKind::Project, ReadKind::Thread] {
+            let env = Fake::with("gina", &["gina"], 5, 0);
+            let mut c = Coalescer::new();
+            let t0 = Instant::now();
+            c.note_told("gina", told(5));
+            c.trigger(&env, "gina", t0);
+            assert!(env.sent().is_empty(), "the phone has 5");
+            c.note_alert_sent("gina", kind, "chat", 6, Some(told(6)));
+            c.trigger(&env, "gina", t0 + Duration::from_secs(1));
+            let sent = env.sent();
+            assert_eq!(sent.len(), 1, "{kind:?}: the phone has 6 now, so a 5 corrects it");
+            assert_eq!(sent[0].unread_total, "5");
+        }
+        // An alert with no totals leaves what the phone was told.
+        let env = Fake::with("gina", &["gina"], 5, 0);
+        let mut c = Coalescer::new();
+        c.note_told("gina", told(5));
+        c.note_alert_sent("gina", ReadKind::Project, "chat", 6, None);
+        c.trigger(&env, "gina", Instant::now());
+        assert!(env.sent().is_empty());
+    }
+
+    /// Each alert that carries totals maps to one note.
+    #[test]
+    fn an_alert_note_names_the_person_chat_seq_and_totals() {
+        let thread = k2_core::push::ThreadPush {
+            agent_name: "a".into(),
+            conversation_id: "c-1".into(),
+            addr: "a".into(),
+            seq: 41,
+            project_id: "p".into(),
+            msg_kind: k2_core::push::ThreadMsgKind::Choice,
+            count: 1,
+            principal: "gina".into(),
+            device_usernames: vec!["gina".into()],
+            unread_total: "6".into(),
+            waiting_total: "1".into(),
+            avatar_rev: String::new(),
+            agent_color: String::new(),
+            preview: String::new(),
+            msg: None,
+            budget: k2_core::push::ThreadBudget::Thread,
+        };
+        let totals = Some(Totals { total: 6, waiting_total: 1 });
+        assert_eq!(
+            alert_note(&PushEvent::ThreadPost(thread.clone())),
+            Some(("gina".to_string(), ReadKind::Thread, "c-1".to_string(), 41, totals))
+        );
+        let project = k2_core::push::ProjectPush {
+            project_name: "n".into(),
+            group_id: "g-1".into(),
+            seq: 8,
+            principal: "gina".into(),
+            device_usernames: vec!["gina".into()],
+            unread_total: "6".into(),
+            waiting_total: "1".into(),
+        };
+        assert_eq!(
+            alert_note(&PushEvent::ProjectPost(project)),
+            Some(("gina".to_string(), ReadKind::Project, "g-1".to_string(), 8, totals))
+        );
+        // Totals that aren't numbers aren't told, but the alert still counts.
+        let odd = k2_core::push::ThreadPush { unread_total: String::new(), ..thread };
+        assert_eq!(alert_note(&PushEvent::ThreadPost(odd)).map(|n| n.4), Some(None));
+        assert_eq!(alert_note(&PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }), None);
     }
 
     /// The badge push rides its own budget class end to end.

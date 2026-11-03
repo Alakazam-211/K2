@@ -218,6 +218,10 @@ fn the_card_budget_is_30_an_hour_per_person_and_apart_from_thread_posts() {
     }
     assert_eq!(card_pushes(mark, &conv).len(), 30, "the 31st card push this hour is dropped");
     crate::push_routes::deliver_thread(PushEvent::ThreadPost(push(ThreadBudget::Thread)));
+    // push-read-hints-v1: every card that passed its budget told the phone its
+    // totals (over budget, it didn't), and a Thread push isn't noted here: the
+    // coalescer notes its own.
+    assert_eq!(crate::badge_push::test_read_capture::alerts_for(&conv).len(), 30, "only the cards that went out");
     let all = card_pushes(mark, &conv);
     assert_eq!(all.len(), 31, "a Thread post still goes: the coalescer's bucket is its own");
     assert_eq!(all.last().map(|t| t.budget.clone()), Some(ThreadBudget::Thread));

@@ -152,6 +152,7 @@ fn canary_events() -> Vec<PushEvent> {
         PushEvent::ProjectPost(ProjectPush {
             project_name: "CanaryProjectQv".into(),
             group_id: "grp-canary-9".into(),
+            seq: 7,
             principal: "owner".into(),
             device_usernames: vec!["owner".into()],
             unread_total: "7".into(),
@@ -249,6 +250,7 @@ fn no_plaintext_field_ever_rides_a_sealed_or_generic_push() {
                 }
                 assert_eq!(body["payload"]["title"], "K2");
                 assert_eq!(body["payload"]["body"], "New message");
+                assert!(body["payload"]["data"].get("seq").is_none(), "no seq on the generic lane: {wire}");
                 assert!(body["payload"].get("threadId").is_none() && body["payload"].get("collapseId").is_none());
             }
         }
@@ -649,6 +651,99 @@ fn the_read_hint_rides_each_lane_as_the_contract_says() {
         .dispatch_in_mode(&read_badge(ReadHint::default()), "bk-test", &plain_only, PushE2eMode::SealedWhenSupported)
         .expect("dispatch");
     assert_eq!(relay.calls().len(), 1, "no hint, no split");
+}
+
+/// What the iOS phone needs to clear anything (K2 Companion, 11-03). A badge
+/// push with no `unreadTotal` is ignored, and clearing a whole server waits on
+/// `unreadTotal` and `waitingTotal` both being 0, so totals and the server
+/// stamp are on every badge push, sealed or not, stripped of its hints or not.
+/// A delivered alert is matched on `kind`, its chat id and `seq`, in `data`.
+#[test]
+fn every_badge_and_alert_has_what_the_phone_matches_on() {
+    let _db = crate::db::scoped_for_test();
+    let _relay = super::relay_state_test_lock();
+    set_instance_id(legacy_golden::GOLDEN_INSTANCE);
+    let read = ReadHint::of(vec![read_entry(ReadKind::Thread, "c-1", 42)]);
+    let (sk, mut key) = phone_key(71);
+    key.v = 2;
+    let keyed = register("pm-v2", "apns", "tok-pm-v2", true, Some(&key));
+    let apns = register("pm-apns", "apns", "tok-pm-apns", true, None);
+    let fcm = register("pm-fcm", "fcm", "tok-pm-fcm", true, None);
+    let url = unique_url("phone-fields");
+    let relay = Relay::new(true);
+    e2e::note_relay_caps(&url, true, true);
+    let cloud = tunnel_cloud(&url, relay.clone());
+
+    // The plain lane: an iPhone's badge has all of it. An Android phone's loses
+    // only `read`.
+    cloud
+        .dispatch_in_mode(&read_badge(read.clone()), "bk-test", &[apns.clone(), fcm.clone()], PushE2eMode::Off)
+        .expect("plain");
+    let calls = relay.calls();
+    assert_eq!(calls.len(), 2);
+    for (_, body, _) in &calls {
+        let data = &body["payload"]["data"];
+        assert_eq!(data["kind"], "badge", "{body}");
+        assert_eq!(data["unreadTotal"], "3", "without it the phone ignores the push: {body}");
+        assert_eq!(data["waitingTotal"], "1", "{body}");
+        assert_eq!(data["badgeKey"], "bk-test", "{body}");
+        assert_eq!(data["subdomain"], "rosson", "{body}");
+        assert_eq!(data["instanceId"], legacy_golden::GOLDEN_INSTANCE, "{body}");
+        let wanted = if body["devices"][0]["platform"] == "apns" { serde_json::json!("t:c-1:42") } else { serde_json::Value::Null };
+        assert_eq!(data["read"], wanted, "{body}");
+    }
+
+    // Zero is sent as zero, not left out: it's what lets the phone clear.
+    relay.clear();
+    let zero = PushEvent::Badge(BadgePush {
+        principal: "owner".into(),
+        device_usernames: vec!["owner".into()],
+        unread_total: "0".into(),
+        waiting_total: "0".into(),
+        stale: Default::default(),
+        read: read.clone(),
+    });
+    cloud.dispatch_in_mode(&zero, "bk-test", &[apns.clone()], PushE2eMode::Off).expect("plain");
+    let zeroes = relay.calls()[0].1["payload"]["data"].clone();
+    assert_eq!((&zeroes["unreadTotal"], &zeroes["waitingTotal"]), (&serde_json::json!("0"), &serde_json::json!("0")));
+
+    // Format 2: the phone flattens `data`, `bk` and `srv` into one push.
+    relay.clear();
+    e2e::note_relay_caps(&url, true, true);
+    cloud.dispatch_in_mode(&read_badge(read), "bk-test", &[keyed.clone()], PushE2eMode::SealedWhenSupported).expect("sealed");
+    let open_with = |kind: SealKind, body: &serde_json::Value| -> serde_json::Value {
+        let blob = body["devices"][0]["e2e"].as_str().expect("e2e");
+        serde_json::from_slice(&seal::open(kind, &sk, &key.psk, blob).expect("open")).expect("json")
+    };
+    let n = open_with(SealKind::Nudge, &relay.calls()[0].1);
+    assert_eq!(n["bk"], "bk-test");
+    assert_eq!(n["srv"], serde_json::json!({ "sub": "rosson", "iid": legacy_golden::GOLDEN_INSTANCE }));
+    assert_eq!(n["data"]["unreadTotal"], "3");
+    assert_eq!(n["data"]["waitingTotal"], "1");
+    assert_eq!(n["data"]["read"], "t:c-1:42");
+
+    // Delivered alerts, in the clear and sealed: `data` holds kind, chat id and seq.
+    let events = legacy_golden::golden_events();
+    let event = |name: &str| events.iter().find(|(n, _)| n == name).expect("case").1.clone();
+    let cases = [
+        (event("thread-text-x1-preview"), "thread", "conversationId", "c-77"),
+        (event("project-post"), "project", "groupId", "pg-9"),
+    ];
+    for (alert, kind, id_key, id) in &cases {
+        relay.clear();
+        cloud.dispatch_in_mode(alert, "bk-test", &[apns.clone()], PushE2eMode::Off).expect("plain alert");
+        let plain = relay.calls()[0].1["payload"]["data"].clone();
+        relay.clear();
+        e2e::note_relay_caps(&url, true, true);
+        cloud.dispatch_in_mode(alert, "bk-test", &[keyed.clone()], PushE2eMode::SealedWhenSupported).expect("sealed alert");
+        let sealed = open_with(SealKind::Alert, &relay.calls()[0].1)["data"].clone();
+        for data in [&plain, &sealed] {
+            assert_eq!(data["kind"], *kind, "{data}");
+            assert_eq!(data[*id_key], *id, "{data}");
+            assert!(data["seq"].as_str().is_some_and(|s| s.parse::<i64>().is_ok()), "seq, as a string: {data}");
+            assert!(data["waitingTotal"].is_string(), "{data}");
+        }
+    }
 }
 
 /// push-read-hints-v1: the fitter drops `stale` before `read`. The worst
@@ -1086,6 +1181,7 @@ fn alert_truncation_rule() {
     let project = PushEvent::ProjectPost(ProjectPush {
         project_name: "Apollo 🚀 ".repeat(400),
         group_id: "pg-9".into(),
+        seq: 7,
         principal: "owner".into(),
         device_usernames: vec!["owner".into()],
         unread_total: "7".into(),
@@ -2153,6 +2249,7 @@ fn sealed_alerts_keep_kind_inside_data() {
     let oversized = PushEvent::ProjectPost(ProjectPush {
         project_name: long.clone(),
         group_id: "pg-9".into(),
+        seq: 12,
         principal: "owner".into(),
         device_usernames: vec!["owner".into()],
         unread_total: "7".into(),

@@ -121,8 +121,9 @@ pub trait PushEnv {
     /// no alert to `person` (muted, viewed on the desktop, over budget):
     /// hint it on their next silent push.
     fn stale(&self, person: &str, conversation_id: &str);
-    /// An alert to `person` for `conversation_id`, at `seq`, went out.
-    fn alerted(&self, person: &str, conversation_id: &str, seq: i64);
+    /// An alert to `person` for `conversation_id`, at `seq`, went out with
+    /// these totals: a badge push with the same ones is skipped.
+    fn alerted(&self, person: &str, conversation_id: &str, seq: i64, totals: k2_core::read_state::Totals);
 }
 
 #[derive(Debug, Clone)]
@@ -323,10 +324,7 @@ impl Coalescer {
         w.viewed_since_push = false;
         w.open_until = Some(now + len);
         env.send(event);
-        // The phone now has these numbers: a badge push with the same ones
-        // is skipped.
-        crate::badge_push::note_told(person, totals);
-        env.alerted(person, conversation, seq);
+        env.alerted(person, conversation, seq, totals);
     }
 }
 
@@ -412,9 +410,9 @@ impl PushEnv for DaemonEnv {
         crate::badge_push::note_stale(person, conversation_id);
     }
 
-    fn alerted(&self, person: &str, conversation_id: &str, seq: i64) {
+    fn alerted(&self, person: &str, conversation_id: &str, seq: i64, totals: k2_core::read_state::Totals) {
         crate::badge_push::note_alerted(person, conversation_id);
-        crate::badge_push::note_alert_sent(person, k2_core::push::ReadKind::Thread, conversation_id, seq);
+        crate::badge_push::note_alert_sent(person, k2_core::push::ReadKind::Thread, conversation_id, seq, totals);
     }
 }
 
@@ -613,6 +611,7 @@ mod tests {
         stale: RefCell<Vec<(String, String)>>,
         alerted: RefCell<Vec<(String, String)>>,
         alerted_seqs: RefCell<Vec<i64>>,
+        alerted_totals: RefCell<Vec<k2_core::read_state::Totals>>,
     }
 
     impl Fake {
@@ -683,9 +682,10 @@ mod tests {
         fn stale(&self, person: &str, conversation_id: &str) {
             self.stale.borrow_mut().push((person.into(), conversation_id.into()));
         }
-        fn alerted(&self, person: &str, conversation_id: &str, seq: i64) {
+        fn alerted(&self, person: &str, conversation_id: &str, seq: i64, totals: k2_core::read_state::Totals) {
             self.alerted.borrow_mut().push((person.into(), conversation_id.into()));
             self.alerted_seqs.borrow_mut().push(seq);
+            self.alerted_totals.borrow_mut().push(totals);
         }
     }
 
@@ -701,6 +701,7 @@ mod tests {
         assert_eq!(*env.alerted_seqs.borrow(), [40], "the second is held");
         c.tick(&env, t0 + WINDOW);
         assert_eq!(*env.alerted_seqs.borrow(), [40, 41]);
+        assert_eq!(env.alerted_totals.borrow()[1], env.totals("owner"), "the numbers it told the phone");
     }
 
     /// push-content-available-v1 (K3): an agent post that gives a person

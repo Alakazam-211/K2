@@ -45,6 +45,12 @@ jobs:
       - name: A published Arch package never changes bytes (stubbed)
         run: bash tests/packaging/arch-upload-pkg.sh
 
+      - name: Omarchy k2-bin recipe matches the Arch package and the licence
+        run: bash scripts/check-omarchy-recipe.sh
+
+      - name: Omarchy recipe check fails on broken fixtures
+        run: bash tests/packaging/check-omarchy-recipe.sh
+
       # Linux SHA256SUMS merge + release.sh Step 10.6 check, with a stub gh.
       - name: Linux SHA256SUMS merge and check (stubbed)
         run: bash tests/packaging/linux-sums.sh

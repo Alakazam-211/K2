@@ -1,0 +1,33 @@
+# Maintainer: Alakazam Labs <support@k2.dev>
+pkgname=k2-bin
+_pkgname=${pkgname%-bin}
+pkgver=0.46.7
+pkgrel=1
+pkgdesc="AI workspace orchestration by Alakazam Labs (GUI + daemon + CLI)"
+arch=('x86_64')
+url="https://k2.dev"
+license=('FSL-1.1-ALv2')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libayatana-appindicator'
+    'librsvg'
+    'libsecret'
+    'openssl'
+    'libcap'
+)
+optdepends=('gnome-keyring: Secret Service provider for K2 Connect tokens')
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+options=('!strip' '!debug')
+install="${pkgname}.install"
+source=("https://github.com/Alakazam-211/K2/releases/download/v${pkgver}/${_pkgname}-${pkgver}-x86_64.pkg.tar.zst"
+        "${pkgname}.install")
+noextract=("${_pkgname}-${pkgver}-x86_64.pkg.tar.zst")
+sha256sums=('d4aa363d4a3f26c441467651ae9a372a30f770d9f45cf891bdc2ac6ad3bcb28c'
+            '44073b555a571e44c3ff38d5c0ef5ab3dccf13ebc620e1b4d7acc88a42313683')
+
+package() {
+    bsdtar -xf "${srcdir}/${_pkgname}-${pkgver}-x86_64.pkg.tar.zst" -C "${pkgdir}" \
+        --exclude '.PKGINFO' --exclude '.BUILDINFO' --exclude '.MTREE' --exclude '.INSTALL'
+}

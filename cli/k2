@@ -8602,8 +8602,10 @@ See and run it:
                                        each --cmd service.
   k2 app history <app-id>              Deploys: who, from, to, why, result, and
                                        which you can still roll back to.
-  k2 app history <app-id> --users      What happened to its people: a login released, a
-                                       reset started, a link taken back, a lockout cleared,
+  k2 app history <app-id> --users      What happened to its people: a login released (the
+                                       person chose their own password, so held access started; says who
+                                       set it up; a record, not proof no one else knows it), a reset started,
+                                       a link taken back, a lockout cleared,
                                        sessions ended, a login removed, rooms changed.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]

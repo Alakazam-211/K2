@@ -252,7 +252,7 @@ interface SettingsState {
   // `compute_disabled` until it is on (or K2_COMPUTE=1).
   computePreview: boolean
 
-  // Voice rooms (preview) on the focused server: Settings → Voice Rooms shows
+  // The voice rooms preview on the focused server: Settings → Voice Rooms shows
   // while it's on, even when the server can't host (it says why). DEFAULTS
   // OFF; the owner sets it (`k2 settings set voiceRoomsPreview true`).
   voiceRoomsPreview: boolean

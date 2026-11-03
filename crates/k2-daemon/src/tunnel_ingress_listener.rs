@@ -122,6 +122,7 @@ pub async fn spawn(state: crate::DaemonState) -> Result<u16, String> {
 }
 
 async fn accept_loop(listener: std::sync::Arc<TcpListener>, state: crate::DaemonState) {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[daemon/tunnel-ingress]");
     loop {
         let accepted = tokio::select! {
             r = listener.accept() => r,
@@ -133,6 +134,7 @@ async fn accept_loop(listener: std::sync::Arc<TcpListener>, state: crate::Daemon
         };
         match accepted {
             Ok((stream, _peer)) => {
+                backoff.on_accept();
                 // The far end of the E2E listener's splice: answers must
                 // not wait on Nagle (see `tunnel_tls_listener::no_nagle`).
                 crate::tunnel_tls_listener::no_nagle(&stream);
@@ -142,6 +144,10 @@ async fn accept_loop(listener: std::sync::Arc<TcpListener>, state: crate::Daemon
                 });
             }
             Err(e) => {
+                if let Some(pause) = backoff.on_error(&e) {
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
                 let kind = e.kind();
                 if matches!(
                     kind,

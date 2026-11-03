@@ -177,14 +177,22 @@ pub fn local_addr() -> Option<SocketAddr> {
 }
 
 async fn accept_loop(l: Arc<TcpListener>) {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[front80]");
     loop {
         let accepted = tokio::select! {
             r = l.accept() => r,
             _ = crate::handoff::quiesced() => return,
         };
         let (tcp, peer) = match accepted {
-            Ok(x) => x,
+            Ok(x) => {
+                backoff.on_accept();
+                x
+            }
             Err(e) => {
+                if let Some(pause) = backoff.on_error(&e) {
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
                 let fatal = matches!(e.raw_os_error(), Some(9) | Some(22));
                 log_debug!("[front80] accept: {e}");
                 if fatal {

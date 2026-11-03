@@ -41,6 +41,8 @@ pub fn log_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+// Pause and log rate for accept loops out of descriptors or memory.
+pub mod accept_backoff;
 pub mod active;
 // S17: agent sessions in their own memory budget inside the daemon's unit.
 pub mod agents_leaf;

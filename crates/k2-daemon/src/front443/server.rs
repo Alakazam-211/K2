@@ -176,6 +176,7 @@ impl Front {
 /// (the socket stays open: the hand-off passes it on). Connections are
 /// spawned on `rt`.
 pub async fn accept_loop(listener: Arc<TcpListener>, front: Arc<Front>, rt: tokio::runtime::Handle) {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[front443]");
     loop {
         let accepted = tokio::select! {
             r = listener.accept() => r,
@@ -185,14 +186,20 @@ pub async fn accept_loop(listener: Arc<TcpListener>, front: Arc<Front>, rt: toki
             }
         };
         let (tcp, peer) = match accepted {
-            Ok(x) => x,
+            Ok(x) => {
+                backoff.on_accept();
+                x
+            }
             Err(e) => {
+                if let Some(pause) = backoff.on_error(&e) {
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
                 let fatal = matches!(e.raw_os_error(), Some(libc::EBADF) | Some(libc::EINVAL) | Some(libc::ENOTSOCK));
                 if fatal {
                     log_debug!("[front443] fatal accept error — accept loop ends: {e}");
                     return;
                 }
-                // EMFILE/ENFILE and friends: back off a little, keep going.
                 log_debug!("[front443] accept error: {e}");
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 continue;

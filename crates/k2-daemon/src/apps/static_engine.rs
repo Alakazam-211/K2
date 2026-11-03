@@ -143,12 +143,22 @@ pub fn serve(app_id: &str, deployment_id: &str, port: u16, served: Served) -> Re
     let l = tokio::net::TcpListener::from_std(std_l).map_err(|e| EngineError::new(codes::ENGINE_UNAVAILABLE, e.to_string()))?;
     let (cut, cut_rx) = tokio::sync::watch::channel(false);
     let served = std::sync::Arc::new(served);
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new(format!("[apps/static] {app_id}"));
     let accept = rt.spawn(async move {
         let mut stop = cut_rx.clone();
         loop {
             tokio::select! {
                 a = l.accept() => {
-                    let Ok((mut s, _)) = a else { continue };
+                    let mut s = match a {
+                        Ok((s, _)) => s,
+                        Err(e) => {
+                            if let Some(pause) = backoff.on_error(&e) {
+                                tokio::time::sleep(pause).await;
+                            }
+                            continue;
+                        }
+                    };
+                    backoff.on_accept();
                     let served = served.clone();
                     let rx = cut_rx.clone();
                     tokio::spawn(async move {

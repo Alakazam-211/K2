@@ -528,11 +528,13 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
     listeners().lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), lis.clone());
     let app = app.to_string();
     rt.spawn(async move {
+        let mut backoff = k2_core::accept_backoff::AcceptBackoff::new(format!("[apps] egress {app}"));
         loop {
             let conn_stop = stop_rx.clone();
             tokio::select! {
                 a = l.accept() => match a {
                     Ok((c, _)) => {
+                        backoff.on_accept();
                         let (app, lis, stop) = (app.clone(), lis.clone(), conn_stop);
                         // R37: the old daemon drains these before it exits.
                         let guard = crate::handoff::app_conn_guard();
@@ -541,10 +543,13 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
                             drop(guard);
                         });
                     }
-                    Err(e) => {
-                        k2_core::log_debug!("[apps] egress accept {app}: {e}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
+                    Err(e) => match backoff.on_error(&e) {
+                        Some(pause) => tokio::time::sleep(pause).await,
+                        None => {
+                            k2_core::log_debug!("[apps] egress accept {app}: {e}");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                    },
                 },
                 _ = stop_rx.changed() => break,
                 // R37: stop accepting at a hand-off's quiesce; the socket stays

@@ -274,12 +274,18 @@ pub fn serve(home: &Path) {
         Err(_) => return,
     };
     tokio::spawn(async move {
+        let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[vault] vault.sock");
         loop {
             match l.accept().await {
                 Ok((s, _)) => {
+                    backoff.on_accept();
                     tokio::spawn(handle_conn(s));
                 }
                 Err(e) => {
+                    if let Some(pause) = backoff.on_error(&e) {
+                        tokio::time::sleep(pause).await;
+                        continue;
+                    }
                     k2_core::log_debug!("[vault] vault.sock accept: {e}");
                     break;
                 }

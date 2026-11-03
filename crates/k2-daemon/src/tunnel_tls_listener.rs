@@ -639,6 +639,7 @@ pub(crate) async fn accept_loop(
     shared_config: Arc<ArcSwap<ServerConfig>>,
     http_port: u16,
 ) {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[daemon/e2e]");
     loop {
         let accepted = tokio::select! {
             r = listener.accept() => r,
@@ -651,6 +652,7 @@ pub(crate) async fn accept_loop(
         };
         match accepted {
             Ok((tcp, peer)) => {
+                backoff.on_accept();
                 // H2: take a global connection permit BEFORE spawning the
                 // per-connection task so the listener can't be driven to FD
                 // exhaustion / unbounded task growth. We `try_acquire` (never
@@ -713,6 +715,10 @@ pub(crate) async fn accept_loop(
                 });
             }
             Err(e) => {
+                if let Some(pause) = backoff.on_error(&e) {
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
                 // Transient accept errors: log + continue. Fatal/closed
                 // listener: exit the loop so ClearPortOnDrop runs and
                 // ensure can re-bind (without this we spin forever with a
@@ -2073,6 +2079,19 @@ mod tests {
         sni: &str,
         preamble: Option<Vec<u8>>,
     ) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
+        frpc_handshake(cert_pem, tcp, sni, preamble).await
+    }
+
+    /// [`frpc_session`] on a connection already made. Bounded: a connection
+    /// the listener never takes fails the test instead of hanging it (the
+    /// 11-03 soak run sat here for 7 hours).
+    async fn frpc_handshake(
+        cert_pem: &str,
+        mut tcp: TcpStream,
+        sni: &str,
+        preamble: Option<Vec<u8>>,
+    ) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
         use rustls_pemfile::Item;
         let mut roots = rustls::RootCertStore::empty();
         for item in rustls_pemfile::read_all(&mut cert_pem.as_bytes()) {
@@ -2081,12 +2100,13 @@ mod tests {
             }
         }
         let cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-        let mut tcp = TcpStream::connect(("127.0.0.1", port)).await?;
         if let Some(p) = preamble {
             tcp.write_all(&p).await?;
         }
         let name = rustls::pki_types::ServerName::try_from(sni.to_string()).expect("valid SNI");
-        tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp).await
+        tokio::time::timeout(Duration::from_secs(30), tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp))
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "no TLS answer in 30 s"))?
     }
 
     /// Read until `buf` holds `n` bytes.
@@ -2593,6 +2613,13 @@ mod tests {
     /// A relay naming its own address is unknown too (PB-A6).
     #[tokio::test]
     async fn two_hundred_connections_with_no_client_ip_trip_no_per_visitor_limit() {
+        // Client, listener's side, App dial, App's side: four descriptors per
+        // connection, all held, on top of whatever the other tests have open.
+        // Boot raises the limit, but a test binary starts with the one it
+        // inherited, so this has to raise it too.
+        k2_core::raise_nofile_limit();
+        let soft = k2_core::nofile_soft_limit().expect("RLIMIT_NOFILE");
+        assert!(soft >= 4 * 200 + 512, "soft RLIMIT_NOFILE {soft} too low to hold 200 connections");
         let _home = crate::test_support::TempHome::new();
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         crate::apps::guard::reload();
@@ -2669,6 +2696,138 @@ mod tests {
         open_app(relay_saw(visitor)).await.expect("a closed connection frees its slot");
         crate::apps::router::clear("shop");
         k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
+    }
+
+    /// Soak 11-03: out of descriptors, the E2E accept loop retried at once and
+    /// logged every try (47,000 lines a second, 161 GB), and the tunnel-ingress
+    /// loop ended. Both must pause, log a line, and serve what was waiting
+    /// once descriptors are free. Real EMFILE, in a child process of this test
+    /// binary: the limit it lowers and the table it fills are no other test's.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn out_of_descriptors_the_listeners_pace_themselves_and_serve_again() {
+        const CHILD: &str = "K2_TEST_ACCEPT_SHORTAGE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return accept_shortage_child().await;
+        }
+        let mut child = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+        child
+            .args(["--exact", "tunnel_tls_listener::tests::out_of_descriptors_the_listeners_pace_themselves_and_serve_again"])
+            .args(["--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(Duration::from_secs(180), child.output()).await.expect("the child ended").expect("the child ran");
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let tail: Vec<&str> = stderr.lines().rev().take(15).collect();
+        let report = stdout.lines().find(|l| l.starts_with("SHORTAGE ")).unwrap_or_else(|| panic!("no report ({}):\n{stdout}\n{tail:#?}", out.status));
+        let field = |name: &str| report.split(' ').find_map(|w| w.strip_prefix(name)).unwrap_or_else(|| panic!("{name} in {report}"));
+
+        let mut problems = Vec::new();
+        for label in ["[daemon/e2e]", "[daemon/tunnel-ingress]"] {
+            let errors = stderr.lines().filter(|l| l.contains(label) && l.contains("accept error")).count();
+            if errors != 1 {
+                problems.push(format!("{label}: {errors} accept error lines in the shortage, want 1"));
+            }
+            // 3 s of pauses from 50 ms doubling to 1 s is about 7 tries.
+            let tries = stderr
+                .lines()
+                .find(|l| l.contains(label) && l.contains("accepting again after"))
+                .and_then(|l| l.split("accepting again after ").nth(1)?.split(' ').next()?.parse::<u64>().ok());
+            match tries {
+                Some(n) if (2..=12).contains(&n) => {}
+                other => problems.push(format!("{label}: accept tries in the shortage {other:?}, want 2 to 12")),
+            }
+        }
+        let cpu_ms: u64 = field("cpu_ms=").parse().unwrap();
+        if cpu_ms > 750 {
+            problems.push(format!("{cpu_ms} ms of CPU in a 3,000 ms shortage"));
+        }
+        for what in ["tls=", "ingress="] {
+            if field(what) != "served" {
+                problems.push(format!("once descriptors were free, {what}{}", field(what)));
+            }
+        }
+        assert!(out.status.success(), "child: {}\n{stdout}\n{tail:#?}", out.status);
+        assert!(problems.is_empty(), "{problems:#?}\n{report}\nlast lines: {tail:#?}");
+    }
+
+    /// The child of the test above: reports on stdout, leaves the judging.
+    #[cfg(unix)]
+    async fn accept_shortage_child() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        fn cpu_ms() -> u64 {
+            let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) }, 0);
+            let ms = |t: libc::timeval| t.tv_sec as u64 * 1000 + t.tv_usec as u64 / 1000;
+            ms(u.ru_utime) + ms(u.ru_stime)
+        }
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        crate::apps::guard::reload();
+        let (pem, tls_port) = path_b_listener("example").await;
+        let ingress_port = crate::tunnel_ingress_listener::ensure_port().await.expect("ingress listener");
+        let _ = crate::handoff::splice_handle(); // As boot does.
+        // Made now: connecting them later needs no new descriptor, so each
+        // listener sees a connection it has no descriptor to take. Two for
+        // the E2E loop: a loop that ends frees a descriptor, which the first
+        // takes, and the second still has none.
+        let tls_socks = [tokio::net::TcpSocket::new_v4().unwrap(), tokio::net::TcpSocket::new_v4().unwrap()];
+        let ingress_sock = tokio::net::TcpSocket::new_v4().unwrap();
+
+        let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) }, 0);
+        rl.rlim_cur = 512;
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rl) }, 0);
+        let mut filler = Vec::new();
+        loop {
+            let fd = unsafe { libc::dup(0) };
+            if fd < 0 {
+                assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EMFILE));
+                break;
+            }
+            filler.push(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+
+        let cpu_before = cpu_ms();
+        let mut handshakes = Vec::new();
+        for sock in tls_socks {
+            let tcp = sock.connect(([127, 0, 0, 1], tls_port).into()).await.expect("connect");
+            let pem = pem.clone();
+            handshakes.push(tokio::spawn(async move { frpc_handshake(&pem, tcp, "shop.example.k2.dev", None).await }));
+        }
+        let mut ingress_tcp = ingress_sock.connect(([127, 0, 0, 1], ingress_port).into()).await.expect("connect");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let cpu = cpu_ms() - cpu_before;
+        drop(filler);
+
+        let mut tls = "served";
+        for handshake in handshakes {
+            match handshake.await.expect("handshake task") {
+                Ok(mut session) => {
+                    session.write_all(b"GET / HTTP/1.1\r\nHost: shop.example.k2.dev\r\n\r\n").await.expect("write");
+                    let (head, _) = next_response(&mut session, &mut Vec::new()).await;
+                    if !head.starts_with("HTTP/1.1 200") {
+                        tls = "wrong-answer";
+                    }
+                }
+                Err(_) => tls = "no-handshake",
+            }
+        }
+        let answered = async {
+            ingress_tcp.write_all(b"GET /boot-status HTTP/1.1\r\nHost: localhost\r\n\r\n").await?;
+            let mut head = [0u8; 8];
+            ingress_tcp.read_exact(&mut head).await?;
+            Ok::<_, std::io::Error>(head)
+        };
+        let ingress = match tokio::time::timeout(Duration::from_secs(10), answered).await {
+            Ok(Ok(head)) if &head == b"HTTP/1.1" => "served",
+            Ok(Ok(_)) => "wrong-answer",
+            Ok(Err(_)) => "closed",
+            Err(_) => "no-answer",
+        };
+        // On a line of its own: libtest has already printed "test <name> ... ".
+        println!("\nSHORTAGE cpu_ms={cpu} tls={tls} ingress={ingress}");
     }
 
     /// PB-G2: the listener-wide share is a real share and survives no guard.

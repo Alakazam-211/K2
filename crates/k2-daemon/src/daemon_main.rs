@@ -1150,16 +1150,21 @@ async fn async_main() {
     // multi-second migration sweep on this thread can't starve it — the
     // runtime is multi-threaded.
     boot_status::set_migrating("Starting up…");
+    // Now, not on the first connection: building it needs descriptors, and
+    // failing to panics the accept loop that asked.
+    let _ = crate::handoff::splice_handle();
     {
         let state = state.clone();
         let shutdown_tx = shutdown_tx.clone();
         tokio::spawn(async move {
             let mut shutdown_rx = shutdown_tx.subscribe();
+            let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[daemon]");
             loop {
                 tokio::select! {
                     res = listener.accept() => {
                         match res {
                             Ok((stream, addr)) => {
+                                backoff.on_accept();
                                 let st = state.clone();
                                 let mut shutdown = shutdown_tx.subscribe();
                                 // PRD connect-login-edge-only I4: the MAIN
@@ -1174,9 +1179,10 @@ async fn async_main() {
                                     }
                                 });
                             }
-                            Err(e) => {
-                                log_debug!("[daemon] accept error: {e}");
-                            }
+                            Err(e) => match backoff.on_error(&e) {
+                                Some(pause) => tokio::time::sleep(pause).await,
+                                None => log_debug!("[daemon] accept error: {e}"),
+                            },
                         }
                     }
                     _ = shutdown_rx.recv() => {

@@ -503,10 +503,20 @@ pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16, fa
     let l = std::sync::Arc::new(tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?);
     crate::handoff::register_app(app_id, crate::handoff::AppKind::Front, &l);
     let task = handle.spawn(async move {
+        let mut backoff = k2_core::accept_backoff::AcceptBackoff::new(format!("[apps/router] {app}"));
         loop {
             tokio::select! {
                 a = l.accept() => {
-                    let Ok((mut s, peer)) = a else { continue };
+                    let (mut s, peer) = match a {
+                        Ok(x) => x,
+                        Err(e) => {
+                            if let Some(pause) = backoff.on_error(&e) {
+                                tokio::time::sleep(pause).await;
+                            }
+                            continue;
+                        }
+                    };
+                    backoff.on_accept();
                     let app = app.clone();
                     let guard = crate::handoff::app_conn_guard();
                     tokio::spawn(async move {

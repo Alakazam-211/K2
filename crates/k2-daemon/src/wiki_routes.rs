@@ -720,6 +720,7 @@ async fn run_wiki_site(
     port: u16,
     mut cancel: watch::Receiver<bool>,
 ) {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[wiki] site");
     loop {
         tokio::select! {
             _ = cancel.changed() => {
@@ -730,12 +731,16 @@ async fn run_wiki_site(
             accept = listener.accept() => {
                 match accept {
                     Ok((stream, _)) => {
+                        backoff.on_accept();
                         let ws = workspace.clone();
                         tokio::spawn(async move {
                             handle_site_conn(ws, port, stream).await;
                         });
                     }
-                    Err(_) => break,
+                    Err(e) => match backoff.on_error(&e) {
+                        Some(pause) => tokio::time::sleep(pause).await,
+                        None => break,
+                    },
                 }
             }
         }

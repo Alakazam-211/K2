@@ -271,17 +271,23 @@ mod unix_impl {
             // (30s) so a dead cell doesn't leave a parked task forever.
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut backoff = k2_core::accept_backoff::AcceptBackoff::new(format!("[hook-scoped] cell sock {sid_str}"));
             loop {
                 tokio::select! {
                     accepted = tok_listener.accept() => {
                         match accepted {
                             Ok((stream, _addr)) => {
+                                backoff.on_accept();
                                 let sid = sid_str.clone();
                                 tokio::spawn(async move {
                                     handle_conn(stream, sid, uid, cell_uid).await;
                                 });
                             }
                             Err(e) => {
+                                if let Some(pause) = backoff.on_error(&e) {
+                                    tokio::time::sleep(pause).await;
+                                    continue;
+                                }
                                 log_debug!("[hook-scoped] cell sock {sid_str} accept error: {e}; stopping");
                                 break;
                             }

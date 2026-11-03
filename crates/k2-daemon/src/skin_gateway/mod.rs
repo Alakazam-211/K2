@@ -470,8 +470,19 @@ async fn serve(args: Args) -> Result<(), String> {
 }
 
 async fn serve_listener(listener: TcpListener, gw: Arc<Gateway>) -> Result<(), String> {
+    let mut backoff = k2_core::accept_backoff::AcceptBackoff::new("[skin-gateway]");
     loop {
-        let (stream, _) = listener.accept().await.map_err(|e| format!("accept: {e}"))?;
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(e) => match backoff.on_error(&e) {
+                Some(pause) => {
+                    tokio::time::sleep(pause).await;
+                    continue;
+                }
+                None => return Err(format!("accept: {e}")),
+            },
+        };
+        backoff.on_accept();
         let gw = Arc::clone(&gw);
         tokio::spawn(async move {
             let _ = handle_conn(gw, stream).await;

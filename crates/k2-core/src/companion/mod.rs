@@ -443,6 +443,7 @@ fn run_local_listener(listener: std::net::TcpListener) {
 
     log_debug!("[companion] Local listener started on port {}", listener.local_addr().map(|a| a.port()).unwrap_or(0));
     let mut request_count = 0u64;
+    let mut backoff = crate::accept_backoff::AcceptBackoff::new("[companion]");
     for stream in listener.incoming() {
         request_count += 1;
         // Wrap each connection in catch_unwind to prevent a single bad request
@@ -456,10 +457,17 @@ fn run_local_listener(listener: std::net::TcpListener) {
                 }
             }
 
-            let Ok(mut stream) = stream else {
-                crate::log_debug!("[companion] Listener accept error — continuing");
-                return true;
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    match backoff.on_error(&e) {
+                        Some(pause) => std::thread::sleep(pause),
+                        None => crate::log_debug!("[companion] Listener accept error — continuing"),
+                    }
+                    return true;
+                }
             };
+            backoff.on_accept();
             let remote_addr = stream.peer_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "ngrok".to_string());

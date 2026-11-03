@@ -27,11 +27,15 @@
 #   K2_SOAK_LOAD       CPU burners during (a) and (c) (default: nproc)
 #   K2_SOAK_THREADS    --test-threads for (a) (default 12)
 #   K2_SOAK_MIN_FREE_GB  refuse to start below this (default 20)
+#   K2_SOAK_STEP_TIMEOUT  time limit per step (default 4h; timeout(1) syntax)
+#   K2_SOAK_LOG_CAP_GB  largest file one step may write (default 8)
 #   K2_SOAK_KEEP=1     keep target/src
 
 set -uo pipefail
 
 CLEAN_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+STEP_TIMEOUT=${K2_SOAK_STEP_TIMEOUT:-4h}
+LOG_CAP_GB=${K2_SOAK_LOG_CAP_GB:-8}
 
 # --- the run wrapper -------------------------------------------------------
 
@@ -105,7 +109,9 @@ sweep() {
 clean() {
   local h t rc
   h=$(mktemp -d /tmp/k2-soak-home-XXXXXX); t=$(mktemp -d /tmp/k2-soak-tmp-XXXXXX)
-  setsid --wait setpriv --no-new-privs env -i HOME="$h" TMPDIR="$t" PATH="$TOOL_PATH" USER="$(id -un)" LANG=C.UTF-8 "${CARGO_ENV[@]}" "$@"
+  # Limits so one hung or looping step can't fill the disk: a file size cap
+  # (the step dies on SIGXFSZ) and a time limit. Either shows up as a failure.
+  ( ulimit -f $((LOG_CAP_GB * 1024 * 1024)); setsid --wait setpriv --no-new-privs env -i HOME="$h" TMPDIR="$t" PATH="$TOOL_PATH" USER="$(id -un)" LANG=C.UTF-8 "${CARGO_ENV[@]}" timeout --kill-after=60 "$STEP_TIMEOUT" "$@" )
   rc=$?
   sweep "${STEP:-$*}"
   chmod -R u+w "$h" "$t" 2>/dev/null

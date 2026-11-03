@@ -8,10 +8,15 @@ license = "MIT OR Apache-2.0"
 description = "A real-time voice audio pipeline in pure Rust: devices, echo cancellation, noise suppression and gain control, Opus, jitter buffers with loss concealment, mixing and levels."
 authors = ["Alakazam Labs"]
 readme = "README.md"
+documentation = "https://docs.rs/kessel-audio"
+# repository = TODO: set when the public repository's home is decided.
 keywords = ["audio", "voice", "opus", "echo-cancellation", "jitter-buffer"]
 categories = ["multimedia::audio"]
 # Not published until the API settles and the release is approved.
 publish = false
+# CC BY 4.0 speech for the metric tests. Stays in the repository; see the
+# `speech-tests` feature.
+exclude = ["tests/data/"]
 
 [features]
 default = ["cpal"]
@@ -24,6 +29,15 @@ cpal = ["dep:cpal", "dep:objc2", "dep:block2"]
 # cpal's PulseAudio host (a pure-Rust protocol client; works on PipeWire
 # through pipewire-pulse).
 pulseaudio = ["cpal", "cpal/pulseaudio"]
+# Tests only: the metric tests that play real speech. They read tests/data,
+# which isn't in the published package, so this only compiles from a repository
+# checkout.
+speech-tests = []
+# Tests only: run the CPU bars in a debug build (a release build always runs
+# them). Turn on only if the root manifest sets `opt-level = 3` for sonora*,
+# ropus and rubato: a dependency's profile settings can't do that from here, and
+# unoptimised they miss the bars by a long way.
+cpu-bars = ["speech-tests"]
 
 [dependencies]
 bytes = "1"
@@ -45,6 +59,9 @@ block2 = { version = "0.6", optional = true }
 [dev-dependencies]
 rustfft = "6"
 serde_json = "1"
+
+[package.metadata.docs.rs]
+features = ["pulseaudio"]
 
 [lints.rust]
 missing_docs = "warn"

@@ -1,5 +1,5 @@
 # cargo-deny policy for kessel-audio:
-#   cargo deny --manifest-path crates/kessel-audio/Cargo.toml check licenses bans
+#   cargo deny check licenses bans
 # tests/licences.rs enforces the same licence rules in `cargo test`.
 
 [graph]

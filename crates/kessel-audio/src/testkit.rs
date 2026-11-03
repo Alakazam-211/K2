@@ -2,7 +2,8 @@
 //! sonora against the C++ WebRTC library: synthetic rooms (image method), a laptop speaker
 //! and chassis model, a fixed system delay, levels, and the ERLE /
 //! convergence / level metrics. Speech is real (12 LibriSpeech utterances
-//! shipped as Opus in tests/data) or synthetic (a formant synthesiser).
+//! kept as Opus in tests/data, behind the `speech-tests` feature) or synthetic
+//! (a formant synthesiser).
 
 #![allow(dead_code)]
 
@@ -201,29 +202,36 @@ pub(crate) fn set_active_level(x: &mut [f32], target_db: f64) {
 // Real speech: LibriSpeech test-clean (CC BY 4.0), see tests/data/README.md
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "speech-tests")]
 pub(crate) const FAR_POOL: u8 = 0;
+#[cfg(feature = "speech-tests")]
 pub(crate) const NEAR_POOL: u8 = 1;
 
+#[cfg(feature = "speech-tests")]
 pub(crate) struct Utterance {
     pub(crate) pool: u8,
     pub(crate) speaker: u32,
     pub(crate) pcm: Vec<f32>,
 }
 
+#[cfg(feature = "speech-tests")]
 static CORPUS: std::sync::OnceLock<Vec<Utterance>> = std::sync::OnceLock::new();
 
+#[cfg(feature = "speech-tests")]
 fn rd_u16(b: &[u8], p: &mut usize) -> u16 {
     let v = u16::from_le_bytes([b[*p], b[*p + 1]]);
     *p += 2;
     v
 }
 
+#[cfg(feature = "speech-tests")]
 fn rd_u32(b: &[u8], p: &mut usize) -> u32 {
     let v = u32::from_le_bytes([b[*p], b[*p + 1], b[*p + 2], b[*p + 3]]);
     *p += 4;
     v
 }
 
+#[cfg(feature = "speech-tests")]
 /// The test corpus, decoded once (48 kHz, active level about -26 dBFS).
 pub(crate) fn corpus() -> &'static [Utterance] {
     CORPUS.get_or_init(|| {
@@ -256,6 +264,7 @@ pub(crate) fn corpus() -> &'static [Utterance] {
     })
 }
 
+#[cfg(feature = "speech-tests")]
 /// A talker track from one pool: random utterances with 0.25 to 0.9 s
 /// pauses, as the baseline built its far-end and near-end tracks.
 pub(crate) fn speech_track(pool: u8, rng: &mut Rng, len: usize) -> Vec<f32> {

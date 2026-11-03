@@ -1,8 +1,13 @@
 //! Offline pipeline tests: the processing core driven block by block with a
 //! simulated clock, fed by synthetic talkers through the baseline's echo model.
 
+// Without the speech tests, the helpers they share have fewer users.
+#![cfg_attr(not(feature = "speech-tests"), allow(dead_code))]
+
 mod alloc;
+#[cfg(feature = "speech-tests")]
 mod metrics;
+#[cfg(feature = "speech-tests")]
 mod receive;
 
 use crate::apm::ProcessingConfig;

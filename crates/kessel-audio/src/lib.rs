@@ -80,6 +80,11 @@ mod stats;
 #[cfg(feature = "cpal")]
 mod system;
 
+// Runs the README's examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]

@@ -360,6 +360,12 @@ fn s6_agc2_levels_speech() {
 /// (it measured 1.55%, p50 150.6 µs). That bar holds here, timed alone.
 /// The whole duplex path adds the jitter buffer, Opus encode (complexity 9)
 /// and decode, and the mix; its bar is 10% of a core.
+///
+/// Only where the DSP crates are optimised: a release build, or the `cpu-bars`
+/// feature when the root manifest optimises them in debug builds. Unoptimised
+/// the echo canceller alone takes about 3 ms of each 10 ms block, and the
+/// figure says nothing about real use.
+#[cfg(any(not(debug_assertions), feature = "cpu-bars"))]
 #[test]
 fn cpu_per_block_within_bars() {
     let inputs = super::shared_cpu();

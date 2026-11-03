@@ -257,11 +257,13 @@ mod tests {
         assert!(in_dtx >= 70, "only {in_dtx} of 100 silent frames were in DTX");
     }
 
+    #[cfg(feature = "speech-tests")]
     fn real_speech(seed: u64, secs: usize) -> Vec<f32> {
         let mut rng = crate::testkit::Rng::new(seed);
         crate::testkit::speech_track(crate::testkit::FAR_POOL, &mut rng, 48_000 * secs)
     }
 
+    #[cfg(feature = "speech-tests")]
     #[test]
     fn lbrr_flag_follows_the_fec_setting() {
         let _cpu = crate::tests::shared_cpu();
@@ -308,6 +310,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "speech-tests")]
     #[test]
     fn fec_recovers_lost_frames_better_than_plc() {
         let _cpu = crate::tests::shared_cpu();

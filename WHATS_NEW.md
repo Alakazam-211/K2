@@ -774,7 +774,7 @@ Updates are signed with new keys, kept on a dedicated release Mac and used only 
 - **Who am I.** `GET /cli/skin/me` tells a guest or an App its kind, its rooms with the permissions it has in each, and which features this server has (`k2.me.get()` in the SDK).
 - **Row previews for guests.** `GET /cli/thread/latest` now answers App guests and Apps for their own rooms: the last message per room in one call, up to 50 rooms. A room the pass doesn't hold answers the same `skin_room` as one that doesn't exist.
 - **Apps set their own guests' rooms, no owner token.** Give an App the right once with `k2 app grant <app> --kind guests-rooms [--room <room>]…`, and its server can read and reset its own guests' rooms with its own pass (`k2.asApp().guests.setRooms({username, rooms})`, or `GET|POST /cli/skin/guests/rooms`). It reaches only its own guests, only the rooms you listed plus its own, and never more than a guest's role allows. Setting the same rooms again changes nothing, every change is recorded with before and after (`k2 app history <app>`), and an App may make 60 of these calls a minute. Agents do the same within your grant with `k2 app guest rooms <app> <user> [set …]`. A Garden widget can too (`k2.guests.setRooms`, for any App on this computer), and K2 asks you on its own sheet before every change.
-- **The must-not-break contract.** Dannon's and NSI's routes (login with its token answer, login by email, the 423 lock, the Thread and its live socket, files with a guest pass, `db/query`, `db/rows`) are pinned as contract tests that run through the SDK against a real daemon, outside the wall and from inside it.
+- **The must-not-break contract.** The routes existing App teams rely on (login with its token answer, login by email, the 423 lock, the Thread and its live socket, files with a guest pass, `db/query`, `db/rows`) are pinned as contract tests that run through the SDK against a real daemon, outside the wall and from inside it.
 - **Who has access to a room.** An App can now show who holds access to a room: its guests and agent logins, with their role and what they may do there. The list comes from the access you granted, not from who happens to be online, and everyone who logs in to K2 itself is one line, "admins of this box". It's a new permission, `room:members`, off by default; grant it per room like any other (`k2 app role room <role> <room> --caps thread:read,room:members`). An App sees only its own guests. In any room you can hide guests' names from Apps with `k2 app room-names <room> hide`; you still see every name, and so do your Gardens. Agents read the list with `k2 app members`, and an App hears `room_members_changed` on the room's live socket when it changes.
 - **An App can check on itself.** `app.self` tells an App its id, the version that is live, whether it is running, and when it went live; `app.usage` gives its limits, its live connections and how many calls it made to each K2 action (from its own call record). Each App sees only its own; asking about another App gets the same answer as asking about one that doesn't exist. You and its agent read the same with `k2 app self <app>` and `k2 app usage <app>`, and the App hears `app_deployed` when a new version goes live.
 - **Gardens get both.** A Garden widget can call `k2.room.members(…)` (with every name, since a Garden acts as you), `k2.app.self(…)` and `k2.app.usage(…)` for any App on this computer, and `k2.widget.self()` for its own id, live version, who made it and its last seven days of saves. `k2 study app-surfaces` has the details.
@@ -1093,7 +1093,7 @@ Updates are signed with new keys, kept on a dedicated release Mac and used only 
 - **Hosted mail, steadier.** Mail to providers without IPv6 no longer gets stuck. `k2 hostmail status` shows the real certificate names and the last certificate error, `domain add` lists the A records you need, and spam rules that newer rule downloads broke are repaired. New: `k2 hostmail outbound`. `k2 hostmail backup plan` measures how much space a backup would need.
 - **Domains go live by themselves.** After you switch a domain's nameservers to K2, the server notices within minutes; no more `k2 domain refresh`.
 - **Message any agent by either name.** `k2 msg` works with a workspace's handle and its agent name. `k2 agent hire --name` keeps the name you give it.
-- **Move a chat to another tool.** `k2 workspace swap-canonical` moves a workspace's main chat to another AI tool and hands over the recent conversation. Thanks to Sterling Long (Luzzotica) for this one.
+- **Move a chat to another tool.** `k2 workspace swap-canonical` moves a workspace's main chat to another AI tool and hands over the recent conversation. Thanks to an early customer for this one.
 
 **Security**
 - Published Apps can no longer be shown inside other websites. If you embed your App on your own site, allow it with `k2 publish frame <app> --allow https://your.site` (owner only). Apps published with `--cmd` run their own server: `k2 publish ps` warns when one sends no frame protection.
@@ -1357,7 +1357,7 @@ New workspaces skip “Do you trust this folder?” for Claude, Codex, Grok, and
 
 Adding a folder that is already a workspace says **workspace already exists \<name\>** instead of a generic fail.
 
-**Hosted mail.** Mail-manage agents get the rest of `k2 hostmail` (grant, doctor, approvals, import, IMAP once-password, leaf `--help`). `k2 hostmail status` matches systemd. This is the cut for lztek / it-email / Mara once this daemon is on the box.
+**Hosted mail.** Mail-manage agents get the rest of `k2 hostmail` (grant, doctor, approvals, import, IMAP once-password, leaf `--help`). `k2 hostmail status` matches systemd. This is the cut for hosted-mail boxes once this daemon is on the box.
 
 Thread, Chatter, Project, and Feedback use **Meslo**. Long words wrap. Shift+Enter is a real line break. In split view, Message-the-agent under Thread gets the caret and is the default when that setting is on. Selecting Thread text should not shrink the terminal by a pixel.
 
@@ -1769,7 +1769,7 @@ cannot revive.
 
 ## 0.40.104 — Linux hosts stay up, Message &lt;name&gt;
 
-Headless Linux boxes (for example RPMAVS) were growing to tens of
+Headless Linux boxes were growing to tens of
 gigabytes and the kernel killed the daemon about every three hours.
 The desktop Mac on the same version did not. Linux file-watch was
 treating every *open* of `ROLE.md` as an edit, queuing path strings
@@ -1802,7 +1802,7 @@ A Feedback reply from your phone or another Connect login is stored
 and injected as **you**, not the box owner. The owner still frames
 with the server name; Alice's comment is `[from alice]`.
 
-If a remote host (for example RPMAVS) starts returning 404s on
+If a remote host starts returning 404s on
 **Message the agent** or `/cli/*`, K2 reloads the webview as soon as
 the OS still says the host is up — same reset as switching Local and
 back, without the bounce. DevTools: filter `[remote-path]`.
@@ -1865,7 +1865,7 @@ instead of the git branch. Two chips fit the row; the rest collapse
 to **+N**. Click a chip to open that project. The outline uses the
 same accent as buttons, with the theme's primary text.
 
-Switching to another host (for example RPMAVS) no longer leaves the
+Switching to another host no longer leaves the
 previous box's agents painted under the new name. If the remote list
 is slow or fails, the roster is empty until that host answers.
 
@@ -2600,7 +2600,7 @@ is now OOTB too.
 
 ### Pre-packaged Gmail client baked into all release daemons
 
-**Customer proof (DTL):** email-link opened Google with
+**Customer proof:** email-link opened Google with
 `client_id=REPLACE_ME.apps.googleusercontent.com` → `invalid_client` 401.
 Redirect/PKCE were fine — only the compile-time Gmail client was missing.
 
@@ -2978,7 +2978,7 @@ attached at the wrong size.
   once-recorded dead port no longer blocks self-heal forever.
 - **Hosted operators:** upgrade the Linux daemon on any box that has shown
   external `HTTP 000` / connection refused while `systemctl` still said
-  `active` (nsi / acv / luzz class). After update, verify with
+  `active`. After update, verify with
   `curl https://<sub>.k2.dev/boot-status`, not only process liveness.
 
 
@@ -3350,7 +3350,7 @@ paths (agent/runtime state, `.git`, build caches, logs) no longer thrash
 the list, and a directory you already have open refreshes quietly in the
 background instead of re-showing the loading row.
 
-Update both the **thin client** and the **daemon** on the host (e.g. NSI)
+Update both the **thin client** and the **daemon** on the host
 so the quieter watcher and the calmer UI land together.
 
 

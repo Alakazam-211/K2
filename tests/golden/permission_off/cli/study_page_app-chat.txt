@@ -151,6 +151,16 @@ Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
 
+WHEN THE SAME PERSON SIGNS IN AGAIN (a reload, a new tab, your App
+restarted) and still has a live session, don't log the old one out: no
+guests.logout on a pass you are replacing. Use the new pass and leave the
+old one to expire (expiry sends Sew no revoke). A logout ends that session
+in Sew too: K2 tells Sew, and Sew revokes the chat device tied to it. The
+device your page stored is then refused ("device certificate refused:
+revoked"), so chat and calls fail for that person until your page clears it
+(Sew's kit: deviceStore(...).clear(), once) and registers a new one. Log
+out only when the person asks to; then that revoke is what you want.
+
 CHANNELS (needs Sew 0.5.0+; else 409 sew_feature_missing). Your server
 makes a text channel in your App's own bound Space and puts your users in:
   const ch = await k2.asApp().chat.createChannel({slug: 'site-7',

@@ -97,9 +97,9 @@ WHAT GOES WRONG
   joins work, no audio → 7881/tcp, 7882/udp, 5349/tcp blocked from outside
   431 on /rtc/v1 → K2's 64 KiB request-head limit: tell K2
   calls fail on another host of the App, or in a Tauri window → k2 study tauri (10)
+  device certificate refused: revoked → a logout, often your sign-in code's: k2 study app-chat
 
-NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents
-never join calls.
+NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents never join calls.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr

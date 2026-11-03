@@ -461,10 +461,73 @@ fn a_share_with_a_session_needs_a_running_sessions_id() {
     assert_eq!(r.status, "200 OK", "{}", r.body);
 }
 
-/// A guest can't choose where a secret is kept, so a refusal never sends them
-/// to that option. Nothing is kept and the card stays open.
+/// A PTY standing in for an agent's main chat: `claude` is the test shim, and
+/// it is registered under the workspace id, as a running canonical chat is.
+#[cfg(unix)]
+struct RunningChat {
+    key: String,
+    session: std::sync::Arc<k2_core::terminal::DaemonPtySession>,
+    _rt: tokio::runtime::Runtime,
+    _shim: k2_core::test_env::AgentShim,
+}
+
+#[cfg(unix)]
+impl RunningChat {
+    fn start(project_id: &str) -> RunningChat {
+        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+        let shim = k2_core::test_env::AgentShim::install();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+        let enter = rt.enter();
+        let label_source = LabelSource::Pty;
+        let session = DaemonPtySession::spawn(DaemonPtyConfig {
+            session_id: k2_core::session::SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(std::path::PathBuf::from("/tmp")),
+            program: Some("claude".to_string()),
+            args: vec![],
+            durable_args: None,
+            env: Default::default(),
+            drain_on_exit: true,
+            label: String::new(),
+            label_source,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+            cell_uid: None,
+            overlay: None,
+            survive: false,
+            ptyd_meta: None,
+        })
+        .expect("spawn the fake agent");
+        crate::v2_session_map::register(project_id.to_string(), session.clone());
+        drop(enter);
+        RunningChat { key: project_id.to_string(), session, _rt: rt, _shim: shim }
+    }
+
+    fn sid(&self) -> String {
+        self.session.session_id.to_string()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RunningChat {
+    fn drop(&mut self) {
+        crate::v2_session_map::unregister(&self.key);
+        self.session.kill();
+    }
+}
+
+/// An App guest can only save for a session, and a card stays open for 7 days,
+/// so the session that asked has often ended by Save: an idle agent sleeps, and
+/// its next session has a new id. Whether the session that asked has gone or a
+/// person posted the card with none:
+/// - nothing running: nothing is kept, the card stays open, the guest is told
+///   only what a guest can do, and the agent is woken and told;
+/// - the chat running again: the same card saves, for that session, and that
+///   session can use it.
+#[cfg(unix)]
 #[test]
-fn a_guests_refusal_only_says_what_a_guest_can_do() {
+fn a_guests_save_reaches_the_chats_running_session() {
+    use k2_vault::{Requester, Selector, Use};
     let _home = crate::test_support::TempHome::new();
     let vault = crate::vault::ensure_test_vault();
     let (handle, project_id) = ws("ovlsg");
@@ -476,20 +539,78 @@ fn a_guests_refusal_only_says_what_a_guest_can_do() {
         })
     };
     let body = |name: &str| serde_json::json!({ "addr": handle, "name": name, "for": "api.example.com", "from": "k2" });
-    for (ended, params, code) in [
-        ("GUEST_ENDED", params_of(&[("cell_session_id", "gone-session")]), "card_session_gone"),
-        ("GUEST_NONE", HashMap::new(), "card_no_session"),
-    ] {
-        let posted = post_json("/cli/thread/secret", &params, body(ended));
+    let cards: Vec<(&str, String)> = [
+        ("GUEST_ENDED", params_of(&[("cell_session_id", "gone-session")])),
+        ("GUEST_NONE", HashMap::new()),
+    ]
+    .into_iter()
+    .map(|(name, params)| {
+        let posted = post_json("/cli/thread/secret", &params, body(name));
         assert_eq!(posted.status, "200 OK", "{}", posted.body);
-        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
-        let r = as_guest(&id);
-        assert_error_code(&r, "409 Conflict", code);
-        assert!(r.body.contains("Ask the agent to ask again"), "{}", r.body);
+        (name, json_body(&posted)["id"].as_str().expect("id").to_string())
+    })
+    .collect();
+
+    for (name, id) in &cards {
+        let r = as_guest(id);
+        assert_error_code(&r, "409 Conflict", "card_session_gone");
+        assert!(r.body.contains("Nothing was saved") && r.body.contains("try Save again"), "{}", r.body);
         assert!(!r.body.contains("workspace"), "a guest can't keep it for the workspace: {}", r.body);
         assert!(!r.body.contains(SESSION_PW));
-        assert_eq!(vault.request_get(&id).expect("request").status, "pending", "the card stays open");
+        assert_eq!(vault.request_get(id).expect("request").status, "pending", "the card stays open");
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l.contains(&format!("tried to save {name}")) && l.contains("still open")),
+            "the agent is woken and told: {injects:?}"
+        );
+        assert!(injects.iter().all(|l| !l.contains(SESSION_PW)), "{injects:?}");
     }
+
+    let chat = RunningChat::start(&project_id);
+    let who = Requester::Session { workspace_id: project_id.clone(), session_id: Some(chat.sid()) };
+    let origin = k2_vault::hosts::Origin::parse_url("https://api.example.com/").expect("url").1;
+    for (name, id) in &cards {
+        let set = as_guest(id);
+        assert_eq!(set.status, "200 OK", "{name}: {}", set.body);
+        assert!(!set.body.contains(SESSION_PW));
+        let selector = Selector::user(k2_vault::Scope::session(chat.sid()), *name);
+        let r = vault.resolve(&selector, Use::Fetch(&origin), &who).expect("the running session can use it");
+        assert_eq!(r.value.expose(), SESSION_PW.as_bytes(), "{name}");
+    }
+}
+
+/// A person, too: asked by a session that has ended, Save reaches the chat's
+/// running session, and a file arrives there. With nothing running they can
+/// also keep it for the workspace: the words say so.
+#[cfg(unix)]
+#[test]
+fn a_persons_save_reaches_the_chats_running_session() {
+    let _home = crate::test_support::TempHome::new();
+    let _vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlsn");
+    let t = k2_vault::fsutil::TestDir::new("sess-next");
+    let _run = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+    let asker = uuid::Uuid::new_v4().to_string();
+    let dir = crate::vault::spawn::materialize(&mut HashMap::new(), &project_id, &asker, false, &crate::vault::spawn::SpawnRefs::default()).dir.expect("dir");
+    let posted = post_as(&asker, &handle, "NEXT_FILE", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    crate::vault::spawn::session_ended(&asker);
+    assert!(!dir.exists());
+
+    let r = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_error_code(&r, "409 Conflict", "card_session_gone");
+    assert!(r.body.contains("the card's options"), "{}", r.body);
+
+    let chat = RunningChat::start(&project_id);
+    let next = crate::vault::spawn::materialize(&mut HashMap::new(), &project_id, &chat.sid(), false, &crate::vault::spawn::SpawnRefs::default()).dir.expect("dir");
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    let body = json_body(&set);
+    assert_eq!(body["ref"], format!("k2v://session/{}/NEXT_FILE", chat.sid()), "{body}");
+    assert_eq!(body["fileDelivered"], true, "{body}");
+    assert_eq!(std::fs::read(next.join("NEXT_FILE")).expect("arrived"), SESSION_PW.as_bytes());
+    crate::vault::spawn::session_ended(&chat.sid());
 }
 
 /// A card never claims a delivery that didn't happen: a file of that name is

@@ -1827,7 +1827,7 @@ pub fn inject_raw_into_session_with_profile(
 // Branch implementations
 // ─────────────────────────────────────────────────────────────────────
 
-fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup::LiveSession> {
+pub(crate) fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup::LiveSession> {
     lookup_live_for_conversation_where(conversation_key, |_| true)
 }
 

@@ -43,6 +43,13 @@ pub fn note_spawning(session_id: &str) {
     m.insert(session_id.to_string(), now);
 }
 
+/// The session has ended: it no longer counts as being spawned.
+pub fn forget_spawning(session_id: &str) {
+    if let Some(m) = SPAWNING.lock().as_mut() {
+        m.remove(session_id);
+    }
+}
+
 fn spawning_ids() -> Vec<String> {
     let mut g = SPAWNING.lock();
     let Some(m) = g.as_mut() else { return Vec::new() };

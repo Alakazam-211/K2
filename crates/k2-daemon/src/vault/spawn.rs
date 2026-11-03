@@ -605,6 +605,7 @@ fn resolve_env_ref(vault: &k2_vault::LocalVault, r: &str, owner_set: bool, who: 
 /// Session ended: its secrets dir and placeholders go.
 pub fn session_ended(session_id: &str) {
     let _turn = TOPUP.lock();
+    crate::session_liveness::forget_spawning(session_id);
     LIVE.lock().remove(session_id);
     let mine: Vec<PathBuf> = {
         let mut g = DIRS.lock();

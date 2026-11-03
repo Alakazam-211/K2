@@ -478,6 +478,11 @@ fn request_mac_input(r: &SecretRequest) -> Vec<u8> {
 pub struct CardAnswer {
     /// `workspace` | `server` | `session`
     pub scope: Option<String>,
+    /// The running session a session-scope answer is kept for, when the one
+    /// that asked has ended: the chat's running session. Set by the daemon,
+    /// never read from a request.
+    #[serde(skip)]
+    pub session_id: Option<String>,
     pub hosts: Option<Vec<String>>,
     pub delivery: Option<Delivery>,
     /// Second click after a red mismatch / readable-delivery warning.
@@ -3393,7 +3398,7 @@ impl LocalVault {
             // The session that asked: its passport id is what spawn, resolve
             // and list compare. Never the card's conversation: that is another
             // id, and a secret kept under it reaches nobody.
-            "session" => match req.session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            "session" => match ans.session_id.as_deref().or(req.session_id.as_deref()).map(str::trim).filter(|s| !s.is_empty()) {
                 Some(sid) => Scope::session(sid),
                 None => {
                     return Err(VaultError::conflict(

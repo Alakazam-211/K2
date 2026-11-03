@@ -2428,36 +2428,60 @@ fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>)
     }
 }
 
-/// Save on a card kept for the session that asked: refused while the card
-/// is still open when that session can't receive it. The value isn't kept;
-/// the person can keep it for the workspace instead.
-fn session_card_refused_to_save(req: &k2_vault::vault::SecretRequest, delivery: k2_vault::Delivery, guest: bool) -> Option<CliResponse> {
-    let sid = req.session_id.as_deref()?;
-    let can_receive = crate::session_liveness::is_live(sid)
-        && (delivery != k2_vault::Delivery::File || crate::vault::spawn::kept_dir(sid).is_some());
-    (!can_receive).then(|| {
-        error_json(
-            "409 Conflict",
-            "card_session_gone",
-            // A guest can't choose where it is kept: only what they can do.
-            if guest {
-                "The session that asked for this has ended, so it can't receive it. Nothing was saved. Ask the agent to ask again."
-            } else {
-                "The session that asked for this can't receive it: it has ended, or it can't hold files. Nothing was saved. You can keep it for this workspace in the card's options, or have the agent ask again."
-            },
-        )
-    })
+/// The running session of the chat a card is in: its pinned Chat's, or a
+/// sidecar's of this workspace.
+fn chat_running_session(resolved: &ResolvedOverlay) -> Option<String> {
+    if pinned_chat_of(&resolved.project_id).as_deref() == Some(resolved.conversation_id.as_str()) {
+        return crate::session_lookup::lookup_any(&resolved.project_id).map(|live| live.session_id().to_string());
+    }
+    let sid = workspace_msg::lookup_live_for_conversation(&resolved.conversation_id)?.session_id().to_string();
+    (crate::session_token::workspace_for_session(&sid).as_deref() == Some(resolved.project_id.as_str())).then_some(sid)
+}
+
+/// Who an answer to a card reaches: the session that asked while it runs,
+/// else this chat's running session. A card stays open for 7 days, and an
+/// idle agent sleeps and comes back with a new session id.
+fn card_receiver(req: &k2_vault::vault::SecretRequest, resolved: &ResolvedOverlay) -> Option<String> {
+    let asker = req.session_id.as_deref().filter(|s| crate::session_liveness::is_live(s));
+    asker.map(str::to_string).or_else(|| chat_running_session(resolved))
+}
+
+/// Save on a card kept for one session: refused while the card is still open
+/// when no running session can receive it. The value isn't kept. A guest can't
+/// choose where it is kept, so a guest only hears what a guest can do.
+fn session_card_refused_to_save(receiver: Option<&str>, delivery: k2_vault::Delivery, guest: bool) -> Option<CliResponse> {
+    let hint = match receiver {
+        None if guest => "The agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute. If this comes back, send the agent a message.",
+        None => "This agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute, or keep it for this workspace in the card's options.",
+        Some(sid) if delivery == k2_vault::Delivery::File && crate::vault::spawn::kept_dir(sid).is_none() => {
+            "The running session can't hold files. Nothing was saved. You can keep it for this workspace in the card's options: the file arrives when the session restarts."
+        }
+        Some(_) => return None,
+    };
+    Some(error_json("409 Conflict", "card_session_gone", hint))
+}
+
+/// Save was refused because nothing is running: wake the agent, so the person
+/// can save again, and tell it not to wait for an answer that never came.
+fn wake_for_card(params: &HashMap<String, String>, resolved: &ResolvedOverlay, name: &str, session_author: &str) {
+    let from = card_actor_from(params, resolved, session_author);
+    let line = format!(
+        "A person tried to save {name} on your secret card, but no session of yours was running, so nothing was saved. The card is still open and they were told to try Save again, and you get a line when it is saved. Ask again only if they tell you it failed. If it saves, it is kept for this session."
+    );
+    record_test_inject(&format_thread_compose_pty_line(&from, &resolved.addr, &line));
+    let payload = format!("[thread:{}] {line}", resolved.addr);
+    deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, &from, "thread", "", None));
 }
 
 /// What the agent hears about a file card, after Save: whether the file is
 /// in the asking session's `$K2_SECRETS_DIR` now, never a claim that it is
 /// when it isn't. `None`: no running session asked, or not a file. Other
 /// running sessions get theirs at once too.
-fn card_file_delivery(vault: &k2_vault::LocalVault, req: &k2_vault::vault::SecretRequest, m: &k2_vault::SecretMeta) -> Option<(bool, String)> {
+fn card_file_delivery(vault: &k2_vault::LocalVault, receiver: Option<&str>, workspace_id: &str, m: &k2_vault::SecretMeta) -> Option<(bool, String)> {
     if m.default_delivery != k2_vault::Delivery::File {
         return None;
     }
-    let top_up = req.session_id.as_deref().filter(|s| crate::session_liveness::is_live(s)).map(|sid| crate::vault::spawn::top_up(vault, sid, &req.workspace_id));
+    let top_up = receiver.map(|sid| crate::vault::spawn::top_up(vault, sid, workspace_id));
     crate::vault::spawn::top_up_all(vault);
     let t = top_up?;
     let n = &m.name;
@@ -2613,7 +2637,9 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Ok(i) => i,
         Err(e) => return vault_error(&e),
     };
+    let receiver = card_receiver(&req, resolved);
     let ans = k2_vault::vault::CardAnswer {
+        session_id: receiver.clone(),
         scope: opt_param(params, "scope"),
         hosts,
         delivery,
@@ -2625,8 +2651,13 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     };
     let guest = matches!(actor, k2_vault::Actor::Guest { .. });
     let scope_word = ans.scope.clone().unwrap_or_else(|| if guest { "session".into() } else { req.proposed_scope.clone() });
-    if req.status == "pending" && scope_word == "session" {
-        if let Some(r) = session_card_refused_to_save(&req, ans.delivery.unwrap_or(req.proposed_delivery), guest) {
+    let delivery_word = ans.delivery.unwrap_or(req.proposed_delivery);
+    // A guest's non-fetch answer gets the vault's own refusal: no wake for it.
+    if req.status == "pending" && scope_word == "session" && !(guest && delivery_word != k2_vault::Delivery::Fetch) {
+        if let Some(r) = session_card_refused_to_save(receiver.as_deref(), delivery_word, guest) {
+            if receiver.is_none() {
+                wake_for_card(params, resolved, &req.name, session_author);
+            }
             return r;
         }
     }
@@ -2661,7 +2692,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         (true, Some(was)) => format!(" It replaced the earlier {} (that one was sent {was}).", m.name),
         (true, None) => format!(" It replaced the earlier {}.", m.name),
     };
-    let file_delivery = card_file_delivery(&vault, &req, m);
+    let file_delivery = card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m);
     let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
         " Kept for this running session only: it's gone if the session restarts, even with --resume. Ask with --scope workspace to keep it."
     } else {
@@ -7397,9 +7428,14 @@ mod tests {
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
         let secret_val = "s3cr3t-NEVER-IN-SKIN-ANSWER-xyz";
+        // A guest's answer is kept for a running session: the agent's own
+        // here. This test is about the value never coming back; with nothing
+        // running, see `a_guests_save_reaches_the_chats_running_session`.
+        let asker = uuid::Uuid::new_v4().to_string();
+        crate::session_liveness::note_spawning(&asker);
         let posted = dispatch_post(
             "/cli/thread/secret",
-            &HashMap::new(),
+            &params_of(&[("cell_session_id", asker.as_str())]),
             serde_json::json!({
                 "addr": handle,
                 "name": "API_TOKEN",

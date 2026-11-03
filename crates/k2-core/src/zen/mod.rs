@@ -60,6 +60,7 @@ pub mod downloads;
 pub mod links;
 pub mod lock;
 pub mod news;
+pub mod phone;
 pub mod schema;
 pub mod skill;
 pub mod stdlib;
@@ -703,6 +704,11 @@ pub(crate) fn build_template_page_in(d: &Defaults, tid: &str, toml_src: &str) ->
     });
     let ordered: Vec<(&J, bool)> = widgets.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, true))).collect();
     set_chrome(&mut page, "template", &chrome, &ordered);
+    // Only when the template carries one, so every other template's page
+    // (and its pinned hash) answers byte for byte as before.
+    if let Some(p) = phone::from_template(&t) {
+        page["phone"] = p;
+    }
     page
 }
 
@@ -759,7 +765,9 @@ pub fn garden_page_in(d: &Defaults, layer: &Layer, default_template: &str) -> J 
     let mut page = template_page_in(d, tid).or_else(|| template_page(tid)).unwrap_or_else(texting_page);
     let layout = layer.get("page.layout");
     let widgets = layer.get("page.widgets");
+    let file_phone = layer.get("page.phone");
     if layout.is_none() && widgets.is_none() {
+        phone::settle(&mut page, file_phone, false);
         return page;
     }
     let file: Vec<J> = widgets.and_then(J::as_array).cloned().unwrap_or_default();
@@ -803,6 +811,7 @@ pub fn garden_page_in(d: &Defaults, layer: &Layer, default_template: &str) -> J 
     let ws = page["widgets"].as_array().cloned().unwrap_or_default();
     name_columns(&mut columns, &ws);
     page["layout"] = layout_json(&kind, &canvas, &columns);
+    phone::settle(&mut page, file_phone, has_content);
     page
 }
 

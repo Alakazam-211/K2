@@ -943,3 +943,47 @@ fn widget_delete_is_scoped_like_put_and_refuses_a_placed_widget() {
     assert!(crate::zen_agent_routes::POST_ROUTES.contains(&"/cli/zen/widget/delete"));
     assert!(crate::routes::route_policy::get_refused("/cli/zen/widget/delete", ""), "GET on the delete row is 405");
 }
+
+// ── a Garden's mobile layout goes through the same door ─────────────
+
+const PHONE_PAGE: &str = "schema = 1\n[[phone.screen]]\nlabel = \"People\"\n[[phone.screen.widget]]\nid = \"agents\"\n";
+const BAD_PHONE_PAGE: &str = "schema = 1\n[[phone.screen]]\n[[phone.screen.widget]]\nid = \"agents\"\nheight = 3\n";
+
+/// contract-gardens-phone rev 2 §A.2: authored with `garden put`, needing what
+/// any Garden edit needs. There is no route of its own to get around.
+#[test]
+fn a_phone_layout_needs_what_any_garden_edit_needs() {
+    let e = env();
+    let g = garden1(&e.f);
+    let before = disk(&e.f, &g);
+    // Without the switch: a proposal, nothing written, nothing live.
+    let plain = workspace("w-phone-plain", false);
+    let (s, v) = call("/cli/zen/garden/put", false, &plain, json!({"garden": g, "text": PHONE_PAGE}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["proposed"], true, "{v}");
+    assert_eq!(disk(&e.f, &g), before, "a proposal writes nothing");
+    assert!(e.f.resolve(Some(&g)).expect("resolve")["page"].get("phone").is_none(), "nothing reached the page");
+    // With the switch: written and audited, on the page.
+    let manager = workspace("w-phone-mgr", true);
+    let (s, v) = call("/cli/zen/garden/put", false, &manager, json!({"garden": g, "text": PHONE_PAGE}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["changed"], true, "{v}");
+    assert!(has_audit("zen-garden-put", &g), "audited");
+    assert_eq!(e.f.resolve(Some(&g)).expect("resolve")["page"]["phone"]["screens"][0]["label"], "People");
+    // A bad shape is refused for both: no write and no proposal.
+    for who in [&plain, &manager] {
+        let (s, v) = call("/cli/zen/garden/put", false, who, json!({"garden": g, "text": BAD_PHONE_PAGE}));
+        assert_eq!(s, "400 Bad Request", "{who:?}: {v}");
+        assert!(v["message"].as_str().is_some_and(|m| m.contains("widget height is")), "{v}");
+    }
+    assert_eq!(disk(&e.f, &g).as_deref(), Some(PHONE_PAGE));
+    // A locked Garden refuses both, and a login isn't this computer's person.
+    e.f.set_garden_lock(&g, true).expect("lock");
+    for who in [&plain, &manager] {
+        let (s, v) = call("/cli/zen/garden/put", false, who, json!({"garden": g, "text": "schema = 1\n"}));
+        assert_eq!((s.as_str(), v["error"].as_str()), ("423 Locked", Some("garden_locked")), "{who:?}: {v}");
+    }
+    let login = Caller::Login { username: "ada".into() };
+    let (s, v) = call("/cli/zen/garden/put", false, &login, json!({"garden": g, "text": PHONE_PAGE}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+}

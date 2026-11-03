@@ -123,8 +123,8 @@ impl ZenFiles {
         let f = ZenFile::Garden(g.id.clone());
         let base = self.base_for(&f);
         let checked = self.check_src(&f, text, &base);
-        if !checked.errors.is_empty() {
-            let lines: Vec<String> = checked.errors.iter().take(10).map(|d| d.render()).collect();
+        if !checked.errors.is_empty() || !checked.authoring.is_empty() {
+            let lines: Vec<String> = checked.errors.iter().chain(checked.authoring.iter()).take(10).map(|d| d.render()).collect();
             return Err(ZenError::BadRequest(format!("the page has errors, nothing was written: {}", lines.join(" | "))));
         }
         Ok(g.id)

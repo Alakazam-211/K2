@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as J};
 use toml_edit::{Item, TableLike, Value};
 
+#[path = "schema_phone.rs"]
+mod phone_check;
+
 /// The only schema this K2 reads.
 pub const SCHEMA_VERSION: i64 = 1;
 /// Garden 1's page template (the texting page).
@@ -225,7 +228,7 @@ pub const THEME_TABLES: &[&str] =
 /// background image lives next to the bundle's own file.
 pub const BUNDLE_TABLES: &[&str] = &["background"];
 /// Top-level keys that only a Garden file may carry (G38).
-pub const PAGE_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls", "caps"];
+pub const PAGE_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "controls", "caps", "phone"];
 /// The warning for `[[control]]` in a Garden file (prd-zen-freeform-chrome
 /// FC52): a Garden places its controls with `[[widget]]` (chrome kinds), so
 /// this table does nothing. A warning, not an error, so old files load.
@@ -759,6 +762,12 @@ pub struct Checked {
     pub layer: Layer,
     pub errors: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
+    /// Findings that refuse new text but only warn about text already live
+    /// (also in `warnings`): a `[phone]` that no longer fits its template.
+    /// A K2 update may move a template under a good Garden file, and that
+    /// must never turn the file into an error, while an agent writing a bad
+    /// id against today's template should be told no (`check_garden_put`).
+    pub authoring: Vec<Diagnostic>,
     /// `(line, col)` of each layer key, for checks that need the disk
     /// (the background image) to point at the line that named it.
     pub positions: BTreeMap<String, (usize, usize)>,
@@ -1382,6 +1391,10 @@ fn check_with(
                 page_pos.get_or_insert(pos);
                 check_layout(&mut ctx, item, pos);
             }
+            "phone" => {
+                page_pos.get_or_insert(pos);
+                phone_check::check_phone(&mut ctx, item, pos);
+            }
             "widget" => {
                 page_pos.get_or_insert(pos);
                 check_widgets(&mut ctx, item, pos);
@@ -1434,7 +1447,7 @@ fn check_with(
             other => {
                 let mut allowed: Vec<&str> = vec!["schema"];
                 if kind == FileKind::Garden {
-                    allowed.extend_from_slice(&["template", "layout", "widget"]);
+                    allowed.extend_from_slice(&["template", "layout", "widget", "phone"]);
                 }
                 allowed.extend_from_slice(THEME_TABLES);
                 if kind == FileKind::Theme {
@@ -1745,7 +1758,19 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
 /// A custom widget's `config` (UW7): a table of strings, numbers and
 /// booleans, at most [`MAX_CONFIG_BYTES`] as JSON. K2 gives it no meaning.
 fn check_config(ctx: &mut Ctx, v: &Item, pos: (usize, usize)) -> Option<J> {
-    let Some(t) = require_table(ctx, v, pos, "widget.props.config") else { return None };
+    let out = config_values(ctx, v, pos, "widget.props.config")?;
+    let size = J::Object(out.clone()).to_string().len();
+    if size > MAX_CONFIG_BYTES {
+        ctx.error(pos, format!("config is {size} bytes as JSON; a custom widget's config is at most {MAX_CONFIG_BYTES} (4 KB)"));
+        return None;
+    }
+    Some(J::Object(out))
+}
+
+/// The values of a `config` table (strings, numbers, booleans). `None` when
+/// any isn't one, after reporting each.
+fn config_values(ctx: &mut Ctx, v: &Item, pos: (usize, usize), name: &str) -> Option<Map<String, J>> {
+    let t = require_table(ctx, v, pos, name)?;
     let mut out = Map::new();
     let mut ok = true;
     for (k, item) in t.iter() {
@@ -1767,12 +1792,7 @@ fn check_config(ctx: &mut Ctx, v: &Item, pos: (usize, usize)) -> Option<J> {
             }
         }
     }
-    let size = J::Object(out.clone()).to_string().len();
-    if size > MAX_CONFIG_BYTES {
-        ctx.error(pos, format!("config is {size} bytes as JSON; a custom widget's config is at most {MAX_CONFIG_BYTES} (4 KB)"));
-        ok = false;
-    }
-    ok.then_some(J::Object(out))
+    ok.then_some(out)
 }
 
 /// One `[[widget]]` after the walk, for the page-wide rules.
@@ -2491,7 +2511,7 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
         .to_string();
     let file_layout = ctx.out.layer.get("page.layout").cloned();
     let file_widgets = ctx.out.layer.get("page.widgets").cloned();
-    if file_layout.is_none() && file_widgets.is_none() {
+    if file_layout.is_none() && file_widgets.is_none() && !ctx.out.layer.contains_key("page.phone") {
         return;
     }
     let tpl = match ctx.defaults {
@@ -2616,6 +2636,14 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
             }
         }
     }
+    // Chrome is the file's when it places any, else the template's.
+    let chrome: Vec<J> = if file_chrome.is_empty() {
+        tpl["chrome"]["items"].as_array().cloned().unwrap_or_default()
+    } else {
+        file_chrome.iter().map(|(_, w)| w.clone()).collect()
+    };
+    let content: Vec<J> = widgets.iter().map(|(_, w)| w.clone()).collect();
+    phone_check::cross_check_phone(ctx, at, &content, &chrome, from_file);
 }
 
 /// prd-garden-column-collapse A1 (CA9): a folded column hides everything in

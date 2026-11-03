@@ -921,3 +921,35 @@ fn a_manifest_only_change_is_a_new_unsigned_version_on_every_door() {
     assert_eq!(d1["signed"], false, "an unlisted agent's manifest put never signs for this Garden: {d1}");
     assert_eq!(d1["caps"], json!(["agents:read"]), "{d1}");
 }
+
+// ── a Garden's mobile layout (contract-gardens-phone rev 2 §A.2) ─────
+
+/// `[phone]` is authored like any other part of a Garden: on the Garden's
+/// list, or refused with the card that asks. There is no route of its own.
+#[test]
+fn a_phone_layout_needs_garden_access() {
+    let e = env();
+    let with_phone = format!("{PAGE}\n[[phone.screen]]\n[[phone.screen.widget]]\nid = \"b1\"\n");
+    let before = disk(&e.f, &e.g1);
+    let (s, v) = zen("/cli/zen/garden/put", false, &agent("w-ed"), json!({"garden": e.g1, "text": with_phone}));
+    assert_eq!(s, "403 Forbidden", "{v}");
+    needed(&v, &e.g1);
+    assert_eq!(disk(&e.f, &e.g1), before, "nothing written, nothing proposed");
+    assert!(e.f.resolve(Some(&e.g1)).expect("resolve")["page"].get("phone").is_none(), "nothing reached the page");
+
+    list(&e.g1, "w-ed");
+    let (s, v) = zen("/cli/zen/garden/put", false, &agent("w-ed"), json!({"garden": e.g1, "text": with_phone}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(e.f.resolve(Some(&e.g1)).expect("resolve")["page"]["phone"]["screens"][0]["widgets"][0]["id"], "b1");
+    assert!(events(&e.g1).iter().any(|ev| ev.kind == ga::EventKind::Changed), "it's in the Garden's History");
+
+    // On the list, a bad shape is still refused, and a locked Garden still is.
+    let bad = format!("{PAGE}\n[[phone.screen]]\n[[phone.screen.widget]]\nid = \"nope\"\n");
+    let (s, v) = zen("/cli/zen/garden/put", false, &agent("w-ed"), json!({"garden": e.g1, "text": bad}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("phone screen 1 names widget 'nope', which is not on this page")), "{v}");
+    assert_eq!(disk(&e.f, &e.g1), with_phone, "nothing written");
+    e.f.set_garden_lock(&e.g1, true).expect("lock");
+    let (s, v) = zen("/cli/zen/garden/put", false, &agent("w-ed"), json!({"garden": e.g1, "text": PAGE}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("423 Locked", Some("garden_locked")), "{v}");
+}

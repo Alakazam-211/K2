@@ -1604,3 +1604,62 @@ async fn gs52_agent_passport_is_refused() {
     }
     k2_core::test_env::remove_test_dir(&tmp);
 }
+
+// ── a Garden's mobile layout (contract-gardens-phone rev 2 §A.5) ────────
+
+const PHONE_ON_TEXTING: &str = "schema = 1\n[[phone.screen]]\nlabel = \"People\"\n[[phone.screen.widget]]\nid = \"agents\"\n[[phone.screen]]\n[[phone.screen.widget]]\nid = \"conversation\"\n";
+
+/// `[phone]` rides sync, a lock and a move to an own copy unchanged, and a K2
+/// update that takes a widget off a template never makes the file an error:
+/// a synced Garden leaves the id out, an own copy keeps the page it had.
+#[test]
+fn a_phone_layout_survives_sync_and_a_template_moving_under_it() {
+    let (_t, z) = temp_dir("phone");
+    let f = ZenFiles::with_defaults(&z, fake_set(|_| {}));
+    f.setup().expect("setup");
+    let synced_one = gid(&f, 0);
+    write_garden(&f, &synced_one, PHONE_ON_TEXTING.as_bytes());
+    let whole = json!({ "screens": [
+        { "label": "People", "widgets": [{ "id": "agents" }] },
+        { "widgets": [{ "id": "conversation" }] },
+    ] });
+    let now = resolve_now(&f, &synced_one);
+    assert_eq!(now["page"]["phone"], whole, "{}", now["page"]);
+    assert_eq!(now["errors"], json!([]), "{}", now["errors"]);
+
+    // Own copy and back: the file and the layout stay.
+    f.set_garden_sync(&synced_one, Parts::Both, false).expect("own copy");
+    assert_eq!(resolve_now(&f, &synced_one)["page"]["phone"], whole);
+    f.set_garden_sync(&synced_one, Parts::Both, true).expect("synced again");
+    assert_eq!(resolve_now(&f, &synced_one)["page"]["phone"], whole);
+    assert_eq!(std::fs::read(f.path_of(&ZenFile::Garden(synced_one.clone()))).expect("file"), PHONE_ON_TEXTING.as_bytes(), "never rewritten");
+
+    // A second Garden kept as its own copy of today's template.
+    let copy = new_garden(&f, "mine", "texting", Some(PHONE_ON_TEXTING));
+    f.set_garden_sync(&copy, Parts::Both, false).expect("own copy");
+
+    // A lock freezes the layout with the rest of the file.
+    let locked = new_garden(&f, "locked", "texting", Some(PHONE_ON_TEXTING));
+    f.set_garden_lock(&locked, true).expect("lock");
+    assert_eq!(resolve_now(&f, &locked)["page"]["phone"], whole);
+
+    // The next release renames the template's Conversation.
+    let moved = ZenFiles::with_defaults(
+        &z,
+        fake_set(|s| {
+            let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
+            *t = t.replace("id = \"conversation\"", "id = \"talk\"").replace("widget = \"conversation\"", "widget = \"talk\"");
+        }),
+    );
+    let after = resolve_now(&moved, &synced_one);
+    assert_eq!(after["errors"], json!([]), "a K2 update never makes this an error: {}", after["errors"]);
+    assert_eq!(after["warnings"][0]["message"], "phone screen 2 names widget 'conversation', which is not on this page", "{}", after["warnings"]);
+    assert_eq!(after["page"]["phone"], json!({ "screens": [{ "label": "People", "widgets": [{ "id": "agents" }] }] }), "the id and its empty screen went");
+    assert_eq!(std::fs::read(moved.path_of(&ZenFile::Garden(synced_one.clone()))).expect("file"), PHONE_ON_TEXTING.as_bytes(), "the file itself is untouched");
+    assert_eq!(resolve_now(&moved, &copy)["page"]["phone"], whole, "an own copy keeps the page it had");
+    // Writing the same text today is refused: it names a widget that isn't there.
+    match moved.check_garden_put(&synced_one, PHONE_ON_TEXTING, false) {
+        Err(ZenError::BadRequest(m)) => assert!(m.contains("names widget 'conversation'"), "{m}"),
+        other => panic!("want a refusal, got {other:?}"),
+    }
+}

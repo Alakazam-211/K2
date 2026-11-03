@@ -1232,6 +1232,53 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
 /// 0.46.8: an agent runs its App's users end to end. It starts a reset (K2 mails
 /// the person, the agent never gets the link), takes a pending link back, clears a
 /// lockout, and reads what happened in the App's own record.
+/// A guess, unlock, repeat loop is bounded: an agent clears one login's lockout
+/// [`AGENT_UNLOCKS_PER_HOUR`] times an hour. A clear that found nothing doesn't
+/// count, another login has its own count, and the owner has no cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agents_unlocks_of_one_login_are_capped_per_hour() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    let lock = |u: &str| {
+        skin_db()
+            .execute("INSERT OR REPLACE INTO login_lockouts (username, failed_count, locked_until) VALUES (?1, 3, ?2)", rusqlite::params![u, chrono::Utc::now().timestamp() + 900])
+            .expect("a lockout");
+    };
+    let locked = |u: &str| count("SELECT COUNT(*) FROM login_lockouts WHERE username = ?1", &[&u]) == 1;
+    let (u, other) = (format!("u{tag}"), format!("o{tag}"));
+    for name in [&u, &other] {
+        let r = post(port, "/cli/skin/users", &agent, json!({ "username": name, "app": shop })).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+
+    for i in 0..k2_daemon::skin_routes::AGENT_UNLOCKS_PER_HOUR {
+        lock(&u);
+        let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
+        assert_eq!(r.status, 200, "unlock {i}: {}", r.body);
+        assert_eq!(r.json()["cleared"], json!(true), "{}", r.body);
+        // Nothing to clear: doesn't count against the person.
+        let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
+        assert_eq!(r.json()["cleared"], json!(false), "{}", r.body);
+    }
+    lock(&u);
+    let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
+    assert_eq!((r.status, r.code()), (429, "unlock_limit".to_string()), "{}", r.body);
+    assert!(locked(&u), "the lockout stands");
+
+    lock(&other);
+    let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": other })).await;
+    assert_eq!(r.status, 200, "another login has its own count: {}", r.body);
+    let r = post(port, "/cli/skin/users/unlock", OWNER, json!({ "username": u })).await;
+    assert_eq!(r.status, 200, "the owner has no cap: {}", r.body);
+    assert!(!locked(&u));
+}
+
 /// A set-password page was on one of the App's hosts when it was set; a domain can
 /// lapse. Whoever holds the name next gets no tokens: the check runs at send time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

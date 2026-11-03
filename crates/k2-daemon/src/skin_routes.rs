@@ -485,6 +485,10 @@ pub fn agent_scoped(
         // differently for an agent get its workspace.
         // The write marks the row it wrote, in its own transaction
         // (`skin::guest_rooms::written_by`), never a name from this body.
+        let unlock_of = (path == "/cli/skin/users/unlock").then(|| unlock_key(body)).flatten();
+        if unlock_of.as_deref().is_some_and(|k| agent_unlocks_used(k) >= AGENT_UNLOCKS_PER_HOUR) {
+            return agent_unlock_limit_response();
+        }
         let before = write_apps(path, body, Some(ws));
         let r = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Agent(actor.to_string()), || match path {
             "/cli/skin/users/rooms" => users_rooms(body, actor, Some(ws)),
@@ -493,6 +497,9 @@ pub fn agent_scoped(
             _ => handler(body, actor),
         });
         audit_write(path, body, actor, Some(ws), before, &r);
+        if let Some(key) = unlock_of.as_deref().filter(|_| r.status.starts_with("200") && r.body.contains("\"cleared\":true")) {
+            count_agent_unlock(key);
+        }
         if r.status.starts_with("200") && matches!(path, "/cli/skin/users/rooms" | "/cli/skin/roles/assign") {
             return with_waiting(r, body);
         }
@@ -502,6 +509,53 @@ pub fn agent_scoped(
     let r = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || handler(body, actor));
     audit_write(path, body, actor, None, before, &r);
     r
+}
+
+/// How many lockouts an agent may clear on one login in an hour. A lockout
+/// takes 3 wrong passwords and ends by itself after 15 minutes, so someone guessing
+/// gets 12 tries an hour alone; with this an agent's unlocks add at most 18. A
+/// helpdesk doesn't clear the same person seven times in an hour. The owner and an
+/// Admin have no cap. Kept in memory: a daemon restart starts the count again.
+pub const AGENT_UNLOCKS_PER_HOUR: usize = 6;
+
+fn agent_unlocks() -> &'static std::sync::Mutex<HashMap<String, Vec<std::time::Instant>>> {
+    static U: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<std::time::Instant>>>> = std::sync::OnceLock::new();
+    U.get_or_init(Default::default)
+}
+
+/// The login an unlock is about, however it was named (its email counts the same).
+fn unlock_key(body: &[u8]) -> Option<String> {
+    let v = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let named = str_field(&v, &["username", "name"])?;
+    Some(skin::login_principal_username(named).ok().flatten().unwrap_or_else(|| named.trim().to_ascii_lowercase()))
+}
+
+fn agent_unlocks_used(key: &str) -> usize {
+    let mut all = agent_unlocks().lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|_, at| {
+        at.retain(|t| t.elapsed() < std::time::Duration::from_secs(3600));
+        !at.is_empty()
+    });
+    all.get(key).map_or(0, Vec::len)
+}
+
+fn count_agent_unlock(key: &str) {
+    agent_unlocks().lock().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).or_default().push(std::time::Instant::now());
+}
+
+fn agent_unlock_limit_response() -> CliResponse {
+    CliResponse {
+        status: "429 Too Many Requests",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "unlock_limit",
+                "hint": format!("you've cleared this login's lockout {AGENT_UNLOCKS_PER_HOUR} times in the last hour: it's being guessed, or the person needs a reset (k2 app user reset). It ends by itself after 15 minutes; the owner can still clear it."),
+            }
+        })
+        .to_string(),
+    }
 }
 
 /// The line a write [`agent_scoped`] guards (and the add) leaves. Unlock and

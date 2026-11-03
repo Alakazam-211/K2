@@ -150,6 +150,11 @@ YOUR SERVER (never the browser):
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
+Sew's gateway socket has its own close codes, not K2's table in k2 study
+app-surfaces: 4003 identify_timeout (Sew 0.7.1) is a slow sign-in on that socket,
+never a dead pass, and Sew's kit identifies again by itself. Don't sign the
+person out on it. A call socket's 4011 says why in its reason:
+call_ended:<reason>, signed_out or deactivated.
 
 WHEN THE SAME PERSON SIGNS IN AGAIN (a reload, a new tab, your App
 restarted) and still has a live session, don't log the old one out: no

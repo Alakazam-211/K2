@@ -807,6 +807,8 @@ pub mod fake {
         pub helper_no_accept: Mutex<bool>,
         pub mgmt_health_ok: Mutex<bool>,
         pub mgmt_status: Mutex<Value>,
+        /// The version `GET /mgmt/v1/status` reports, over the one on disk.
+        pub mgmt_version: Mutex<Option<String>>,
         pub mgmt_calls: Mutex<Vec<String>>,
         /// "METHOD path" → queued mgmt answers (before the canned ones).
         pub mgmt_answers: Mutex<HashMap<String, VecDeque<Result<Value, MgmtError>>>>,
@@ -917,11 +919,15 @@ pub mod fake {
     pub const TESTBUILD: &str = "testbuild";
 
     /// Why the helper or real Sew would refuse this `media install` body.
-    fn sew_refuses_media_input(stdin: Option<&[u8]>) -> Option<String> {
+    fn sew_refuses_media_input(stdin: Option<&[u8]>, sew_version: &str) -> Option<String> {
         let req: k2_root_proto::sew::MediaRequest = match serde_json::from_slice(stdin.unwrap_or(b"{}")) {
             Ok(r) => r,
             Err(e) => return Some(format!("invalid --config-json: {e}")),
         };
+        // New in Sew 0.7.1: an older Sew's inputs don't have the key.
+        if req.turn_trusted_cidrs.is_some() && !k2_root_proto::sew::sew_takes_trusted_cidrs(sew_version) {
+            return Some("invalid --config-json: unknown field `turn_trusted_cidrs`".to_string());
+        }
         let turn = req.has_turn_tls().then_some(("/stage/turn.crt", "/stage/turn.key"));
         serde_json::from_value::<k2_root_proto::sew::SewMediaInstallInputs>(req.sew_inputs(Some("/stage/media.tgz"), turn))
             .err()
@@ -964,6 +970,7 @@ pub mod fake {
                 served_connects: Mutex::new(Vec::new()),
                 api_health_q: Mutex::new(VecDeque::new()),
                 api_health_n: Mutex::new(0),
+                mgmt_version: Mutex::new(None),
                 mgmt_status: Mutex::new(json!({
                     "provider": "k2",
                     "version": format!("{pin}+g1234567"),
@@ -1426,7 +1433,8 @@ pub mod fake {
             // As the real pair does: the helper's MediaRequest, then Sew's
             // `MediaInstallInputs` (exit 2 on an unknown key or a wrong type).
             if joined.starts_with("engine sew media install") || joined.starts_with("engine sew media reconfigure") {
-                if let Some(reason) = sew_refuses_media_input(stdin) {
+                let version = self.mgmt_version.lock().unwrap().clone().unwrap_or_else(|| k2_root_proto::sew::pinned().version.to_string());
+                if let Some(reason) = sew_refuses_media_input(stdin, &version) {
                     return Ok(json!({"sewExit": 2, "reason": reason}));
                 }
             }
@@ -1539,6 +1547,9 @@ pub mod fake {
                     let mut st = self.mgmt_status.lock().unwrap().clone();
                     if let Some(v) = self.on_disk.lock().unwrap().clone() {
                         st["version"] = json!(format!("{v}+g1234567"));
+                    }
+                    if let Some(v) = self.mgmt_version.lock().unwrap().clone() {
+                        st["version"] = json!(v);
                     }
                     Ok(st)
                 }

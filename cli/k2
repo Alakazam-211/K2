@@ -11041,6 +11041,11 @@ YOUR SERVER (never the browser):
 Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
 calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
 on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
+Sew's gateway socket has its own close codes, not K2's table in k2 study
+app-surfaces: 4003 identify_timeout (Sew 0.7.1) is a slow sign-in on that socket,
+never a dead pass, and Sew's kit identifies again by itself. Don't sign the
+person out on it. A call socket's 4011 says why in its reason:
+call_ended:<reason>, signed_out or deactivated.
 
 WHEN THE SAME PERSON SIGNS IN AGAIN (a reload, a new tab, your App
 restarted) and still has a live session, don't log the old one out: no
@@ -11112,7 +11117,7 @@ _study_page_chat_voice() {
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew),
-powered by Sew; this K2 pins Sew 0.6.1. Your App gets ONE Space, bound to
+powered by Sew; this K2 pins Sew 0.7.1. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
 encrypted. Hearth (Sew's own client) is optional: nothing here needs it;
@@ -11304,7 +11309,7 @@ LIMITS (Sew 0.5.0). 5,000 channels per Space, archived included (about
 default channels · 100 members per create or add · names 1–100 characters
 · no delete, no public↔private, no type change. K2 sets no App quotas.
 K2's door: request heads over 64 KiB → 431; 120 writes a minute per
-visitor per App (the Owner: k2 firewall guard). Sew 0.6.1, this K2's
+visitor per App (the Owner: k2 firewall guard). Sew 0.7.1, this K2's
 pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
 DM calls, upload and message-rate quotas) and the unbound-Space gaps.
 
@@ -12732,7 +12737,8 @@ k2 app sdk — K2's server SDK (and Sew's) inside your App folder
         --sew does all that AND copies Sew's packages (this box needs Sew
         0.5.0+): @sew/client (Sew's API), @sew/channel (chat), @sew/voice
         (voice and video calls), @sew/e2ee (call encryption), @sew/bff
-        (your server's side). It pins their links to each other in npm
+        (your server's side), and from Sew 0.7.1 @sew/noise (the mic noise
+        filter @sew/voice uses). It pins their links to each other in npm
         "overrides" and prints an npm i line for what comes from the npm
         registry (React, LiveKit, …): run that line instead of npm
         install. Adding --sew later to an App that has @k2/server is

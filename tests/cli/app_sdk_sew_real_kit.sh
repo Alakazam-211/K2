@@ -70,8 +70,18 @@ expect_eq "the box keeps the pinned kit" "$(printf '%s' "$out" | python3 -c 'imp
 out="$(k2 app sdk add "$APP" --sew --json)"
 printf '%s\n' "$out" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("    vendored:", [r["file"] for r in v["vendored"]]); print("    install:", v.get("install"))'
 expect_eq "--sew vendors the kit's version" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("sew"))')" "$KIT_V"
-expect_eq "@k2/server + the five Sew packages" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["vendored"]))')" "6"
+# The kit's own list: five packages to 0.6.x, and 0.7.1 adds @sew/noise.
+KIT_PKGS="$(python3 -I -c 'import json,sys,tarfile
+t=tarfile.open(sys.argv[1])
+m=next(n for n in t.getnames() if n=="kit.json" or n.endswith("/kit.json"))
+print(" ".join(p["name"].removeprefix("@sew/") for p in json.load(t.extractfile(m))["packages"]))' "$KIT")"
+echo "    kit packages: $KIT_PKGS"
 for p in client voice channel e2ee bff; do
+    case " $KIT_PKGS " in *" $p "*) ok "the kit has @sew/$p" ;; *) bad "the kit has no @sew/$p" ;; esac
+done
+want_vendored=$(( 1 + $(printf '%s\n' $KIT_PKGS | wc -l) ))
+expect_eq "@k2/server + every package in the kit" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["vendored"]))')" "$want_vendored"
+for p in $KIT_PKGS; do
     [ -f "$APP/vendor/sew-$p-$KIT_V.tgz" ] && ok "vendor/sew-$p-$KIT_V.tgz" || bad "vendor/sew-$p-$KIT_V.tgz missing"
 done
 INSTALL="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("install") or "")')"
@@ -84,7 +94,7 @@ if [ -n "$INSTALL" ]; then
     # The line K2 printed for the kit's peers (e.g. npm i livekit-client@… react@^19 …).
     ( cd "$APP" && eval "$INSTALL --no-audit --no-fund --loglevel=error" >"$SANDBOX/npm-peers.log" 2>&1 ) && ok "the printed install line: $INSTALL" || { bad "the printed install line: $INSTALL"; tail -40 "$SANDBOX/npm-peers.log" >&2; }
 fi
-for p in client voice channel e2ee bff; do
+for p in $KIT_PKGS; do
     v="$(cd "$APP" && node -p "require('./node_modules/@sew/$p/package.json').version" 2>/dev/null || true)"
     expect_eq "@sew/$p installed at $KIT_V" "$v" "$KIT_V"
 done

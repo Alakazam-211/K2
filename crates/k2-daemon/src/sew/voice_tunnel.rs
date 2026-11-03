@@ -24,10 +24,12 @@
 //!   --relay-only --turn-tls passthrough` (`relay_only = true`, `turn_tls`),
 //!   `turn_domain`, `bind_v4 = 127.0.0.1` (UDP 7882 / TCP 7881 off the
 //!   network) and NO `node_ip` (Sew writes 127.0.0.1 itself; the engine's only
-//!   host candidate is loopback, reachable by its own TURN). No
-//!   `turn_trusted_cidrs`: not an install key on Sew 0.6.x or 0.7.0 (an unknown
-//!   key fails the install with exit 2), and Sew's default is loopback only,
-//!   which is where frpc-voice dials from. Back in direct mode:
+//!   host candidate is loopback, reachable by its own TURN). On Sew 0.7.1 and
+//!   later also `turn_trusted_cidrs` ([`TUNNEL_TRUSTED_CIDRS`], M7: the PROXY
+//!   sources, where frpc-voice dials from). Not on an older Sew: an unknown key
+//!   fails the install with exit 2, and its default is loopback anyway. A
+//!   reconfigure keeps the list, so the way back to direct leaves it. Back in
+//!   direct mode:
 //!   `relay_only = false`, `bind_v4 = 0.0.0.0`, the node IP. Sew refuses
 //!   relay-only with tier plain/off (exit 78, [`sew_media`] names it); K2
 //!   never sends it.
@@ -36,7 +38,7 @@
 
 use serde_json::{json, Value};
 
-use k2_root_proto::sew::{MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, UNIT_MEDIA};
+use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOOPBACK, SEW_EXIT_RELAY_ONLY_REFUSED, TUNNEL_TRUSTED_CIDRS, UNIT_MEDIA};
 
 use super::supervisor::{self as sup, no, Env, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
@@ -85,6 +87,14 @@ pub fn sew_features(env: &Env) -> Result<Vec<String>, String> {
         .unwrap_or_default())
 }
 
+/// Does the Sew running here take `turn_trusted_cidrs` (0.7.1 on)? From its
+/// live `GET /mgmt/v1/status`, never the pin: a box mid-way between two pins
+/// answers for what it actually runs.
+pub fn takes_trusted_cidrs(env: &Env) -> R<bool> {
+    let st = sup::mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| no("mgmt_unreachable", 503, format!("Sew's version: {e}")))?;
+    Ok(st.get("version").and_then(Value::as_str).is_some_and(sew_takes_trusted_cidrs))
+}
+
 /// Root helper protocol 12 with `namespaces.sewtunnel` (an older helper
 /// refuses the new media keys).
 pub fn helper_ok(env: &Env) -> bool {
@@ -126,9 +136,10 @@ pub fn ready(env: &Env) -> R<()> {
     Ok(())
 }
 
-/// The Sew keys the tunnel tier sets (§6.6 M5/M9), plus the cert pair. Sew
-/// refuses any other key: `voice_tunnel_tests` pin this list.
-pub fn media_keys(host: &str, chain: &str, key_pem: &str) -> Value {
+/// The Sew keys the tunnel tier sets (§6.6 M5/M7/M9), plus the cert pair. Sew
+/// refuses any other key: `voice_tunnel_tests` pin this list. `trusted`:
+/// [`takes_trusted_cidrs`].
+pub fn media_keys(host: &str, chain: &str, key_pem: &str, trusted: bool) -> Value {
     let mut v = json!({
         "turn_tls": voice::TIER_PASSTHROUGH,
         "turn_domain": host,
@@ -140,6 +151,9 @@ pub fn media_keys(host: &str, chain: &str, key_pem: &str) -> Value {
     });
     if let Some(ip) = node_ip() {
         v["node_ip"] = json!(ip);
+    }
+    if trusted {
+        v["turn_trusted_cidrs"] = json!(TUNNEL_TRUSTED_CIDRS);
     }
     v
 }
@@ -294,7 +308,7 @@ pub fn install_steps(env: &Env, label: &str, url: &str, mut st: VoiceState) -> R
     voice::save(env, &mut st);
 
     voice::step(env, "install");
-    let mut body = media_keys(&h, &chain, &key_pem);
+    let mut body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
     body["public_url"] = json!(url);
     body["udp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_UDP_PORT);
     body["tcp_port"] = json!(k2_root_proto::sew::SEW_MEDIA_TCP_PORT);
@@ -374,7 +388,7 @@ pub fn move_in(env: &Env, st: VoiceState) -> R<Value> {
     let dns_label = st.label.clone().unwrap_or_else(|| label.clone());
     let (chain, key_pem) = issue_or_reuse(env, &label, &mut st)?;
     voice::save(env, &mut st);
-    let body = media_keys(&h, &chain, &key_pem);
+    let body = media_keys(&h, &chain, &key_pem, takes_trusted_cidrs(env)?);
     sew_media(env, &["media", "reconfigure", "restart-now"], &body, "media_reconfigure_failed")?;
     voice::update(env, |s| {
         s.turn_tier = Some(TIER_TUNNEL.to_string());

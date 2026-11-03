@@ -32,8 +32,8 @@
 //! **Every origin (0.46.8):** `origin` is one host, the App's primary, so a
 //! person on any other host of the App gets a signalling URL on the wrong
 //! host. K2 keeps the whole list (`origins`, primary first) and sends it only
-//! once Sew reports `app_origins`. Sew 0.6.1 doesn't: its request type denies
-//! unknown fields, so until then only `origin` goes.
+//! once Sew reports `app_origins`. Sew 0.7.1 doesn't (that is 0.7.2): its request
+//! type denies unknown fields, so until then only `origin` goes.
 //!
 //! **The chat key (App-governed Spaces S1, Sew 0.6.0 I7):** an App's
 //! `max_level` (`member | moderator | admin`) and `uploads` (bool) come
@@ -234,7 +234,7 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
                 out.insert("display_name".into(), v.clone());
             }
         }
-        // Never before the flag: Sew 0.6.1 refuses the whole body over it.
+        // Never before the flag: Sew 0.7.1 refuses the whole body over it.
         if has(features::APP_ORIGINS) {
             if let Some(v) = body.get("origins").filter(|v| v.is_array()) {
                 out.insert("origins".into(), v.clone());
@@ -432,7 +432,7 @@ mod tests {
             Some(json!({"display_name": "Jobs", "origin": null})),
             "a null origin clears in Sew"
         );
-        // 0.46.8: the whole list waits for its own flag (Sew 0.6.1 reports
+        // 0.46.8: the whole list waits for its own flag (Sew 0.7.1 reports
         // app_origin and denies unknown fields).
         let many = obj(json!({"display_name": "Jobs", "origin": "wss://a.example.com", "origins": ["wss://a.example.com", "wss://b.example.com"]}));
         assert_eq!(

@@ -6,7 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.8
 
 ### When you update
-- **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
+- **Going back to Sew 0.6.1 after upgrading to 0.7.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.1 changes Sew's data.
 - **Outside mail forwards still waiting for a confirm:** K2 no longer asks for one. Those set in the 7 days before you update turn on by themselves over a few minutes, and each address gets an email first with a link to stop it. Older ones stay off and send nothing until someone sets them again (`k2 hostmail forward add`). You get one notice listing both, and `k2 hostmail forward list` shows them.
 - **Access changes reach signed-in people at their next request.** A role, room or cap you changed sometimes waited until the person signed in again. Now adding and removing both apply at once, so the `--apply-tokens` flag on `k2 app user rooms` is gone.
 - **`guests-rooms` approvals you already gave still don't open those rooms to logins an agent set up.** Those logins keep their App's own room until the person uses a reset link on K2's own page. You don't need to do anything.
@@ -46,7 +46,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Chat and voice (Sew)
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
-- **K2 now installs and upgrades to Sew 0.6.1,** with fixes on 0.6.0 and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.6.1.
+- **K2 now installs and upgrades to Sew 0.7.1,** with chat connection and encrypted call fixes and nothing new to turn on. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.7.1.
+- **Sew's App kit filters microphone noise by default.** Run `k2 app sdk add <app-folder> --sew` again to get it, then the `npm i` line it prints. It falls back to the browser's own filter if it can't load.
+- **Renaming, archiving or bringing back a channel in an App-governed Space works now.** K2 sent Sew a field it refuses on those three changes, so they failed.
 - **An agent with Manage Chat / Voice Hosting on now gets its own chat account,** so it can create and run a Space without a second ask. An agent without the switch can ask for an account on a permission card.
 
 ### Threads

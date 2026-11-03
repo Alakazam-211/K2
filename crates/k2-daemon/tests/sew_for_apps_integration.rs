@@ -319,7 +319,7 @@ async fn home_settings_follow_sews_feature_flags_never_its_version() {
 }
 
 /// 0.46.8: every live origin of an App reaches Sew, but only a Sew that
-/// reports `app_origins`. Sew 0.6.1 denies unknown fields, so sending it the
+/// reports `app_origins`. Sew 0.7.1 denies unknown fields, so sending it the
 /// list early would get the App's whole settings row refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_origin_goes_only_once_sew_takes_the_list() {
@@ -336,7 +336,7 @@ async fn every_origin_goes_only_once_sew_takes_the_list() {
     drain(&env).await;
     let held = env.sew.app_settings(&jobs).unwrap();
     assert_eq!(held["origin"], serde_json::json!("wss://jobs.example.com"));
-    assert_eq!(held.get("origins"), None, "Sew 0.6.1 never sees the field: {held}");
+    assert_eq!(held.get("origins"), None, "Sew 0.7.1 never sees the field: {held}");
     assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered), "and nothing is blocked over it");
     env.sew.assert_clean();
 

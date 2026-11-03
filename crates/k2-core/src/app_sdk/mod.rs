@@ -451,7 +451,7 @@ pub fn status(folder: &Path, sew_on_box: Option<&str>) -> Result<Vec<StatusRow>,
     };
     let mut rows = Vec::new();
     let names: Vec<(&str, Option<&str>)> = std::iter::once((k2_server::NAME, Some(k2_server::version())))
-        .chain(sew_kit::PACKAGES.iter().map(|n| (*n, sew_on_box)))
+        .chain(sew_kit::PACKAGES.iter().chain(&sew_kit::LATER_PACKAGES).map(|n| (*n, sew_on_box)))
         .collect();
     for (name, on_box) in names {
         let stem = vendored_file_name(name, "").trim_end_matches(".tgz").to_string();

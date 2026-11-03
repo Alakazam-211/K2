@@ -1,6 +1,7 @@
 //! Sew's App kit (`sew-app-kit-<v>.tar.gz`, Sew 0.5.0 on): the npm-pack
 //! tarballs of `@sew/client`, `@sew/voice`, `@sew/channel`, `@sew/e2ee` and
-//! `@sew/bff`, with `SHA256SUMS`, `NOTICES` and a `kit.json` manifest.
+//! `@sew/bff` (from 0.7.1 also `@sew/noise`), with `SHA256SUMS`, `NOTICES` and a
+//! `kit.json` manifest.
 //!
 //! **Trust.** The kit's own sha256 is pinned by K2 next to the Sew pin
 //! (`k2_root_proto::sew::app_kit`); [`parse`] refuses any other bytes, then
@@ -35,6 +36,9 @@ pub fn file_name(version: &str) -> String {
 }
 /// The packages every kit carries (Sew REL-050).
 pub const PACKAGES: [&str; 5] = ["@sew/client", "@sew/voice", "@sew/channel", "@sew/e2ee", "@sew/bff"];
+/// Packages later kits add (0.7.1: the mic noise filter `@sew/voice` depends
+/// on): vendored and reported like the rest, never required of an older kit.
+pub const LATER_PACKAGES: [&str; 1] = ["@sew/noise"];
 /// The first Sew release with an App kit.
 pub const MIN_SEW: &str = "0.5.0";
 

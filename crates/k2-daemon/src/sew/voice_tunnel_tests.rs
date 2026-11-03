@@ -132,6 +132,71 @@ fn the_test_sew_refuses_a_key_real_sew_would() {
     }
 }
 
+/// Sew 0.7.1 and later get the tunnel tier's PROXY sources, on a first install
+/// and on a move in, as the exact pair the helper takes; an older Sew never
+/// sees the key (it would fail the install with exit 2).
+#[test]
+fn the_trusted_cidrs_go_to_sew_0_7_1_and_later_only() {
+    let pair = json!(["127.0.0.1/32", "::1/128"]);
+    for v in ["0.7.1", "0.7.1+g77c5e1f", "0.7.2", "0.8.0"] {
+        let t = t();
+        *t.ops.mgmt_version.lock().unwrap() = Some(v.into());
+        t.install().unwrap_or_else(|e| panic!("{v}: {}: {}", e.code, e.hint));
+        let m = t.stdin_of(TUNNEL_INSTALL);
+        assert_eq!(m["turn_trusted_cidrs"], pair, "{v}: {m}");
+        let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(m).expect("the helper's MediaRequest parses it");
+        req.validate().expect("valid for protocol 12");
+        assert_eq!(
+            req.sew_inputs(Some("/s/m.tgz"), None)["turn_trusted_cidrs"],
+            pair,
+            "{v}: and it reaches the JSON Sew reads"
+        );
+    }
+    for v in ["0.7.0", "0.6.1", "not-a-version"] {
+        let t = t();
+        *t.ops.mgmt_version.lock().unwrap() = Some(v.into());
+        t.install().unwrap_or_else(|e| panic!("{v}: {}: {}", e.code, e.hint));
+        let m = t.stdin_of(TUNNEL_INSTALL);
+        assert!(m.get("turn_trusted_cidrs").is_none(), "{v}: {m}");
+    }
+
+    // Moving an installed engine onto the tunnel tier sends it too; the way
+    // back to direct leaves it (a reconfigure keeps it, direct doesn't read it).
+    let t = t();
+    *t.ops.mgmt_version.lock().unwrap() = Some("0.7.1".into());
+    *t.ops.tunnel_preview.lock().unwrap() = false;
+    t.install().expect("direct install");
+    let direct = t.stdin_of(TUNNEL_INSTALL);
+    assert!(direct.get("turn_trusted_cidrs").is_none(), "the direct tier never sends it: {direct}");
+    *t.ops.tunnel_preview.lock().unwrap() = true;
+    t.ops.clear();
+    set_tier_named(&t.env(), "tunnel").expect("to tunnel");
+    assert_eq!(t.stdin_of(RECONF)["turn_trusted_cidrs"], pair);
+    t.ops.clear();
+    set_tier_named(&t.env(), TIER_DIRECT).expect("to direct");
+    let back = t.stdin_of(RECONF);
+    assert!(back.get("turn_trusted_cidrs").is_none(), "{back}");
+}
+
+/// A daemon and helper on different Sew pins never reach Sew: the tunnel
+/// install and the move in both stop at the helper check and say what to do.
+#[test]
+fn a_helper_on_another_sew_pin_stops_the_tunnel_tier_cleanly() {
+    let t = t();
+    *t.ops.tunnel_preview.lock().unwrap() = false;
+    t.install().expect("direct install");
+    *t.ops.tunnel_preview.lock().unwrap() = true;
+    t.ops.clear();
+    let mut h = helper_ok(12, true, "0.6.1");
+    h.version_json.as_mut().unwrap()["namespaces"]["sewtunnel"] = json!(true);
+    *t.ops.helper.lock().unwrap() = h;
+    let e = set_tier_named(&t.env(), "tunnel").expect_err("another pin");
+    assert_eq!(e.code, "helper_outdated", "{}", e.hint);
+    assert!(e.hint.contains("pins Sew 0.6.1") && e.hint.contains("k2 root-helper update"), "{}", e.hint);
+    let calls: Vec<String> = t.ops.calls.lock().unwrap().iter().map(|c| c.argv.clone()).collect();
+    assert!(!calls.iter().any(|c| c.contains("media")), "nothing ran: {calls:?}");
+}
+
 /// S9a end to end: no TURN DNS, a `turn-tunnel` cert for `turn.<label>`
 /// with the bare label, Sew's M5/M7/M9 keys and no node IP, the voice lane
 /// armed, the served check through the relay.

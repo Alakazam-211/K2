@@ -677,6 +677,7 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
         cc: req.cc.clone(),
         bcc: req.bcc.clone(),
         policy_bcc: Vec::new(),
+        reply_to: Vec::new(),
         subject: req.subject.clone(),
         text_body: req.text.clone().unwrap_or_default(),
         in_reply_to: None,

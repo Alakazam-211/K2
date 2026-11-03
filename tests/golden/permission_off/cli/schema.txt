@@ -1158,7 +1158,7 @@ exit: 0
     },
     {
       "name": "mail send",
-      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--reply-to <addr>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
       "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) work on HOSTED and LINKED senders. Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
@@ -1169,6 +1169,7 @@ exit: 0
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address is unchanged. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
+        {"name": "--reply-to", "arg": "addr", "description": "Where answers go instead of From (repeatable, max 3). A header: nothing is sent there and it doesn't count toward the 10 recipients. Shown to your human under approval and in k2 mail outbox. HOSTED mailboxes only."},
         {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
         {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
         {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},

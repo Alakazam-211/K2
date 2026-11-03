@@ -149,6 +149,8 @@ export interface OutboundItem {
   bcc?: string[]
   /** Blind copies the owner's always-BCC policy added at send time. */
   policyBcc?: string[]
+  /** Where answers go instead of From (`--reply-to`). No mail goes there. */
+  replyTo?: string[]
   subject: string
   status: 'pending_approval' | 'approved' | 'rejected' | 'submitted' | 'failed' | string
   statusNote: string

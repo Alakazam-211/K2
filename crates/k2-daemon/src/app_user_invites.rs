@@ -549,6 +549,7 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         cc: Vec::new(),
         bcc: Vec::new(),
         policy_bcc: Vec::new(),
+        reply_to: Vec::new(),
         subject: composed.subject,
         text_body: composed.body,
         in_reply_to: None,

@@ -1485,6 +1485,11 @@ function ApprovalCard({
           <span className="font-mono"> · bcc (owner policy) {item.policyBcc?.join(', ')}</span>
         )}
       </p>
+      {(item.replyTo?.length ?? 0) > 0 && (
+        <p className="text-[10px] text-[var(--color-status-warn)] break-words">
+          Answers go to <span className="font-mono">{item.replyTo?.join(', ')}</span>, not to the sender.
+        </p>
+      )}
       <p className="text-[10px] text-[var(--color-text-muted)]">
         {item.agentName ?? 'agent'}
         {item.workspace ? ` · ${item.workspace}` : ''} · expires {fmtDate(item.expiresAt)} (auto-deny)

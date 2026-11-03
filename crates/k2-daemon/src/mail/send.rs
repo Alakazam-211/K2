@@ -63,6 +63,8 @@ pub const MAX_FROM_NAME_CHARS: usize = 128;
 /// A9), so this counts the JSON-escaped text and leaves room for the rest of
 /// the request. Attachments ride uploads and don't count.
 pub const MAX_HOSTED_TEXT_JSON_BYTES: usize = 9_500_000;
+/// Most `--reply-to` addresses on one message.
+pub const MAX_REPLY_TO: usize = 3;
 /// §8.4 loop caps.
 pub const MAX_REPLY_REFERENCES: usize = 100;
 pub const MAX_THREAD_REPLIES_PER_HOUR: usize = 4;
@@ -200,6 +202,12 @@ pub struct OutboundMessage {
     /// audited apart from [`Self::bcc`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policy_bcc: Vec<String>,
+    /// The Reply-To header (`--reply-to`), HOSTED only. A header, not a
+    /// recipient: nothing is sent there, so it is not in the envelope and
+    /// doesn't count toward the recipient cap. It steers where answers go, so
+    /// it shows in the approval view and the outbox (`reply_to_json`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reply_to: Vec<String>,
     pub subject: String,
     pub text_body: String,
     /// Reply threading (§8.4): the original's Message-ID.
@@ -529,6 +537,9 @@ pub fn submission_email_json(msg: &OutboundMessage) -> serde_json::Value {
     if !msg.cc.is_empty() {
         v["cc"] = serde_json::Value::Array(addr_list(&msg.cc));
     }
+    if !msg.reply_to.is_empty() {
+        v["replyTo"] = serde_json::Value::Array(addr_list(&msg.reply_to));
+    }
     if let Some(irt) = msg.in_reply_to.as_deref() {
         v["header:In-Reply-To:asText"] = serde_json::json!(irt);
     }
@@ -626,6 +637,24 @@ pub fn normalize_recipients(raw: &[String]) -> Result<Vec<String>, SendError> {
     Ok(out)
 }
 
+/// Validate `--reply-to`: at most [`MAX_REPLY_TO`], each a full address by the
+/// same strict rule as a recipient ([`normalize_recipients`]). This check is
+/// what keeps a line break out of the header: the mail server writes
+/// `replyTo[].email` as it gets it (tests/mail/stalwart-attachments-probe.py
+/// A8), so nothing unchecked may reach it.
+pub fn normalize_reply_to(raw: &[String]) -> Result<Vec<String>, SendError> {
+    if raw.len() > MAX_REPLY_TO {
+        return Err(SendError::Usage(format!(
+            "too many --reply-to addresses ({}) — max {MAX_REPLY_TO}",
+            raw.len()
+        )));
+    }
+    normalize_recipients(raw).map_err(|e| match e {
+        SendError::Usage(h) => SendError::Usage(h.replacen("invalid recipient", "invalid --reply-to", 1)),
+        other => other,
+    })
+}
+
 // ── The outbound store (audit rows + 0600 body files) ───────────────────
 
 /// A new audit row. `status` is the INITIAL state the gate decided
@@ -690,7 +719,7 @@ pub trait OutboundStore {
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
                              cc_json, subject, body_ref, attachments_ref, status, \
                              decided_by, note, created_at, updated_at, decided_at, sent_at, \
-                             send_after, bcc_json, policy_bcc_json";
+                             send_after, bcc_json, policy_bcc_json, reply_to_json";
 
 fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
     Ok(MailOutbound {
@@ -713,6 +742,7 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
         send_after: r.get(16)?,
         bcc_json: r.get(17)?,
         policy_bcc_json: r.get(18)?,
+        reply_to_json: r.get(19)?,
     })
 }
 
@@ -818,6 +848,7 @@ impl OutboundStore for DbOutboundStore {
         };
         let bcc_json = json_or_null(&new.message.bcc, "bcc")?;
         let policy_bcc_json = json_or_null(&new.message.policy_bcc, "policy bcc")?;
+        let reply_to_json = json_or_null(&new.message.reply_to, "reply-to")?;
         // Filenames only — basenames, never paths, never bytes (they're
         // non-secret display names). Empty leaves the column NULL.
         let attachments_ref = if new.attachment_names.is_empty() {
@@ -835,9 +866,10 @@ impl OutboundStore for DbOutboundStore {
             conn.execute(
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
                  to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
-                 decided_at, created_at, updated_at, send_after, bcc_json, policy_bcc_json) \
+                 decided_at, created_at, updated_at, send_after, bcc_json, policy_bcc_json, \
+                 reply_to_json) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, \
-                 ?15, ?16)",
+                 ?15, ?16, ?17)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -855,6 +887,7 @@ impl OutboundStore for DbOutboundStore {
                     new.send_after,
                     bcc_json,
                     policy_bcc_json,
+                    reply_to_json,
                 ],
             )
         };
@@ -1155,6 +1188,8 @@ pub fn outbound_json(row: &MailOutbound) -> serde_json::Value {
         // owner's "always BCC" policy added. Kept apart for the audit.
         "bcc": list(row.bcc_json.as_deref()),
         "policyBcc": list(row.policy_bcc_json.as_deref()),
+        // Where answers go instead of From (`--reply-to`). No mail goes there.
+        "replyTo": list(row.reply_to_json.as_deref()),
         "subject": row.subject,
         "status": wire_status(&row.status),
         "statusNote": status_note(&row.status),
@@ -1887,6 +1922,7 @@ mod tests {
             cc: vec![],
             bcc: vec![],
             policy_bcc: vec![],
+            reply_to: Vec::new(),
             subject: "Weekly digest".to_string(),
             text_body: "All green.".to_string(),
             in_reply_to: None,
@@ -2154,6 +2190,7 @@ mod tests {
             send_after: None,
             bcc_json: None,
             policy_bcc_json: None,
+            reply_to_json: None,
         };
         let v = outbound_json(&base);
         assert_eq!(v["attachments"]["count"], 2);
@@ -2314,6 +2351,7 @@ mod tests {
             send_after: None,
             bcc_json: None,
             policy_bcc_json: None,
+            reply_to_json: None,
         }
     }
 
@@ -3524,5 +3562,39 @@ mod tests {
         assert_eq!(mode, 0o600, "{mode:o}");
         assert!(write_private_new(&f, b"again").is_err(), "an id is never reused");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn normalize_reply_to_caps_and_names_the_flag() {
+        assert_eq!(normalize_reply_to(&["A@B.example".to_string()]).unwrap(), vec!["a@b.example"]);
+        let four: Vec<String> = (0..4).map(|i| format!("r{i}@x.example")).collect();
+        assert!(matches!(normalize_reply_to(&four), Err(SendError::Usage(h)) if h.contains("max 3")));
+        match normalize_reply_to(&["a@b.example\r\nBcc: c@d.example".to_string()]) {
+            Err(SendError::Usage(h)) => assert!(h.contains("--reply-to"), "{h}"),
+            other => panic!("expected a refusal: {other:?}"),
+        }
+    }
+
+    /// The header goes to the engine as a structured list, next to the rest.
+    #[test]
+    fn on_mode_reply_to_reaches_the_engine_as_a_header_not_a_recipient() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let mut m = unique_from(msg());
+        m.reply_to = vec!["answers@acme.dev".to_string()];
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let SendOutcome::Submitted { id } = gate_and_dispatch(&store, Some(&client), Gate::On, &req, now_unix()).expect("dispatch") else {
+            panic!("expected a submit")
+        };
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.created[0]["replyTo"], serde_json::json!([{ "email": "answers@acme.dev" }]), "{}", st.created[0]);
+        let rcpt = st.envelopes[0]["rcptTo"].to_string();
+        assert!(!rcpt.contains("answers@acme.dev"), "{rcpt}");
+        drop(st);
+        assert_eq!(outbound_json(&store.load(&id).unwrap().unwrap())["replyTo"], serde_json::json!(["answers@acme.dev"]));
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

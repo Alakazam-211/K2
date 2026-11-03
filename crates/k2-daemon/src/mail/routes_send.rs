@@ -847,6 +847,13 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(l) => l,
         Err(resp) => return resp,
     };
+    let reply_to = match string_list(&v["replyTo"], "replyTo") {
+        Ok(l) => match send::normalize_reply_to(&l) {
+            Ok(r) => r,
+            Err(e) => return send_error_response(e),
+        },
+        Err(resp) => return resp,
+    };
     let wait_timeout = match wait_params(&v) {
         Ok(w) => w,
         Err(resp) => return resp,
@@ -918,6 +925,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         cc,
         bcc,
         policy_bcc: Vec::new(),
+        reply_to,
         subject: subject.to_string(),
         text_body: body_text.to_string(),
         in_reply_to: None,
@@ -954,6 +962,14 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Source::Linked => {
             if from_name_explicit.is_some() {
                 return linked_from_name_refused();
+            }
+            if !msg.reply_to.is_empty() {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "--reply-to works on hosted K2 mailboxes only — a linked inbox is your human's \
+                     own account, and answers go to it. Nothing was sent",
+                );
             }
             if schedule_requested {
                 return error_response(
@@ -1127,6 +1143,16 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
             "missing 'body' — the reply text",
         );
     };
+    // A reply stays locked to the original sender, and refuses (never drops)
+    // an attempt to point its answers elsewhere.
+    if !v["replyTo"].is_null() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "k2 mail reply goes back to the original sender and takes no --reply-to — send a new \
+             message with k2 mail send if answers should go elsewhere",
+        );
+    }
     let wait_timeout = match wait_params(&v) {
         Ok(w) => w,
         Err(resp) => return resp,
@@ -1258,6 +1284,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 cc: Vec::new(),
                 bcc: Vec::new(),
                 policy_bcc: Vec::new(),
+                reply_to: Vec::new(),
                 subject,
                 text_body: body_text.to_string(),
                 in_reply_to: None,
@@ -1348,6 +1375,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 cc: Vec::new(),
                 bcc: Vec::new(),
                 policy_bcc: Vec::new(),
+                reply_to: Vec::new(),
                 subject: send::reply_subject(&ctx.subject),
                 text_body: body_text.to_string(),
                 in_reply_to: ctx.message_id.clone(),
@@ -2334,6 +2362,7 @@ mod tests {
             cc: Vec::new(),
             bcc: Vec::new(),
             policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "Hi via linked".to_string(),
             text_body: "the linked body".to_string(),
             in_reply_to: None,
@@ -2389,6 +2418,7 @@ mod tests {
             cc: Vec::new(),
             bcc: Vec::new(),
             policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "Here are the files".to_string(),
             text_body: "see attached".to_string(),
             in_reply_to: None,
@@ -2884,6 +2914,7 @@ mod tests {
             cc: vec![],
             bcc: Vec::new(),
             policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "s".to_string(),
             text_body: "b".to_string(),
             in_reply_to: None,
@@ -3041,6 +3072,7 @@ mod tests {
             cc: vec![],
             bcc: Vec::new(),
             policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "their secret subject".to_string(),
             text_body: "b".to_string(),
             in_reply_to: None,
@@ -3711,6 +3743,7 @@ mod tests {
             cc: Vec::new(),
             bcc: vec!["boss@shop.example".to_string()],
             policy_bcc: vec!["owner@shop.example".to_string()],
+            reply_to: Vec::new(),
             subject: "Hi".to_string(),
             text_body: "body".to_string(),
             in_reply_to: None,
@@ -4298,5 +4331,138 @@ mod tests {
             assert_eq!(safe_attachment_name(raw), want, "{raw:?}");
         }
         assert_eq!(safe_attachment_name(&"x".repeat(500)).chars().count(), 200);
+    }
+
+    // ── --reply-to ──
+
+    /// Reply-To shows wherever the send can be checked: the outbox, the
+    /// approvals list and the opened message; it reaches the header, and only
+    /// the header: no envelope recipient, and no use of the recipient cap.
+    #[test]
+    fn reply_to_is_audited_shown_to_the_approver_and_rides_the_header_only() {
+        let (path, project_id, domain) = seed_files_sender("rto", "approval");
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({ "replyTo": ["Replies@Acme.Example", "second@acme.example"] }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let want = serde_json::json!(["replies@acme.example", "second@acme.example"]);
+
+        let outbox = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(outbox["outbound"]["replyTo"], want, "{outbox}");
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["replyTo"], want, "{ours}");
+        let shown = body_json(&handle_approvals_show(&params(&[("id", &id)])));
+        assert_eq!(shown["message"]["replyTo"], want, "{shown}");
+
+        let store = DbOutboundStore::default();
+        let rec = RecordingSubmit::default();
+        let mut acct = |_from: &str| Ok("acc-1".to_string());
+        send::approve_and_submit(&store, Ok(&rec), &mut acct, &id, "owner", None, now_secs()).expect("approve");
+        let seen = rec.seen.lock().unwrap();
+        let (rcpts, email) = &seen[0];
+        assert_eq!(rcpts, &vec!["human@example.com".to_string()], "nothing is sent to a Reply-To");
+        assert_eq!(email["replyTo"], serde_json::json!([{ "email": "replies@acme.example" }, { "email": "second@acme.example" }]), "{email}");
+        drop(seen);
+        done(&path, &project_id, &domain);
+    }
+
+    #[test]
+    fn a_send_without_reply_to_sets_no_header_and_stores_no_column() {
+        let (path, project_id, domain) = seed_files_sender("rtonone", "approval");
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        assert!(store.load(&id).unwrap().unwrap().reply_to_json.is_none());
+        let stored = store.load_message(&id).unwrap();
+        assert!(send::submission_email_json(&stored).get("replyTo").is_none());
+        done(&path, &project_id, &domain);
+    }
+
+    /// Ten recipients and a Reply-To: the cap counts who gets mail.
+    #[test]
+    fn reply_to_does_not_count_toward_the_recipient_cap() {
+        let (path, project_id, domain) = seed_files_sender("rtocap", "approval");
+        let ten: Vec<String> = (0..10).map(|i| format!("r{i}@dest.example")).collect();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "to": ten, "replyTo": "here@dest.example" })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        done(&path, &project_id, &domain);
+    }
+
+    #[test]
+    fn reply_to_refuses_anything_but_a_plain_address() {
+        let (path, project_id, domain) = seed_files_sender("rtobad", "approval");
+        for bad in [
+            serde_json::json!("x@y.example\r\nBcc: evil@z.example"),
+            serde_json::json!("x@y.example\nX-Evil: 1"),
+            serde_json::json!("x@y.example\r"),
+            serde_json::json!("Evil <x@y.example>"),
+            serde_json::json!("x@y.example, z@y.example"),
+            serde_json::json!("not-an-address"),
+            serde_json::json!(""),
+            serde_json::json!(42),
+            serde_json::json!(["a@b.example", "c@d.example", "e@f.example", "g@h.example"]),
+        ] {
+            let resp = handle_send(&send_body(&path, serde_json::json!({ "replyTo": bad.clone() })));
+            assert_eq!(resp.status, "400 Bad Request", "{bad}: {}", resp.body);
+            assert_eq!(body_json(&resp)["error"]["code"], "usage", "{bad}");
+        }
+        assert_eq!(outbound_count(&project_id), 0, "nothing queued");
+        done(&path, &project_id, &domain);
+    }
+
+    #[test]
+    fn linked_send_refuses_reply_to() {
+        let (name, path) = unique("lrto");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "on");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked, "replyTo": "x@y.example" })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("hosted K2 mailboxes only"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        cleanup_linked(&project_id);
+    }
+
+    /// `k2 mail reply` stays locked to the original sender: a Reply-To is
+    /// refused, not dropped, before anything else happens; a recipient in the
+    /// body is ignored, and the reply carries no Reply-To.
+    #[test]
+    fn reply_stays_locked_and_refuses_reply_to() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        seed_fake_engine(&fake);
+        fake.state.lock().unwrap().emails.insert("e1".to_string(), reply_source("e1"));
+        let (path, project_id, domain) = seed_files_sender("rtolock", "approval");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let resp = handle_reply(
+            &serde_json::to_vec(&serde_json::json!({
+                "project": path, "id": token, "body": "thanks", "replyTo": "elsewhere@evil.example",
+            }))
+            .unwrap(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("original sender"), "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        let resp = handle_reply(
+            &serde_json::to_vec(&serde_json::json!({
+                "project": path, "id": token, "body": "thanks", "to": "elsewhere@evil.example",
+                "cc": "elsewhere@evil.example",
+            }))
+            .unwrap(),
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let stored = DbOutboundStore::default().load_message(&id).unwrap();
+        assert_eq!(stored.all_recipients(), vec!["cust@dest.example".to_string()], "locked to the original sender");
+        assert!(stored.reply_to.is_empty());
+        assert!(send::submission_email_json(&stored).get("replyTo").is_none());
+        send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
     }
 }

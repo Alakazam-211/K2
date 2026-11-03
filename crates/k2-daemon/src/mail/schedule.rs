@@ -450,6 +450,7 @@ mod tests {
             cc: Vec::new(),
             bcc: Vec::new(),
             policy_bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "s".to_string(),
             text_body: "t".to_string(),
             in_reply_to: None,

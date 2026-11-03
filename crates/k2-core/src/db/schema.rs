@@ -4201,6 +4201,10 @@ pub struct MailOutbound {
     /// send time (audited apart from the agent's own).
     #[serde(default)]
     pub policy_bcc_json: Option<String>,
+    /// 0261: JSON array of the message's Reply-To addresses (`--reply-to`).
+    /// A header, never a recipient; audited because it steers answers.
+    #[serde(default)]
+    pub reply_to_json: Option<String>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

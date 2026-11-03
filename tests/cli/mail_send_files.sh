@@ -161,6 +161,40 @@ rc=$?
 set -e
 assert_exit "show needs an id" 2 "$rc"
 
+echo "== --reply-to on send, refused on reply =="
+rm -f "$SEND_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail send to@x.example --subject S --body hi --reply-to a@x.example --reply-to b@x.example,c@x.example --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "send --reply-to" 0 "$rc"
+assert_json "repeatable and comma-separated" "$(cat "$SEND_POST")" "d.get('replyTo') == ['a@x.example', 'b@x.example', 'c@x.example']"
+rm -f "$SEND_POST"
+set +e
+"${K2[@]}" "$K2_CLI" mail send to@x.example --subject S --body hi --json >/dev/null 2>&1
+rc=$?
+set -e
+assert_json "no flag, no key" "$(cat "$SEND_POST")" "'replyTo' not in d"
+set +e
+"${K2[@]}" "$K2_CLI" mail send to@x.example --subject S --body hi --reply-to >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "--reply-to needs a value" 2 "$rc"
+rm -f "$REPLY_POST"
+set +e
+err="$("${K2[@]}" "$K2_CLI" mail reply m_abc --body hi --reply-to a@x.example 2>&1)"
+rc=$?
+set -e
+assert_exit "reply --reply-to" 2 "$rc"
+assert_has "reply says why" "$err" "original sender"
+[ ! -e "$REPLY_POST" ] && ok "nothing POSTed" || bad "reply --reply-to POSTed"
+set +e
+"${K2[@]}" "$K2_CLI" mail reply m_abc --body hi --to a@x.example >/dev/null 2>&1
+rc=$?
+set -e
+assert_exit "reply --to stays an unknown flag" 2 "$rc"
+[ ! -e "$REPLY_POST" ] && ok "nothing POSTed" || bad "reply --to POSTed"
+
 echo "== help no longer says linked only =="
 out="$("${K2[@]}" "$K2_CLI" mail send --help 2>&1)"
 assert_lacks "send help" "$out" "LINKED inboxes only"

@@ -134,6 +134,7 @@ export const CATALOG_ERROR_CODES = [
   // The App transport (runtime S23): gateway and App-route refusals, plus
   // the server SDK's own two.
   'pass_required',
+  'access_lost',
   'pass_invalid',
   'pass_wrong_link',
   'not_on_link',

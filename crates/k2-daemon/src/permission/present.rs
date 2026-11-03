@@ -371,7 +371,8 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
 /// May "Allow all" cover this action? Click items only, and never one that
 /// shows its approver a secret (one `forYou` per answer; PR-A4).
 pub(crate) fn batchable(r: &Registered) -> bool {
-    r.spec.proof.batchable() && !super::actions::password_reset::is_reveal(r.spec.id)
+    // A box login's access is read card by card: never under "Allow all".
+    r.spec.proof.batchable() && !super::actions::password_reset::is_reveal(r.spec.id) && r.spec.id != super::actions::box_login_grant::ACTION
 }
 
 /// The `view` JSON for the requests on one card: a `permission` view for

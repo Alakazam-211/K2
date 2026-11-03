@@ -17,10 +17,15 @@
 //! - **On Allow:** the route's own handler as the person who clicked, with
 //!   the checked ids: `POST /cli/skin/grants` for a new login on the App,
 //!   `POST /cli/skin/grants/role` when they already have one (their live
-//!   sessions stay and follow). Nothing about the box login itself changes:
-//!   the `host` grant is never touched, and the App's grant is the effect.
-//! - **The words** are computed from the role as it is when asked, room by
-//!   room. If the role changes before the click the card is stale.
+//!   sessions stay and follow at their next request). The `host` grant is
+//!   never touched, and the App's grant is the effect.
+//! - **The words** are computed when asked: the current role and the new one
+//!   when it's a change, room by room, with folder limits, and how to put it
+//!   back. So a change to any of those before the click makes the card stale.
+//!   They warn plainly that a password used on the App can pass through the
+//!   App's server, and it's the same password as the box login: a person
+//!   signing in there through K2's own page is a follow-up, not built.
+//! - **Never in "Allow all":** read card by card ([`never_batched`]).
 //!
 //! Chat through an App is a separate question: a box login's chat is its own
 //! grant, and this card doesn't touch it.
@@ -28,15 +33,22 @@
 use k2_core::permission::catalog::{
     ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, ParamKind, ParamSpec, Proof, SettingsRef, Undo, WallCoverage, Words,
 };
-use k2_core::skin::{self, SkinPrincipal, SkinRole};
+use k2_core::skin::{self, SkinGrant, SkinPrincipal, SkinRole};
 use serde_json::{json, Value};
 
 use super::app_login::{login_on, principal, role_allows, role_named};
+
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{own_service, OwnService};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 
 pub(crate) const ACTION: &str = "apps.user-grant-box";
+
+/// Cards that never join a batch, and are never under its "Allow all".
+pub(crate) fn never_batched(action: &str) -> bool {
+    action == ACTION || super::password_reset::is_reveal(action)
+}
+
 pub(crate) const ROUTE_ADD: &str = "/cli/skin/grants";
 pub(crate) const ROUTE_ROLE: &str = "/cli/skin/grants/role";
 /// The grant routes' own floor: the owner.
@@ -100,8 +112,71 @@ fn ask_of(ctx: &Ctx) -> Result<Ask, String> {
     Ok(Ask { person, svc, role })
 }
 
+/// What a role's folder limits say, or nothing when it has none.
+fn folder_limits(role: &SkinRole) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for r in &role.room_access {
+        let Some(f) = &r.folders else { continue };
+        let mut one: Vec<String> = Vec::new();
+        for (word, list) in [("read", &f.read), ("change", &f.write), ("drop files in", &f.upload), ("save", &f.download)] {
+            if !list.is_empty() {
+                one.push(format!("{word} {}", list.join(", ")));
+            }
+        }
+        if !one.is_empty() {
+            parts.push(format!("in {}, only: {}", r.handle, one.join("; ")));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" Folder limits: {}.", parts.join("; "))
+    }
+}
+
+/// The login they hold on the App now: its role's name, or its rooms.
+fn current_words(g: &SkinGrant) -> String {
+    match g.role_id.as_deref() {
+        Some(rid) => {
+            let name = skin::list_roles().ok().and_then(|rs| rs.into_iter().find(|r| r.id == rid)).map(|r| r.name);
+            format!("the role {}", name.unwrap_or_else(|| rid.to_string()))
+        }
+        None => {
+            let rooms = skin::handles_for_project_ids(&skin::parse_rooms_json(g.scope.as_deref()));
+            if rooms.is_empty() {
+                "no rooms".to_string()
+            } else {
+                format!("Thread access in {}", rooms.join(", "))
+            }
+        }
+    }
+}
+
+/// How to put back what they hold now.
+fn undo_words(u: &str, app: &str, g: Option<&SkinGrant>) -> String {
+    match g {
+        None => format!("k2 app grant rm --subject-kind principal --subject {u} --kind app --target {app}"),
+        Some(g) => match g.role_id.as_deref() {
+            Some(rid) => {
+                let name = skin::list_roles().ok().and_then(|rs| rs.into_iter().find(|r| r.id == rid)).map(|r| r.name).unwrap_or_else(|| rid.to_string());
+                format!("k2 app grant role {} --role {name}", g.id)
+            }
+            None => {
+                let rooms = skin::handles_for_project_ids(&skin::parse_rooms_json(g.scope.as_deref()));
+                let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
+                format!(
+                    "k2 app grant rm --id {} then k2 app grant add --subject-kind principal --subject {u} --kind app --target {app} {}",
+                    g.id,
+                    flags.join(" ")
+                )
+            }
+        },
+    }
+}
+
 /// The card's words from the stored values: `{user}`, `{app}` by name,
-/// `{what}` and `{effects}` (what the role allows).
+/// `{what}` and `{effects}` (what the role allows, what changes, the
+/// password warning, how to put it back).
 pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     if action != ACTION {
         return None;
@@ -113,14 +188,21 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
             out.params.insert("user".into(), json!(a.person.username));
             out.params.insert("app".into(), json!(a.svc.name));
             let (u, app) = (&a.person.username, &a.svc.name);
-            (
-                format!("Let {ws} give {u}, who has a box login here, access to its App {app} with the role {}", a.role.name),
-                format!(
-                    "When {u} signs in to {app} with the role {}, they can: {}. Their box login itself doesn't change, and they use their own password; {ws} never sees it. Undo it with k2 app grant rm --subject-kind principal --subject {u} --kind app --target {app}.",
-                    a.role.name,
-                    role_allows(&a.role)
-                ),
-            )
+            let now = login_on(&a.person, &a.svc);
+            let what = match &now {
+                Some(g) => format!("Let {ws} change {u}'s access to its App {app} from {} to the role {}. {u} has a box login here", current_words(g), a.role.name),
+                None => format!("Let {ws} give {u}, who has a box login here, access to its App {app} with the role {}", a.role.name),
+            };
+            let when = if now.is_some() { format!(" If {u} is signed in to {app}, this applies at their next request.") } else { String::new() };
+            let off = if now.as_ref().is_some_and(|g| !g.enabled) { format!(" This login is switched off, so {u} gets no access to {app} until someone turns it on.") } else { String::new() };
+            let effects = format!(
+                "When {u} signs in to {app} with the role {}, they can: {}.{}{when}{off} Their box login itself doesn't change. Warning: signing in to {app} sends their password through {app}'s server, which {ws} runs, so {ws} could learn it, and it's the same password as their box login. Allow this only if you trust {ws} with that, or give them a separate App login instead. Undo: {}.",
+                a.role.name,
+                role_allows(&a.role),
+                folder_limits(&a.role),
+                undo_words(u, app, now.as_ref()),
+            );
+            (what, effects)
         }
         Err(e) => (format!("Let {ws} give a box login access to its App"), e),
     };
@@ -179,7 +261,14 @@ fn apply(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
         let (code, message) = error_of(&v, "refused");
         return Applied::Refused { code, message };
     }
-    Applied::Done { message: format!("{} has access to {} with the role {} now.", a.person.username, a.svc.name, a.role.name) }
+    let off = existing.as_ref().is_some_and(|g| !g.enabled);
+    Applied::Done {
+        message: if off {
+            format!("{}'s login on {} now has the role {}, but that login is switched off: they have no access until someone turns it on.", a.person.username, a.svc.name, a.role.name)
+        } else {
+            format!("{} has access to {} with the role {} now.", a.person.username, a.svc.name, a.role.name)
+        },
+    }
 }
 
 pub(crate) fn actions() -> Vec<Registered> {

@@ -31,8 +31,9 @@ pub(crate) struct Placed {
 /// window, still pending, fewer than [`limits::BATCH_MAX_ITEMS`] items.
 fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<(String, Vec<PermissionRequest>)> {
     // A card that shows its approver a secret is always its own card, and
-    // nothing joins it (one `forYou` per answer; PR-A4).
-    if super::actions::password_reset::is_reveal(&req.action) {
+    // nothing joins it (one `forYou` per answer; PR-A4). So is a box login's
+    // access: read on its own, never under "Allow all".
+    if super::actions::box_login_grant::never_batched(&req.action) {
         return None;
     }
     let open = store::open(Some(&req.workspace_id)).ok()?;
@@ -47,7 +48,7 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
             continue;
         }
         let items = store::for_card(conv, card).ok()?;
-        if items.iter().any(|i| super::actions::password_reset::is_reveal(&i.action)) {
+        if items.iter().any(|i| super::actions::box_login_grant::never_batched(&i.action)) {
             continue;
         }
         let first = items.first()?;

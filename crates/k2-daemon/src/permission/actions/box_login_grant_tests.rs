@@ -97,7 +97,10 @@ fn the_owner_allows_it_from_the_thread_and_the_grant_is_the_effect() {
     assert!(what.contains(&u) && what.contains(&svc) && what.contains(&r), "who, where, which role: {what}");
     let effects = vw["consequences"].as_str().unwrap_or("");
     assert!(effects.contains("read the Thread"), "what the role allows: {effects}");
-    assert!(effects.contains(&format!("{} never sees it", me.handle)), "{effects}");
+    assert!(effects.contains(&format!("{svc}'s server")) && effects.contains("same password"), "warns plainly: {effects}");
+    assert!(!effects.contains("never sees"), "{effects}");
+    assert!(what.contains("give"), "a new login: {what}");
+    assert!(!crate::permission::present::batchable(&super::super::find(ACTION).unwrap()), "never under Allow all");
     assert!(login_of(&u, &app).is_none(), "nothing happens at the ask");
 
     // Nobody below the owner: an agent, its own card included; an Admin.
@@ -124,6 +127,12 @@ fn the_owner_allows_it_from_the_thread_and_the_grant_is_the_effect() {
     // A second role: the same card changes it in place.
     let r2 = role(&me, Some(&app));
     let asked = ask_ok(&me, ACTION, json!({ "user": u, "app": svc, "role": r2 }));
+    let vw = view(&me, &card_of(&asked));
+    let what = vw["whatChanges"].as_str().unwrap_or("").to_string();
+    assert!(what.contains(&format!("from the role {r}")) && what.contains(&format!("to the role {r2}")), "current → new: {what}");
+    let effects = vw["consequences"].as_str().unwrap_or("").to_string();
+    assert!(effects.contains("at their next request"), "{effects}");
+    assert!(effects.contains(&format!("k2 app grant role {} --role {r}", g.id)), "undo restores the old role: {effects}");
     let (s, a) = answer_as("owner", &me, &card_of(&asked), json!({ "answer": "Allow" }));
     assert_eq!(s, "200 OK", "{a}");
     let want2 = skin::find_role(&r2).unwrap().expect("role").id;
@@ -164,4 +173,42 @@ fn the_ask_is_refused_for_anyone_but_a_box_login_on_its_own_app() {
     // And app.login-grant names this card for a box login.
     let why = ask_refused(&me, super::super::app_login::ACTION, json!({ "op": "add", "user": u, "app": svc, "role": r }));
     assert!(why.contains(ACTION), "names this card: {why}");
+}
+
+/// A disabled login reports what's true; changing the role's folder limits
+/// before the click makes the card stale (they are in the words).
+#[test]
+fn a_switched_off_login_says_so_and_folder_limits_are_in_the_words() {
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let me = seed("bxd");
+    let svc = format!("jobs{}", uniq());
+    let app = app_of(&me, &svc);
+    let u = box_login("di");
+    let (r1, r2) = (role(&me, Some(&app)), role(&me, Some(&app)));
+    let body = json!({ "subjectKind": "principal", "subjectId": skin::list_principals().unwrap().into_iter().find(|p| p.username == u).unwrap().id, "kind": "app", "targetId": app, "roleId": skin::find_role(&r1).unwrap().unwrap().id });
+    let made = crate::skin_routes::handle_grants_post(body.to_string().as_bytes(), "owner-token");
+    assert!(made.status.starts_with("200"), "{}", made.body);
+    let g = login_of(&u, &app).expect("the login");
+    skin::set_grant_enabled_as(&g.id, false, "owner-token").expect("off");
+
+    let asked = ask_ok(&me, ACTION, json!({ "user": u, "app": svc, "role": r2 }));
+    let vw = view(&me, &card_of(&asked));
+    assert!(vw["consequences"].as_str().unwrap_or("").contains("switched off"), "{vw}");
+    let (s, a) = answer_as("owner", &me, &card_of(&asked), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert!(last_turn(&me).contains("switched off"), "never reports access: {}", last_turn(&me));
+
+    // Folder limits: shown, and a change makes the card stale.
+    let r3 = role(&me, Some(&app));
+    let asked = ask_ok(&me, ACTION, json!({ "user": u, "app": svc, "role": r3 }));
+    let id3 = id_of(&asked);
+    let hash_before = row(&id3).text_hash.clone();
+    let scope = k2_core::skin::paths::RoomPathScope { read: vec!["public".into()], ..Default::default() };
+    skin::paths::set_role_room_paths(&r3, &me.id, &scope).expect("limit");
+    let ctx = crate::permission::present::ctx_of(&row(&id3));
+    let spec = super::super::find(ACTION).unwrap().spec;
+    assert_ne!(crate::permission::present::text_hash_of(spec, &ctx), hash_before, "the limit changes the words");
+    let computed = with_computed(ACTION, &ctx).expect("words");
+    assert!(computed.params["effects"].as_str().unwrap_or("").contains("only: read public"), "{:?}", computed.params["effects"]);
 }

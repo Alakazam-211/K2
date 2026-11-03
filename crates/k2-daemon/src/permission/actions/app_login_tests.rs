@@ -91,7 +91,7 @@ fn the_owner_allows_a_login_once_and_the_card_says_what_the_role_allows() {
     assert_eq!(vw["whatChanges"], format!("Let {} give {dana} a login on its App {app_name}, with the role {viewer}.", ws.handle), "{vw}");
     let effects = vw["consequences"].as_str().unwrap_or("");
     assert!(effects.contains(&format!("With the role {viewer}, {dana} can in {}: read the Thread and post in the Thread.", ws.handle)), "{effects}");
-    assert!(effects.contains(&format!("{} never sees it", ws.handle)), "{effects}");
+    assert!(effects.contains(&format!("{app_name}'s server can see it")), "the password goes through the App: {effects}");
 
     // The agent never answers; an Admin is below the route's floor.
     let (s, a) = as_agent(&ws, &card);

@@ -228,7 +228,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
                 Some(r) => (
                     format!("Let {ws} give {u} a login on its App {a}, with the role {}", r.name),
                     format!(
-                        "With the role {}, {u} can {}. They sign in to {a} with their own password; {ws} never sees it. Remove it again with k2 app grant rm --subject-kind principal --subject {u} --kind app --target {a}.",
+                        "With the role {}, {u} can {}. They sign in to {a} with their own password, and {a}'s server can see it when they do. Remove it again with k2 app grant rm --subject-kind principal --subject {u} --kind app --target {a}.",
                         r.name,
                         role_allows(r)
                     ),

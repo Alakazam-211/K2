@@ -284,7 +284,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     let effects = match (tied, mode_of(ctx)) {
         (false, _) => effects,
         (true, "password") => format!(
-            "{effects} This doesn't free {who} from {ws}'s agent: {who} stays tied to {ws}, with {ws}'s rooms and the rooms approved for its App, and anything more keeps waiting, because the password they choose at sign-in may pass through the App's own page, where {ws} could see it. Only a reset link on K2's own page unties them.",
+            "{effects} This doesn't free {who} from {ws}'s agent: {who} stays tied to {ws}, with only its App's own room, and anything more keeps waiting, because the password they choose at sign-in may pass through the App's own page, where {ws} could see it. Only a reset link on K2's own page unties them.",
             ws = ctx.workspace_handle
         ),
         (true, _) => format!("{effects} Using it also unties {who} from {}: any access waiting for a reset starts.", ctx.workspace_handle),

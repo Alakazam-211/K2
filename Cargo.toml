@@ -42,6 +42,7 @@ exclude = [
     "third_party/sew-proto",
     "third_party/sew-client",
     "vendor/k2-mpc-base",
+    "vendor/k2-mpc-board",
     "vendor/k2-mpc-markdown",
     "vendor/k2-mpc-text",
 ]

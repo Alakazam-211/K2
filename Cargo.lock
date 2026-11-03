@@ -4393,6 +4393,7 @@ dependencies = [
  "k2-core",
  "k2-export",
  "k2-mpc-base",
+ "k2-mpc-board",
  "k2-mpc-markdown",
  "k2-mpc-text",
  "k2-node",
@@ -4470,6 +4471,14 @@ dependencies = [
  "regex-automata",
  "thiserror 2.0.18",
  "yrs",
+]
+
+[[package]]
+name = "k2-mpc-board"
+version = "0.1.0-dev"
+dependencies = [
+ "miniz_oxide",
+ "sha2 0.10.9",
 ]
 
 [[package]]

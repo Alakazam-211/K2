@@ -2871,7 +2871,7 @@ exit: 0
     {
       "name": "app user role",
       "usage": "k2 app user role <username> <role>",
-      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Signed-in guests get it at their next request.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}
@@ -3278,7 +3278,7 @@ exit: 0
     {
       "name": "skin user rooms",
       "usage": "k2 skin user rooms <username> --agent sales",
-      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens).",
+      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. Signed-in guests get the change at their next request.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
@@ -3288,7 +3288,7 @@ exit: 0
     {
       "name": "skin user role",
       "usage": "k2 skin user role <username> <role>",
-      "description": "Assign a skin role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign a skin role to a guest. Not Connect owner/admin/member. Re-assign replaces. Signed-in guests get it at their next request.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}

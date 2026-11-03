@@ -589,7 +589,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
         out.push(Blocker {
             code: SHARED_ROLES,
             hint: format!(
-                "{app}'s guests hold box-wide roles that name {a}'s room ({}): after a handover they would keep talking to {a}, not the new agent. Give them a role of this App instead (k2 app role create <name> --app {app}, then k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids), or take {a}'s room off those roles, then ask again",
+                "{app}'s guests hold box-wide roles that name {a}'s room ({}): after a handover they would keep talking to {a}, not the new agent. Give them a role of this App instead (k2 app role create <name> --app {app}, then k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids), or take {a}'s room off those roles (k2 app role room <role> {a} --clear), then ask again",
                 p.rooms.shared_roles.join(", ")
             ),
             names: p.rooms.shared_roles.clone(),

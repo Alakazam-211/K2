@@ -17915,7 +17915,7 @@ if pw:
     print("To handle no password at all: k2 app user invite <username> --app <app> mails them a link.")
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
                     ;;
                 show)
                     # app-user-profile P6 (0.46.5): a person's profile in one
@@ -18056,7 +18056,7 @@ else:
     print("No mail path on this box: give %s this one-time link yourself (shown once):\n%s" % (d.get("username"), d.get("link")))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
                     ;;
                 reset)
                     local username="" app="" to="" code=0 from="" json_out=0
@@ -18370,7 +18370,7 @@ else:
     print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
                     ;;
                 role)
                     local username="${1:-}" role="${2:-}"
@@ -18385,7 +18385,7 @@ d=json.load(sys.stdin)
 print("Skin user %s role: %s" % (d.get("username",""), d.get("roleName") or d.get("role_name") or "—"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
+    print("Waiting: everything else works now, but they can'"'"'t use room %s until they use a reset link on K2'"'"'s own page, because you set this login up. The owner or an admin sends it; ask on a card: %s" % (", ".join(w["rooms"]), w.get("ask")))'
                     ;;
                 unassign)
                     local username="${1:-}"
@@ -44511,7 +44511,7 @@ cmd_schema() {
     {
       "name": "app user role",
       "usage": "k2 app user role <username> <role>",
-      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign an app role to a guest. Not Connect owner/admin/member. Re-assign replaces. Signed-in guests get it at their next request.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}
@@ -44918,7 +44918,7 @@ cmd_schema() {
     {
       "name": "skin user rooms",
       "usage": "k2 skin user rooms <username> --agent sales",
-      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens).",
+      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. Signed-in guests get the change at their next request.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
@@ -44928,7 +44928,7 @@ cmd_schema() {
     {
       "name": "skin user role",
       "usage": "k2 skin user role <username> <role>",
-      "description": "Assign a skin role to a guest. Not Connect owner/admin/member. Re-assign replaces. Live sessions rewrite immediately.",
+      "description": "Assign a skin role to a guest. Not Connect owner/admin/member. Re-assign replaces. Signed-in guests get it at their next request.",
       "args": [
         {"name": "username", "required": true},
         {"name": "role", "required": true}

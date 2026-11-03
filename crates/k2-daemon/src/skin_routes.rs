@@ -3188,9 +3188,10 @@ fn tied_room_hint(raw: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up and could know its password, so {} stays held back. What clears it: the person uses a reset link the owner sends on K2's own page (the owner: k2 app user reset {user}; the agent asks on a card: k2 permission request apps.user-password-reset user={user} mode=link). Approving the room for the App doesn't clear it, and neither does choosing a new password on the App's own page.",
+        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up and could know its password, so {} stays held back. What clears it: the person uses a reset link the owner sends on K2's own page (the owner: k2 app user reset {user}; the agent asks on a card: k2 permission request apps.user-password-reset user={user} app={app} mode=link --why \"<what you need it for>\"). Approving the room for the App doesn't clear it, and neither does choosing a new password on the App's own page.",
         held.join(", "),
         user = pass.username,
+        app = app_name_of(&pass.app),
     ))
 }
 

@@ -273,7 +273,7 @@ impl Plan {
             let kept: Vec<String> = g.rooms.iter().filter(|r| **r != self.room_from).map(|r| ws_handle(r)).collect();
             if !kept.is_empty() {
                 out.push(format!(
-                    "Rooms you approved for {app}'s guests ({}) stay with the App: {b} can hand them out as {a} could. A login {b} sets up reaches them once the person chooses their own password. Revoking the grant (k2 app grant {app} --kind guests-rooms --revoke) takes back what an agent hands out from this update on. Rooms handed out before it, and rooms you put on a role yourself, stay until you change them.",
+                    "The rooms {app}'s own code may hand its guests ({}) stay with the App. A login {b} sets up reaches any room its role names once the person chooses their own password.",
                     kept.join(", ")
                 ));
             }

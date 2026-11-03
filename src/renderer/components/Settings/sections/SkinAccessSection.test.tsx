@@ -999,7 +999,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",
       'agent:handle': "Change the agent's handle (its address)",
-      'files:download': 'Download Thread files (a save, not just a view; a person grants it)',
+      'files:download': 'Download Thread files (a save, not just a view)',
     })
   })
 

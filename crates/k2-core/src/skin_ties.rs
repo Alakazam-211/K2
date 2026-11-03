@@ -9,8 +9,8 @@
 //!
 //! - App targets: the box login (`host`) only when `host_ok` (they already
 //!   had it when the tie was set), and any App of `workspace_id`;
-//! - rooms: only `workspace_id`, minus [`super::PERSON_ONLY_CAPS`]. One rule,
-//!   one place: [`room_inside`] ([`TIED_REACHES_APPROVED_ROOMS`]);
+//! - rooms: only `workspace_id`, minus [`super::PERSON_ONLY_CAPS`] (which only
+//!   ever limit a tied login, and platform passes). One rule, one place: [`room_inside`] ([`TIED_REACHES_APPROVED_ROOMS`]);
 //! - no chat-only box login and no chat pass (a chat grant is box-wide).
 //!
 //! The owner may widen a tied user at any time; what reaches past the
@@ -38,10 +38,10 @@
 //! **What ties again.** An agent setting the password (directly or `generate`)
 //! or the email. Mailing a link doesn't: that only starts a reset.
 //!
-//! **Until then, an App's approved rooms wait too (security review
-//! 2026-11-02).** With a login whose password the agent set, the agent could
-//! sign in alone and read and post in another agent's Thread, so those rooms
-//! wait like any other: [`TIED_REACHES_APPROVED_ROOMS`].
+//! **Until then, every other room waits.** With a login whose password the agent
+//! set, the agent could sign in alone: [`TIED_REACHES_APPROVED_ROOMS`]. Once
+//! released, the role in the App has the scopes (Rosson 2026-11-03): whatever
+//! rooms and caps it names, person-only caps included.
 //!
 //! skin.db step 6 adds the table (and `app_user_invites`, used by the
 //! invite and owner-reset slices): a numbered step, so a K2 older than
@@ -553,32 +553,13 @@ pub fn app_rooms(app: &str) -> Result<Vec<String>, String> {
 /// [`CAPS_ELSEWHERE`] by [`clamp`].
 pub const TIED_REACHES_APPROVED_ROOMS: bool = false;
 
-/// The most a login an agent wrote (or holds the password of) may hold on a
-/// room other than its App's own: a role-less guest's Thread caps. More
-/// (files, heartbeats, the workspace's settings) reaches into another agent's
-/// workspace.
+/// The most a tied login would hold on a room other than its App's own, if
+/// [`TIED_REACHES_APPROVED_ROOMS`] were on. Nothing else limits a role's caps.
 pub const CAPS_ELSEWHERE: &[&str] = &[super::CAP_THREAD_READ, super::CAP_THREAD_POST];
 
 /// Is `room` one `tie` lets through on an App with these approved rooms?
 pub fn room_inside(tie: &Tie, app: &str, app_rooms: &[String], room: &str) -> bool {
     room == tie.workspace_id || (TIED_REACHES_APPROVED_ROOMS && app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
-}
-
-/// What an untied login reaches when an agent wrote its role or its App
-/// login (`guest_rooms::written`): its App's own room as written; any other
-/// room only while it is on the App's `guests-rooms` grant, read live, and
-/// only [`CAPS_ELSEWHERE`] there. So revoking the grant takes those rooms from
-/// everyone it reached. What the owner wrote never comes through here.
-pub fn hold_written(own_room: Option<&str>, app_rooms: &[String], policy: RoomPolicy) -> RoomPolicy {
-    let mut out = RoomPolicy::new();
-    for (room, caps) in policy {
-        if own_room == Some(room.as_str()) {
-            out.insert(room, caps);
-        } else if app_rooms.iter().any(|r| *r == room) {
-            out.insert(room, caps.into_iter().filter(|c| CAPS_ELSEWHERE.contains(&c.as_str())).collect());
-        }
-    }
-    out
 }
 
 /// What a tied user may use of `policy` on `app` (§5.2): no tie → the
@@ -766,13 +747,6 @@ mod tests {
         // Never on the box login, and never for another workspace's App.
         assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &approved, mixed.clone()).unwrap(), policy(&[("ws", &["thread:read"])]));
         assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), &approved, mixed.clone()), Err(Denied));
-        // What an agent wrote, on an untied login: the App's own room as
-        // written, an approved room at Thread caps, any other room gone.
-        assert_eq!(
-            hold_written(Some("ws"), &approved, policy(&[("ws", &["thread:read", "files:write"]), ("sales", &["thread:read", "files:write"]), ("ops", &["thread:read"])])),
-            policy(&[("ws", &["thread:read", "files:write"]), ("sales", &["thread:read"])]),
-        );
-        assert_eq!(hold_written(Some("ws"), &[], mixed), policy(&[("ws", &["thread:read"])]), "the grant revoked: gone");
         // Nothing in the tie's room: an empty (Thread-dark) policy, allowed.
         assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &[], policy(&[("sales", &["thread:read"])])), Ok(RoomPolicy::new()));
     }

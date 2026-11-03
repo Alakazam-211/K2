@@ -246,15 +246,16 @@ fn ceiling_for(who: &Who, t: &Target) -> R<Ceiling> {
         return Ok(Ceiling::AnyRoom);
     }
     match who {
-        // `target` already kept a passport to its own workspace's Apps.
+        // `target` already kept a passport to its own workspace's Apps. With the
+        // switch on, the role in the App has the scopes: any room, no grant.
+        Who::Agent { project_id, .. } if k2_core::workspace::settings::agents_can_manage_app_users(project_id) => Ok(Ceiling::AnyRoom),
         Who::Agent { .. } => match gr::app_ceiling(&t.service_id).map_err(store)? {
             Some(rooms) => Ok(Ceiling::Rooms(rooms)),
             None => Err(no(
                 "grant_required",
                 403,
                 format!(
-                    "{} has no guests:rooms grant: run k2 app grant {} --kind guests-rooms (with \"Let this agent manage its Apps' users\" \
-                     on it applies at once in your own room; otherwise the owner gets a card on your Thread)",
+                    "\"Let this agent manage its Apps' users\" is off for this agent and {} has no guests:rooms grant: ask for the switch, or run k2 app grant {} --kind guests-rooms (the owner gets a card on your Thread)",
                     t.name, t.name
                 ),
             )),

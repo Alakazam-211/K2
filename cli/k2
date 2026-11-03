@@ -8072,10 +8072,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         A guest of ONE App: that App's grant, no box login. The owner,
                                         or an agent with "Let this agent manage its Apps' users" for
                                         its own workspace's Apps. An agent's login works at once in the
-                                        App's own room; a room on the App's guests-rooms grant waits until
-                                        the person chooses their own password (the answer says so and
-                                        how). A role past those rooms, or with more than
-                                        Thread access on another workspace's room, is refused.
+                                        App's own room; any other room its role names waits until the
+                                        person chooses their own password (the answer says so and how).
                                         Names people on this box use are refused too. --temp-password:
                                         K2 makes a password and prints it once; the person chooses their
                                         own at first sign-in (or k2 app user invite: a mailed link, so you
@@ -8139,8 +8137,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--app <app>]
                                         Set default rooms (unassigned guests only); --app sets that App's rooms
-                                        (the owner, or an agent for its own workspace's Apps, within the App's
-                                        own room and its guests-rooms grant). Signed-in people get the change
+                                        (the owner, or an agent for its own workspace's Apps: any room on this
+                                        box). Signed-in people get the change
                                         at their next request
   k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
@@ -8163,8 +8161,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         folders get the same 403 as a missing cap. --write folders are readable
                                         too; caps still decide. --upload = drop folders (files:upload adds files
                                         in its own subfolder, never lists or reads). --upload-dir = default upload folder.
-                                        --download = folders or files files:download may save (person only to add;
-                                        omitted = kept, --no-download clears; --download alone changes only them).
+                                        --download = folders or files files:download may save (omitted = kept, --no-download clears; --download alone changes only them).
   k2 app role paths <role> <room> --clear
                                         Back to the whole room
   k2 app role list                     Roles (per-room lines; no secrets)
@@ -8212,8 +8209,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         once; an agent's (its own App) is one held request listing the
                                         logins: a card for the owner (exit 2). --dry-run only looks.
   k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]
-                                        <app> sets its OWN guests' rooms with its own pass (no owner
-                                        token): its --room rooms plus its own, never above a role. The
+                                        <app>'s own code sets its OWN guests' rooms with its own pass (no
+                                        owner token): its --room rooms plus its own, never above a role.
+                                        An agent with "Let this agent manage its Apps' users" on doesn't
+                                        need this to give people rooms (k2 app user rooms). The
                                         owner; or the App's own agent in its own room with "Let this
                                         agent manage its Apps' users" (else, or another workspace's
                                         room, one held request: a card for the owner, exit 2).
@@ -8261,8 +8260,8 @@ thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
 files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move|rename;
   never into the agent's .k2/ folder),
-files:agentconfig (opt-in, owner only: also lets files:write reach .k2/; not recommended),
-files:download (opt-in, a person grants it: save Thread files, GET /cli/thread/attachment
+files:agentconfig (opt-in: also lets files:write reach .k2/; not recommended),
+files:download (opt-in: save Thread files, GET /cli/thread/attachment
   mode=download; never implied by thread:read or files:read; opening files is unchanged).
 Rooms: workspace handles. Empty = Thread dark.
 Grid/PTY is never an app room. Capability check paths (full):
@@ -11478,8 +11477,8 @@ through the App's link and ends on its own; k2 app test-guests <app-id> lists
 them.
 
 GUESTS WITHOUT THE OWNER TOKEN (0.46.4). Your App calls with its own pass:
-  1. Once: k2 app grant <app> --kind guests-rooms [--room <your room>] (at
-     once with "Let this agent manage its Apps' users", else a card)
+  1. Once: k2 app grant <app> --kind guests-rooms [--room <room>] (at once
+     with "Let this agent manage its Apps' users", else a card)
   2. At boot: k2.asApp().app.rooms() (GET /cli/skin/app-rooms: its own room,
      granted, the ceiling), then k2.asApp().guests.list() to reconcile.
   3. At login: guests.login, then guests.setRooms if their rooms change.
@@ -12154,8 +12153,8 @@ Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
                                        manage its Apps' users" (App users and
                                        test guests of its own Apps, their
                                        passwords, email, names, unlock, roles
-                                       and its own room, invites, the
-                                       guests-rooms grant in its own room;
+                                       and any room or cap on its App's roles,
+                                       invites, the guests-rooms grant;
                                        never a box login; the owner, both
                                        ways). --core ticks a
                                        core: its Apps then use Database, Files
@@ -17265,23 +17264,23 @@ k2 app — guests' rooms (RS-A15, 0.46.1): an App sets its own guests' rooms
 without the owner token.
 
   k2 app grant <app> --kind guests-rooms [--room <handle>]... [--json]
-                                       Lets <app> set its own guests' rooms
-                                       with its own pass (GET|POST
+                                       Lets <app>'s own code set its guests'
+                                       rooms with its own pass (GET|POST
                                        /cli/skin/guests/rooms, the server SDK's
                                        k2.asApp().guests.*). It may hand out the
                                        --room rooms plus its own room, never
                                        above a guest's role. Again = replace
-                                       the rooms. Audited. The owner: at once.
-                                       A login the App's agent sets up reaches
-                                       them once the person chooses their own
-                                       password. --revoke takes
-                                       back what an agent handed out; rooms the
-                                       owner put on a role stay.
-                                       An agent: its own workspace's App, at
-                                       once in its own room with "Manage its
-                                       Apps end to end"; otherwise (or another
-                                       workspace's room) one held request with
-                                       a card for the owner (exit 2).
+                                       the rooms. Audited.
+                                       An agent with "Let this agent manage its
+                                       Apps' users" on doesn't need this to give
+                                       people rooms: k2 app user rooms and
+                                       k2 app role room take any room on this
+                                       box. The owner, or that agent: at once.
+                                       With the switch off: one held request
+                                       with a card for the owner (exit 2).
+                                       --revoke stops the App's code handing out
+                                       more; rooms already on a login or role
+                                       stay until they're changed.
   k2 app grant <app> --kind guests-rooms --revoke
                                        Take it back (an agent may, for its own
                                        App: it only narrows).
@@ -17343,12 +17342,13 @@ without the owner token.
   k2 app guest rooms <app> <user> set <room,room,...|-> [--json]
                                        Set them ("-" or "" = no rooms). The
                                        owner: any room. An agent: its own
-                                       workspace's App, within the owner's
-                                       grant. Idempotent; 60 calls a minute per
+                                       workspace's App, any room with "Let this
+                                       agent manage its Apps' users" on, else
+                                       within the App's grant. Idempotent; 60 calls a minute per
                                        App; every change audited (k2 app history).
-  k2 app guest ceiling <app> [--json]  The App's own room, whether the owner
-                                       granted guests-rooms and the rooms it may
-                                       hand out (its server: GET /cli/skin/app-rooms,
+  k2 app guest ceiling <app> [--json]  The App's own room, whether it has the
+                                       guests-rooms grant and the rooms its own
+                                       code may hand out (its server: GET /cli/skin/app-rooms,
                                        k2.asApp().app.rooms(); no grant needed).
   k2 app guest list <app> [--limit N] [--cursor <user>] [--json]
                                        Its own guests with their rooms, role and
@@ -17385,7 +17385,7 @@ a = v.get("appInfo") or {}
 own = v.get("ownRoom") or {}
 print("%s: own room %s" % (a.get("handle") or v.get("app"), own.get("handle") or "(gone)"))
 if not v.get("granted"):
-    print("  no guests-rooms grant: it may hand out nothing (the owner: k2 app grant %s --kind guests-rooms)" % (a.get("name") or v.get("app")))
+    print("  no guests-rooms grant: its own code may hand out nothing (k2 app grant %s --kind guests-rooms). An agent with the App-users switch on sets any room itself." % (a.get("name") or v.get("app")))
 else:
     rooms = [r.get("handle") for r in (v.get("grantRooms") or [])]
     print("  granted; hands out: %s" % (", ".join([own.get("handle")] * bool(own) + rooms) or "nothing"))'
@@ -44897,12 +44897,12 @@ cmd_schema() {
     {
       "name": "app grant guests-rooms",
       "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
-      "description": "The owner; or the App's own agent in its own room with \"Let this agent manage its Apps' users\" (else, or another workspace's room, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "description": "The owner; or the App's own agent with \"Let this agent manage its Apps' users\" (with it off, one held request with a card for the owner, exit 2) (RS-A15, 0.46.1; 0.46.4). That agent doesn't need this to give people rooms. Lets <app>'s own code read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},
         {"name": "--room", "arg": "handle", "description": "A room the App may hand its guests (repeatable)."},
-        {"name": "--revoke", "arg": null, "description": "Take the grant back."},
+        {"name": "--revoke", "arg": null, "description": "Take the grant back: the App's code can't hand out more; rooms already on a login or role stay."},
         {"name": "--json", "arg": null, "description": "Print the daemon body."}
       ]
     },
@@ -46970,7 +46970,7 @@ room:members (See who has access to the room)
   room.members             GET  /cli/skin/members                             Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.
 project:write (Post in project chats (needs it in every member room))
   project.post             POST /cli/skin/projects/post                       Post in a project chat as the guest (guest:<username>); needs project:write in every member room. With clientMsgId a retry answers the stored line (duplicate: true, no delivered or deliveryReason) instead of posting twice; the id in another project is 409 client_msg_id_reused.
-files:download (Download Thread files (a save, not just a view; a person grants it))
+files:download (Download Thread files (a save, not just a view))
   files.downloads          GET  /cli/fs/downloads                             The files this login may save from the room: its role's download entries, expanded (needs files:download; App only, a Garden is the owner and reads every file).
   files.download           GET  /cli/fs/download                              Save a file, a chunk at a time: needs files:download, and the file inside a download entry or readable with files:read (App only, like files.downloads).
 wallet:self (Use the person's own wallet (an owner setting per App, never a room cap))
@@ -50429,15 +50429,17 @@ PER-APP LOGINS (0.45.5)
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
-  owner step. A room on the App's guests-rooms grant waits until the person
-  chooses their own password: the answer says what waits and how. A role
-  naming another room, or holding more than thread:read and thread:post on
-  another workspace's room, is refused. A name people on this box use is refused
+  owner step. Its role says what else it gets: the agent that owns the App may
+  put any room on this box and any cap on that App's roles and logins, with no
+  grant and no card. A login the agent set up gets the rest once the person
+  chooses their own password: the answer says what waits and how. A role of
+  another App is refused, and a box login stays the owner's. A name people on
+  this box use is refused
   (login_name_reserved). --temp-password or an invite lets the person choose
   their own password at first sign-in. Signed-in people get new rooms and caps
   at their next request; nobody signs out for it. An agent may end its App's
   people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
-  the password of or removes only people its own agent added, and a box login's
+  the password of, names or removes only people its own agent added, and a box login's
   access is a card for the owner (k2 permission request apps.user-grant-box).
   WAITS FOR THEIR OWN PASSWORD: a person an agent created, or whose password
   or email it set (or an App key made) is tied to that agent's workspace. If
@@ -50510,8 +50512,8 @@ INVITES (0.46.4)
 GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   An App resets its OWN guests' rooms (say at login) with its own pass:
     owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
-                  (or the App's own agent in its own room, with "Let this
-                  agent manage its Apps' users")
+                  (or the App's own agent, with "Let this agent manage its
+                  Apps' users")
     the App:      GET  /cli/skin/guests/rooms?username=dana
                   POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
                   Authorization: Bearer <its App pass: K2_PASS_FILE in the
@@ -50526,7 +50528,8 @@ GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
   60 calls a minute per App (429 rate_limited, retryAfterMs); no grant =
   403 grant_required; a guest's pass, a platform pass or the owner token =
   403 app_pass_required. Every change is audited (k2 app history <app>).
-  Agents, end to end within the grant: k2 app guest rooms <app> <u> [set a,b].
+  Agents: k2 app guest rooms <app> <u> [set a,b]: any room with the App-users
+  switch on, within the grant with it off.
   Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
   any local App (cap guests:rooms); every write asks you on K2's own sheet.
   This replaces POST /cli/skin/users/rooms with the owner token.

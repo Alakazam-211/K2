@@ -440,10 +440,7 @@ fn set_rooms(c: &Ctx, v: &J) -> R {
     // request either way; this only picks what the stored copy says.
     let apply_sent = v.get("applyTokens").is_some();
     let apply = v.get("applyTokens").and_then(J::as_bool).unwrap_or(true);
-    // Inside the key's rooms, which the owner set at mint (or this workspace's
-    // own room, on a key its agent minted): the owner's word, not a hold.
-    let g = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || skin::set_app_grant_rooms(&user, &c.app, &ids, apply, &c.actor()))
-        .map_err(|e| err(409, "not_settable", e))?;
+    let g = skin::set_app_grant_rooms(&user, &c.app, &ids, apply, &c.actor()).map_err(|e| err(409, "not_settable", e))?;
     let mut out = json!({ "ok": true, "username": user, "app": c.app, "rooms": ids, "roomHandles": skin::handles_for_project_ids(&ids), "grant": g });
     if apply_sent {
         out["deprecated"] = json!("applyTokens does nothing now: a signed-in person gets the change at their next request. Stop sending it.");

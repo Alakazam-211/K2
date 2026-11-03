@@ -126,7 +126,7 @@
     {
       "name": "files:download",
       "exposure": ["app"],
-      "label": "Download Thread files (a save, not just a view; a person grants it)"
+      "label": "Download Thread files (a save, not just a view)"
     },
     {
       "name": "files:upload",

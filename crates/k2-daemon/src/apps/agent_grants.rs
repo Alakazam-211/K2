@@ -405,12 +405,13 @@ pub(crate) fn copy_host(who: &Who, body: &[u8]) -> R<J> {
 
 // ── the guests-rooms grant ──────────────────────────────────────────
 
-/// An agent's guests-rooms grant (`guest_rooms::give`): at once with
-/// "Let this agent manage its Apps' users" in its own room; held otherwise. `Ok(None)` = go on (the
-/// agent may do it itself).
+/// An agent's guests-rooms grant (`guest_rooms::give`): what the App's own code
+/// may hand out. At once with "Let this agent manage its Apps' users", which
+/// already lets the agent give any room itself; held otherwise. `Ok(None)` = go on
+/// (the agent may do it itself).
 pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String], reason: Option<&str>) -> R<Option<J>> {
     let own = own_rooms(ws, rooms);
-    if own && may_self(who) {
+    if may_self(who) {
         return Ok(None);
     }
     let handle = format!("{}/{}", ws_handle(&t.project_id), t.name);
@@ -426,18 +427,13 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
             route: GUEST_ROOMS_APPLY,
             body: json!({ "service": t.service_id, "app": handle, "workspace": ws, "rooms": rooms }),
             lines: vec![
-                format!("let {handle} set its own guests' rooms (guests-rooms): {shown}"),
+                format!("let {handle}'s own code set its guests' rooms (guests-rooms): {shown}"),
                 format!(
-                    "then {handle}'s guests can be given {shown}, with Thread access at most when {ws} sets it. Logins {ws} sets up itself reach it once the person chooses their own password, on a page {ws}'s App can host. Take it back with k2 app grant {handle} --kind guests-rooms --revoke: what {ws} handed out goes at the next request; rooms you put on a role yourself stay",
-                    ws = ws_handle(ws)
+                    "then {handle}'s code can give its guests {shown}. Take it back with k2 app grant {handle} --kind guests-rooms --revoke: its code can't hand out more, and rooms already on a login or role stay until they're changed"
                 ),
             ],
             summary: format!("guests-rooms for {handle}: {shown}"),
-            why: if own {
-                format!("\"{SWITCH_NAME}\" is off for this agent")
-            } else {
-                "a room outside the agent's workspace is the owner's to hand out".to_string()
-            },
+            why: format!("\"{SWITCH_NAME}\" is off for this agent"),
             reason,
         },
         own,

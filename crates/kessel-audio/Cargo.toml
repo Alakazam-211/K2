@@ -14,9 +14,10 @@ keywords = ["audio", "voice", "opus", "echo-cancellation", "jitter-buffer"]
 categories = ["multimedia::audio"]
 # Not published until the API settles and the release is approved.
 publish = false
-# CC BY 4.0 speech for the metric tests. Stays in the repository; see the
-# `speech-tests` feature.
-exclude = ["tests/data/"]
+# Both stay in the repository. tests/data is CC BY 4.0 speech for the metric
+# tests (see the `speech-tests` feature); tests/scrub.rs is the repository's own
+# publish check.
+exclude = ["tests/data/", "tests/scrub.rs"]
 
 [features]
 default = ["cpal"]

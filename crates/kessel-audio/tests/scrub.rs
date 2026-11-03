@@ -1,6 +1,9 @@
 //! Publish hygiene: the crate's files must not name internal hosts, paths,
 //! environment variables or products of the team that wrote it. The
 //! patterns are assembled at run time so this file doesn't match itself.
+//!
+//! This is the repository's own check. It stays out of the published package
+//! (see `exclude` in Cargo.toml), because its list is itself those names.
 
 use std::path::{Path, PathBuf};
 
@@ -21,11 +24,14 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[test]
-fn no_internal_names() {
-    let k = ["K", "2"].concat();
+fn product() -> String {
+    ["K", "2"].concat()
+}
+
+fn banned() -> Vec<String> {
+    let k = product();
     let lower = k.to_lowercase();
-    let banned: Vec<String> = vec![
+    vec![
         format!("{k}_"),
         format!("~/.{lower}"),
         format!(".{lower}/"),
@@ -39,7 +45,47 @@ fn no_internal_names() {
         format!("z3{}", "mbp"),
         format!("sew{}", "lab"),
         format!("{}-211", "Alakazam"),
-    ];
+    ]
+}
+
+/// `pattern` appears in `line` at the start of a word, so a pattern is not
+/// found on the tail of a longer name. A pattern that starts with punctuation
+/// matches anywhere.
+fn has_pattern(line: &str, pattern: &str) -> bool {
+    let word_start = pattern.starts_with(|c: char| c.is_ascii_alphanumeric());
+    line.match_indices(pattern).any(|(at, _)| {
+        !word_start
+            || !line[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// The README's one line saying where the crate is used may name the product.
+fn may_name_product(file_name: &str, line: &str) -> bool {
+    file_name == "README.md" && line.trim_start().starts_with(&format!("Used in {}", product()))
+}
+
+/// What's wrong with one line of one file.
+fn line_hits(file_name: &str, line: &str, banned: &[String]) -> Vec<String> {
+    let k = product();
+    let mut hits: Vec<String> = banned
+        .iter()
+        .filter(|b| has_pattern(line, b))
+        .map(|b| format!("{b:?}"))
+        .collect();
+    // The product name as a word.
+    let named = line.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == k);
+    if named && !may_name_product(file_name, line) {
+        hits.push(format!("the word {k:?}"));
+    }
+    hits
+}
+
+#[test]
+fn no_internal_names() {
+    let banned = banned();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut all = Vec::new();
     files(root, &mut all);
@@ -52,18 +98,48 @@ fn no_internal_names() {
         }
         let text = std::fs::read_to_string(f)
             .unwrap_or_else(|e| panic!("{}: not UTF-8 text: {e}", f.display()));
+        let name = f.file_name().expect("file name").to_string_lossy();
         for (i, line) in text.lines().enumerate() {
-            for b in &banned {
-                if line.contains(b.as_str()) {
-                    hits.push(format!("{}:{}: {b:?}", f.display(), i + 1));
-                }
-            }
-            // The product name as a word.
-            let mut words = line.split(|c: char| !c.is_ascii_alphanumeric());
-            if words.any(|w| w == k.as_str()) {
-                hits.push(format!("{}:{}: the word {k:?}", f.display(), i + 1));
+            for hit in line_hits(&name, line, &banned) {
+                hits.push(format!("{}:{}: {hit}", f.display(), i + 1));
             }
         }
     }
     assert!(hits.is_empty(), "internal names found:\n{}", hits.join("\n"));
+}
+
+#[test]
+fn a_pattern_matches_the_whole_word_not_the_tail_of_a_name() {
+    let lower = product().to_lowercase();
+    let path = format!("{lower}::");
+    assert!(has_pattern(&format!("use {path}thing;"), &path));
+    assert!(has_pattern(&format!("{path}thing"), &path));
+    assert!(has_pattern(&format!("({path}thing)"), &path));
+    assert!(!has_pattern(&format!("use bloc{path}Thing;"), &path), "the tail of a crate name");
+    assert!(!has_pattern(&format!("use a_{path}Thing;"), &path));
+    // Either occurrence counts.
+    assert!(has_pattern(&format!("bloc{path}a and {path}b"), &path));
+
+    // A host name is still found after a dot, and a dotted path anywhere.
+    let host = format!("{lower}.dev");
+    assert!(has_pattern(&format!("https://a.{host}/"), &host));
+    let dir = format!(".{lower}/");
+    assert!(has_pattern(&format!("a{dir}b"), &dir));
+}
+
+#[test]
+fn only_the_used_in_line_of_the_readme_may_name_the_product() {
+    let k = product();
+    let banned = banned();
+    let used_in = format!("Used in {k}.");
+    assert_eq!(line_hits("README.md", &used_in, &banned), Vec::<String>::new());
+    assert_eq!(line_hits("README.md", &format!("  {used_in}"), &banned), Vec::<String>::new());
+
+    let elsewhere = format!("Works well with {k}.");
+    assert_eq!(line_hits("README.md", &elsewhere, &banned).len(), 1);
+    assert_eq!(line_hits("lib.rs", &used_in, &banned).len(), 1, "README only");
+
+    // The allowance covers the word, not the other names.
+    let host = format!("{used_in} See {}.dev.", k.to_lowercase());
+    assert_eq!(line_hits("README.md", &host, &banned).len(), 1);
 }

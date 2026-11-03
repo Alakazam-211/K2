@@ -178,11 +178,8 @@ impl MicOs for NoCheck {
 #[allow(unsafe_code)]
 mod macos {
     use super::{MicOs, MicStatus, Reply};
-    // Renamed so this path doesn't trip the publish scrub's match on an internal
-    // address form.
-    use block2 as objc_block;
-    use objc_block::RcBlock;
-    use objc2::rc::{autoreleasepool, Retained};
+    use block2::RcBlock;
+    use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyObject, Bool};
     use objc2::{class, msg_send};
 
@@ -221,19 +218,19 @@ mod macos {
                 // SAFETY: Foundation class and instance methods with the
                 // signatures Apple documents; the C string is NUL-terminated
                 // and outlives the call, and each object is checked for nil.
+                // They return autoreleased objects, which this pool keeps
+                // alive, so raw pointers are enough and nothing is retained.
                 unsafe {
-                    let bundle: Option<Retained<AnyObject>> =
-                        msg_send![class!(NSBundle), mainBundle];
-                    let key: Option<Retained<AnyObject>> = msg_send![
+                    let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+                    let key: *mut AnyObject = msg_send![
                         class!(NSString),
                         stringWithUTF8String: c"NSMicrophoneUsageDescription".as_ptr()
                     ];
-                    let (Some(bundle), Some(key)) = (bundle, key) else {
+                    if bundle.is_null() || key.is_null() {
                         return false;
-                    };
-                    let value: Option<Retained<AnyObject>> =
-                        msg_send![&*bundle, objectForInfoDictionaryKey: &*key];
-                    value.is_some()
+                    }
+                    let value: *mut AnyObject = msg_send![bundle, objectForInfoDictionaryKey: key];
+                    !value.is_null()
                 }
             })
         }

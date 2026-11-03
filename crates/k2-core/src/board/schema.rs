@@ -528,7 +528,8 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
             }
             let lower = s.to_ascii_lowercase();
             let ok = (lower.starts_with("http://") && s.len() > 7 || lower.starts_with("https://") && s.len() > 8)
-                && !s.chars().any(char::is_whitespace);
+                // U+FEFF too: the widget's `\s` counts it, and a board file refuses it.
+                && !s.chars().any(|c| c.is_whitespace() || c == '\u{FEFF}');
             if !ok {
                 return Err(bad("an http:// or https:// address"));
             }

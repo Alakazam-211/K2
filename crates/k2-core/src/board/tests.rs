@@ -162,6 +162,7 @@ fn refusals_are_typed_and_nothing_is_cut() {
     assert_eq!(err(add(json!({"type": "sticky", "color": "mauve"}))).code, "bad_field");
     assert_eq!(err(add(json!({"type": "sticky", "colour": "red"}))).code, "unknown_field");
     assert_eq!(err(add(json!({"type": "shape", "link": "ftp://x"}))).code, "bad_field");
+    assert_eq!(err(add(json!({"type": "shape", "link": "https://x.test/\u{feff}a"}))).code, "bad_field", "what the widget and a board file refuse");
     assert_eq!(err(add(json!({"type": "image", "crop": {"x": 0.5, "y": 0, "w": 0.6, "h": 1}}))).code, "bad_field", "outside the image");
     assert_eq!(err(add(json!({"type": "image", "crop": {"x": -0.1, "y": 0, "w": 0.5, "h": 1}}))).code, "bad_field", "never clamped");
     // Images: blob refs only; a data: URL is refused with the way in.

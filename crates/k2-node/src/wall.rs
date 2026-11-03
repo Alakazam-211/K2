@@ -172,7 +172,9 @@ pub struct SeatbeltTenant {
 /// - **A tenant's jobs** can't read or write the node home (only
 ///   `toolchains/`, read-only), any other tenant's root, `/private/tmp`
 ///   or `/private/var/tmp` (their `TMPDIR` is their own), can't connect
-///   to a socket in another server's root or the node home.
+///   to a socket in another server's root or the node home. They may stat
+///   the tenants root and the node home themselves, and nothing else about
+///   either: their own paths run through those two directories.
 ///
 /// One uid means other servers' processes stay visible (no Seatbelt
 /// `process-info*` deny: unproven, see below) and signals
@@ -198,6 +200,17 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
         }
         rw(&mut p, "deny", &troot);
         rw(&mut p, "allow", &own);
+        // `file-read*` includes `file-read-metadata`, so the denies above
+        // also stop an lstat of these two directories. Every path of the
+        // job's own runs through one of them (`<root>/<slot>/…`,
+        // `<home>/toolchains/…`), and canonicalizing a path lstats each
+        // parent: without this `realpath`, `mkdir -p`, a shell's `cd`, cargo
+        // and rustc all fail with EPERM. Only the two exact directories, only
+        // their metadata: no `file-read-data`, so neither can be listed, and
+        // not a subpath, so nothing inside them can be stat'ed.
+        for d in [&troot, &real_path(&t.home)] {
+            p.push_str(&format!("(allow file-read-metadata (literal {}))\n", sb_str(d)));
+        }
         // Unix sockets: none in another server's root or the node home.
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&troot)));
         p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(&real_path(&t.home))));
@@ -1105,6 +1118,61 @@ mod tests {
         assert!(p.find("mDNSResponder").unwrap() < allow);
         let full = seatbelt_profile(&[], &[], false);
         assert!(!full.contains("network"), "network = full adds no network rule");
+    }
+
+    fn tenant_profile(slot: u8, home: &str) -> String {
+        let home = PathBuf::from(home);
+        let tenants_root = PathBuf::from(format!("{}-t", home.display()));
+        seatbelt_tenant_profile(&[], &[], false, &SeatbeltTenant { slot, home, tenants_root })
+    }
+
+    fn at(p: &str, line: &str) -> usize {
+        p.find(line).unwrap_or_else(|| panic!("missing {line} in:\n{p}"))
+    }
+
+    /// A tenant's job may stat the tenants root and the node home, exactly
+    /// those two, metadata only; every other rule around them stays. A
+    /// metadata allow before its deny would do nothing (Seatbelt takes the
+    /// last match).
+    #[test]
+    fn a_tenants_profile_opens_only_the_two_parents_metadata() {
+        let p = tenant_profile(1, "/nonexistent-k2/k2node");
+        let lines: Vec<&str> = p.lines().filter(|l| l.contains("file-read-metadata")).collect();
+        assert_eq!(
+            lines,
+            vec!["(allow file-read-metadata (literal \"/nonexistent-k2/k2node-t\"))", "(allow file-read-metadata (literal \"/nonexistent-k2/k2node\"))"],
+            "{p}"
+        );
+        assert!(!p.contains("file-read-data"), "nothing may list either directory: {p}");
+        let deny_root = at(&p, "(deny file-read* file-write* (subpath \"/nonexistent-k2/k2node-t\"))");
+        let deny_home = at(&p, "(deny file-read* file-write* (subpath \"/nonexistent-k2/k2node\"))");
+        let own = at(&p, "(allow file-read* file-write* (subpath \"/nonexistent-k2/k2node-t/1\"))");
+        let tools = at(&p, "(allow file-read* (subpath \"/nonexistent-k2/k2node/toolchains\"))");
+        assert!(deny_root < own && deny_home < tools, "{p}");
+        assert!(deny_root < at(&p, lines[0]) && deny_home < at(&p, lines[1]), "the metadata allows come after their denies: {p}");
+        // No other rule opens either directory or a neighbour.
+        let allows: Vec<&str> = p.lines().filter(|l| l.starts_with("(allow file-")).collect();
+        assert_eq!(allows.len(), 4, "own root, toolchains, two metadata lines: {p}");
+        assert!(!p.contains("(allow file-write"), "no write-only allow: {p}");
+    }
+
+    /// Seatbelt matches real paths: `/var/k2node` is `/private/var/k2node`
+    /// on a Mac, or the literal never matches and the fix does nothing.
+    #[test]
+    fn a_tenants_metadata_allows_use_the_real_path() {
+        let p = tenant_profile(1, "/var/nonexistent-k2node");
+        let top = if cfg!(target_os = "macos") { "/private/var" } else { "/var" };
+        assert!(p.contains(&format!("(allow file-read-metadata (literal \"{top}/nonexistent-k2node-t\"))")), "{p}");
+        assert!(p.contains(&format!("(allow file-read-metadata (literal \"{top}/nonexistent-k2node\"))")), "{p}");
+    }
+
+    /// The owner's jobs never go through the tenants root, so it stays
+    /// closed to them, metadata too.
+    #[test]
+    fn the_owners_profile_opens_no_metadata() {
+        let p = tenant_profile(k2_node_proto::share::OWNER_SLOT, "/nonexistent-k2/k2node");
+        assert!(p.contains("(deny file-read* file-write* (subpath \"/nonexistent-k2/k2node-t\"))"), "{p}");
+        assert!(!p.contains("file-read-metadata"), "{p}");
     }
 
     #[test]

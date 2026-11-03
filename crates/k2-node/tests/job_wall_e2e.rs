@@ -9,6 +9,8 @@
 //!   config, `/Users`, and (network none) every non-loopback address.
 //!
 //! The Linux `k2job` unit needs root and systemd: `job_wall_linux.rs`.
+//! The Seatbelt tests can't run inside a `k2 compute` job: Seatbelt doesn't
+//! nest (`sandbox_apply: Operation not permitted`).
 // pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
 // until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
 #![cfg(unix)]
@@ -140,6 +142,40 @@ mod seatbelt {
         }
         assert!(!ok(&v, "list", "/Users"), "the wall let the job list /Users: {v}");
         assert!(ok(&v, "list", &own.display().to_string()), "the job's own home works: {v}");
+    }
+
+    /// The owner's jobs walk their own paths (`realpath`, `mkdir -p`), and
+    /// the tenants root stays closed to them, metadata too: a tenant's
+    /// metadata allow on it is its own profile's, never the owner's. Control:
+    /// the test process stats it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_job_walks_its_paths_and_cant_stat_the_tenants_root() {
+        let mut fake = Fake::start().await;
+        let n = start_node(&fake, "wall-sb-meta", "", |o| o.wall = Some(Wall::Seatbelt)).await;
+        let mut c = fake.next_conn().await;
+        ready(&mut c).await;
+        let troot = n.layout.tenants_root();
+        let secret = troot.join("1/cache/secret");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(&secret, "SECRET-tenant").unwrap();
+        std::fs::metadata(&troot).expect("control: the test process stats the tenants root");
+        let own = n.layout.job_dir("sbm", 1).join("home");
+        let script = r#"c() { t=$1; shift; if "$@" >/dev/null 2>&1; then echo "$t OK"; else echo "$t NO"; fi; }
+c realpath /bin/realpath "$1"
+c mkdir /bin/mkdir -p "$1/a/b"
+c stat-root /usr/bin/stat -f %N "$2"
+c ls-root /bin/ls -A "$2"
+c stat-secret /usr/bin/stat -f %N "$2/1/cache/secret"
+c cat-secret /bin/cat "$2/1/cache/secret"
+"#;
+        let (o, t) = (own.display().to_string(), troot.display().to_string());
+        c.send(Frame::Assign(assign(plan("sbm", &["/bin/sh", "-c", script, "sh", &o, &t]), 1)));
+        let fr = run_to_receipt(&mut c, "sbm").await;
+        assert_eq!(last_state(&fr, "sbm").state, JobState::Done, "{fr:?}");
+        let out = text(&logs_of(&fr, "sbm"), LogStream::Out);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines, ["realpath OK", "mkdir OK", "stat-root NO", "ls-root NO", "stat-secret NO", "cat-secret NO"], "{out}");
+        assert!(own.join("a/b").is_dir(), "mkdir -p made it");
     }
 
     /// The sandbox's own refusal: a socket the profile denies fails at

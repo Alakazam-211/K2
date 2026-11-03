@@ -9,6 +9,10 @@
 //! outside any sandbox, reaches the thing), and any byte of another
 //! server's secret in a job's output fails the test.
 //!
+//! Seatbelt doesn't nest: inside a `k2 compute` job (already under the
+//! node's profile) `sandbox-exec` fails with `sandbox_apply: Operation not
+//! permitted`. Run these on a Mac outside a job.
+//!
 //!   cargo test -p k2-node --test tenant_wall_macos
 // pending k2-node Windows port: k2-node (the compute node runtime) is Unix-only
 // until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
@@ -93,6 +97,11 @@ fn short_dir() -> PathBuf {
 
 async fn mac_in(dir: PathBuf, slots: &[(Slot, Trust, Network)], prepare: bool) -> Mac {
     assert!(k2_node::wall::seatbelt_available(), "sandbox-exec is missing");
+    let nests = std::process::Command::new(k2_node::wall::SANDBOX_EXEC)
+        .args(["-p", "(version 1)(allow default)(deny file-read* (subpath \"/nonexistent-k2\"))", "--", "/usr/bin/true"])
+        .output()
+        .unwrap();
+    assert!(nests.status.success(), "these tests can't run under another sandbox (a k2 compute job?): {}", String::from_utf8_lossy(&nests.stderr));
     let mut fake = Fake::start().await;
     let n = start_node_in(&fake, dir, "", |o| o.wall = Some(Wall::Seatbelt)).await;
     let mut conn = fake.next_conn().await;
@@ -388,4 +397,214 @@ async fn w4_a_tenants_profile_hides_no_more_than_the_owners_on_a_mac() {
     eprintln!("owner: {:?} tenant: {:?}", owner.out, tenant.out);
     assert!(tenant.out.contains("KILLED") && owner.out.contains("KILLED"), "a job signals its own children: {} / {}", owner.out, tenant.out);
     assert_eq!(tenant.out, owner.out, "the tenant profile changes process visibility no more than the owner's");
+}
+
+/// One shell check per line of the output: `<tag> OK <output>` or
+/// `<tag> NO <output>`.
+fn check_script(checks: &[(&str, Vec<String>)]) -> String {
+    let mut s = String::from("c() { tag=$1; shift; if o=$(\"$@\" 2>&1); then echo \"$tag OK $o\"; else echo \"$tag NO $o\"; fi; }\n");
+    for (tag, argv) in checks {
+        s.push_str(&format!("c {tag}"));
+        for a in argv {
+            assert!(!a.contains('\''), "a test path with a quote: {a}");
+            s.push_str(&format!(" '{a}'"));
+        }
+        s.push('\n');
+    }
+    s
+}
+
+fn checked<'a>(out: &'a str, tag: &str) -> (bool, &'a str) {
+    let line = out.lines().find(|l| l.split_whitespace().next() == Some(tag)).unwrap_or_else(|| panic!("no check {tag} in:\n{out}"));
+    let rest = &line[tag.len() + 1..];
+    (rest.starts_with("OK"), rest[2..].trim())
+}
+
+fn argv(args: &[&str], paths: &[&Path]) -> Vec<String> {
+    args.iter().map(|a| a.to_string()).chain(paths.iter().map(|p| p.display().to_string())).collect()
+}
+
+/// A tenant's job walks its own paths through the two directories above
+/// them (a real node: `/var/k2node-t/<slot>/…`, `/var/k2node/toolchains/…`):
+/// `realpath`, `mkdir -p`, `cd` and `stat` work, in both spellings of the
+/// path. Those two directories give it their own metadata and nothing else:
+/// no listing, nothing inside another slot or the node home is read or even
+/// stat'ed, and nothing is written. Control: the test process, outside the
+/// sandbox, reaches everything the job is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn w10_a_tenant_walks_its_own_paths_and_learns_nothing_else_from_the_parents() {
+    // Under /var/folders: `/var` is a symlink to `/private/var`, as on a node.
+    let m = mac_in(short_dir(), OWN2, true).await;
+    let n = &m.n;
+    let l = &n.layout;
+    let troot = l.tenants_root();
+    let home = l.home.clone();
+    assert!(troot.starts_with("/private/var/"), "the test needs the /var spelling: {}", troot.display());
+    let var = |p: &Path| PathBuf::from("/var").join(p.strip_prefix("/private/var").unwrap());
+
+    let own = l.tenant(1).job_dir("w10", 1).join("home");
+    let other = troot.join("2");
+    let secret = l.tenant(2).cache().join("secret");
+    put(&secret, "SECRET-slot-2");
+    let loose = home.join("loose");
+    put(&loose, "SECRET-home");
+    let tool = l.toolchains().join("bin/tool.txt");
+    put(&tool, "toolchain");
+    let mode = |p: &Path| std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(p).unwrap().permissions());
+    let (root_mode, home_mode) = (mode(&troot), mode(&home));
+    let peek = own.join("peek");
+
+    let stat = ["/usr/bin/stat", "-f", "%N"];
+    let works: Vec<(&str, Vec<String>)> = vec![
+        ("realpath-own", argv(&["/bin/realpath"], &[&own])),
+        ("realpath-own-var", argv(&["/bin/realpath"], &[&var(&own)])),
+        ("realpath-tool", argv(&["/bin/realpath"], &[&tool])),
+        ("realpath-tool-var", argv(&["/bin/realpath"], &[&var(&tool)])),
+        ("stat-own", argv(&stat, &[&own])),
+        ("stat-root", argv(&stat, &[&troot])),
+        ("stat-home", argv(&stat, &[&home])),
+        ("mkdir-own", argv(&["/bin/mkdir", "-p"], &[&own.join("a/b/c")])),
+        ("mkdir-own-var", argv(&["/bin/mkdir", "-p"], &[&var(&own).join("d/e/f")])),
+        ("cd-own", argv(&["/bin/sh", "-c", "cd \"$1\" && /bin/pwd -P", "sh"], &[&var(&own)])),
+    ];
+    // Read-only, so the control runs them too.
+    let reads: Vec<(&str, Vec<String>)> = vec![
+        ("ls-root", argv(&["/bin/ls", "-A"], &[&troot])),
+        ("ls-home", argv(&["/bin/ls", "-A"], &[&home])),
+        ("ls-slot", argv(&["/bin/ls", "-A"], &[&other])),
+        ("stat-slot", argv(&stat, &[&other])),
+        ("stat-slot-cache", argv(&stat, &[&other.join("cache")])),
+        ("stat-secret", argv(&stat, &[&secret])),
+        ("cat-secret", argv(&["/bin/cat"], &[&secret])),
+        ("realpath-secret", argv(&["/bin/realpath"], &[&secret])),
+        ("stat-state", argv(&stat, &[&l.state()])),
+        ("ls-state", argv(&["/bin/ls", "-A"], &[&l.state()])),
+        ("stat-key", argv(&stat, &[&l.key()])),
+        ("stat-jobs", argv(&stat, &[&l.jobs()])),
+        ("ls-repos", argv(&["/bin/ls", "-A"], &[&l.repos()])),
+        ("stat-loose", argv(&stat, &[&loose])),
+        ("cat-loose", argv(&["/bin/cat"], &[&loose])),
+    ];
+    let writes: Vec<(&str, Vec<String>)> = vec![
+        ("touch-root-file", argv(&["/usr/bin/touch"], &[&troot.join("planted")])),
+        ("mkdir-root-slot", argv(&["/bin/mkdir"], &[&troot.join("3")])),
+        ("touch-root", argv(&["/usr/bin/touch", "-c"], &[&troot])),
+        ("chmod-root", argv(&["/bin/chmod", "777"], &[&troot])),
+        ("mv-slot", argv(&["/bin/mv"], &[&other, &troot.join("2x")])),
+        ("rm-secret", argv(&["/bin/rm"], &[&secret])),
+        ("write-secret", argv(&["/bin/sh", "-c", "echo poisoned > \"$1\"", "sh"], &[&secret])),
+        ("touch-home-file", argv(&["/usr/bin/touch"], &[&home.join("planted")])),
+        ("mkdir-home-dir", argv(&["/bin/mkdir"], &[&home.join("planted-dir")])),
+        ("touch-home", argv(&["/usr/bin/touch", "-c"], &[&home])),
+        ("chmod-home", argv(&["/bin/chmod", "777"], &[&home])),
+        ("touch-tools", argv(&["/usr/bin/touch"], &[&l.toolchains().join("planted")])),
+        ("cat-through-link", argv(&["/bin/sh", "-c", "ln -s \"$1\" \"$2\" && cat \"$2/cache/secret\"", "sh"], &[&other, &peek])),
+    ];
+
+    let control = std::process::Command::new("/bin/sh").arg("-c").arg(check_script(&reads)).output().unwrap();
+    let control = String::from_utf8_lossy(&control.stdout).into_owned();
+    for (tag, _) in &reads {
+        assert!(checked(&control, tag).0, "control: the test process reaches {tag}:\n{control}");
+    }
+
+    let script = [works.as_slice(), reads.as_slice(), writes.as_slice()].concat();
+    let got = run(n, 1, "w10", &["/bin/sh", "-c", &check_script(&script)]).await;
+    for (tag, _) in &works {
+        assert!(checked(&got.out, tag).0, "slot 1's own path, {tag}:\n{}\n{}", got.out, got.err);
+    }
+    let real = own.display().to_string();
+    assert_eq!(checked(&got.out, "realpath-own").1, real, "{}", got.out);
+    assert_eq!(checked(&got.out, "realpath-own-var").1, real, "{}", got.out);
+    assert_eq!(checked(&got.out, "cd-own").1, real, "{}", got.out);
+    assert_eq!(checked(&got.out, "realpath-tool-var").1, tool.display().to_string(), "{}", got.out);
+    assert!(own.join("a/b/c").is_dir() && own.join("d/e/f").is_dir(), "mkdir -p made them");
+    for (tag, _) in reads.iter().chain(&writes) {
+        assert!(!checked(&got.out, tag).0, "the wall let slot 1 do {tag}:\n{}", got.out);
+    }
+    assert!(!got.out.contains("SECRET") && !got.err.contains("SECRET"), "a secret leaked to slot 1:\n{}\n{}", got.out, got.err);
+
+    assert_eq!(std::fs::read_to_string(&secret).unwrap(), "SECRET-slot-2", "the other slot's file is untouched");
+    assert!(other.is_dir() && !troot.join("2x").exists());
+    assert!(!troot.join("planted").exists() && !troot.join("3").exists(), "nothing planted in the tenants root");
+    assert!(!home.join("planted").exists() && !home.join("planted-dir").exists(), "nothing planted in the node home");
+    assert!(!l.toolchains().join("planted").exists(), "toolchains stay read-only");
+    assert_eq!((mode(&troot), mode(&home)), (root_mode, home_mode), "metadata is read-only: the modes didn't change");
+
+    // Slot 2 still reads its own file (the refusals above were the wall's).
+    let own_read = run(n, 2, "w10-own", &["/bin/cat", &secret.display().to_string()]).await;
+    assert_eq!(own_read.out, "SECRET-slot-2", "control: slot 2 reads its own");
+}
+
+/// The bug this guards (Sew's macOS builds, 0.46.7): a real `cargo build` in
+/// a tenant's job, with a path dependency and a build script, the toolchain
+/// where a node keeps it (`<home>/toolchains/cargo`). cargo rewrites each
+/// unit's dep-info and canonicalizes paths through the tenants root, and
+/// rustc finds its sysroot by canonicalizing its own path through the node
+/// home; both failed with EPERM. Its `TMPDIR` is its own, and `/private/tmp`
+/// stays closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn w11_a_real_cargo_build_with_a_build_script_passes_in_a_tenants_job() {
+    let m = mac("mac-w11", OWN2, true).await;
+    let n = &m.n;
+    let l = &n.layout;
+    let out = std::process::Command::new("rustc").args(["--print", "sysroot"]).output().expect("this test needs rustc on PATH");
+    assert!(out.status.success(), "rustc --print sysroot: {}", String::from_utf8_lossy(&out.stderr));
+    let sysroot = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let tools = l.toolchains().join("cargo");
+    assert!(!tools.exists(), "{} is the clone's", tools.display());
+    let cp = std::process::Command::new("/bin/cp").arg("-Rc").arg(&sysroot).arg(&tools).status().unwrap();
+    assert!(cp.success(), "clone {} into the node home", sysroot.display());
+
+    let script = r#"set -e
+p="$HOME/proj"
+mkdir -p "$p/src" "$p/dep/src"
+cd "$p"
+cat > Cargo.toml <<'T'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+dep = { path = "dep" }
+[workspace]
+T
+cat > src/main.rs <<'T'
+fn main() { println!("app says {}", dep::said()); }
+T
+cat > dep/Cargo.toml <<'T'
+[package]
+name = "dep"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+T
+cat > dep/build.rs <<'T'
+use std::{env, fs};
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let out = fs::canonicalize(env::var("OUT_DIR").unwrap()).unwrap();
+    let cwd = env::current_dir().unwrap().canonicalize().unwrap();
+    assert!(cwd.join("build.rs").exists());
+    fs::write(out.join("said.rs"), "pub fn said() -> &'static str { \"built by a build script\" }").unwrap();
+}
+T
+cat > dep/src/lib.rs <<'T'
+include!(concat!(env!("OUT_DIR"), "/said.rs"));
+T
+cargo build --offline
+"$CARGO_TARGET_DIR/debug/app"
+touch src/main.rs dep/src/lib.rs
+cargo build --offline
+"$CARGO_TARGET_DIR/debug/app"
+echo "cargo=$(command -v cargo)"
+echo "sysroot=$(rustc --print sysroot)"
+"#;
+    let mut p = plan("w11", &["/bin/sh", "-c", script]);
+    p.limits.max_secs = 110;
+    let got = run_plan(n, 1, p).await;
+    assert_eq!(got.state, JobState::Done, "a tenant's cargo build: {:?}\nout={}\nerr={}", got.reason, got.out, got.err);
+    assert_eq!(got.out.matches("app says built by a build script").count(), 2, "out={}\nerr={}", got.out, got.err);
+    let real = std::fs::canonicalize(&tools).unwrap();
+    assert!(got.out.contains(&format!("sysroot={}", real.display())), "rustc ran from the node home's toolchains: {}", got.out);
+    assert!(got.out.contains(&format!("cargo={}", tools.join("bin/cargo").display())), "cargo ran from the node home's toolchains: {}", got.out);
 }

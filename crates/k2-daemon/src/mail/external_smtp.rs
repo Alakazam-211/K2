@@ -382,6 +382,8 @@ pub struct OutAttachment {
     pub filename: String,
     pub content_type: String,
     pub bytes: Vec<u8>,
+    /// The content scan read all of it (shown to an approver).
+    pub scanned: bool,
 }
 
 impl std::fmt::Debug for OutAttachment {
@@ -714,7 +716,7 @@ mod tests {
         let cc = vec!["cc@dest.example".to_string()];
         let bcc = vec!["boss@shop.example".to_string(), "owner@shop.example".to_string()];
         let att = OutAttachment {
-            filename: "a.txt".to_string(),
+            scanned: false, filename: "a.txt".to_string(),
             content_type: "text/plain".to_string(),
             bytes: b"x".to_vec(),
         };
@@ -1078,7 +1080,7 @@ mod tests {
 
     fn att(filename: &str, content_type: &str, bytes: &[u8]) -> OutAttachment {
         OutAttachment {
-            filename: filename.to_string(),
+            scanned: false, filename: filename.to_string(),
             content_type: content_type.to_string(),
             bytes: bytes.to_vec(),
         }

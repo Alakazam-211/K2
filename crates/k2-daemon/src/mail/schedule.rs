@@ -251,7 +251,7 @@ pub fn flush_one_scheduled(
     if let Some(why) = &rules.refused {
         return refuse(store, &format!("not sent: {why}"));
     }
-    let mut msg = match store.load_message(id) {
+    let mut msg = match store.load_message_full(id) {
         Ok(m) => m,
         Err(e) => return refuse(store, &format!("not sent: stored message unreadable: {e}")),
     };
@@ -389,7 +389,11 @@ pub fn spawn_scheduled_flusher() -> tokio::task::JoinHandle<()> {
         k2_core::log_debug!("[mail/schedule] flusher started — tick={}s", tick.as_secs());
         loop {
             let _ = tokio::task::spawn_blocking(|| {
-                let _ = flush_due_scheduled(now_secs_wall(), 50);
+                let now = now_secs_wall();
+                // Expiry can't wait for someone to open a list: a headless box
+                // may hold files for nobody.
+                send::auto_deny_expired(now);
+                let _ = flush_due_scheduled(now, 50);
             })
             .await;
             tokio::time::sleep(tick).await;

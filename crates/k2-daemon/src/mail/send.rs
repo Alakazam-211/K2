@@ -65,6 +65,14 @@ pub const MAX_FROM_NAME_CHARS: usize = 128;
 pub const MAX_HOSTED_TEXT_JSON_BYTES: usize = 9_500_000;
 /// Most `--reply-to` addresses on one message.
 pub const MAX_REPLY_TO: usize = 3;
+/// Most bytes of attachments this box holds at once, for messages waiting for
+/// approval or a send time, across every workspace.
+pub const MAX_HELD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// Free disk that must remain after holding another message's files.
+pub const MIN_FREE_AFTER_HOLD: u64 = 2 * 1024 * 1024 * 1024;
+/// A message with files can be scheduled at most this far ahead (the box holds
+/// the bytes until it leaves).
+pub const MAX_HELD_SCHEDULE_SECS: i64 = 7 * 86_400;
 /// §8.4 loop caps.
 pub const MAX_REPLY_REFERENCES: usize = 100;
 pub const MAX_THREAD_REPLIES_PER_HOUR: usize = 4;
@@ -315,15 +323,31 @@ pub fn hide_links(text: &str) -> String {
     out
 }
 
-/// One attachment held in an outbound body file (MCS2). `Debug` prints
-/// the size only — never the bytes.
+/// One attachment of a composed message. The body file keeps this entry; the
+/// bytes live in their own 0600 file beside it (`<id>.files/<n>`), so listing
+/// the approvals queue never reads them. `bytes` is in memory only while a
+/// message is being sent. `Debug` prints the size, never the bytes.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAttachment {
     pub filename: String,
     pub content_type: String,
-    /// Standard base64 of the file bytes.
-    pub data_b64: String,
+    /// Bytes; recorded so a queue can be listed without reading them.
+    #[serde(default)]
+    pub size: u64,
+    /// Hex SHA-256: checked when the bytes are read back, and kept in the
+    /// outbox as the record of what left.
+    #[serde(default)]
+    pub sha256: String,
+    /// The content scan read all of it (`secret_paths::scan_attachment`).
+    /// False for a binary file and for what a forward copies from outside.
+    #[serde(default)]
+    pub scanned: bool,
+    /// A message queued by an older K2 held its bytes here, base64.
+    #[serde(default, rename = "dataB64", skip_serializing_if = "Option::is_none")]
+    pub legacy_b64: Option<String>,
+    #[serde(skip)]
+    pub bytes: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl std::fmt::Debug for StoredAttachment {
@@ -331,18 +355,28 @@ impl std::fmt::Debug for StoredAttachment {
         f.debug_struct("StoredAttachment")
             .field("filename", &self.filename)
             .field("content_type", &self.content_type)
-            .field("data_b64", &format_args!("<{} chars>", self.data_b64.len()))
+            .field("size", &self.size())
             .finish()
     }
 }
 
+/// Hex SHA-256 of some bytes.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 impl StoredAttachment {
-    /// The file's size in bytes, from its base64 length (no decoding: the
-    /// approvals list reads this for every waiting file).
+    /// The file's size in bytes.
     pub fn size(&self) -> u64 {
-        let b = self.data_b64.as_bytes();
-        let pad = b.iter().rev().take(2).filter(|c| **c == b'=').count() as u64;
-        (b.len() as u64 / 4 * 3).saturating_sub(pad)
+        match &self.legacy_b64 {
+            Some(b64) => {
+                let b = b64.as_bytes();
+                let pad = b.iter().rev().take(2).filter(|c| **c == b'=').count() as u64;
+                (b.len() as u64 / 4 * 3).saturating_sub(pad)
+            }
+            None => self.size,
+        }
     }
 
     /// What the approver is shown for this file.
@@ -352,27 +386,43 @@ impl StoredAttachment {
             "name": self.filename,
             "size": self.size(),
             "contentType": self.content_type,
+            "scanned": self.scanned,
         })
     }
 
     pub fn from_out(a: &crate::mail::external_smtp::OutAttachment) -> StoredAttachment {
-        use base64::Engine as _;
         StoredAttachment {
             filename: a.filename.clone(),
             content_type: a.content_type.clone(),
-            data_b64: base64::engine::general_purpose::STANDARD.encode(&a.bytes),
+            size: a.bytes.len() as u64,
+            sha256: sha256_hex(&a.bytes),
+            scanned: a.scanned,
+            legacy_b64: None,
+            bytes: Some(std::sync::Arc::new(a.bytes.clone())),
+        }
+    }
+
+    /// The file's bytes, from memory or a legacy body. A stored file has to be
+    /// read back first ([`OutboundStore::load_message_full`]).
+    pub fn bytes_now(&self) -> Result<Vec<u8>, String> {
+        use base64::Engine as _;
+        if let Some(b) = &self.bytes {
+            return Ok(b.as_ref().clone());
+        }
+        match &self.legacy_b64 {
+            Some(b64) => base64::engine::general_purpose::STANDARD
+                .decode(b64.as_bytes())
+                .map_err(|e| format!("stored attachment '{}' is corrupt: {e}", self.filename)),
+            None => Err(format!("attachment '{}' wasn't read back", self.filename)),
         }
     }
 
     pub fn to_out(&self) -> Result<crate::mail::external_smtp::OutAttachment, String> {
-        use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(self.data_b64.as_bytes())
-            .map_err(|e| format!("stored attachment '{}' is corrupt: {e}", self.filename))?;
         Ok(crate::mail::external_smtp::OutAttachment {
             filename: self.filename.clone(),
             content_type: self.content_type.clone(),
-            bytes,
+            bytes: self.bytes_now()?,
+            scanned: self.scanned,
         })
     }
 }
@@ -716,8 +766,18 @@ pub trait OutboundStore {
         note: Option<&str>,
         now: i64,
     ) -> Result<bool, String>;
-    /// The composed message back from the body file.
+    /// The composed message back from the body file: its files are named,
+    /// not read.
     fn load_message(&self, id: &str) -> Result<OutboundMessage, String>;
+    /// [`Self::load_message`] with every file's bytes read back and checked
+    /// against the hash queued with them: what a send uses.
+    fn load_message_full(&self, id: &str) -> Result<OutboundMessage, String> {
+        self.load_message(id)
+    }
+    /// May the box hold `bytes` more of attachments? `Err` says why not.
+    fn check_can_hold(&self, _bytes: u64) -> Result<(), String> {
+        Ok(())
+    }
     /// Append one line to the row's note (submit-failure details).
     fn append_note(&self, id: &str, extra: &str, now: i64) -> Result<(), String>;
     /// Rewrite the stored body of a one-time-link mail with its links
@@ -737,7 +797,7 @@ pub trait OutboundStore {
 const OUTBOUND_COLS: &str = "id, owner_project_id, agent_name, from_address, to_json, \
                              cc_json, subject, body_ref, attachments_ref, status, \
                              decided_by, note, created_at, updated_at, decided_at, sent_at, \
-                             send_after, bcc_json, policy_bcc_json, reply_to_json";
+                             send_after, bcc_json, policy_bcc_json, reply_to_json, body_sha256";
 
 fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
     Ok(MailOutbound {
@@ -761,6 +821,7 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
         bcc_json: r.get(17)?,
         policy_bcc_json: r.get(18)?,
         reply_to_json: r.get(19)?,
+        body_sha256: r.get(20)?,
     })
 }
 
@@ -770,6 +831,8 @@ fn map_outbound_row(r: &rusqlite::Row) -> rusqlite::Result<MailOutbound> {
 /// the DB and never in logs).
 pub struct DbOutboundStore {
     body_dir: PathBuf,
+    max_held_bytes: u64,
+    min_free_after_hold: u64,
 }
 
 impl Default for DbOutboundStore {
@@ -779,43 +842,124 @@ impl Default for DbOutboundStore {
         // so the test build points the body dir at a per-process temp
         // location instead. Production stays `~/.k2/mail-outbound`.
         if cfg!(test) {
-            return Self {
-                body_dir: std::env::temp_dir()
-                    .join(format!("k2-mail-outbound-testdefault-{}", std::process::id())),
-            };
+            return Self::in_dir(
+                std::env::temp_dir().join(format!("k2-mail-outbound-testdefault-{}", std::process::id())),
+            );
         }
         let dir = k2_core::paths::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".k2")
             .join("mail-outbound");
-        Self { body_dir: dir }
+        Self::in_dir(dir)
     }
 }
 
 impl DbOutboundStore {
+    fn in_dir(body_dir: PathBuf) -> Self {
+        Self { body_dir, max_held_bytes: MAX_HELD_BYTES, min_free_after_hold: MIN_FREE_AFTER_HOLD }
+    }
+
     #[cfg(test)]
     pub fn at(body_dir: PathBuf) -> Self {
-        Self { body_dir }
+        Self::in_dir(body_dir)
     }
 
     fn body_path(&self, id: &str) -> PathBuf {
         self.body_dir.join(format!("{id}.json"))
     }
+
+    fn files_dir(&self, id: &str) -> PathBuf {
+        self.body_dir.join(format!("{id}.files"))
+    }
+
+    /// Every byte held in `<id>.files/` folders now.
+    fn held_bytes(&self) -> u64 {
+        let Ok(rd) = std::fs::read_dir(&self.body_dir) else { return 0 };
+        rd.flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".files"))
+            .flat_map(|e| std::fs::read_dir(e.path()).into_iter().flatten().flatten())
+            .filter_map(|f| f.metadata().ok())
+            .map(|m| m.len())
+            .sum()
+    }
+
+    /// Write the attachments that are in memory, each to its own 0600 file.
+    fn write_files(&self, id: &str, msg: &OutboundMessage) -> Result<(), String> {
+        if !msg.attachments.iter().any(|a| a.bytes.is_some()) {
+            return Ok(());
+        }
+        let dir = self.files_dir(id);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("outbound files dir: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
+        for (n, a) in msg.attachments.iter().enumerate() {
+            if let Some(b) = &a.bytes {
+                write_private_new(&dir.join(n.to_string()), b)
+                    .map_err(|e| format!("outbound file write: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One held file's bytes, refused if they aren't the bytes queued.
+    fn read_held(&self, id: &str, n: usize, a: &StoredAttachment) -> Result<Vec<u8>, String> {
+        if a.legacy_b64.is_some() {
+            return a.bytes_now();
+        }
+        let bytes = std::fs::read(self.files_dir(id).join(n.to_string()))
+            .map_err(|e| format!("held file '{}' unreadable: {e}", a.filename))?;
+        if sha256_hex(&bytes) != a.sha256 {
+            return Err(format!("held file '{}' changed since it was queued", a.filename));
+        }
+        Ok(bytes)
+    }
+
+    /// One held file, for the approver.
+    pub fn load_file(&self, id: &str, n: usize) -> Result<Option<(StoredAttachment, Vec<u8>)>, String> {
+        let msg = self.load_message(id)?;
+        let Some(a) = msg.attachments.get(n).cloned() else { return Ok(None) };
+        let bytes = self.read_held(id, n, &a)?;
+        Ok(Some((a, bytes)))
+    }
+
+    /// Rewrite a body, keeping the row's hash in step. Its id already exists.
+    fn rewrite_body(&self, id: &str, msg: &OutboundMessage) -> Result<(), String> {
+        let path = self.body_path(id);
+        let body = serde_json::to_string(msg).map_err(|e| format!("outbound message serialize: {e}"))?;
+        std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound body write: {e}"))?;
+        restrict_mode(&path);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE mail_outbound SET body_sha256 = ?2 WHERE id = ?1",
+            rusqlite::params![id, sha256_hex(body.as_bytes())],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("outbound body hash: {e}"))
+    }
 }
 
-/// Create a body file readable by this user only from its first byte: it can
-/// hold a person's mail and, under approval, the files attached to it.
-#[cfg(unix)]
+/// Create a file readable by this user only from its first byte: it can hold
+/// a person's mail or a file attached to it. A failed write leaves nothing.
 fn write_private_new(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)?;
-    f.write_all(bytes)
-}
-
-#[cfg(not(unix))]
-fn write_private_new(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(file, bytes)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(file)?;
+    let wrote = f.write_all(bytes).and_then(|()| f.flush());
+    if wrote.is_err() {
+        drop(f);
+        let _ = std::fs::remove_file(file);
+    }
+    wrote
 }
 
 #[cfg(unix)]
@@ -841,8 +985,19 @@ impl OutboundStore for DbOutboundStore {
         let path = self.body_path(&id);
         let body = serde_json::to_string(new.message)
             .map_err(|e| format!("outbound message serialize: {e}"))?;
-        write_private_new(&path, body.as_bytes())
-            .map_err(|e| format!("outbound body write: {e}"))?;
+        let cleanup = |store: &Self| {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(store.files_dir(&id));
+        };
+        if let Err(e) = self.write_files(&id, new.message) {
+            cleanup(self);
+            return Err(e);
+        }
+        if let Err(e) = write_private_new(&path, body.as_bytes()) {
+            cleanup(self);
+            return Err(format!("outbound body write: {e}"));
+        }
+        let body_sha256 = sha256_hex(body.as_bytes());
         let to_json = serde_json::to_string(&new.message.to)
             .map_err(|e| format!("to serialize: {e}"))?;
         let cc_json = if new.message.cc.is_empty() {
@@ -885,9 +1040,9 @@ impl OutboundStore for DbOutboundStore {
                 "INSERT INTO mail_outbound (id, owner_project_id, agent_name, from_address, \
                  to_json, cc_json, subject, body_ref, attachments_ref, status, decided_by, \
                  decided_at, created_at, updated_at, send_after, bcc_json, policy_bcc_json, \
-                 reply_to_json) \
+                 reply_to_json, body_sha256) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, \
-                 ?15, ?16, ?17)",
+                 ?15, ?16, ?17, ?18)",
                 rusqlite::params![
                     id,
                     new.owner_project_id,
@@ -906,12 +1061,13 @@ impl OutboundStore for DbOutboundStore {
                     bcc_json,
                     policy_bcc_json,
                     reply_to_json,
+                    body_sha256,
                 ],
             )
         };
         if let Err(e) = inserted {
             // No row → no send; don't leave an orphan body file either.
-            let _ = std::fs::remove_file(&path);
+            cleanup(self);
             return Err(format!("outbound row insert: {e}"));
         }
         Ok(id)
@@ -970,13 +1126,13 @@ impl OutboundStore for DbOutboundStore {
     }
 
     fn load_message(&self, id: &str) -> Result<OutboundMessage, String> {
-        let body_ref: Option<String> = {
+        let (body_ref, want_hash): (Option<String>, Option<String>) = {
             let db = k2_core::db::shared();
             let conn = db.lock();
             conn.query_row(
-                "SELECT body_ref FROM mail_outbound WHERE id = ?1",
+                "SELECT body_ref, body_sha256 FROM mail_outbound WHERE id = ?1",
                 rusqlite::params![id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(|e| format!("outbound body_ref: {e}"))?
         };
@@ -985,7 +1141,49 @@ impl OutboundStore for DbOutboundStore {
         };
         let raw = std::fs::read_to_string(&body_ref)
             .map_err(|e| format!("outbound body read: {e}"))?;
+        // What the row was told at queue time. A row from an older K2 has none.
+        if want_hash.is_some_and(|h| h != sha256_hex(raw.as_bytes())) {
+            return Err(format!(
+                "the stored message for '{id}' changed after it was queued, so it can't be shown or sent"
+            ));
+        }
         serde_json::from_str(&raw).map_err(|e| format!("outbound body parse: {e}"))
+    }
+
+    fn load_message_full(&self, id: &str) -> Result<OutboundMessage, String> {
+        let mut msg = self.load_message(id)?;
+        for n in 0..msg.attachments.len() {
+            if msg.attachments[n].legacy_b64.is_none() {
+                let bytes = self.read_held(id, n, &msg.attachments[n])?;
+                msg.attachments[n].bytes = Some(std::sync::Arc::new(bytes));
+            }
+        }
+        Ok(msg)
+    }
+
+    fn check_can_hold(&self, bytes: u64) -> Result<(), String> {
+        let gib = |b: u64| format!("{:.1} GiB", b as f64 / (1024.0 * 1024.0 * 1024.0));
+        let held = self.held_bytes();
+        if held.saturating_add(bytes) > self.max_held_bytes {
+            return Err(format!(
+                "this server is already holding {} of files waiting for approval or a send time, \
+                 and its limit is {}. Nothing was queued. Ask your human to decide the queue \
+                 (k2 hostmail approvals), or send a link instead",
+                gib(held),
+                gib(self.max_held_bytes)
+            ));
+        }
+        let _ = std::fs::create_dir_all(&self.body_dir);
+        let free = k2_core::disk_guard::probe(&self.body_dir).map(|fs| fs.free_bytes);
+        match free {
+            Some(f) if f >= bytes.saturating_add(self.min_free_after_hold) => Ok(()),
+            Some(f) => Err(format!(
+                "this server's disk has {} free, too little to hold these files until they're \
+                 sent. Nothing was queued",
+                gib(f)
+            )),
+            None => Err("can't read this server's free disk space, so nothing was queued".to_string()),
+        }
     }
 
     fn append_note(&self, id: &str, extra: &str, now: i64) -> Result<(), String> {
@@ -1002,11 +1200,13 @@ impl OutboundStore for DbOutboundStore {
     }
 
     fn scrub_body(&self, id: &str) -> Result<(), String> {
+        // The bytes go first, whatever the body says: a body that can't be
+        // read must not keep its files on disk.
+        let _ = std::fs::remove_dir_all(self.files_dir(id));
         let msg = self.load_message(id)?;
         if !msg.ephemeral && msg.attachments.is_empty() {
             return Ok(());
         }
-        let path = self.body_path(id);
         let mut kept = at_rest(&msg).into_owned();
         // Email Notifications (security review M3): a decided notification
         // keeps no body at all (its text, html and headers), only what the
@@ -1016,17 +1216,11 @@ impl OutboundStore for DbOutboundStore {
             n.html = None;
             n.headers.clear();
         }
-        let body = serde_json::to_string(&kept).map_err(|e| format!("outbound scrub serialize: {e}"))?;
-        std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound scrub write: {e}"))?;
-        restrict_mode(&path);
-        Ok(())
+        self.rewrite_body(id, &kept)
     }
 
     fn update_blind_copies(&self, id: &str, msg: &OutboundMessage) -> Result<(), String> {
-        let path = self.body_path(id);
-        let body = serde_json::to_string(msg).map_err(|e| format!("outbound message serialize: {e}"))?;
-        std::fs::write(&path, body.as_bytes()).map_err(|e| format!("outbound body write: {e}"))?;
-        restrict_mode(&path);
+        self.rewrite_body(id, msg)?;
         let json_or_null = |list: &[String]| -> Result<Option<String>, String> {
             if list.is_empty() {
                 Ok(None)
@@ -1159,6 +1353,47 @@ pub fn auto_deny_expired(now: i64) -> usize {
     n
 }
 
+/// A mailbox is going away: its waiting messages can't leave, so they end now
+/// and their held files go with them. Returns how many.
+pub fn purge_held_for_address(address: &str, now: i64) -> usize {
+    let rows: Vec<(String, String)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, status FROM mail_outbound \
+             WHERE from_address = ?1 AND status IN ('pending', 'scheduled')",
+        ) else {
+            return 0;
+        };
+        stmt.query_map(rusqlite::params![address], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|r| r.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    };
+    let store = DbOutboundStore::default();
+    let mut n = 0;
+    for (id, status) in rows {
+        let flipped = store
+            .transition(
+                &id,
+                &status,
+                "denied",
+                Some("system:mailbox-removed"),
+                Some("not sent: its mailbox was removed"),
+                now,
+            )
+            .unwrap_or(false);
+        if flipped {
+            n += 1;
+            scrub(&store, &id);
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::MailSendDecided,
+                serde_json::json!({ "outboundId": id, "status": "rejected" }),
+            );
+        }
+    }
+    n
+}
+
 // ── Wire statuses (§11.1.9 / the gate's outbox-note shapes) ─────────────
 
 /// DB status → the stable wire status the CLI/UI shows. `sent` is
@@ -1239,14 +1474,34 @@ pub trait SubmitBackend {
     fn submit(&self, account_id: &str, msg: &OutboundMessage) -> Result<(), String>;
 }
 
+/// Every address in a message about to be handed to the mail server is still
+/// exactly a plain address. The routes checked them when it was composed; this
+/// is the last check before Stalwart, which writes `replyTo` as it gets it, and
+/// it holds whatever happened to a stored body in between.
+pub fn check_addresses_at_submit(msg: &OutboundMessage) -> Result<(), String> {
+    for a in std::iter::once(&msg.from)
+        .chain(&msg.to)
+        .chain(&msg.cc)
+        .chain(&msg.bcc)
+        .chain(&msg.policy_bcc)
+        .chain(&msg.reply_to)
+    {
+        if addresses::normalize_address(a).ok().as_deref() != Some(a.as_str()) {
+            return Err("a stored address isn't a plain address, so nothing was sent".to_string());
+        }
+    }
+    Ok(())
+}
+
 impl SubmitBackend for StalwartClient {
     fn submit(&self, account_id: &str, msg: &OutboundMessage) -> Result<(), String> {
+        check_addresses_at_submit(msg)?;
         // The files go up first, then one request composes and submits. A
         // failed upload sends nothing; an upload the send never uses is
         // Stalwart's to expire.
         let mut uploaded = Vec::with_capacity(msg.attachments.len());
         for file in &msg.attachments {
-            let bytes = file.to_out()?.bytes;
+            let bytes = file.bytes_now()?;
             let blob_id = self
                 .blob_upload(account_id, &bytes)
                 .map_err(|e| format!("attachment '{}' didn't upload: {e}", file.filename))?;
@@ -1432,6 +1687,26 @@ pub enum SendOutcome {
     SubmitFailed { id: String, error: String },
 }
 
+/// Before holding a message's files on this box: not too far ahead, and only if
+/// the box has room. Nothing is recorded on a refusal.
+fn check_can_hold_files(
+    store: &dyn OutboundStore,
+    files: &[StoredAttachment],
+    send_after: Option<i64>,
+    now: i64,
+) -> Result<(), SendError> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    if send_after.is_some_and(|t| t - now > MAX_HELD_SCHEDULE_SECS) {
+        return Err(SendError::Usage(
+            "a message with files can be scheduled at most 7 days ahead".to_string(),
+        ));
+    }
+    let bytes = files.iter().map(StoredAttachment::size).sum();
+    store.check_can_hold(bytes).map_err(SendError::Guardrail)
+}
+
 /// Rate limits → audit row → (queue | schedule | submit).
 /// Rate limits apply at *enqueue*; spacing is agent-driven via send_after.
 pub fn gate_and_dispatch(
@@ -1443,9 +1718,12 @@ pub fn gate_and_dispatch(
 ) -> Result<SendOutcome, SendError> {
     check_rate_limits(store, &req.message.from, now)?;
     let future_after = req.send_after.filter(|t| *t > now);
-    // The outbox keeps the filenames. The bytes stay in the body file only
-    // while something still has to send them (approval, a schedule).
+    // The outbox keeps the filenames. The bytes stay on disk only while
+    // something still has to send them (approval, a schedule).
     let names: Vec<String> = req.message.attachments.iter().map(|a| a.filename.clone()).collect();
+    if gate != Gate::Off && (gate == Gate::Approval || future_after.is_some()) {
+        check_can_hold_files(store, &req.message.attachments, future_after, now)?;
+    }
     match gate {
         Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
         Gate::Approval => {
@@ -1610,7 +1888,7 @@ pub fn approve_and_submit_with<'r>(
         scrub(store, id);
         Ok(ApproveOutcome::FailedToSubmit(reason.to_string()))
     };
-    let msg = match store.load_message(id) {
+    let msg = match store.load_message_full(id) {
         Ok(m) => m,
         Err(e) => return fail(store, &format!("stored message unreadable: {e}")),
     };
@@ -1669,6 +1947,7 @@ pub fn gate_and_dispatch_linked(
         Gate::Approval => {
             let mut held = req.message.clone();
             held.attachments = attachments.iter().map(StoredAttachment::from_out).collect();
+            check_can_hold_files(store, &held.attachments, None, now)?;
             let id = store
                 .insert(&NewOutbound {
                     owner_project_id: req.project_id,
@@ -2210,6 +2489,7 @@ mod tests {
             bcc_json: None,
             policy_bcc_json: None,
             reply_to_json: None,
+            body_sha256: None,
         };
         let v = outbound_json(&base);
         assert_eq!(v["attachments"]["count"], 2);
@@ -2371,6 +2651,7 @@ mod tests {
             bcc_json: None,
             policy_bcc_json: None,
             reply_to_json: None,
+            body_sha256: None,
         }
     }
 
@@ -3414,7 +3695,7 @@ mod tests {
     fn with_file(mut m: OutboundMessage, name: &str, ct: &str, bytes: &[u8]) -> OutboundMessage {
         use crate::mail::external_smtp::OutAttachment;
         m.attachments.push(StoredAttachment::from_out(&OutAttachment {
-            filename: name.to_string(),
+            scanned: false, filename: name.to_string(),
             content_type: ct.to_string(),
             bytes: bytes.to_vec(),
         }));
@@ -3475,7 +3756,8 @@ mod tests {
         let v = outbound_json(&row);
         assert_eq!(v["attachments"]["names"], serde_json::json!(["report.pdf", "notes.txt"]), "{v}");
         let at_rest = std::fs::read_to_string(dir.join(format!("{id}.json"))).expect("body file");
-        assert!(!at_rest.contains("dataB64"), "no bytes at rest: {at_rest}");
+        assert!(!at_rest.contains("dataB64") && !at_rest.contains("JVBERi"), "no bytes at rest: {at_rest}");
+        assert!(!dir.join(format!("{id}.files")).exists(), "on mode never holds the files");
         cleanup_rows(&project);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3552,7 +3834,7 @@ mod tests {
         let client = crate::mail::fake_jmap::FakeJmap::start().client();
         let hosted = HostedSubmit { backend: &client, account_id: "acct".to_string() };
         let stray = crate::mail::external_smtp::OutAttachment {
-            filename: "a".to_string(),
+            scanned: false, filename: "a".to_string(),
             content_type: "text/plain".to_string(),
             bytes: vec![1],
         };
@@ -3615,5 +3897,162 @@ mod tests {
         assert_eq!(outbound_json(&store.load(&id).unwrap().unwrap())["replyTo"], serde_json::json!(["answers@acme.dev"]));
         cleanup_rows(&project);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── holding files: disk, tampering, purges ──
+
+    fn queued_with_file(store: &DbOutboundStore, project: &str, bytes: &[u8]) -> String {
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", bytes);
+        let req = OutboundRequest { project_id: project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        match gate_and_dispatch(store, None, Gate::Approval, &req, now_unix()) {
+            Ok(SendOutcome::Queued { id, .. }) => id,
+            other => panic!("expected a queued message: {other:?}"),
+        }
+    }
+
+    /// A held file is its own 0600 file, the body names it, and the queue can
+    /// be listed without reading it.
+    #[cfg(unix)]
+    #[test]
+    fn held_bytes_live_beside_the_body() {
+        use std::os::unix::fs::PermissionsExt;
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let id = queued_with_file(&store, &project, b"held bytes");
+        let file = dir.join(format!("{id}.files/0"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"held bytes");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(dir.join(format!("{id}.files"))).unwrap().permissions().mode() & 0o777, 0o700);
+        let body = std::fs::read_to_string(dir.join(format!("{id}.json"))).unwrap();
+        assert!(!body.contains("dataB64"), "{body}");
+        // The list's read doesn't touch the bytes: gone, it still answers.
+        std::fs::remove_file(&file).unwrap();
+        let m = store.load_message(&id).expect("named, not read");
+        assert_eq!(m.attachments[0].size(), 10);
+        assert!(store.load_message_full(&id).is_err(), "a send needs them");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An edited body or held file fails closed: the row ends failed, nothing leaves.
+    #[test]
+    fn a_body_or_file_changed_after_queueing_never_leaves() {
+        for edit_file in [false, true] {
+            let (store, dir) = temp_store();
+            let project = format!("P-{}", uuid::Uuid::new_v4());
+            let id = queued_with_file(&store, &project, b"what was approved");
+            if edit_file {
+                std::fs::write(dir.join(format!("{id}.files/0")), b"swapped").unwrap();
+            } else {
+                let path = dir.join(format!("{id}.json"));
+                let raw = std::fs::read_to_string(&path).unwrap();
+                let edited = raw.replacen("\"to\":[\"", "\"replyTo\":[\"x@y.example\\r\\nBcc: z@y.example\"],\"to\":[\"", 1);
+                assert_ne!(raw, edited);
+                std::fs::write(&path, edited).unwrap();
+                assert!(store.load_message(&id).is_err(), "not shown either");
+            }
+            let fake = crate::mail::fake_jmap::FakeJmap::start();
+            let client = fake.client();
+            let mut acct = |_: &str| Ok("acct".to_string());
+            let out = approve_and_submit(&store, Ok(&client), &mut acct, &id, "owner", None, now_unix()).expect("decided");
+            assert!(matches!(&out, ApproveOutcome::FailedToSubmit(r) if r.contains("changed")), "{out:?}");
+            assert_eq!(store.load(&id).unwrap().unwrap().status, "failed");
+            let st = fake.state.lock().unwrap();
+            assert!(st.created.is_empty() && st.uploads.is_empty(), "nothing left");
+            drop(st);
+            cleanup_rows(&project);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The last check before the mail server, for a body from anywhere.
+    #[test]
+    fn an_address_that_isnt_plain_never_reaches_the_engine() {
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        let mut m = msg();
+        m.reply_to = vec!["x@y.example\r\nBcc: z@y.example".to_string()];
+        let err = client.submit("acct", &m).expect_err("refused");
+        assert!(err.contains("plain address"), "{err}");
+        let mut m = msg();
+        m.to = vec!["Not@Normal.Example".to_string()];
+        assert!(client.submit("acct", &m).is_err());
+        assert!(fake.state.lock().unwrap().created.is_empty());
+    }
+
+    #[test]
+    fn the_box_refuses_to_hold_past_its_cap_or_its_disk() {
+        let (mut store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        store.max_held_bytes = 15;
+        let first = queued_with_file(&store, &project, &[1u8; 10]);
+        assert!(!first.is_empty());
+        let m = with_file(unique_from(msg()), "b.bin", "application/octet-stream", &[2u8; 10]);
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let err = gate_and_dispatch(&store, None, Gate::Approval, &req, now_unix()).expect_err("over the cap");
+        assert!(matches!(&err, SendError::Guardrail(h) if h.contains("already holding")), "{err:?}");
+        // Deciding what's waiting makes room.
+        deny(&store, &first, "owner", "no", now_unix()).expect("deny");
+        assert!(gate_and_dispatch(&store, None, Gate::Approval, &req, now_unix()).is_ok());
+
+        store.max_held_bytes = MAX_HELD_BYTES;
+        store.min_free_after_hold = u64::MAX / 2;
+        let err = store.check_can_hold(1).expect_err("disk");
+        assert!(err.contains("free"), "{err}");
+        // On mode holds nothing, so it needs neither.
+        let fake = crate::mail::fake_jmap::FakeJmap::start();
+        let client = fake.client();
+        assert!(matches!(
+            gate_and_dispatch(&store, Some(&client), Gate::On, &req, now_unix()),
+            Ok(SendOutcome::Submitted { .. })
+        ));
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_message_with_files_is_scheduled_at_most_7_days_ahead() {
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let now = now_unix();
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", b"x");
+        for gate in [Gate::On, Gate::Approval] {
+            let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: Some(now + 8 * 86_400) };
+            let err = gate_and_dispatch(&store, None, gate, &req, now).expect_err("too far");
+            assert!(matches!(&err, SendError::Usage(h) if h.contains("7 days")), "{err:?}");
+        }
+        let no_file = unique_from(msg());
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &no_file, send_after: Some(now + 8 * 86_400) };
+        assert!(matches!(gate_and_dispatch(&store, None, Gate::On, &req, now), Ok(SendOutcome::Scheduled { .. })), "text alone keeps 30 days");
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_removed_mailbox_ends_its_waiting_mail_and_keeps_no_files() {
+        let store = DbOutboundStore::default();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let m = with_file(unique_from(msg()), "a.bin", "application/octet-stream", b"x");
+        let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &m, send_after: None };
+        let SendOutcome::Queued { id, .. } = gate_and_dispatch(&store, None, Gate::Approval, &req, now_unix()).expect("queue") else {
+            panic!("expected a queued message")
+        };
+        assert_eq!(purge_held_for_address(&m.from, now_unix()), 1);
+        let row = store.load(&id).unwrap().unwrap();
+        assert_eq!(row.status, "denied");
+        assert!(row.note.as_deref().unwrap_or("").contains("mailbox was removed"), "{:?}", row.note);
+        assert!(store.load_message(&id).unwrap().attachments.is_empty());
+        assert!(!store.files_dir(&id).exists());
+        cleanup_rows(&project);
+    }
+
+    /// A linked message queued by an older K2 keeps working.
+    #[test]
+    fn a_body_from_an_older_k2_still_reads() {
+        let raw = r#"{"from":"a@b.example","to":["c@d.example"],"subject":"s","textBody":"t",
+            "attachments":[{"filename":"f.txt","contentType":"text/plain","dataB64":"aGk="}]}"#;
+        let m: OutboundMessage = serde_json::from_str(raw).expect("parse");
+        assert_eq!(m.attachments[0].size(), 2);
+        assert_eq!(m.attachments[0].bytes_now().unwrap(), b"hi");
     }
 }

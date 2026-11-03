@@ -4205,6 +4205,10 @@ pub struct MailOutbound {
     /// A header, never a recipient; audited because it steers answers.
     #[serde(default)]
     pub reply_to_json: Option<String>,
+    /// 0261: hex SHA-256 of the stored body file. A body that no longer
+    /// matches is neither shown nor sent. NULL on rows from before 0261.
+    #[serde(default)]
+    pub body_sha256: Option<String>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

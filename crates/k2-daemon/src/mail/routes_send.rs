@@ -774,7 +774,7 @@ fn read_one_attachment(
     }
     let filename = safe_attachment_name(path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
     let content_type = content_type_for(&filename);
-    Ok(external_smtp::OutAttachment { filename, content_type, bytes })
+    Ok(external_smtp::OutAttachment { scanned: false, filename, content_type, bytes })
 }
 
 /// Read every requested file ([`read_one_attachment`]) under the per-message
@@ -1812,18 +1812,19 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
     let agent = crate::mail::agent_creds::mail_caller().is_agent();
     let list: Vec<serde_json::Value> = rows
         .iter()
-        .filter(|row| {
-            !agent
-                || !(crate::email_notify::send::is_sender_address(&row.from_address)
-                    || store.load_message(&row.id).map(|m| m.notify.is_some()).unwrap_or(false))
-        })
-        .map(|row| {
-            let mut v = send::outbound_json(row);
-            // Body preview from the stored composed message; a
-            // missing/corrupt body file lists WITHOUT a preview (the
-            // decision buttons still work — approve would then fail
-            // loudly on the unreadable body).
+        .filter_map(|row| {
+            // One read per row: a body names its files, it doesn't hold them.
+            // A missing/corrupt body file lists WITHOUT a preview (the
+            // decision buttons still work — approve would then fail loudly
+            // on the unreadable body).
             let stored = store.load_message(&row.id).ok();
+            let hidden_from_agent = agent
+                && (crate::email_notify::send::is_sender_address(&row.from_address)
+                    || stored.as_ref().is_some_and(|m| m.notify.is_some()));
+            if hidden_from_agent {
+                return None;
+            }
+            let mut v = send::outbound_json(row);
             let preview: Option<String> =
                 stored.as_ref().map(|m| send::hide_links(&m.text_body).chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
@@ -1842,7 +1843,7 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             v["fromName"] = serde_json::json!(stored.as_ref().and_then(|m| m.from_name.clone()));
             v["workspace"] = serde_json::json!(project_name(&row.owner_project_id));
             v["expiresAt"] = serde_json::json!(row.updated_at + send::APPROVAL_EXPIRE_SECS);
-            v
+            Some(v)
         })
         .collect();
     ok_json(serde_json::json!({
@@ -1899,22 +1900,25 @@ pub fn handle_approvals_show(params: &HashMap<String, String>) -> CliResponse {
         return masked();
     }
     if let Some(n) = file_n {
-        let Some(f) = msg.attachments.get(n - 1) else {
-            return error_response(
+        use base64::Engine as _;
+        return match store.load_file(id, n - 1) {
+            Ok(Some((f, bytes))) => ok_json(serde_json::json!({
+                "ok": true,
+                "id": id,
+                "n": n,
+                "name": f.filename,
+                "size": f.size(),
+                "contentType": f.content_type,
+                "scanned": f.scanned,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            })),
+            Ok(None) => error_response(
                 "404 Not Found",
                 "not_found",
                 &format!("outbound '{id}' has no file {n} ({} attached)", msg.attachments.len()),
-            );
+            ),
+            Err(hint) => error_response("502 Bad Gateway", "engine", &hint),
         };
-        return ok_json(serde_json::json!({
-            "ok": true,
-            "id": id,
-            "n": n,
-            "name": f.filename,
-            "size": f.size(),
-            "contentType": f.content_type,
-            "dataBase64": f.data_b64,
-        }));
     }
     let mut v = send::outbound_json(&row);
     v["fromName"] = serde_json::json!(msg.from_name);
@@ -1926,7 +1930,7 @@ pub fn handle_approvals_show(params: &HashMap<String, String>) -> CliResponse {
         msg.attachments.iter().enumerate().map(|(i, f)| f.view_json(i + 1)).collect(),
     );
     v["workspace"] = serde_json::json!(project_name(&row.owner_project_id));
-    v["expiresAt"] = serde_json::json!(row.created_at + send::APPROVAL_EXPIRE_SECS);
+    v["expiresAt"] = serde_json::json!(row.updated_at + send::APPROVAL_EXPIRE_SECS);
     ok_json(serde_json::json!({ "ok": true, "message": v }))
 }
 
@@ -4053,7 +4057,7 @@ mod tests {
             send_after: None,
         };
         let atts = vec![external_smtp::OutAttachment {
-            filename: "a.pdf".into(),
+            scanned: false, filename: "a.pdf".into(),
             content_type: "application/pdf".into(),
             bytes: vec![1, 2, 3],
         }];
@@ -4117,7 +4121,7 @@ mod tests {
             send_after: None,
         };
         let atts = vec![external_smtp::OutAttachment {
-            filename: "q.txt".into(),
+            scanned: false, filename: "q.txt".into(),
             content_type: "text/plain".into(),
             bytes: b"quarterly".to_vec(),
         }];
@@ -4398,7 +4402,7 @@ mod tests {
         let id = body_json(&resp)["id"].as_str().expect("id").to_string();
         std::fs::write(&file, b"swapped").unwrap();
         let store = DbOutboundStore::default();
-        let stored = store.load_message(&id).unwrap();
+        let stored = store.load_message_full(&id).unwrap();
         assert_eq!(stored.to, vec!["cust@dest.example".to_string()], "recipient locked");
         assert_eq!(decoded(&stored.attachments[0]), b"captured");
         assert!(fake.state.lock().unwrap().uploads.is_empty(), "nothing left before approval");
@@ -4912,7 +4916,7 @@ mod tests {
             references: None,
             reply_source: None,
             attachments: vec![send::StoredAttachment::from_out(&external_smtp::OutAttachment {
-                filename: "original.eml".to_string(),
+                scanned: false, filename: "original.eml".to_string(),
                 content_type: "message/rfc822".to_string(),
                 bytes: b"raw".to_vec(),
             })],
@@ -4998,7 +5002,7 @@ mod tests {
         let id = v["id"].as_str().expect("id").to_string();
 
         let store = DbOutboundStore::default();
-        let stored = store.load_message(&id).unwrap();
+        let stored = store.load_message_full(&id).unwrap();
         assert_eq!(stored.from, mailbox, "the mailbox, never the original sender");
         assert_eq!(stored.to, vec!["dest@else.example".to_string()]);
         assert_eq!(stored.policy_bcc, vec!["boss@acme.example".to_string()], "the owner's BCC");

@@ -246,7 +246,14 @@ pub fn handle_address_delete(body: &[u8]) -> CliResponse {
         &project_id,
         &b.address,
     ) {
-        Ok(v) => ok_json(v),
+        Ok(v) => {
+            // Waiting messages from it can't leave any more; their files go now.
+            let now = chrono::Utc::now().timestamp();
+            if let Ok(addr) = crate::mail::addresses::normalize_address(&b.address) {
+                crate::mail::send::purge_held_for_address(&addr, now);
+            }
+            ok_json(v)
+        }
         Err(e) => addr_error_response(e),
     }
 }

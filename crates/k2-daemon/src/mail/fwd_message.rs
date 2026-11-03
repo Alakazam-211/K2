@@ -118,7 +118,7 @@ pub fn forward_body(note: Option<&str>, src: &ForwardSource) -> String {
 }
 
 fn stored(filename: String, content_type: String, bytes: Vec<u8>) -> StoredAttachment {
-    StoredAttachment::from_out(&OutAttachment { filename, content_type, bytes })
+    StoredAttachment::from_out(&OutAttachment { scanned: false, filename, content_type, bytes })
 }
 
 /// `--as-eml`: the original's raw bytes as one `message/rfc822` file, read off
@@ -542,7 +542,7 @@ mod tests {
         let SendOutcome::Queued { id, .. } = send::gate_and_dispatch(&store, None, Gate::Approval, &req, now()).expect("queue") else {
             panic!("expected a queued message")
         };
-        let back = store.load_message(&id).unwrap();
+        let back = store.load_message_full(&id).unwrap();
         assert_eq!(back.attachments[0].to_out().unwrap().bytes, vec![0, 255, 7]);
         cleanup_rows(&project);
         let _ = std::fs::remove_dir_all(&dir);

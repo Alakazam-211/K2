@@ -68,7 +68,7 @@
 
   /** @type {MessagePort | null} */
   var port = null
-  /** @type {{caps: string[], features: string[], widget: {id: string, name: string, garden: string}, config: Record<string, unknown>, motion: {reduced: boolean}} | null} */
+  /** @type {{caps: string[], features: string[], widget: {id: string, name: string, garden: string}, config: Record<string, unknown>, motion: {reduced: boolean}, view: string, height: unknown, viewport: {width: number, height: number} | null} | null} */
   var hello = null
   var nextId = 1
   /** @type {Map<number, {resolve: (v: unknown) => void, reject: (e: unknown) => void, verb: string, raw?: boolean}>} */
@@ -203,6 +203,14 @@
       send({ pong: m.ping })
       return
     }
+    if (typeof m.visible === 'boolean') {
+      setVisible(m.visible)
+      return
+    }
+    if (m.viewport && hello) {
+      hello.viewport = viewportOf(m.viewport)
+      return
+    }
     if (typeof m.sub === 'number' && 'value' in m) {
       var s = subs.get(m.sub)
       if (s) s.cb(m.value)
@@ -246,6 +254,99 @@
     }
   }
 
+  // ── On a phone (contract-gardens-phone rev 2 §B.3) ────────────────────
+  // The port is private to this runtime, so a widget reaches the phone's
+  // size and visibility messages through k2.setHeight and k2.onVisible. A
+  // desktop's hello has no `view`: none of this ever posts there.
+  var SIZE_GAP_MS = 250
+  var sentHeight = 0
+  var sentAt = 0
+  /** @type {number | null} */
+  var wantHeight = null
+  var heightTimer = false
+  var ownHeight = false
+  var measuring = false
+  var isVisible = true
+  /** @type {Array<(visible: boolean) => void>} */
+  var visibleFns = []
+
+  /** @param {any} v */
+  function viewportOf(v) {
+    if (!v || typeof v.width !== 'number' || typeof v.height !== 'number' || !isFinite(v.width) || !isFinite(v.height)) return null
+    return Object.freeze({ width: v.width, height: v.height })
+  }
+
+  /** @param {boolean} v */
+  function setVisible(v) {
+    if (v === isVisible) return
+    isVisible = v
+    visibleFns.slice().forEach(function (fn) {
+      try {
+        fn(v)
+      } catch (err) {
+        setTimeout(function () {
+          throw err
+        }, 0)
+      }
+    })
+  }
+
+  function flushHeight() {
+    heightTimer = false
+    if (wantHeight === null) return
+    var px = wantHeight
+    wantHeight = null
+    if (px === sentHeight) return
+    sentHeight = px
+    sentAt = Date.now()
+    send({ size: { height: px } })
+  }
+
+  // At most 4 a second; the newest height wins.
+  /** @param {number} px */
+  function postHeight(px) {
+    wantHeight = px
+    if (heightTimer) return
+    var wait = sentAt + SIZE_GAP_MS - Date.now()
+    if (wait <= 0) {
+      flushHeight()
+      return
+    }
+    heightTimer = true
+    setTimeout(flushHeight, wait)
+  }
+
+  // The larger of the body's box and each top-level element's scrollHeight:
+  // a card sized `height: 100%` scrolls inside itself, so only its
+  // scrollHeight says how tall its content is.
+  function reportNatural() {
+    measuring = false
+    var b = document.body
+    if (ownHeight || !b) return
+    var h = b.getBoundingClientRect().height
+    for (var i = 0; i < b.children.length; i++) h = Math.max(h, b.children[i].scrollHeight)
+    if (h > 0) postHeight(Math.ceil(h))
+  }
+
+  function measureSoon() {
+    if (measuring) return
+    measuring = true
+    setTimeout(reportNatural, SIZE_GAP_MS)
+  }
+
+  // `height: "auto"`: existing cards fit with no code of their own.
+  function watchHeight() {
+    var b = document.body
+    if (!b) return
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(measureSoon).observe(b, { childList: true, subtree: true, characterData: true, attributes: true })
+    }
+    if (typeof ResizeObserver === 'function') new ResizeObserver(measureSoon).observe(b)
+    // Images and fonts change the height without changing the DOM.
+    document.addEventListener('load', measureSoon, true)
+    measureSoon()
+  }
+
   /** @param {MessageEvent} e */
   function onHello(e) {
     if (port) return
@@ -259,6 +360,9 @@
       widget: m.widget && typeof m.widget === 'object' ? Object.freeze(Object.assign({}, m.widget)) : { id: '', name: '', garden: '' },
       config: Object.freeze(Object.assign({}, m.config || {})),
       motion: Object.freeze({ reduced: !!(m.motion && m.motion.reduced) }),
+      view: m.view === 'phone' ? 'phone' : 'desktop',
+      height: m.height,
+      viewport: viewportOf(m.viewport),
     }
     port.onmessage = onPortMessage
     g.removeEventListener('message', onHello)
@@ -268,6 +372,12 @@
     early = null
     for (var i = 0; i < waiting.length; i++) send(waiting[i])
     helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
+    if (hello.view !== 'phone') {
+      wantHeight = null
+    } else {
+      if (wantHeight !== null) flushHeight()
+      if (hello.height === 'auto') watchHeight()
+    }
   }
   g.addEventListener('message', onHello)
 
@@ -908,6 +1018,24 @@
     },
   })
   Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
+  Object.defineProperty(k2, 'view', { enumerable: true, get: function () { return hello ? hello.view : 'desktop' } })
+  Object.defineProperty(k2, 'viewport', { enumerable: true, get: function () { return hello ? hello.viewport : null } })
+  k2.setHeight = function (/** @type {number} */ px) {
+    if (typeof px !== 'number' || !isFinite(px) || px <= 0) return
+    if (hello && hello.view !== 'phone') return
+    // The widget sizes itself from here on: K2's own measuring steps aside.
+    ownHeight = true
+    if (hello) postHeight(Math.ceil(px))
+    else wantHeight = Math.ceil(px)
+  }
+  k2.onVisible = function (/** @type {(visible: boolean) => void} */ fn) {
+    visibleFns.push(fn)
+    return function () {
+      visibleFns = visibleFns.filter(function (x) {
+        return x !== fn
+      })
+    }
+  }
   k2.shape = Object.freeze({ view: view, list: list, obj: obj, num: num, str: str })
   k2.K2Error = K2Error
   k2.retryable = Object.freeze(RETRY.slice())

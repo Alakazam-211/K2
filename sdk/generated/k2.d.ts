@@ -2139,6 +2139,14 @@ export interface K2 {
   /** Files the person drops on this widget, already in its data, at frame coordinates; returns the unsubscribe. A phone never drops: offer pick too. Needs uploads:pick. */
   onDrop(cb: (drop: UploadDropped) => void): () => void
   readonly motion: { readonly reduced: boolean }
+  /** `phone` in a Garden on K2 Companion, else `desktop` (`desktop` until `connected` resolves). Use it to pick touch gestures and a phone's layout. */
+  readonly view: 'phone' | 'desktop'
+  /** The visible area under the phone's own chrome, in CSS px; null on a desktop, or when the phone doesn't say. */
+  readonly viewport: { readonly width: number; readonly height: number } | null
+  /** On a phone, ask for this height in CSS px (the phone keeps it between 160 and 3x the visible height; a `fill` or px widget ignores it). From the first call K2 stops measuring for you. At most 4 a second. Does nothing on a desktop. */
+  setHeight(px: number): void
+  /** On a phone, hears when this frame leaves or comes back on screen: stop timers and re-reads while false. It starts true, is called only on a change, and never fires on a desktop. Returns the unsubscribe. */
+  onVisible(cb: (visible: boolean) => void): () => void
   /** Guards for data you didn't make. */
   readonly shape: K2Shape
   /** The error class (for `instanceof`). */

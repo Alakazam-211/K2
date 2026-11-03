@@ -258,6 +258,7 @@ fn park_row(app: &AppRow, by: &str, reason: &str) -> R<()> {
         )
         .map_err(db_err)?;
         tx.commit().map_err(db_err)?;
+        k2_core::skin::ties::forget_app_workspace(&app.service_id);
     }
     audit(&app.app_id, "park", by, json!({ "from": app.owner_workspace, "reason": reason }));
     super::routes::mirror(&app.app_id);
@@ -333,6 +334,7 @@ fn assign(app: &AppRow, to: &Ws, by: &str) -> R<()> {
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
+    k2_core::skin::ties::forget_app_workspace(&app.service_id);
     Ok(())
 }
 

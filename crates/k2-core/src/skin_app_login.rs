@@ -506,7 +506,7 @@ pub(super) fn cap_pass_expiry(conn: &Connection, token_id: &str, chain_expires: 
 
 pub(super) fn finish(session: SkinAppSession) -> SkinAppSession {
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
-    SkinAppSession { meta: super::attach_token_handles(session.meta), ..session }
+    super::attach_session(session)
 }
 
 /// Mint a login session for `username` on `app` **with** a device sign-in

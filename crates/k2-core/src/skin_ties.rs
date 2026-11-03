@@ -33,7 +33,10 @@
 //! uncapped sessions.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -585,9 +588,39 @@ pub fn app_workspace(app: &str) -> Option<String> {
         LOCK_ORDER_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
         debug_assert!(false, "app_workspace({app}) ran under the skin mutex (lock order: never skin → daemon DB)");
     }
+    if let Some(ws) = cached_app_workspace(app) {
+        return Some(ws);
+    }
     let db = crate::db::shared();
     let conn = db.lock();
-    crate::published_services::get_by_id(&conn, app).ok().flatten().map(|s| s.project_id)
+    let ws = crate::published_services::get_by_id(&conn, app).ok().flatten().map(|s| s.project_id);
+    // Stored under the DB lock, so it can't land after a move's [`forget_app_workspace`].
+    if let Some(ws) = &ws {
+        app_workspace_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), (ws.clone(), Instant::now()));
+    }
+    ws
+}
+
+/// How long [`app_workspace`] trusts what it read. It runs at every request of a
+/// tied or agent-written login, and an App changes workspace only at a handover
+/// or a removal of its agent, which call [`forget_app_workspace`]. This bounds
+/// anything that doesn't.
+const APP_WORKSPACE_TTL: Duration = Duration::from_secs(2);
+
+fn app_workspace_cache() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_app_workspace(app: &str) -> Option<String> {
+    let cache = app_workspace_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.get(app).filter(|(_, at)| at.elapsed() < APP_WORKSPACE_TTL).map(|(ws, _)| ws.clone())
+}
+
+/// `app` just changed workspace: the next [`app_workspace`] reads the DB. Call
+/// after the commit.
+pub fn forget_app_workspace(app: &str) {
+    app_workspace_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(app.trim());
 }
 
 #[cfg(test)]

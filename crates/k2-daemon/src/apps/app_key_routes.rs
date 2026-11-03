@@ -6,7 +6,7 @@
 //! GET  /v1/apps/<id>/whoami                      the key: App, scopes, ceiling
 //! GET  /v1/apps/<id>/users                       users          this App's users
 //! POST /v1/apps/<id>/users       {username, email?, password?, rooms?, role?}   users (+ rooms for rooms/role)
-//! POST /v1/apps/<id>/users/rooms {username, rooms, applyTokens?}                rooms
+//! POST /v1/apps/<id>/users/rooms {username, rooms}                              rooms (applyTokens: deprecated, does nothing)
 //! POST /v1/apps/<id>/users/disable|enable|remove|unlock {username}              users
 //! POST /v1/apps/<id>/users/password-reset {username}                            users
 //! POST /v1/apps/<id>/fetch       {url, secret|secrets, method?, headers?, bodyB64?, maxBytes?, timeoutSecs?}  fetch
@@ -436,9 +436,19 @@ fn set_rooms(c: &Ctx, v: &J) -> R {
     let tokens = rooms_of(v).ok_or_else(|| err(400, "rooms_required", "rooms is required ([] takes every room away)"))?;
     let ids = resolve_rooms(c, &tokens)?;
     let _ = app_user(c, &user)?;
+    // Deprecated (0.46.8): a signed-in person gets the change at their next
+    // request either way; this only picks what the stored copy says.
+    let apply_sent = v.get("applyTokens").is_some();
     let apply = v.get("applyTokens").and_then(J::as_bool).unwrap_or(true);
-    let g = skin::set_app_grant_rooms(&user, &c.app, &ids, apply, &c.actor()).map_err(|e| err(409, "not_settable", e))?;
-    Ok(json!({ "ok": true, "username": user, "app": c.app, "rooms": ids, "roomHandles": skin::handles_for_project_ids(&ids), "grant": g }))
+    // Inside the key's rooms, which the owner set at mint (or this workspace's
+    // own room, on a key its agent minted): the owner's word, not a hold.
+    let g = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || skin::set_app_grant_rooms(&user, &c.app, &ids, apply, &c.actor()))
+        .map_err(|e| err(409, "not_settable", e))?;
+    let mut out = json!({ "ok": true, "username": user, "app": c.app, "rooms": ids, "roomHandles": skin::handles_for_project_ids(&ids), "grant": g });
+    if apply_sent {
+        out["deprecated"] = json!("applyTokens does nothing now: a signed-in person gets the change at their next request. Stop sending it.");
+    }
+    Ok(out)
 }
 
 fn set_enabled(c: &Ctx, v: &J, on: bool) -> R {

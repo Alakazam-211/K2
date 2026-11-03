@@ -993,6 +993,7 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
+    k2_core::skin::ties::forget_app_workspace(&app.service_id);
     drop(conn);
     for rid in &withdrawn {
         if let Ok(Some(r)) = hov_db(|c| reqs::get(c, rid)) {
@@ -1594,6 +1595,7 @@ pub(crate) fn apply_undo(r: &reqs::AppRequest, by: &str) -> R<J> {
         deploy::audit::append(&tx, deploy::audit::SUBJECT_APP, &app.app_id, "handover_undo", by, None, &json!({ "handover": row.id, "from": to, "to": room_from }))
             .map_err(db_err)?;
         tx.commit().map_err(db_err)?;
+        k2_core::skin::ties::forget_app_workspace(&app.service_id);
     }
     let mut out = serde_json::Map::new();
     // skin.db: rooms back, ties back, retired passwords restored where the

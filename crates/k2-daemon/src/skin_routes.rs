@@ -482,63 +482,20 @@ pub fn agent_scoped(
         // (`users_password` / `users_email` below).
         // The checks above passed for `ws`: the handlers that act
         // differently for an agent get its workspace.
-        let r = match path {
+        // The write marks the row it wrote, in its own transaction
+        // (`skin::guest_rooms::written_by`), never a name from this body.
+        let r = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Agent(actor.to_string()), || match path {
             "/cli/skin/users/rooms" => users_rooms(body, actor, Some(ws)),
-            "/cli/skin/users/password" => return users_password(body, actor, Some(ws)),
-            "/cli/skin/users/email" => return users_email(body, actor, Some(ws)),
+            "/cli/skin/users/password" => users_password(body, actor, Some(ws)),
+            "/cli/skin/users/email" => users_email(body, actor, Some(ws)),
             _ => handler(body, actor),
-        };
-        if r.status.starts_with("200") {
-            note_written(path, body, actor, true);
-            if matches!(path, "/cli/skin/users/rooms" | "/cli/skin/roles/assign") {
-                return with_waiting(r, body);
-            }
+        });
+        if r.status.starts_with("200") && matches!(path, "/cli/skin/users/rooms" | "/cli/skin/roles/assign") {
+            return with_waiting(r, body);
         }
         return r;
     }
-    let r = handler(body, actor);
-    if r.status.starts_with("200") {
-        note_written(path, body, actor, false);
-    }
-    r
-}
-
-/// Record who last wrote a role or an App login ([`skin::guest_rooms::written`]):
-/// an agent's write marks it, the owner's clears the mark. The App login's
-/// `app`, or the one the role landed on.
-fn note_written(path: &str, body: &[u8], actor: &str, by_agent: bool) {
-    use skin::guest_rooms as gr;
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return };
-    let apply = |kind: &str, id: &str| {
-        let done = if by_agent { gr::mark_written(kind, id, actor) } else { gr::clear_written(kind, id) };
-        if let Err(e) = done {
-            k2_core::log_debug!("[skin] written mark {kind} {id}: {e}");
-        }
-    };
-    if AGENT_SCOPED_ROLE_ROUTES.contains(&path) {
-        if let Some(token) = str_field(&v, &["id", "name", "role"]) {
-            if let Ok(Some(r)) = skin::find_role(token) {
-                apply(gr::WRITTEN_ROLE, &r.id);
-            }
-        }
-        return;
-    }
-    if !matches!(path, "/cli/skin/users/rooms" | "/cli/skin/roles/assign" | "/cli/skin/roles/unassign") {
-        return;
-    }
-    let Some(username) = str_field(&v, &["username", "name"]) else { return };
-    let Ok(Some(p)) = principal_named(username) else { return };
-    let Ok(grants) = skin::list_grants() else { return };
-    let app = app_field(&v).and_then(|a| resolve_app_target(a).ok());
-    for g in grants.iter().filter(|g| {
-        g.subject_kind == "principal"
-            && g.subject_id == p.id
-            && g.kind == "app"
-            && g.target_id != skin::HOST_APP_ID
-            && app.as_deref().is_none_or(|a| a == g.target_id)
-    }) {
-        apply(gr::WRITTEN_GRANT, &g.id);
-    }
+    skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || handler(body, actor))
 }
 
 /// What a tied login's App grant names that the tie holds back, as handles
@@ -674,12 +631,12 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
         // Security review 2026-11-02: only people this workspace's agent
         // added, like the email route. The owner's people are the owner's
         // (a new password would hand the agent their sign-in).
-        "/cli/skin/users/password" | "/cli/skin/users/remove" => {
+        "/cli/skin/users/password" | "/cli/skin/users/remove" | "/cli/skin/users/full-name" => {
             // A test guest has its own answer (`agent_test_guest_refused`).
             let test_guest = skin::test_guests::get(&p.id).ok().flatten().is_some();
             if !test_guest && skin::creators::workspace_of(&p.id).ok().flatten().as_deref() != Some(ws) {
                 return Err(owner_only_with_hint(&format!(
-                    "'{}' was added by the owner: only the owner sets their password or removes them (ask your human)",
+                    "'{}' was added by the owner: only the owner sets their password or name, or removes them (ask your human)",
                     p.username
                 )));
             }
@@ -2088,13 +2045,10 @@ pub fn handle_grants_role(body: &[u8], actor: &str) -> CliResponse {
     let Some(role) = str_field(&v, &["role", "roleId", "role_id"]) else {
         return CliResponse::bad_request("missing role");
     };
-    match skin::set_app_grant_role(id, role) {
+    let set = || skin::set_app_grant_role(id, role);
+    let written = if actor_is_agent(actor) { set() } else { skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, set) };
+    match written {
         Ok((g, changed)) => {
-            if !actor_is_agent(actor) {
-                if let Err(e) = skin::guest_rooms::clear_written(skin::guest_rooms::WRITTEN_GRANT, &g.id) {
-                    k2_core::log_debug!("[skin] written mark grant {}: {e}", g.id);
-                }
-            }
             if changed {
                 k2_core::log_debug!(
                     "[skin] actor={actor} grant {} role -> {} (app {}, {} {}; live sessions rewritten)",
@@ -3787,6 +3741,7 @@ fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>, label: O
         raw,
         app,
         role_name,
+        ..
     } = session;
     skin::profile::record_session(&meta.id, skin::profile::VIA_PASSWORD, label);
     if form {

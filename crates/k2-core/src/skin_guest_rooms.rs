@@ -87,16 +87,53 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
 
 // ── what an agent wrote (0.46.8) ─────────────────────────────────────
 //
-// A role or an App login an agent (or an App, under its grant) last wrote.
-// Reads of a login's access hold these to the App's own room and the App's
-// `guests-rooms` rooms, live ([`super::ties::hold_written`]), so revoking the
-// grant takes those rooms from everyone it reached, an untied person included,
-// and what the owner wrote stays. The owner's own write clears the mark.
+// A role of an App, or an App login, an agent (or an App, under its grant) last
+// wrote. Reads of a login's access hold these to the App's own room and the
+// App's `guests-rooms` rooms, live ([`super::ties::hold_written`]), so revoking
+// the grant takes those rooms from everyone it reached, an untied person
+// included, and what the owner wrote stays. The owner's own write clears the
+// mark. A box-wide role and a box login are never marked or held: they aren't
+// the App's to hold back.
+//
+// The mark is written by the write itself, on the row it wrote, in its
+// transaction ([`note_role_conn`], [`note_grant_conn`]): never from a field of
+// a request, and a mark that can't be written undoes the change.
 
 /// `agent_written_access.kind` of a role.
 pub const WRITTEN_ROLE: &str = "role";
 /// `agent_written_access.kind` of an App login (a `kind=app` grant).
 pub const WRITTEN_GRANT: &str = "grant";
+
+/// Who is writing access on this thread ([`written_by`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrittenBy {
+    /// An agent, or an App under its grant (`agent:<handle>`, `app-key:<id>`).
+    Agent(String),
+    /// The owner's word (the owner, an Owner login, a shell tab).
+    Owner,
+}
+
+thread_local! {
+    static WRITER: std::cell::RefCell<Option<WrittenBy>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `who` as the writer of any role or App login it writes. Outside
+/// this (a card's effect, a migration, a test) a write leaves the marks alone.
+pub fn written_by<R>(who: WrittenBy, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<WrittenBy>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            WRITER.with(|w| *w.borrow_mut() = prev);
+        }
+    }
+    let _restore = Restore(WRITER.with(|w| w.borrow_mut().replace(who)));
+    f()
+}
+
+fn writer() -> Option<WrittenBy> {
+    WRITER.with(|w| w.borrow().clone())
+}
 
 pub(super) fn mark_written_conn(conn: &Connection, kind: &str, id: &str, by: &str) -> Result<(), String> {
     conn.execute(
@@ -108,26 +145,50 @@ pub(super) fn mark_written_conn(conn: &Connection, kind: &str, id: &str, by: &st
     Ok(())
 }
 
-/// An agent (`by`) wrote this role or App login.
-pub fn mark_written(kind: &str, id: &str, by: &str) -> Result<(), String> {
-    with_conn(|conn| mark_written_conn(conn, kind, id, by))
+fn clear_written_conn(conn: &Connection, kind: &str, id: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM agent_written_access WHERE kind = ?1 AND id = ?2", params![kind, id])
+        .map_err(|e| format!("agent written clear: {e}"))?;
+    Ok(())
 }
 
-/// The owner wrote it: what it holds now is the owner's. On a role, that
-/// goes for the logins holding it too: the owner set what that role gives.
-pub fn clear_written(kind: &str, id: &str) -> Result<(), String> {
-    with_conn(|conn| {
-        conn.execute("DELETE FROM agent_written_access WHERE kind = ?1 AND id = ?2", params![kind, id])
-            .map_err(|e| format!("agent written clear: {e}"))?;
-        if kind == WRITTEN_ROLE {
+/// This role was just written, inside the caller's transaction: an agent's
+/// write marks a role of an App, the owner's clears it and the marks of the
+/// logins holding it (the owner set what that role gives).
+pub(super) fn note_role_conn(conn: &Connection, role_id: &str, app_id: Option<&str>) -> Result<(), String> {
+    match writer() {
+        None => Ok(()),
+        Some(WrittenBy::Agent(by)) => match app_id {
+            Some(_) => mark_written_conn(conn, WRITTEN_ROLE, role_id, &by),
+            None => Ok(()),
+        },
+        Some(WrittenBy::Owner) => {
+            clear_written_conn(conn, WRITTEN_ROLE, role_id)?;
             conn.execute(
                 "DELETE FROM agent_written_access WHERE kind = ?1 AND id IN (SELECT id FROM grants WHERE kind = 'app' AND role_id = ?2)",
-                params![WRITTEN_GRANT, id],
+                params![WRITTEN_GRANT, role_id],
             )
             .map_err(|e| format!("agent written clear: {e}"))?;
+            Ok(())
         }
-        Ok(())
-    })
+    }
+}
+
+/// This App login was just written, inside the caller's transaction. `changed`:
+/// an agent marks only what it changed; the owner's word clears either way.
+pub(super) fn note_grant_conn(conn: &Connection, grant_id: &str, target: &str, changed: bool) -> Result<(), String> {
+    match writer() {
+        None => Ok(()),
+        Some(WrittenBy::Agent(by)) if changed && target != HOST_APP_ID => mark_written_conn(conn, WRITTEN_GRANT, grant_id, &by),
+        Some(WrittenBy::Agent(_)) => Ok(()),
+        Some(WrittenBy::Owner) => clear_written_conn(conn, WRITTEN_GRANT, grant_id),
+    }
+}
+
+/// Does what an agent wrote hold this login back on `target`? Its App login
+/// was written, or its role is a role of that same App and was written. Never
+/// on the box login.
+pub(super) fn written_holds(target: &str, grant_marked: bool, role_marked: bool, role_app: Option<&str>) -> bool {
+    target != HOST_APP_ID && (grant_marked || (role_marked && role_app == Some(target)))
 }
 
 pub(super) fn written_conn(conn: &Connection, kind: &str, id: &str) -> Result<bool, String> {
@@ -688,11 +749,13 @@ pub fn set(app: &str, username: &str, room_tokens: &[String], ceiling: &Ceiling,
     if !out.view.changed {
         return Ok(out);
     }
-    let grant = super::set_app_grant_rooms(&out.view.username, app.trim(), &ids, true, actor).map_err(Refusal::Store)?;
-    // Under the App's grant, not the owner's rights: revoking it takes these back.
-    if matches!(ceiling, Ceiling::Rooms(_)) {
-        mark_written(WRITTEN_GRANT, &grant.id, actor).map_err(Refusal::Store)?;
-    }
+    // Under the App's grant, not the owner's rights: revoking it takes these
+    // back. The owner's own door is the owner's word, and clears the mark.
+    let who = match ceiling {
+        Ceiling::Rooms(_) => WrittenBy::Agent(actor.to_string()),
+        Ceiling::AnyRoom => WrittenBy::Owner,
+    };
+    written_by(who, || super::set_app_grant_rooms(&out.view.username, app.trim(), &ids, true, actor)).map_err(Refusal::Store)?;
     audit(
         app.trim(),
         AUDIT_CHANGE,

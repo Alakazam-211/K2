@@ -262,7 +262,7 @@ export class K2App {
     list: (): Promise<AppKeyUsers> => this.appKey('GET', 'users'),
     create: (body: { username: string; email?: string; password?: string; rooms?: string[]; role?: string }): Promise<AppKeyUserCreated> =>
       this.appKey('POST', 'users', body),
-    setRooms: (body: { username: string; rooms: string[]; applyTokens?: boolean }): Promise<AppKeyRoomsSet> =>
+    setRooms: (body: { username: string; rooms: string[]; /** @deprecated Does nothing: a signed-in person gets the change at their next request. */ applyTokens?: boolean }): Promise<AppKeyRoomsSet> =>
       this.appKey('POST', 'users/rooms', body),
     disable: (body: { username: string }): Promise<AppKeyOk> => this.appKey('POST', 'users/disable', body),
     enable: (body: { username: string }): Promise<AppKeyOk> => this.appKey('POST', 'users/enable', body),
@@ -273,7 +273,7 @@ export class K2App {
 
   readonly rooms = {
     /** A user's rooms in this App ([] takes every room away). */
-    set: (body: { username: string; rooms: string[]; applyTokens?: boolean }): Promise<AppKeyRoomsSet> => this.appKey('POST', 'users/rooms', body),
+    set: (body: { username: string; rooms: string[]; /** @deprecated Does nothing: a signed-in person gets the change at their next request. */ applyTokens?: boolean }): Promise<AppKeyRoomsSet> => this.appKey('POST', 'users/rooms', body),
   }
 
   /** The App key's own view: this App, its scopes and ceiling. */

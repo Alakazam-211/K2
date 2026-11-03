@@ -2780,6 +2780,16 @@ pub struct SkinAppSession {
     pub app: String,
     /// The role on that App's grant, or `None` (rooms, Thread-only).
     pub role_name: Option<String>,
+    /// What [`attach_session`] fills `meta.room_access` from.
+    room_policy: RoomPolicy,
+}
+
+/// A minted session's handles and room lines, which read the daemon DB, so
+/// after the skin mutex is released (A21), never inside the mint.
+fn attach_session(s: SkinAppSession) -> SkinAppSession {
+    let mut meta = attach_token_handles(s.meta);
+    meta.room_access = room_access_from_policy(&s.room_policy, None);
+    SkinAppSession { meta, ..s }
 }
 
 /// Empty / missing App → [`HOST_APP_ID`] (a BFF that names no App).
@@ -2805,10 +2815,7 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
     let app_ws = ties::app_workspace(&app);
     let r = with_conn(|conn| mint_app_session_conn(conn, &username, &app, app_ws.as_deref()))?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
-    Ok(SkinAppSession {
-        meta: attach_token_handles(r.meta),
-        ..r
-    })
+    Ok(attach_session(r))
 }
 
 /// The mint behind [`create_app_session_token`] on an open connection (so
@@ -2913,13 +2920,14 @@ pub(crate) fn mint_app_session_conn(
                 caps,
                 rooms,
                 room_handles: Vec::new(),
-                room_access: room_access_from_policy(&policy, None),
+                room_access: Vec::new(),
                 created_at,
                 revoked_at: None,
             },
             raw,
             app: app.clone(),
             role_name,
+            room_policy: policy,
         })
     }
 }
@@ -4339,7 +4347,7 @@ pub fn token_scope(id: &str) -> Result<Option<TokenScope>, String> {
 }
 
 /// Set principal default rooms. Live sessions follow at their next request
-/// ([`live_session_policy`]); `apply_tokens` also copies onto the stored
+/// ([`live_session`]); `apply_tokens` also copies onto the stored
 /// **sessions** rows
 /// only — never platform tokens. Without it, live sessions still lose any
 /// room that is no longer in `rooms` (removal is never deferred).
@@ -4378,7 +4386,7 @@ pub fn set_principal_default_rooms(
             rewrite_live_sessions(conn, &p.id, HOST_APP_ID, &policy)?;
         } else {
             // The stored copy only: a live session reads its grant at each
-            // request either way (`live_session_policy`, 0.46.8).
+            // request either way (`live_session`, 0.46.8).
             narrow_live_sessions(conn, &p.id, HOST_APP_ID, &rooms)?;
         }
         Ok(SkinPrincipal {
@@ -4409,11 +4417,16 @@ fn blank_to_none(raw: Option<String>) -> Option<String> {
 }
 
 fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
-    let caps_raw: String = r.get(2)?;
-    let rooms_raw: String = r.get(3)?;
-    let policy_raw: String = r.get(5)?;
-    let app_id: Option<String> = r.get(6)?;
-    let paths_raw: Option<String> = r.get(7)?;
+    map_role_row_at(r, 0)
+}
+
+/// [`ROLE_SELECT`]'s columns, starting at column `at`.
+fn map_role_row_at(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<SkinRole> {
+    let caps_raw: String = r.get(at + 2)?;
+    let rooms_raw: String = r.get(at + 3)?;
+    let policy_raw: String = r.get(at + 5)?;
+    let app_id: Option<String> = r.get(at + 6)?;
+    let paths_raw: Option<String> = r.get(at + 7)?;
     let caps = caps_from_json(&caps_raw);
     let rooms = rooms_from_json(&rooms_raw);
     // A room policy that can't be read gives nothing, never every cap in
@@ -4423,13 +4436,13 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
         RoomPolicy::new()
     });
     Ok(SkinRole {
-        id: r.get(0)?,
-        name: r.get(1)?,
+        id: r.get(at)?,
+        name: r.get(at + 1)?,
         caps: union_caps(&room_policy),
         rooms: rooms_from_policy(&room_policy),
         room_handles: Vec::new(),
         room_access: Vec::new(),
-        created_at: r.get(4)?,
+        created_at: r.get(at + 4)?,
         app_id: blank_to_none(app_id),
         room_policy,
         // Display and editing only. Enforcement re-reads the column
@@ -4662,7 +4675,8 @@ pub fn create_role_for_app(
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = now_secs();
     with_conn(|conn| {
-        let taken: i64 = conn
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin role begin: {e}"))?;
+        let taken: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM roles WHERE name = ?1 COLLATE NOCASE",
                 params![name],
@@ -4672,7 +4686,7 @@ pub fn create_role_for_app(
         if taken > 0 {
             return Err(format!("role '{name}' already exists"));
         }
-        conn.execute(
+        tx.execute(
             "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy, app_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -4686,6 +4700,8 @@ pub fn create_role_for_app(
             ],
         )
         .map_err(|e| unique_role_err(&name, e))?;
+        guest_rooms::note_role_conn(&tx, &id, app_id.as_deref())?;
+        tx.commit().map_err(|e| format!("skin role commit: {e}"))?;
         let mut role = role_from_policy(id, name, created_at, policy);
         role.app_id = app_id;
         Ok(role)
@@ -4733,16 +4749,19 @@ pub fn update_role(id_or_name: &str, policy: Option<&RoomPolicy>) -> Result<Skin
         None => None,
     };
     let role = with_conn(|conn| {
-        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin role begin: {e}"))?;
+        let Some(mut role) = role_by_id_or_name(&tx, id_or_name)? else {
             return Err(format!("unknown skin role '{id_or_name}'"));
         };
         if let Some(p) = policy {
             role.room_policy = p;
         }
-        persist_role_policy(conn, &role.id, &role.room_policy)?;
-        paths::prune_role_paths(conn, &role)?;
-        role.room_paths = paths::role_room_paths(conn, &role.id).unwrap_or_default();
-        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
+        persist_role_policy(&tx, &role.id, &role.room_policy)?;
+        paths::prune_role_paths(&tx, &role)?;
+        role.room_paths = paths::role_room_paths(&tx, &role.id).unwrap_or_default();
+        rewrite_sessions_for_role(&tx, &role.id, &role.room_policy)?;
+        guest_rooms::note_role_conn(&tx, &role.id, role.app_id.as_deref())?;
+        tx.commit().map_err(|e| format!("skin role commit: {e}"))?;
         Ok(role)
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -4761,12 +4780,15 @@ pub fn set_role_room(
     };
     let caps = parse_caps(caps)?;
     let role = with_conn(|conn| {
-        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin role begin: {e}"))?;
+        let Some(mut role) = role_by_id_or_name(&tx, id_or_name)? else {
             return Err(format!("unknown skin role '{id_or_name}'"));
         };
         role.room_policy.insert(project_id, caps);
-        persist_role_policy(conn, &role.id, &role.room_policy)?;
-        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
+        persist_role_policy(&tx, &role.id, &role.room_policy)?;
+        rewrite_sessions_for_role(&tx, &role.id, &role.room_policy)?;
+        guest_rooms::note_role_conn(&tx, &role.id, role.app_id.as_deref())?;
+        tx.commit().map_err(|e| format!("skin role commit: {e}"))?;
         Ok(role)
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -4780,16 +4802,19 @@ pub fn clear_role_room(id_or_name: &str, project_id: &str) -> Result<SkinRole, S
         return Err("missing workspace".to_string());
     }
     let role = with_conn(|conn| {
-        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin role begin: {e}"))?;
+        let Some(mut role) = role_by_id_or_name(&tx, id_or_name)? else {
             return Err(format!("unknown skin role '{id_or_name}'"));
         };
         role.room_policy.remove(project_id);
-        persist_role_policy(conn, &role.id, &role.room_policy)?;
+        persist_role_policy(&tx, &role.id, &role.room_policy)?;
         // The room's folders go with its line: re-adding the room later
         // starts unscoped, never with a stale scope.
-        paths::prune_role_paths(conn, &role)?;
+        paths::prune_role_paths(&tx, &role)?;
         role.room_paths.remove(project_id);
-        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
+        rewrite_sessions_for_role(&tx, &role.id, &role.room_policy)?;
+        guest_rooms::note_role_conn(&tx, &role.id, role.app_id.as_deref())?;
+        tx.commit().map_err(|e| format!("skin role commit: {e}"))?;
         Ok(role)
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -4842,6 +4867,8 @@ pub fn remove_role(id_or_name: &str) -> Result<bool, String> {
         if granted > 0 {
             return Err(grant_role_remove_err(&role.name));
         }
+        conn.execute("DELETE FROM agent_written_access WHERE kind = ?1 AND id = ?2", params![guest_rooms::WRITTEN_ROLE, role.id])
+            .map_err(|e| format!("skin role mark delete: {e}"))?;
         let n = conn
             .execute("DELETE FROM roles WHERE id = ?1", params![role.id])
             .map_err(|e| {
@@ -6256,7 +6283,9 @@ pub fn add_principal_for_app_by(
             ],
         )
         .map_err(|e| format!("skin app grant insert: {e}"))?;
-        if by.agent_workspace.is_some() || by.app_key_workspace.is_some() {
+        // Not an App key's login: its rooms are inside the key's, which the
+        // owner set at mint, and its tie holds it until a reset.
+        if by.agent_workspace.is_some() {
             guest_rooms::mark_written_conn(&tx, guest_rooms::WRITTEN_GRANT, &grant_id, created_by)?;
         }
         if let Some(ws) = by.agent_workspace {
@@ -6298,7 +6327,7 @@ pub fn add_principal_for_app_by(
 /// S24-15: set the rooms of one guest's role-less grant on App `app`
 /// (`host` included). Creates the grant when there is none (owner route).
 /// A grant that carries a role is refused: change the role's rooms instead.
-/// Live sessions follow at their next request ([`live_session_policy`]);
+/// Live sessions follow at their next request ([`live_session`]);
 /// `apply_tokens` only decides how the stored rows are rewritten. A disabled
 /// grant stays disabled.
 pub fn set_app_grant_rooms(
@@ -6321,24 +6350,26 @@ pub fn set_app_grant_rooms(
     let rooms = normalize_room_ids(rooms);
     let stored = rooms_json(&rooms);
     members::notify_ok(with_conn(|conn| {
-        let Some(p) = principal_by_username(conn, &username)? else {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("skin app grant begin: {e}"))?;
+        let Some(p) = principal_by_username(&tx, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        match app_grant(conn, &p.id, &app)? {
+        let changed = match app_grant(&tx, &p.id, &app)? {
             Some(g) if g.role_id.is_some() => {
                 return Err(format!(
                     "'{username}' has a role on that App; change the role's rooms (k2 app role room) or remove the grant first"
                 ));
             }
             Some(g) => {
-                conn.execute(
+                tx.execute(
                     "UPDATE grants SET scope = ?1 WHERE id = ?2",
                     params![stored, g.id],
                 )
                 .map_err(|e| format!("skin app grant rooms: {e}"))?;
+                g.scope.as_deref() != Some(stored.as_str())
             }
             None => {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO grants
                      (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
                      VALUES (?1, 'principal', ?2, 'app', ?3, NULL, ?4, ?5, 1, ?6)",
@@ -6352,14 +6383,18 @@ pub fn set_app_grant_rooms(
                     ],
                 )
                 .map_err(|e| format!("skin app grant insert: {e}"))?;
+                true
             }
-        }
+        };
         if apply_tokens {
-            rewrite_live_sessions(conn, &p.id, &app, &thread_only_policy(&rooms))?;
+            rewrite_live_sessions(&tx, &p.id, &app, &thread_only_policy(&rooms))?;
         } else {
-            narrow_live_sessions(conn, &p.id, &app, &rooms)?;
+            narrow_live_sessions(&tx, &p.id, &app, &rooms)?;
         }
-        app_grant(conn, &p.id, &app)?.ok_or_else(|| "app grant vanished".to_string())
+        let grant = app_grant(&tx, &p.id, &app)?.ok_or_else(|| "app grant vanished".to_string())?;
+        guest_rooms::note_grant_conn(&tx, &grant.id, &grant.target_id, changed)?;
+        tx.commit().map_err(|e| format!("skin app grant commit: {e}"))?;
+        Ok(grant)
     }))
 }
 
@@ -6409,6 +6444,8 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
             return Err("kind=app requires roleId".to_string());
         };
         if old.role_id.as_deref() == Some(role_id.as_str()) && old.scope.is_none() {
+            guest_rooms::note_grant_conn(&tx, &old.id, &old.target_id, false)?;
+            tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
             return Ok((old, false));
         }
         let Some(role) = role_by_id_or_name(&tx, &role_id)? else {
@@ -6451,6 +6488,7 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
                 .unwrap_or_default();
             rewrite_live_sessions(&tx, &old.subject_id, &old.target_id, &policy)?;
         }
+        guest_rooms::note_grant_conn(&tx, &old.id, &old.target_id, true)?;
         tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
         Ok((
             SkinGrant {
@@ -7123,7 +7161,7 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 /// `kind=app` grant **for the App the session is bound to** (S24-5; NULL
 /// on a pre-0.45.5 row = `host`) at the moment of use: a backstop behind the
 /// revocations the grant writers do. Its rooms and caps are that grant's at
-/// the moment of use ([`live_session_policy`]). Platform passes
+/// the moment of use ([`live_session`]). Platform passes
 /// (`session=0`) skip both.
 /// An App **link pass** (`link_id` set, runtime S14) is never returned
 /// here: it is valid only on its own link ([`link::resolve_link_pass`]).
@@ -7246,13 +7284,16 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
             // sign-out. A login's rooms and caps are its grant's, now, like
             // its folders (R3); the stored copy only says what it was when
             // last written. A role that can't be read fails closed.
-            if let Some((policy, was_written)) = live_session_policy(conn, &pass)? {
-                written = was_written;
-                pass.caps = union_caps(&policy);
-                pass.rooms = rooms_from_policy(&policy);
-                pass.room_policy = policy;
+            match live_session(conn, &pass)? {
+                Some(live) => {
+                    written = live.written;
+                    pass.caps = union_caps(&live.policy);
+                    pass.rooms = rooms_from_policy(&live.policy);
+                    pass.room_policy = live.policy;
+                    pass.room_paths = live.paths;
+                }
+                None => pass.room_paths = paths::session_paths(conn, &pass),
             }
-            pass.room_paths = paths::session_paths(conn, &pass);
             // app-user-profile §3.7: last used, in memory only.
             profile::touch(&pass.id);
         }
@@ -7269,15 +7310,17 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
     }))
 }
 
-/// Did an agent write this App login, or the role it carries?
+/// Does what an agent wrote hold this login back ([`guest_rooms::written_holds`])?
 fn grant_written(conn: &Connection, grant: &SkinGrant) -> Result<bool, String> {
-    if guest_rooms::written_conn(conn, guest_rooms::WRITTEN_GRANT, &grant.id)? {
-        return Ok(true);
-    }
-    match grant.role_id.as_deref() {
-        Some(rid) => guest_rooms::written_conn(conn, guest_rooms::WRITTEN_ROLE, rid),
-        None => Ok(false),
-    }
+    let grant_marked = guest_rooms::written_conn(conn, guest_rooms::WRITTEN_GRANT, &grant.id)?;
+    let (role_marked, role_app) = match grant.role_id.as_deref() {
+        Some(rid) => (
+            guest_rooms::written_conn(conn, guest_rooms::WRITTEN_ROLE, rid)?,
+            role_by_id_or_name(conn, rid)?.and_then(|r| r.app_id),
+        ),
+        None => (false, None),
+    };
+    Ok(guest_rooms::written_holds(&grant.target_id, grant_marked, role_marked, role_app.as_deref()))
 }
 
 /// [`resolve_skin_token`]'s hold on an untied login an agent wrote: what
@@ -7291,16 +7334,65 @@ fn hold_resolved(mut pass: SkinPass, app_rooms: &[String]) -> SkinPass {
     pass
 }
 
-/// The policy a login session has right now: its App's enabled grant's
-/// ([`grant_login_policy`], what a fresh sign-in would get), and whether an
-/// agent wrote that login or its role ([`grant_written`]). `None`: no such
-/// grant (a chat-only box login, S28 §13, whose stored policy is empty), or
-/// no principal; the stored row stands.
-fn live_session_policy(conn: &Connection, pass: &SkinPass) -> Result<Option<(RoomPolicy, bool)>, String> {
+/// What a login session has right now, on one read of its App's enabled grant:
+/// the policy ([`grant_login_policy`], what a fresh sign-in would get), whether
+/// an agent's write holds it back ([`grant_written`]), and its folders
+/// ([`paths::session_paths`]).
+struct LiveSession {
+    policy: RoomPolicy,
+    written: bool,
+    paths: paths::PassPaths,
+}
+
+/// One query, because this runs at every request of a signed-in person: the
+/// grant, its role and both marks. `None`: no such grant (a chat-only box login,
+/// S28 §13, whose stored policy is empty), or no principal; the stored row
+/// stands. A grant whose role doesn't join (a name on an old row, a role that's
+/// gone) takes the slower lookups, which fail closed.
+fn live_session(conn: &Connection, pass: &SkinPass) -> Result<Option<LiveSession>, String> {
     let Some(principal_id) = pass.principal_id.as_deref() else { return Ok(None) };
-    let Some(grant) = enabled_app_grant(conn, principal_id, &pass.app)? else { return Ok(None) };
-    let written = grant_written(conn, &grant)?;
-    Ok(Some((grant_login_policy(conn, &grant)?.0, written)))
+    let row = conn
+        .query_row(
+            "SELECT g.id, g.subject_kind, g.subject_id, g.kind, g.target_id, g.role_id, g.scope, g.created_at, g.enabled, g.created_by,
+                    r.id, r.name, r.caps, r.rooms, r.created_at, COALESCE(r.room_policy, '{}'), r.app_id, r.room_paths,
+                    EXISTS (SELECT 1 FROM agent_written_access m WHERE m.kind = ?3 AND m.id = g.id),
+                    EXISTS (SELECT 1 FROM agent_written_access m WHERE m.kind = ?4 AND m.id = g.role_id)
+             FROM grants g LEFT JOIN roles r ON r.id = g.role_id
+             WHERE g.subject_kind = 'principal' AND g.subject_id = ?1 AND g.kind = 'app' AND g.target_id = ?2 AND g.enabled != 0",
+            params![principal_id, pass.app, guest_rooms::WRITTEN_GRANT, guest_rooms::WRITTEN_ROLE],
+            |r| {
+                let grant = map_grant_row(r)?;
+                let joined: Option<String> = r.get(10)?;
+                let role = match joined {
+                    Some(_) => Some((map_role_row_at(r, 10)?, r.get::<_, Option<String>>(17)?)),
+                    None => None,
+                };
+                Ok((grant, role, r.get::<_, bool>(18)?, r.get::<_, bool>(19)?))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("skin live session: {e}"))?;
+    let Some((grant, role, grant_marked, role_marked)) = row else { return Ok(None) };
+    match (grant.role_id.as_deref(), role) {
+        (None, _) => Ok(Some(LiveSession {
+            policy: thread_only_policy(&parse_rooms_json(grant.scope.as_deref())),
+            written: guest_rooms::written_holds(&grant.target_id, grant_marked, false, None),
+            paths: paths::PassPaths::Whole,
+        })),
+        (Some(_), Some((role, raw_paths))) => Ok(Some(LiveSession {
+            written: guest_rooms::written_holds(&grant.target_id, grant_marked, role_marked, role.app_id.as_deref()),
+            paths: match paths::parse_room_paths(raw_paths.as_deref()) {
+                Ok(lines) => paths::PassPaths::Lines(lines),
+                Err(e) => paths::PassPaths::Unreadable(e),
+            },
+            policy: role.room_policy,
+        })),
+        (Some(_), None) => Ok(Some(LiveSession {
+            written: grant_written(conn, &grant)?,
+            policy: grant_login_policy(conn, &grant)?.0,
+            paths: paths::session_paths(conn, pass),
+        })),
+    }
 }
 
 /// [`resolve_skin_token`]'s clamp for a tied guest's session: `None` when
@@ -10465,6 +10557,62 @@ mod tests {
 
     /// A role or session whose room policy can't be read gives nothing, never
     /// every cap in every room.
+    /// Re-review 2026-11-02: the mark is written with the change. One that can't
+    /// be written undoes it, so nothing an agent wrote is ever left unmarked.
+    #[test]
+    fn a_mark_that_cant_be_written_undoes_the_change() {
+        with_temp_home(|| {
+            let (room, other) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+            let mut p = RoomPolicy::new();
+            p.insert(room.clone(), vec![CAP_THREAD_READ.into()]);
+            create_role_for_app("keeps", &p, Some("app-1")).unwrap();
+            add_principal_for_app("dana", None, "app-1", None, "owner-token").unwrap();
+            with_conn(|c| c.execute_batch("DROP TABLE agent_written_access;").map_err(|e| e.to_string())).unwrap();
+            let by = || guest_rooms::WrittenBy::Agent("agent:test".to_string());
+            assert!(guest_rooms::written_by(by(), || create_role_for_app("gone", &p, Some("app-1"))).is_err());
+            assert!(find_role("gone").unwrap().is_none(), "no role without its mark");
+            assert!(guest_rooms::written_by(by(), || set_role_room("keeps", &other, None)).is_err());
+            assert!(!find_role("keeps").unwrap().unwrap().room_policy.contains_key(&other), "no room without its mark");
+            assert!(guest_rooms::written_by(by(), || clear_role_room("keeps", &room)).is_err());
+            assert!(find_role("keeps").unwrap().unwrap().room_policy.contains_key(&room));
+            assert!(guest_rooms::written_by(by(), || set_app_grant_rooms("dana", "app-1", &[other.clone()], true, "agent:test")).is_err());
+            let g = with_conn(|conn| {
+                let d = principal_by_username(conn, "dana")?.expect("dana");
+                app_grant(conn, &d.id, "app-1")
+            })
+            .unwrap()
+            .expect("grant");
+            assert_eq!(parse_rooms_json(g.scope.as_deref()), Vec::<String>::new(), "no rooms without the mark");
+            assert!(guest_rooms::written_by(by(), || set_app_grant_role(&g.id, "keeps")).is_err());
+            assert_eq!(list_grants().unwrap().into_iter().find(|x| x.id == g.id).unwrap().role_id, None, "no role on the login without the mark");
+        });
+    }
+
+    /// Re-review 2026-11-02: a box-wide role and a box login are never held; the
+    /// hold is a role of that same App, or an App login an agent wrote.
+    #[test]
+    fn what_an_agent_wrote_holds_back_only_its_own_app() {
+        use guest_rooms::{written, written_by, written_holds, WrittenBy, WRITTEN_ROLE};
+        assert!(!written_holds(HOST_APP_ID, true, true, Some(HOST_APP_ID)), "never the box login");
+        assert!(!written_holds("app-1", false, true, None), "a box-wide role");
+        assert!(!written_holds("app-1", false, true, Some("app-2")), "another App's role");
+        assert!(written_holds("app-1", false, true, Some("app-1")));
+        assert!(written_holds("app-1", true, false, None));
+        with_temp_home(|| {
+            let mut p = RoomPolicy::new();
+            p.insert(uuid::Uuid::new_v4().to_string(), vec![CAP_THREAD_READ.into()]);
+            let agent = || WrittenBy::Agent("agent:test".to_string());
+            let wide = written_by(agent(), || create_role_for_app("wide", &p, None)).unwrap();
+            assert!(!written(WRITTEN_ROLE, &wide.id).unwrap(), "box-wide: no mark");
+            let own = written_by(agent(), || create_role_for_app("own", &p, Some("app-1"))).unwrap();
+            assert!(written(WRITTEN_ROLE, &own.id).unwrap());
+            written_by(WrittenBy::Owner, || update_role("own", Some(&p))).unwrap();
+            assert!(!written(WRITTEN_ROLE, &own.id).unwrap(), "the owner's word clears it");
+            let plain = create_role_for_app("plain", &p, Some("app-1")).unwrap();
+            assert!(!written(WRITTEN_ROLE, &plain.id).unwrap(), "nobody named: no mark");
+        });
+    }
+
     #[test]
     fn an_unreadable_room_policy_fails_closed() {
         with_temp_home(|| {
@@ -10501,6 +10649,7 @@ mod tests {
     #[ignore = "a timing report, not a test"]
     fn resolve_timing_on_a_busy_room_shape() {
         with_temp_home(|| {
+            let _db = crate::db::scoped_for_test();
             let rooms: Vec<String> = (0..20).map(|_| uuid::Uuid::new_v4().to_string()).collect();
             let mut p = RoomPolicy::new();
             for r in &rooms {
@@ -10517,6 +10666,28 @@ mod tests {
             assign_role("bo", "typical").unwrap();
             let (_, typical) = create_session_token("bo").unwrap();
             let (_, platform) = create_token("plat", Some(&[CAP_THREAD_READ.to_string()]), &rooms).unwrap();
+            // A tied login and one an agent wrote take the App's workspace from
+            // the main DB too.
+            let app = {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, 'timing', '/tmp/timing', 'timing')", params![rooms[0]]).unwrap();
+                crate::published_services::insert(&conn, &rooms[0], "timing", "node s.js", "/tmp", 47_561, "local", "stopped", "cmd", "").unwrap().id
+            };
+            let mut own = RoomPolicy::new();
+            own.insert(rooms[0].clone(), vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into(), CAP_FILES_READ.into()]);
+            create_role_for_app("appown", &own, Some(&app)).unwrap();
+            let by_agent = AddedBy { agent_workspace: Some(&rooms[0]), ..Default::default() };
+            add_principal_for_app_by("tied", None, &app, Some("appown"), "agent:timing", by_agent).unwrap();
+            let tied = create_app_session_token("tied", &app).unwrap().raw;
+            add_principal_for_app("marked", None, &app, Some("appown"), "owner-token").unwrap();
+            with_conn(|conn| {
+                let p = principal_by_username(conn, "marked")?.expect("marked");
+                let g = app_grant(conn, &p.id, &app)?.expect("grant");
+                guest_rooms::mark_written_conn(conn, guest_rooms::WRITTEN_GRANT, &g.id, "agent:timing")
+            })
+            .unwrap();
+            let marked = create_app_session_token("marked", &app).unwrap().raw;
             let time = |what: &str, raw: &str| {
                 let n = 2000u32;
                 let start = std::time::Instant::now();
@@ -10529,6 +10700,8 @@ mod tests {
             time("platform pass (no grant read)", &platform);
             time("login session, role of 1 room, 3 caps", &typical);
             time("login session, role of 20 rooms, every cap", &session);
+            time("tied login, own room", &tied);
+            time("login an agent wrote, own room", &marked);
         });
     }
 

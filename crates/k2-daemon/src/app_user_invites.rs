@@ -1235,7 +1235,7 @@ fn app_key_reset_send(
     by: &By,
 ) -> Result<Value, (u16, &'static str, String)> {
     let (ws, email) = (ws.to_string(), email.to_string());
-    let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), actor) {
+    let minted = match invites::mint(&person.id, app, invites::PURPOSE_RESET, settings.reset_ttl_secs, Some(&email), false, Some((&ws, skin::ties::REASON_APP_KEY)), by.actor()) {
         Ok(m) => m,
         Err(invites::MintError::Throttled) => return Err((429, "throttled", "wait a minute".to_string())),
         Err(invites::MintError::TiedElsewhere) => return Err((409, skin::ties::TIED_ELSEWHERE, "this person is tied to another workspace; only the owner resets them".to_string())),

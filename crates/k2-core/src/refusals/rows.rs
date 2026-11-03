@@ -400,7 +400,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("login_name_reserved", "general", 409, Who::Agent, "A login an agent or an App key makes can't take a name people on this box sign in or stamp under.",
         "Pick another username. Reserved: owner, root, admin, administrator, system, k2, and anyone who signs in to K2 itself."),
     r("outside_app_rooms", "general", 403, Who::Agent, "That room isn't one this App's own code may hand its people: not the App's own room, and not on its guests-rooms grant.",
-        "Add it once for the whole App: k2 app grant <app-id> --kind guests-rooms --room <room>, adding a --room for each room it has already (k2 app guest ceiling <app-id>). An agent with \"Let this agent manage its Apps' users\" on can set any room itself: k2 app user rooms."),
+        "Add it for the whole App: k2 app grant <app-id> --kind guests-rooms --room <room>. That replaces the list, so repeat the rooms it has (k2 app guest ceiling <app-id>). An agent with \"Let this agent manage its Apps' users\" on can set any room itself: k2 app user rooms."),
     r("skin_room", "general", 403, Who::Agent, "The pass doesn't hold that room or Thread (the same answer as a room that doesn't exist). A hint saying \"waiting for reset (agent-tied)\" means an agent set this login up, so that room stays held back.",
         "Use a room the pass holds, or have the owner add it. Agent-tied: it clears when the person chooses their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow."),
     r("state_write_failed", "general", 500, Who::K2, "K2 couldn't save its state for this step.",

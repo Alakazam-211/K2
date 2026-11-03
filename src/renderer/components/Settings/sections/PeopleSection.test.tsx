@@ -230,7 +230,7 @@ describe('PeopleSection', () => {
     expect(screen.queryByRole('button', { name: 'Reset password…' })).toBeNull()
 
     fireEvent.click(screen.getByLabelText('Open tina'))
-    expect(screen.getByText(/so a reset never goes there/)).toBeTruthy()
+    expect(screen.getByText(/so your reset never goes there/)).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', { name: 'Reset password…' }))
     const dialog = screen.getByTestId('reset-password-dialog')
     expect(dialog.textContent).toContain('sales’s agent set tina up')

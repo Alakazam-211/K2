@@ -8092,8 +8092,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
                                         An agent with "Let this agent manage its Apps' users" on: K2 mails
                                         the person the App's reset link, to the email on the login, from the
-                                        App's address (you never see the link). Starting a reset doesn't tie
-                                        them; when they choose a password with it, any wait ends.
+                                        App's address (you never see the link). Sending it adds no limit;
+                                        when they choose a password with it, anything waiting starts.
                                         --revoke takes back that login's unused links on the App.
                                         The owner, or an admin for App-only users (box logins stay
                                         the owner's). A one-time reset link on K2's own page: when used,
@@ -8155,7 +8155,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
                                         files:write never reaches the agent's .k2/ folder unless you add
-                                        files:agentconfig too (owner only; not recommended). k2 study apps.
+                                        files:agentconfig too (not recommended). k2 study apps.
                                         files:upload = drop files into --upload folders, never see them.
                                         Chat caps (App-wide; any room line counts): chat:read, chat:post,
                                         chat:respond, voice:join, voice:video (needs voice:join). They cap the
@@ -11174,8 +11174,7 @@ THE ORDER
     version those get not_found for chat through an App. Anyone the Agent
     or your App creates or sets a password for is tied to the agent: no chat
     pass (403 tied_pending_reset) until they choose their own password
-    (first sign-in with a temporary password, an invite or reset link, or
-    your App's forgot-password flow).
+    (first sign-in, an invite or reset link, your App's forgot-password flow).
  4. Chat for that person, BEFORE the Space (Sew needs their account):
       k2 app user chat <owner-user> member --app <app>        (Owner)
     For everyone after (step 8), better: the Owner runs k2 app grant <app>
@@ -50456,7 +50455,8 @@ PER-APP LOGINS (0.45.5)
   WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
   owner step. Its role says what else it gets: the agent that owns the App may
   put any room on this box and any cap on that App's roles and logins, with no
-  grant and no card. A login the agent set up gets the rest once the person
+  grant and no card (k2 app role room <role> <room> --caps thread:read,files:read).
+  A login the agent set up gets the rest once the person
   chooses their own password: the answer says what waits and how. A role of
   another App is refused, and a box login stays the owner's. A name people on
   this box use is refused

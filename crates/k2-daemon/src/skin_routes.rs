@@ -875,25 +875,14 @@ fn role_in_workspace(r: &skin::SkinRole, ws: &str) -> bool {
     rooms_in(&r.rooms, ws) && r.room_policy.keys().all(|k| k == ws) && r.app_id.as_deref().map_or(true, |app| app_of_workspace(app, ws))
 }
 
-/// What an agent of `ws` may hand out on its App `app` (0.46.8): its own
-/// room and the rooms of the App's owner-approved `guests-rooms` grant.
-/// Read errors count as no grant: never wider.
-
 /// Every room `r` names is in `allowed`.
 fn role_within(r: &skin::SkinRole, allowed: &[String]) -> bool {
     r.rooms.iter().chain(r.room_policy.keys()).all(|k| allowed.contains(k))
 }
 
-/// The rooms `r` names outside `allowed`.
-
-/// [`outside_app_rooms`] for a role, naming it: which role was checked is
-/// part of the answer (a role named like another's id never stands in).
-
 /// A role an agent of `ws` may edit: wholly its workspace's, or a role of one
 /// of its Apps that an agent wrote ([`skin::guest_rooms::written`]). A role the
-/// owner made reaching elsewhere stays the owner's, whatever the App's grant.
-/// An agent-written role stays editable after the grant goes, so the agent can
-/// clear a room it can no longer hand out.
+/// owner made reaching elsewhere stays the owner's.
 fn role_is_agents(r: &skin::SkinRole, ws: &str) -> bool {
     role_in_workspace(r, ws)
         || (r.app_id.as_deref().is_some_and(|app| app_of_workspace(app, ws))
@@ -911,9 +900,6 @@ fn app_name_of(app: &str) -> String {
     let conn = db.lock();
     k2_core::published_services::get_by_id(&conn, app).ok().flatten().map(|s| s.name).unwrap_or_else(|| app.to_string())
 }
-
-/// 403 `outside_app_rooms` for an agent on its own App: names the rooms and
-/// the broad path, the App's `guests-rooms` grant.
 
 /// The published service `id` belongs to workspace `ws`.
 fn app_of_workspace(id: &str, ws: &str) -> bool {
@@ -1038,31 +1024,24 @@ pub(crate) fn password_sets_must_change(actor: &str, username: &str) -> bool {
     !agent_owns_test_guest(actor, username)
 }
 
-/// GH#72 (Rosson 2026-10-14): [`skin::CAP_FILES_AGENT_CONFIG`] — letting
-/// App guests write the agent's own `.k2/` folder — is owner tooling. An
-/// agent with "manage Apps" may not add it to a role's room, mint it on a
-/// platform pass, widen a pass that holds it, or hand a role that holds
-/// it to a guest. Removing it (tightening) stays open to agents.
+/// GH#72: an agent may not mint [`skin::CAP_FILES_AGENT_CONFIG`] on a platform pass
+/// or widen a pass that holds it. A role of its own App may name it (Rosson
+/// 2026-11-03).
 fn agent_config_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:agentconfig (app guests may write the agent's .k2 folder) is owner-only — ask your human (Settings → User Access, or k2 app role room <role> <handle> --caps …,files:write,files:agentconfig)",
+        "files:agentconfig on a platform pass is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:write,files:agentconfig",
     )
 }
 
-/// 0.46.3 Thread downloads: [`skin::CAP_FILES_DOWNLOAD`] is person-only
-/// the same way (Rosson 2026-10-22: Thread access doesn't mean file
-/// downloads; a person turns downloads on).
+/// 0.46.3 Thread downloads: [`skin::CAP_FILES_DOWNLOAD`] on a platform pass, the
+/// same way.
 fn files_download_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:download (app guests may save Thread files) is person-only — ask your human (Settings → User Access, or k2 app role room <role> <handle> --caps …,files:download)",
+        "files:download on a platform pass is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:download",
     )
 }
 
-/// prd-app-caps-0464-v1 AC18 (Q4): adding or widening a role line's
-/// download entries is person-only, like `files:download` itself; an agent
-/// with "manage Apps" may still narrow them.
-
-/// The refusal for an agent granting the person-only `cap`.
+/// The refusal for an agent putting the person-only `cap` on a platform pass.
 fn person_only_refused(cap: &str) -> CliResponse {
     if cap == skin::CAP_FILES_DOWNLOAD {
         files_download_refused()

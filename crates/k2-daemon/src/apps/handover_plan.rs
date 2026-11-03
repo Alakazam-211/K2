@@ -39,6 +39,8 @@ pub const NEEDS_DB_MOVE: &str = "handover_needs_db_move";
 pub const DB_SHARED: &str = "handover_db_shared";
 pub const DB_BUSY: &str = "handover_db_busy";
 pub const VAULT_CLOSED: &str = "handover_vault_closed";
+/// The App's guests hold box-wide roles that name the old agent's room.
+pub const SHARED_ROLES: &str = "handover_shared_roles";
 
 /// The owner's choices on the card.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -251,9 +253,18 @@ impl Plan {
         }
         let moving = self.guests.len() - self.count(sh::CLASS_SHARED) - self.count(sh::CLASS_AGENT_LOGIN);
         if moving > 0 {
-            out.push(format!(
-                "Guests: {moving} guest(s) keep their access and stay signed in. From now on they talk to {b}. Their conversations with {a} stay with {a}."
-            ));
+            let tied = self.count(sh::CLASS_GIVER_TIED) + self.count(sh::CLASS_APP_KEY_TIED);
+            let stay = moving - tied;
+            if stay > 0 {
+                out.push(format!(
+                    "Guests: {stay} guest(s) keep their access and stay signed in. From now on they talk to {b}. Their conversations with {a} stay with {a}."
+                ));
+            }
+            if tied > 0 {
+                out.push(format!(
+                    "Logins {a} set up: {tied} login(s) are signed out now, because {a} could hold one of their sign-ins. They keep their access and talk to {b} when they sign in again."
+                ));
+            }
         }
         // 0.46.8: the App's guests-rooms grant is the App's, not the agent's:
         // the rooms the owner approved stay, and B hands them out the same.
@@ -261,7 +272,7 @@ impl Plan {
             let kept: Vec<String> = g.rooms.iter().filter(|r| **r != self.room_from).map(|r| ws_handle(r)).collect();
             if !kept.is_empty() {
                 out.push(format!(
-                    "Rooms you approved for {app}'s guests ({}) stay with the App: {b} can hand them out as {a} could, and logins {b} sets up can use them. Take them back any time: k2 app grant {app} --kind guests-rooms --revoke.",
+                    "Rooms you approved for {app}'s guests ({}) stay with the App: {b} can hand them out as {a} could. A login {b} sets up reaches them only after the person uses a reset link on K2's own page. Revoking the grant (k2 app grant {app} --kind guests-rooms --revoke) takes back what an agent handed out; rooms you put on a role yourself stay.",
                     kept.join(", ")
                 ));
             }
@@ -269,8 +280,8 @@ impl Plan {
         let retired = self.guests.iter().filter(|g| (g.class == sh::CLASS_GIVER_TIED || g.class == sh::CLASS_APP_KEY_TIED) && g.has_password).count();
         if retired > 0 {
             out.push(format!(
-                "Passwords {a} set: {retired} guest(s)' passwords were set by {a}. They stay signed in, but their passwords are cleared so {a} can't \
-                 sign in as them. Each sets a new one when their sign-in ends; {b} can send the link (k2 app user reset), or you can."
+                "Passwords {a} set: {retired} guest(s)' passwords were set by {a}. They are cleared so {a} can't sign in as them. Each sets a new one \
+                 to sign in again; {b} can send the link (k2 app user reset), or you can."
             ));
         }
         let shared = self.names(sh::CLASS_SHARED);
@@ -290,12 +301,6 @@ impl Plan {
         let logins = self.names(sh::CLASS_AGENT_LOGIN);
         if !logins.is_empty() {
             out.push(format!("{a}'s own logins on {app} ({}) stop working.", logins.join(", ")));
-        }
-        if !self.rooms.shared_roles.is_empty() {
-            out.push(format!(
-                "Roles other Apps share ({}) still name {a}'s room: they stay as they are (edit them in Settings → Apps if {app}'s guests should reach {b} through them).",
-                self.rooms.shared_roles.join(", ")
-            ));
         }
         let moved: Vec<&str> = self.secrets.iter().filter(|s| s.case == "move").map(|s| s.name.as_str()).collect();
         let copied: Vec<&str> = self.secrets.iter().filter(|s| s.case == "copy").map(|s| s.name.as_str()).collect();
@@ -576,6 +581,19 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
                 names: tied,
             });
         }
+    }
+    // A box-wide role naming A's room stays as it is (other Apps share it), so
+    // this App's guests on it would keep reaching A, or go dark if tied, while
+    // the card says they talk to B. The owner decides first, never silently.
+    if !p.rooms.shared_roles.is_empty() {
+        out.push(Blocker {
+            code: SHARED_ROLES,
+            hint: format!(
+                "{app}'s guests hold box-wide roles that name {a}'s room ({}): after a handover they would keep talking to {a}, not the new agent. Give them a role of this App instead (k2 app role create <name> --app {app}, then k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids), or take {a}'s room off those roles, then ask again",
+                p.rooms.shared_roles.join(", ")
+            ),
+            names: p.rooms.shared_roles.clone(),
+        });
     }
     if !vault_ok {
         out.push(Blocker {

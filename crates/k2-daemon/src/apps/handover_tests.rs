@@ -798,8 +798,7 @@ fn a_guest_a_set_up_is_retied_and_its_password_retired() {
     let hid = v["handover"]["id"].as_str().unwrap().to_string();
     let (st, v) = approve(&req_id(&v));
     assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
-    let pass = k2_core::skin::resolve_skin_token(&s.raw).expect("the live session stays");
-    assert_eq!(pass.room_policy.keys().cloned().collect::<Vec<_>>(), vec![f.b.clone()]);
+    assert!(k2_core::skin::resolve_skin_token(&s.raw).is_none(), "A could hold this session: it ends at the switch");
     assert!(!k2_core::skin::verify_principal_password("bea-t31", "a-knows-this-1"), "A's known password no longer signs in");
     assert_eq!(tie_of(&pid).as_deref(), Some(f.b.as_str()), "re-tied to B");
     assert_eq!(k2_core::skin::creators::workspace_of(&pid).unwrap().as_deref(), Some(f.b.as_str()), "stamped B");
@@ -828,14 +827,7 @@ fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
     k2_core::skin::creators::stamp(&pid, &f.a).unwrap();
     k2_core::skin::creators::tie(&pid, &f.a, "agent:gr1", k2_core::skin::ties::REASON_CREATED).unwrap();
     let s = k2_core::skin::create_app_session_token("tia-gr1", &f.svc).unwrap();
-    let rooms = |raw: &str| {
-        let mut v: Vec<String> = k2_core::skin::resolve_skin_token(raw).expect("live").room_policy.into_keys().collect();
-        v.sort();
-        v
-    };
-    let mut before = vec![f.a.clone(), f.c.clone()];
-    before.sort();
-    assert_eq!(rooms(&s.raw), before);
+    assert_eq!(k2_core::skin::resolve_skin_token(&s.raw).expect("live").rooms, vec![f.a.clone()], "the approved room waits for a reset");
 
     let (_, v) = ask(&f);
     let lines = v["plan"]["lines"].as_array().expect("lines");
@@ -864,11 +856,48 @@ fn the_rooms_the_owner_approved_carry_to_the_new_agent() {
     // The grant is the App's: the room stays, the App's own moved to B.
     let ceiling = k2_core::skin::guest_rooms::app_ceiling(&f.svc).unwrap().expect("the grant carried");
     assert!(ceiling.contains(&f.c) && ceiling.contains(&f.b) && !ceiling.contains(&f.a), "{ceiling:?}");
-    // The login, re-tied to B, stays signed in with the same reach.
+    // The login is B's now, and A's old sign-in as it ended at the switch.
     assert_eq!(tie_of(&pid).as_deref(), Some(f.b.as_str()));
-    let mut after = vec![f.b.clone(), f.c.clone()];
-    after.sort();
-    assert_eq!(rooms(&s.raw), after, "the approved room still works under B");
+    assert!(k2_core::skin::resolve_skin_token(&s.raw).is_none(), "A kept no session");
+}
+
+/// The App's guests on a box-wide role naming A's room would stay on A after
+/// the switch while the card says they talk to B. It refuses, naming the
+/// roles, and nothing moves; a role of the App itself is no such thing.
+#[test]
+fn a_box_wide_role_naming_the_old_room_refuses_the_handover() {
+    let f = fx("swr1");
+    let mut pol = k2_core::skin::RoomPolicy::new();
+    pol.insert(f.a.clone(), vec!["thread:read".into(), "files:read".into()]);
+    let role = k2_core::skin::create_role_for_app("swr-boxwide", &pol, None).unwrap();
+    let p = k2_core::skin::add_principal("swr-u").unwrap();
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: p.id.clone(),
+        kind: "app".into(),
+        target_id: f.svc.clone(),
+        role: Some(role.id.clone()),
+        scope: None,
+        created_by: Some("owner-token".into()),
+    })
+    .unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!((st, code(&v)), (409, "handover_shared_roles"), "{v}");
+    assert_eq!(v["error"]["blockers"][0]["names"], json!(["swr-boxwide"]), "{v}");
+    assert_eq!(app_row(&f.app).owner_workspace, f.a, "nothing moved");
+    // The owner gives them a role of this App instead: it goes, and they reach B.
+    let mut pol = k2_core::skin::RoomPolicy::new();
+    pol.insert(f.a.clone(), vec!["thread:read".into()]);
+    let own = k2_core::skin::create_role_for_app("swr-own", &pol, Some(&f.svc)).unwrap();
+    let g = k2_core::skin::list_grants().unwrap().into_iter().find(|g| g.subject_id == p.id && g.target_id == f.svc).unwrap();
+    k2_core::skin::set_app_grant_role(&g.id, &own.id).unwrap();
+    let s = k2_core::skin::create_app_session_token("swr-u", &f.svc).unwrap();
+    let (st, v) = ask(&f);
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let (st, v) = approve(&req_id(&v));
+    assert_eq!((st, v["status"].as_str()), (200, Some("approved")), "{v}");
+    let pass = k2_core::skin::resolve_skin_token(&s.raw).expect("an owner's guest stays signed in");
+    assert_eq!(pass.rooms, vec![f.b.clone()], "it talks to B");
 }
 
 /// T3.2: a shared guest stays A's; the owner may take it over instead.

@@ -631,6 +631,9 @@ fn retie_conn(conn: &Connection, pid: &str, from: &str, to: &str) -> Result<(), 
 /// links voided.
 fn retire_conn(conn: &Connection, pid: &str) -> Result<usize, String> {
     conn.execute("UPDATE principals SET password_hash = NULL WHERE id = ?1", params![pid]).map_err(|e| format!("handover retire: {e}"))?;
+    // A may have signed in as this login and kept the session: it ends here,
+    // or A would keep what it just handed over.
+    super::revoke_sessions_for_principal(conn, pid)?;
     let resets = conn
         .execute("UPDATE password_reset_tokens SET used_at = ?2 WHERE principal_id = ?1 AND used_at IS NULL", params![pid, super::now_secs()])
         .map_err(|e| format!("handover retire: {e}"))?;

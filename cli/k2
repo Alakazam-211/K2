@@ -43262,7 +43262,7 @@ cmd_schema() {
     {
       "name": "hostmail forward",
       "usage": "k2 hostmail forward set <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | add <addr> --to <dest> [--to <dest>…] [--keep|--no-keep] [--restart-stopped] | rm <addr> --to <dest> [--to <dest>…] | show <addr> | unset <addr> | pause <addr> [--to <dest>] | resume <addr> [--to <dest>] | list [--paused|--active|--pending] [--external] [--json]",
-      "description": "Forward a hosted mailbox to up to 100 addresses: a mailbox on this server (no copy unless --keep) or an outside address (keeps a copy unless --no-keep). Every forward goes on at once. An outside address isn't asked: K2 emails it first, saying who set it, with a stop link that needs no login and never expires, and tells the owner (Inbox, plus email if the owner has a notice address). set replaces the whole list; add and rm leave the others alone. Refused: an address on one of this server's own domains with no mailbox here, because that mail would bounce here and never reach another provider whatever the MX says; over 100 per mailbox (too_many_destinations); over 20 new outside addresses a day on this server, a number only the owner can change with k2 hostmail config --forward-new-per-day (new_outside_limit); an address that pressed Stop (destination_stopped: the owner or an Admin can override with --restart-stopped; agents never). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server, counting every copy (mail waits in the queue); 500 copies/day per mailbox pauses all its outside forwards (daily_cap). Pause reasons (show gives them with words, per destination, with the notice state, last-24h counts and events): manual, dest_gone (3 no-such-user refusals in a row, or over 5% of at least 50), refused (over 20% refused as spam or by policy, of at least 10), daily_cap, revoked (destination pressed Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/add/rm/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only. list: owner/Admin; it shows notices that failed and old forwards K2 left off. A person's own mailbox: k2 mail forward.",
+      "description": "Forward a hosted mailbox to up to 100 addresses: a mailbox on this server (no copy unless --keep) or an outside address (keeps a copy unless --no-keep). Every forward goes on at once. An outside address isn't asked: K2 emails it first, saying who set it, with a stop link that needs no login and never expires, and tells the owner (Inbox, plus email if the owner has a notice address). set replaces the whole list; add and rm leave the others alone. Refused: an address on one of this server's own domains with no mailbox here, because that mail would bounce here and never reach another provider whatever the MX says; over 100 per mailbox (too_many_destinations); over 20 new outside addresses a day on this server, a number only the owner can change with k2 hostmail config --forward-new-per-day (new_outside_limit); an address that pressed Stop (destination_stopped: the owner or an Admin can override with --restart-stopped; agents never). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server, counting every copy (mail waits in the queue); 500 copies/day per mailbox pauses all its outside forwards (daily_cap); the owner alone changes the per-mailbox numbers with k2 hostmail config --forward-copies-per-day and --forward-copies-per-hour. Pause reasons (show gives them with words, per destination, with the notice state, last-24h counts and events): manual, dest_gone (3 no-such-user refusals in a row, or over 5% of at least 50), refused (over 20% refused as spam or by policy, of at least 10), daily_cap, revoked (destination pressed Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/add/rm/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only. list: owner/Admin; it shows notices that failed and old forwards K2 left off. A person's own mailbox: k2 mail forward.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
         {"name": "--to", "arg": "dest", "description": "The destination address; repeat for several. pause and resume: only this one (default: all)."},
@@ -49050,7 +49050,11 @@ FORWARDING (`k2 hostmail forward`)
            At 100 outside addresses one message uses the whole hour's 100,
            and the fifth message in a day reaches the 500. Same-box copies
            count toward the hourly limits too (Stalwart 0.16.25 or later), but
-           not toward the 500.
+           not toward the 500. Only the owner can change the per-mailbox
+           numbers, for every mailbox: k2 hostmail config
+           --forward-copies-per-day <n> (up to 24000) and
+           --forward-copies-per-hour <n> (up to 1000); an agent never can, so
+           tell your human on Thread. forward show gives the numbers in force.
   Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
            couldn't be checked, several From addresses), bounce reports, and
            mail K2 already forwarded. They stay in the mailbox.
@@ -49076,8 +49080,8 @@ FORWARDING (`k2 hostmail forward`)
   Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, add, rm,
            show, unset, pause and resume their own manual pause, on any
            mailbox they manage, outside addresses included, end to end — no permission
-           card per forward; every change names the agent to the owner. The
-           one thing they can't change is the daily limit above. Your own
+           card per forward; every change names the agent to the owner. They
+           can't change the limits above, or resume a pause K2 made. Your own
            mailbox outside needs agent sending on (agent_send_required). After
            K2 or a person pauses an address, set and add refuse it for an agent
            for 24 hours, even if it was removed since.
@@ -62794,6 +62798,18 @@ elif verb == "config_forward_cap":
         print("this server may now add %s new outside forward addresses a day (default %s, most %s)" % (
             d.get("perDay"), d.get("default"), d.get("max")))
 
+elif verb in ("config_forward_copies_day", "config_forward_copies_hour"):
+    daily = verb == "config_forward_copies_day"
+    field = "perDay" if daily else "perHour"
+    d = call("POST", "/cli/mail/config/forward-copies-per-" + ("day" if daily else "hour"), body={field: int(env("M_PER_DAY"))})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("each mailbox on this server may now forward %s copies %s (default %s, most %s)" % (
+            d.get(field), "in 24 hours" if daily else "an hour", d.get("default"), d.get("max")))
+        if d.get("note"):
+            print("note: %s" % d["note"])
+
 elif verb == "quota_get":
     d = call("GET", "/cli/mail/quota", params={"address": env("M_ADDRESS")})
     if as_json:
@@ -62984,6 +63000,10 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
                     print("%s  %s" % (a, fwd_line(f)))
                     for line in fwd_detail(f):
                         print(line)
+                vol = d.get("volume") or {}
+                if vol:
+                    print("volume: %s of %s copies counted in 24 hours (at the limit K2 pauses its outside forwards), %s an hour (above that the mail server holds them)" % (
+                        vol.get("copiesCounted", 0), vol.get("copiesPerDay"), vol.get("copiesPerHour")))
                 evs = d.get("events") or []
                 if evs:
                     print("  recent events (newest first):")
@@ -65616,9 +65636,17 @@ cmd_mail_config() {
     if _wants_help "$@"; then cmd_help_mail_config; exit 0; fi
     local send_mode="" domain="" relay_host="" relay_port="" relay_user="" relay_pass=""
     local agent_send="" address_cap="" quota_bytes="" quota_gb="" quota_messages="" workspace="" as_json=false any_set=false
-    local always_bcc="" always_bcc_set=false forward_new_per_day=""
+    local always_bcc="" always_bcc_set=false forward_new_per_day="" forward_copies_per_day="" forward_copies_per_hour=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --forward-copies-per-day)
+                [ $# -ge 2 ] || { _mail_err "usage" "--forward-copies-per-day requires a number"; exit 2; }
+                _mail_is_uint "$2" || { _mail_err "usage" "--forward-copies-per-day must be a whole number, 1 to 24000 (default 500)"; exit 2; }
+                forward_copies_per_day="$2"; shift 2 ;;
+            --forward-copies-per-hour)
+                [ $# -ge 2 ] || { _mail_err "usage" "--forward-copies-per-hour requires a number"; exit 2; }
+                _mail_is_uint "$2" || { _mail_err "usage" "--forward-copies-per-hour must be a whole number, 1 to 1000 (default 100)"; exit 2; }
+                forward_copies_per_hour="$2"; shift 2 ;;
             --forward-new-per-day)
                 [ $# -ge 2 ] || { _mail_err "usage" "--forward-new-per-day requires a number"; exit 2; }
                 _mail_is_uint "$2" || { _mail_err "usage" "--forward-new-per-day must be a whole number, 0 to 1000 (default 20)"; exit 2; }
@@ -65717,6 +65745,19 @@ cmd_mail_config() {
     if $always_bcc_set && [ -z "$workspace" ]; then
         _mail_err "usage" "--always-bcc needs --workspace <ws> — the policy is set per workspace"
         exit 2
+    fi
+    if [ -n "$forward_copies_per_day" ] || [ -n "$forward_copies_per_hour" ]; then
+        if $any_set || [ -n "$forward_new_per_day" ] || { [ -n "$forward_copies_per_day" ] && [ -n "$forward_copies_per_hour" ]; }; then
+            _mail_err "usage" "give --forward-copies-per-day or --forward-copies-per-hour on its own, one at a time, not with other settings"
+            exit 2
+        fi
+        if [ -n "$forward_copies_per_day" ]; then
+            local M_VERB="config_forward_copies_day" M_JSON="$as_json" M_PER_DAY="$forward_copies_per_day"
+        else
+            local M_VERB="config_forward_copies_hour" M_JSON="$as_json" M_PER_DAY="$forward_copies_per_hour"
+        fi
+        _mail_py
+        return
     fi
     if [ -n "$forward_new_per_day" ]; then
         if $any_set; then
@@ -72411,6 +72452,8 @@ USAGE
   k2 hostmail config --workspace <ws> --always-bcc ''    Clear the policy
   k2 hostmail config --forward-new-per-day <n>           The owner only; give it alone,
                                                          not with other flags
+  k2 hostmail config --forward-copies-per-day <n>        The same
+  k2 hostmail config --forward-copies-per-hour <n>       The same
 
 FLAGS
   --send-mode <m>        Per-domain outbound path (pair with --domain):
@@ -72457,6 +72500,38 @@ FLAGS
                          on after its email: 300 at once take about 2 hours,
                          1000 about 8. k2 hostmail config shows the number
                          under forwarding.newOutsidePerDay.
+  --forward-copies-per-day <n>
+                         THE OWNER ONLY (not an Admin, not an agent, even
+                         with mail-manage). How many forwarded copies one
+                         mailbox may send to outside addresses in 24 hours
+                         before K2 pauses all its outside forwards (daily_cap).
+                         The same number for every mailbox. Default 500; 1 to
+                         24000 (what one mailbox could send with the server's
+                         1,000 an hour to itself). It takes effect at once; a
+                         mailbox already paused for it stays paused until
+                         someone resumes it (k2 hostmail forward resume), which
+                         also starts its count over. Mail that arrived during
+                         the pause stays in the mailbox and isn't forwarded.
+                         Lower it under what's been counted and the next copy
+                         pauses the mailbox.
+  --forward-copies-per-hour <n>
+                         THE OWNER ONLY, the same. How many copies one mailbox
+                         may send an hour; above that the mail server holds the
+                         rest in its queue. The same number for every mailbox.
+                         Default 100; 1 to 1000, because the server as a whole
+                         stops at 1,000 an hour whatever this says, so a mailbox
+                         using all of that leaves none for the others. K2 writes it
+                         to the mail server right away; if that fails it says
+                         so, the old number holds, and K2 tries again within the
+                         hour. Copies still waiting from before keep their turn.
+                         k2 hostmail config shows both under forwarding, and k2
+                         hostmail forward show shows them with a mailbox's count.
+                         Neither changes what K2 pauses for refusals: a mailbox
+                         that sends more reaches those limits sooner.
+                         If copies a day is more than 24 times copies an hour,
+                         the answer warns you: only 24 times can leave in a
+                         day, and the mail server gives up on a copy still
+                         waiting after about 3 days.
   --always-bcc <list>    OWNER/ADMIN ONLY. Blind-copy these addresses on
                          EVERY email this workspace's agent sends (send and
                          reply, hosted and linked; approval-queued and
@@ -74097,7 +74172,10 @@ outside forwards, reason daily_cap; new mail stays in the mailbox). At 100
 outside addresses one message uses the whole hour's 100, and the fifth message
 in a day reaches the 500. Same-box copies count toward the hourly limits too
 (Stalwart 0.16.25 or later), and wait in the queue the same way, but not toward
-the 500.
+the 500. Only the owner can change the per-mailbox numbers, for every mailbox:
+k2 hostmail config --forward-copies-per-day <n> (up to 24000) and
+--forward-copies-per-hour <n> (up to 1000). show gives the numbers in force and
+the mailbox's count. The 1,000 an hour per server doesn't change.
 
 Paused = new mail stays in the mailbox and isn't sent to that address, not
 even after a resume. Copies already in the queue still go. show gives the
@@ -74107,7 +74185,9 @@ reason:
                 in a row, or for over 5% of a day's messages once 50 were sent
   refused       over 20% of a day's messages refused as spam or by policy,
                 once 10 were sent
-  daily_cap     500 copies in 24 hours (doesn't lift by itself)
+  daily_cap     500 copies in 24 hours, or the number the owner set (doesn't
+                lift by itself; k2 hostmail config --forward-copies-per-day
+                raises it, then someone resumes, which starts the count over)
   box_brake     too many of this server's forwards were refused, so
                 every outside forward is paused (the server brake)
   revoked       the address pressed Stop in K2's email

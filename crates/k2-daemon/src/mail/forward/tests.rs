@@ -950,6 +950,105 @@ fn the_daily_cap_is_the_owner_s_to_raise_and_has_a_ceiling() {
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("too_many_destinations")), "{v}");
 }
 
+fn set_copies(path: &str, field: &str, n: i64) -> (u16, J) {
+    let body_in = json!({ field: n }).to_string();
+    let r = if path == COPIES_DAY_PATH { handle_forward_copies_day(body_in.as_bytes()) } else { handle_forward_copies_hour(body_in.as_bytes()) };
+    (status(&r), body(&r))
+}
+
+/// The owner's two numbers: the defaults hold until set, the bounds refuse
+/// with what's allowed, both show in config and show, and the owner is told.
+#[test]
+fn how_much_a_mailbox_may_forward_is_the_owner_s_to_set() {
+    let _t = t("fwvol");
+    system_sender_on();
+    seed_server();
+    let fake = std::rc::Rc::new(crate::mail::forward_outcomes::tests::FakeThrottles::default());
+    crate::mail::defaults::set_test_throttles(Some(fake.clone()));
+    let config = || -> J { serde_json::from_str(&crate::mail::routes_server::handle_config_get(&HashMap::new()).body).expect("json") };
+    let cfg = config();
+    assert_eq!((cfg["forwarding"]["copiesPerDay"].clone(), cfg["forwarding"]["copiesPerHour"].clone()), (json!(500), json!(100)), "{cfg}");
+    assert_eq!((cfg["forwarding"]["copiesPerDayMax"].clone(), cfg["forwarding"]["copiesPerHourMax"].clone()), (json!(24_000), json!(1000)), "{cfg}");
+    // Out of bounds: refused, nothing changed, and 0 says what to do instead.
+    for (path, field, n, flag) in [
+        (COPIES_DAY_PATH, "perDay", 0, "--forward-copies-per-day must be 1 to 24000"),
+        (COPIES_DAY_PATH, "perDay", 24_001, "--forward-copies-per-day must be 1 to 24000"),
+        (COPIES_HOUR_PATH, "perHour", 0, "--forward-copies-per-hour must be 1 to 1000"),
+        (COPIES_HOUR_PATH, "perHour", 1001, "--forward-copies-per-hour must be 1 to 1000"),
+    ] {
+        let (st, v) = set_copies(path, field, n);
+        assert_eq!((st, v["error"]["code"].clone()), (400, json!("usage")), "{v}");
+        let hint = v["error"]["hint"].as_str().unwrap_or("");
+        assert!(hint.contains(flag) && hint.contains("Nothing changed") && hint.contains("forward pause"), "{v}");
+    }
+    assert!(fake.calls.borrow().is_empty(), "nothing written");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    // The day: K2's own pass, so nothing goes to the mail server.
+    let (st, v) = set_copies(COPIES_DAY_PATH, "perDay", 2000);
+    assert_eq!((st, v["perDay"].clone(), v["default"].clone(), v["max"].clone()), (200, json!(2000), json!(500), json!(24_000)), "{v}");
+    assert_eq!(v["note"], J::Null, "{v}");
+    assert!(fake.calls.borrow().is_empty(), "the mail server has no part in this: {:?}", fake.calls.borrow());
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("2000 copies in 24 hours") && n[0].1.contains("it was 500") && n[0].1.contains("--forward-copies-per-day 500"), "{}", n[0].1);
+    // The hour: the mail server's throttle, written right away.
+    let (st, v) = set_copies(COPIES_HOUR_PATH, "perHour", 300);
+    assert_eq!((st, v["perHour"].clone(), v["applied"].clone(), v["note"].clone()), (200, json!(300), json!(true), J::Null), "{v}");
+    assert_eq!(fake.objs.borrow()[0]["rate"]["count"], 300);
+    assert_eq!(*fake.calls.borrow(), vec!["create t1", "create t2", "reload"]);
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n[0].1.contains("300 copies an hour") && n[0].1.contains("it was 100"), "{}", n[0].1);
+    // Both are visible.
+    let cfg = config();
+    assert_eq!((cfg["forwarding"]["copiesPerDay"].clone(), cfg["forwarding"]["copiesPerHour"].clone()), (json!(2000), json!(300)), "{cfg}");
+    assert_eq!(cfg["forwarding"]["newOutsidePerDay"], json!(store::NEW_OUTSIDE_PER_DAY), "that's its own number");
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    let s = show();
+    assert_eq!(s["volume"], json!({ "copiesPerDay": 2000, "copiesPerHour": 300, "copiesCounted": 0 }), "{s}");
+    // The mail server can't take it: saved, said so, and the old throttle stays.
+    *fake.write_fails.borrow_mut() = true;
+    let (st, v) = set_copies(COPIES_HOUR_PATH, "perHour", 400);
+    assert_eq!((st, v["applied"].clone()), (200, json!(false)), "{v}");
+    assert!(v["note"].as_str().unwrap_or("").contains("isn't enforcing it yet") && v["note"].as_str().unwrap_or("").contains("the old number holds"), "{v}");
+    assert_eq!(fake.objs.borrow()[0]["rate"]["count"], 300);
+    assert_eq!(config()["forwarding"]["copiesPerHour"], 400);
+    // The hourly pass finishes it.
+    *fake.write_fails.borrow_mut() = false;
+    assert_eq!(crate::mail::defaults::reconcile_configured_throttles(fake.as_ref()).problem, None);
+    assert_eq!(fake.objs.borrow()[0]["rate"]["count"], 400);
+    // More a day than the hour can carry: allowed, and it says what that means.
+    let (st, v) = set_copies(COPIES_DAY_PATH, "perDay", 24_000);
+    assert_eq!(st, 200, "{v}");
+    let note = v["note"].as_str().unwrap_or("");
+    assert!(note.contains("at most 9600 copies") && note.contains("about 3 days") && note.contains("--forward-copies-per-hour"), "{v}");
+    crate::mail::defaults::set_test_throttles(None);
+}
+
+/// A daily-limit pause says what to do, wherever it's read.
+#[test]
+fn a_daily_limit_pause_names_the_setting_wherever_it_shows() {
+    let _t = t("fwvolpause");
+    system_sender_on();
+    post(ADD_PATH, json!({ "address": MB, "to": OUT }));
+    let id = show()["forward"]["id"].as_str().expect("id").to_string();
+    let now = email_notify::now();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE mail_forward_events SET at = at - 1000 WHERE forward_id = ?1", rusqlite::params![id]).expect("age");
+        for i in 0..store::DAILY_CAP {
+            store::record_outcome(&conn, &id, Some(&format!("q{i}")), store::O_QUEUED, None, now - 100).expect("outcome");
+        }
+    }
+    assert_eq!(crate::mail::forward_outcomes::evaluate(&id, now), Some(store::P_DAILY_CAP));
+    let s = show();
+    assert!(s["forward"]["pauseWords"].as_str().unwrap_or("").contains("--forward-copies-per-day"), "{s}");
+    assert_eq!(s["volume"]["copiesCounted"], json!(store::DAILY_CAP), "{s}");
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("--forward-copies-per-day"), "{v}");
+}
+
 /// An agent can't loosen its own limit, with mail-manage or without: the
 /// handler refuses it, the route's floor is the owner's (not an Admin's), and
 /// the refusal isn't answered by asking for mail.manage.
@@ -971,6 +1070,28 @@ fn an_agent_can_t_raise_the_daily_cap() {
     assert!(row.post.is_some_and(|m| !m.admits(k2_core::connect_users::Role::Admin) && m.admits(k2_core::connect_users::Role::Owner)), "{row:?}");
     // GET is refused.
     assert_eq!(crate::mail_routes::dispatch(CAP_PATH, &HashMap::new()).expect("claimed").status, "405 Method Not Allowed");
+}
+
+/// The same refusal for how much a mailbox may forward: an agent can't raise
+/// or lower either number, mail-manage or not, nor can an Admin login.
+#[test]
+fn an_agent_can_t_change_how_much_a_mailbox_may_forward() {
+    let _t = t("fwvolagent");
+    seed_server();
+    let r = as_agent("ws-fw", || handle_forward_copies_day(json!({ "perDay": 24_000 }).to_string().as_bytes()));
+    assert_eq!((status(&r), body(&r)["error"]["code"].clone()), (403, json!("owner_only")), "{}", r.body);
+    let r = as_agent("ws-fw", || handle_forward_copies_hour(json!({ "perHour": 1000 }).to_string().as_bytes()));
+    assert_eq!((status(&r), body(&r)["error"]["code"].clone()), (403, json!("owner_only")), "{}", r.body);
+    let got = db(|c| Ok((store::copies_per_day(c)?, store::copies_per_hour(c)?))).ok().expect("limits");
+    assert_eq!(got, (store::DAILY_CAP, store::HOURLY_CAP), "unchanged");
+    let principal = crate::session_token::HookPrincipal { workspace_uuid: "ws-fw".into(), agent_address: "agent".into() };
+    for path in [COPIES_DAY_PATH, COPIES_HOUR_PATH] {
+        assert!(crate::mail_routes::mail_manage_authorized(path, false, Some(&principal)).is_err(), "{path}");
+        assert!(!crate::mail_routes::is_mail_manage_surface(path), "mail-manage doesn't open {path}");
+        let row = crate::routes::route_policy::lookup(path).expect("in the table");
+        assert!(row.post.is_some_and(|m| !m.admits(k2_core::connect_users::Role::Admin) && m.admits(k2_core::connect_users::Role::Owner)), "{row:?}");
+        assert_eq!(crate::mail_routes::dispatch(path, &HashMap::new()).expect("claimed").status, "405 Method Not Allowed");
+    }
 }
 
 /// The guards hold at a raised cap: every address gets its notice with a stop

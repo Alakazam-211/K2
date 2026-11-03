@@ -56,9 +56,27 @@ case "$cmd" in
     target="${CARGO_TARGET_DIR:-$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}"
     K2_E2E_DAEMON="$target/debug/k2-daemon" STALWART_PROBE=stalwart-forward-many-e2e.py \
       exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
+  # The owner's numbers for how much a mailbox may forward, both versions: K2's
+  # own routes and the throttle they write, real delivery, and K2's daily pass on
+  # the webhook batches a real Stalwart signs (tests/mail/stalwart-forward-volume-e2e.py).
+  volume-e2e)
+    cargo build -p k2-daemon --bin k2-daemon || exit 1
+    bin="$(cargo test -p k2-daemon --lib --no-run --message-format json | python3 -I -c 'import json,sys
+for l in sys.stdin:
+    try:
+        m = json.loads(l)
+    except ValueError:
+        continue
+    if m.get("executable") and m.get("profile", {}).get("test"):
+        print(m["executable"])')"
+    [ -x "$bin" ] || { echo "no k2-daemon test binary: $bin" >&2; exit 1; }
+    target="${CARGO_TARGET_DIR:-$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}"
+    FW_LIVE_TEST_BIN="$bin" K2_E2E_DAEMON="$target/debug/k2-daemon" STALWART_PROBE=stalwart-forward-volume-e2e.py \
+      exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
   # Every real-Stalwart proof the forward limit rests on, one after the other.
   proofs)
     rc=0
+    bash "$0" volume-e2e || rc=1
     bash "$0" many-probe || rc=1
     bash "$0" many-e2e || rc=1
     bash "$0" e2e || rc=1
@@ -74,5 +92,5 @@ case "$cmd" in
     rm -f "$log"
     echo "== forward-cargo.sh $*: exit $rc =="
     exit $rc ;;
-  *) echo "usage: $0 check|test|targeted|contract|landing|e2e|many-probe|many-e2e|proofs|logged <cmd> [cargo args…]" >&2; exit 2 ;;
+  *) echo "usage: $0 check|test|targeted|contract|landing|e2e|many-probe|many-e2e|volume-e2e|proofs|logged <cmd> [cargo args…]" >&2; exit 2 ;;
 esac

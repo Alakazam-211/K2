@@ -15,6 +15,9 @@
 //! GET  /cli/mail/forwards[?state=]         every forward on the box        owner, Admin
 //! POST /cli/mail/config/forward-new-per-day {perDay}
 //!                                          the box's daily cap on new outside addresses  the owner only
+//! POST /cli/mail/config/forward-copies-per-day {perDay}
+//! POST /cli/mail/config/forward-copies-per-hour {perHour}
+//!                                          how much one mailbox may forward  the owner only
 //! POST /cli/mail/address/person-link {address, person|null}
 //!                                          which box login owns a mailbox  owner, Admin
 //! GET|POST /cli/mail/self/forward[...]     the same verbs for the mailbox's own person (a box login linked
@@ -82,6 +85,8 @@ pub const PAUSE_PATH: &str = "/cli/mail/forward/pause";
 pub const RESUME_PATH: &str = "/cli/mail/forward/resume";
 pub const LIST_PATH: &str = "/cli/mail/forwards";
 pub const CAP_PATH: &str = "/cli/mail/config/forward-new-per-day";
+pub const COPIES_DAY_PATH: &str = "/cli/mail/config/forward-copies-per-day";
+pub const COPIES_HOUR_PATH: &str = "/cli/mail/config/forward-copies-per-hour";
 pub const PERSON_LINK_PATH: &str = "/cli/mail/address/person-link";
 pub const SELF_PATH: &str = "/cli/mail/self/forward";
 pub const SELF_ADD_PATH: &str = "/cli/mail/self/forward/add";
@@ -242,7 +247,7 @@ pub fn reason_words(reason: &str) -> &'static str {
         store::P_DEST_GONE => "the destination says the address doesn't exist",
         store::P_REFUSED => "the destination refused too many forwards as spam or by policy",
         store::P_REVOKED => "the destination asked K2 to stop",
-        store::P_DAILY_CAP => "it reached its daily limit",
+        store::P_DAILY_CAP => "it reached its daily limit (the owner can raise it: k2 hostmail config --forward-copies-per-day <n>)",
         store::P_BOX_BRAKE => "too many forwards from this server were refused",
         store::P_RECEIVE_ONLY => "the mailbox's domain is receive-only",
         store::P_AIR_GAP => "air-gap is on",
@@ -553,9 +558,13 @@ fn show(row: &MailAddress) -> R<J> {
     let (live, events) = db(|c| Ok((store::live_rows(c, &row.id)?, store::events_for_address(c, &row.id, EVENTS_SHOWN)?)))?;
     let first_active = live.iter().find(|f| f.is_active());
     let fwd = first_active.or(live.first()).map(|f| forward_json(f, now));
+    let (per_day, per_hour, used) = db(|c| {
+        Ok((store::copies_per_day(c)?, store::copies_per_hour(c)?, store::mailbox_queued(c, &row.id, store::daily_window_start(c, &row.id, now)?)?))
+    })?;
     Ok(json!({
         "ok": true,
         "address": row.address,
+        "volume": { "copiesPerDay": per_day, "copiesPerHour": per_hour, "copiesCounted": used },
         // The pre-0.46.7 shape, kept for older CLIs: only an active
         // forward is a forward.
         "to": first_active.map(|f| f.dest.clone()),
@@ -1239,6 +1248,129 @@ pub fn handle_forward_cap(body: &[u8]) -> CliResponse {
             "max": store::NEW_OUTSIDE_PER_DAY_MAX,
         }))
     }))
+}
+
+/// One of the owner's numbers for how much a mailbox may forward.
+struct VolumeLimit {
+    /// The JSON field: `perDay` | `perHour`.
+    field: &'static str,
+    flag: &'static str,
+    /// For the audit line.
+    audit: &'static str,
+    /// "copies in 24 hours" | "copies an hour".
+    per: &'static str,
+    /// What K2 does past it.
+    past: &'static str,
+    default: i64,
+    max: i64,
+    read: fn(&rusqlite::Connection) -> Result<i64, String>,
+    write: fn(&rusqlite::Connection, i64) -> Result<bool, String>,
+}
+
+/// At `per_hour` only so many copies can leave in a day. Above that a busy
+/// mailbox's queue only grows, and the mail server gives up on what waits too long.
+fn volume_note(per_day: i64, per_hour: i64) -> Option<String> {
+    (per_day > 24 * per_hour).then(|| {
+        format!(
+            "at {per_hour} an hour at most {} copies can leave in a day, so the limit of {per_day} copies in 24 hours may not be reached. Copies past that wait in the mail server's queue, and it gives up on one still waiting after about 3 days. To let them all go, raise --forward-copies-per-hour",
+            24 * per_hour
+        )
+    })
+}
+
+/// The owner only, like [`handle_forward_cap`]: the route's floor refuses an
+/// Admin login, the mail surface refuses a passport, and this refuses a
+/// passport again. An agent must never be able to loosen its own limit.
+fn set_volume(l: &VolumeLimit, body: &[u8]) -> CliResponse {
+    if crate::caller_workspace::request_principal().is_some() {
+        return email_notify::fail_response(&fail(403, "owner_only", format!("only the owner changes how many {} one mailbox may forward", l.per)));
+    }
+    respond(body_json(body).and_then(|v| {
+        let n = v
+            .get(l.field)
+            .and_then(J::as_i64)
+            .ok_or_else(|| fail(400, "usage", format!("send {{{}}}: how many {} one mailbox may forward, a whole number", l.field, l.per)))?;
+        if !(1..=l.max).contains(&n) {
+            return Err(fail(
+                400,
+                "usage",
+                format!(
+                    "{} must be 1 to {} (default {}), and {n} is out of range. Nothing changed. To stop forwarding, use k2 hostmail forward pause",
+                    l.flag, l.max, l.default
+                ),
+            ));
+        }
+        let before = db(l.read)?;
+        if !db(|c| (l.write)(c, n))? {
+            return Err(fail(409, "not_ready", "this server has no mail server yet (k2 hostmail enable)"));
+        }
+        email_notify::audit_line("mail-forward-volume", "owner", &format!("{}={before}->{n}", l.audit));
+        forward_verify::tell_owner(
+            "How much a mailbox may forward changed",
+            &format!(
+                "Each mailbox on this server may now forward {n} {} (it was {before}; the default is {}). {} This was done with the owner's credentials: if it wasn't you, change it back: k2 hostmail config {} {before}.",
+                l.per, l.default, l.past, l.flag
+            ),
+            &[],
+        );
+        Ok(n)
+    }).and_then(|n| {
+        let (per_day, per_hour) = db(|c| Ok((store::copies_per_day(c)?, store::copies_per_hour(c)?)))?;
+        // The hourly number is the mail server's to enforce: write it now, and
+        // say so if that didn't work.
+        let unapplied = if l.field == "perHour" { forward_applied() } else { None };
+        let mut notes: Vec<String> = Vec::new();
+        if let Some(why) = &unapplied {
+            notes.push(format!("saved, but the mail server isn't enforcing it yet ({why}). K2 tries again within the hour, and the old number holds until then"));
+        }
+        notes.extend(volume_note(per_day, per_hour));
+        let mut out = json!({ "ok": true, "default": l.default, "max": l.max, "note": if notes.is_empty() { J::Null } else { J::String(notes.join(". ")) } });
+        out[l.field] = json!(n);
+        if l.field == "perHour" {
+            out["applied"] = json!(unapplied.is_none());
+        }
+        Ok(out)
+    }))
+}
+
+fn forward_applied() -> Option<String> {
+    crate::mail::defaults::apply_configured_throttles().map(|e| email_notify::send::mask_addresses(&e))
+}
+
+/// POST `/cli/mail/config/forward-copies-per-day` `{perDay}`.
+pub fn handle_forward_copies_day(body: &[u8]) -> CliResponse {
+    set_volume(
+        &VolumeLimit {
+            field: "perDay",
+            flag: "--forward-copies-per-day",
+            audit: "copies_per_day",
+            per: "copies in 24 hours",
+            past: "Past that K2 pauses the mailbox's outside forwards. A mailbox already paused for this stays paused until it's resumed.",
+            default: store::DAILY_CAP,
+            max: store::DAILY_CAP_MAX,
+            read: store::copies_per_day,
+            write: store::set_copies_per_day,
+        },
+        body,
+    )
+}
+
+/// POST `/cli/mail/config/forward-copies-per-hour` `{perHour}`.
+pub fn handle_forward_copies_hour(body: &[u8]) -> CliResponse {
+    set_volume(
+        &VolumeLimit {
+            field: "perHour",
+            flag: "--forward-copies-per-hour",
+            audit: "copies_per_hour",
+            per: "copies an hour",
+            past: "Past that the mail server holds the rest in its queue.",
+            default: store::HOURLY_CAP,
+            max: store::HOURLY_CAP_MAX,
+            read: store::copies_per_hour,
+            write: store::set_copies_per_hour,
+        },
+        body,
+    )
 }
 
 /// GET `/cli/mail/forwards[?state=paused|active|pending_verify][&kind=external]`

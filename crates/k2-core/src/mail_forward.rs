@@ -154,10 +154,19 @@ pub const O_REFUSED_POLICY: &str = "refused_policy";
 pub const O_FAILED: &str = "failed";
 
 // ── limits (PRD §3.5, §3.6; vs-live Q6, Q7) ─────────────────────────
-/// Per mailbox per hour (the mail server's throttle defers above it).
+/// Per mailbox per hour (the mail server's throttle defers above it), unless
+/// the owner set another number ([`copies_per_hour`]).
 pub const HOURLY_CAP: i64 = 100;
-/// Per mailbox per trailing 24 h (K2 pauses at it).
+/// Per mailbox per trailing 24 h (K2 pauses at it), unless the owner set
+/// another number ([`copies_per_day`]).
 pub const DAILY_CAP: i64 = 500;
+/// The most the owner can set [`HOURLY_CAP`] to. The whole box's throttle
+/// ([`BOX_HOURLY_CAP`]) holds every mailbox to this anyway, so a higher number
+/// would promise what the mail server won't do.
+pub const HOURLY_CAP_MAX: i64 = BOX_HOURLY_CAP;
+/// The most the owner can set [`DAILY_CAP`] to: what one mailbox could send in
+/// 24 hours with the whole box's throttle to itself. It could never reach more.
+pub const DAILY_CAP_MAX: i64 = 24 * BOX_HOURLY_CAP;
 /// Per box per hour across all mailboxes (the mail server defers above it).
 pub const BOX_HOURLY_CAP: i64 = 1000;
 pub const WINDOW_SECS: i64 = 24 * 3600;
@@ -543,6 +552,41 @@ pub fn set_new_outside_cap(conn: &Connection, per_day: i64) -> Result<bool, Stri
         .execute("UPDATE mail_server SET forward_new_per_day = ?1 WHERE id = 1", params![per_day])
         .map_err(err("new outside cap"))?;
     Ok(n == 1)
+}
+
+/// One of the owner's volume numbers from `mail_server`, or `default`.
+fn volume_limit(conn: &Connection, column: &str, default: i64) -> Result<i64, String> {
+    conn.query_row(&format!("SELECT {column} FROM mail_server WHERE id = 1"), [], |r| r.get::<_, Option<i64>>(0))
+        .optional()
+        .map(|v| v.flatten().unwrap_or(default))
+        .map_err(err("volume limit"))
+}
+
+fn set_volume_limit(conn: &Connection, column: &str, n: i64) -> Result<bool, String> {
+    let n = conn.execute(&format!("UPDATE mail_server SET {column} = ?1 WHERE id = 1"), params![n]).map_err(err("volume limit"))?;
+    Ok(n == 1)
+}
+
+/// Copies one mailbox may forward in the trailing 24 hours before K2 pauses its
+/// outside forwards: what the owner set, or [`DAILY_CAP`].
+pub fn copies_per_day(conn: &Connection) -> Result<i64, String> {
+    volume_limit(conn, "forward_copies_per_day", DAILY_CAP)
+}
+
+/// Set it. `Ok(false)`: no mail server here yet.
+pub fn set_copies_per_day(conn: &Connection, n: i64) -> Result<bool, String> {
+    set_volume_limit(conn, "forward_copies_per_day", n)
+}
+
+/// Copies one mailbox may send an hour before the mail server holds the rest:
+/// what the owner set, or [`HOURLY_CAP`]. The mail server enforces it.
+pub fn copies_per_hour(conn: &Connection) -> Result<i64, String> {
+    volume_limit(conn, "forward_copies_per_hour", HOURLY_CAP)
+}
+
+/// Set it. `Ok(false)`: no mail server here yet.
+pub fn set_copies_per_hour(conn: &Connection, n: i64) -> Result<bool, String> {
+    set_volume_limit(conn, "forward_copies_per_hour", n)
 }
 
 /// Notice emails K2 tried since `since` (sent or failed).
@@ -1399,6 +1443,22 @@ mod tests {
         assert!(set_new_outside_cap(&c, 300).unwrap());
         assert_eq!(new_outside_cap(&c).unwrap(), 300);
         assert_eq!(MAX_DESTINATIONS, 100, "the per-mailbox limit doesn't move with it");
+    }
+
+    #[test]
+    fn the_volume_limits_are_the_defaults_until_the_owner_sets_them() {
+        let c = conn();
+        assert_eq!((copies_per_day(&c).unwrap(), copies_per_hour(&c).unwrap()), (DAILY_CAP, HOURLY_CAP), "no mail server row");
+        assert!(!set_copies_per_day(&c, 900).unwrap(), "nothing to set on");
+        assert!(!set_copies_per_hour(&c, 200).unwrap(), "nothing to set on");
+        c.execute("INSERT INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).unwrap();
+        assert_eq!((copies_per_day(&c).unwrap(), copies_per_hour(&c).unwrap()), (500, 100), "unset: unchanged defaults");
+        assert!(set_copies_per_day(&c, 900).unwrap());
+        assert_eq!((copies_per_day(&c).unwrap(), copies_per_hour(&c).unwrap()), (900, 100), "one doesn't move the other");
+        assert!(set_copies_per_hour(&c, 200).unwrap());
+        assert_eq!((copies_per_day(&c).unwrap(), copies_per_hour(&c).unwrap()), (900, 200));
+        assert_eq!(new_outside_cap(&c).unwrap(), NEW_OUTSIDE_PER_DAY, "nor the day's new addresses");
+        assert_eq!((HOURLY_CAP_MAX, DAILY_CAP_MAX), (1000, 24_000));
     }
 
     #[test]

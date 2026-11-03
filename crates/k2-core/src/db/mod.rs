@@ -1773,6 +1773,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // 0.46.8). ADD COLUMN only; renumber freely on a slip (and edit the
         // migration-order tests).
         ("0261_mail_outbound_reply_to", include_str!("../../drizzle_sql/0261_mail_outbound_reply_to.sql")),
+        // 0262 — how much one mailbox may forward, the owner's numbers (Rosson
+        // 2026-11-03; 0.46.8): `mail_server.forward_copies_per_day`,
+        // `forward_copies_per_hour`. ADD COLUMN only; renumber freely on a slip
+        // (and edit the migration-order tests).
+        ("0262_mail_forward_volume", include_str!("../../drizzle_sql/0262_mail_forward_volume.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2452,7 +2457,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0261_mail_outbound_reply_to",
+            last_name, "0262_mail_forward_volume",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2575,6 +2580,7 @@ mod tests {
                 "0260_mail_forward_destinations",
                 // 0.46.8: where answers to an outbound go.
                 "0261_mail_outbound_reply_to",
+                "0262_mail_forward_volume",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2705,6 +2711,7 @@ mod tests {
                 "0260_mail_forward_destinations",
                 // 0.46.8: where answers to an outbound go.
                 "0261_mail_outbound_reply_to",
+                "0262_mail_forward_volume",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2932,7 +2939,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0261_mail_outbound_reply_to", "0261 (0.46.8) runs last");
+        assert_eq!(top, "0262_mail_forward_volume", "0262 (0.46.8) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2980,9 +2987,10 @@ mod tests {
                 "0258_client_msg_ids",
                 "0259_custom_domain_relay",
                 "0260_mail_forward_destinations",
-                "0261_mail_outbound_reply_to"
+                "0261_mail_outbound_reply_to",
+                "0262_mail_forward_volume"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0261)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3824,7 +3832,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0261 (mail outbound Reply-To, 0.46.8) is the newest: its record
+            // 0262 (forward volume, 0.46.8) is the newest: its record goes
+            // (its column re-adds are skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0262_mail_forward_volume'", []).unwrap();
+            // 0261 (mail outbound Reply-To, 0.46.8) came before it: its record
             // goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0261_mail_outbound_reply_to'", []).unwrap();
             // 0260 (forward destinations, 0.46.8) came before it: its record

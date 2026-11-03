@@ -87,6 +87,16 @@ class H(BaseHTTPRequestHandler):
         p = u.path
         if p.startswith("/cli/mail/self/") and q.get("token") == "agent-passport":
             return reply(self, 403, {"ok": False, "error": {"code": "person_only", "hint": "this is a person's own mailbox route"}})
+        if p in ("/cli/mail/config/forward-copies-per-day", "/cli/mail/config/forward-copies-per-hour"):
+            daily = p.endswith("day")
+            if q.get("token") == "agent-passport":
+                return reply(self, 403, {"ok": False, "error": {"code": "owner_only", "hint": "only the owner changes this"},
+                                         "permission": {"requestable": False, "where": "the owner does this, with k2 hostmail config " + ("--forward-copies-per-day" if daily else "--forward-copies-per-hour") + " <n>"}})
+            field, top, dflt = ("perDay", 24000, 500) if daily else ("perHour", 1000, 100)
+            if not 1 <= body.get(field, 0) <= top:
+                return reply(self, 400, {"ok": False, "error": {"code": "usage", "hint": "out of range: 1 to %d. Nothing changed" % top}})
+            return reply(self, 200, {"ok": True, field: body[field], "default": dflt, "max": top,
+                                     "note": "at 300 an hour at most 7200 copies can leave in a day" if body[field] == 20000 else None})
         if p == "/cli/mail/config/forward-new-per-day":
             if q.get("token") == "agent-passport" or self.headers.get("Authorization", "").endswith("agent-passport"):
                 return reply(self, 403, {"ok": False, "error": {"code": "owner_only", "hint": "only the owner changes how many new outside addresses this server may add a day"},
@@ -132,6 +142,7 @@ class H(BaseHTTPRequestHandler):
                          pauseWords="not forwarding: the mail server needs upgrading: k2 hostmail upgrade")
             rows = [f, dict(TOLD, address=addr)] if addr.startswith("two@") else [f]
             return reply(self, 200, {"ok": True, "address": addr, "to": None, "keep": False, "forward": f, "forwards": rows,
+                                     "volume": {"copiesPerDay": 2000, "copiesPerHour": 300, "copiesCounted": 12},
                                      "events": [{"id": "e1", "forwardId": "f1", "event": "paused", "actor": "k2",
                                                  "detail": {"reason": "refused"}, "at": 1700000500}]})
         if p.endswith("/forward/resume"):
@@ -288,8 +299,44 @@ set -e
 [ "$rc" -eq 3 ] || fail "an agent raising the cap must exit 3 (got $rc): $out"
 printf '%s' "$out" | grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
 
+# ── how much a mailbox may forward (the owner only) ─────────────────────
+out="$("$K2" hostmail config --forward-copies-per-day 2000)"
+last_body | grep -q '^POST /cli/mail/config/forward-copies-per-day .*"perDay": *2000' || fail "per-day must POST its route: $(last_body)"
+printf '%s' "$out" | grep -q 'may now forward 2000 copies in 24 hours (default 500, most 24000)' || fail "per-day output: $out"
+out="$("$K2" hostmail config --forward-copies-per-hour 300)"
+last_body | grep -q '^POST /cli/mail/config/forward-copies-per-hour .*"perHour": *300' || fail "per-hour must POST its route: $(last_body)"
+printf '%s' "$out" | grep -q 'may now forward 300 copies an hour (default 100, most 1000)' || fail "per-hour output: $out"
+out="$("$K2" hostmail config --forward-copies-per-day 20000)"
+printf '%s' "$out" | grep -q '^note: at 300 an hour' || fail "the answer's note must show: $out"
+for args in "--forward-copies-per-day 24001" "--forward-copies-per-hour 1001" "--forward-copies-per-day 0"; do
+    set +e
+    # shellcheck disable=SC2086
+    out="$("$K2" hostmail config $args 2>&1)"; rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "$args must exit 2 (got $rc): $out"
+    printf '%s' "$out" | grep -q 'Nothing changed' || fail "$args must say nothing changed: $out"
+done
+for args in "--forward-copies-per-day lots" "--forward-copies-per-hour lots" "--forward-copies-per-day 600 --forward-copies-per-hour 200" "--forward-copies-per-day 600 --forward-new-per-day 30" "--forward-copies-per-hour 200 --address-cap 3"; do
+    set +e
+    # shellcheck disable=SC2086
+    out="$("$K2" hostmail config $args 2>&1)"; rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "$args must exit 2 (got $rc): $out"
+done
+for args in "--forward-copies-per-day 24000" "--forward-copies-per-hour 1000"; do
+    set +e
+    # shellcheck disable=SC2086
+    out="$(K2_HOOK_TOKEN=agent-passport "$K2" hostmail config $args 2>&1)"; rc=$?
+    set -e
+    [ "$rc" -eq 3 ] || fail "an agent running $args must exit 3 (got $rc): $out"
+    printf '%s' "$out" | grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
+done
+"$K2" hostmail config --help | grep -q -- '--forward-copies-per-hour <n>' || fail "config --help must name the hourly flag"
+"$K2" hostmail forward --help | grep -q -- '--forward-copies-per-day' || fail "forward --help must name the daily flag"
+
 # ── show: pause words, notice, 24 h counts ──────────────────────────────
 out="$("$K2" hostmail forward show sales@brand.test)"
+printf '%s' "$out" | grep -q '^volume: 12 of 2000 copies counted in 24 hours .*300 an hour' || fail "show must give the volume limits: $out"
 printf '%s' "$out" | grep -q 'state=paused  reason=refused' || fail "show must print state + reason: $out"
 printf '%s' "$out" | grep -q 'paused because the destination refused too many forwards' || fail "show must print pauseWords: $out"
 printf '%s' "$out" | grep -q 'last 24h: forwarded 12, delivered 9, refused 3' || fail "show must print the 24 h counts: $out"

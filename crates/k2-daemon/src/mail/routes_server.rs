@@ -814,6 +814,12 @@ pub fn handle_config_get(params: &HashMap<String, String>) -> CliResponse {
             "default": k2_core::mail_forward::NEW_OUTSIDE_PER_DAY,
             "max": k2_core::mail_forward::NEW_OUTSIDE_PER_DAY_MAX,
             "maxDestinationsPerMailbox": k2_core::mail_forward::MAX_DESTINATIONS,
+            "copiesPerDay": k2_core::mail_forward::copies_per_day(&conn).unwrap_or(k2_core::mail_forward::DAILY_CAP),
+            "copiesPerDayDefault": k2_core::mail_forward::DAILY_CAP,
+            "copiesPerDayMax": k2_core::mail_forward::DAILY_CAP_MAX,
+            "copiesPerHour": k2_core::mail_forward::copies_per_hour(&conn).unwrap_or(k2_core::mail_forward::HOURLY_CAP),
+            "copiesPerHourDefault": k2_core::mail_forward::HOURLY_CAP,
+            "copiesPerHourMax": k2_core::mail_forward::HOURLY_CAP_MAX,
         });
     }
     let ws = crate::cli::str_param(params, "workspace");

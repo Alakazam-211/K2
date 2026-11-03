@@ -196,7 +196,11 @@ FORWARDING (`k2 hostmail forward`)
            At 100 outside addresses one message uses the whole hour's 100,
            and the fifth message in a day reaches the 500. Same-box copies
            count toward the hourly limits too (Stalwart 0.16.25 or later), but
-           not toward the 500.
+           not toward the 500. Only the owner can change the per-mailbox
+           numbers, for every mailbox: k2 hostmail config
+           --forward-copies-per-day <n> (up to 24000) and
+           --forward-copies-per-hour <n> (up to 1000); an agent never can, so
+           tell your human on Thread. forward show gives the numbers in force.
   Not forwarded  spam, mail whose sender nothing vouches for (DMARC failed or
            couldn't be checked, several From addresses), bounce reports, and
            mail K2 already forwarded. They stay in the mailbox.
@@ -222,8 +226,8 @@ FORWARDING (`k2 hostmail forward`)
   Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, add, rm,
            show, unset, pause and resume their own manual pause, on any
            mailbox they manage, outside addresses included, end to end — no permission
-           card per forward; every change names the agent to the owner. The
-           one thing they can't change is the daily limit above. Your own
+           card per forward; every change names the agent to the owner. They
+           can't change the limits above, or resume a pause K2 made. Your own
            mailbox outside needs agent sending on (agent_send_required). After
            K2 or a person pauses an address, set and add refuse it for an agent
            for 24 hours, even if it was removed since.

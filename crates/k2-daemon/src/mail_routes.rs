@@ -18,6 +18,8 @@
 //! | GET  /cli/mail/config             | mail/routes_server.rs   |
 //! | POST /cli/mail/config/set         | mail/routes_server.rs   |
 //! | POST /cli/mail/config/forward-new-per-day | mail/forward.rs |
+//! | POST /cli/mail/config/forward-copies-per-day | mail/forward.rs |
+//! | POST /cli/mail/config/forward-copies-per-hour | mail/forward.rs |
 //! | GET  /cli/mail/doctor             | mail/routes_server.rs   |
 //! | POST /cli/mail/doctor (run, S6)   | mail/routes_server.rs   |
 //! | POST /cli/mail/domain/add         | mail/routes_domains.rs  |
@@ -299,6 +301,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/server/upgrade"
         | "/cli/mail/config/set"
         | "/cli/mail/config/forward-new-per-day"
+        | "/cli/mail/config/forward-copies-per-day"
+        | "/cli/mail/config/forward-copies-per-hour"
         | "/cli/mail/domain/add"
         | "/cli/mail/domain/remove"
         | "/cli/mail/domain/check"
@@ -404,6 +408,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/server/upgrade" => routes_server::handle_server_upgrade(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),
         "/cli/mail/config/forward-new-per-day" => crate::mail::forward::handle_forward_cap(body),
+        "/cli/mail/config/forward-copies-per-day" => crate::mail::forward::handle_forward_copies_day(body),
+        "/cli/mail/config/forward-copies-per-hour" => crate::mail::forward::handle_forward_copies_hour(body),
         "/cli/mail/doctor" => routes_server::handle_doctor_run(body),
         "/cli/mail/domain/add" => routes_domains::handle_domain_add(body),
         "/cli/mail/domain/remove" => routes_domains::handle_domain_remove(body),

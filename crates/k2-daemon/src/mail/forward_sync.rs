@@ -1289,6 +1289,16 @@ fn run_live() {
                 }
                 Err(e) => k2_core::log_debug!("{P} pass skipped: {}", crate::email_notify::send::mask_addresses(&e)),
             }
+            // The owner's hourly number, if writing it right away failed or
+            // something changed it since. Reads, and writes only a difference.
+            match super::supervisor::mgmt_client_from_row() {
+                Ok(client) => {
+                    for line in super::defaults::reconcile_configured_throttles(&client).lines {
+                        k2_core::log_debug!("{line} (hourly)");
+                    }
+                }
+                Err(e) => k2_core::log_debug!("{P} throttles skipped: {e}"),
+            }
         }
         // Hourly, sooner when nudged or air-gap flips (checked each minute),
         // and every 10 minutes while the import is owed.

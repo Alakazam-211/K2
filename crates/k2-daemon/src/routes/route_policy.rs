@@ -1103,6 +1103,8 @@ pub const ROUTES: &[Route] = &[
     both("/cli/mail/cert/owner", Admin),
     post("/cli/mail/cert/renew", Admin),
     get("/cli/mail/config", Member),
+    post("/cli/mail/config/forward-copies-per-day", Owner),
+    post("/cli/mail/config/forward-copies-per-hour", Owner),
     post("/cli/mail/config/forward-new-per-day", Owner),
     post("/cli/mail/config/set", Admin),
     post("/cli/mail/credentials/keep", Admin),

@@ -44,7 +44,8 @@
 //!   [`store::REFUSED_MIN`] forwards. There is no spam-complaint signal for
 //!   forwarded mail: a provider's complaint report doesn't reach K2 (it never
 //!   reads a mailbox), so these refusals and the stop link stand in for it;
-//! - `daily_cap`, per mailbox: [`store::DAILY_CAP`] copies across all its
+//! - `daily_cap`, per mailbox: [`store::copies_per_day`] copies (the owner's
+//!   number, or [`store::DAILY_CAP`]) across all its
 //!   destinations pause all its outside forwards (the hourly caps are the
 //!   mail server's throttles, [`crate::mail::defaults::forward_throttles`],
 //!   and count each destination's copy too: each is its own queued message);
@@ -281,14 +282,14 @@ pub fn classify(e: &HookEvent) -> Option<(&'static str, Option<String>)> {
 
 /// Why one forward's numbers pause it, if they do. `in_a_row`: its
 /// "doesn't exist" refusals since the last delivery.
-pub fn forward_trip(c: &Counts, in_a_row: i64) -> Option<&'static str> {
+pub fn forward_trip(c: &Counts, in_a_row: i64, daily_cap: i64) -> Option<&'static str> {
     if in_a_row >= store::DEST_GONE_IN_A_ROW || k2_core::email_outcomes::trips(c.queued, c.refused_user, 0).is_some() {
         return Some(store::P_DEST_GONE);
     }
     if c.queued >= store::REFUSED_MIN && c.refused_policy * 100 > store::REFUSED_PCT * c.queued {
         return Some(store::P_REFUSED);
     }
-    if c.queued >= store::DAILY_CAP {
+    if c.queued >= daily_cap {
         return Some(store::P_DAILY_CAP);
     }
     None
@@ -469,7 +470,7 @@ pub fn evaluate(forward_id: &str, now: i64) -> Option<&'static str> {
 }
 
 fn evaluate_locked(forward_id: &str, now: i64) -> Option<&'static str> {
-    let (f, c, in_a_row, since, copies, siblings) = {
+    let (f, c, in_a_row, since, copies, siblings, daily_cap) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let f = store::get(&conn, forward_id).ok().flatten()?;
@@ -487,14 +488,15 @@ fn evaluate_locked(forward_id: &str, now: i64) -> Option<&'static str> {
             .into_iter()
             .filter(|o| o.id != f.id && o.is_external() && o.is_active())
             .collect();
-        (f, c, in_a_row, since, copies, siblings)
+        let daily_cap = store::copies_per_day(&conn).ok()?;
+        (f, c, in_a_row, since, copies, siblings, daily_cap)
     };
-    let reason = forward_trip(&c, in_a_row).or((copies >= store::DAILY_CAP).then_some(store::P_DAILY_CAP))?;
+    let reason = forward_trip(&c, in_a_row, daily_cap).or((copies >= daily_cap).then_some(store::P_DAILY_CAP))?;
     let detail = json!({
         "queued": c.queued, "delivered": c.delivered, "refusedUser": c.refused_user, "refusedPolicy": c.refused_policy,
         "failed": c.failed, "inARow": in_a_row, "since": since, "mailboxCopies": copies,
     });
-    let mut note = notice_for(&f, reason, &Counts { queued: if reason == store::P_DAILY_CAP { copies } else { c.queued }, ..c }, in_a_row);
+    let mut note = notice_for(&f, reason, &Counts { queued: if reason == store::P_DAILY_CAP { copies } else { c.queued }, ..c }, in_a_row, daily_cap);
     if reason == store::P_DAILY_CAP && !siblings.is_empty() {
         note.1 = format!("{} (This limit is the mailbox's, so forwarding to all its outside addresses is paused.)", note.1);
     }
@@ -630,7 +632,7 @@ fn pause_and_tell(f: &Forward, reason: &'static str, detail: serde_json::Value, 
 }
 
 /// The notice for one forward's pause: (title, body).
-pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64) -> (String, String) {
+pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64, daily_cap: i64) -> (String, String) {
     let (addr, dest) = (&f.address, &f.dest);
     let resume = format!(
         "Resume it when that's fixed: k2 hostmail forward resume {addr} --to {dest} (the mailbox's person can use k2 mail forward resume). \
@@ -658,10 +660,13 @@ pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64) -> (Stri
         ),
         r if r == store::P_DAILY_CAP => format!(
             "K2 paused forwarding from {addr} to {dest}: it forwarded {} messages in the last 24 hours, the daily limit of {}. \
-             {stays}\n\nIf that much mail is expected, resume it: k2 hostmail forward resume {addr}. If it isn't, check what is \
-             arriving in {addr} before you resume.",
+             {stays}\n\nIf that much mail is expected, the owner can raise the limit for every mailbox, up to {}: \
+             k2 hostmail config --forward-copies-per-day <n>. Then resume it, or resume it as it is and the count starts over: \
+             k2 hostmail forward resume {addr}. If it isn't expected, check what is arriving in {addr} before you resume. \
+             Mail that arrived during the pause isn't forwarded.",
             c.queued,
-            store::DAILY_CAP
+            daily_cap,
+            store::DAILY_CAP_MAX
         ),
         other => format!("K2 paused forwarding from {addr} to {dest} ({other}). {stays}\n\n{resume}"),
     };
@@ -769,4 +774,4 @@ pub fn after_change(row: &Forward) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

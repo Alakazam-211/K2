@@ -155,19 +155,19 @@ fn the_dsn_details_carry_the_enhanced_status_and_classify_user_vs_policy() {
 #[test]
 fn the_trip_rules_match_the_prd() {
     let c = |queued, refused_user, refused_policy, failed| Counts { queued, delivered: 0, refused_user, refused_policy, failed };
-    assert_eq!(forward_trip(&c(3, 3, 0, 0), 3), Some(store::P_DEST_GONE));
-    assert_eq!(forward_trip(&c(3, 2, 0, 0), 2), None);
-    assert_eq!(forward_trip(&c(10, 0, 3, 0), 0), Some(store::P_REFUSED), "30% of 10");
-    assert_eq!(forward_trip(&c(10, 0, 2, 0), 0), None, "exactly 20% is not more than 20%");
-    assert_eq!(forward_trip(&c(9, 0, 9, 0), 0), None, "under 10 forwards");
-    assert_eq!(forward_trip(&c(10, 0, 0, 9), 0), None, "failures aren't policy refusals");
-    assert_eq!(forward_trip(&c(500, 0, 0, 0), 0), Some(store::P_DAILY_CAP));
-    assert_eq!(forward_trip(&c(499, 0, 0, 0), 0), None);
+    assert_eq!(forward_trip(&c(3, 3, 0, 0), 3, store::DAILY_CAP), Some(store::P_DEST_GONE));
+    assert_eq!(forward_trip(&c(3, 2, 0, 0), 2, store::DAILY_CAP), None);
+    assert_eq!(forward_trip(&c(10, 0, 3, 0), 0, store::DAILY_CAP), Some(store::P_REFUSED), "30% of 10");
+    assert_eq!(forward_trip(&c(10, 0, 2, 0), 0, store::DAILY_CAP), None, "exactly 20% is not more than 20%");
+    assert_eq!(forward_trip(&c(9, 0, 9, 0), 0, store::DAILY_CAP), None, "under 10 forwards");
+    assert_eq!(forward_trip(&c(10, 0, 0, 9), 0, store::DAILY_CAP), None, "failures aren't policy refusals");
+    assert_eq!(forward_trip(&c(500, 0, 0, 0), 0, store::DAILY_CAP), Some(store::P_DAILY_CAP));
+    assert_eq!(forward_trip(&c(499, 0, 0, 0), 0, store::DAILY_CAP), None);
     // Email Notifications' hard-bounce rate, per destination: over 5% of at
     // least 50, even with deliveries breaking up the run.
-    assert_eq!(forward_trip(&c(50, 3, 0, 0), 1), Some(store::P_DEST_GONE), "6% of 50");
-    assert_eq!(forward_trip(&c(50, 2, 0, 0), 1), None, "4% of 50");
-    assert_eq!(forward_trip(&c(49, 3, 0, 0), 1), None, "under 50");
+    assert_eq!(forward_trip(&c(50, 3, 0, 0), 1, store::DAILY_CAP), Some(store::P_DEST_GONE), "6% of 50");
+    assert_eq!(forward_trip(&c(50, 2, 0, 0), 1, store::DAILY_CAP), None, "4% of 50");
+    assert_eq!(forward_trip(&c(49, 3, 0, 0), 1, store::DAILY_CAP), None, "under 50");
     assert!(brake_trip(&c(50, 2, 2, 2)), "12% of 50");
     assert!(!brake_trip(&c(50, 5, 0, 0)), "exactly 10%");
     assert!(!brake_trip(&c(49, 10, 10, 10)), "under 50");
@@ -428,9 +428,10 @@ fn the_webhook_stays_on_while_an_outside_forward_is_live_with_email_notify_off()
 // ── the throttles ───────────────────────────────────────────────────
 
 #[derive(Default)]
-struct FakeThrottles {
-    objs: RefCell<Vec<J>>,
-    calls: RefCell<Vec<String>>,
+pub(crate) struct FakeThrottles {
+    pub objs: RefCell<Vec<J>>,
+    pub calls: RefCell<Vec<String>>,
+    pub write_fails: RefCell<bool>,
 }
 
 impl defaults::ThrottleApi for FakeThrottles {
@@ -447,6 +448,9 @@ impl defaults::ThrottleApi for FakeThrottles {
         Ok(id)
     }
     fn throttle_update(&self, id: &str, mut body: J) -> Result<(), String> {
+        if *self.write_fails.borrow() {
+            return Err("fake: the mail server refused it".into());
+        }
         self.calls.borrow_mut().push(format!("update {id}"));
         body["id"] = json!(id);
         let mut o = self.objs.borrow_mut();
@@ -484,23 +488,191 @@ fn the_two_throttles_match_the_probe_file_and_are_written_once() {
     // Someone else's throttle is never touched.
     api.objs.borrow_mut().push(json!({"id": "mine", "description": "relay limit", "enable": true, "key": {"rcptDomain": true},
                                       "match": {"else": "true", "match": {}}, "rate": {"count": 5, "period": 1000}}));
-    let lines = defaults::reconcile_forward_throttles(&api);
-    assert_eq!(*api.calls.borrow(), vec!["create t2", "create t3", "reload"], "{lines:?}");
+    let report = defaults::reconcile_forward_throttles(&api, store::HOURLY_CAP);
+    assert_eq!(*api.calls.borrow(), vec!["create t2", "create t3", "reload"], "{report:?}");
+    assert_eq!(report.problem, None);
     api.calls.borrow_mut().clear();
-    assert!(defaults::reconcile_forward_throttles(&api).is_empty(), "idempotent");
+    assert!(defaults::reconcile_forward_throttles(&api, store::HOURLY_CAP).lines.is_empty(), "idempotent");
     assert!(api.calls.borrow().is_empty());
     // Someone changed one of K2's; an older K2 left a duplicate.
     api.objs.borrow_mut()[1]["rate"]["count"] = json!(5000);
     let mut dup = api.objs.borrow()[2].clone();
     dup["id"] = json!("t9");
     api.objs.borrow_mut().push(dup);
-    defaults::reconcile_forward_throttles(&api);
+    defaults::reconcile_forward_throttles(&api, store::HOURLY_CAP);
     assert_eq!(*api.calls.borrow(), vec!["update t2", "destroy t9", "reload"]);
     let objs = api.objs.borrow();
     assert_eq!(objs.len(), 3);
     assert_eq!(objs[0]["id"], "mine");
     assert_eq!(objs[0]["rate"]["count"], 5, "untouched");
     assert_eq!(objs[1]["rate"]["count"], store::HOURLY_CAP);
+}
+
+/// A box from before the setting has K2's throttles with the old words. A new
+/// number is an update in place: the same ids, one write, one reload. A create
+/// and a destroy could leave a mailbox with no throttle if one of them failed.
+#[test]
+fn a_new_hourly_number_updates_the_existing_throttle_in_place() {
+    let api = FakeThrottles::default();
+    defaults::reconcile_forward_throttles(&api, store::HOURLY_CAP);
+    api.calls.borrow_mut().clear();
+    let report = defaults::reconcile_forward_throttles(&api, 250);
+    assert_eq!(*api.calls.borrow(), vec!["update t1", "reload"], "{report:?}");
+    let objs = api.objs.borrow().clone();
+    assert_eq!((objs.len(), objs[0]["id"].clone(), objs[0]["rate"]["count"].clone()), (2, json!("t1"), json!(250)));
+    assert_eq!(objs[0]["description"], "K2 outside forwards: per mailbox, 250 an hour");
+    assert_eq!(objs[0]["key"], json!({"sender": true}));
+    assert_eq!(objs[1]["rate"]["count"], store::BOX_HOURLY_CAP, "the whole box's isn't the owner's to move");
+    api.calls.borrow_mut().clear();
+    assert!(defaults::reconcile_forward_throttles(&api, 250).lines.is_empty(), "idempotent");
+    assert!(api.calls.borrow().is_empty());
+    // Someone put the old number back: repaired, in place.
+    api.objs.borrow_mut()[0]["rate"]["count"] = json!(100);
+    defaults::reconcile_forward_throttles(&api, 250);
+    assert_eq!(*api.calls.borrow(), vec!["update t1", "reload"]);
+    // A refused write says so, and the old throttle is still there.
+    api.calls.borrow_mut().clear();
+    *api.write_fails.borrow_mut() = true;
+    let report = defaults::reconcile_forward_throttles(&api, 400);
+    assert!(report.problem.as_deref().is_some_and(|p| p.contains("refused")), "{report:?}");
+    assert_eq!(api.objs.borrow().len(), 2, "nothing was removed");
+    assert_eq!(api.objs.borrow()[0]["rate"]["count"], 250);
+}
+
+/// Boot, the hourly pass and the owner's change share this: it takes the box's
+/// number, so an existing box gets it from any of them.
+#[test]
+fn the_reconcile_writes_the_number_this_box_is_set_to() {
+    let (_g, _io) = setup();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT OR REPLACE INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).expect("server");
+    }
+    let api = FakeThrottles::default();
+    defaults::reconcile_configured_throttles(&api);
+    assert_eq!(api.objs.borrow()[0]["rate"]["count"], store::HOURLY_CAP, "the default until it's set");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(store::set_copies_per_hour(&conn, 700).expect("set"));
+    }
+    defaults::reconcile_configured_throttles(&api);
+    assert_eq!(api.objs.borrow()[0]["rate"]["count"], 700);
+}
+
+/// A raised daily limit: past the old 500 nothing pauses, at the new number it
+/// does, and the notice names the setting.
+#[test]
+fn a_raised_daily_limit_holds_and_the_notice_names_the_setting() {
+    let (_g, io) = setup();
+    let (addr, dest) = ("raised@brand.test", "raised@outside.test");
+    let t = now() - 1000;
+    let f = active(addr, dest, t);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT OR REPLACE INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).expect("server");
+        assert!(store::set_copies_per_day(&conn, 800).expect("set"));
+    }
+    let queued = |queued| Counts { queued, delivered: 0, refused_user: 0, refused_policy: 0, failed: 0 };
+    assert_eq!(forward_trip(&queued(500), 0, 800), None);
+    assert_eq!(forward_trip(&queued(800), 0, 800), Some(store::P_DAILY_CAP));
+    seed_queued(&f, 1000, 799, t + 5);
+    assert_eq!(evaluate(&f.id, t + 6), None, "799 is past the old 500, under the new 800");
+    assert_eq!(row(&f.id).state, store::ST_ACTIVE);
+    assert!(io.forward(&account(addr)).is_some(), "still forwarding");
+    seed_queued(&f, 2000, 1, t + 7);
+    assert_eq!(evaluate(&f.id, t + 8), Some(store::P_DAILY_CAP));
+    assert_eq!(io.forward(&account(addr)), None);
+    let n = take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("forwarded 800 messages in the last 24 hours, the daily limit of 800"), "{}", n[0].1);
+    assert!(n[0].1.contains("k2 hostmail config --forward-copies-per-day <n>"), "{}", n[0].1);
+    assert!(n[0].1.contains(&format!("up to {}", store::DAILY_CAP_MAX)), "{}", n[0].1);
+    assert!(n[0].1.contains("k2 hostmail forward resume raised@brand.test"), "{}", n[0].1);
+    // Lowered under what's been counted: the next look pauses.
+    let (addr2, dest2) = ("low@brand.test", "low@outside.test");
+    let g = active(addr2, dest2, t);
+    seed_queued(&g, 3000, 100, t + 5);
+    assert_eq!(evaluate(&g.id, t + 6), None);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(store::set_copies_per_day(&conn, 50).expect("set"));
+    }
+    assert_eq!(evaluate(&g.id, t + 7), Some(store::P_DAILY_CAP));
+}
+
+/// Driven by tests/mail/stalwart-forward-volume-e2e.py: the webhook batches a
+/// real Stalwart signed and posted for real forwards, played into K2's real route
+/// and pass, and the pause written to that real Stalwart. Under a raised daily
+/// limit the old 500 goes by and K2 pauses at the new number.
+#[test]
+#[ignore = "live: tests/mail/stalwart-forward-volume-e2e.py runs this against a throwaway Stalwart"]
+fn live_a_raised_daily_limit_on_real_webhook_batches() {
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is unset"));
+    let (_g, _fake) = setup();
+    let addr = env("FW_LIVE_MAILBOX");
+    let cap: i64 = env("FW_LIVE_CAP").parse().expect("cap");
+    let live: std::rc::Rc<crate::mail::jmap::StalwartClient> = std::rc::Rc::new(crate::mail::jmap::StalwartClient::new(env("FW_LIVE_URL"), env("FW_LIVE_KEY")));
+    crate::mail::forward_sync::set_test_io(Some(live.clone()));
+    crate::mail::forward_sync::set_test_ctx(Some(crate::mail::forward_sync::Ctx { host: Some(env("FW_LIVE_HOST")), airgap: false, now: 0 }));
+    webhook::set_test_key(Some(Some(env("FW_LIVE_HOOK_KEY"))));
+    let aid = seed_mailbox(&addr, "direct");
+    let dests: Vec<String> = env("FW_LIVE_DESTS").split(',').map(str::to_string).collect();
+    let verified: Vec<String> = dests.iter().map(|d| verified_row(&addr, d)).collect();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT OR REPLACE INTO mail_server (id, status, pinned_version, updated_at) VALUES (1, 'running', '0.16.25', 1)", []).expect("server");
+        assert!(store::set_copies_per_day(&conn, cap).expect("set"));
+        conn.execute("UPDATE mail_addresses SET stalwart_account_id = ?1 WHERE id = ?2", rusqlite::params![env("FW_LIVE_ACCOUNT"), aid]).expect("account");
+        for (d, v) in dests.iter().zip(&verified) {
+            store::add(
+                &conn,
+                &store::NewForward { address_id: &aid, address: &addr, dest: d, dest_kind: store::KIND_EXTERNAL, keep: true, set_by: "owner", state: store::ST_ACTIVE, verified_address_id: Some(v) },
+                now() - 3600,
+            )
+            .expect("row");
+        }
+    }
+    let copies = || {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::mailbox_queued(&conn, &aid, 0).expect("count")
+    };
+    let paused = || {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::live_rows(&conn, &aid).expect("rows").iter().filter(|f| f.pause_reason.as_deref() == Some(store::P_DAILY_CAP)).count()
+    };
+    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(env("FW_LIVE_SPOOL")).expect("spool").map(|e| e.expect("entry").path()).filter(|p| p.extension().is_some_and(|x| x == "body")).collect();
+    names.sort();
+    let (mut unpaused_at, mut paused_at) = (0, None);
+    for name in &names {
+        let body = std::fs::read(name).expect("body");
+        let sig = std::fs::read_to_string(name.with_extension("sig")).expect("signature");
+        let head = format!("POST /cli/email/events HTTP/1.1\r\nX-Signature: {}\r\n\r\n", sig.trim());
+        let r = webhook::handle(true, &head, &body);
+        assert_eq!(status(&r), 200, "{}", r.body);
+        if paused() > 0 {
+            paused_at = Some(copies());
+            break;
+        }
+        unpaused_at = copies();
+    }
+    println!("FW_LIVE batches {} unpaused_at {unpaused_at} paused_at {paused_at:?} rows_paused {} of {}", names.len(), paused(), dests.len());
+    assert!(unpaused_at >= store::DAILY_CAP, "the old limit went by with nothing paused: only reached {unpaused_at}");
+    let at = paused_at.expect("K2 never paused");
+    assert!(at >= cap, "paused at {at}, under the raised {cap}");
+    assert_eq!(paused(), dests.len(), "the whole mailbox stops");
+    // K2 wrote that to the real mail server.
+    let current = crate::mail::forward_sync::SieveIo::read(live.as_ref(), &env("FW_LIVE_ACCOUNT")).expect("read");
+    assert_eq!(current.sieve.forward, None, "the real script has no forward left: {:?}", current.k2_src);
+    let n = take_notices();
+    assert!(n.iter().any(|(_, body, _)| body.contains("--forward-copies-per-day")), "{n:?}");
+    println!("FW_LIVE notice {}", n[0].1.replace('\n', " "));
 }
 
 // ── several destinations: every copy counts ─────────────────────────

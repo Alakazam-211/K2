@@ -684,6 +684,7 @@ fn run_live(reason: &'static str) {
             Ok(c) => c,
             Err(e) => {
                 k2_core::log_debug!("[email-notify] webhook setup skipped ({reason}): no management client: {e}");
+                crate::mail::forward_outcomes::webhook_health(Some("K2 has no way to manage the mail server"));
                 return;
             }
         };

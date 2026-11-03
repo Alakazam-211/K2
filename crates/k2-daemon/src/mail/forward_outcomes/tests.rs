@@ -328,16 +328,19 @@ fn the_box_brake_pauses_every_outside_forward_with_one_notice_until_the_owner_re
         .expect("internal")
     };
     // 50 forwards, from A and from B; 5 refused for policy across both, then a
-    // 6th: 12% box-wide (A alone is under its own 20%, and B has under 10).
-    seed_queued(&a, 100, 49, t + 5);
-    seed_queued(&b, 300, 1, t + 5);
+    // 6th: 12% box-wide (A alone is under its own 20%, and B has under 10, with
+    // enough of its own that this is the box's problem).
+    seed_queued(&a, 100, 47, t + 5);
+    seed_queued(&b, 300, 3, t + 5);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        for q in 100..104 {
+        for q in 100..102 {
             store::record_outcome(&conn, &a.id, Some(&q.to_string()), store::O_REFUSED_POLICY, Some("550 5.7.1"), t + 5).expect("refused");
         }
-        store::record_outcome(&conn, &b.id, Some("300"), store::O_REFUSED_POLICY, Some("550 5.7.1"), t + 5).expect("refused");
+        for q in 300..303 {
+            store::record_outcome(&conn, &b.id, Some(&q.to_string()), store::O_REFUSED_POLICY, Some("550 5.7.1"), t + 5).expect("refused");
+        }
     }
     let out = apply(&events(json!([perm_fail(105, "a@brand.test", "a@outside.test", 550, "5.7.1", "policy")])), t + 10);
     let mut paused = out.paused.clone();
@@ -637,11 +640,21 @@ fn one_mailbox_can_t_trip_the_whole_box_brake() {
     let n = take_notices();
     assert_eq!(n.len(), 1, "{n:?}");
     assert!(n[0].1.contains("other mailboxes keep forwarding"), "{}", n[0].1);
-    // Refusals from a second mailbox: that's the box.
+    // A stray failure on a second mailbox isn't the box's problem.
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::record_outcome(&conn, &b.id, Some("8000"), store::O_FAILED, None, t - 700).expect("outcome");
+    }
+    assert!(evaluate_box(t).is_empty());
+    assert_eq!(row(&b.id).state, store::ST_ACTIVE);
+    // Real refusals from it are.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for q in ["8001", "8002", "8003"] {
+            store::record_outcome(&conn, &b.id, Some(q), store::O_REFUSED_POLICY, None, t - 700).expect("outcome");
+        }
     }
     assert_eq!(evaluate_box(t), vec![b.id.clone()], "the brake pauses what's left");
     assert_eq!(row(&b.id).pause_reason.as_deref(), Some(store::P_BOX_BRAKE));

@@ -446,7 +446,7 @@ fn the_stop_page_is_honest_when_the_write_fails() {
     let (_, stop) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::email_verify::open_for_notice(&conn, MB, "a@outside.test", "owner", email_notify::now()).expect("open")
+        k2_core::email_verify::open_for_notice(&conn, MB, "a@outside.test", "owner", false, email_notify::now()).expect("open")
     };
     *t.io.fail.borrow_mut() = true;
     let p = vpages::page_post(STOP_PATH, "", format!("t={stop}").as_bytes());
@@ -525,7 +525,19 @@ fn forward_list_says_when_delivery_reports_are_broken() {
     let _t = t("fwhook");
     seed_server();
     assert_eq!(body(&handle_forwards_list(&HashMap::new()))["outcomes"]["ok"], true);
+    // With no outside forward relying on it, it isn't news yet...
+    let _ = crate::mail::forward_outcomes::take_notices();
     crate::mail::forward_outcomes::webhook_health(Some("no management client"));
+    assert_eq!(body(&handle_forwards_list(&HashMap::new()))["outcomes"]["ok"], true);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    // ...and the owner hears once one does (re-review finding 8).
+    system_sender_on();
+    let (st, v) = post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "{v}");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    crate::mail::forward_outcomes::webhook_health(Some("no management client"));
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(n.iter().any(|(title, _, _)| title.contains("can't see what happens")), "{n:?}");
     let v = body(&handle_forwards_list(&HashMap::new()));
     assert_eq!((v["outcomes"]["ok"].clone(), v["outcomes"]["error"].clone()), (json!(false), json!("no management client")), "{v}");
 }
@@ -989,7 +1001,7 @@ fn past_the_burst_new_forwards_wait_their_turn_with_the_notice_first() {
     assert_eq!(sent(&t) as i64, burst + store::NOTICES_PER_PASS as i64);
     let pass = forward_verify::minute_pass(now + 60);
     assert_eq!(pass.turned_on, 1, "{pass:?}");
-    assert_eq!(db(|c| store::due_waiting(c)).ok().expect("waiting"), 0);
+    assert_eq!(db(|c| store::due_waiting(c, email_notify::now())).ok().expect("waiting"), 0);
     let row = db(|c| store::live_for_pair(c, &waiting_mailbox, &format!("d{burst}@outside.test"))).ok().flatten().expect("row");
     assert_eq!((row.state.as_str(), row.notice_state.as_deref()), (store::ST_ACTIVE, Some(store::N_SENT)));
     let events = db(|c| store::events_for_address(c, &row.address_id, 50)).ok().expect("events");
@@ -1613,6 +1625,9 @@ impl crate::mail::forward_sync::SieveIo for HookIo {
     fn write_source(&self, account_id: &str, current: &crate::mail::forward_sync::Current, source: &str) -> Result<(), String> {
         self.inner.write_source(account_id, current, source)
     }
+    fn ensure_redirects(&self) -> Result<(), String> {
+        self.inner.ensure_redirects()
+    }
 }
 
 const HAND: &str = "require [\"fileinto\"];\nif header :contains \"subject\" \"invoice\" {\nfileinto \"Invoices\";\n}\nredirect \"boss@outside.test\";\n";
@@ -1818,4 +1833,513 @@ fn sieve_user_ooo(text: &str) -> crate::mail::sieve_user::UserSieve {
         ooo: Some(crate::mail::sieve_user::OooBlock { days: 7, text: text.to_string(), until: None, from: MB.to_string() }),
         forward: None,
     }
+}
+
+// ── the re-review (each of these held the hole before its fix) ──────
+
+const RV_B: &str = "bb@notify.brand.test";
+const RV_C: &str = "cc@notify.brand.test";
+
+fn rv_row(addr: &str, dest: &str) -> store::Forward {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::live_for_pair(&conn, addr, dest).expect("pair").expect("a live row")
+}
+
+fn rv_age(id: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("UPDATE mail_forward_events SET at = at - 5000 WHERE forward_id = ?1", rusqlite::params![id]).expect("age");
+}
+
+fn rv_seed(id: &str, queued: i64, kind: &str, refused: i64, at: i64) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for i in 0..queued {
+        store::record_outcome(&conn, id, Some(&format!("q-{id}-{i}")), store::O_QUEUED, None, at).expect("queued");
+    }
+    for i in 0..refused {
+        store::record_outcome(&conn, id, Some(&format!("r-{id}-{i}")), kind, Some("550 5.7.1"), at).expect("refused");
+    }
+}
+
+fn rv_forward(addr: &str, dest: &str) -> String {
+    let (st, v) = post(FORWARD_PATH, json!({ "address": addr, "to": dest }));
+    assert_eq!(st, 200, "{v}");
+    let id = rv_row(addr, dest).id;
+    rv_age(&id);
+    id
+}
+
+/// Finding B: the owner's resume after a one-mailbox brake pause holds.
+#[test]
+fn a_resume_after_a_one_mailbox_brake_pause_holds() {
+    let t = t("rv2onebrake");
+    system_sender_on();
+    let a = rv_forward(MB, OUT);
+    let base = email_notify::now();
+    rv_seed(&a, 50, store::O_REFUSED_POLICY, 8, base - 100);
+    assert_eq!(crate::mail::forward_outcomes::evaluate(&a, base), None, "under the per-destination rate");
+    crate::mail::forward_outcomes::evaluate_box(base);
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_REFUSED));
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "the answer says on: {v}");
+    assert_eq!(rv_row(MB, OUT).state, store::ST_ACTIVE, "and it is");
+    assert!(t.io.forward(ACC).is_some());
+    // Later passes on the same old numbers leave it on, and so a new row.
+    crate::mail::forward_outcomes::evaluate_box(email_notify::now());
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": "new@outside.test" }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(rv_row(MB, "new@outside.test").state, store::ST_ACTIVE);
+    assert_eq!(rv_row(MB, OUT).state, store::ST_ACTIVE);
+}
+
+/// Finding C: a person's pause takes over one an agent made.
+#[test]
+fn a_person_s_pause_takes_over_an_agent_s_pause() {
+    let _t = t("rv2take");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    let (st, _) = as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200);
+    // The agent's own, so far.
+    let (st, _) = post(PAUSE_PATH, json!({ "address": MB }));
+    assert_eq!(st, 200);
+    assert_eq!(rv_row(MB, OUT).paused_by.as_deref(), Some("owner"));
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    // And an agent's second pause doesn't take it back.
+    as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(rv_row(MB, OUT).paused_by.as_deref(), Some("owner"));
+}
+
+/// Finding C: rm and add can't undo a person's pause within the day.
+#[test]
+fn an_agent_can_t_rm_and_add_past_a_person_s_pause() {
+    let t = t("rv2rmadd");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    post(PAUSE_PATH, json!({ "address": MB }));
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!(st, 403, "{v}");
+    let (st, v) = as_agent("ws-fw", || post(RM_PATH, json!({ "address": MB, "to": OUT })));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = as_agent("ws-fw", || post(ADD_PATH, json!({ "address": MB, "to": OUT })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap_or("").contains("a person paused it"), "{v}");
+    assert!(t.io.forward(ACC).is_none(), "still not flowing");
+    // The person can.
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "{v}");
+    // An agent's own pause stays its own to undo this way.
+    let (st, _) = as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200);
+    as_agent("ws-fw", || post(RM_PATH, json!({ "address": MB, "to": OUT })));
+    let (st, v) = as_agent("ws-fw", || post(ADD_PATH, json!({ "address": MB, "to": OUT })));
+    assert_eq!(st, 200, "{v}");
+}
+
+/// Finding D: an agent's pause and resume doesn't restart the refusal count, a
+/// person's does.
+#[test]
+fn an_agent_s_pause_and_resume_keeps_the_refusal_count_a_person_s_resets_it() {
+    let _t = t("rv2window");
+    system_sender_on();
+    seed_mailbox(RV_C, "direct");
+    let a = rv_forward(MB, OUT);
+    let ctl = rv_forward(RV_C, "ctl@outside.test");
+    let base = email_notify::now();
+    rv_seed(&a, 9, store::O_REFUSED_POLICY, 9, base - 100);
+    rv_seed(&ctl, 9, store::O_REFUSED_POLICY, 9, base - 100);
+    let (st, _) = as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200);
+    let (st, _) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200);
+    let at = base + 2;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (id, tag) in [(&a, "a"), (&ctl, "c")] {
+            store::record_outcome(&conn, id, Some(&format!("t-{tag}")), store::O_QUEUED, None, at).expect("q");
+            store::record_outcome(&conn, id, Some(&format!("t-{tag}")), store::O_REFUSED_POLICY, None, at).expect("r");
+        }
+    }
+    assert_eq!(crate::mail::forward_outcomes::evaluate(&ctl, at), Some(store::P_REFUSED), "control: 10 of 10 refused trips");
+    assert_eq!(crate::mail::forward_outcomes::evaluate(&a, at), Some(store::P_REFUSED), "the same numbers, after an agent's pause and resume");
+    // The owner resumes: that does start the count again.
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    assert_eq!(crate::mail::forward_outcomes::evaluate(&a, email_notify::now()), None);
+}
+
+/// Finding E: the owner turns agent sending off later.
+#[test]
+fn turning_agent_sending_off_later_pauses_the_agent_s_own_mailbox_forward() {
+    let t = t("rv2sendoff");
+    system_sender_on();
+    let (st, _) = as_agent("ws-fw", || post(FORWARD_PATH, json!({ "address": MB, "to": OUT })));
+    assert_eq!(st, 200);
+    assert_eq!(rv_row(MB, OUT).agent_ws.as_deref(), Some("ws-fw"));
+    let ctx = crate::mail::forward_sync::ctx();
+    agent_sending("off");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_AGENT_SEND_OFF));
+    assert!(t.io.forward(ACC).is_none());
+    // The agent can't resume it, and its own pause and resume doesn't get round it.
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("agent_send_required")), "{v}");
+    // Sending back on: it comes back by itself.
+    agent_sending("on");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(rv_row(MB, OUT).state, store::ST_ACTIVE);
+    assert!(t.io.forward(ACC).is_some());
+    // The agent pauses it, sending goes off: resume asks too.
+    let (st, _) = as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200);
+    agent_sending("off");
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("agent_send_required")), "{v}");
+    assert_eq!(rv_row(MB, OUT).state, store::ST_PAUSED);
+    // A person takes a held one over, and it stays on with sending off.
+    post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_AGENT_SEND_OFF), "their first resume met the sending hold");
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((rv_row(MB, OUT).state.as_str(), rv_row(MB, OUT).agent_ws), (store::ST_ACTIVE, None), "the person's forward now");
+}
+
+/// Finding F: a person's pause on a `not_told` row holds, and an agent can't use
+/// it to resume past `not_told`.
+#[test]
+fn a_person_s_pause_on_a_not_told_row_holds_and_agents_can_t_resume_past_it() {
+    let t = t("rv2nottold");
+    system_sender_on();
+    *t.f.engine.fail_submit.lock().unwrap() = Some("down".to_string());
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    let at = email_notify::now();
+    for hours in [1, 3, 8, 14, 20, 26] {
+        forward_verify::minute_pass(at + hours * 3600);
+    }
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_NOT_TOLD));
+    let (st, v) = post(PAUSE_PATH, json!({ "address": MB }));
+    assert_eq!(st, 200, "{v}");
+    let row = rv_row(MB, OUT);
+    assert_eq!((row.pause_reason.as_deref(), row.held_by.as_deref()), (Some(store::P_NOT_TOLD), Some("owner")), "the reason isn't converted");
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("held")), "{v}");
+    *t.f.engine.fail_submit.lock().unwrap() = None;
+    forward_verify::minute_pass(at + 40 * 3600);
+    let row = rv_row(MB, OUT);
+    assert_eq!((row.state.as_str(), row.pause_reason.as_deref(), row.paused_by.as_deref(), row.held_by.as_deref()), (store::ST_PAUSED, Some(store::P_MANUAL), Some("owner"), None), "paused, for the owner, once K2 lets go");
+    assert!(t.io.forward(ACC).is_none());
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!(st, 403, "still the person's: {v}");
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+}
+
+/// Finding F, the same hold for K2's other reasons, and taking it back.
+#[test]
+fn a_person_s_pause_under_air_gap_holds_and_can_be_taken_back() {
+    let t = t("rv2hold");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    crate::mail::forward_sync::set_test_ctx(Some(crate::mail::forward_sync::Ctx { host: Some(HOST.to_string()), airgap: true, now: 0 }));
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(rv_row(MB, OUT).pause_reason.as_deref(), Some(store::P_AIR_GAP));
+    post(PAUSE_PATH, json!({ "address": MB }));
+    assert_eq!(rv_row(MB, OUT).held_by.as_deref(), Some("owner"));
+    // Taking it back: K2's reason still stands, and the answer says so.
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["state"].clone()), (200, json!("paused")), "{v}");
+    assert!(v["note"].as_str().unwrap_or("").contains("still holds"), "{v}");
+    assert_eq!(rv_row(MB, OUT).held_by, None);
+    // Paused again; the air gap ends; it stays paused, for the owner.
+    post(PAUSE_PATH, json!({ "address": MB }));
+    crate::mail::forward_sync::set_test_ctx(Some(crate::mail::forward_sync::Ctx { host: Some(HOST.to_string()), airgap: false, now: 0 }));
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    let row = rv_row(MB, OUT);
+    assert_eq!((row.pause_reason.as_deref(), row.paused_by.as_deref()), (Some(store::P_MANUAL), Some("owner")));
+    assert!(t.io.forward(ACC).is_none());
+}
+
+/// Finding G: a row stuck in backoff holds nobody up, and the per-address limit
+/// counts rows on their way.
+#[test]
+fn the_notice_limit_holds_through_the_queue_and_a_stuck_row_blocks_nobody() {
+    let t = t("rv2queue");
+    system_sender_on();
+    let (_, _) = seed_pending(MB, "stuck@outside.test", 3600, "owner");
+    let now = email_notify::now();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::email_outcomes::suppress(&conn, "stuck@outside.test", k2_core::email_outcomes::SCOPE_BOX, "", k2_core::email_outcomes::R_HARD, "dsn", now).expect("suppress");
+    }
+    forward_verify::minute_pass(now);
+    assert_eq!(rv_row(MB, "stuck@outside.test").state, store::ST_PENDING_VERIFY, "stuck, off");
+    let x = "victim@outside.test";
+    let mut answers = Vec::new();
+    for i in 0..6 {
+        let m = format!("m{i}@notify.brand.test");
+        seed_mailbox(&m, "direct");
+        let (st, v) = post(ADD_PATH, json!({ "address": m, "to": x }));
+        answers.push((st, v["state"].clone(), v["error"]["code"].clone()));
+    }
+    for (i, a) in answers.iter().enumerate() {
+        if (i as i64) < store::NOTICES_PER_DEST_PER_DAY {
+            assert_eq!((a.0, a.1.clone()), (200, json!("active")), "goes now, nothing waiting ahead of it: {i} {a:?}");
+        } else {
+            assert_eq!((a.0, a.2.clone()), (429, json!("notice_limit")), "{i} {a:?}");
+        }
+    }
+    let got = t.f.engine.sent.lock().unwrap().iter().filter(|m| m.rcpt == vec![x.to_string()]).count();
+    assert_eq!(got, store::NOTICES_PER_DEST_PER_DAY as usize);
+}
+
+/// Finding G: a row waiting its turn also respects the address's limit when it
+/// comes up, and steps aside.
+#[test]
+fn a_waiting_row_past_the_address_s_limit_steps_aside() {
+    let t = t("rv2wait");
+    system_sender_on();
+    let x = "busy@outside.test";
+    for i in 0..store::NOTICES_PER_DEST_PER_DAY {
+        let m = format!("w{i}@notify.brand.test");
+        seed_mailbox(&m, "direct");
+        let (st, v) = post(ADD_PATH, json!({ "address": m, "to": x }));
+        assert_eq!(st, 200, "{v}");
+    }
+    let (_, _) = seed_pending(MB, x, 3600, "owner");
+    let now = email_notify::now();
+    forward_verify::minute_pass(now);
+    let row = rv_row(MB, x);
+    assert_eq!(row.state, store::ST_PENDING_VERIFY);
+    assert!(row.notice_next_at.is_some_and(|n| n > now), "it waits: {row:?}");
+    let got = t.f.engine.sent.lock().unwrap().iter().filter(|m| m.rcpt == vec![x.to_string()]).count();
+    assert_eq!(got, store::NOTICES_PER_DEST_PER_DAY as usize, "no extra email");
+    assert_eq!(db(|c| store::due_waiting(c, now)).ok().expect("waiting"), 0, "and holds nobody up");
+}
+
+/// Finding G: an agent spending the limit doesn't lock the owner out of a restart.
+#[test]
+fn a_person_s_restart_is_exempt_from_the_notice_limit() {
+    let t = t("rv2restart");
+    system_sender_on();
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!(st, 200, "{v}");
+    let stop = last_token(&t, "k2es_");
+    vpages::page_post(STOP_PATH, "", format!("t={stop}").as_bytes());
+    for i in 1..store::NOTICES_PER_DEST_PER_DAY {
+        let m = format!("r{i}@notify.brand.test");
+        seed_mailbox(&m, "direct");
+        let (st, v) = post(ADD_PATH, json!({ "address": m, "to": OUT }));
+        assert_eq!(st, 200, "{v}");
+    }
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": OUT }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("destination_stopped")), "{v}");
+    let (st, v) = post(ADD_PATH, json!({ "address": MB, "to": OUT, "restartStopped": true }));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+}
+
+/// Finding H: resuming can't close a same-box loop.
+#[test]
+fn a_resume_can_t_close_a_same_box_loop() {
+    let _t = t("rv2loop");
+    seed_mailbox(RV_B, "direct");
+    post(FORWARD_PATH, json!({ "address": MB, "to": RV_B }));
+    post(PAUSE_PATH, json!({ "address": MB }));
+    let (st, v) = post(FORWARD_PATH, json!({ "address": RV_B, "to": MB }));
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = post(RESUME_PATH, json!({ "address": MB }));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("forward_loop")), "{v}");
+    assert_eq!(rv_row(MB, RV_B).state, store::ST_PAUSED);
+}
+
+/// Finding H: `paused_by` is the workspace, not its folder name.
+#[test]
+fn two_workspaces_with_one_folder_name_are_two_pausers() {
+    let _t = t("rv2name");
+    system_sender_on();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('ws-b', 'twin', '/tmp/other/it-agent-folder')", []).expect("project");
+        conn.execute(
+            "INSERT INTO mail_inbox_grants (source, inbox_id, project_id, level, can_manage, can_delete, created_at) VALUES ('hosted', ?1, 'ws-b', 'read', 1, 0, 1)",
+            rusqlite::params![format!("ma-{MB}")],
+        )
+        .expect("grant");
+    }
+    post(FORWARD_PATH, json!({ "address": MB, "to": OUT }));
+    let (st, v) = as_agent("ws-fw", || post(PAUSE_PATH, json!({ "address": MB })));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(rv_row(MB, OUT).paused_by.as_deref(), Some("agent-ws:ws-fw"));
+    let (st, v) = as_agent("ws-b", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    let (st, v) = as_agent("ws-fw", || post(RESUME_PATH, json!({ "address": MB })));
+    assert_eq!((st, v["state"].clone()), (200, json!("active")), "{v}");
+}
+
+/// Finding H: an out-of-office write that brings back redirects raises the limit first.
+#[test]
+fn an_out_of_office_write_raises_the_redirect_limit_first() {
+    let t = t("rv2ooolimit");
+    system_sender_on();
+    post(FORWARD_PATH, json!({ "address": MB, "to": ["a@outside.test", "b@outside.test"] }));
+    // The script lost its forward block somehow, and the limit can't be raised now.
+    t.io.put(ACC, "keep;\n");
+    *t.io.limit_fail.borrow_mut() = true;
+    let writes = *t.io.writes.borrow();
+    let (st, _) = ooo_set(MB, "Away.");
+    assert_ne!(st, 200, "refused rather than written with redirects the server would skip");
+    assert_eq!(*t.io.writes.borrow(), writes);
+    assert_eq!(t.io.src(ACC).as_deref(), Some("keep;\n"));
+    *t.io.limit_fail.borrow_mut() = false;
+    let calls = *t.io.limit_calls.borrow();
+    let (st, _) = ooo_set(MB, "Away.");
+    assert_eq!(st, 200);
+    assert_eq!(*t.io.limit_calls.borrow(), calls + 1);
+    assert_eq!(t.io.forward(ACC).map(|f| f.redirects()), Some(2));
+}
+
+/// Finding H: an unknown token takes no slot in the stop rate limit.
+#[test]
+fn an_invented_stop_token_is_never_rate_limited_and_takes_no_slot() {
+    let t = t("rv2rate");
+    system_sender_on();
+    post(ADD_PATH, json!({ "address": MB, "to": OUT }));
+    let real = last_token(&t, "k2es_");
+    // A token of the right shape that K2 never issued.
+    let mut fake: Vec<char> = real.chars().collect();
+    let n = fake.len();
+    fake[n - 1] = if fake[n - 1] == 'A' { 'B' } else { 'A' };
+    let fake: String = fake.into_iter().collect();
+    for _ in 0..30 {
+        let p = vpages::page_post(STOP_PATH, "", format!("t={fake}").as_bytes());
+        assert_ne!(p.status, "429 Too Many Requests", "nothing to protect");
+    }
+    let mut last = String::new();
+    for _ in 0..12 {
+        last = vpages::page_post(STOP_PATH, "", format!("t={real}").as_bytes()).status.to_string();
+    }
+    assert_eq!(last, "429 Too Many Requests", "a real link still is");
+}
+
+/// Finding H: the summary's notes are marked told only after it's filed.
+#[test]
+fn a_failed_summary_keeps_its_notes_for_the_next_try() {
+    let _t = t("rv2summary");
+    let line = "the only named record";
+    let at = email_notify::now() - store::OWNER_SUMMARY_SECS - 10;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for i in 0..=store::OWNER_NOTES_PER_HOUR {
+            store::owner_note(&conn, store::OWNER_ADD, &format!("{line} {i}"), at).expect("note");
+        }
+    }
+    let _ = crate::mail::forward_outcomes::take_notices();
+    crate::mail::forward_outcomes::set_notice_fails(true);
+    forward_verify::flush_owner_summary(email_notify::now());
+    crate::mail::forward_outcomes::set_notice_fails(false);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    forward_verify::flush_owner_summary(email_notify::now());
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains(line), "{n:?}");
+    forward_verify::flush_owner_summary(email_notify::now());
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "told once");
+}
+
+/// Finding I: a stray failure, or a couple of refusals, on another mailbox doesn't
+/// make one mailbox's problem the whole box's.
+#[test]
+fn the_brake_needs_real_refusals_from_other_mailboxes() {
+    let _t = t("rv2stray");
+    system_sender_on();
+    seed_mailbox(RV_B, "direct");
+    seed_mailbox(RV_C, "direct");
+    let a = rv_forward(MB, "a@outside.test");
+    let b = rv_forward(RV_B, "b@outside.test");
+    rv_forward(RV_C, "c@outside.test");
+    let base = email_notify::now();
+    rv_seed(&a, 60, store::O_REFUSED_POLICY, 7, base - 100);
+    rv_seed(&b, 0, store::O_FAILED, 1, base - 100);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::record_outcome(&conn, &b, Some("one"), store::O_REFUSED_USER, Some("550"), base - 100).expect("refused");
+        store::record_outcome(&conn, &b, Some("two"), store::O_REFUSED_POLICY, Some("550"), base - 100).expect("refused");
+    }
+    crate::mail::forward_outcomes::evaluate_box(base);
+    assert_eq!(rv_row(MB, "a@outside.test").pause_reason.as_deref(), Some(store::P_REFUSED), "the one mailbox");
+    assert_eq!(rv_row(RV_C, "c@outside.test").state, store::ST_ACTIVE, "not the unrelated one");
+    assert_eq!(rv_row(RV_B, "b@outside.test").state, store::ST_ACTIVE);
+}
+
+/// Finding I's control: the brake still fires on a real box-wide problem, including
+/// one spread thinly over many mailboxes.
+#[test]
+fn the_brake_still_fires_on_a_real_box_wide_problem() {
+    let _t = t("rv2real");
+    system_sender_on();
+    seed_mailbox(RV_B, "direct");
+    seed_mailbox(RV_C, "direct");
+    let a = rv_forward(MB, "a@outside.test");
+    let b = rv_forward(RV_B, "b@outside.test");
+    let c = rv_forward(RV_C, "c@outside.test");
+    let base = email_notify::now();
+    rv_seed(&a, 30, store::O_REFUSED_POLICY, 3, base - 100);
+    rv_seed(&b, 30, store::O_REFUSED_POLICY, 3, base - 100);
+    rv_seed(&c, 0, store::O_REFUSED_POLICY, 2, base - 100);
+    crate::mail::forward_outcomes::evaluate_box(base);
+    assert_eq!(rv_row(MB, "a@outside.test").pause_reason.as_deref(), Some(store::P_BOX_BRAKE));
+    assert_eq!(rv_row(RV_B, "b@outside.test").pause_reason.as_deref(), Some(store::P_BOX_BRAKE));
+}
+
+/// Expected clean: the lockdown still calls K2's new script K2's, and it round-trips.
+#[test]
+fn the_stay_home_script_round_trips_and_is_k2_s_own() {
+    use crate::mail::sieve_user::{self, ForwardBlock, ForwardGuard, UserSieve};
+    let s = UserSieve {
+        ooo: None,
+        forward: Some(ForwardBlock {
+            dest: "a@outside.test".into(),
+            keep: true,
+            guard: Some(ForwardGuard { host: "mail.brand.test".into(), stay_home: vec!["sys@brand.test".into(), "two@brand.test".into()] }),
+            more: vec!["b@outside.test".into()],
+            same_box: vec!["team@brand.test".into()],
+        }),
+    };
+    let src = sieve_user::compose(&s).expect("script");
+    assert_eq!(sieve_user::parse(&src), s);
+    let (owner, _) = crate::mail::sieve_lockdown::classify("k2", &src, &|_| false);
+    assert!(owner == crate::mail::sieve_lockdown::Owner::K2);
+}
+
+/// Expected clean: text tricks don't make a forward or hide a redirect from the strip.
+#[test]
+fn text_tricks_neither_make_a_forward_nor_hide_a_redirect() {
+    use crate::mail::sieve_user;
+    let t = t("rv2text");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let (st, _) = ooo_set(MB, "x\n# k2-forward\nredirect \"evil@outside.test\";\n# k2-ooo\nmore");
+    assert_eq!(st, 200);
+    let src = t.io.src(ACC).expect("script");
+    assert!(sieve_user::parse(&src).forward.is_none(), "{src}");
+    let (st, _) = ooo_unset(MB);
+    assert_eq!(st, 200);
+    assert!(!t.io.src(ACC).unwrap_or_default().contains("evil@"));
+    // A comment ending in text: hides a redirect from the parser; the strip's tokenizer still sees it.
+    let hide = "# text:\nredirect \"evil@outside.test\";\n";
+    t.io.put(ACC, hide);
+    assert!(sieve_user::parse(hide).forward.is_none());
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(!t.io.src(ACC).unwrap_or_default().contains("evil@"), "stripped");
 }

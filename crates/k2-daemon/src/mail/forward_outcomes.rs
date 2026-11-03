@@ -301,23 +301,29 @@ pub fn brake_trip(c: &Counts) -> bool {
 
 // ── the windows ─────────────────────────────────────────────────────
 
-/// When the forward last started forwarding (activated or resumed).
+/// When the forward last started forwarding (activated, or resumed by a person or
+/// by K2). An agent's own pause and resume doesn't count: it would wipe the count
+/// that pauses a destination that keeps refusing.
 pub fn started_at(conn: &Connection, forward_id: &str) -> Result<i64, String> {
     conn.query_row(
-        "SELECT COALESCE(MAX(at), 0) FROM mail_forward_events WHERE forward_id = ?1 AND event IN ('activated', 'resumed')",
+        "SELECT COALESCE(MAX(at), 0) FROM mail_forward_events WHERE forward_id = ?1 \
+         AND (event = 'activated' OR (event = 'resumed' AND actor NOT LIKE 'agent:%'))",
         params![forward_id],
         |r| r.get(0),
     )
     .map_err(|e| format!("mail forwards: start: {e}"))
 }
 
-/// When a forward the brake paused was last resumed (0: never): the
-/// brake's window starts there.
+/// When a forward the brake paused, the whole box's or one mailbox's, was last
+/// resumed (0: never): the brake's window starts there. Otherwise a person's
+/// resume would trip it again on the same numbers.
 pub fn brake_released_at(conn: &Connection) -> Result<i64, String> {
     conn.query_row(
-        "SELECT COALESCE(MAX(r.at), 0) FROM mail_forward_events r WHERE r.event = 'resumed' AND ( \
+        "SELECT COALESCE(MAX(r.at), 0) FROM mail_forward_events r WHERE r.event = 'resumed' AND (( \
            SELECT p.detail_json FROM mail_forward_events p WHERE p.forward_id = r.forward_id AND p.event = 'paused' \
-           AND p.at <= r.at ORDER BY p.at DESC, p.rowid DESC LIMIT 1) LIKE '%\"reason\":\"box_brake\"%'",
+           AND p.at <= r.at ORDER BY p.at DESC, p.rowid DESC LIMIT 1) GLOB '*\"reason\":\"box_brake\"*' OR ( \
+           SELECT p.detail_json FROM mail_forward_events p WHERE p.forward_id = r.forward_id AND p.event = 'paused' \
+           AND p.at <= r.at ORDER BY p.at DESC, p.rowid DESC LIMIT 1) GLOB '*\"oneMailbox\":true*')",
         [],
         |r| r.get(0),
     )
@@ -518,12 +524,17 @@ fn evaluate_box_locked(now: i64) -> Vec<String> {
         if !brake_trip(&c) {
             return Vec::new();
         }
-        // One mailbox's refusals stop that mailbox, not the whole box.
-        if let Ok([only]) = store::refused_mailboxes_since(&conn, since).as_deref() {
-            let only = only.clone();
-            let rows: Vec<Forward> = store::live_rows(&conn, &only).unwrap_or_default().into_iter().filter(|f| f.is_external() && f.is_active()).collect();
-            drop(conn);
-            return pause_one_mailbox(&rows, &c);
+        // One mailbox's refusals stop that mailbox, not the whole box. A stray
+        // failure or two elsewhere doesn't make it the box's problem. This stops
+        // accidents only: someone writing to a few mailboxes on purpose still
+        // trips it, because delivery events don't say who sent the original.
+        if let Ok([(top, _, _), others @ ..]) = store::refusals_by_mailbox(&conn, since).as_deref() {
+            if others.iter().map(|(_, refused, _)| refused).sum::<i64>() < store::BRAKE_OTHER_MAILBOXES_MIN {
+                let top = top.clone();
+                let rows: Vec<Forward> = store::live_rows(&conn, &top).unwrap_or_default().into_iter().filter(|f| f.is_external() && f.is_active()).collect();
+                drop(conn);
+                return pause_one_mailbox(&rows, &c);
+            }
         }
         let active: Vec<Forward> = store::list(&conn, &store::ListFilter { state: Some(store::ST_ACTIVE), external_only: true, ..Default::default() })
             .unwrap_or_default();
@@ -668,9 +679,33 @@ pub(crate) fn take_notices() -> Vec<(String, String, Vec<String>)> {
     NOTICES.with(|n| std::mem::take(&mut *n.borrow_mut()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static NOTICE_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: make filing a notice fail on this thread.
+#[cfg(test)]
+pub(crate) fn set_notice_fails(fails: bool) {
+    NOTICE_FAILS.with(|c| c.set(fails));
+}
+
 pub(crate) fn notice(title: &str, body: &str, extra: &[String]) {
+    if let Err(e) = try_notice(title, body, extra) {
+        k2_core::log_debug!("{P} WARN owner notice: {}", crate::email_notify::send::mask_addresses(&e));
+    }
+}
+
+/// [`notice`], for a caller that has to know it was filed.
+pub(crate) fn try_notice(title: &str, body: &str, extra: &[String]) -> Result<(), String> {
     #[cfg(test)]
-    NOTICES.with(|n| n.borrow_mut().push((title.to_string(), body.to_string(), extra.to_vec())));
+    {
+        if NOTICE_FAILS.with(std::cell::Cell::get) {
+            return Err("fake: the Inbox refused".to_string());
+        }
+        NOTICES.with(|n| n.borrow_mut().push((title.to_string(), body.to_string(), extra.to_vec())));
+        Ok(())
+    }
     #[cfg(not(test))]
     {
         let r = if extra.is_empty() {
@@ -678,9 +713,7 @@ pub(crate) fn notice(title: &str, body: &str, extra: &[String]) {
         } else {
             crate::feedback_routes::file_people_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-email", title, body, extra)
         };
-        if let Err(e) = r {
-            k2_core::log_debug!("{P} WARN owner notice: {}", crate::email_notify::send::mask_addresses(&e));
-        }
+        r.map(|_| ()).map_err(|e| e.to_string())
     }
 }
 
@@ -690,12 +723,18 @@ pub(crate) fn notice(title: &str, body: &str, extra: &[String]) {
 /// changes while outside forwards rely on it: with none, `dest_gone`, `refused`,
 /// `daily_cap` and the box brake can't fire (the hourly throttles still hold).
 pub fn webhook_health(error: Option<&str>) {
+    let wanted = webhook_wanted();
+    // An error with no outside forward relying on it isn't news yet: left
+    // unrecorded, the owner hears when one does (the webhook runs for it).
+    if error.is_some() && !wanted {
+        return;
+    }
     let changed = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::set_webhook_error(&conn, error).unwrap_or(false)
     };
-    if !changed || !webhook_wanted() {
+    if !changed || !wanted {
         return;
     }
     match error {

@@ -54,13 +54,59 @@ pub const P_MANUAL: &str = "manual";
 /// K2 couldn't tell the address it can stop this, for [`NOT_TOLD_PAUSE_SECS`].
 /// An opt-out with no stop link isn't an opt-out. Lifted when the email goes.
 pub const P_NOT_TOLD: &str = "not_told";
+/// An agent's outside forward on its own mailbox, with that workspace's agent
+/// sending turned off since. Lifts when it's back on, or when a person takes it.
+pub const P_AGENT_SEND_OFF: &str = "agent_send_off";
 /// The mail server is older than the one outside forwards need (or its
 /// version is unknown): `k2 hostmail upgrade`.
 pub const P_UPGRADE: &str = "upgrade_required";
 
 /// Pauses K2 lifts by itself when the cause goes away (the reconcile).
 pub fn auto_lifts(reason: &str) -> bool {
-    reason == P_RECEIVE_ONLY || reason == P_AIR_GAP || reason == P_UPGRADE
+    reason == P_RECEIVE_ONLY || reason == P_AIR_GAP || reason == P_UPGRADE || reason == P_AGENT_SEND_OFF
+}
+
+/// Someone pauses a row that's already paused. `as_hold`: K2 holds it and will
+/// let go by itself, so record them beside its reason; otherwise they become
+/// who paused it. The reason stays either way: it may say more than theirs.
+pub fn record_pause_on_paused(conn: &Connection, id: &str, actor: &str, pauser: &str, as_hold: bool, now: i64) -> Result<Forward, String> {
+    let sql = if as_hold {
+        "UPDATE mail_forwards SET held_by = ?2, updated_at = ?3 WHERE id = ?1"
+    } else {
+        "UPDATE mail_forwards SET paused_by = ?2, updated_at = ?3 WHERE id = ?1"
+    };
+    conn.execute(sql, params![id, pauser, now]).map_err(err("hold"))?;
+    record_event(conn, id, E_HELD, actor, &serde_json::json!({ "reason": P_MANUAL }), now)?;
+    get(conn, id)?.ok_or_else(|| "mail forwards: the row is gone".to_string())
+}
+
+/// Take back a hold: K2's own reason still stands.
+pub fn clear_hold(conn: &Connection, id: &str, now: i64) -> Result<Forward, String> {
+    conn.execute("UPDATE mail_forwards SET held_by = NULL, updated_at = ?2 WHERE id = ?1", params![id, now]).map_err(err("hold"))?;
+    get(conn, id)?.ok_or_else(|| "mail forwards: the row is gone".to_string())
+}
+
+/// K2 lets go of a row someone else also paused: it stays paused, for them.
+pub fn hold_to_manual(conn: &Connection, id: &str, now: i64) -> Result<Forward, String> {
+    let by: Option<String> = conn
+        .query_row("SELECT held_by FROM mail_forwards WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(err("hold"))?
+        .flatten();
+    let by = by.ok_or_else(|| "mail forwards: nothing holds this row".to_string())?;
+    conn.execute(
+        "UPDATE mail_forwards SET pause_reason = ?2, paused_by = ?3, held_by = NULL, updated_at = ?4 WHERE id = ?1",
+        params![id, P_MANUAL, by, now],
+    )
+    .map_err(err("hold"))?;
+    record_event(conn, id, E_PAUSED, &by, &serde_json::json!({ "reason": P_MANUAL, "held": true }), now)?;
+    get(conn, id)?.ok_or_else(|| "mail forwards: the row is gone".to_string())
+}
+
+/// Mark this outside forward as its own mailbox's agent's (`None`: a person took it).
+pub fn set_agent_ws(conn: &Connection, id: &str, workspace: Option<&str>) -> Result<(), String> {
+    conn.execute("UPDATE mail_forwards SET agent_ws = ?2 WHERE id = ?1", params![id, workspace]).map_err(err("agent workspace"))?;
+    Ok(())
 }
 
 // ── events (`mail_forward_events.event`) ────────────────────────────
@@ -83,6 +129,8 @@ pub const E_NOTICE_FAILED: &str = "notice_failed";
 pub const E_RESTARTED: &str = "restarted";
 /// K2 told the owner this row still has no stop link (once).
 pub const E_NOT_TOLD: &str = "not_told";
+/// Someone paused a row that was already paused.
+pub const E_HELD: &str = "held";
 /// K2 told the owner this row's mail can't arrive (once).
 pub const E_CANT_ARRIVE: &str = "cant_arrive";
 /// A row from before opt-out was recent enough to go active on update.
@@ -156,6 +204,11 @@ pub const NOT_TOLD_PAUSE_SECS: i64 = 24 * 3600;
 /// Notices one outside address can get from this box in a trailing day, across
 /// mailboxes and re-adds: so nobody is mailed the whole box's cap.
 pub const NOTICES_PER_DEST_PER_DAY: i64 = 3;
+/// The box brake stops the whole box only when other mailboxes between them have
+/// at least this many refusals: below it, it's the one mailbox's problem. This
+/// stops accidents. It doesn't stop someone writing to a few mailboxes on
+/// purpose, because delivery events don't say who sent the original.
+pub const BRAKE_OTHER_MAILBOXES_MIN: i64 = 3;
 
 /// Retention.
 pub const EVENTS_KEEP_SECS: i64 = 365 * 86_400;
@@ -199,6 +252,10 @@ pub struct Forward {
     pub notice_failed_at: Option<i64>,
     /// When K2 tries that email next.
     pub notice_next_at: Option<i64>,
+    /// Who else paused this while K2 held it: it stays paused for them when K2 lets go.
+    pub held_by: Option<String>,
+    /// The workspace whose agent set this on its own mailbox (`None`: a person's).
+    pub agent_ws: Option<String>,
 }
 
 impl Forward {
@@ -214,7 +271,7 @@ impl Forward {
 }
 
 const COLS: &str = "id, address_id, address, dest, dest_kind, verified_address_id, keep, state, set_by, pause_reason, \
-                    created_at, updated_at, activated_at, paused_at, removed_at, notice_state, notice_at, paused_by, notice_failed_at, notice_next_at";
+                    created_at, updated_at, activated_at, paused_at, removed_at, notice_state, notice_at, paused_by, notice_failed_at, notice_next_at, held_by, agent_ws";
 
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
     Ok(Forward {
@@ -238,6 +295,8 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Forward> {
         paused_by: r.get(17)?,
         notice_failed_at: r.get(18)?,
         notice_next_at: r.get(19)?,
+        held_by: r.get(20)?,
+        agent_ws: r.get(21)?,
     })
 }
 
@@ -497,9 +556,25 @@ pub fn notices_since(conn: &Connection, since: i64) -> Result<i64, String> {
 }
 
 /// Rows waiting their turn.
-pub fn due_waiting(conn: &Connection) -> Result<i64, String> {
-    conn.query_row("SELECT COUNT(*) FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due'", [], |r| r.get(0))
+pub fn due_waiting(conn: &Connection, now: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM mail_forwards WHERE state = 'pending_verify' AND notice_state = 'due' AND COALESCE(notice_next_at, 0) <= ?1",
+        params![now],
+        |r| r.get(0),
+    )
+    .map_err(err("waiting"))
+}
+
+/// Rows waiting to email this address: each is a notice on its way.
+pub fn due_to_dest(conn: &Connection, dest: &str) -> Result<i64, String> {
+    conn.query_row("SELECT COUNT(*) FROM mail_forwards WHERE dest = ?1 AND state = 'pending_verify' AND notice_state = 'due'", params![dest], |r| r.get(0))
         .map_err(err("waiting"))
+}
+
+/// Not this row's turn yet (it isn't a failed email): look again at `next`.
+pub fn notice_wait_until(conn: &Connection, id: &str, next: i64) -> Result<(), String> {
+    conn.execute("UPDATE mail_forwards SET notice_next_at = ?2 WHERE id = ?1", params![id, next]).map_err(err("notice"))?;
+    Ok(())
 }
 
 /// Has this row an event from before opt-out's sort (`legacy_due`)?
@@ -574,20 +649,23 @@ pub fn is_automatic_pause(reason: &str) -> bool {
 /// An automatic pause of (mailbox address, destination) since `since` with no
 /// resume after it, on any row of the pair, live or removed: `rm` and `add`
 /// don't wash one out.
-pub fn recent_automatic_pause(conn: &Connection, address: &str, dest: &str, since: i64) -> Result<Option<String>, String> {
+pub fn recent_pause_agents_keep(conn: &Connection, address: &str, dest: &str, since: i64) -> Result<Option<String>, String> {
     let mut st = conn
         .prepare(
-            "SELECT e.detail_json FROM mail_forward_events e JOIN mail_forwards f ON f.id = e.forward_id \
-             WHERE f.address = ?1 AND f.dest = ?2 AND e.event = 'paused' AND e.at >= ?3 \
-             AND NOT EXISTS (SELECT 1 FROM mail_forward_events r WHERE r.forward_id = e.forward_id AND r.event = 'resumed' AND r.at >= e.at) \
+            "SELECT e.detail_json, e.actor FROM mail_forward_events e JOIN mail_forwards f ON f.id = e.forward_id \
+             WHERE f.address = ?1 AND f.dest = ?2 AND e.event IN ('paused', 'held') AND e.at >= ?3 \
+             AND NOT EXISTS (SELECT 1 FROM mail_forward_events r WHERE r.forward_id = e.forward_id AND r.event = 'resumed' AND r.at >= e.at AND r.rowid > e.rowid) \
+             AND NOT EXISTS (SELECT 1 FROM mail_forwards n WHERE n.address = f.address AND n.dest = f.dest AND n.rowid > f.rowid AND n.set_by NOT LIKE 'agent%') \
              ORDER BY e.at DESC, e.rowid DESC",
         )
         .map_err(err("recent pause"))?;
-    let rows = st.query_map(params![address, dest, since], |r| r.get::<_, String>(0)).map_err(err("recent pause"))?;
+    let rows = st.query_map(params![address, dest, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(err("recent pause"))?;
     for raw in rows {
-        let raw = raw.map_err(err("recent pause"))?;
+        let (raw, actor) = raw.map_err(err("recent pause"))?;
         let reason = serde_json::from_str::<J>(&raw).ok().and_then(|v| v.get("reason").and_then(J::as_str).map(str::to_string));
-        if let Some(r) = reason.filter(|r| is_automatic_pause(r)) {
+        // An agent's own pause is its own to undo.
+        let by_a_person = !actor.starts_with("agent");
+        if let Some(r) = reason.filter(|r| is_automatic_pause(r) || (r == P_MANUAL && by_a_person)) {
             return Ok(Some(r));
         }
     }
@@ -611,14 +689,15 @@ pub fn daily_window_start(conn: &Connection, address_id: &str, now: i64) -> Resu
 }
 
 /// The mailboxes (`address_id`) whose forwards were refused since `since`.
-pub fn refused_mailboxes_since(conn: &Connection, since: i64) -> Result<Vec<String>, String> {
+pub fn refusals_by_mailbox(conn: &Connection, since: i64) -> Result<Vec<(String, i64, i64)>, String> {
     let mut st = conn
         .prepare(
-            "SELECT DISTINCT f.address_id FROM mail_forward_outcomes o JOIN mail_forwards f ON f.id = o.forward_id \
-             WHERE o.at >= ?1 AND o.kind IN ('refused_user', 'refused_policy', 'failed') ORDER BY f.address_id",
+            "SELECT f.address_id, SUM(o.kind IN ('refused_user', 'refused_policy')), COUNT(*) AS n \
+             FROM mail_forward_outcomes o JOIN mail_forwards f ON f.id = o.forward_id \
+             WHERE o.at >= ?1 AND o.kind IN ('refused_user', 'refused_policy', 'failed') GROUP BY f.address_id ORDER BY n DESC, f.address_id",
         )
         .map_err(err("refused"))?;
-    let rows = st.query_map(params![since], |r| r.get::<_, String>(0)).map_err(err("refused"))?;
+    let rows = st.query_map(params![since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))).map_err(err("refused"))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err("refused"))
 }
 
@@ -760,6 +839,8 @@ pub struct Change<'a> {
     /// Set with the move to [`ST_ACTIVE`] from `pending_verify`.
     pub verified_address_id: Option<&'a str>,
     pub actor: &'a str,
+    /// Who to record as pausing it, when that isn't `actor` (an agent's workspace).
+    pub pauser: Option<&'a str>,
     pub detail: Option<J>,
 }
 
@@ -782,7 +863,7 @@ pub fn transition(conn: &Connection, id: &str, to: &str, c: &Change<'_>, now: i6
                 return Err(TransitionError::Illegal(cur.state.clone(), "active (unverified)".to_string()));
             }
             run(
-                "UPDATE mail_forwards SET state = 'active', pause_reason = NULL, paused_at = NULL, paused_by = NULL, verified_address_id = ?2, \
+                "UPDATE mail_forwards SET state = 'active', pause_reason = NULL, paused_at = NULL, paused_by = NULL, held_by = NULL, verified_address_id = ?2, \
                  activated_at = COALESCE(activated_at, ?3), updated_at = ?3 WHERE id = ?1",
                 &[&id, &verified, &now],
             )?;
@@ -797,7 +878,7 @@ pub fn transition(conn: &Connection, id: &str, to: &str, c: &Change<'_>, now: i6
             let reason = c.reason.filter(|r| !r.is_empty()).ok_or_else(|| TransitionError::Illegal(cur.state.clone(), "paused (no reason)".to_string()))?;
             run(
                 "UPDATE mail_forwards SET state = 'paused', pause_reason = ?2, paused_at = COALESCE(paused_at, ?3), paused_by = ?4, updated_at = ?3 WHERE id = ?1",
-                &[&id, &reason, &now, &c.actor],
+                &[&id, &reason, &now, &c.pauser.unwrap_or(c.actor)],
             )?;
             let mut d = detail.clone();
             if let J::Object(m) = &mut d {
@@ -1053,7 +1134,7 @@ pub fn owner_note(conn: &Connection, kind: &str, line: &str, now: i64) -> Result
 
 /// The waiting changes, once the oldest has waited its time: `(kind, line)`,
 /// oldest first, marked told. Empty: nothing due yet.
-pub fn owner_summary_due(conn: &Connection, now: i64) -> Result<Vec<(String, String)>, String> {
+pub fn owner_summary_due(conn: &Connection, now: i64) -> Result<Vec<(i64, String, String)>, String> {
     let oldest: Option<i64> = conn
         .query_row("SELECT MIN(at) FROM mail_forward_owner_notes WHERE told_at IS NULL", [], |r| r.get(0))
         .map_err(err("owner summary"))?;
@@ -1061,15 +1142,23 @@ pub fn owner_summary_due(conn: &Connection, now: i64) -> Result<Vec<(String, Str
         return Ok(Vec::new());
     }
     let mut st = conn
-        .prepare("SELECT kind, line FROM mail_forward_owner_notes WHERE told_at IS NULL ORDER BY at, id")
+        .prepare("SELECT id, kind, line FROM mail_forward_owner_notes WHERE told_at IS NULL ORDER BY at, id")
         .map_err(err("owner summary"))?;
     let rows = st
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
         .map_err(err("owner summary"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(err("owner summary"))?;
-    conn.execute("UPDATE mail_forward_owner_notes SET told_at = ?1 WHERE told_at IS NULL", params![now]).map_err(err("owner summary"))?;
     Ok(rows)
+}
+
+/// The summary holding these notes was filed. Only then: until it is, they're
+/// the one named record of those adds.
+pub fn owner_notes_told(conn: &Connection, ids: &[i64], now: i64) -> Result<(), String> {
+    for id in ids {
+        conn.execute("UPDATE mail_forward_owner_notes SET told_at = ?2 WHERE id = ?1", params![id, now]).map_err(err("owner summary"))?;
+    }
+    Ok(())
 }
 
 /// Drop rows past their keep time.
@@ -1275,7 +1364,10 @@ mod tests {
         let q = add(&c, &ext(&qid, "q@brand.test", "w@outside.test"), 40).unwrap();
         set_notice(&c, &q.id, N_DUE, 40).unwrap();
         assert_eq!(new_outside_since(&c, 0).unwrap(), 3);
-        assert_eq!(due_waiting(&c).unwrap(), 1);
+        assert_eq!(due_waiting(&c, 40).unwrap(), 1);
+        notice_wait_until(&c, &q.id, 100).unwrap();
+        assert_eq!(due_waiting(&c, 40).unwrap(), 0, "one in backoff holds nobody up");
+        assert_eq!(due_to_dest(&c, "w@outside.test").unwrap(), 1, "but its notice is still on the way");
     }
 
     #[test]
@@ -1360,15 +1452,22 @@ mod tests {
         record_outcome(&c, &f.id, Some("1"), O_QUEUED, None, 5).unwrap();
         transition(&c, &f.id, ST_PAUSED, &Change { reason: Some(P_DAILY_CAP), actor: "k2", ..Default::default() }, 10).unwrap();
         transition(&c, &f.id, ST_REMOVED, &actor(), 11).unwrap();
-        assert_eq!(recent_automatic_pause(&c, mb, dest, 0).unwrap().as_deref(), Some(P_DAILY_CAP));
-        assert_eq!(recent_automatic_pause(&c, mb, dest, 11).unwrap(), None, "older than the window");
-        assert_eq!(recent_automatic_pause(&c, mb, "other@outside.test", 0).unwrap(), None);
+        assert_eq!(recent_pause_agents_keep(&c, mb, dest, 0).unwrap().as_deref(), Some(P_DAILY_CAP));
+        assert_eq!(recent_pause_agents_keep(&c, mb, dest, 11).unwrap(), None, "older than the window");
+        assert_eq!(recent_pause_agents_keep(&c, mb, "other@outside.test", 0).unwrap(), None);
         // The removed row's copies still count for the mailbox.
         assert_eq!(mailbox_queued(&c, &aid, daily_window_start(&c, &aid, 100).unwrap()).unwrap(), 1);
-        // A manual pause isn't automatic.
+        // An agent's own pause is its own to undo; a person's isn't.
         let g = add(&c, &n, 20).unwrap();
-        transition(&c, &g.id, ST_PAUSED, &Change { reason: Some(P_MANUAL), actor: "owner", ..Default::default() }, 21).unwrap();
-        assert_eq!(recent_automatic_pause(&c, mb, dest, 15).unwrap(), None);
+        transition(&c, &g.id, ST_PAUSED, &Change { reason: Some(P_MANUAL), actor: "agent:x", pauser: Some("agent-ws:u"), ..Default::default() }, 21).unwrap();
+        assert_eq!(recent_pause_agents_keep(&c, mb, dest, 15).unwrap(), None);
+        assert_eq!(get(&c, &g.id).unwrap().unwrap().paused_by.as_deref(), Some("agent-ws:u"));
+        record_pause_on_paused(&c, &g.id, "owner", "owner", false, 21).unwrap();
+        assert_eq!(get(&c, &g.id).unwrap().unwrap().paused_by.as_deref(), Some("owner"), "the person takes it over");
+        assert_eq!(recent_pause_agents_keep(&c, mb, dest, 15).unwrap().as_deref(), Some(P_MANUAL));
+        // A person's later resume ends that.
+        transition(&c, &g.id, ST_ACTIVE, &Change { actor: "owner", ..Default::default() }, 21).unwrap();
+        assert_eq!(recent_pause_agents_keep(&c, mb, dest, 15).unwrap(), None);
         // A person's resume of a daily_cap pause starts the count again.
         let h = add(&c, &ext(&aid, mb, "h@outside.test"), 22).unwrap();
         let v = Change { verified_address_id: Some("v"), actor: "k2", ..Default::default() };
@@ -1406,7 +1505,9 @@ mod tests {
         assert!(!owner_note(&c, "change", "rolled-2", t + 11).unwrap());
         assert!(owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS - 1).unwrap().is_empty(), "not an hour yet");
         let got = owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS).unwrap();
-        assert_eq!(got, vec![("change".to_string(), "rolled-1".to_string()), ("change".to_string(), "rolled-2".to_string())]);
+        assert_eq!(got.iter().map(|(_, k, l)| (k.as_str(), l.as_str())).collect::<Vec<_>>(), vec![("change", "rolled-1"), ("change", "rolled-2")]);
+        assert_eq!(owner_summary_due(&c, t + 10 + OWNER_SUMMARY_SECS).unwrap().len(), 2, "not told until it's filed");
+        owner_notes_told(&c, &got.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(), t + 10 + OWNER_SUMMARY_SECS).unwrap();
         assert!(owner_summary_due(&c, t + 20 + OWNER_SUMMARY_SECS).unwrap().is_empty(), "told once");
         // Each kind has its own slots: changes didn't spend the adds'.
         assert!(owner_note(&c, OWNER_ADD, "add", t + 12).unwrap());

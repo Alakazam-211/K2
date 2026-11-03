@@ -1079,7 +1079,7 @@ fn grants_for(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> Ve
 /// (same fail-closed rule as
 /// `k2_core::workspace::settings::mail_agent_send_for_path`, which takes
 /// the DB lock itself): override when valid, else the default, else off.
-fn workspace_agent_send_conn(
+pub(crate) fn workspace_agent_send_conn(
     conn: &rusqlite::Connection,
     project_id: &str,
     default_mode: &str,

@@ -28,6 +28,7 @@ export type PauseReason =
   | 'upgrade_required'
   | 'manual'
   | 'not_told'
+  | 'agent_send_off'
 
 export interface ForwardVerify {
   /** `pending` | `verified` | `expired` | `revoked` (email_verify states). */
@@ -194,6 +195,7 @@ export function eventWords(e: ForwardEvent): string {
     activated: 'Forwarding on',
     notice_sent: 'Told the address, with a stop link',
     notice_failed: 'Couldn’t email the address its stop link',
+    held: 'Paused again while already paused',
     not_told: 'Owner told the address still has no stop link',
     restarted: 'Chosen again after the address pressed Stop',
     legacy_on: 'Turned on (K2 stopped asking for a confirm)',

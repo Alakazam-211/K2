@@ -1116,6 +1116,11 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
             Err(e) => return cfg_error_response(e),
         }
     }
+    // An agent's outside forward on its own mailbox follows its sending: now,
+    // not at the next hourly pass.
+    if b.agent_send.is_some() || b.defaults.as_ref().is_some_and(|d| d.agent_send.is_some()) {
+        crate::mail::forward_sync::request_reconcile();
+    }
     // 5. Global defaults.
     if let Some(d) = &b.defaults {
         match config::set_global_defaults(

@@ -724,6 +724,21 @@ def main():
     check("X13 mail From a system sender isn't forwarded", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
     check("X13 it stays in the mailbox", kept_eventually(mid), "")
 
+    # ── X15 what K2's strip leaves of someone's rules still compiles ─
+    # (forward_sync::plan_strip, sieve_lockdown::remove_outbound: a redirect
+    # becomes keep;, a :copy one leaves an empty block or a bare require.)
+    for what, src in (
+        ("redirect became keep", 'require ["fileinto"];\nif header :contains "subject" "invoice" {\nfileinto "INBOX";\n}\nkeep;\n'),
+        ("an empty block", 'require ["copy"];\nif header :contains "subject" "invoice" {\n\n}\n\n'),
+        ("only a require", 'require ["copy"];\n\n'),
+    ):
+        n, a = put_script(alice, src)
+        check(f"X15 {what} compiles", n == "SieveScript/set" and not a.get("notUpdated") and not a.get("notCreated"), f"{n} {json.dumps(a)[:300]}")
+        mid = f"x15-{tag}-{secrets.token_hex(2)}"
+        ham(mid)
+        check(f"X15 {what}: the mail stays", bool(wait_for(lambda: kept(mid) >= 1, 20)) and kept(mid) >= 1, f"kept {kept(mid)}")
+        check(f"X15 {what}: nothing left", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
+
     # ── X14 a same-box loop: what Stalwart does on its own ──────────
     put_script(alice, f'require ["copy"];\n# k2-forward\nredirect :copy "{bob_addr}";\n')
     put_script(bob, f'require ["copy"];\n# k2-forward\nredirect :copy "{alice_addr}";\n')

@@ -203,9 +203,11 @@ FORWARDING (`k2 hostmail forward`)
            (every outside forward on the server: too many were refused),
            upgrade_required (not forwarding: the mail server needs upgrading:
            k2 hostmail upgrade), air_gap and receive_only (nothing may leave),
-           not_told (K2 couldn't email the address its stop link for a day).
-           Only air_gap, receive_only, upgrade_required and not_told lift by
-           themselves.
+           not_told (K2 couldn't email the address its stop link for a day),
+           agent_send_off (an agent set this on its own mailbox, and agent
+           sending is off now). Only air_gap, receive_only, upgrade_required,
+           not_told and agent_send_off lift by themselves. If someone also
+           pauses it while K2 holds it, it stays paused when K2 lets go.
   Upgrade  outside forwards need the pinned mail server (Stalwart
            0.16.25 or later). On an older one set answers exit 1
            upgrade_required ("k2 hostmail upgrade"); same-box forwards
@@ -216,7 +218,7 @@ FORWARDING (`k2 hostmail forward`)
            card per forward; every change names the agent to the owner. The
            one thing they can't change is the daily limit above. Your own
            mailbox outside needs agent sending on (agent_send_required). After
-           K2 pauses an address by itself, set and add refuse it for an agent
+           K2 or a person pauses an address, set and add refuse it for an agent
            for 24 hours, even if it was removed since.
            Without the toggle: exit 3 owner_only.
            dest_gone / refused / daily_cap: the owner, an Admin or the

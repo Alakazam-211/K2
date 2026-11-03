@@ -48876,9 +48876,11 @@ FORWARDING (`k2 hostmail forward`)
            (every outside forward on the server: too many were refused),
            upgrade_required (not forwarding: the mail server needs upgrading:
            k2 hostmail upgrade), air_gap and receive_only (nothing may leave),
-           not_told (K2 couldn't email the address its stop link for a day).
-           Only air_gap, receive_only, upgrade_required and not_told lift by
-           themselves.
+           not_told (K2 couldn't email the address its stop link for a day),
+           agent_send_off (an agent set this on its own mailbox, and agent
+           sending is off now). Only air_gap, receive_only, upgrade_required,
+           not_told and agent_send_off lift by themselves. If someone also
+           pauses it while K2 holds it, it stays paused when K2 lets go.
   Upgrade  outside forwards need the pinned mail server (Stalwart
            0.16.25 or later). On an older one set answers exit 1
            upgrade_required ("k2 hostmail upgrade"); same-box forwards
@@ -48889,7 +48891,7 @@ FORWARDING (`k2 hostmail forward`)
            card per forward; every change names the agent to the owner. The
            one thing they can't change is the daily limit above. Your own
            mailbox outside needs agent sending on (agent_send_required). After
-           K2 pauses an address by itself, set and add refuse it for an agent
+           K2 or a person pauses an address, set and add refuse it for an agent
            for 24 hours, even if it was removed since.
            Without the toggle: exit 3 owner_only.
            dest_gone / refused / daily_cap: the owner, an Admin or the
@@ -62609,8 +62611,12 @@ elif verb.startswith("forward_") or verb.startswith("self_forward_"):
         elif f.get("state") == "paused" and f.get("pauseWords"):
             out.append("  paused because %s" % f["pauseWords"])
             reason = f.get("pauseReason") or ""
+            if f.get("heldBy"):
+                out.append("  someone also paused it, so it stays paused when K2 lets go; resume takes that back")
             if reason == "not_told":
                 out.append("  it goes back on by itself when K2 can email the address its stop link; or remove it")
+            elif reason == "agent_send_off":
+                out.append("  it goes back on when agent sending does; or the owner, an Admin or the mailbox's person resumes it, and it's theirs")
             elif reason == "revoked":
                 out.append("  it can't be resumed; only the owner or an Admin can choose it again (--restart-stopped), and should ask that address first")
             elif reason in ("air_gap", "receive_only"):
@@ -73466,6 +73472,10 @@ gives the reason:
   revoked       the address pressed Stop in K2's email
   not_told      K2 couldn't email the address its stop link for a day; it
                 goes back on by itself when the email goes
+  agent_send_off
+                an agent set this on its own mailbox, and that workspace's
+                agent sending is off now; it goes back on when sending does,
+                or a person resumes it and it's theirs from then on
   air_gap, receive_only
                 nothing may leave; lifts by itself when that changes
   upgrade_required
@@ -73487,6 +73497,9 @@ WHO
   agent gets exit 3 owner_only; the owner or an Admin turns it on in
   Settings → Workspaces → (the agent's workspace).
   Resume after any other pause, and list: see their own help.
+  After K2 or a person pauses an address, an agent can't add it again for 24
+  hours, even if it was removed since, so an agent that removes it can't put
+  it back (exit 3 owner_only).
   A person's own mailbox: k2 mail forward (the owner links it first with
   k2 hostmail person link).
 
@@ -73597,9 +73610,12 @@ EOF
 
 cmd_help_hostmail_forward_pause() {
     cat <<'EOF'
-Pause a mailbox's forwards by hand: one with --to, otherwise all that are
-on. New mail stays in the mailbox and isn't sent there until someone
-resumes it. Anyone who may set the forward may pause it.
+Pause a mailbox's forwards by hand: one with --to, otherwise all of them.
+New mail stays in the mailbox and isn't sent there until someone resumes it.
+Anyone who may set the forward may pause it. A person's pause also takes over
+one an agent made. On a forward K2 already holds (air_gap, receive_only,
+upgrade_required, not_told, agent_send_off), your pause is kept beside K2's
+reason, and it stays paused when K2 lets go; show says so.
 
 USAGE
   k2 hostmail forward pause <addr> [--to <dest>] [--json]
@@ -73625,6 +73641,15 @@ gives:
   air_gap, receive_only     nobody: it resumes by itself when that changes
   upgrade_required          not by hand: run k2 hostmail upgrade; it resumes
                             by itself after the upgrade
+  agent_send_off            the owner, an Admin or the mailbox's person, and
+                            then it no longer follows agent sending; an agent
+                            gets exit 3 agent_send_required. It also goes back
+                            on when agent sending does
+If someone also paused a forward K2 holds, resume takes that pause back (the
+one who paused it, or any person); K2's reason stays until it changes.
+Resuming a same-box forward that would now loop is refused (forward_loop).
+An agent resuming an outside forward on its own mailbox needs agent sending
+on; off and approval both count as not on (agent_send_required).
 
 USAGE
   k2 hostmail forward resume <addr> [--to <dest>] [--json]

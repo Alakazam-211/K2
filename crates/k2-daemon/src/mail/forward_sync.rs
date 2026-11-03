@@ -425,9 +425,15 @@ fn apply_holds(f: Forward, mb: &Mailbox, ctx: &Ctx) -> Result<(Forward, Option<S
     // After the reasons above: a mail server too old for outside forwards
     // holds an active one visibly (paused `upgrade_required`), and lifts
     // the hold after `k2 hostmail upgrade`.
-    let hold = hold_reason(&f, mb, ctx, !f.is_external() || verified_ok(&conn, &f)).or_else(|| {
-        (f.is_external() && f.state != store::ST_PENDING_VERIFY && !outside_forward_supported()).then_some(store::P_UPGRADE)
-    });
+    let hold = hold_reason(&f, mb, ctx, !f.is_external() || verified_ok(&conn, &f))
+        .or_else(|| (f.is_external() && f.state != store::ST_PENDING_VERIFY && !outside_forward_supported()).then_some(store::P_UPGRADE))
+        // An agent's outside forward on its own mailbox follows that workspace's
+        // agent sending, also when the owner turns it off later.
+        .or_else(|| {
+            let off = f.state != store::ST_PENDING_VERIFY
+                && f.agent_ws.as_deref().is_some_and(|ws| super::access::workspace_agent_send_conn(&conn, ws, &k2_core::app_settings::load().mail_agent_send) != "on");
+            off.then_some(store::P_AGENT_SEND_OFF)
+        });
     let mv = |to: &str, reason: Option<&str>| {
         store::transition(&conn, &f.id, to, &store::Change { reason, actor: ACTOR_K2, ..Default::default() }, ctx.now)
             .map_err(|e| e.to_string())
@@ -437,6 +443,8 @@ fn apply_holds(f: Forward, mb: &Mailbox, ctx: &Ctx) -> Result<(Forward, Option<S
         (store::ST_PAUSED, Some(r), Some(cur)) if (store::auto_lifts(cur) || r == store::P_REVOKED) && cur != r => {
             Ok((mv(store::ST_PAUSED, Some(r))?, Some(r.to_string())))
         }
+        // K2 lets go, but someone else paused it too: it stays paused, for them.
+        (store::ST_PAUSED, None, Some(cur)) if store::auto_lifts(cur) && f.held_by.is_some() => Ok((store::hold_to_manual(&conn, &f.id, ctx.now)?, Some(store::P_MANUAL.to_string()))),
         (store::ST_PAUSED, None, Some(cur)) if store::auto_lifts(cur) => Ok((mv(store::ST_ACTIVE, None)?, Some(String::new()))),
         _ => Ok((f, None)),
     }
@@ -634,6 +642,12 @@ pub fn patch_ooo(address_id: &str, ooo: Option<sieve_user::OooBlock>) -> Result<
         let current = io.read(account)?;
         let mut want = desired(&current, &live, &ctx, outside_forward_supported());
         want.ooo = ooo;
+        // This write may bring back redirects: the limit goes up first, or the
+        // mail server silently skips the extra ones.
+        let written = want.forward.as_ref().map_or(0, ForwardBlock::redirects);
+        if written > 1 && written > current.sieve.forward.as_ref().map_or(0, ForwardBlock::redirects) {
+            io.ensure_redirects()?;
+        }
         if !in_sync(&current, &want) {
             io.write(account, &current, &want)?;
         }

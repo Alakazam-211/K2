@@ -133,6 +133,19 @@ impl Caller {
         }
     }
 
+    /// Who to record as pausing a forward. An agent by its workspace's id: two
+    /// workspaces can share a folder name.
+    fn pauser(&self) -> String {
+        match self {
+            Caller::Agent { workspace_uuid } => format!("agent-ws:{workspace_uuid}"),
+            other => other.actor(),
+        }
+    }
+
+    fn is_agent(&self) -> bool {
+        matches!(self, Caller::Agent { .. })
+    }
+
     /// Who asked, for the confirm mail (`owner` | a person key |
     /// `agent:<name>`).
     fn asker(&self) -> String {
@@ -156,6 +169,18 @@ impl Caller {
     /// May this caller resume a forward `paused_by` paused for `reason`? An
     /// agent resumes only its own hand pause: a person's stays a person's.
     pub fn may_resume(&self, reason: &str, paused_by: Option<&str>) -> Result<(), Fail> {
+        if reason == store::P_AGENT_SEND_OFF {
+            // A person may take it over; the sending switch is what an agent answers to.
+            return if self.is_agent() {
+                Err(fail(
+                    403,
+                    "agent_send_required",
+                    "K2 paused this forward because agent sending is off for this mailbox's workspace; it goes back on when sending does, or the owner, an Admin or the mailbox's person resumes it",
+                ))
+            } else {
+                Ok(())
+            };
+        }
         if reason == store::P_NOT_TOLD {
             return Err(fail(
                 409,
@@ -178,7 +203,7 @@ impl Caller {
             ));
         }
         match self {
-            Caller::Agent { .. } if reason == store::P_MANUAL && paused_by != Some(self.actor().as_str()) => Err(fail(
+            Caller::Agent { .. } if reason == store::P_MANUAL && paused_by != Some(self.pauser().as_str()) => Err(fail(
                 403,
                 "owner_only",
                 format!(
@@ -205,7 +230,7 @@ impl Caller {
 }
 
 /// The agent's name (its workspace folder), never a path.
-fn agent_name(workspace_uuid: &str) -> String {
+pub(crate) fn agent_name(workspace_uuid: &str) -> String {
     crate::workspace_msg::resolve_workspace(workspace_uuid)
         .and_then(|p| std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| workspace_uuid.chars().take(8).collect())
@@ -223,6 +248,7 @@ pub fn reason_words(reason: &str) -> &'static str {
         store::P_AIR_GAP => "air-gap is on",
         store::P_MANUAL => "someone paused it",
         store::P_NOT_TOLD => "K2 hasn't been able to email the address its link to stop this",
+        store::P_AGENT_SEND_OFF => "agent sending is off for the workspace whose agent set this forward",
         store::P_UPGRADE => "not forwarding: the mail server needs upgrading: k2 hostmail upgrade",
         _ => "of a rule",
     }
@@ -488,6 +514,7 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
         "updatedAt": f.updated_at,
         "activatedAt": f.activated_at,
         "pausedAt": f.paused_at,
+        "heldBy": f.held_by.as_deref().map(forward_verify::actor_words),
         "verify": verify,
         // What K2 told an outside address (`sent` | `failed` | `due` | `stale`).
         "notice": f.notice_state,
@@ -564,6 +591,33 @@ fn row_stands(f: &Forward, dest: &Dest) -> bool {
     }
 }
 
+/// An agent's outside forward on its own mailbox would send its mail past its
+/// sending rules, so it needs agent sending on. Fail closed: no workspace on
+/// record reads as off.
+fn agent_own_mailbox_limit(row: &MailAddress, caller: &Caller) -> R<()> {
+    let Caller::Agent { workspace_uuid } = caller else { return Ok(()) };
+    if row.owner_project_id != *workspace_uuid {
+        return Ok(());
+    }
+    let path: Option<String> = db(|c| {
+        use rusqlite::OptionalExtension;
+        c.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![workspace_uuid], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("mail forwards: workspace: {e}"))
+    })?;
+    let mode = path.map_or_else(|| "off".to_string(), |p| k2_core::workspace::settings::mail_agent_send_for_path(&p));
+    if mode == "on" {
+        return Ok(());
+    }
+    Err(fail(
+        403,
+        "agent_send_required",
+        format!(
+            "this is your own mailbox, and forwarding it outside would send its mail past your sending rules (agent sending is {mode} here). The owner or an Admin sets the forward, or turns sending on: k2 mail sending <workspace> on"
+        ),
+    ))
+}
+
 fn refuse_outside_now(row: &MailAddress) -> R<()> {
     if email_notify::airgap_blocks() {
         return Err(fail(409, "air_gap", "air-gap is on: nothing leaves this server, so it can't forward outside"));
@@ -614,36 +668,24 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         }
     }
     // Agents' own limits (review findings 6 and 9).
-    if let Caller::Agent { workspace_uuid } = caller {
-        if !outside.is_empty() && row.owner_project_id == *workspace_uuid {
-            // Fail closed: no workspace on record reads as off.
-            let path: Option<String> = db(|c| {
-                use rusqlite::OptionalExtension;
-                c.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![workspace_uuid], |r| r.get(0))
-                    .optional()
-                    .map_err(|e| format!("mail forwards: workspace: {e}"))
-            })?;
-            let mode = path.map_or_else(|| "off".to_string(), |p| k2_core::workspace::settings::mail_agent_send_for_path(&p));
-            if mode != "on" {
-                return Err(fail(
-                    403,
-                    "agent_send_required",
-                    format!(
-                        "this is your own mailbox, and forwarding it outside would send its mail past your sending rules (agent sending is {mode} here). The owner or an Admin sets the forward, or turns sending on: k2 mail sending <workspace> on"
-                    ),
-                ));
-            }
+    if caller.is_agent() {
+        if !outside.is_empty() {
+            agent_own_mailbox_limit(row, caller)?;
         }
         for d in &outside {
-            let recent = db(|c| store::recent_automatic_pause(c, &row.address, d, now - store::WINDOW_SECS))?;
+            let recent = db(|c| store::recent_pause_agents_keep(c, &row.address, d, now - store::WINDOW_SECS))?;
             if let Some(reason) = recent {
+                let who = if reason == store::P_MANUAL {
+                    "a person paused it".to_string()
+                } else {
+                    format!("K2 paused it because {}", reason_words(&reason))
+                };
                 return Err(fail(
                     403,
                     "owner_only",
                     format!(
-                        "K2 paused forwarding from {} to {d} in the last 24 hours because {}, so an agent can't start it again, removed or not. The owner, an Admin or the mailbox's person can",
-                        row.address,
-                        reason_words(&reason)
+                        "forwarding from {} to {d} was paused in the last 24 hours ({who}), so an agent can't start it again, removed or not. The owner, an Admin or the mailbox's person can",
+                        row.address
                     ),
                 ));
             }
@@ -675,8 +717,10 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
     // nobody gets the box's whole cap in notices (finding 14).
     for d in fresh.iter().filter(|d| tells_destination(d)) {
         forward_verify::can_tell(row.stalwart_account_id.as_deref(), d.address())?;
-        let told = db(|c| store::notices_to_dest_since(c, d.address(), now - store::WINDOW_SECS))?;
-        if told >= store::NOTICES_PER_DEST_PER_DAY {
+        // Sent, and on its way from rows waiting their turn. A person's explicit
+        // restart is exempt: an agent spending the limit doesn't lock them out.
+        let told = db(|c| Ok(store::notices_to_dest_since(c, d.address(), now - store::WINDOW_SECS)? + store::due_to_dest(c, d.address())?))?;
+        if told >= store::NOTICES_PER_DEST_PER_DAY && !stopped.iter().any(|s| s == d.address()) {
             let mut f = fail(
                 429,
                 "notice_limit",
@@ -711,7 +755,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
 
     // Tell each new outside address BEFORE its redirect exists. Past the
     // hour's burst, or with others already waiting, it waits its turn.
-    let (sent_this_hour, waiting) = db(|c| Ok((store::notices_since(c, now - 3600)?, store::due_waiting(c)?)))?;
+    let (sent_this_hour, waiting) = db(|c| Ok((store::notices_since(c, now - 3600)?, store::due_waiting(c, now)?)))?;
     let mut room = if waiting > 0 { 0 } else { (store::NOTICES_BURST_PER_HOUR - sent_this_hour).max(0) };
     let asker = caller.asker();
     let mut told: Vec<(String, Told)> = Vec::new();
@@ -723,7 +767,8 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
             continue;
         }
         room -= 1;
-        told.push((d.address().to_string(), forward_verify::tell_destination(&row.address, row.stalwart_account_id.as_deref(), d.address(), &asker, now)?));
+        let restart = stopped.iter().any(|s| s == d.address());
+        told.push((d.address().to_string(), forward_verify::tell_destination(&row.address, row.stalwart_account_id.as_deref(), d.address(), &asker, restart, now)?));
     }
 
     // One change, one Sieve write.
@@ -764,6 +809,11 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 now,
             )
             .map_err(dbe)?;
+            if let Caller::Agent { workspace_uuid } = caller {
+                if d.kind() == store::KIND_EXTERNAL && row.owner_project_id == *workspace_uuid {
+                    store::set_agent_ws(c, &f.id, Some(workspace_uuid)).map_err(dbe)?;
+                }
+            }
             if waits {
                 store::set_notice(c, &f.id, store::N_DUE, now).map_err(dbe)?;
                 change_ref.queued.push(f.dest.clone());
@@ -816,7 +866,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         let message = match t {
             Some(Told { via: Some(_), .. }) => Some(format!("Forwarding to {} is on. K2 emailed {} to say so, with a link to stop it.", f.dest, f.dest)),
             Some(Told { error, .. }) => Some(format!(
-                "Forwarding to {} is on, but K2 couldn't email {} its stop link yet ({}). K2 tries again hourly; forward list shows it.",
+                "Forwarding to {} is on, but K2 couldn't email {} its stop link yet ({}). K2 keeps trying; after a day without that email it pauses this until the email goes. forward list shows it.",
                 f.dest,
                 f.dest,
                 error.as_deref().unwrap_or("the mail server refused")
@@ -946,6 +996,27 @@ fn state_answer(row: &MailAddress, rows: &[Forward], skipped: Vec<J>, note: Opti
     })
 }
 
+/// A pause on a row that's already paused still has to mean something. A person's
+/// takes over one an agent paused, and on a row K2 holds and lifts by itself it's
+/// recorded beside K2's reason: the reason stays, so an agent can't resume past it,
+/// and when K2 lets go the row stays paused. An agent never overrides a person.
+fn pause_again(f: Forward, caller: &Caller) -> R<(Forward, bool)> {
+    let reason = f.pause_reason.as_deref().unwrap_or("");
+    let lifts = store::auto_lifts(reason) || reason == store::P_NOT_TOLD;
+    let me = caller.pauser();
+    let (as_hold, moves) = if lifts {
+        (true, f.held_by.as_deref() != Some(me.as_str()) && (!caller.is_agent() || f.held_by.is_none()))
+    } else {
+        (false, !caller.is_agent() && reason == store::P_MANUAL && f.paused_by.as_deref() != Some(me.as_str()))
+    };
+    if !moves {
+        return Ok((f, false));
+    }
+    let now = email_notify::now();
+    let f = db(|c| store::record_pause_on_paused(c, &f.id, &caller.actor(), &me, as_hold, now))?;
+    Ok((f, true))
+}
+
 fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     let rows = targets(row, v)?;
     let mut done = Vec::with_capacity(rows.len());
@@ -955,6 +1026,10 @@ fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     let one = rows.len() == 1;
     for f in rows {
         if f.state == store::ST_PAUSED {
+            let (f, moved) = pause_again(f, caller)?;
+            if moved && f.is_external() {
+                told.push(f.dest.clone());
+            }
             done.push(f);
             continue;
         }
@@ -962,7 +1037,13 @@ fn pause(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
             skipped.push(json!({ "to": f.dest, "why": "it isn't on, so there's nothing to pause" }));
             continue;
         }
-        let (f, n) = changed(forward_sync::pause(&f.id, store::P_MANUAL, &caller.actor(), None))?;
+        let actor = caller.actor();
+        let pauser = caller.pauser();
+        let (f, n) = changed(forward_sync::transition_and_sync(
+            &f.id,
+            store::ST_PAUSED,
+            &store::Change { reason: Some(store::P_MANUAL), actor: &actor, pauser: Some(&pauser), ..Default::default() },
+        ))?;
         note = note.or(n);
         if f.is_external() {
             told.push(f.dest.clone());
@@ -988,10 +1069,40 @@ fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
             }
             continue;
         }
-        if let Err(no) = caller.may_resume(f.pause_reason.as_deref().unwrap_or(""), f.paused_by.as_deref()) {
+        let reason = f.pause_reason.clone().unwrap_or_default();
+        // A hold beside K2's own reason: the one who can take it back does, and
+        // K2's reason still decides when it comes back on.
+        let k2_decides = reason == store::P_NOT_TOLD || (store::auto_lifts(&reason) && reason != store::P_AGENT_SEND_OFF);
+        if k2_decides && f.held_by.is_some() && (!caller.is_agent() || f.held_by.as_deref() == Some(caller.pauser().as_str())) {
+            let now = email_notify::now();
+            let f = db(|c| store::clear_hold(c, &f.id, now))?;
+            note = note.or_else(|| Some(format!("Your pause is lifted, but K2 still holds this forward because {}; it comes back by itself when that changes", reason_words(&reason))));
+            done.push(f);
+            continue;
+        }
+        if let Err(no) = caller.may_resume(&reason, f.paused_by.as_deref()) {
             skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
             refused = refused.or(Some(no));
             continue;
+        }
+        if f.is_external() {
+            if let Err(no) = agent_own_mailbox_limit(row, caller) {
+                skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
+                refused = refused.or(Some(no));
+                continue;
+            }
+        }
+        // Resuming may close a loop that wasn't there when it was set.
+        if !f.is_external() && db(|c| store::same_box_loop(c, &row.address, &f.dest))? {
+            let no = fail(409, "forward_loop", format!("{} forwards back to {}, directly or through other mailboxes here, so resuming this would loop. Nothing changed", f.dest, row.address));
+            skipped.push(json!({ "to": f.dest, "why": no.hint, "code": no.code }));
+            refused = refused.or(Some(no));
+            continue;
+        }
+        // A person's resume of a sending hold makes it their forward: otherwise
+        // the next pass would pause it again.
+        if reason == store::P_AGENT_SEND_OFF {
+            db(|c| store::set_agent_ws(c, &f.id, None))?;
         }
         let (f, n) = changed(forward_sync::resume(&f.id, &caller.actor()))?;
         note = note.or(n);

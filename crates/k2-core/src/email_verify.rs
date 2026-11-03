@@ -287,16 +287,24 @@ pub fn mint_stop(conn: &Connection, address_id: &str, now: i64) -> Result<String
     Ok(stop)
 }
 
+/// [`open_for_notice`]'s error for an address that pressed Stop.
+pub const STOPPED: &str = "that address pressed Stop";
+
 /// Open a mailbox forward's address with no confirm (opt-out): reuse its
 /// live row, turn a request still pending from before opt-out `verified`
 /// (its confirm link stays readable: [`peek_any`]), or make a new row. Gives
 /// a new stop token for the notice email. Earlier stop tokens keep working.
-pub fn open_for_notice(conn: &Connection, subject_ref: &str, address: &str, requested_by: &str, now: i64) -> Result<(Verified, String), String> {
+pub fn open_for_notice(conn: &Connection, subject_ref: &str, address: &str, requested_by: &str, restart: bool, now: i64) -> Result<(Verified, String), String> {
     let subject_ref = subject_ref.trim();
     if subject_ref.is_empty() {
         return Err("no subject".to_string());
     }
     let address = normalize_address(address);
+    // A row verified here would clear a Stop. Only a person's explicit restart
+    // may: a Stop landing during a retry or a many-address add stays a Stop.
+    if !restart && is_stopped(conn, subject_ref, &address) {
+        return Err(STOPPED.to_string());
+    }
     let live = live_for(conn, PURPOSE_FORWARD, subject_ref, now)?;
     let id = match live.into_iter().find(|v| v.address == address) {
         Some(v) if v.is_verified() => v.id,
@@ -620,12 +628,12 @@ mod tests {
     #[test]
     fn a_forward_address_opens_with_no_confirm_and_a_working_stop() {
         let c = conn();
-        let (v, stop) = open_for_notice(&c, MB, " Me@Outside.Test ", "owner", 100).expect("open");
+        let (v, stop) = open_for_notice(&c, MB, " Me@Outside.Test ", "owner", false, 100).expect("open");
         assert_eq!((v.state.as_str(), v.address.as_str(), v.verified_at), (ST_VERIFIED, DEST, Some(100)));
         assert!(token_shape_ok(&stop, STOP_PREFIX));
         assert!(!is_stopped(&c, MB, DEST));
         // Opening again reuses the row and gives another stop token; both work.
-        let (again, stop2) = open_for_notice(&c, MB, DEST, "owner", 110).expect("again");
+        let (again, stop2) = open_for_notice(&c, MB, DEST, "owner", false, 110).expect("again");
         assert_eq!(again.id, v.id);
         assert_ne!(stop, stop2);
         assert_eq!(peek_stop(&c, &stop).expect("peek").expect("row").id, v.id);
@@ -638,13 +646,13 @@ mod tests {
     #[test]
     fn a_stop_lasts_past_the_purge_and_an_old_link_stops_a_chosen_again_address() {
         let c = conn();
-        let (v, old_stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        let (v, old_stop) = open_for_notice(&c, MB, DEST, "owner", false, 100).expect("open");
         super::stop(&c, &old_stop, 120).expect("stop");
         assert_eq!(purge_dead(&c, 10_000_000).expect("purge"), 0, "a forward's stop is never forgotten");
         assert!(is_stopped(&c, MB, DEST));
         assert!(peek_stop(&c, &old_stop).expect("peek").is_some(), "the old link still answers");
         // Someone chooses it again: a new row, no longer stopped.
-        let (again, _) = open_for_notice(&c, MB, DEST, "owner", 200).expect("again");
+        let (again, _) = open_for_notice(&c, MB, DEST, "owner", true, 200).expect("again");
         assert_ne!(again.id, v.id);
         assert!(!is_stopped(&c, MB, DEST));
         // The first notice's link stops the new row.
@@ -656,7 +664,7 @@ mod tests {
     #[test]
     fn a_stop_is_per_mailbox_and_a_person_notice_still_purges() {
         let c = conn();
-        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", false, 100).expect("open");
         super::stop(&c, &stop, 110).expect("stop");
         assert!(!is_stopped(&c, "other@brand.test", DEST), "another mailbox's forward isn't stopped");
         let i = issue(&c, PURPOSE_PERSON_NOTICE, "owner", DEST, "owner", 100).expect("issue");
@@ -668,7 +676,7 @@ mod tests {
     fn a_request_pending_from_before_opt_out_opens_and_its_old_link_reads() {
         let c = conn();
         let i = issue(&c, PURPOSE_FORWARD, MB, DEST, "owner", 1000).expect("issue");
-        let (v, stop) = open_for_notice(&c, MB, DEST, "owner", 1100).expect("open");
+        let (v, stop) = open_for_notice(&c, MB, DEST, "owner", false, 1100).expect("open");
         assert_eq!((v.id.as_str(), v.state.as_str()), (i.row.id.as_str(), ST_VERIFIED));
         assert_eq!(peek_any(&c, &i.token).expect("peek").expect("row").id, v.id, "the old link still names the row");
         assert!(peek(&c, &i.token, 1100).expect("peek").is_none(), "it isn't a confirm any more");
@@ -687,18 +695,31 @@ mod tests {
         assert!(is_stopped(&c, MB, DEST));
         issue(&c, PURPOSE_FORWARD, MB, DEST, "agent:x", 1200).expect("re-ask, as 0.46.7 allowed");
         assert!(is_stopped(&c, MB, DEST), "the pending request hides nothing");
-        let (v, _) = open_for_notice(&c, MB, DEST, "owner", 1300).expect("chosen again");
+        let (v, _) = open_for_notice(&c, MB, DEST, "owner", true, 1300).expect("chosen again");
         assert_eq!(v.state, ST_VERIFIED);
+        assert!(!is_stopped(&c, MB, DEST));
+    }
+
+    /// Re-review finding 8: a retry or a many-address add running while a Stop
+    /// lands used to verify a row and undo the Stop in the record.
+    #[test]
+    fn opening_for_a_notice_never_clears_a_stop_unless_someone_chooses_it() {
+        let c = conn();
+        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", false, 100).expect("open");
+        super::stop(&c, &stop, 110).expect("stop");
+        assert_eq!(open_for_notice(&c, MB, DEST, "agent:x", false, 120).expect_err("refused"), STOPPED);
+        assert!(is_stopped(&c, MB, DEST), "still stopped");
+        open_for_notice(&c, MB, DEST, "owner", true, 130).expect("chosen again");
         assert!(!is_stopped(&c, MB, DEST));
     }
 
     #[test]
     fn only_a_press_that_changed_something_says_so() {
         let c = conn();
-        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", 100).expect("open");
+        let (_, stop) = open_for_notice(&c, MB, DEST, "owner", false, 100).expect("open");
         assert!(stop_changed(&c, &stop, 110).expect("stop").expect("row").1);
         assert!(!stop_changed(&c, &stop, 120).expect("stop").expect("row").1, "the same press again");
-        let (_, gone) = open_for_notice(&c, MB, "other@outside.test", "owner", 100).expect("open");
+        let (_, gone) = open_for_notice(&c, MB, "other@outside.test", "owner", false, 100).expect("open");
         forget_stop(&c, &gone).expect("forget");
         assert!(peek_stop(&c, &gone).expect("peek").is_none());
     }

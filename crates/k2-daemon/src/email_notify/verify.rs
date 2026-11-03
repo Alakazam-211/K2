@@ -503,6 +503,16 @@ fn stop_rate_limited(token: &str) -> bool {
     if !(store::token_shape_ok(token, store::STOP_PREFIX) || store::token_shape_ok(token, store::CONFIRM_PREFIX)) {
         return false;
     }
+    // Only a link K2 issued takes a slot: anyone can invent well-shaped tokens,
+    // and each one would otherwise stay in this map.
+    let known = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::peek_stop(&conn, token).ok().flatten().is_some() || store::peek_any(&conn, token).ok().flatten().is_some()
+    };
+    if !known {
+        return false;
+    }
     let now = super::now();
     let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     let map = g.get_or_insert_with(HashMap::new);

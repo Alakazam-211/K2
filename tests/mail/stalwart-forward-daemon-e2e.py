@@ -15,7 +15,8 @@ keychain or a running daemon.
 
 Not covered here, because the daemon's background loops only run with K2's
 systemd unit up: the minute pass (rows waiting their turn, retries, the hourly
-summary) and the reconcile. The Rust tests cover those against fakes.
+summary) and the reconcile, so the hourly strip too. The Rust tests cover those
+against fakes; probe X15 checks that what the strip writes compiles on Stalwart.
 """
 
 import importlib.util
@@ -323,6 +324,25 @@ def main():
         ham(mid)
         time.sleep(6)
         check("E8 after unset nothing is forwarded", not sink.with_id(mid), json.dumps([m["rcpt"] for m in sink.with_id(mid)]))
+
+        # E10 audit-sieve sees a redirect in K2's own script with no row, by domain.
+        st, v = d.call("GET", "/cli/mail/sieve-audit")
+        check("E10 clean after unset", st == 200 and v["summary"]["k2ScriptRedirectsNoRow"] == 0, f"{st} {json.dumps(v)[:300]}")
+        blob, err = svc.upload(alice, b'# k2-forward\nredirect "hidden.person@outside.test";\n')
+        check("E10 setup: the blob", bool(blob), f"{err}")
+        n, g = svc.call("SieveScript/get", {"accountId": alice, "ids": None}, using=(CORE, SIEVE))
+        ours = [x["id"] for x in (g.get("list") or []) if x.get("name") == "k2"]
+        n, a = svc.call("SieveScript/set", {"accountId": alice, "update": {ours[0]: {"blobId": blob}}, "onSuccessActivateScript": ours[0]}, using=(CORE, SIEVE))
+        check("E10 setup: a K2-rendered script, no row", n == "SieveScript/set" and not a.get("notUpdated"), f"{n} {json.dumps(a)[:200]}")
+        st, v = d.call("GET", "/cli/mail/sieve-audit")
+        text = json.dumps(v)
+        check("E10 the old count says clean", st == 200 and v["summary"]["scriptsWithOutsideTargets"] == 0, text[:300])
+        check("E10 the new one doesn't", v["summary"]["k2ScriptRedirectsNoRow"] == 1, text[:300])
+        row = next((a for a in v.get("accounts") or [] if a.get("address") == alice_addr), {})
+        check("E10 listed on the account, by domain", [r.get("domain") for r in row.get("k2RedirectsNoRow") or []] == ["outside.test"], json.dumps(row)[:300])
+        check("E10 no local part, no script text", "hidden.person" not in text and "k2-forward" not in text, text[:300])
+        n, g = svc.call("SieveScript/get", {"accountId": alice, "ids": None}, using=(CORE, SIEVE))
+        check("E10 read-only: the script is still there", any(x.get("blobId") == blob or x.get("name") == "k2" for x in g.get("list") or []), json.dumps(g)[:200])
     finally:
         d.stop()
     print(f"== forward daemon e2e: {len(probe.FAILED)} failed check(s): {probe.FAILED} ==", flush=True)

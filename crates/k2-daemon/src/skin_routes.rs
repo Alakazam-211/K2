@@ -1573,6 +1573,28 @@ fn principal_json_with_generated(p: &skin::SkinPrincipal, generated: Option<&str
 }
 
 /// Delete one `login_lockouts` row. Body is only `ok`, `username`, `cleared`.
+/// A line in the record of every App `username` is on (`k2 app history <app>
+/// --users`).
+fn note_user_event(username: &str, event: &str, actor: &str, payload: serde_json::Value) {
+    let Ok(Some(p)) = principal_named(username) else { return };
+    note_user_event_on(&apps_of_principal(&p.id), event, actor, payload);
+}
+
+fn apps_of_principal(principal_id: &str) -> Vec<String> {
+    skin::list_grants()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|g| g.subject_kind == "principal" && g.subject_id == principal_id && g.kind == "app" && g.target_id != skin::HOST_APP_ID)
+        .map(|g| g.target_id)
+        .collect()
+}
+
+fn note_user_event_on(apps: &[String], event: &str, actor: &str, payload: serde_json::Value) {
+    for app in apps {
+        skin::guest_rooms::audit_user_event(app, event, actor, payload.clone());
+    }
+}
+
 pub fn handle_users_unlock(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -1590,6 +1612,8 @@ pub fn handle_users_unlock(body: &[u8], actor: &str) -> CliResponse {
     match skin::clear_login_lockout(username) {
         Ok((key, cleared)) => {
             k2_core::log_debug!("[skin] actor={actor} unlock {key} cleared={cleared}");
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app_user_unlocked", actor, format!("{key} cleared={cleared}"), "-", "-", "cli"));
+            note_user_event(username, "app_user_unlocked", actor, serde_json::json!({ "username": key, "cleared": cleared }));
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,
@@ -1616,11 +1640,13 @@ pub fn handle_users_remove(body: &[u8], actor: &str) -> CliResponse {
     }
     // app-read-state-v1: the guest's read state goes with them.
     let principal_id = skin::host_login_detail(username).ok().map(|d| d.principal_id);
+    let apps = principal_id.as_deref().map(apps_of_principal).unwrap_or_default();
     match skin::remove_principal_as(username, actor) {
         Ok(true) => {
             if let Some(id) = principal_id {
                 crate::read_routes::forget_guest(&id);
             }
+            note_user_event_on(&apps, "app_user_removed", actor, serde_json::json!({ "username": username }));
             k2_core::log_debug!("[skin] actor={actor} removed principal {username}");
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
         }

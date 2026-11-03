@@ -382,6 +382,8 @@ pub struct Released {
     pub tie: Tie,
     pub username: String,
     pub via: &'static str,
+    /// The Apps this login is on: each one's record gets the line.
+    pub apps: Vec<String>,
 }
 
 impl Released {
@@ -406,6 +408,14 @@ impl Released {
     /// rollback never leaves a line for something that didn't happen.
     pub fn audit(&self) {
         crate::auth_audit::record(&crate::auth_audit::AuditEvent::new(AUDIT_EVENT, &self.username, self.line(), "-", "-", "cli"));
+        for app in &self.apps {
+            super::guest_rooms::audit_user_event(
+                app,
+                AUDIT_EVENT,
+                &self.tie.set_by,
+                serde_json::json!({ "username": self.username, "via": self.via, "setUpBy": self.tie.set_by, "what": self.line() }),
+            );
+        }
     }
 }
 
@@ -424,7 +434,15 @@ pub(super) fn release_conn(conn: &Connection, principal_id: &str, via: &'static 
             let username: String = conn
                 .query_row("SELECT username FROM principals WHERE id = ?1", params![principal_id], |r| r.get(0))
                 .map_err(|e| format!("tie release (name): {e}"))?;
-            Some(Released { tie, username, via })
+            let mut st = conn
+                .prepare("SELECT target_id FROM grants WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = 'app' AND target_id != ?2")
+                .map_err(|e| format!("tie release (apps): {e}"))?;
+            let apps = st
+                .query_map(params![principal_id, HOST_APP_ID], |r| r.get::<_, String>(0))
+                .map_err(|e| format!("tie release (apps): {e}"))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| format!("tie release (apps): {e}"))?;
+            Some(Released { tie, username, via, apps })
         }
         None => None,
     };

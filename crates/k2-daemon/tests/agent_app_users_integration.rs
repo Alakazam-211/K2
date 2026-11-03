@@ -1190,7 +1190,7 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_a_signed_in_change_doesnt() 
 /// throttle per person across every pass, taken first), never returns a token, and a
 /// used App reset link ties nobody.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
+async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -1230,4 +1230,128 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties() {
     let r = reset_with(port, &token_in(&m[0].text_body), "app-reset-pass-1").await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(tie_of(&g).is_none(), "the person chose it: an App's reset ties nobody (Rosson 2026-11-03)");
+}
+
+/// 0.46.8: an agent runs its App's users end to end. It starts a reset (K2 mails
+/// the person, the agent never gets the link), takes a pending link back, clears a
+/// lockout, and reads what happened in the App's own record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_starts_a_reset_takes_it_back_clears_a_lockout_and_reads_the_record() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let ops = seed_ws(&env, &format!("ops{tag}"));
+    let shop_name = format!("shop{tag}");
+    let shop = app_row(&sales, &shop_name);
+    allow_manage(&sales, true);
+    allow_manage(&ops, true);
+    let agent = passport(&sales);
+    let from = seed_mail(&sales, &format!("rst{tag}.example.test"), "on");
+    set_front_door(port, &format!("https://door{tag}.example.test")).await;
+
+    let u = format!("u{tag}");
+    let email = format!("{u}@example.test");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "email": email, "password": "agent-set-pass-1" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let reasons = tie_of(&u).expect("tied").reasons;
+
+    // Start it: K2 mails the login's email from the App's address.
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((r.json()["delivered"].as_str(), r.json()["sentTo"].as_str()), (Some("sent"), Some(email.as_str())), "{}", r.body);
+    assert!(!r.body.contains("k2inv_"), "the agent never gets the link: {}", r.body);
+    let m = mails_to(&rec, &email);
+    assert_eq!(m.len(), 1);
+    assert_eq!(outbound_rows(&from).len(), 0, "ephemeral: not in the outbox the agent reads");
+    assert_eq!(tie_of(&u).expect("tied").reasons, reasons, "starting a reset ties nothing new");
+    assert!(invite_rows(&u).iter().any(|i| i.purpose == "reset"), "the App's reset, never the owner's link");
+
+    // Take it back: the link stops working.
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop, "revoke": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["revoked"], json!(1), "{}", r.body);
+    let r = reset_with(port, &token_in(&m[0].text_body), "too-late-pass-11").await;
+    assert_eq!(r.status, 401, "{}", r.body);
+    assert!(tie_of(&u).is_some());
+
+    // Again, used: released. Starting one on a released login doesn't tie it.
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m = mails_to(&rec, &email);
+    let r = reset_with(port, &token_in(&m[1].text_body), "their-own-pass-1").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u).is_none(), "the person chose it");
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u).is_none(), "a reset going out doesn't tie");
+
+    // The link's address and the link itself stay the owner's to choose.
+    for body in [json!({ "username": u, "to": "other@example.test" }), json!({ "username": u, "code": true }), json!({ "username": u, "from": from })] {
+        let r = post(port, "/cli/skin/users/reset-link", &agent, body).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    }
+    // Another workspace's agent, a stranger and a box login.
+    let other = passport(&ops);
+    let r = post(port, "/cli/skin/users/reset-link", &other, json!({ "username": u })).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": "nobody-here" })).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "one answer: {}", r.body);
+    let bx = format!("bx{tag}");
+    owner_post(port, "/cli/skin/users", json!({ "username": bx, "email": format!("{bx}@example.test") })).await;
+    owner_post(port, "/cli/skin/users", json!({ "username": bx, "app": shop })).await;
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": bx, "app": shop })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+
+    // The App-users switch gates it.
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&sales.id, false).unwrap();
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": u, "app": shop })).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&sales.id, true).unwrap();
+
+    // A lockout: cleared by the App's own agent, audited, no one else's.
+    let bad = json!({ "username": u, "password": "wrong-wrong-wrong", "app": shop });
+    let mut locked = false;
+    for _ in 0..20 {
+        if login(port, bad.clone()).await.status == 429 {
+            locked = true;
+            break;
+        }
+    }
+    assert!(locked, "the wrong passwords lock the login");
+    let r = post(port, "/cli/skin/users/unlock", &other, json!({ "username": u })).await;
+    assert_eq!(r.status, 403, "another workspace's agent: {}", r.body);
+    let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["cleared"], json!(true), "{}", r.body);
+    let r = login(port, json!({ "username": u, "password": "their-own-pass-1", "app": shop })).await;
+    assert_eq!(r.status, 200, "signs in again: {}", r.body);
+    let s = r.json()["token"].as_str().unwrap().to_string();
+    assert!(k2_core::auth_audit::read_all().unwrap().iter().any(|l| l["event"] == "app_user_unlocked" && l["outcome"].as_str().unwrap().contains(&u)), "audited");
+
+    // Sessions ended and a removal, then the App's own record.
+    let r = post(port, "/cli/skin/users/sessions/revoke", &agent, json!({ "app": shop, "user": u, "all": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(policy_of(&s).is_none());
+    let r = post(port, "/cli/skin/users/remove", &agent, json!({ "username": u })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(port, "/cli/app/history", &agent, &format!("app={shop_name}&users=1&limit=50")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let events: Vec<String> = r.json()["audit"].as_array().expect("rows").iter().map(|x| x["event"].as_str().unwrap().to_string()).collect();
+    for want in [
+        "app_user_reset_started",
+        "app_user_links_revoked",
+        "app_user_tie_released",
+        "app_user_unlocked",
+        "app_user_sessions_ended",
+        "app_user_removed",
+    ] {
+        assert!(events.iter().any(|e| e == want), "{want} in {events:?}");
+    }
+    let released = r.json()["audit"].as_array().unwrap().iter().find(|x| x["event"] == "app_user_tie_released").cloned().unwrap();
+    assert!(released["payload"]["what"].as_str().unwrap().contains("the person chose this password"), "{released}");
+    let r = get(port, "/cli/app/history", &other, &format!("app={shop_name}&users=1")).await;
+    assert_ne!(r.status, 200, "another workspace's agent can't read it: {}", r.body);
 }

@@ -2201,6 +2201,21 @@ fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
         let rows = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_GARDEN_WIDGET, w, limit).map_err(db_err)?;
         return Ok(json!({ "ok": true, "widget": w, "audit": rows }));
     }
+    // `users=1`: what happened to the App's people, not its deploys. Any App with
+    // people, a `--cmd` one too; an agent only its own workspace's.
+    if params.get("users").is_some_and(|u| u == "1") {
+        let t = super::grace::target(who, params.get("app").map(String::as_str))?;
+        let subject = k2_core::skin::guest_rooms::audit_subject(&t.service_id);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let rows: Vec<_> = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_APP, &subject, 1000)
+            .map_err(db_err)?
+            .into_iter()
+            .filter(|r| r.event.starts_with("app_user_") || r.event.starts_with("guest_rooms"))
+            .take(limit)
+            .collect();
+        return Ok(json!({ "ok": true, "app": t.name, "audit": rows, "users": true }));
+    }
     let app = app_for(who, params.get("app").map(String::as_str))?;
     let db = k2_core::db::shared();
     let conn = db.lock();

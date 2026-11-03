@@ -8133,6 +8133,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         choose a new one at their next sign-in (no session until then),
                                         except an agent's own test guest (k2 app user add <app> <name> --test)
   k2 app user unlock <username> [--json]
+                                        Clear K2's sign-in lockout (the owner, an admin for App-only users,
+                                        or an agent with the App-users switch for a login on its own App; audited)
                                         Clear an app guest login lock (does not change the password)
   k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
                                         A person's chat (their chat account, k2:principal:<id>); no scope = show it.
@@ -8598,6 +8600,9 @@ See and run it:
                                        each --cmd service.
   k2 app history <app-id>              Deploys: who, from, to, why, result, and
                                        which you can still roll back to.
+  k2 app history <app-id> --users      What happened to its people: a login released, a
+                                       reset started, a link taken back, a lockout cleared,
+                                       sessions ended, a login removed, rooms changed.
   k2 app history --widget <name>       A Garden widget's version history.
   k2 app logs <app-id> [--deployment D] [--tail N] [--follow]
   k2 app errors <app-id> [--since 1h] [--kind crash|health|build|deploy] [--json]
@@ -9973,11 +9978,12 @@ print("  audit     %s" % ("chain verifies (%s rows)" % au.get("rows") if au.get(
 
 # k2 app history <app-id> [--limit N] [--json]   |   k2 app history --widget <name>
 cmd_app_history() {
-    local app="" widget="" limit="" json_out=0
+    local app="" widget="" limit="" json_out=0 users=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --widget) widget="${2:-}"; shift 2 ;;
             --limit) limit="${2:-}"; shift 2 ;;
+            --users) users=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
@@ -9986,10 +9992,11 @@ cmd_app_history() {
     done
     local q
     if [ -n "$widget" ]; then q="widget=$(urlencode "$widget")"; else
-        [ -z "$app" ] && { echo "usage: k2 app history <app-id> [--limit N]  |  k2 app history --widget <name>" >&2; exit 2; }
+        [ -z "$app" ] && { echo "usage: k2 app history <app-id> [--users] [--limit N]  |  k2 app history --widget <name>" >&2; exit 2; }
         q="app=$(urlencode "$app")"
     fi
     [ -n "$limit" ] && q="${q}&limit=$(urlencode "$limit")"
+    [ "$users" = 1 ] && q="${q}&users=1"
     _compute_call GET /cli/app/history "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -9997,6 +10004,12 @@ import json, sys, time
 v = json.load(sys.stdin)
 def t(x):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(x)) if x else "-"
+if v.get("users"):
+    for r in v.get("audit", []):
+        print("%s  %-26s %-20s %s" % (t(r["at"]), r["event"], r["actor"], json.dumps(r["payload"], sort_keys=True)))
+    if not v.get("audit"):
+        print("Nothing about this App\u0027s people yet.")
+    sys.exit(0)
 if "widget" in v:
     for r in v.get("audit", []):
         print("%s  %-10s %-12s %s" % (t(r["at"]), r["event"], r["actor"], json.dumps(r["payload"], sort_keys=True)))
@@ -50464,6 +50477,10 @@ PER-APP LOGINS (0.45.5)
   it: until a form posts straight to K2, the App's server could still see it.
   The auth audit log says which path released it and who set the login up.
   An agent setting the password or email ties them again; sending a link doesn't.
+  An agent starts a reset with k2 app user reset <u> --app <app> (K2 mails the
+  email on the login, the agent never sees the link; --revoke takes it back),
+  clears a lockout with k2 app user unlock <u>, and reads what happened with
+  k2 app history <app> --users.
   Never released this way: a box login (only your reset), an agent's own login,
   a test guest, or a password change while signed in. Settings → User Access
   shows "Waiting for reset"; K2 also posts one card (its answers point to your

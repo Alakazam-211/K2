@@ -723,6 +723,9 @@ pub fn handle_owner_sessions_revoke(body: &[u8], actor: &str) -> CliResponse {
     };
     let by = if crate::skin_routes::actor_is_agent(actor) { actor } else { "the owner" };
     audit("app_user_session_revoked", actor, &format!("{} app={app} ended={ended} by {by}", p.username));
+    if app != skin::HOST_APP_ID {
+        skin::guest_rooms::audit_user_event(&app, "app_user_sessions_ended", actor, json!({ "username": p.username, "ended": ended }));
+    }
     CliResponse::ok_json(json!({ "ok": true, "username": p.username, "app": app, "ended": ended }).to_string())
 }
 

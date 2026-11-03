@@ -684,7 +684,7 @@ describe('SkinAccessSection', () => {
 
   it('GH#72: the .k2 folder opt-in shows only under files:write, is off by default, and drops with it', async () => {
     expect(SKIN_AGENT_CONFIG_CAP).toBe('files:agentconfig')
-    expect(SKIN_AGENT_CONFIG_LABEL).toBe("Also allow writing the agent's .k2 folder (not recommended)")
+    expect(SKIN_AGENT_CONFIG_LABEL).toBe("Also allow writing the agent's .k2 folder and root instruction files (not recommended)")
     expect(SKIN_CAP_CHOICES as readonly string[]).not.toContain('files:agentconfig')
     expect(DEFAULT_SKIN_CAPS as readonly string[]).not.toContain('files:agentconfig')
     expect([...toggleSkinCap(new Set(['files:write', 'files:agentconfig']), 'files:write', false)]).toEqual([])
@@ -988,7 +988,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'thread:read': 'Read the Thread',
       'thread:post': 'Post to the Thread',
       'files:read': 'Read files (also shows heartbeat instructions)',
-      'files:write': "Write files (not the agent's .k2 folder)",
+      'files:write': "Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.md, GEMINI.md)",
       'tickets:read': 'Read tickets and get live ticket updates',
       'tickets:post': 'Open, answer, assign and set status on tickets',
       'wiki:read': 'Read the wiki',

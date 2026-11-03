@@ -363,7 +363,7 @@ describe('TUWA10: one cap table', () => {
       'thread:read': 'Read the Thread',
       'thread:post': 'Post to the Thread',
       'files:read': 'Read files (also shows heartbeat instructions)',
-      'files:write': "Write files (not the agent's .k2 folder)",
+      'files:write': "Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.md, GEMINI.md)",
       'tickets:read': 'Read tickets and get live ticket updates',
       'tickets:post': 'Open, answer, assign and set status on tickets',
       'wiki:read': 'Read the wiki',
@@ -374,7 +374,7 @@ describe('TUWA10: one cap table', () => {
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",
       'agent:handle': "Change the agent's handle (its address)",
-      'files:agentconfig': "Also allow writing the agent's .k2 folder (not recommended)",
+      'files:agentconfig': "Also allow writing the agent's .k2 folder and root instruction files (not recommended)",
       // RS-A15: an owner grant to the App itself, never a role's or a pass's cap.
       'guests:rooms': "Set its own guests' rooms (an owner grant per App, never a guest's)",
       'room:members': 'See who has access to the room',

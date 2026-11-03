@@ -227,7 +227,7 @@ async fn an_approved_room_waits_for_the_reset_and_the_answer_says_so() {
     assert_eq!((r.status, r.code()), (403, "skin_room".to_string()), "{}", r.body);
     let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
     assert!(hint.contains("Waiting for reset (agent-tied)") && hint.contains(&b.ops.handle), "{hint}");
-    assert!(hint.contains(&format!("apps.user-password-reset user={u} mode=link")), "{hint}");
+    assert!(hint.contains(&format!("apps.user-password-reset user={u} app=")) && hint.contains("mode=link --why"), "{hint}");
     let r2 = bearer(port, "GET", "/cli/thread?addr=no-such-room", &s, None).await;
     assert_eq!(r2.body, r.body, "the answer never says which rooms exist");
 

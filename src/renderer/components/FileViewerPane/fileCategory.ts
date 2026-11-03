@@ -20,6 +20,7 @@ export type FileCategory =
   | 'diagram'
   | 'cad2d'
   | 'model3d'
+  | 'board'
   | 'binary'
   | 'text'
 
@@ -59,6 +60,8 @@ export const CAD2D_EXTS = ['.dxf']
  * object file opens the 3D viewer and fails to parse with a clear error.
  */
 export const MODEL3D_EXTS = ['.stl', '.obj', '.3mf', '.ply', '.glb', '.gltf']
+/** A Board file (`.k5board`): a zip K2 reads and writes through the format's codec, never as text. */
+export const BOARD_EXTS = ['.k5board']
 export const BINARY_EXTS = [
   '.wasm',
   '.bin',
@@ -102,6 +105,7 @@ export function getFileCategory(filePath: string): FileCategory {
   if (DIAGRAM_EXTS.includes(ext)) return 'diagram'
   if (CAD2D_EXTS.includes(ext)) return 'cad2d'
   if (MODEL3D_EXTS.includes(ext)) return 'model3d'
+  if (BOARD_EXTS.includes(ext)) return 'board'
   if (BINARY_EXTS.includes(ext)) return 'binary'
   return 'text'
 }
@@ -119,6 +123,7 @@ export function getDefaultViewMode(category: FileCategory): ViewMode {
     category === 'diagram' ||
     category === 'cad2d' ||
     category === 'model3d' ||
+    category === 'board' ||
     category === 'binary'
   ) {
     return 'rendered'
@@ -136,6 +141,7 @@ export function isBinaryPreviewCategory(category: FileCategory): boolean {
     category === 'video' ||
     category === 'zip' ||
     category === 'model3d' ||
+    category === 'board' ||
     category === 'binary'
   )
 }

@@ -568,6 +568,29 @@ ok "another workspace without a share: exit 3 doc_not_shared"
 cli agent "$B" doc cat no-such.md
 want_rc 4 "missing file"
 ok "no such file: exit 4"
+
+# A Board file (.k5board) is never a live doc: a text or tier-0 write would put
+# raw bytes on disk past the format's codec. It's refused by name, whatever the
+# bytes, and the file's bytes stay exactly as they were.
+BOARD_BYTES='PK this is not a real board, and the refusal must not care'
+for name in plan.k5board PLAN2.K5BOARD Makefile.k5board .env.k5board; do
+    printf '%s' "$BOARD_BYTES" > "$B/$name"
+    owner GET /cli/docs/read "" "workspace=$B&path=$name"; want 422 "$name read"; code_is board_file "$name read"
+    owner POST /cli/docs/open "{\"workspace\":\"$B\",\"path\":\"$name\"}"; want 422 "$name open"; code_is board_file "$name open"
+    owner POST /cli/docs/write "{\"workspace\":\"$B\",\"path\":\"$name\",\"text\":\"over the top\"}"; want 422 "$name write"; code_is board_file "$name write"
+    [ "$(cat "$B/$name")" = "$BOARD_BYTES" ] || fail "$name: the bytes changed"
+    owner GET /cli/docs/cores "" "path=$name"; want 200 "$name cores"
+    jok "$BODY" 'j["file"]["core"] == "board" and j["file"]["liveView"] == False' "$name routes to the board row, with no Live view"
+done
+cli agent "$B" doc cat plan.k5board
+want_rc 4 "k2 doc cat of a board"
+has "$ERR" "board_file" "k2 doc cat of a board"
+printf 'x' > "$B/raw.bin"
+cli agent "$B" doc mv raw.bin raw.k5board
+want_rc 4 "k2 doc mv onto a board name"
+has "$ERR" "board_file" "k2 doc mv onto a board name"
+[ -f "$B/raw.bin" ] && [ ! -e "$B/raw.k5board" ] || fail "mv onto a board name moved the file"
+ok "a .k5board is refused board_file by every k2 doc door (exit 4), in any spelling, and its bytes don't change"
 cli owner "$WORK" doc status
 want_rc 0 "pool status"
 has "$OUT" "disk sync on" "pool status"

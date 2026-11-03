@@ -502,7 +502,8 @@ pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
     let Some(p) = path.map(str::trim).filter(|p| !p.is_empty()) else { return r };
     let Ok(mut v) = serde_json::from_str::<Value>(&r.body) else { return r };
     let tier = Tier::of(p);
-    let core = core_of(tier);
+    // A board is `Tier::Blob` to the docs routes, and its own row here.
+    let core = if super::target::is_board_file(p) { docs_cores::BOARD } else { core_of(tier) };
     v["file"] = json!({ "core": core, "on": is_on(core), "liveView": tier != Tier::Blob });
     CliResponse { body: v.to_string(), ..r }
 }
@@ -809,6 +810,9 @@ pub(crate) mod tests {
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
             assert_eq!(file("src/main.rs"), json!({"core": "text", "on": false, "liveView": true}));
             assert_eq!(file("photo.png"), json!({"core": "any-file", "on": false, "liveView": false}));
+            for board in ["plan.k5board", "a/b/X.K5BOARD", "Makefile.k5board", ".env.k5board"] {
+                assert_eq!(file(board), json!({"core": "board", "on": false, "liveView": false}), "{board}");
+            }
             let none: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some("  ")).body).expect("json");
             assert!(none.get("file").is_none(), "{none}");
             all_off();

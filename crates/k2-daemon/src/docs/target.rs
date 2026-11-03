@@ -37,6 +37,13 @@ use std::path::{Path, PathBuf};
 
 use k2_mpc_base::store::DocKey;
 
+/// A Board file, by its name alone (any case, whatever comes before it).
+pub fn is_board_file(rel: &str) -> bool {
+    const EXT: &[u8] = b".k5board";
+    let b = rel.as_bytes();
+    b.len() >= EXT.len() && b[b.len() - EXT.len()..].eq_ignore_ascii_case(EXT)
+}
+
 /// How much of the kit a file gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -52,7 +59,11 @@ pub enum Tier {
 impl Tier {
     /// The tier a workspace-relative path gets (by name only).
     pub fn of(rel: &str) -> Tier {
-        if k2_mpc_markdown::is_markdown_path(rel) {
+        // First: `.env.k5board` and `Makefile.k5board` match the text pack's
+        // name prefixes, and a board is a zip, never text.
+        if is_board_file(rel) {
+            Tier::Blob
+        } else if k2_mpc_markdown::is_markdown_path(rel) {
             Tier::Markdown
         } else if let Some(pack) = k2_mpc_text::TextPack::for_path(rel) {
             Tier::Text(pack.family())
@@ -132,6 +143,12 @@ impl Refusal {
     }
     fn declined(code: &'static str, message: impl Into<String>) -> Self {
         Refusal { status: "422 Unprocessable Entity", code, message: message.into() }
+    }
+    /// A Board file isn't a live doc: a text or tier-0 write would put raw
+    /// bytes on disk past the format's codec, so `k2 doc` never opens one.
+    /// [`share_rel`] still takes it (a share names a file, it opens nothing).
+    fn board_file(rel: &str) -> Self {
+        Refusal::declined("board_file", format!("{rel} is a Board file; k2 doc doesn't read or change Board files"))
     }
 }
 
@@ -340,6 +357,9 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     let parent = abs.parent().and_then(|p| p.canonicalize().ok()).ok_or_else(|| Refusal::bad("path_escapes", "bad folder"))?;
     let abs = parent.join(abs.file_name().unwrap_or_default());
     let rel = rel_string(&t.root, &abs)?;
+    if is_board_file(&rel) {
+        return Err(Refusal::board_file(&rel));
+    }
     if !Tier::of(&rel).same_kind(t.tier) {
         return Err(Refusal::bad(
             "tier_change",
@@ -471,6 +491,9 @@ pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     }
     let rel = rel_string(&root, &abs)?;
     deny(&rel, &link, &abs)?;
+    if is_board_file(&rel) {
+        return Err(Refusal::board_file(&rel));
+    }
     let tier = Tier::of(&rel);
     size_cap(&rel, meta.len(), super::blob_max_bytes())?;
     Ok(Target { project_id, root, rel, abs, tier })
@@ -507,6 +530,38 @@ mod tests {
         assert!(is_vault(".k2/vault"));
         assert!(is_vault(".k2/VAULT/x.md"));
         assert!(!is_vault(".k2/vaulted.md"));
+    }
+
+    #[test]
+    fn a_board_file_is_blob_by_any_spelling_and_nothing_else_is() {
+        for name in ["plan.k5board", "a/b/plan.k5board", "X.K5BOARD", "Makefile.k5board", ".env.k5board", ".k5board", "a.md.k5board"] {
+            assert!(is_board_file(name), "{name}");
+            assert_eq!(Tier::of(name), Tier::Blob, "{name}");
+        }
+        for name in ["plan.k5board.md", "k5board", "plan.k5boardx", "plank5board", "é.md"] {
+            assert!(!is_board_file(name), "{name}");
+        }
+        assert_eq!(Tier::of("plan.k5board.md"), Tier::Markdown);
+    }
+
+    #[test]
+    fn a_share_can_name_a_board_file_and_the_deny_list_stays_about_paths() {
+        let d = tmp();
+        let p = d.join("plan.k5board");
+        std::fs::write(&p, b"PK").expect("write");
+        assert_eq!(deny("plan.k5board", &p, &p), Ok(()));
+        let root = d.to_string_lossy().to_string();
+        assert_eq!(share_rel(&root, "plan.k5board", true).expect("a share can name one"), ("plan.k5board".to_string(), false));
+    }
+
+    #[test]
+    fn a_doc_cant_be_moved_onto_a_board_name() {
+        let d = tmp();
+        std::fs::write(d.join("a.bin"), b"x").expect("write");
+        let t = Target { project_id: "p".into(), root: d.clone(), rel: "a.bin".into(), abs: d.join("a.bin"), tier: Tier::Blob };
+        let e = resolve_new(&t, "a.k5board").expect_err("a Blob-tier file named as a board");
+        assert_eq!(e.code, "board_file");
+        assert_eq!(e.status, "422 Unprocessable Entity");
     }
 
     fn tmp() -> PathBuf {

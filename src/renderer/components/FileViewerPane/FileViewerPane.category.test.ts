@@ -6,6 +6,18 @@ import {
   supportsViewToggle,
 } from './fileCategory'
 
+describe('getFileCategory: Board files', () => {
+  it('classifies .k5board in any case and with any stem, never as text', () => {
+    for (const p of ['/t/a.k5board', '/t/A.K5BOARD', '/t/Makefile.k5board', '/t/.env.k5board', '/t/a.md.k5board']) {
+      expect(getFileCategory(p)).toBe('board')
+    }
+    expect(getFileCategory('/t/a.k5board.md')).toBe('markdown')
+    expect(getDefaultViewMode('board')).toBe('rendered')
+    expect(isBinaryPreviewCategory('board')).toBe(true)
+    expect(supportsViewToggle('board')).toBe(false)
+  })
+})
+
 describe('getFileCategory — Phase A', () => {
   it('classifies images including heic/avif/tiff', () => {
     expect(getFileCategory('/t/a.png')).toBe('image')

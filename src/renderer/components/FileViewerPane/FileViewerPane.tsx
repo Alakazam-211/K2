@@ -37,6 +37,7 @@ import { HighlightedCodeBlock } from './CodeHighlighter'
 import { DiffViewer } from '@/components/DiffViewer/DiffViewer'
 import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
+import { BoardFileCard } from './BoardFileCard'
 import { ViewerNote } from './ViewerNote'
 import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
 import {
@@ -222,6 +223,11 @@ export function FileViewerPane(props: FileViewerPaneProps): React.JSX.Element {
   // Diff mode — render DiffViewer instead of editor
   if (mode === 'diff') {
     return <DiffViewer filePath={filePath} className="h-full" />
+  }
+  // One routing point for every door that opens a file: a Board file never
+  // reaches the text read, poll, save or Live view below.
+  if (getFileCategory(filePath) === 'board') {
+    return <BoardFileCard filePath={filePath} />
   }
 
   return (

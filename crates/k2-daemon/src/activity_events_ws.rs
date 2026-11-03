@@ -645,6 +645,10 @@ pub async fn serve_activity_events_connection(
     let mut recheck = crate::socket_access::tick();
 
     let mut skin_gate = crate::socket_access::SkinGate::default();
+    let mut access = match skin_raw.clone() {
+        Some(raw) => crate::access_live::PassWatch::open(link.clone(), raw).await,
+        None => crate::access_live::PassWatch::off(),
+    };
     // An App pass, as it is now: its flags follow, a lost cap stops that kind
     // of frame, and a socket with none of its caps left ends.
     macro_rules! guest_apply_or_close {
@@ -724,6 +728,10 @@ pub async fn serve_activity_events_connection(
             std::time::Duration::from_millis(wait.clamp(0, COUNTS_THROTTLE_MS) as u64)
         });
         tokio::select! {
+            _ = access.changed() => {
+                let (now, generation) = access.answer().room_access(&project_id, &SOCKET_CAPS);
+                guest_apply_or_close!(now, generation);
+            }
             _ = recheck.tick() => {
                 if login.as_ref().is_some_and(|l| !l.valid_now()) {
                     let _ = write.send(crate::presence::session_revoked_close_message()).await;
@@ -968,6 +976,8 @@ mod tests {
             room_policy,
             app: "host".to_string(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 

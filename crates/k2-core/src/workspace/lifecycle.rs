@@ -331,6 +331,7 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
         rusqlite::params![project_id],
     )
     .map_err(|e| format!("Failed to delete project: {}", e))?;
+    crate::skin::access_live::hint();
 
     for gid in &member_groups {
         emit(

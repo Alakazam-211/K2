@@ -120,6 +120,8 @@ fn guest(app: &str, rooms: &[(&str, &[&str])]) -> SkinPass {
         room_policy,
         app: app.into(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     }
 }
 

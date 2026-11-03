@@ -975,6 +975,8 @@ mod tests {
             room_policy: Default::default(),
             app: "host".to_string(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 

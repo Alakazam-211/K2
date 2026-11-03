@@ -106,6 +106,23 @@ fn holds_in_every(pass: &SkinPass, rooms: &[String], cap: &str) -> bool {
     !rooms.is_empty() && rooms.iter().all(|r| pass.has_cap_in_room(r, cap))
 }
 
+/// May this pass read a project with these member rooms? (The hub's walk: one read
+/// of the projects, for every open pass.)
+pub(crate) fn holds_project(pass: &SkinPass, rooms: &[String]) -> bool {
+    holds_in_every(pass, rooms, CAP_THREAD_READ)
+}
+
+/// Every project, with its member rooms.
+pub(crate) fn all_projects() -> Result<Vec<(String, Vec<String>)>, String> {
+    project_groups::list_groups()?
+        .into_iter()
+        .map(|g| {
+            let rooms = member_rooms(&g)?;
+            Ok((g.id, rooms))
+        })
+        .collect()
+}
+
 /// The member rooms (workspace ids) of a project, oldest-joined first.
 fn member_rooms(group: &ProjectGroup) -> Result<Vec<String>, String> {
     match &group.member_workspace_ids {
@@ -576,6 +593,9 @@ pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<Str
     let mut recheck = crate::socket_access::tick();
     // A link's context is task-local: captured here for the blocking checks.
     let link = crate::apps::gateway::current();
+    // The hub says at once when this pass's answer changes, a project's members
+    // included.
+    let mut access = crate::access_live::PassWatch::open(link.clone(), token.clone()).await;
     macro_rules! access_now {
         () => {{
             let (l, t, g) = (link.clone(), token.clone(), group_id.clone());
@@ -588,6 +608,15 @@ pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<Str
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
+                }
+            }
+            _ = access.changed() => {
+                match access_now!() {
+                    crate::socket_access::RoomAccess::Still(_) => {}
+                    end => {
+                        let _ = write.send(end.close_message()).await;
+                        break;
+                    }
                 }
             }
             _ = recheck.tick() => {

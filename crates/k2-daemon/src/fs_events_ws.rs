@@ -168,8 +168,13 @@ async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
 /// An unreadable folder list is as good as no `files:read` (fail closed, as at
 /// the door).
 fn files_scope_now(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str) -> Result<k2_core::skin::RoomPathScope, crate::socket_access::RoomAccess> {
-    use crate::socket_access::{room_access, RoomAccess};
-    match room_access(link, raw, room, &[crate::skin_routes::FILES_READ]) {
+    files_scope_of(crate::socket_access::room_access(link, raw, room, &[crate::skin_routes::FILES_READ]), room)
+}
+
+/// The folders under an answer already in hand.
+fn files_scope_of(access: crate::socket_access::RoomAccess, room: &str) -> Result<k2_core::skin::RoomPathScope, crate::socket_access::RoomAccess> {
+    use crate::socket_access::RoomAccess;
+    match access {
         RoomAccess::Still(pass) => pass.path_scope(room).map_err(|e| {
             log_debug!("[daemon/fs_events_ws] path scope unreadable: {e}");
             RoomAccess::Lost
@@ -267,6 +272,10 @@ pub async fn serve_fs_events_connection(
     // socket.
     let link = crate::apps::gateway::current();
     let mut skin_gate = crate::socket_access::SkinGate::default();
+    let mut access = match skin_raw.clone() {
+        Some(raw) => crate::access_live::PassWatch::open(link.clone(), raw).await,
+        None => crate::access_live::PassWatch::off(),
+    };
     macro_rules! scope_now_or_close {
         () => {
             if let Some(raw) = skin_raw.clone() {
@@ -291,6 +300,19 @@ pub async fn serve_fs_events_connection(
 
     loop {
         tokio::select! {
+            _ = access.changed() => {
+                let (now, generation) = access.answer().room_access(&project_id, &[crate::skin_routes::FILES_READ]);
+                match files_scope_of(now, &project_id) {
+                    Ok(fresh) => {
+                        scope = Some(fresh);
+                        skin_gate.settled(generation);
+                    }
+                    Err(end) => {
+                        let _ = write.send(end.close_message()).await;
+                        break;
+                    }
+                }
+            }
             _ = recheck.tick() => {
                 if login.as_ref().is_some_and(|l| !l.valid_now()) {
                     let _ = write.send(crate::presence::session_revoked_close_message()).await;
@@ -475,6 +497,8 @@ mod tests {
             room_policy,
             app: "host".to_string(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 

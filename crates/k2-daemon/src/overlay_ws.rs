@@ -360,8 +360,13 @@ pub(crate) enum GuestNow {
 }
 
 pub(crate) fn guest_now(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str, conversation: &str) -> GuestNow {
-    use crate::socket_access::{room_access, RoomAccess};
-    let pass = match room_access(link, raw, room, &[crate::skin_routes::THREAD_READ]) {
+    guest_now_of(crate::socket_access::room_access(link, raw, room, &[crate::skin_routes::THREAD_READ]), room, conversation)
+}
+
+/// [`guest_now`] under an answer already in hand. Still reads the room's pin.
+fn guest_now_of(access: crate::socket_access::RoomAccess, room: &str, conversation: &str) -> GuestNow {
+    use crate::socket_access::RoomAccess;
+    let pass = match access {
         RoomAccess::Still(p) => p,
         other => return GuestNow::Close(other.close_message()),
     };
@@ -395,6 +400,20 @@ impl GuestProbe {
                 GuestNow::Close(Message::Close(None))
             });
         // A held frame asks again next time: the Chat may be back.
+        if matches!(now, GuestNow::Send(_)) {
+            self.gate.settled(generation);
+        }
+        now
+    }
+
+    /// [`Self::now`] under the hub's answer: no resolve.
+    async fn answered(&mut self, answer: crate::access_live::Answer) -> GuestNow {
+        let (room, conversation) = (self.room.clone(), self.conversation.clone());
+        let (access, generation) = answer.room_access(&room, &[crate::skin_routes::THREAD_READ]);
+        let now = tokio::task::spawn_blocking(move || guest_now_of(access, &room, &conversation)).await.unwrap_or_else(|e| {
+            log_debug!("[daemon/overlay_ws] guest check panicked: {e}");
+            GuestNow::Close(Message::Close(None))
+        });
         if matches!(now, GuestNow::Send(_)) {
             self.gate.settled(generation);
         }
@@ -789,6 +808,10 @@ pub async fn serve_overlay_events_connection(
         }),
         _ => None,
     };
+    let mut access = match skin_raw.clone() {
+        Some(raw) => crate::access_live::PassWatch::open(link.clone(), raw).await,
+        None => crate::access_live::PassWatch::off(),
+    };
 
     loop {
         tokio::select! {
@@ -798,6 +821,23 @@ pub async fn serve_overlay_events_connection(
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
+                }
+            }
+            _ = access.changed() => {
+                let answer = access.answer();
+                if let Some(probe) = probe.as_mut() {
+                    match probe.answered(answer).await {
+                        GuestNow::Send(fresh) => {
+                            if let Some(g) = guest_wire.as_mut() {
+                                g.pass = fresh;
+                            }
+                        }
+                        GuestNow::Hold => {}
+                        GuestNow::Close(m) => {
+                            let _ = write.send(m).await;
+                            break;
+                        }
+                    }
                 }
             }
             _ = recheck.tick() => {
@@ -1372,6 +1412,8 @@ mod tests {
             room_policy: k2_core::skin::RoomPolicy::new(),
             app: String::new(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         };
         let guest = GuestWire { pass, project_id: "p".into(), root: None, scrub: Default::default() };
         let g: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], Some(&guest), &crate::permission::view::Seen::new(k2_core::permission::card::Viewer::Guest { app: None }, 0))).expect("json");

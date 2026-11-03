@@ -596,6 +596,8 @@ impl Project {
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
         conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
+        // A room whose agent is gone isn't on anyone's `me.get` any more.
+        crate::skin::access_live::hint();
         Ok(())
     }
 

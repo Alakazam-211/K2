@@ -79,7 +79,7 @@ parking_lot = "0.12"
 
 # DB layer (migrations live in crates/k2so-core/drizzle_sql/, loaded via
 # include_str!). Bundled SQLite so every platform ships the same version.
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "hooks"] }
 
 # Overlay threads (prd-overlay-threads-v1 S1) — daemon-owned document
 # store under ~/.k2/k2-threads.redb. Pure Rust, MIT/Apache-2.0.

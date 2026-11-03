@@ -309,6 +309,8 @@ fn room_view_caps(project_id: &str, caps: Vec<String>) -> SkinPass {
         room_policy,
         app: String::new(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     }
 }
 

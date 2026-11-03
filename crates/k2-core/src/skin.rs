@@ -84,6 +84,10 @@ pub const SKIN_SCHEMA_VERSION: i64 = 8;
 /// Agent ties and the tied user's ceiling (agent-app-users, 0.46.4).
 #[path = "skin_ties.rs"]
 pub mod ties;
+
+/// Live access: the update hook, the generation, the listener (0.46.8).
+#[path = "skin_access_live.rs"]
+pub mod access_live;
 /// One-time set-password links: invites, App resets, owner resets
 /// (agent-app-users, 0.46.4).
 #[path = "skin_invites.rs"]
@@ -1228,6 +1232,12 @@ pub struct SkinPass {
     /// time from the session's own grant → role (an edit applies from the
     /// session's next request). Platform and link passes: `Whole`.
     pub room_paths: paths::PassPaths,
+    /// When this pass stops working by itself (unix seconds), if it does. A hub
+    /// holding it open wakes then.
+    pub expires_at: Option<i64>,
+    /// A login with an enabled chat grant, so `chat.pass` may work. Platform and
+    /// link passes: `false`.
+    pub chat: bool,
 }
 
 impl SkinPass {
@@ -1690,6 +1700,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     if let Err(e) = crate::private_home::restrict_db_files(path) {
         crate::log_debug!("[skin] WARN {e}");
     }
+    // Last, so the migrations above wake nothing.
+    access_live::install(&conn);
     Ok(conn)
 }
 
@@ -2292,39 +2304,30 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
         });
     }
     let conn = &guard.as_ref().expect("skin db opened").conn;
-    let _held = ties::HeldGuard::enter();
-    let before = rows_changed(conn);
+    let held = ties::HeldGuard::enter();
     let out = f(conn);
-    // Under the mutex: whoever sees it move and then reads, reads the write.
-    if rows_changed(conn) != before {
-        WRITE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // Under the mutex: whoever sees the generation move and then reads, reads
+    // the write. On an `Err` too: a closure can autocommit, then fail.
+    let moved = access_live::settle();
+    drop(held);
+    drop(guard);
+    // The mutex isn't re-entrant, and the listener may hear from anywhere.
+    if moved {
+        access_live::tell();
     }
     out
 }
 
-/// Moves after any call that changed a row in skin.db through this process's
-/// connection, whichever table and writer (`prd-live-access-changes-v1` S1a).
-/// An open socket compares it before each frame and resolves its pass only when
-/// it moved, so a quiet box costs one atomic load per frame and a revoke stops
-/// the very next frame. A rollback or an unrelated write (a failed login's
-/// lockout row, a new session) moves it too: that costs each socket one extra
-/// resolve, never a wrong answer. `prd-live-access-changes-v1` S2 narrows it to
-/// the access tables. Not a proof of access: it
-/// can't see expiry, the main database or the other daemon during a handoff, so
-/// sockets also resolve on a tick.
-static WRITE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// See [`WRITE_GENERATION`].
+/// Moves after any write to an access table ([`access_live::ACCESS_TABLES`])
+/// through this process's connection, and on [`access_live::hint`]. An open socket
+/// compares it before each frame and resolves its pass only when it moved, so a
+/// quiet box costs one atomic load per frame and a revoke stops the very next
+/// frame. A failed login or a new session doesn't move it, so an outsider can't.
+/// A rollback or someone else's change does: that costs each socket one extra
+/// resolve, never a wrong answer. Not a proof of access: it can't see expiry or the
+/// other daemon during a handoff, so sockets also resolve on a tick.
 pub fn write_generation() -> u64 {
-    WRITE_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-/// Rows changed on this connection since it opened, foreign key actions and
-/// triggers included.
-fn rows_changed(conn: &Connection) -> i32 {
-    // SAFETY: the handle is live for as long as `conn` is borrowed, and this
-    // call only reads a counter on it.
-    unsafe { rusqlite::ffi::sqlite3_total_changes(conn.handle()) }
+    access_live::generation()
 }
 
 /// Close the cached skin.db connection (the next call opens it again). For
@@ -7168,6 +7171,16 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
 /// database couldn't say" (`Err`). An open socket must not read an error as a
 /// dead pass: that tells a person to sign in again for nothing.
 pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, String> {
+    resolve_token(presented_raw, true)
+}
+
+/// [`try_resolve_skin_token`] for K2's own re-check of an open socket: nobody used
+/// the session, so it doesn't count as "last used".
+pub fn peek_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, String> {
+    resolve_token(presented_raw, false)
+}
+
+fn resolve_token(presented_raw: &str, used: bool) -> Result<Option<SkinPass>, String> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return Ok(None);
     }
@@ -7187,7 +7200,8 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
                           SELECT 1 FROM grants g
                           WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
                             AND g.kind = ?4 AND g.target_id = ?5 AND g.enabled != 0),
-                        tie.workspace_id, tie.host_ok, tie.reasons, tie.set_by, tie.set_at
+                        tie.workspace_id, tie.host_ok, tie.reasons, tie.set_by, tie.set_at,
+                        t.expires_at
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  LEFT JOIN principal_agent_ties tie ON tie.principal_id = t.principal_id AND t.session = 1
@@ -7264,6 +7278,8 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
                             room_policy,
                             app,
                             room_paths: Default::default(),
+                            expires_at: r.get(16)?,
+                            chat: chat_ok,
                         },
                         tie,
                     )))
@@ -7288,7 +7304,9 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
                 None => pass.room_paths = paths::session_paths(conn, &pass),
             }
             // app-user-profile §3.7: last used, in memory only.
-            profile::touch(&pass.id);
+            if used {
+                profile::touch(&pass.id);
+            }
         }
         let app_rooms = if tie.is_some() { ties::app_rooms_conn(conn, &pass.app)? } else { Vec::new() };
         Ok(Some((pass, tie, app_rooms)))
@@ -7925,6 +7943,8 @@ mod tests {
                 room_policy,
                 app: "host".to_string(),
                 room_paths: Default::default(),
+                expires_at: None,
+                chat: false,
             }
         };
         let ident = pass_with(&[CAP_AGENT_IDENTITY]);
@@ -8032,6 +8052,8 @@ mod tests {
                 room_policy,
                 app: "host".to_string(),
                 room_paths: Default::default(),
+                expires_at: None,
+                chat: false,
             }
         };
         for caps in [
@@ -8063,6 +8085,8 @@ mod tests {
             room_policy: RoomPolicy::new(),
             app: String::new(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         };
         assert!(platform.dispatcher_admits_any(&[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
         assert!(!platform.dispatcher_admits_cap(CAP_ACTIVITY_READ));

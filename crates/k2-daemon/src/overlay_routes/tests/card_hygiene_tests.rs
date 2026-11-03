@@ -219,6 +219,8 @@ fn only_a_person_answers_a_choice_card() {
             .collect(),
         app: if session { "host".into() } else { String::new() },
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     };
     let person = k2_core::skin::add_principal(&format!("pat{}", &uuid::Uuid::new_v4().simple().to_string()[..6])).expect("person");
     let bot_name = format!("bot{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);

@@ -576,6 +576,8 @@ pub fn delete_group(id: &str) -> Result<(), String> {
     }
     // Its read cursors and mutes go with it (thread-read-v1; no FK).
     crate::read_state::delete_conversation(&conn, crate::read_state::KIND_PROJECT, id)?;
+    // Who may read a project rests on its members, in this database.
+    crate::skin::access_live::hint();
     Ok(())
 }
 
@@ -670,6 +672,7 @@ pub fn add_member(group_id: &str, workspace_id: &str) -> Result<AddMemberOutcome
         )
         .map_err(|e| format!("group touch failed: {e}"))?;
     }
+    crate::skin::access_live::hint();
     Ok(AddMemberOutcome {
         member: ProjectGroupMember {
             group_id: group_id.to_string(),
@@ -720,6 +723,7 @@ pub fn remove_member(group_id: &str, workspace_id: &str) -> Result<(), String> {
         params![group_id, now],
     )
     .map_err(|e| format!("group touch failed: {e}"))?;
+    crate::skin::access_live::hint();
     Ok(())
 }
 
@@ -887,6 +891,7 @@ pub fn remove_workspace_memberships_with(
         )
         .map_err(|e| format!("group touch failed: {e}"))?;
     }
+    crate::skin::access_live::hint();
     Ok(group_ids)
 }
 

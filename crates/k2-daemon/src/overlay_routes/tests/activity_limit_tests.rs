@@ -15,6 +15,8 @@ fn platform_pass(project_id: &str) -> SkinPass {
         room_policy: Default::default(),
         app: String::new(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     }
 }
 

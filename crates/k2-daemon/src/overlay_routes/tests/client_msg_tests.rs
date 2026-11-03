@@ -215,6 +215,8 @@ fn another_senders_same_key_is_a_new_post() {
         room_policy: k2_core::skin::RoomPolicy::new(),
         app: String::new(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     };
     let answers = [
         dispatch_post_as("/cli/thread/post", &HashMap::new(), compose.as_bytes(), "owner"),

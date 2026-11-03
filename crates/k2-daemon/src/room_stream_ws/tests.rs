@@ -19,6 +19,8 @@ fn the_ear_room_cache_is_only_rooms_with_activity_read() {
         room_policy: k2_core::skin::RoomPolicy::new(),
         app: String::new(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     };
     let r = readable(&[("a", "conv-a"), ("b", "conv-b")]);
     assert!(ear_rooms_of(Some(&pass(&["thread:read"])), &r).is_empty(), "Thread-only: no ear rooms");

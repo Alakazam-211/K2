@@ -16,106 +16,9 @@ use k2_daemon::session_events::{self, SessionEvent};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
-const PW: &str = "s3cret-horse-staple";
-const LOGIN_PW: &str = "correct-horse-battery-staple-9";
-/// A socket's idle close is a 5 s tick away; a little room for a busy node.
-const CLOSE_WITHIN_MS: u64 = 7_000;
-
-type Sock = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-#[derive(Debug, Default)]
-struct Seen {
-    frames: Vec<String>,
-    close: Option<u16>,
-    ended: bool,
-}
-
-impl Seen {
-    fn has(&self, needle: &str) -> bool {
-        self.frames.iter().any(|f| f.contains(needle))
-    }
-}
-
-/// What arrives within `ms`, or until the socket ends.
-async fn watch(sock: &mut Sock, ms: u64) -> Seen {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
-    let mut out = Seen::default();
-    loop {
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match tokio::time::timeout(left, sock.next()).await {
-            Err(_) => return out,
-            Ok(None) | Ok(Some(Err(_))) => {
-                out.ended = true;
-                return out;
-            }
-            Ok(Some(Ok(Message::Text(t)))) => out.frames.push(t.to_string()),
-            Ok(Some(Ok(Message::Close(c)))) => {
-                out.close = c.map(|c| u16::from(c.code));
-                out.ended = true;
-                return out;
-            }
-            Ok(Some(Ok(_))) => {}
-        }
-    }
-}
-
-async fn open(port: u16, pq: &str) -> Sock {
-    let url = format!("ws://127.0.0.1:{port}{pq}");
-    let (s, _) = tokio_tungstenite::connect_async(&url).await.unwrap_or_else(|e| panic!("open {pq}: {e}"));
-    s
-}
-
-fn pin_chat(ws: &Ws) -> String {
-    let conv = uuid::Uuid::new_v4().to_string();
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &ws.id, None, Some(&conv), "claude", "system", "running").expect("pin");
-    conv
-}
-
-async fn say(port: u16, ws: &Ws, text: &str) {
-    let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": ws.handle, "from": "k2", "text": text })).await;
-    assert_eq!(r.status, 200, "post: {}", r.body);
-}
-
-fn ticket(room: &str, id: &str) {
-    session_events::emit(SessionEvent::TicketChanged {
-        project_id: room.to_string(),
-        id: id.to_string(),
-        change: "answered".into(),
-        status: "answered".into(),
-        via: None,
-        has_brief: false,
-    })
-    .expect("emit");
-}
-
-fn file_changed(ws: &Ws, rel: &str) {
-    let root = ws.path.to_string_lossy().to_string();
-    session_events::emit(SessionEvent::FsChanged { workspace_path: root.clone(), paths: vec![format!("{root}/{rel}")] }).expect("emit");
-}
-
-async fn owner_ok(port: u16, path: &str, body: Value) -> Value {
-    let r = post(port, path, OWNER, body).await;
-    assert_eq!(r.status, 200, "{path}: {}", r.body);
-    r.json()
-}
-
-const ALL_CAPS: &[&str] = &["thread:read", "thread:post", "activity:read", "tickets:read", "files:read", "room:members", "heartbeats:read"];
-
-/// One guest on its own role in `ws`. Returns `(role, pass)`.
-async fn guest_in(port: u16, ws: &Ws, username: &str, caps: &[&str]) -> (String, String) {
-    let role = format!("role-{username}");
-    owner_ok(port, "/cli/skin/roles", json!({ "name": role })).await;
-    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": caps })).await;
-    owner_ok(port, "/cli/skin/users", json!({ "username": username })).await;
-    k2_daemon::test_harness::guest_with_own_password(username, PW);
-    owner_ok(port, "/cli/skin/roles/assign", json!({ "username": username, "role": role })).await;
-    let body = json!({ "username": username, "password": PW }).to_string();
-    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.expect("join");
-    assert_eq!(r.status, 200, "guest login: {}", r.body);
-    (role, r.json()["token"].as_str().expect("token").to_string())
-}
+#[path = "support/live_sockets.rs"]
+mod live_sockets;
+use live_sockets::*;
 
 // ── App uninstall ────────────────────────────────────────────────────
 
@@ -634,15 +537,6 @@ async fn a_removed_login_cannot_read_or_write_a_live_doc() {
 }
 
 // ── App guests ───────────────────────────────────────────────────────
-
-async fn project(port: u16, name: &str, members: &[&Ws]) -> String {
-    let g = owner_ok(port, "/cli/project-group/create", json!({ "name": name })).await;
-    let id = g["id"].as_str().expect("group id").to_string();
-    for m in members {
-        owner_ok(port, "/cli/project-group/add-member", json!({ "group": id, "workspace": m.id })).await;
-    }
-    id
-}
 
 /// A guest's five sockets on one room, plus the same overlay with the ear on.
 struct GuestSockets {

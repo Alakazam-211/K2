@@ -146,7 +146,7 @@ pub fn try_resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> 
     let now = now_secs();
     with_conn(|conn| {
         conn.query_row(
-            "SELECT id, name, caps, rooms FROM tokens
+            "SELECT id, name, caps, rooms, expires_at FROM tokens
              WHERE key_hash = ?1 AND session = 0 AND revoked_at IS NULL
                AND expires_at IS NOT NULL AND expires_at > ?2
                AND link_id = ?3 AND app_service_id = ?4",
@@ -164,6 +164,8 @@ pub fn try_resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> 
                     room_policy: RoomPolicy::new(),
                     app: app_service_id.to_string(),
                     room_paths: Default::default(),
+                    expires_at: r.get(4)?,
+                    chat: false,
                 })
             },
         )

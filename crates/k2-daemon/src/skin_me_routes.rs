@@ -221,6 +221,8 @@ mod tests {
             room_policy: Default::default(),
             app: if session { "host".into() } else { String::new() },
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 

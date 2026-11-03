@@ -6951,6 +6951,8 @@ mod tests {
             room_policy: k2_core::skin::RoomPolicy::new(),
             app: String::new(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 
@@ -6969,6 +6971,8 @@ mod tests {
             room_policy: rooms.iter().map(|r| (r.clone(), caps.clone())).collect(),
             app: "host".into(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 

@@ -136,6 +136,9 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
     // refusing everything until it can stop.
     let revoked = passes::revoke_app_passes(&app.service_id).map_err(|e| no("db_error", 500, e))?;
     super::quotas::invalidate(&app.app_id);
+    // The suspension itself is in the main database: a guest's socket on this
+    // link has nothing in skin.db to notice.
+    k2_core::skin::access_live::hint();
     let stopped = match super::supervisor::stop_app(&app, &by) {
         Ok(()) => json!(true),
         Err(f) => json!({ "stopped": false, "code": f.code, "hint": f.message }),
@@ -239,6 +242,7 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
         let _ = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, "resume", &by, None, &json!({}));
     }
     super::quotas::invalidate(&app.app_id);
+    k2_core::skin::access_live::hint();
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new("app-resume", &by, format!("{} resumed", app.app_id), "cli", "-", "apps"));
     let who_resumed = if agent { "its agent" } else { "the owner" };
     super::alerts::notify(&app.owner_workspace, &format!("[k2 apps] {who_resumed} resumed {}.", app.app_id));

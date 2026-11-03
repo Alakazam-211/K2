@@ -77,6 +77,8 @@ fn guest(pid: &str, username: &str, rooms: &[(&str, &[&str])]) -> SkinPass {
         room_policy,
         app: "host".into(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     }
 }
 
@@ -92,6 +94,8 @@ fn app_pass(caps: &[&str], rooms: &[&str]) -> SkinPass {
         room_policy: Default::default(),
         app: String::new(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     }
 }
 

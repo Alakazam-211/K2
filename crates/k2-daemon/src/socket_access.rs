@@ -20,13 +20,14 @@
 //! 4003. Pass fine, this socket's room or capability gone:
 //! [`crate::presence::access_lost_close_message`] (4013). A resolve holds the
 //! skin mutex for 100 to 400 µs, so it never runs per frame:
-//! - **Before a frame leaves:** [`SkinGate`]. One atomic load while skin.db is
-//!   quiet. After any write, the next frame resolves first, so a revoke, a role
-//!   edit or a deleted user stops the very next frame.
-//! - **On the [`TICK`], idle or not:** always resolves. That closes an idle
-//!   socket, and it's the bound (5 s) on what no skin.db write shows: a pass's
-//!   expiry, a suspended App, a moved pin, and the other daemon's write during a
-//!   handoff.
+//! - **Before a frame leaves:** [`SkinGate`]. One atomic load while access is
+//!   quiet. After any access write, the next frame resolves first, so a revoke, a
+//!   role edit or a deleted user stops the very next frame.
+//! - **When the hub says so** ([`crate::access_live`]): at once, idle or not, with
+//!   the answer the hub already read.
+//! - **On the [`TICK`], idle or not:** always resolves. That's the bound (5 s) with
+//!   the hub off, and on what no write shows: a moved pin, a pass's expiry and the
+//!   other daemon's write during a handoff.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,7 +92,7 @@ impl LoginCheck {
     }
 }
 
-/// Has skin.db been written since this socket last checked its pass?
+/// Has any access been written since this socket last checked its pass?
 #[derive(Debug, Default)]
 pub struct SkinGate {
     settled_at: Option<u64>,

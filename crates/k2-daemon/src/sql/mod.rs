@@ -2416,6 +2416,8 @@ mod tests {
             room_policy: policy,
             app: "host".to_string(),
             room_paths: Default::default(),
+            expires_at: None,
+            chat: false,
         }
     }
 
@@ -2590,6 +2592,8 @@ mod tests {
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
                 room_paths: Default::default(),
+                expires_at: None,
+                chat: false,
             };
             let n = fake.recorded().len();
             let plat = routes::handle_store_get_gated(
@@ -3007,6 +3011,8 @@ mod tests {
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
                 room_paths: Default::default(),
+                expires_at: None,
+                chat: false,
             };
             let n = fake.recorded().len();
             let plat =
@@ -4248,6 +4254,8 @@ mod tests {
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
                 room_paths: Default::default(),
+                expires_at: None,
+                chat: false,
             };
             let plat = routes::handle_db_query(
                 &query_json(&handle, "SELECT 1", None),

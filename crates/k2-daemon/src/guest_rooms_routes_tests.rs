@@ -202,6 +202,8 @@ fn on_a_link_only_that_links_app_pass_is_the_app() {
         room_policy: Default::default(),
         app: app.into(),
         room_paths: Default::default(),
+        expires_at: None,
+        chat: false,
     };
     let link = OnLink { app_id: "jobs".into(), service_id: "svc-1".into() };
     assert_eq!(app_of(&pass(false, "svc-1"), Some(&link)), Some("svc-1".to_string()));

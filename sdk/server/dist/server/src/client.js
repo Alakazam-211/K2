@@ -314,6 +314,7 @@ export class K2App {
             },
             onFrame,
             onOpen: opts?.onOpen,
+            checkPass: () => this.callAs(bound, 'me.get', undefined),
             onError: onError ??
                 ((e) => {
                     console.warn(`[k2] ${e.message}`);

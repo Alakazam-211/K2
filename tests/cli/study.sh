@@ -686,11 +686,12 @@ as_out="$("$K2" study app-surfaces)"
 assert_contains "title" "$as_out" "k2 study app-surfaces"
 for needle in "room.members, cap room:members" "admins of this box" "GET /cli/skin/members?workspace=" \
     "GET /cli/skin/self" "GET /cli/skin/usage?hours=N" "k2.widget.self()" "k2 app room-names <room> hide|show" \
-    "room_members_changed" "app_deployed" "not_exposed"; do
+    "room_members_changed" "app_deployed" "not_exposed" \
+    "WHEN ACCESS CHANGES ON AN OPEN SOCKET" "4013   access_lost" "4003   K2 says the pass is dead" "code failed with status 401"; do
     assert_contains "app-surfaces: $needle" "$as_out" "$needle"
 done
 as_lines="$(printf '%s\n' "$as_out" | wc -l | tr -d ' ')"
-if [ "$as_lines" -le 80 ]; then echo "  PASS: app-surfaces is bounded ($as_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-surfaces is $as_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+if [ "$as_lines" -le 115 ]; then echo "  PASS: app-surfaces is bounded ($as_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-surfaces is $as_lines lines (max 115)" >&2; fail=$((fail + 1)); fi
 as_json="$("$K2" study app-surfaces --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-surfaces" and "room.members" in d["body"], d["id"]' "$as_json"
 echo "  PASS: app-surfaces --json id+body"

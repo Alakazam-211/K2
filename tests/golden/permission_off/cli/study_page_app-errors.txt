@@ -188,6 +188,9 @@ DOOR (passes, App keys, quotas, suspend)
   owner_token_from_app (exit 3)
       fix: Use the App key ($K2_SECRETS_DIR/K2_APP_KEY) on
       /v1/apps/$K2_APP_ID/…, or: k2 app clean-mode <app> off
+  access_lost (exit 3)
+      fix: Read me.get again and redraw from it. Don't reopen this socket.
+      Details: k2 study app-surfaces
   pass_invalid (exit 3)
       fix: Sign in again to get a new pass.
   pass_required (exit 3)

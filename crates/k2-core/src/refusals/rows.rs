@@ -140,6 +140,9 @@ pub(super) const ROWS: &[Refusal] = &[
         "Call it from the App's server side with its own pass."),
     r("owner_token_from_app", "door", 403, Who::Agent, "The App runs in clean mode, and Apps can't use the owner token.",
         "Use the App key ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/…, or: k2 app clean-mode <app> off"),
+    // A socket's close (4013), not an HTTP answer: opening it again is 403.
+    r("access_lost", "door", 403, Who::Agent, "This open socket's room or capability was taken away. The pass still works.",
+        "Read me.get again and redraw from it. Don't reopen this socket. Details: k2 study app-surfaces"),
     r("pass_invalid", "door", 401, Who::Person, "The pass is expired or revoked, or its App is gone.",
         "Sign in again to get a new pass."),
     r("pass_required", "door", 401, Who::Agent, "No pass came with the request.",

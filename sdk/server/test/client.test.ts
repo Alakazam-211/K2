@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { APP_VERBS, K2Error, fromEnv, type K2App } from '../src/index.ts'
+import { MAX_REFUSED } from '../src/socket.ts'
 import { startFake, until, type Answer, type FakeGateway, type Seen } from './fake-gateway.ts'
 
 const GUEST = 'k2skn_guestAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
@@ -593,6 +594,139 @@ describe('sockets', () => {
     await until('the reconnect', () => gw.sockets.length === 2, 5000)
     off()
   })
+
+  it('a 4013 ends with one access_lost and no retry', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.sockets[0]!.close(4013)
+    await until('the end', () => errors.length === 1)
+    await new Promise((r) => setTimeout(r, 800))
+    expect(errors[0]?.code).toBe('access_lost')
+    expect(errors[0]?.hint).toMatch(/me\.get/)
+    expect(errors).toHaveLength(1)
+    expect(gw.sockets).toHaveLength(1)
+    expect(gw.seen.filter((s) => s.url.startsWith('/cli/skin/me'))).toHaveLength(0)
+  })
+
+  it('a plain close with a lost room: refused re-dials end in one failed, however the code got lost', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    let dials = 0
+    k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.onUpgrade = () => {
+      dials += 1
+      return 403
+    }
+    answer = () => ({ status: 200, body: { ok: true, kind: 'guest' } })
+    gw.sockets[0]!.close(1000)
+    await until('the end', () => errors.some((e) => e.code === 'failed'), 45000)
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(errors.map((e) => e.code)).toEqual(['resync', 'failed'])
+    expect(errors[1]?.hint).toMatch(/keeps refusing/)
+    expect(dials).toBe(MAX_REFUSED)
+  }, 50000)
+
+  it('a refused re-dial with a dead pass ends in one failed, status 401, after one dial', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    let dials = 0
+    k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.onUpgrade = () => {
+      dials += 1
+      return 401
+    }
+    answer = () => ({ status: 401, body: { error: 'invalid or revoked skin token' } })
+    gw.sockets[0]!.close(1000)
+    await until('the end', () => errors.some((e) => e.code === 'failed'), 5000)
+    await new Promise((r) => setTimeout(r, 1200))
+    expect(errors.map((e) => e.code)).toEqual(['resync', 'failed'])
+    expect(errors[1]?.status).toBe(401)
+    expect(errors[1]?.hint).toMatch(/pass_invalid/)
+    expect(dials).toBe(1)
+  })
+
+  it('a 4003 with a dead pass ends at once: no refused upgrade at all', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    let dials = 0
+    k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.onUpgrade = () => {
+      dials += 1
+      return 401
+    }
+    answer = () => ({ status: 401, body: { error: 'invalid or revoked skin token' } })
+    gw.sockets[0]!.close(4003)
+    await until('the end', () => errors.length === 1, 5000)
+    await new Promise((r) => setTimeout(r, 800))
+    expect(errors.map((e) => [e.code, e.status])).toEqual([['failed', 401]])
+    expect(dials).toBe(0)
+  })
+
+  it('a 4003 on a rotated App pass reopens with the new pass, with no failed', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    let opens = 0
+    const off = k2.asApp().subscribe('activity.events', { workspace: 'ops' }, () => {}, (e) => errors.push(e), { onOpen: () => (opens += 1) })
+    await until('the socket', () => gw.sockets.length === 1)
+    writeFileSync(join(dir, 'pass'), 'k2skn_rotated\n')
+    answer = () => ({ status: 200, body: { ok: true } })
+    gw.sockets[0]!.close(4003)
+    await until('the reconnect', () => gw.sockets.length === 2, 5000)
+    await until('the reopen', () => opens === 2)
+    expect(new URL(gw.sockets[1]!.url, gw.url).searchParams.get('token')).toBe('k2skn_rotated')
+    expect(errors.map((e) => e.code)).toEqual(['resync'])
+    off()
+  })
+
+  it('a restart or a network drop keeps retrying with no failed, and comes back', async () => {
+    let down = true
+    const realFetch = globalThis.fetch
+    const fetchImpl: typeof fetch = async (u, init) => {
+      if (down) throw new TypeError('fetch failed')
+      return realFetch(u, init)
+    }
+    const k2 = fromEnv(
+      { K2_GATEWAY_URL: gw.url, K2_PASS_FILE: join(dir, 'pass'), K2_APP_ID: 'svc-jobs-1', K2_APP_NAME: 'jobs', K2_SECRETS_DIR: join(dir, 'secrets') },
+      { fetch: fetchImpl },
+    )
+    const errors: K2Error[] = []
+    let dials = 0
+    const off = k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.onUpgrade = () => {
+      dials += 1
+      return down ? 503 : null
+    }
+    gw.sockets[0]!.close(1012)
+    await until('four failed dials', () => dials >= 4, 15000)
+    expect(errors.map((e) => e.code)).toEqual(['resync'])
+    down = false
+    await until('the socket again', () => gw.sockets.length === 2, 15000)
+    expect(errors.map((e) => e.code)).toEqual(['resync'])
+    off()
+  }, 40000)
+
+  it('K2 busy (429 or 5xx on the check) is no answer: it keeps retrying', async () => {
+    const k2 = client()
+    const errors: K2Error[] = []
+    let dials = 0
+    const off = k2.asGuest(GUEST).activity.events({ workspace: 'ops' }, () => {}, (e) => errors.push(e))
+    await until('the socket', () => gw.sockets.length === 1)
+    gw.onUpgrade = () => {
+      dials += 1
+      return 503
+    }
+    answer = () => ({ status: dials % 2 ? 429 : 503, body: 'busy' })
+    gw.sockets[0]!.close(1000)
+    await until('more dials than the refusal limit', () => dials > MAX_REFUSED, 60000)
+    expect(errors.map((e) => e.code)).toEqual(['resync'])
+    off()
+  }, 70000)
 })
 
 describe('guests.rooms / guests.setRooms (RS-A15: no owner token)', () => {

@@ -86,8 +86,13 @@ export function threadActivityTransport(a: ActivityActor, target: WatchActivityT
           }
         },
         (e) => {
-          if (e.code === 'resync') on.drop()
-          else onError(e)
+          if (e.code === 'resync') {
+            on.drop()
+            return
+          }
+          // The socket ended for good: nothing on it can be true any more.
+          if (e.code === 'access_lost' || e.code === 'failed') on.reset({})
+          onError(e)
         },
       )
     },

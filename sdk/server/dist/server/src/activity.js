@@ -78,10 +78,14 @@ export function threadActivityTransport(a, target, onError) {
                         on.reset();
                 }
             }, (e) => {
-                if (e.code === 'resync')
+                if (e.code === 'resync') {
                     on.drop();
-                else
-                    onError(e);
+                    return;
+                }
+                // The socket ended for good: nothing on it can be true any more.
+                if (e.code === 'access_lost' || e.code === 'failed')
+                    on.reset({});
+                onError(e);
             });
         },
     };

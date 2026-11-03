@@ -253,6 +253,7 @@
     {"code": "bad_args", "doc": "An argument isn't plain data (functions, DOM nodes and cycles never cross) or the call's arguments aren't a list. The frame refuses it before it leaves; K2 refuses it too."},
     {"code": "bad_shape", "doc": "K2 delivered a value that isn't the verb's shape (a card view without items, say). The runtime's guard refuses it to a handler-object subscription; the widget keeps its last good data."},
     {"code": "pass_required", "doc": "No pass on an App call: send this App's pass (K2_PASS_FILE) or a guest's session pass as Authorization: Bearer."},
+    {"code": "access_lost", "doc": "This open socket's room or capability is gone (close 4013); the pass still works. Read me.get again and don't reopen the socket."},
     {"code": "pass_invalid", "doc": "The pass is unknown, expired or revoked: read K2_PASS_FILE again (K2 rotates it), or log the guest in again."},
     {"code": "pass_wrong_link", "doc": "A pass for another App or link was presented on this App's gateway link."},
     {"code": "not_on_link", "doc": "The route isn't open to Apps (no app row in the catalog)."},

@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { APP_VERBS, fromEnv, type ActivityState, type K2App } from '../src/index.ts'
+import { APP_VERBS, K2Error, fromEnv, type ActivityState, type K2App } from '../src/index.ts'
+import { threadActivityTransport } from '../src/activity.ts'
 import { refetchHint } from '../src/socket.ts'
 import { startFake, until, type Answer, type FakeGateway, type Seen } from './fake-gateway.ts'
 
@@ -128,6 +129,30 @@ describe('the App socket (review D5, B2)', () => {
     gw.sockets[0]!.close(4008)
     await until('the reopen', () => opens === 2, 5000)
     off()
+  })
+
+  it('a socket that ended for good clears what it showed, and says why', async () => {
+    let onErr: ((e: K2Error) => void) | undefined
+    const resets: unknown[] = []
+    const seen: string[] = []
+    const a = {
+      call: async () => ({}),
+      subscribe: (_v: string, _args: unknown, _f: (f: unknown) => void, e?: (err: K2Error) => void) => {
+        onErr = e
+        return () => {}
+      },
+    }
+    const t = threadActivityTransport(a, { rooms: 'all' }, (e) => seen.push(e.code))
+    t.connect({ open: () => {}, frame: () => {}, reset: (s) => resets.push(s), drop: () => resets.push('drop') })
+    onErr?.(new K2Error({ code: 'resync', hint: 'x' }))
+    expect(resets).toEqual(['drop'])
+    expect(seen).toEqual([])
+    onErr?.(new K2Error({ code: 'access_lost', hint: 'x' }))
+    expect(resets).toEqual(['drop', {}])
+    expect(seen).toEqual(['access_lost'])
+    onErr?.(new K2Error({ code: 'failed', hint: 'x' }))
+    expect(resets).toEqual(['drop', {}, {}])
+    expect(seen).toEqual(['access_lost', 'failed'])
   })
 
   it('the ear’s resync hint names thread.activity beside thread.page', () => {

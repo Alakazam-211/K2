@@ -657,6 +657,7 @@ mod tests {
                 // The App transport (runtime S23): the gateway link's and
                 // the App routes' refusals, plus the server SDK's own two.
                 "pass_required",
+                "access_lost",
                 "pass_invalid",
                 "pass_wrong_link",
                 "not_on_link",

@@ -1,9 +1,10 @@
 //! An agent manages its App's users end to end (Rosson 2026-11-02, 0.46.8),
 //! headless: the real dispatcher in process on a temp `$HOME`, over loopback.
 //!
-//! - A login an agent makes works at once in the App's own room and the rooms
-//!   the owner approved for that App; a room past those is refused, naming
-//!   the broad path. The tie stays and still does its other work.
+//! - A login an agent makes works at once in the App's own room. A room the
+//!   owner approved for the App waits for a reset on K2's own page; a room past
+//!   those is refused, naming the broad path. The security review's proofs live
+//!   here as permanent tests (findings 1, 2, 4, 5, 6 and the sessions oracle).
 //! - Nothing but an owner reset on K2's own page unties.
 //! - New access reaches a signed-in person at the next request.
 //! - An App's own agent reads and ends its own guests' sessions.
@@ -136,9 +137,10 @@ fn line(ws: &Ws) -> Value {
     json!({ "handle": ws.handle, "caps": ["thread:read", "thread:post"] })
 }
 
-/// The first path of an agent's App users: a role inside the App's rooms.
+/// The main flow, with no owner step: an agent adds a login to its own App,
+/// gives it a role in the App's own room, and the person is in.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_login_inside_the_apps_rooms_works_at_once_and_outside_is_refused() {
+async fn a_login_in_the_apps_own_room_works_at_once_with_no_owner_step() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -146,153 +148,298 @@ async fn a_login_inside_the_apps_rooms_works_at_once_and_outside_is_refused() {
     let b = box2(&env, &t);
     let (shop, agent) = (b.shop.clone(), b.agent.clone());
 
-    // The owner's role: the App's own room and ops, for this App.
-    let wide = format!("wide{t}");
-    owner_post(port, "/cli/skin/roles", json!({ "name": wide, "app": shop, "roomAccess": [line(&b.sales), line(&b.ops)] })).await;
-
-    // No grant yet: ops is outside, the refusal names the card, nobody made.
-    let u0 = format!("u0{t}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u0, "app": shop, "role": wide })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
-    let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
-    assert!(
-        hint.contains(&format!("k2 app grant {} --kind guests-rooms --room {}", b.shop_name, b.ops.handle)),
-        "names the broad path, for this App and this room: {hint}"
-    );
-    assert_eq!(r.json()["error"]["rooms"], json!([b.ops.handle]), "{}", r.body);
-    assert!(!k2_core::skin::list_principals().unwrap().iter().any(|p| p.username == u0), "nobody was made");
-
-    // The owner approves ops for this App.
-    owner_post(port, "/cli/app/grant", json!({ "app": shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
-
-    // The agent makes the login with a temporary password: no owner step.
-    let u1 = format!("u1{t}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": wide, "generate": true })).await;
+    let mine = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &agent, json!({ "name": mine, "app": shop, "roomAccess": [{ "handle": b.sales.handle, "caps": ["thread:read", "thread:post", "files:read"] }] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    let u1 = format!("u1{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": mine, "generate": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json().get("waitingForReset").is_none(), "nothing waits: {}", r.body);
     let temp = r.json()["generatedPassword"].as_str().expect("shown once").to_string();
     assert_eq!(r.json()["passwordMustChange"], json!(true), "{}", r.body);
     person_chooses(port, &u1, &temp, &shop, PW).await;
 
-    // Fully usable, the role's rooms and caps, nothing waiting.
     let s1 = session(port, &u1, &shop).await;
-    let both = sorted(vec![b.sales.id.clone(), b.ops.id.clone()]);
-    assert_eq!(rooms_of(&s1), both, "both rooms at once");
+    assert_eq!(rooms_of(&s1), vec![b.sales.id.clone()]);
     let pass = k2_core::skin::resolve_skin_token(&s1).unwrap();
-    assert!(pass.has_cap_in_room(&b.ops.id, "thread:post"), "{pass:?}");
-    let row = user_row(port, &u1).await;
-    assert_eq!(row["pendingReset"], json!(false), "{row}");
-    let r = bearer(port, "GET", "/cli/skin/agents", &s1, None).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert!(r.body.contains(&b.ops.id), "the App's person reaches ops: {}", r.body);
+    assert!(pass.has_cap_in_room(&b.sales.id, "files:read"), "the role's caps in its own room: {pass:?}");
+    assert_eq!(user_row(port, &u1).await["pendingReset"], json!(false));
 
-    // The tie stays, and keeps its other work: an agent could know this
-    // password, so never a chat pass, and never the box login.
+    // It still manages this login.
+    let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u1, "email": format!("{u1}@example.test") })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // The tie stays and keeps its other work: never a chat pass, never the box login.
     assert!(tie_of(&u1).is_some(), "still tied");
     k2_core::skin::insert_chat_grant_for_tests(&principal_id(&u1)).expect("chat grant");
     let r = bearer(port, "POST", "/cli/sew/pass", &s1, Some(json!({}))).await;
     assert_eq!((r.status, r.code()), (403, "tied_pending_reset".to_string()), "{}", r.body);
-    owner_post(port, "/cli/skin/grants/delete", json!({ "subjectKind": "principal", "subjectId": principal_id(&u1), "kind": "chat", "targetId": "sew" })).await;
     let r = login(port, json!({ "username": u1, "password": PW })).await;
     assert_eq!(r.status, 401, "no box login: {}", r.body);
 
-    // A role past the grant, the agent's own rooms route too.
-    let wider = format!("wider{t}");
-    owner_post(port, "/cli/skin/roles", json!({ "name": wider, "roomAccess": [line(&b.sales), line(&b.desk)] })).await;
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": format!("u2{t}"), "app": shop, "role": wider })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
-    let u3 = format!("u3{t}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u3, "app": shop })).await;
+    // It ends its sessions.
+    let r = post(port, "/cli/skin/users/sessions/revoke", &agent, json!({ "app": shop, "user": u1, "all": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u3, "app": shop, "rooms": [b.sales.handle, b.ops.handle] })).await;
-    assert_eq!(r.status, 200, "inside the App's rooms: {}", r.body);
-    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u3, "app": shop, "rooms": [b.desk.handle] })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
-    assert!(r.json()["error"]["hint"].as_str().unwrap().contains(&format!("--room {}", b.desk.handle)), "{}", r.body);
-
-    // The agent still manages such a login (it isn't "outside its workspace").
-    let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u1, "email": format!("{u1}@example.test") })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    let r = post(port, "/cli/skin/users/unlock", &agent, json!({ "username": u1 })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-
-    // Its own App's role: a granted room, Thread caps only.
-    let mine = format!("mine{t}");
-    let r = post(port, "/cli/skin/roles", &agent, json!({ "name": mine, "app": shop, "roomAccess": [line(&b.sales), line(&b.ops)] })).await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    let r = post(port, "/cli/skin/roles/room", &agent, json!({ "name": mine, "handle": b.ops.handle, "caps": ["thread:read", "files:write"] })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "more than Thread in another workspace's room: {}", r.body);
-    assert!(r.json()["error"]["hint"].as_str().unwrap().contains("files:write"), "{}", r.body);
-    let r = post(port, "/cli/skin/roles/room", &agent, json!({ "name": mine, "handle": b.desk.handle })).await;
-    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
-    // A role for no App stays its own room only.
-    let r = post(port, "/cli/skin/roles", &agent, json!({ "name": format!("box{t}"), "roomAccess": [line(&b.ops)] })).await;
-    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-
-    // Taking the grant back takes the rooms from these logins at once.
-    owner_post(port, "/cli/app/grant/revoke", json!({ "app": shop, "kind": "guests-rooms" })).await;
-    assert_eq!(rooms_of(&s1), vec![b.sales.id.clone()], "ops is gone at the next request");
-    assert_eq!(user_row(port, &u1).await["pendingReset"], json!(true));
+    assert!(k2_core::skin::resolve_skin_token(&s1).is_none());
 }
 
-/// A tied login the owner gave more, before the grant: it clears by itself,
-/// with the same password and the same session.
+/// A room on the App's grant waits for a reset on K2's own page, and the
+/// answer says what waits and which card. Only after that does it reach the
+/// person, at Thread caps, and revoking the grant takes it back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_existing_tied_login_clears_when_its_rooms_fall_inside_the_grant() {
+async fn an_approved_room_waits_for_the_reset_and_the_answer_says_so() {
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
     let t = tag();
     let b = box2(&env, &t);
     let (shop, agent) = (b.shop.clone(), b.agent.clone());
+    let wide = format!("wide{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": wide, "app": shop, "roomAccess": [line(&b.sales), line(&b.ops)] })).await;
 
+    // No grant yet: outside, and the refusal names the grant. Nobody made.
+    let u0 = format!("u0{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u0, "app": shop, "role": wide })).await;
+    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
+    let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains(&format!("k2 app grant {} --kind guests-rooms --room {}", b.shop_name, b.ops.handle)), "{hint}");
+    assert!(hint.contains("reset link on K2's own page"), "says a login of its own still waits: {hint}");
+    assert_eq!(r.json()["error"]["rooms"], json!([b.ops.handle]), "{}", r.body);
+    assert!(!k2_core::skin::list_principals().unwrap().iter().any(|p| p.username == u0), "nobody was made");
+
+    owner_post(port, "/cli/app/grant", json!({ "app": shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+
+    // Approved: allowed, and it says exactly what waits and the card to ask on.
     let u = format!("u{t}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "password": TEMP })).await;
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "role": wide, "generate": true })).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    person_chooses(port, &u, TEMP, &shop, PW).await;
+    assert_eq!(r.json()["waitingForReset"]["rooms"], json!([b.ops.handle]), "{}", r.body);
+    let ask = r.json()["waitingForReset"]["ask"].as_str().expect("the card").to_string();
+    assert!(ask.starts_with(&format!("k2 permission request apps.user-password-reset user={u} app={} mode=link", b.shop_name)), "{ask}");
+    let temp = r.json()["generatedPassword"].as_str().expect("shown once").to_string();
+    person_chooses(port, &u, &temp, &shop, PW).await;
     let s = session(port, &u, &shop).await;
+    assert_eq!(rooms_of(&s), vec![b.sales.id.clone()], "its App's own room only");
+    assert_eq!(user_row(port, &u).await["pendingReset"], json!(true), "pending while the room waits");
 
-    // The owner widens it past the ceiling: it waits, and says so.
-    owner_post(port, "/cli/skin/users/rooms", json!({ "username": u, "app": shop, "rooms": [b.sales.handle, b.ops.handle], "applyTokens": true })).await;
-    assert_eq!(rooms_of(&s), vec![b.sales.id.clone()], "held back");
-    assert_eq!(user_row(port, &u).await["pendingReset"], json!(true));
-
-    // skin_room names the tie and what clears it, for this person's own room;
-    // the untied control and the hint's bytes stay as they were.
+    // skin_room names the tie and what clears it, about their own grant only.
     let r = bearer(port, "GET", &format!("/cli/thread?addr={}", b.ops.handle), &s, None).await;
     assert_eq!((r.status, r.code()), (403, "skin_room".to_string()), "{}", r.body);
     let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
-    assert!(hint.contains("Waiting for reset (agent-tied)"), "{hint}");
-    assert!(hint.contains(&b.ops.handle), "{hint}");
-    assert!(hint.contains(&format!("k2 app grant {} --kind guests-rooms --room {}", b.shop_name, b.ops.handle)), "{hint}");
-    assert!(hint.contains(&format!("k2 app user reset {u}")), "{hint}");
-    // No oracle: a room this person's grant doesn't name gets the same words.
+    assert!(hint.contains("Waiting for reset (agent-tied)") && hint.contains(&b.ops.handle), "{hint}");
+    assert!(hint.contains(&format!("apps.user-password-reset user={u} mode=link")), "{hint}");
     let r2 = bearer(port, "GET", "/cli/thread?addr=no-such-room", &s, None).await;
-    assert_eq!((r2.status, r2.code()), (403, "skin_room".to_string()), "{}", r2.body);
     assert_eq!(r2.body, r.body, "the answer never says which rooms exist");
 
-    // Approved for the App: the same pass, at its next request.
-    let pid = principal_id(&u);
-    let hash_before: String = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db"))
-        .unwrap()
-        .query_row("SELECT password_hash FROM principals WHERE id = ?1", [&pid], |r| r.get(0))
-        .unwrap();
-    owner_post(port, "/cli/app/grant", json!({ "app": shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
-    assert_eq!(rooms_of(&s), sorted(vec![b.sales.id.clone(), b.ops.id.clone()]), "no sign-out, no reset");
+    // The owner's reset, used: untied. The room arrives on the same session
+    // rules: Thread caps at most, because an agent wrote this login.
+    owner_post(port, "/cli/skin/front-door", json!({ "mode": "direct", "url": format!("https://door{t}.example.test"), "apply": false })).await;
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u, "app": shop, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let tok = r.json()["link"].as_str().expect("the link").split('#').nth(1).expect("the token").to_string();
+    let body = json!({ "token": tok, "password": "chosen-by-them-33" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/password/reset", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u).is_none());
+    let r = login(port, json!({ "username": u, "password": "chosen-by-them-33", "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let s2 = r.json()["token"].as_str().expect("token").to_string();
+    assert_eq!(rooms_of(&s2), sorted(vec![b.sales.id.clone(), b.ops.id.clone()]));
     assert_eq!(user_row(port, &u).await["pendingReset"], json!(false));
-    let hash_after: String = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db"))
-        .unwrap()
-        .query_row("SELECT password_hash FROM principals WHERE id = ?1", [&pid], |r| r.get(0))
-        .unwrap();
-    assert_eq!(hash_before, hash_after, "the password didn't change");
-    assert!(tie_of(&u).is_some());
 
-    // An untied login: skin_room's old answer, byte for byte.
+    // Revoke: gone at the next request, for this untied person too.
+    owner_post(port, "/cli/app/grant/revoke", json!({ "app": shop, "kind": "guests-rooms" })).await;
+    assert_eq!(rooms_of(&s2), vec![b.sales.id.clone()], "the grant's room is gone");
+}
+
+/// Security review finding 2: an agent can't give a login more than Thread on
+/// another workspace's room, at add or assign, and the ceiling cuts it anyway.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_role_with_more_than_thread_on_another_room_is_refused_and_held_back() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let strong = format!("strong{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": strong, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "thread:post", "files:read", "files:write", "heartbeats:write", "agent:identity"] }] })).await;
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "role": strong, "generate": true })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "refused at add: {}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().unwrap().contains(&strong), "names the role: {}", r.body);
+    // Assign, on a login it made.
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/assign", &b.agent, json!({ "username": u, "role": strong })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "refused at assign: {}", r.body);
+    person_chooses(port, &u, TEMP, &b.shop, PW).await;
+    // The owner giving that role to the agent's login: held back all the same.
+    let g = k2_core::skin::list_grants().unwrap().into_iter().find(|g| g.subject_id == principal_id(&u) && g.target_id == b.shop).expect("the login");
+    owner_post(port, "/cli/skin/grants/role", json!({ "id": g.id, "role": strong })).await;
+    let s = session(port, &u, &b.shop).await;
+    let pass = k2_core::skin::resolve_skin_token(&s).expect("live");
+    assert!(pass.room_policy.is_empty(), "nothing in ops while tied: {pass:?}");
+}
+
+/// Finding 4: folder limits on another workspace's room are never an agent's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_cant_touch_folder_limits_on_another_workspaces_room() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let role = format!("portal{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": role, "app": b.shop, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    owner_post(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": b.ops.handle, "read": ["public"] })).await;
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let before = k2_core::skin::find_role(&role).unwrap().unwrap().room_paths;
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": role, "handle": b.ops.handle, "clear": true })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert_eq!(k2_core::skin::find_role(&role).unwrap().unwrap().room_paths, before, "the limit stays");
+    // Nor any other edit of a role the owner made reaching there.
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    // On a role the agent wrote, the same: it may write only Thread lines there.
+    let mine = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": mine, "app": b.shop, "roomAccess": [line(&b.sales), line(&b.ops)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": mine, "handle": b.ops.handle, "read": ["x"] })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": mine, "handle": b.ops.handle, "caps": ["thread:read", "files:write"] })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": mine, "handle": b.desk.handle })).await;
+    assert_eq!((r.status, r.code()), (403, "outside_app_rooms".to_string()), "{}", r.body);
+    // A role for no App stays its own room only.
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": format!("box{t}"), "roomAccess": [line(&b.ops)] })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+}
+
+/// Finding 1: an agent-made login can't borrow a name people here use, and
+/// can't read or post in another agent's Thread on the App's approved rooms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_login_cant_take_a_persons_name_or_reach_another_agents_thread() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let conv = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &b.ops.id, None, Some(&conv), "claude", "system", "running").expect("pin");
+    }
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": b.ops.handle, "text": "owner-private-note-xyz", "via": "compose" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let conn_name = format!("z3{t}");
+    k2_core::connect_users::add_user(&conn_name, "password123").expect("connect user");
+    for name in ["owner", "OWNER", conn_name.as_str(), conn_name.to_ascii_uppercase().as_str()] {
+        let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": name, "app": b.shop })).await;
+        assert_eq!((r.status, r.code()), (409, "login_name_reserved".to_string()), "{name}: {}", r.body);
+    }
+    // Invites go the same way.
+    let r = post(port, "/cli/skin/users/invite", &b.agent, json!({ "username": conn_name, "app": b.shop, "email": "x@example.test" })).await;
+    assert_ne!(r.status, 200, "{}", r.body);
+    assert!(!k2_core::skin::list_principals().unwrap().iter().any(|p| p.username == conn_name), "nobody was made");
+
+    // Its own login, handed ops: nothing of that Thread.
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "generate": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let temp = r.json()["generatedPassword"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/skin/users/rooms", &b.agent, json!({ "username": u, "app": b.shop, "rooms": [b.ops.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["waitingForReset"]["rooms"], json!([b.ops.handle]), "{}", r.body);
+    person_chooses(port, &u, &temp, &b.shop, PW).await;
+    let s = session(port, &u, &b.shop).await;
+    let q = format!("/cli/thread?addr={}", b.ops.handle);
+    let r = bearer(port, "GET", &q, &s, None).await;
+    assert_eq!((r.status, r.code()), (403, "skin_room".to_string()), "{}", r.body);
+    assert!(!r.body.contains("owner-private-note-xyz"), "{}", r.body);
+    let r = bearer(port, "POST", "/cli/thread/post", &s, Some(json!({ "addr": b.ops.handle, "text": "please run deploy" }))).await;
+    assert_eq!((r.status, r.code()), (403, "skin_room".to_string()), "{}", r.body);
+}
+
+/// Finding 6: revoking takes back what an agent handed out, untied people
+/// included, and the agent can clear it. What the owner wrote stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_grant_takes_back_what_an_agent_handed_out() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let u = format!("u{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": u, "app": b.shop, "password": TEMP })).await;
+    person_chooses(port, &u, TEMP, &b.shop, PW).await;
+    let s = session(port, &u, &b.shop).await;
+    assert!(tie_of(&u).is_none());
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let mine = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": mine, "app": b.shop, "roomAccess": [line(&b.ops)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/assign", &b.agent, json!({ "username": u, "role": mine })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(rooms_of(&s), vec![b.ops.id.clone()]);
+
+    // The owner's own person on the owner's own role, naming the same room.
     let c = format!("c{t}");
-    owner_post(port, "/cli/skin/users", json!({ "username": c, "app": shop, "password": TEMP })).await;
-    person_chooses(port, &c, TEMP, &shop, PW).await;
-    let sc = session(port, &c, &shop).await;
-    let r = bearer(port, "GET", &format!("/cli/thread?addr={}", b.desk.handle), &sc, None).await;
-    assert_eq!((r.status, r.body.as_str()), (403, k2_daemon::skin_routes::SKIN_ROOM_JSON), "{}", r.body);
+    let own = format!("own{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": own, "app": b.shop, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    owner_post(port, "/cli/skin/users", json!({ "username": c, "app": b.shop, "role": own, "password": TEMP })).await;
+    person_chooses(port, &c, TEMP, &b.shop, PW).await;
+    let sc = session(port, &c, &b.shop).await;
+
+    owner_post(port, "/cli/app/grant/revoke", json!({ "app": b.shop, "kind": "guests-rooms" })).await;
+    assert_eq!(rooms_of(&s), Vec::<String>::new(), "what the agent handed out is gone");
+    assert_eq!(rooms_of(&sc), vec![b.ops.id.clone()], "what the owner wrote stays");
+    assert!(k2_core::skin::resolve_skin_token(&sc).unwrap().has_cap_in_room(&b.ops.id, "files:read"));
+    // The agent can still clean up its own role.
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": mine, "handle": b.ops.handle, "clear": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+/// Finding 5: password and remove reach only people the agent's workspace added.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_cant_take_over_or_remove_a_person_the_owner_added() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let role = format!("staff{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": role, "app": b.shop, "roomAccess": [line(&b.ops)] })).await;
+    let u = format!("alice{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": u, "app": b.shop, "role": role, "password": TEMP })).await;
+    person_chooses(port, &u, TEMP, &b.shop, PW).await;
+    let s = session(port, &u, &b.shop).await;
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    for (path, body) in [
+        ("/cli/skin/users/password", json!({ "username": u, "password": "agent-chose-this-1" })),
+        ("/cli/skin/users/remove", json!({ "username": u })),
+    ] {
+        let r = post(port, path, &b.agent, body).await;
+        assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path}: {}", r.body);
+    }
+    assert!(tie_of(&u).is_none(), "not tied");
+    assert!(k2_core::skin::resolve_skin_token(&s).is_some(), "still signed in");
+    // Also on a person in the App's own room only.
+    let v = format!("bob{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": v, "app": b.shop, "password": TEMP })).await;
+    let r = post(port, "/cli/skin/users/remove", &b.agent, json!({ "username": v })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    // Its own: yes.
+    let w = format!("wes{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": w, "app": b.shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/password", &b.agent, json!({ "username": w, "password": "agent-chose-this-1" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/remove", &b.agent, json!({ "username": w })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
 }
 
 /// Only an owner reset on K2's own page unties: not the must-change screen,
@@ -450,7 +597,7 @@ async fn an_apps_agent_ends_its_own_guests_sessions() {
     assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "{}", r.body);
     let nobody = format!("app={}&user=nobody{t}", enc(&shop));
     let r2 = get(port, "/cli/skin/users/sessions", &agent, &nobody).await;
-    assert_eq!(r2.status, 404, "the same answer as a person who isn't on this App: {}", r2.body);
+    assert_eq!((r2.status, r2.body.as_str()), (r.status, r.body.as_str()), "one answer: this route can't test whether a name exists");
 
     // A box login on its App: refused, naming the card.
     let bx = format!("bx{t}");

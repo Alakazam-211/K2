@@ -740,6 +740,13 @@ pub fn audit_subject(service_id: &str) -> String {
         .unwrap_or_else(|| service_id.to_string())
 }
 
+/// A line about one of `service_id`'s users in the App's own record (`k2 app
+/// history <app> --users`), which its agent can read. Reads the daemon DB: never
+/// under the skin mutex.
+pub fn audit_user_event(service_id: &str, event: &str, actor: &str, payload: serde_json::Value) {
+    audit(service_id, event, actor, payload);
+}
+
 fn audit(service_id: &str, event: &str, actor: &str, mut payload: serde_json::Value) {
     payload["service"] = json!(service_id);
     let subject = audit_subject(service_id);

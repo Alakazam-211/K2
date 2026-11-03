@@ -11865,22 +11865,28 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
-                // agent-app-users S4: the owner only (never an agent verb).
+                // The owner's reset, or an Admin's (never on a box login: the
+                // handler's `owner_or_admin_for`). An agent with the App-users
+                // switch starts the App's own reset instead: never this link.
                 crate::app_user_invites::RESET_LINK_ROUTE => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    // 0.46.6: the owner or an Admin (never on a box login:
-                    // the handler's `owner_or_admin_for`).
-                    let Some(actor) = super::http::owner_or_admin_role_identity(&query, state.token.as_str()) else {
-                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
-                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
-                        return DispatchOutcome::Done;
+                    let (actor, agent_ws) = match owner_admin_or_app_users_hook_scoped(p, &query, bearer_token.as_deref(), state.token.as_str()) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                            return DispatchOutcome::Done;
+                        }
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
-                        crate::skin_routes::stamp_actor(crate::app_user_invites::handle_reset_link(&body, &actor, is_post), &actor)
+                        let r = match agent_ws.as_deref() {
+                            Some(ws) => crate::app_user_invites::handle_agent_reset(&body, &actor, ws, is_post),
+                            None => crate::app_user_invites::handle_reset_link(&body, &actor, is_post),
+                        };
+                        crate::skin_routes::stamp_actor(r, &actor)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

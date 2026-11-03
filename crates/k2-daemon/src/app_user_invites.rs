@@ -4,7 +4,9 @@
 //! - `POST /cli/skin/users/invite` (owner, or an agent with "manage Apps"
 //!   for its own workspace's Apps): mail a person a one-time link to set
 //!   their own password, creating them App-only when they're new.
-//! - `POST /cli/skin/users/reset-link` (owner only): a reset link on K2's own
+//! - `POST /cli/skin/users/reset-link` from an agent: [`handle_agent_reset`], the
+//!   App's reset, mailed to the person, never returned to the agent.
+//! - `POST /cli/skin/users/reset-link` from the owner: a reset link on K2's own
 //!   page that, once used, drops the person's agent tie (`owner_reset`). Mailed to the
 //!   stored email by default; `to` mails another address (which becomes
 //!   their email on use); `code` hands the link to the owner instead.
@@ -933,6 +935,9 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
             pick.unwrap_or_else(|| skin::HOST_APP_ID.to_string())
         }
     };
+    if v.get("revoke").and_then(Value::as_bool) == Some(true) {
+        return revoke_links(&person, &app, true, actor);
+    }
     let code = v.get("code").and_then(Value::as_bool).unwrap_or(false);
     let to = match text(&v, &["to"]) {
         Some(raw) => match skin::normalize_email(raw) {
@@ -1075,6 +1080,100 @@ fn returned_code(minted: &invites::Minted, person: &skin::SkinPrincipal, app: &s
         })
         .to_string(),
     )
+}
+
+// ── an agent's reset (0.46.8) ────────────────────────────────────────
+
+fn status_line(code: u16) -> &'static str {
+    match code {
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        409 => "409 Conflict",
+        429 => "429 Too Many Requests",
+        502 => "502 Bad Gateway",
+        _ => "500 Internal Server Error",
+    }
+}
+
+/// `POST /cli/skin/users/reset-link` from an agent of `ws`, with the App-users
+/// switch on (`k2 app user reset <u> --app <app> [--revoke]`). K2 mails the person
+/// the App's reset link, to the email on the login, from the App's address and
+/// under the workspace's mail governance, the same as `password.forgot` and an App
+/// key's reset. The agent never gets the link: the person's mailbox does. Starting
+/// a reset isn't setting a password, so it ties nobody; the person choosing a
+/// password with it releases a tie. `revoke` takes back that login's unused links
+/// on the App (never the owner's reset).
+pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> CliResponse {
+    if !is_post {
+        return method_not_allowed();
+    }
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = text(&v, &["username", "name"]) else { return usage("missing username") };
+    if text(&v, &["to", "from"]).is_some() || v.get("code").and_then(Value::as_bool) == Some(true) {
+        return owner_only("an agent's reset goes to the email on the login, from the App's address; only the owner sends it elsewhere or takes the link itself");
+    }
+    let not_here = || refusal("404 Not Found", "not_found", "no such App user on your workspace's Apps");
+    let person = match principal(username) {
+        Ok(Some(p)) => p,
+        Ok(None) => return not_here(),
+        Err(r) => return r,
+    };
+    let grants = match skin::list_grants() {
+        Ok(g) => g,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    if crate::skin_routes::has_box_login(&person.id, &grants) {
+        return crate::skin_routes::box_login_refused(&person.username);
+    }
+    if skin::test_guests::get(&person.id).ok().flatten().is_some() {
+        return owner_only("a test guest has no reset: set its password with k2 app test-guest");
+    }
+    let own: Vec<&str> = grants
+        .iter()
+        .filter(|g| g.subject_kind == "principal" && g.subject_id == person.id && g.kind == "app")
+        .filter(|g| skin::ties::app_workspace(&g.target_id).as_deref() == Some(ws))
+        .map(|g| g.target_id.as_str())
+        .collect();
+    let app = match text(&v, &["app", "appId"]) {
+        Some(raw) => match crate::skin_routes::resolve_app_target(raw) {
+            Ok(a) if own.contains(&a.as_str()) => a,
+            Ok(_) => return not_here(),
+            Err(e) => return usage(&e),
+        },
+        None => match own.as_slice() {
+            [one] => one.to_string(),
+            [] => return not_here(),
+            _ => return usage("they sign in to several of your Apps: name one (--app)"),
+        },
+    };
+    if v.get("revoke").and_then(Value::as_bool) == Some(true) {
+        return revoke_links(&person, &app, false, actor);
+    }
+    match app_key_reset(&app, username, actor) {
+        Ok(out) => {
+            audit("app_user_reset_started", actor, &format!("{} app={app} delivered={}", person.username, out["delivered"].as_str().unwrap_or("-")));
+            skin::guest_rooms::audit_user_event(&app, "app_user_reset_started", actor, json!({ "username": person.username, "delivered": out["delivered"] }));
+            let mut out = out;
+            out["app"] = json!(app);
+            CliResponse::ok_json(out.to_string())
+        }
+        Err((code, id, hint)) => refusal(status_line(code), id, &hint),
+    }
+}
+
+/// Take back `person`'s unused links on `app`, audited.
+fn revoke_links(person: &skin::SkinPrincipal, app: &str, owners_too: bool, actor: &str) -> CliResponse {
+    match invites::void_for_app(&person.id, app, owners_too) {
+        Ok(n) => {
+            audit("app_user_links_revoked", actor, &format!("{} app={app} revoked={n}", person.username));
+            skin::guest_rooms::audit_user_event(app, "app_user_links_revoked", actor, json!({ "username": person.username, "revoked": n }));
+            CliResponse::ok_json(json!({ "ok": true, "username": person.username, "app": app, "revoked": n }).to_string())
+        }
+        Err(e) => CliResponse::internal_error(e),
+    }
 }
 
 // ── an App key's reset (security review item 4) ──────────────────────

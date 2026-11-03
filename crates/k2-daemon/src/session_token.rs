@@ -1199,7 +1199,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // agent-app-users (0.46.4): an agent invites people to its own
         // workspace's Apps (the manage-Apps gate + the handler's checks), and
         // an App's own agent sets its invite settings (switch 2, handler).
-        // `/cli/skin/users/reset-link` is the owner's alone: never here.
+        // An agent on `reset-link` gets the App's own reset, mailed to the
+        // person (`handle_agent_reset`), never the owner's link.
+        "/cli/skin/users/reset-link",
         "/cli/skin/users/invite",
         "/cli/skin/access/invites",
         // `/cli/skin/grants`, `/cli/skin/grants/delete`, `/cli/skin/grants/enabled`,
@@ -2337,12 +2339,12 @@ mod tests {
         }
     }
 
-    /// agent-app-users T4.4 / A22: the owner reset link is never an agent
-    /// verb; inviting is (the handler scopes it to the agent's own Apps).
+    /// 0.46.8: an agent starts its App's own reset here (the handler scopes it, and
+    /// never mints the owner's link); inviting is the same.
     #[test]
-    fn reset_link_is_owner_only_invite_is_an_agent_verb() {
+    fn reset_link_and_invite_are_agent_verbs() {
         for on in [false, true] {
-            assert!(!is_agent_verb_when("/cli/skin/users/reset-link", on), "reset-link (permission cards on={on})");
+            assert!(is_agent_verb_when("/cli/skin/users/reset-link", on), "reset-link (permission cards on={on})");
             assert!(is_agent_verb_when("/cli/skin/users/invite", on), "invite (permission cards on={on})");
         }
     }

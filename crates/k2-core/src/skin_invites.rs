@@ -528,6 +528,18 @@ pub(crate) fn void_unused_conn(conn: &Connection, principal_id: &str, which: Voi
     Ok(n + m)
 }
 
+/// Take back `principal_id`'s unused links on `app`: their links stop working. An
+/// agent's revoke leaves the owner's reset (`owners_too` false). Returns how many.
+pub fn void_for_app(principal_id: &str, app: &str, owners_too: bool) -> Result<usize, String> {
+    with_conn(|conn| {
+        conn.execute(
+            "DELETE FROM app_user_invites WHERE principal_id = ?1 AND app = ?2 AND used_at IS NULL AND (?3 = 1 OR purpose != 'owner_reset')",
+            params![principal_id, app, owners_too as i64],
+        )
+        .map_err(|e| format!("invite revoke: {e}"))
+    })
+}
+
 fn owner_reset_live_conn(conn: &Connection, principal_id: &str, now: i64) -> Result<bool, String> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM app_user_invites WHERE principal_id = ?1 AND purpose = 'owner_reset'

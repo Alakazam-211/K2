@@ -8089,13 +8089,18 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         need --email and are made App-only). The owner, or an agent
                                         for its own workspace's Apps (from its workspace's address,
                                         under its email sending mode). Links expire (k2 app login settings)
-  k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]
+  k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]
+                                        An agent with "Let this agent manage its Apps' users" on: K2 mails
+                                        the person the App's reset link, to the email on the login, from the
+                                        App's address (you never see the link). Starting a reset doesn't tie
+                                        them; when they choose a password with it, any wait ends.
+                                        --revoke takes back that login's unused links on the App.
                                         The owner, or an admin for App-only users (box logins stay
                                         the owner's). A one-time reset link on K2's own page: when used,
                                         extra access waiting for the person's own password starts. --code: the link is printed for you to hand over. Mailing it needs --from
                                         <an address no agent reads>; a tied person's stored email
                                         (or one from before 0.46.4 you haven't set) needs --to.
-                                        Agents can't run this: ask a person on a card instead,
+                                        An agent wanting one of those asks a person on a card,
                                         k2 permission request apps.user-password-reset user=<username>
                                         [app=<app>] [mode=password|link|email] --why "<why>". The
                                         person who allows it sees the new password (or a one-time
@@ -18144,25 +18149,29 @@ if w.get("rooms"):
     print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), w.get("ask")))'
                     ;;
                 reset)
-                    local username="" app="" to="" code=0 from="" json_out=0
+                    local username="" app="" to="" code=0 from="" json_out=0 revoke=0
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --app=*) app="${1#--app=}"; shift ;;
+                            --revoke) revoke=1; shift ;;
                             --to) to="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --to=*) to="${1#--to=}"; shift ;;
                             --code) code=1; shift ;;
                             --from) from="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --from=*) from="${1#--from=}"; shift ;;
                             --json) json_out=1; shift ;;
-                            --help|-h) echo "Usage: k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]   (owner only)" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" ]] && { echo "Usage: k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>]" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>]" >&2; exit 1; }
                     local body raw
                     body=$(_compute_json K2_CJ_username="$username" K2_CJ_app="$app" K2_CJ_to="$to" K2_CJ_code_b="$code" K2_CJ_from="$from")
+                    if [[ "$revoke" -eq 1 ]]; then
+                        body=$(printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["revoke"]=True; print(json.dumps(d))')
+                    fi
                     raw=$(cli_post_json "/cli/skin/users/reset-link" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
                     if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$raw"; return 0; fi
@@ -18170,8 +18179,10 @@ if w.get("rooms"):
 import json,sys
 d=json.load(sys.stdin)
 how=d.get("delivered")
-if how=="sent":
-    print("Reset link sent to %s (works once; when it is used, %s gets every access you gave them)" % (d.get("sentTo"), d.get("username")))
+if "revoked" in d:
+    print("Took back %s unused link(s) for %s on that App" % (d.get("revoked"), d.get("username")))
+elif how=="sent":
+    print("Reset link sent to %s (works once; when it is used, %s gets everything their role names)" % (d.get("sentTo"), d.get("username")))
 elif how=="held":
     print(d.get("hint") or "Reset link held for approval.")
 else:
@@ -44557,11 +44568,12 @@ cmd_schema() {
     },
     {
       "name": "app user reset",
-      "usage": "k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]",
-      "description": "Owner only. A one-time reset link. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
+      "usage": "k2 app user reset <username> [--app <app>] [--revoke] [--to <email> | --code] [--from <address>] [--json]",
+      "description": "An agent with the App-users switch: K2 mails the person the App's reset link, to the email on the login (never shown to the agent; starting it ties nobody); --revoke takes back unused links. The owner, or an admin for App-only users: a one-time reset link on K2's own page. When it is used, the password is set, every session ends, and extra access that waited for a reset (an agent made or set up this person) starts. The link is always K2's own set-password page (the box front door's /cli/skin/password/set, never an App's) with K2's fixed text. --code shows the link to you (the code alone when the box has no front door). Mailing needs --from <an address no agent can read> (a workspace mailbox could be read by its agent); it goes to the stored email, or --to (stored as their email on use). The stored email is refused for anyone an agent or App key set up (any tie: it could have chosen the address) and for an email from before 0.46.4 you haven't set since: use --to or --code. The front door must be https and no App's domain. An owner reset link lives 24 h (K2's, never the App's setting).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--app", "arg": "app", "description": "Whose set-password page and link life to use (default: the App the person uses)."},
+        {"name": "--revoke", "arg": null, "description": "Take back this login's unused links on the App."},
         {"name": "--to", "arg": "email", "description": "Mail it here instead; becomes their email when used."},
         {"name": "--code", "arg": null, "description": "Show the link once instead of mailing it."},
         {"name": "--from", "arg": "address", "description": "The hosted address to send from."},

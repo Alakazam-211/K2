@@ -80671,7 +80671,7 @@ EOF
 
 _zen_guide_page_phone() {
     cat <<'EOF'
-A Garden's mobile layout
+k2 zen guide phone — a Garden's mobile layout
 
 Every Garden shows on a phone in K2 Companion. With no [[phone.screen]] it uses
 the default layout: one screen per column, every widget. Add them to choose the

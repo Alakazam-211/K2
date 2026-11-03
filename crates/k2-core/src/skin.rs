@@ -217,8 +217,9 @@ pub const CAP_AGENT_HANDLE: &str = "agent:handle";
 /// in `.k2/` with 403 `agent_config_protected`. Means nothing without
 /// `files:write` in the same room ([`parse_caps`] refuses it alone), never
 /// opens `.k2/heartbeats/` (heartbeats:write rules stay), and reads are
-/// unaffected. Owner tooling only: an agent with "manage Apps" can never
-/// add it (`skin_routes` refuses with 403 `owner_only`).
+/// unaffected. The owner's on box-wide roles and platform passes; the agent
+/// that owns an App may put it on that App's roles (Rosson 2026-11-03), held back
+/// by the tie until the person chooses their own password.
 pub const CAP_FILES_AGENT_CONFIG: &str = "files:agentconfig";
 /// The room access list (room-scope R9, 0.46.1): `GET /cli/skin/members`
 /// (`room.members`), the guests and agent logins that hold a grant on the
@@ -240,9 +241,8 @@ pub const CAP_PROJECT_WRITE: &str = "project:write";
 /// the `canDownload` flag each attachment carries for the viewer; opening a
 /// file (meta, preview, thumb, range) stays `thread:read` plus the guest's
 /// own `files:read`, as before. Never in the defaults, never implied by
-/// `thread:read` or `files:read`, in no App core, and person-only to grant:
-/// an agent with "manage Apps" can't add it (`skin_routes` answers 403
-/// `owner_only`), the same rule as [`CAP_FILES_AGENT_CONFIG`].
+/// `thread:read` or `files:read`, in no App core. Who may grant it is the same
+/// rule as [`CAP_FILES_AGENT_CONFIG`].
 pub const CAP_FILES_DOWNLOAD: &str = "files:download";
 /// Upload-only files (prd-app-caps-0464-v1 AC7, 0.46.4): put files in the
 /// room line's drop folders (`upload`, [`paths::RoomPathScope::upload`])

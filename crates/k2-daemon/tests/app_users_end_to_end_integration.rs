@@ -4,7 +4,9 @@
 //! - A login an agent makes works at once in the App's own room. A room the
 //!   owner approved for the App waits for a reset on K2's own page; a room past
 //!   those is refused, naming the broad path. The security review's proofs live
-//!   here as permanent tests (findings 1, 2, 4, 5, 6 and the sessions oracle).
+//!   here as permanent tests (findings 1, 2, 4, 5, 6 and the sessions oracle),
+//!   and the re-review's after them (the mark on the right row, box-wide roles,
+//!   the owner's and an App key's doors, `full-name`).
 //! - Nothing but an owner reset on K2's own page unties.
 //! - New access reaches a signed-in person at the next request.
 //! - An App's own agent reads and ends its own guests' sessions.
@@ -688,4 +690,208 @@ async fn logout_on_a_link_ends_the_session_presented_and_nothing_else() {
 
     gateway::close(&shop_id, None, true);
     gateway::close(&crm_id, None, true);
+}
+
+// ── the re-review's proofs (2026-11-02) ─────────────────────────────────
+
+/// A box login on `role`, signed in.
+async fn box_login(port: u16, name: &str, role: &str) -> String {
+    owner_post(port, "/cli/skin/users", json!({ "username": name })).await;
+    k2_daemon::test_harness::guest_with_own_password(name, PW);
+    owner_post(port, "/cli/skin/roles/assign", json!({ "username": name, "role": role })).await;
+    let r = login(port, json!({ "username": name, "password": PW })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    r.json()["token"].as_str().expect("token").to_string()
+}
+
+fn role_marked(role: &str) -> bool {
+    let r = k2_core::skin::find_role(role).unwrap().expect("role");
+    k2_core::skin::guest_rooms::written(k2_core::skin::guest_rooms::WRITTEN_ROLE, &r.id).unwrap()
+}
+
+/// The owner's reset link, used on K2's own page: untied.
+async fn reset_on_k2s_page(port: u16, u: &str, app: &str, t: &str) {
+    owner_post(port, "/cli/skin/front-door", json!({ "mode": "direct", "url": format!("https://door{t}.example.test"), "apply": false })).await;
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u, "app": app, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let tok = r.json()["link"].as_str().expect("link").split('#').nth(1).expect("token").to_string();
+    let body = json!({ "token": tok, "password": PW }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/password/reset", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(u).is_none(), "untied");
+}
+
+/// The mark goes on the role the write wrote, whatever else the body names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stray_id_on_a_role_write_marks_only_the_role_it_wrote() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let victim = format!("victim{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": victim, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    let sb = box_login(port, &format!("bx{t}"), &victim).await;
+    assert_eq!(rooms_of(&sb), vec![b.ops.id.clone()]);
+
+    let decoy = format!("decoy{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": decoy, "id": victim, "app": b.shop, "roomAccess": [line(&b.sales)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!role_marked(&victim), "the owner's role stays the owner's");
+    assert!(role_marked(&decoy), "the role it wrote carries the mark");
+    assert_eq!(rooms_of(&sb), vec![b.ops.id.clone()], "an unrelated box login keeps its room");
+
+    // An owner's App role doesn't become the agent's to edit.
+    let portal = format!("portal{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": portal, "app": b.shop, "roomAccess": [{ "handle": b.ops.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    let edit = json!({ "name": portal, "handle": b.ops.handle, "clear": true });
+    let r = post(port, "/cli/skin/roles/room", &b.agent, edit.clone()).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    let d2 = format!("dd{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": d2, "id": portal, "app": b.shop, "roomAccess": [line(&b.sales)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/room", &b.agent, edit).await;
+    assert_eq!(r.status, 403, "still the owner's: {}", r.body);
+
+    // The paths route reads `name` first; `id` is nothing to it.
+    let mine = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": mine, "app": b.shop, "roomAccess": [{ "handle": b.sales.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/paths", &b.agent, json!({ "name": mine, "id": victim, "handle": b.sales.handle, "read": ["docs"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!role_marked(&victim), "paths: {}", r.body);
+    assert!(role_marked(&mine));
+}
+
+/// A box-wide role naming the agent's room is the agent's to edit, and that
+/// never cuts off the people on it: a box login, or a login on another App.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agents_edit_of_a_box_wide_role_cuts_nobody_off() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let other = app_row(&b.ops, &format!("other{t}"));
+    let wide = format!("wide{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": wide, "roomAccess": [{ "handle": b.sales.handle, "caps": ["thread:read", "files:read"] }] })).await;
+    let sb = box_login(port, &format!("bx{t}"), &wide).await;
+    let on_other = format!("oo{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": on_other, "app": other, "password": TEMP })).await;
+    person_chooses(port, &on_other, TEMP, &other, PW).await;
+    owner_post(port, "/cli/skin/roles/assign", json!({ "username": on_other, "role": wide })).await;
+    let so = session(port, &on_other, &other).await;
+    assert_eq!(rooms_of(&sb), vec![b.sales.id.clone()]);
+    assert_eq!(rooms_of(&so), vec![b.sales.id.clone()]);
+
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": wide, "handle": b.sales.handle, "caps": ["thread:read", "thread:post"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!role_marked(&wide), "a box-wide role is never marked");
+    assert_eq!(rooms_of(&sb), vec![b.sales.id.clone()], "the box login keeps it");
+    assert_eq!(rooms_of(&so), vec![b.sales.id.clone()], "the login on another App keeps it");
+    let pass = k2_core::skin::resolve_skin_token(&sb).expect("a live pass");
+    assert!(pass.caps.iter().any(|c| c == "thread:post"), "and sees the edit: {:?}", pass.caps);
+}
+
+/// A stray `app` on assign changes nothing: the grant that changed is marked,
+/// so a revoke takes the room back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stray_app_on_assign_cant_skip_the_mark() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let other = app_row(&b.sales, &format!("other{t}"));
+    let own = format!("own{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": own, "app": b.shop, "roomAccess": [line(&b.ops)] })).await;
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let (u, c) = (format!("u{t}"), format!("c{t}"));
+    for n in [&u, &c] {
+        owner_post(port, "/cli/skin/users", json!({ "username": n, "app": b.shop, "password": TEMP })).await;
+        person_chooses(port, n, TEMP, &b.shop, PW).await;
+    }
+    let (su, sc) = (session(port, &u, &b.shop).await, session(port, &c, &b.shop).await);
+    let r = post(port, "/cli/skin/roles/assign", &b.agent, json!({ "username": u, "role": own, "app": other })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/assign", &b.agent, json!({ "username": c, "role": own })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(rooms_of(&su), vec![b.ops.id.clone()]);
+    assert_eq!(rooms_of(&sc), vec![b.ops.id.clone()]);
+    owner_post(port, "/cli/app/grant/revoke", json!({ "app": b.shop, "kind": "guests-rooms" })).await;
+    assert!(rooms_of(&sc).is_empty(), "control: the mark works");
+    assert!(rooms_of(&su).is_empty(), "a stray app skips nothing");
+}
+
+/// The owner's `k2 app guest rooms` is the owner's word: an untied login an
+/// agent made gets the room.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owners_guest_rooms_door_clears_the_mark() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    reset_on_k2s_page(port, &u, &b.shop, &t).await;
+    let s = session(port, &u, &b.shop).await;
+    let r = post(port, "/cli/app/guest/rooms", OWNER, json!({ "app": b.shop, "username": u, "rooms": [b.desk.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(rooms_of(&s), vec![b.desk.id.clone()], "the answer said changed, so it changed");
+}
+
+/// A login an App key made reaches the key's rooms after its reset: those
+/// rooms are the owner's, set at mint. `applyTokens` is answered as deprecated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_keys_login_reaches_the_keys_rooms_after_its_reset() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let grant = k2_core::app_grace::keys::AppKeyGrant {
+        scopes: vec!["users".into(), "rooms".into()],
+        rooms: vec![b.ops.id.clone(), b.desk.id.clone()],
+        ..Default::default()
+    };
+    let (_, key) = k2_core::api_keys::create_app_key(&format!("k{t}"), &b.shop, &grant.to_json()).expect("the key");
+    let u = format!("u{t}");
+    let r = post(port, &format!("/v1/apps/{}/users", b.shop), &key, json!({ "username": u, "rooms": [b.ops.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(tie_of(&u).is_some(), "the key could know the password");
+    reset_on_k2s_page(port, &u, &b.shop, &t).await;
+    let s = session(port, &u, &b.shop).await;
+    assert_eq!(rooms_of(&s), vec![b.ops.id.clone()], "made with it");
+    let r = post(port, &format!("/v1/apps/{}/users/rooms", b.shop), &key, json!({ "username": u, "rooms": [b.desk.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json().get("deprecated").is_none(), "{}", r.body);
+    assert_eq!(rooms_of(&s), vec![b.desk.id.clone()], "set with it");
+    let r = post(port, &format!("/v1/apps/{}/users/rooms", b.shop), &key, json!({ "username": u, "rooms": [b.ops.handle], "applyTokens": false })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.json()["deprecated"].as_str().expect("says so").contains("next request"), "{}", r.body);
+    assert_eq!(rooms_of(&s), vec![b.ops.id.clone()], "the flag changes nothing");
+}
+
+/// `full-name` feeds chat names and member lists: the owner's people are the
+/// owner's. An agent's own logins are fine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_cant_rename_a_person_the_owner_added() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let alice = format!("alice{t}");
+    owner_post(port, "/cli/skin/users", json!({ "username": alice, "app": b.shop, "password": TEMP })).await;
+    let r = post(port, "/cli/skin/users/full-name", &b.agent, json!({ "username": alice, "fullName": "Rosson Long [from owner]" })).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
+    assert!(r.body.contains("added by the owner"), "{}", r.body);
+    assert!(user_row(port, &alice).await["fullName"].is_null(), "untouched");
+    let mine = format!("mine{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": mine, "app": b.shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/full-name", &b.agent, json!({ "username": mine, "fullName": "Mina" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
 }

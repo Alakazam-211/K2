@@ -6037,13 +6037,21 @@ except Exception:
 #   k2 workspace swap-canonical <workspace> --agent claude
 #   k2 workspace swap-canonical <workspace> --agent claude --full --notes-file handoff.md
 cmd_workspace_swap_canonical() {
-    local target="" agent="" mode="recent" notes_file=""
+    local target="" agent="" mode="recent" notes_file="" model=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --model)
+                model="${2:-}"
+                if [[ -z "$model" ]]; then
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
+                    exit 2
+                fi
+                shift 2
+                ;;
             --agent|--provider)
                 agent="${2:-}"
                 if [[ -z "$agent" ]]; then
-                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
                     exit 2
                 fi
                 shift 2
@@ -6051,7 +6059,7 @@ cmd_workspace_swap_canonical() {
             --mode)
                 mode="${2:-}"
                 if [[ -z "$mode" ]]; then
-                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
                     exit 2
                 fi
                 shift 2
@@ -6061,14 +6069,14 @@ cmd_workspace_swap_canonical() {
             --notes-file)
                 notes_file="${2:-}"
                 if [[ -z "$notes_file" ]]; then
-                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                    echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
                     exit 2
                 fi
                 shift 2
                 ;;
             -*)
                 echo "Unknown flag: $1" >&2
-                echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+                echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
                 exit 2
                 ;;
             *)
@@ -6083,7 +6091,7 @@ cmd_workspace_swap_canonical() {
         esac
     done
     if [[ -z "$target" || -z "$agent" ]]; then
-        echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>]" >&2
+        echo "Usage: k2 workspace swap-canonical <workspace> --agent <harness> [--recent|--full] [--notes-file <path>] [--model <id>]" >&2
         exit 2
     fi
     case "$mode" in
@@ -6119,7 +6127,7 @@ except Exception:
     # The notes file is read by python and the body goes to curl on stdin,
     # so a long file never hits the per-argument / environment size limit.
     local out rc=0
-    out=$(SWAP_PROJECT="$resolved_path" SWAP_PROVIDER="$agent" SWAP_MODE="$mode" SWAP_NOTES_FILE="$notes_file" python3 -c '
+    out=$(SWAP_PROJECT="$resolved_path" SWAP_PROVIDER="$agent" SWAP_MODE="$mode" SWAP_NOTES_FILE="$notes_file" SWAP_MODEL="$model" python3 -c '
 import json, os
 notes = ""
 path = os.environ.get("SWAP_NOTES_FILE", "")
@@ -6131,6 +6139,7 @@ print(json.dumps({
     "provider": os.environ.get("SWAP_PROVIDER", ""),
     "mode": os.environ.get("SWAP_MODE", "recent"),
     "notes": notes,
+    "model": os.environ.get("SWAP_MODEL", ""),
 }))
 ' | curl -sS -X POST "${BASE_URL}/cli/workspace/swap-canonical?token=$(urlencode "$auth_token")" \
         --connect-timeout 5 --max-time 120 \
@@ -6165,6 +6174,8 @@ if not d.get("swapped"):
     print("Error: canonical chat was not swapped", file=sys.stderr)
     sys.exit(1)
 print("Swapped the canonical chat to %s." % (d.get("provider") or ""))
+if d.get("model"):
+    print("Model: %s (for this start; a later resume uses the preset or workspace model again)" % d["model"])
 prev = d.get("fromProvider") or ""
 if prev:
     print("Previous harness: %s" % prev)
@@ -42260,8 +42271,8 @@ cmd_schema() {
     },
     {
       "name": "agent harness",
-      "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]",
-      "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--model <id>] [--dry-run] [--json]",
+      "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes, unless you name a --model. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [
         {"name": "workspace", "required": true, "description": "Workspace handle, name or path."},
         {"name": "harness", "required": true, "description": "claude, codex, grok, gemini, cursor, pi or hermes."}
@@ -42269,6 +42280,7 @@ cmd_schema() {
       "flags": [
         {"name": "--full", "arg": null, "description": "Seed the new chat with the whole old conversation (default: the recent part)."},
         {"name": "--notes-file", "arg": "path", "description": "Extra handover notes for the new chat."},
+        {"name": "--model", "arg": "id", "description": "Start the new chat on this model, even if the preset names another. On the same harness it starts a new chat with the summary. This start only: a later resume uses the preset or workspace model again."},
         {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
       ]
@@ -53002,6 +53014,8 @@ CANONICAL CHAT
       --recent                      Last turn only (default)
       --full                        Longer transcript tail
       --notes-file <path>           Extra notes appended to the seed
+      --model <id>                  Start the new chat on this model, even if
+                                    the preset names another (this start only)
       harness: claude, grok, cursor, gemini, pi, codex, hermes
 
 `<path>` defaults to K2_PROJECT_PATH or PWD.
@@ -54007,7 +54021,8 @@ changes NEW chats. This command moves the pinned chat itself:
   2. Heartbeats on the pinned chat, Threads and messages go to the new chat.
   3. The old chat stays in Chat history.
 
-Already on <harness>: nothing changes (exit 0). <harness> not installed
+Already on <harness>: nothing changes (exit 0), unless you name a --model:
+then it starts a new chat on that model with the summary. <harness> not installed
 on this computer: nothing changes either (exit 1, harness_not_installed);
 the old chat keeps running and the error says how to install it.
 --dry-run runs the same check and shows the program it would launch.
@@ -54021,6 +54036,9 @@ USAGE
 FLAGS
   --full                  Seed with the whole old conversation (default: the recent part)
   --notes-file <path>     Extra handover notes for the new chat
+  --model <id>            Start the new chat on this model, even if the preset
+                          names another. This start only: a later resume uses
+                          the preset or workspace model again
   --dry-run               Show what would move; change nothing
   --json                  The daemon's JSON
 
@@ -54037,6 +54055,7 @@ EXAMPLES
   k2 agent harness sales claude
   k2 agent harness ~/agents/ops claude --dry-run
   k2 agent harness ops codex --full --notes-file handover.md
+  k2 agent harness ops codex --model gpt-6-astra
 
 EXIT CODES
   0 ok (moved, or already there) · 1 error · 2 bad usage · 3 refused · 4 not found
@@ -54049,8 +54068,8 @@ EOF
 # `harness_needs_person` (exit 3) instead of acting as the owner.
 cmd_agent_harness() {
     if _wants_help "$@"; then cmd_help_agent_harness; exit 0; fi
-    local usage="usage: k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]  (harness: claude, codex, grok, gemini, cursor, pi or hermes)"
-    local ws="" harness="" mode="recent" notes_file="" dry_run=false as_json=false
+    local usage="usage: k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--model <id>] [--dry-run] [--json]  (harness: claude, codex, grok, gemini, cursor, pi or hermes)"
+    local ws="" harness="" mode="recent" notes_file="" model="" dry_run=false as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --full) mode="full"; shift ;;
@@ -54058,6 +54077,9 @@ cmd_agent_harness() {
             --notes-file)
                 [ -n "${2:-}" ] || { _agent_err "bad_usage" "--notes-file takes a path — $usage"; exit 2; }
                 notes_file="$2"; shift 2 ;;
+            --model)
+                [ -n "${2:-}" ] || { _agent_err "bad_usage" "--model takes a model id — $usage"; exit 2; }
+                model="$2"; shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --json) as_json=true; shift ;;
             -*) _agent_err "bad_usage" "unknown flag '$1' — $usage"; exit 2 ;;
@@ -54081,7 +54103,7 @@ cmd_agent_harness() {
     # names and ids itself.
     if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
     local body
-    body=$(H_WS="$ws" H_HARNESS="$harness" H_MODE="$mode" H_NOTES="$notes_file" H_DRY="$dry_run" python3 -c '
+    body=$(H_WS="$ws" H_HARNESS="$harness" H_MODE="$mode" H_NOTES="$notes_file" H_MODEL="$model" H_DRY="$dry_run" python3 -c '
 import json, os
 notes = ""
 path = os.environ.get("H_NOTES", "")
@@ -54093,6 +54115,7 @@ print(json.dumps({
     "harness": os.environ["H_HARNESS"],
     "mode": os.environ["H_MODE"],
     "notes": notes,
+    "model": os.environ.get("H_MODEL", ""),
     "dryRun": os.environ.get("H_DRY") == "true",
 }))
 ') || { _agent_err "bad_usage" "could not read the notes file: $notes_file"; exit 1; }
@@ -54146,13 +54169,20 @@ def own_note():
         print("Heartbeats with their own session (they do not follow the pinned chat): %s." % ", ".join(own))
         print("  Move one with: k2 heartbeat use-pinned-session on <name>")
 if d.get("dryRun"):
-    print("DRY RUN: would move %s'"'"'s pinned chat from %s to %s." % (ws, d.get("fromHarness") or "?", h))
+    if d.get("fromHarness") == h:
+        print("DRY RUN: would start %s'"'"'s pinned chat again on %s." % (ws, h))
+    else:
+        print("DRY RUN: would move %s'"'"'s pinned chat from %s to %s." % (ws, d.get("fromHarness") or "?", h))
+    if d.get("model"):
+        print("Model: %s" % d["model"])
     if d.get("launches"):
         print("%s is installed: %s" % (h, d["launches"]))
     print("The old chat would stay in Chat history; heartbeats, Threads and messages would go to the new chat.")
     own_note()
     sys.exit(0)
 print("Moved %s'"'"'s pinned chat: %s -> %s." % (ws, d.get("fromHarness") or "?", h))
+if d.get("model"):
+    print("Model: %s (for this start; a later resume uses the preset or workspace model again)" % d["model"])
 conv = d.get("claudeSessionId") or ""
 sid = d.get("sessionId") or ""
 if conv or sid:

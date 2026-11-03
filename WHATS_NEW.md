@@ -69,6 +69,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
 
 ### Fixes
+- **A Codex preset's `-c` options now reach a new chat.** Continue in a new chat, `k2 agent harness` and `k2 workspace swap-canonical` removed options like `-c model_reasoning_effort="high"` from the preset, because K2 read `-c` as "continue". This goes back to 0.41.0. A preset with `-c model=…` now wins over the workspace default model on a new chat, as `-m` always has.
+- **Name the model when you start a pinned chat.** `k2 agent harness <workspace> <harness> --model <id>` (and `k2 workspace swap-canonical --model`) starts the new chat on that model, even if the preset names another. On the same harness it starts a new chat with a summary of the old one. It holds for that start: when the chat later resumes, it goes back to the preset or workspace model.
 - **A sign-in link can no longer send someone to another site.** A crafted return address could redirect after a successful sign-in.
 - **Open connections now close when access is removed.** Taking someone out of a room, ending their sign-in, deleting them or uninstalling their App now stops what their open tabs receive and closes those connections. Anyone whose access didn't change stays connected.
 - **K2 checks for updates at most once every 3 hours, however many windows you have open or times you reload.** An update it already found stays on offer. **Check for Updates** in Settings always checks right away.

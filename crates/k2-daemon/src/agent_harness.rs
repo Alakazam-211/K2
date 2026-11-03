@@ -59,6 +59,8 @@ struct Req {
     #[serde(default)]
     notes: String,
     #[serde(default)]
+    model: String,
+    #[serde(default)]
     dry_run: bool,
 }
 
@@ -260,7 +262,9 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
     };
 
     let current = current_harness(&target.id, &target.path);
-    if current == harness {
+    let model = Some(req.model.trim()).filter(|m| !m.is_empty());
+    // A named model is a reason to start a new chat on the same harness.
+    if current == harness && model.is_none() {
         return CliResponse::ok_json(
             json!({
                 "switched": false,
@@ -281,6 +285,11 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             return r;
         }
     };
+    if let Some(model) = model {
+        if let Err(why) = k2_core::workspace::resume_chat::never_chatted_takes_model(&target.path, harness, model) {
+            return refused("400 Bad Request", "model_unsupported", format!("{why}. The pinned chat was not touched."));
+        }
+    }
     let own_session = own_session_heartbeats(&target.id);
     if req.dry_run {
         return CliResponse::ok_json(
@@ -291,13 +300,14 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
                 "path": target.path,
                 "fromHarness": current,
                 "harness": harness,
+                "model": model,
                 "launches": launches,
                 "ownSessionHeartbeats": own_session,
             })
             .to_string(),
         );
     }
-    match crate::pinned_chat::run_swap(&target.path, harness, mode, &req.notes, &from) {
+    match crate::pinned_chat::run_swap(&target.path, harness, mode, &req.notes, &from, model) {
         Err(r) => {
             audit(caller, &format!("failed:{harness}"), ingress);
             r

@@ -724,7 +724,11 @@ fn claude_pinned_or(command: &str, args: &[String]) -> Vec<String> {
 
 /// Drop resume / premint / fork tokens and the following id. Fresh
 /// continue must not inherit a preset that already names a session.
-fn strip_session_argv(args: &[String]) -> Vec<String> {
+///
+/// `-c` means "continue the last chat" to Claude, Pi and Hermes, but Codex's
+/// `-c key=value` (and `--config`) is a config override: it stays, and its
+/// value is never read as a flag or a `resume` word.
+fn strip_session_argv(provider: &str, args: &[String]) -> Vec<String> {
     const FLAGS: &[&str] = &[
         "--resume",
         "-r",
@@ -738,6 +742,11 @@ fn strip_session_argv(args: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < args.len() {
         let tok = args[i].as_str();
+        if provider == "codex" && (tok == "-c" || tok == "--config") {
+            out.extend(args[i..].iter().take(2).cloned());
+            i += 2;
+            continue;
+        }
         if FLAGS.contains(&tok) || tok == "resume" {
             i += 1;
             if i < args.len() && !args[i].starts_with('-') {
@@ -785,6 +794,47 @@ pub fn never_chatted_program(
     }
 }
 
+/// Can `model` be named on the new chat a pinned-chat move of
+/// `target_provider` would start? Picks the argv as
+/// [`resolve_never_chatted_chat_args`] does, with NO identity writes, so a
+/// move refuses before it ends the old chat. `Err` says why not: a model id
+/// that isn't one, or a harness with no model flag K2 knows.
+pub fn never_chatted_takes_model(
+    project_path: &str,
+    target_provider: &str,
+    model: &str,
+) -> Result<(), String> {
+    use crate::workspace::model_splice::{apply_model, ModelApplyMode, ModelApplyResult};
+    let model = model.trim();
+    if model.is_empty()
+        || model.len() > 200
+        || model.starts_with('-')
+        || model.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!("'{model}' is not a model id"));
+    }
+    let provider = target_provider.trim();
+    let default_cmd = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        resolve_agent_command(&conn, project_path)
+    };
+    let (command, args) = match provider_resume_for_provider(provider) {
+        Some(adapter) => {
+            let (command, args, _, _) = spawn_command_for(adapter, &default_cmd);
+            let args = strip_session_argv(adapter.provider, &args);
+            (command, args)
+        }
+        None => (default_cmd.command.clone(), default_cmd.args.clone()),
+    };
+    match apply_model(&command, &args, Some(model), ModelApplyMode::ApiOverride).1 {
+        ModelApplyResult::IgnoredUnsupported => {
+            Err(format!("{command} has no model flag K2 knows, so --model can't reach it"))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Never-chatted argv for `target_provider`. Does not resume a saved id
 /// and does not converge to the newest file on disk.
 ///
@@ -823,7 +873,7 @@ pub fn resolve_never_chatted_chat_args(
     }
 
     let (command, base_args, env, readiness) = spawn_command_for(adapter, &default_cmd);
-    let base_args = strip_session_argv(&base_args);
+    let base_args = strip_session_argv(adapter.provider, &base_args);
 
     match adapter.premint_args(&base_args, "") {
         Some(_) => {
@@ -993,6 +1043,24 @@ mod tests {
         )
         .expect("insert preset");
         id
+    }
+
+    /// A preset that comes before the built-ins, for this test only: the
+    /// preset table is shared, and `spawn_command_for` takes the first match.
+    struct FirstPreset(String);
+
+    impl FirstPreset {
+        fn new(command: &str) -> Self {
+            Self(insert_preset(command, -1))
+        }
+    }
+
+    impl Drop for FirstPreset {
+        fn drop(&mut self) {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM agent_presets WHERE id = ?1", params![self.0]).expect("remove preset");
+        }
     }
 
     fn set_saved_session(project_id: &str, session_id: &str, harness: &str) {
@@ -1774,6 +1842,60 @@ mod tests {
         assert!(out.resume_session.is_empty());
         assert_never_chatted_argv(&out.args, source);
         assert_eq!(saved_row(&project_id), Some((None, "codex".to_string())));
+    }
+
+    /// `-c key=value` is Codex's config override, not Claude's `--continue`.
+    /// A refreshed chat keeps it, whatever its value says.
+    #[test]
+    fn never_chatted_codex_keeps_config_overrides() {
+        let _guard = HomeGuard::new("fresh-codex-config");
+        crate::db::init_for_tests();
+        let source = "01920000-abcd-7000-8000-00000000c0df";
+        let _preset = FirstPreset::new(&format!(
+            "codex --yolo -c model_reasoning_effort=\"high\" -c model=sol resume {source} --config sandbox_mode=x"
+        ));
+        let path = format!("/fixture/fresh-codex-config-{}", uuid::Uuid::new_v4());
+        insert_project(&path, None);
+
+        let out = resolve_never_chatted_chat_args(&path, "codex").expect("fresh");
+        assert_eq!(
+            out.args,
+            ["--yolo", "-c", "model_reasoning_effort=high", "-c", "model=sol", "--config", "sandbox_mode=x"]
+                .map(String::from)
+                .to_vec()
+        );
+    }
+
+    /// A harness whose `-c` means "continue the last chat" still loses it.
+    #[test]
+    fn never_chatted_other_harnesses_still_drop_continue() {
+        let _guard = HomeGuard::new("fresh-pi-continue");
+        crate::db::init_for_tests();
+        let _preset = FirstPreset::new("pi --thinking high -c --session abc");
+        let path = format!("/fixture/fresh-pi-continue-{}", uuid::Uuid::new_v4());
+        insert_project(&path, None);
+
+        let out = resolve_never_chatted_chat_args(&path, "pi").expect("fresh");
+        assert_eq!(out.args, ["--thinking", "high"].map(String::from).to_vec());
+    }
+
+    #[test]
+    fn a_model_id_must_fit_the_harness_before_anything_moves() {
+        let _guard = HomeGuard::new("fresh-model-preflight");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/fresh-model-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let before = saved_row(&project_id);
+
+        never_chatted_takes_model(&path, "codex", "gpt-6-astra").expect("codex takes -m");
+        for bad in ["", "  ", "--yolo", "two words", "a\nb"] {
+            let err = never_chatted_takes_model(&path, "codex", bad).expect_err("not a model id");
+            assert!(err.contains("not a model id"), "{bad:?}: {err}");
+        }
+        // Bare hermes has no model flag until `chat`.
+        let err = never_chatted_takes_model(&path, "hermes", "m").expect_err("hermes without chat");
+        assert!(err.contains("no model flag"), "{err}");
+        assert_eq!(saved_row(&project_id), before, "the check writes nothing");
     }
 
     #[test]

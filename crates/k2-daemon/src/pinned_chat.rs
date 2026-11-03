@@ -195,7 +195,7 @@ pub fn ensure_pinned_chat(
     force_respawn: bool,
     explicit_selection: bool,
 ) -> Result<EnsurePinnedChatOutcome, String> {
-    ensure_pinned_chat_inner(project_path, force_respawn, explicit_selection, None)
+    ensure_pinned_chat_inner(project_path, force_respawn, explicit_selection, None, None)
 }
 
 /// Force-respawn a never-chatted session of `target_provider`.
@@ -212,7 +212,18 @@ pub fn ensure_pinned_chat_fresh(
     if provider.is_empty() {
         return Err("target provider required".to_string());
     }
-    ensure_pinned_chat_inner(project_path, true, false, Some(provider))
+    ensure_pinned_chat_inner(project_path, true, false, Some(provider), None)
+}
+
+/// [`ensure_pinned_chat_fresh`] naming the model the new chat starts on: it
+/// replaces a model the preset names (`k2 agent harness --model`). Checked
+/// first with [`k2_core::workspace::resume_chat::never_chatted_takes_model`].
+fn ensure_pinned_chat_fresh_on_model(
+    project_path: &str,
+    target_provider: &str,
+    model: &str,
+) -> Result<EnsurePinnedChatOutcome, String> {
+    ensure_pinned_chat_inner(project_path, true, false, Some(target_provider.trim()), Some(model))
 }
 
 fn ensure_pinned_chat_inner(
@@ -220,6 +231,7 @@ fn ensure_pinned_chat_inner(
     force_respawn: bool,
     explicit_selection: bool,
     fresh_provider: Option<&str>,
+    fresh_model: Option<&str>,
 ) -> Result<EnsurePinnedChatOutcome, String> {
     // 1. Resolve project_id. The canonical key is the bare project_id
     //    (canonical_session::canonical_key_for) — the same slot the
@@ -243,7 +255,13 @@ fn ensure_pinned_chat_inner(
             }
             _ => PinnedAdopt::Skip,
         };
-        let resolved = resolve_never_chatted_chat_args(project_path, provider)?;
+        let mut resolved = resolve_never_chatted_chat_args(project_path, provider)?;
+        if let Some(model) = fresh_model {
+            // The spawn's own splice then sees a pinned model and leaves it.
+            use k2_core::workspace::model_splice::{apply_model, ModelApplyMode};
+            let (args, _) = apply_model(&resolved.command, &resolved.args, Some(model), ModelApplyMode::ApiOverride);
+            resolved.args = args;
+        }
         (resolved, adopt, true)
     } else {
         let resolved = resolve_resume_chat_args_ex(project_path, explicit_selection)?;
@@ -748,6 +766,8 @@ pub fn handle_swap_canonical(
         mode: String,
         #[serde(default)]
         notes: String,
+        #[serde(default)]
+        model: String,
     }
 
     let req: Req = match serde_json::from_slice(body) {
@@ -787,7 +807,8 @@ pub fn handle_swap_canonical(
         }
     }
     let mode = if req.mode.trim().is_empty() { "recent" } else { req.mode.trim() };
-    match run_swap(req.project.trim(), req.provider.trim(), mode, &req.notes, &from) {
+    let model = Some(req.model.trim()).filter(|m| !m.is_empty());
+    match run_swap(req.project.trim(), req.provider.trim(), mode, &req.notes, &from, model) {
         Ok(mut done) => {
             swap_audit(caller, &format!("swapped:{}", done["provider"].as_str().unwrap_or("")), ingress);
             done["swapped"] = serde_json::Value::Bool(true);
@@ -853,12 +874,18 @@ pub(crate) fn preflight_harness(
 /// `Err` is the 400 to send: an unknown harness, an unregistered project,
 /// or a spawn that failed or did not come up fresh (the handoff file
 /// stays on disk and the body names it).
+///
+/// `model` names the model the new chat starts on. It replaces a model the
+/// preset names, and a harness that can't take one is refused here, before
+/// the old chat ends. It's for this start: when the chat later resumes, its
+/// argv comes from the preset again.
 pub(crate) fn run_swap(
     project_path: &str,
     provider: &str,
     mode: &str,
     notes: &str,
     from: &str,
+    model: Option<&str>,
 ) -> Result<serde_json::Value, crate::cli_response::CliResponse> {
     // Nothing is touched (no handoff, no kill) until the target is known,
     // the workspace is registered and the target CLI can be launched.
@@ -870,11 +897,23 @@ pub(crate) fn run_swap(
         )));
     }
     preflight_harness(project_path, target)?;
+    if let Some(model) = model {
+        k2_core::workspace::resume_chat::never_chatted_takes_model(project_path, target, model).map_err(|why| {
+            swap_refused(
+                "400 Bad Request",
+                "model_unsupported",
+                &format!("{why}. The pinned chat was not touched."),
+            )
+        })?;
+    }
     let prep = k2_core::workspace::canonical_swap::prepare_canonical_swap(project_path, provider, mode, notes)
         .map_err(crate::cli_response::CliResponse::bad_request)?;
 
-    let ensured = ensure_pinned_chat_fresh(&prep.project_path, &prep.target_provider)
-        .map_err(|err| swap_failed(&prep.handoff_path, err))?;
+    let ensured = match model {
+        Some(model) => ensure_pinned_chat_fresh_on_model(&prep.project_path, &prep.target_provider, model),
+        None => ensure_pinned_chat_fresh(&prep.project_path, &prep.target_provider),
+    }
+    .map_err(|err| swap_failed(&prep.handoff_path, err))?;
     if ensured.reused || !ensured.fresh_spawn {
         return Err(swap_failed(&prep.handoff_path, "canonical chat was reused instead of swapped"));
     }
@@ -893,6 +932,7 @@ pub(crate) fn run_swap(
     );
     Ok(serde_json::json!({
         "provider": prep.target_provider,
+        "model": model,
         "fromProvider": prep.from_provider,
         "fromSessionId": prep.from_session_id,
         "sessionId": ensured.session_id,

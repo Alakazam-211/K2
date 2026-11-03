@@ -33,7 +33,7 @@ SHIM_DIR="$(mktemp -d -t k2-harness-shim-XXXXXX)"
 for cli in claude grok codex; do
     cat >"$SHIM_DIR/$cli" <<EOF
 #!/bin/sh
-case "\$1" in --version|-v|version) echo "0.0.0-shim"; exit 0 ;; esac
+case "\$1" in --version|-v|version|--help|app-server) echo "0.0.0-shim"; exit 0 ;; esac
 printf '%s\n' "\$@" >>"$SHIM_DIR/$cli.argv"
 echo "--" >>"$SHIM_DIR/$cli.argv"
 env >"$SHIM_DIR/$cli.env"
@@ -196,6 +196,53 @@ run k2 agent harness "$A" claude
 has "$out" "already on claude"
 [ "$(starts claude)" = $((claude_before + 1)) ] || fail "already-on spawned claude"
 ok "grok -> claude; second run changes nothing"
+
+echo "== a preset's -c options and --model over its model =="
+# A codex preset that names a model and a config override. Its -c is Codex's
+# config, not "continue": a new chat keeps it (the bug: every swap dropped it).
+k2 preset set Codex --command 'codex --yolo -m preset-model -c model_reasoning_effort="high"' --json >/dev/null \
+    || fail "set the codex preset"
+run k2 agent harness "$A" codex --model
+[ "$rc" = 2 ] || fail "--model with no id exit $rc: $out"
+run k2 agent harness "$A" codex --model --yolo
+[ "$rc" = 1 ] || fail "--model --yolo exit $rc: $out"
+has "$out" "model_unsupported"
+has "$out" "not a model id"
+has "$out" "not touched"
+[ ! -e "$SHIM_DIR/codex.argv" ] || fail "a bad model id spawned codex"
+[ "$(pinned_provider "$A")" = claude ] || fail "a bad model id moved the chat"
+run k2 agent harness "$A" codex
+[ "$rc" = 0 ] || fail "move to codex exit $rc: $out"
+wait_starts codex 1
+last_codex="$(awk 'BEGIN{RS="--\n"} {last=$0} END{print last}' "$SHIM_DIR/codex.argv")"
+has "$last_codex" "model_reasoning_effort=high"
+has "$last_codex" "preset-model"
+ok "the preset's -c option survives a move; no --model keeps the preset's model"
+run k2 agent harness "$A" codex --model astra --dry-run --json
+[ "$rc" = 0 ] || fail "--model dry run exit $rc: $out"
+[ "$(jq -r .model <<<"$out")" = astra ] && [ "$(jq -r .switched <<<"$out")" = false ] || fail "dry run: $out"
+[ "$(starts codex)" = 1 ] || fail "the dry run spawned"
+run k2 agent harness "$A" codex --model astra --json
+[ "$rc" = 0 ] || fail "--model on the same harness exit $rc: $out"
+[ "$(jq -r .switched <<<"$out")" = true ] && [ "$(jq -r .model <<<"$out")" = astra ] || fail "--model answer: $out"
+wait_starts codex 2
+last_codex="$(awk 'BEGIN{RS="--\n"} {last=$0} END{print last}' "$SHIM_DIR/codex.argv")"
+has "$last_codex" "astra"
+hasnt "$last_codex" "preset-model"
+has "$last_codex" "model_reasoning_effort=high"
+ok "--model replaces the preset's model and starts a new chat on the same harness"
+run k2 workspace swap-canonical "$A" --agent codex --model sol
+[ "$rc" = 0 ] || fail "swap-canonical --model exit $rc: $out"
+has "$out" "Model: sol"
+wait_starts codex 3
+last_codex="$(awk 'BEGIN{RS="--\n"} {last=$0} END{print last}' "$SHIM_DIR/codex.argv")"
+has "$last_codex" "sol"
+hasnt "$last_codex" "preset-model"
+run k2 agent harness "$A" claude
+[ "$rc" = 0 ] || fail "back to claude exit $rc: $out"
+wait_starts claude $((claude_before + 2))
+[ "$(pinned_provider "$A")" = claude ] || fail "back on claude after the model checks"
+ok "the older door takes --model too; back on claude"
 
 echo "== a harness that isn't installed: refused, the old chat keeps running =="
 claude_now="$(starts claude)"

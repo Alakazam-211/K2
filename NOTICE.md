@@ -306,7 +306,7 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 
-## Multiplayer kit: k2-mpc-text v0.2.12 (vendored)
+## Multiplayer kit: k2-mpc-text v0.2.13 (vendored)
 
 The plain-text type pack for the kit (code, config, markup, diagram sources,
 `.txt`, and `.csv`/`.tsv` as text: a per-extension file-type table, a
@@ -315,7 +315,7 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-text` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.12` (`8cb0b33`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.13` (`755be95`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above); its tests use proptest (MIT OR Apache-2.0) |
 

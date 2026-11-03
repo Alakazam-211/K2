@@ -4481,7 +4481,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "k2-mpc-base",
 ]

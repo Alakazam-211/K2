@@ -1102,7 +1102,8 @@ fn status_line(code: u16) -> &'static str {
 /// key's reset. The agent never gets the link: the person's mailbox does. Starting
 /// a reset isn't setting a password, so it ties nobody; the person choosing a
 /// password with it releases a tie. `revoke` takes back that login's unused links
-/// on the App (never the owner's reset).
+/// on the App (never the owner's reset). A person who also signs in outside the
+/// workspace is the owner's to reset: nothing is minted, one answer with a stranger.
 pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> CliResponse {
     if !is_post {
         return method_not_allowed();
@@ -1151,6 +1152,16 @@ pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> 
     };
     if v.get("revoke").and_then(Value::as_bool) == Some(true) {
         return revoke_links(&person, &app, false, actor);
+    }
+    // A login on one of this agent's Apps isn't enough: a person who also signs
+    // in elsewhere has one password, and this App's page would see the new one.
+    // The same rule as an App key's reset and a pass's forgot.
+    let roles = match skin::list_roles() {
+        Ok(r) => r,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    if !crate::skin_routes::principal_in_workspace(&person, &roles, &grants, ws) {
+        return not_here();
     }
     match app_key_reset(&app, username, actor) {
         Ok(out) => {

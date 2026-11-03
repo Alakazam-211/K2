@@ -1232,6 +1232,56 @@ async fn s0_an_apps_forgot_is_uniform_and_its_link_ties_nobody() {
 /// 0.46.8: an agent runs its App's users end to end. It starts a reset (K2 mails
 /// the person, the agent never gets the link), takes a pending link back, clears a
 /// lockout, and reads what happened in the App's own record.
+/// One password, two workspaces: an agent's reset on its own App would let that
+/// App's page see the password that also opens the other App.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agents_reset_never_reaches_a_person_who_also_signs_in_elsewhere() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let rec = recorder();
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let ops = seed_ws(&env, &format!("ops{tag}"));
+    let shop = app_row(&sales, &format!("shop{tag}"));
+    let crm = app_row(&ops, &format!("crm{tag}"));
+    allow_manage(&sales, true);
+    let agent = passport(&sales);
+    seed_mail(&sales, &format!("rst{tag}.example.test"), "on");
+    set_front_door(port, &format!("https://door{tag}.example.test")).await;
+
+    let both = format!("both{tag}");
+    let email = format!("{both}@example.test");
+    owner_post(port, "/cli/skin/users", json!({ "username": both, "email": email, "app": shop })).await;
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: principal_id(&both),
+        kind: "app".into(),
+        target_id: crm.clone(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("the other App's login");
+    assert!(tie_of(&both).is_none(), "untied: nothing else stops it");
+
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": both, "app": shop })).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "one answer with a stranger: {}", r.body);
+    assert!(mails_to(&rec, &email).is_empty(), "nothing mailed");
+    assert!(invite_rows(&both).is_empty(), "nothing minted");
+    // Taking back a link on its own App reaches only that App's links.
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": both, "app": shop, "revoke": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // The same person with only the agent's App is its to reset.
+    let only = format!("only{tag}");
+    let only_mail = format!("{only}@example.test");
+    owner_post(port, "/cli/skin/users", json!({ "username": only, "email": only_mail, "app": shop })).await;
+    let r = post(port, "/cli/skin/users/reset-link", &agent, json!({ "username": only, "app": shop })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(mails_to(&rec, &only_mail).len(), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_starts_a_reset_takes_it_back_clears_a_lockout_and_reads_the_record() {
     let env = setup(&[]);

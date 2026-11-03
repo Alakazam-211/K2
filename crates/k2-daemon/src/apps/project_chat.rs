@@ -503,13 +503,43 @@ async fn refuse_http(stream: &mut TcpStream, r: CliResponse) {
     crate::routes::http::refuse_upgrade(stream, &resp).await;
 }
 
+/// May the pass behind `raw` read project `group_id` now? Reads skin.db and the
+/// main database: a blocking thread. Adding a room to a project can take a
+/// guest's access away with no skin.db write at all, so this re-reads the
+/// members every time.
+fn chat_access(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, group_id: &str) -> crate::socket_access::RoomAccess {
+    use crate::socket_access::RoomAccess;
+    let pass = match crate::socket_access::live_pass(link, raw) {
+        Ok(Some(pass)) => pass,
+        Ok(None) => return RoomAccess::PassGone,
+        Err(e) => {
+            k2_core::log_debug!("[apps/project_chat] a pass couldn't be read: {e}");
+            return RoomAccess::Failed;
+        }
+    };
+    match project_groups::list_members(group_id) {
+        Ok(m) => {
+            let rooms: Vec<String> = m.into_iter().map(|m| m.workspace_id).collect();
+            if holds_in_every(&pass, &rooms, CAP_THREAD_READ) {
+                RoomAccess::Still(pass)
+            } else {
+                RoomAccess::Lost
+            }
+        }
+        Err(e) => {
+            k2_core::log_debug!("[apps/project_chat] members of {group_id}: {e}");
+            RoomAccess::Failed
+        }
+    }
+}
+
 /// `WS /cli/skin/projects/events?group=` for a resolved pass. The project
 /// is checked before the upgrade (400 without `group`, the uniform 403
 /// `skin_room` for an unknown or invisible one). After that, each frame
-/// re-resolves the pass from `token` and re-reads the members, so a
-/// revoked pass, a role edit or a new unreachable member closes the
-/// socket instead of sending another line. A subscriber that lags the bus
-/// is closed (catch up with `project.read` afterSeq), never skipped.
+/// and a 5 s tick re-resolve the pass from `token` and re-read the members:
+/// a revoked pass closes 4003; a role edit or a new unreachable member closes
+/// 4013, with no further line. A subscriber that lags the bus is closed (catch
+/// up with `project.read` afterSeq), never skipped.
 pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<String, String>, pass: SkinPass, token: String) {
     let sel = params.get("group").map(|s| s.trim().to_string()).unwrap_or_default();
     if sel.is_empty() {
@@ -541,12 +571,30 @@ pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<Str
     let (mut write, mut read) = ws.split();
     let mut keepalive = tokio::time::interval(crate::overlay_ws::ping_interval());
     keepalive.tick().await;
+    let mut recheck = crate::socket_access::tick();
+    // A link's context is task-local: captured here for the blocking checks.
+    let link = crate::apps::gateway::current();
+    macro_rules! access_now {
+        () => {{
+            let (l, t, g) = (link.clone(), token.clone(), group_id.clone());
+            tokio::task::spawn_blocking(move || chat_access(l.as_deref(), &t, &g)).await.unwrap_or(crate::socket_access::RoomAccess::Failed)
+        }};
+    }
     loop {
         tokio::select! {
             biased;
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
+                }
+            }
+            _ = recheck.tick() => {
+                match access_now!() {
+                    crate::socket_access::RoomAccess::Still(_) => {}
+                    end => {
+                        let _ = write.send(end.close_message()).await;
+                        break;
+                    }
                 }
             }
             incoming = read.next() => match incoming {
@@ -562,21 +610,18 @@ pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<Str
                 if moved.conversation_id != group_id {
                     continue;
                 }
-                // Resolve here: a link's context is task-local.
-                let Some(fresh) = crate::apps::gateway::resolve_pass(&token) else {
-                    let _ = write.send(Message::Close(None)).await;
-                    break;
+                let fresh = match access_now!() {
+                    crate::socket_access::RoomAccess::Still(p) => p,
+                    end => {
+                        let _ = write.send(end.close_message()).await;
+                        break;
+                    }
                 };
                 let gid = group_id.clone();
-                let frame = tokio::task::spawn_blocking(move || {
-                    if !can_read(&fresh, &gid) {
-                        return None;
-                    }
-                    read_item(&fresh, &gid).map(|it| read_frame_wire(&it))
-                })
-                .await
-                .ok()
-                .flatten();
+                let frame = tokio::task::spawn_blocking(move || read_item(&fresh, &gid).map(|it| read_frame_wire(&it)))
+                    .await
+                    .ok()
+                    .flatten();
                 if let Some(text) = frame {
                     if write.send(Message::Text(text)).await.is_err() {
                         break;
@@ -588,10 +633,12 @@ pub async fn serve_events_connection(stream: &mut TcpStream, params: HashMap<Str
                     if msg.group_id != group_id {
                         continue;
                     }
-                    let still = crate::apps::gateway::resolve_pass(&token).is_some_and(|p| can_read(&p, &group_id));
-                    if !still {
-                        let _ = write.send(Message::Close(None)).await;
-                        break;
+                    match access_now!() {
+                        crate::socket_access::RoomAccess::Still(_) => {}
+                        end => {
+                            let _ = write.send(end.close_message()).await;
+                            break;
+                        }
                     }
                     if write.send(Message::Text(frame_wire(&msg))).await.is_err() {
                         break;

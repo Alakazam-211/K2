@@ -15,8 +15,26 @@
 //! A dead credential closes with [`crate::presence::session_revoked_close_message`]
 //! (4003). A client must not rely on seeing the code: it reconnects and the
 //! door refuses it.
+//!
+//! For an App pass, [`room_access`]: the pass as it resolves now. Pass gone:
+//! 4003. Pass fine, this socket's room or capability gone:
+//! [`crate::presence::access_lost_close_message`] (4013). A resolve holds the
+//! skin mutex for 100 to 400 µs, so it never runs per frame:
+//! - **Before a frame leaves:** [`SkinGate`]. One atomic load while skin.db is
+//!   quiet. After any write, the next frame resolves first, so a revoke, a role
+//!   edit or a deleted user stops the very next frame.
+//! - **On the [`TICK`], idle or not:** always resolves. That closes an idle
+//!   socket, and it's the bound (5 s) on what no skin.db write shows: a pass's
+//!   expiry, a suspended App, a moved pin, and the other daemon's write during a
+//!   handoff.
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use k2_core::skin::SkinPass;
+use tokio_tungstenite::tungstenite::Message;
+
+use crate::apps::gateway::LinkCtx;
 
 /// How often an open socket asks again, whether or not it is sending.
 pub const TICK: Duration = Duration::from_secs(5);
@@ -73,6 +91,101 @@ impl LoginCheck {
     }
 }
 
+/// Has skin.db been written since this socket last checked its pass?
+#[derive(Debug, Default)]
+pub struct SkinGate {
+    settled_at: Option<u64>,
+}
+
+impl SkinGate {
+    /// Must the pass be resolved before the next frame?
+    pub fn due(&self) -> bool {
+        self.settled_at != Some(k2_core::skin::write_generation())
+    }
+
+    /// Read this before resolving, and hand it to [`Self::settled`] after: a
+    /// write that lands in between moves the generation, so the next frame asks
+    /// again.
+    pub fn generation(&self) -> u64 {
+        k2_core::skin::write_generation()
+    }
+
+    pub fn settled(&mut self, generation: u64) {
+        self.settled_at = Some(generation);
+    }
+}
+
+/// A pass as it resolves now, on the link its socket arrived on. `Ok(None)`:
+/// gone (revoked, expired, its user deleted). On a suspended App's link too:
+/// closing a link leaves its open connections running, and a guest's session
+/// doesn't look at suspend, so the question is asked here. `Err`: the database
+/// couldn't say, which is no answer about the pass.
+pub(crate) fn live_pass(link: Option<&LinkCtx>, raw: &str) -> Result<Option<SkinPass>, String> {
+    if link.is_some_and(|l| crate::apps::suspend::is_suspended(&l.app_id)) {
+        return Ok(None);
+    }
+    crate::apps::gateway::try_resolve_pass_on(link, raw)
+}
+
+/// [`live_pass`], or the close a socket owes: 4003 for a dead pass, a plain close
+/// for a read error (the client reconnects and asks again, and nobody is told to
+/// sign in).
+pub(crate) fn live_pass_or_close(link: Option<&LinkCtx>, raw: &str) -> Result<SkinPass, Message> {
+    match live_pass(link, raw) {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => Err(crate::presence::session_revoked_close_message()),
+        Err(e) => {
+            k2_core::log_debug!("[socket_access] a pass couldn't be read: {e}");
+            Err(Message::Close(None))
+        }
+    }
+}
+
+/// What an open App socket may do now.
+#[derive(Debug)]
+pub enum RoomAccess {
+    Still(SkinPass),
+    /// The pass lives, but the room or every capability this socket needs is
+    /// gone.
+    Lost,
+    PassGone,
+    /// The check itself failed: no frame, and a plain close (the client
+    /// reconnects and the door decides).
+    Failed,
+}
+
+impl RoomAccess {
+    /// How the socket ends. Only for the ending kinds; a pass that's still
+    /// fine is never closed by this.
+    pub fn close_message(&self) -> Message {
+        match self {
+            RoomAccess::PassGone => crate::presence::session_revoked_close_message(),
+            RoomAccess::Lost => crate::presence::access_lost_close_message(),
+            RoomAccess::Still(_) | RoomAccess::Failed => Message::Close(None),
+        }
+    }
+}
+
+/// Does `raw` still hold `room` with at least one of `caps`? Reads skin.db: a
+/// blocking thread ([`room_access_now`]).
+pub(crate) fn room_access(link: Option<&LinkCtx>, raw: &str, room: &str, caps: &[&str]) -> RoomAccess {
+    match live_pass(link, raw) {
+        Ok(None) => RoomAccess::PassGone,
+        Ok(Some(p)) if p.has_any_cap_in_room(room, caps) => RoomAccess::Still(p),
+        Ok(Some(_)) => RoomAccess::Lost,
+        Err(e) => {
+            k2_core::log_debug!("[socket_access] a pass couldn't be read: {e}");
+            RoomAccess::Failed
+        }
+    }
+}
+
+/// [`room_access`] off the async worker. A long-lived socket captures its link
+/// once: a blocking thread can't see the task-local.
+pub(crate) async fn room_access_now(link: Option<Arc<LinkCtx>>, raw: String, room: String, caps: &'static [&'static str]) -> RoomAccess {
+    tokio::task::spawn_blocking(move || room_access(link.as_deref(), &raw, &room, caps)).await.unwrap_or(RoomAccess::Failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +217,35 @@ mod tests {
             let mut boss = LoginCheck::new(owner, owner);
             assert!(boss.frame_ok() && boss.valid_now(), "the owner token never lapses");
         });
+    }
+
+    #[test]
+    fn the_skin_gate_moves_on_a_write_and_never_on_a_read() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)", rusqlite::params![id, format!("g{}", &id[..8]), format!("/tmp/{id}")]).expect("project");
+        }
+        let (user, role) = (format!("gu{}", &id[..8]), format!("gr{}", &id[..8]));
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(id.clone(), vec![k2_core::skin::CAP_THREAD_READ.to_string()]);
+        k2_core::skin::create_role_for_app(&role, &policy, None).expect("role");
+        k2_core::skin::add_principal(&user).expect("person");
+        k2_core::skin::assign_role(&user, &role).expect("assign");
+        let (meta, raw) = k2_core::skin::create_session_token(&user).expect("session");
+
+        let mut gate = SkinGate::default();
+        assert!(gate.due(), "the first frame always asks");
+        gate.settled(gate.generation());
+        assert!(!gate.due(), "settled");
+        assert!(k2_core::skin::resolve_skin_token(&raw).is_some(), "live");
+        assert!(k2_core::skin::resolve_skin_token("k2skn_not_a_real_pass").is_none());
+        assert!(!gate.due(), "a read moves nothing, or every socket would resolve for every other");
+        assert!(k2_core::skin::revoke_token(&meta.id).expect("revoke"));
+        assert!(gate.due(), "a revoke reaches the very next frame");
     }
 
     #[test]

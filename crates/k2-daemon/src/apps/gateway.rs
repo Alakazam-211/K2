@@ -157,6 +157,18 @@ pub fn resolve_pass_on(link: Option<&LinkCtx>, raw: &str) -> Option<SkinPass> {
     }
 }
 
+/// [`resolve_pass_on`] that tells "no such live pass" from a read error.
+pub(crate) fn try_resolve_pass_on(link: Option<&LinkCtx>, raw: &str) -> Result<Option<SkinPass>, String> {
+    let Some(l) = link else { return k2_core::skin::try_resolve_skin_token(raw) };
+    if let Some(p) = passes::try_resolve_link_pass(raw, &l.link_id, &l.service_id)? {
+        return Ok(Some(p));
+    }
+    if l.service_id.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(k2_core::skin::try_resolve_skin_token(raw)?.filter(|p| p.session && p.app == l.service_id))
+}
+
 /// AR50: a guest's App session (`k2skn_`, `session = 1`) bound to the App
 /// `app_service_id` (it logged in with that App, or through its link). A
 /// session of another App, the box login (`host`) and every non-session

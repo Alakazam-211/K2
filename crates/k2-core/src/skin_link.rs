@@ -134,8 +134,13 @@ pub fn mint_link_pass(
 /// `app_service_id`. `None` unless it is a live pass minted for exactly
 /// that link and App (AR50: the pass's App is the listener's App).
 pub fn resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> Option<SkinPass> {
+    try_resolve_link_pass(raw, link_id, app_service_id).ok().flatten()
+}
+
+/// [`resolve_link_pass`] that tells "no such live pass" from a read error.
+pub fn try_resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> Result<Option<SkinPass>, String> {
     if !is_skin_token(raw) || is_api_key_prefix(raw) || link_id.trim().is_empty() || app_service_id.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
     let hash = sha256_hex(raw);
     let now = now_secs();
@@ -165,8 +170,6 @@ pub fn resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> Opti
         .optional()
         .map_err(|e| format!("link pass resolve: {e}"))
     })
-    .ok()
-    .flatten()
 }
 
 /// Classify a presented pass (for `pass_wrong_link` vs `pass_invalid`).

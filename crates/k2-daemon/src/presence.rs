@@ -271,6 +271,10 @@ pub const WS_CLOSE_KICKED: u16 = 4001;
 /// The 5 s re-check found the connecting token no longer valid (revoked,
 /// expired, user disabled or changed). Not necessarily a kick.
 pub const WS_CLOSE_SESSION_REVOKED: u16 = 4003;
+/// The pass is fine, but this socket's room or capability is gone
+/// (`access_lost`): don't reconnect it, read `me.get` again. A client that
+/// misses the code reconnects, and the door refuses it.
+pub const WS_CLOSE_ACCESS_LOST: u16 = 4013;
 
 fn close_message(code: u16, reason: &'static str) -> tokio_tungstenite::tungstenite::Message {
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -289,6 +293,11 @@ pub fn kicked_close_message() -> tokio_tungstenite::tungstenite::Message {
 /// The close frame a socket sends when the 5 s re-check rejects its token.
 pub fn session_revoked_close_message() -> tokio_tungstenite::tungstenite::Message {
     close_message(WS_CLOSE_SESSION_REVOKED, "revoked")
+}
+
+/// The close frame a socket sends when its room or capability is gone.
+pub fn access_lost_close_message() -> tokio_tungstenite::tungstenite::Message {
+    close_message(WS_CLOSE_ACCESS_LOST, "access_lost")
 }
 
 /// Compute the aggregated PER-USER roster (see [`RosterUser`] for the

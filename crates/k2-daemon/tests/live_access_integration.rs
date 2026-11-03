@@ -632,3 +632,636 @@ async fn a_kicked_login_cannot_read_or_write_a_live_doc() {
 async fn a_removed_login_cannot_read_or_write_a_live_doc() {
     doc_login_loses_access(true).await;
 }
+
+// ── App guests ───────────────────────────────────────────────────────
+
+async fn project(port: u16, name: &str, members: &[&Ws]) -> String {
+    let g = owner_ok(port, "/cli/project-group/create", json!({ "name": name })).await;
+    let id = g["id"].as_str().expect("group id").to_string();
+    for m in members {
+        owner_ok(port, "/cli/project-group/add-member", json!({ "group": id, "workspace": m.id })).await;
+    }
+    id
+}
+
+/// A guest's five sockets on one room, plus the same overlay with the ear on.
+struct GuestSockets {
+    overlay: Sock,
+    overlay_ear: Sock,
+    activity: Sock,
+    files: Sock,
+    stream: Sock,
+    project: Sock,
+}
+
+async fn guest_sockets(port: u16, ws: &Ws, conv: &str, group: &str, pass: &str) -> GuestSockets {
+    let q = enc(pass);
+    GuestSockets {
+        overlay: open(port, &format!("/cli/overlay/events?conversation={conv}&token={q}")).await,
+        overlay_ear: open(port, &format!("/cli/overlay/events?conversation={conv}&ear=1&token={q}")).await,
+        activity: open(port, &format!("/cli/activity/events?workspace={}&token={q}", ws.handle)).await,
+        files: open(port, &format!("/cli/fs/events?workspace={}&token={q}", ws.handle)).await,
+        stream: open(port, &format!("/cli/thread/stream?rooms=all&token={q}")).await,
+        project: open(port, &format!("/cli/skin/projects/events?group={group}&token={q}")).await,
+    }
+}
+
+/// A frame for each socket.
+async fn cause_guest_frames(port: u16, ws: &Ws, group: &str, marker: &str) {
+    say(port, ws, &format!("{marker}-THREAD")).await;
+    ticket(&ws.id, &format!("{marker}-TICKET"));
+    session_events::emit(SessionEvent::RoomMembersChanged { room: Some(ws.id.clone()) }).expect("emit");
+    file_changed(ws, &format!("{marker}-file.txt"));
+    owner_ok(port, "/cli/project-group/msg", json!({ "group": group, "body": format!("{marker}-PROJECT") })).await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Loss {
+    SessionRevoked,
+    RoomTaken,
+    UserDeleted,
+}
+
+impl Loss {
+    /// The close each room-scoped socket owes: the pass gone, or only the room.
+    fn close(self) -> u16 {
+        match self {
+            Loss::SessionRevoked | Loss::UserDeleted => 4003,
+            Loss::RoomTaken => 4013,
+        }
+    }
+}
+
+async fn lose(port: u16, username: &str, pass: &str, how: Loss) {
+    match how {
+        Loss::SessionRevoked => {
+            let id = k2_core::skin::resolve_skin_token(pass).expect("live pass").id;
+            assert!(k2_core::skin::revoke_token(&id).expect("revoke"), "revoked");
+        }
+        Loss::RoomTaken => {
+            owner_ok(port, "/cli/skin/roles/unassign", json!({ "username": username })).await;
+        }
+        Loss::UserDeleted => {
+            owner_ok(port, "/cli/skin/users/remove", json!({ "username": username })).await;
+        }
+    }
+}
+
+/// Each socket, each kind of loss: no frame after the commit and the right
+/// close, whether a frame was caused or the socket sat idle. Two guests with
+/// the same rights who lost nothing keep every frame and stay open.
+async fn guest_loses(how: Loss) {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+    let ws = seed_ws(&env, &format!("loud{tag}"));
+    let quiet = seed_ws(&env, &format!("quiet{tag}"));
+    let conv = pin_chat(&ws);
+    let quiet_conv = pin_chat(&quiet);
+    let (gone_name, idle_name, kept_name) = (format!("gone{tag}"), format!("idle{tag}"), format!("kept{tag}"));
+    let (_, gone) = guest_in(port, &ws, &gone_name, ALL_CAPS).await;
+    let (_, idle) = guest_in(port, &quiet, &idle_name, ALL_CAPS).await;
+    let (_, kept) = guest_in(port, &ws, &kept_name, ALL_CAPS).await;
+    let group = project(port, &format!("loud-{tag}"), &[&ws]).await;
+    let quiet_group = project(port, &format!("quiet-{tag}"), &[&quiet]).await;
+    let mut gone_s = guest_sockets(port, &ws, &conv, &group, &gone).await;
+    let mut idle_s = guest_sockets(port, &quiet, &quiet_conv, &quiet_group, &idle).await;
+    let mut kept_s = guest_sockets(port, &ws, &conv, &group, &kept).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // The rig: frames reach everyone in the room while access lasts.
+    cause_guest_frames(port, &ws, &group, "BEFORE").await;
+    let (a, b, c, e, f) = tokio::join!(
+        watch(&mut gone_s.overlay, 1_500),
+        watch(&mut gone_s.activity, 1_500),
+        watch(&mut gone_s.files, 1_500),
+        watch(&mut gone_s.stream, 1_500),
+        watch(&mut gone_s.project, 1_500)
+    );
+    assert!(a.has("BEFORE-THREAD"), "rig: overlay {a:?}");
+    assert!(b.has("BEFORE-TICKET") && b.has("room_members_changed"), "rig: activity {b:?}");
+    assert!(c.has("BEFORE-file.txt"), "rig: files {c:?}");
+    assert!(e.has("BEFORE-THREAD"), "rig: stream {e:?}");
+    assert!(f.has("BEFORE-PROJECT"), "rig: project {f:?}");
+
+    lose(port, &gone_name, &gone, how).await;
+    lose(port, &idle_name, &idle, how).await;
+    let door = get(port, "/cli/skin/me", &gone, "x=1").await;
+    match how {
+        Loss::RoomTaken => assert_eq!((door.status, door.json()["rooms"].clone()), (200, json!([])), "rig: the door says no rooms: {}", door.body),
+        _ => assert_eq!(door.status, 401, "rig: the door refuses the pass: {}", door.body),
+    }
+
+    // Frames right after the commit: none reach the sockets that lost access.
+    cause_guest_frames(port, &ws, &group, "AFTER").await;
+    let (a, ae, b, c, f) = tokio::join!(
+        watch(&mut gone_s.overlay, 2_000),
+        watch(&mut gone_s.overlay_ear, CLOSE_WITHIN_MS),
+        watch(&mut gone_s.activity, 2_000),
+        watch(&mut gone_s.files, 2_000),
+        watch(&mut gone_s.project, 2_000)
+    );
+    for (what, seen) in [("overlay", &a), ("overlay with the ear", &ae), ("activity", &b), ("files", &c), ("project chat", &f)] {
+        for marker in ["AFTER-THREAD", "AFTER-TICKET", "AFTER-file.txt", "AFTER-PROJECT", "room_members_changed"] {
+            assert!(!seen.has(marker), "{how:?} {what}: {marker} went out after the loss: {seen:?}");
+        }
+        assert_eq!(seen.close, Some(how.close()), "{how:?} {what} closes: {seen:?}");
+    }
+    // The room stream: a dead pass closes; a lost room shrinks its set (one
+    // socket across rooms), with no frame from that room.
+    let e = watch(&mut gone_s.stream, 2_500).await;
+    assert!(!e.has("AFTER-THREAD"), "{how:?} stream: {e:?}");
+    match how {
+        Loss::RoomTaken => assert!(!e.ended && e.has("inbox_subscribed"), "the set shrinks and the socket stays: {e:?}"),
+        _ => assert_eq!(e.close, Some(4003), "{how:?} stream: {e:?}"),
+    }
+
+    // Idle: no frame was caused in its room, and the tick closes it anyway.
+    let (a, ae, b, c, f) = tokio::join!(
+        watch(&mut idle_s.overlay, CLOSE_WITHIN_MS),
+        watch(&mut idle_s.overlay_ear, CLOSE_WITHIN_MS),
+        watch(&mut idle_s.activity, CLOSE_WITHIN_MS),
+        watch(&mut idle_s.files, CLOSE_WITHIN_MS),
+        watch(&mut idle_s.project, CLOSE_WITHIN_MS)
+    );
+    for (what, seen) in [("idle overlay", &a), ("idle overlay with the ear", &ae), ("idle activity", &b), ("idle files", &c), ("idle project chat", &f)] {
+        assert_eq!(seen.close, Some(how.close()), "{how:?} {what}: {seen:?}");
+    }
+
+    // Control: their access didn't change, past several ticks by now.
+    let (a, ae, b, c, e, f) = tokio::join!(
+        watch(&mut kept_s.overlay, 1_000),
+        watch(&mut kept_s.overlay_ear, 1_000),
+        watch(&mut kept_s.activity, 1_000),
+        watch(&mut kept_s.files, 1_000),
+        watch(&mut kept_s.stream, 1_000),
+        watch(&mut kept_s.project, 1_000)
+    );
+    assert!(a.has("AFTER-THREAD") && !a.ended, "kept overlay: {a:?}");
+    assert!(ae.has("AFTER-THREAD") && !ae.ended, "kept overlay with the ear: {ae:?}");
+    assert!(b.has("AFTER-TICKET") && !b.ended, "kept activity: {b:?}");
+    assert!(c.has("AFTER-file.txt") && !c.ended, "kept files: {c:?}");
+    assert!(e.has("AFTER-THREAD") && !e.ended, "kept stream: {e:?}");
+    assert!(f.has("AFTER-PROJECT") && !f.ended, "kept project chat: {f:?}");
+    cause_guest_frames(port, &ws, &group, "LATER").await;
+    let (a, b, c, f) = tokio::join!(watch(&mut kept_s.overlay, 1_500), watch(&mut kept_s.activity, 1_500), watch(&mut kept_s.files, 1_500), watch(&mut kept_s.project, 1_500));
+    assert!(a.has("LATER-THREAD") && !a.ended, "{a:?}");
+    assert!(b.has("LATER-TICKET") && !b.ended, "{b:?}");
+    assert!(c.has("LATER-file.txt") && !c.ended, "{c:?}");
+    assert!(f.has("LATER-PROJECT") && !f.ended, "{f:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_guest_loses_every_open_socket() {
+    guest_loses(Loss::SessionRevoked).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_who_loses_the_room_loses_every_room_socket() {
+    guest_loses(Loss::RoomTaken).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_guest_loses_every_open_socket() {
+    guest_loses(Loss::UserDeleted).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guests_overlay_activity_and_files_race() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    // The publisher outlives the socket it races: a bus with nobody left on it
+    // refuses the emit.
+    let _keep_the_bus_open = session_events::subscribe();
+    let new_guest = |caps: &'static [&'static str]| {
+        let tag = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+        let ws = seed_ws(&env, &format!("raceg{tag}"));
+        let conv = pin_chat(&ws);
+        async move {
+            let user = format!("rg{tag}");
+            let (_, pass) = guest_in(port, &ws, &user, caps).await;
+            (ws, conv, user, pass)
+        }
+    };
+    let revoke = |pass: String| async move {
+        tokio::task::spawn_blocking(move || {
+            let id = k2_core::skin::resolve_skin_token(&pass).expect("live").id;
+            assert!(k2_core::skin::revoke_token(&id).expect("revoke"));
+        })
+        .await
+        .expect("join");
+    };
+    for round in 0..3 {
+        let (_ws, conv, _user, pass) = new_guest(ALL_CAPS).await;
+        let s = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+        let c2 = conv.clone();
+        race(&format!("guest overlay revoked #{round}"), s, std::sync::Arc::new(move |i| k2_daemon::overlay_ws::publish(numbered_thread_frame(&c2, i))), revoke(pass), 4003).await;
+
+        let (_ws, conv, user, pass) = new_guest(ALL_CAPS).await;
+        let s = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+        let c2 = conv.clone();
+        race(
+            &format!("guest overlay lost the room #{round}"),
+            s,
+            std::sync::Arc::new(move |i| k2_daemon::overlay_ws::publish(numbered_thread_frame(&c2, i))),
+            async move {
+                owner_ok(port, "/cli/skin/roles/unassign", json!({ "username": user })).await;
+            },
+            4013,
+        )
+        .await;
+    }
+    let (ws, _conv, _user, pass) = new_guest(ALL_CAPS).await;
+    let s = open(port, &format!("/cli/activity/events?workspace={}&token={}", ws.handle, enc(&pass))).await;
+    let room = ws.id.clone();
+    race("guest activity revoked", s, std::sync::Arc::new(move |i| ticket(&room, &format!("RACE-{i}-"))), revoke(pass), 4003).await;
+    let (ws, _conv, _user, pass) = new_guest(ALL_CAPS).await;
+    let s = open(port, &format!("/cli/fs/events?workspace={}&token={}", ws.handle, enc(&pass))).await;
+    let root = ws.path.to_string_lossy().to_string();
+    race(
+        "guest files revoked",
+        s,
+        std::sync::Arc::new(move |i| {
+            session_events::emit(SessionEvent::FsChanged { workspace_path: root.clone(), paths: vec![format!("{root}/RACE-{i}-.txt")] }).expect("emit");
+        }),
+        revoke(pass),
+        4003,
+    )
+    .await;
+}
+
+/// A database error is no answer about a pass: a plain close, never the 4003
+/// that sends a person to sign in again. Nothing changed, so the door works
+/// again once the database does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_database_error_is_not_a_dead_pass() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+    let ws = seed_ws(&env, &format!("dberr{tag}"));
+    let conv = pin_chat(&ws);
+    let (_, pass) = guest_in(port, &ws, &format!("dbe{tag}"), ALL_CAPS).await;
+    let group = project(port, &format!("dberr-{tag}"), &[&ws]).await;
+    let mut s = guest_sockets(port, &ws, &conv, &group, &pass).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // A second connection, so the daemon's one sees a read fail.
+    let path = k2_core::paths::k2_home().join("skin.db");
+    let other = rusqlite::Connection::open(&path).expect("second connection");
+    other.execute_batch("ALTER TABLE principal_agent_ties RENAME TO principal_agent_ties_gone;").expect("rename");
+    let (a, ae, b, c, e, f) = tokio::join!(
+        watch(&mut s.overlay, CLOSE_WITHIN_MS),
+        watch(&mut s.overlay_ear, CLOSE_WITHIN_MS),
+        watch(&mut s.activity, CLOSE_WITHIN_MS),
+        watch(&mut s.files, CLOSE_WITHIN_MS),
+        watch(&mut s.stream, CLOSE_WITHIN_MS),
+        watch(&mut s.project, CLOSE_WITHIN_MS)
+    );
+    other.execute_batch("ALTER TABLE principal_agent_ties_gone RENAME TO principal_agent_ties;").expect("restore");
+    for (what, seen) in [("overlay", &a), ("overlay with the ear", &ae), ("activity", &b), ("files", &c), ("stream", &e), ("project chat", &f)] {
+        assert!(seen.ended, "{what} closes on the tick: {seen:?}");
+        assert_ne!(seen.close, Some(4003), "{what}: a read error says the pass is dead: {seen:?}");
+        assert_ne!(seen.close, Some(4013), "{what}: a read error says access is lost: {seen:?}");
+    }
+    let door = get(port, "/cli/skin/me", &pass, "x=1").await;
+    assert_eq!(door.status, 200, "the pass still works: {}", door.body);
+    let _again = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+}
+
+/// Activity: one cap of several goes, that kind of frame stops and the rest
+/// keep coming on the same socket. The last cap goes: 4013.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn losing_one_cap_stops_that_frame_and_keeps_the_socket() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "capsrow");
+    let (role, pass) = guest_in(port, &ws, "cappy", &["activity:read", "tickets:read", "room:members"]).await;
+    let mut s = open(port, &format!("/cli/activity/events?workspace={}&token={}", ws.handle, enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    ticket(&ws.id, "BASE-TICKET");
+    let before = watch(&mut s, 1_500).await;
+    assert!(before.has("BASE-TICKET"), "rig: {before:?}");
+
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": ["activity:read", "room:members"] })).await;
+    ticket(&ws.id, "NOCAP-TICKET");
+    session_events::emit(SessionEvent::RoomMembersChanged { room: Some(ws.id.clone()) }).expect("emit");
+    let after = watch(&mut s, 2_000).await;
+    assert!(!after.has("NOCAP-TICKET"), "no ticket frame without tickets:read: {after:?}");
+    assert!(after.has("room_members_changed"), "the caps it keeps keep working: {after:?}");
+    assert!(!after.ended, "the socket stays while a socket cap is left: {after:?}");
+
+    // Past the tick: still open.
+    let still = watch(&mut s, CLOSE_WITHIN_MS).await;
+    assert!(!still.ended, "{still:?}");
+
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": ["thread:read"] })).await;
+    let end = watch(&mut s, CLOSE_WITHIN_MS).await;
+    assert_eq!(end.close, Some(4013), "no socket cap left: {end:?}");
+}
+
+/// Files: a narrowed folder filters at once, a widened one's frames arrive
+/// (not only after some other frame gets through), losing `files:read` is 4013.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_files_socket_follows_folder_changes_both_ways() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "foldrow");
+    let (role, pass) = guest_in(port, &ws, "foldy", &["files:read", "thread:read"]).await;
+    let set_paths = |read: Vec<&'static str>| {
+        let role = role.clone();
+        let handle = ws.handle.clone();
+        async move {
+            let r = post(port, "/cli/skin/roles/paths", OWNER, json!({ "name": role, "handle": handle, "read": read })).await;
+            assert_eq!(r.status, 200, "set folders: {}", r.body);
+        }
+    };
+    set_paths(vec!["jobs/a"]).await;
+    let mut s = open(port, &format!("/cli/fs/events?workspace={}&token={}", ws.handle, enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    file_changed(&ws, "jobs/a/first.txt");
+    file_changed(&ws, "jobs/b/hidden.txt");
+    let seen = watch(&mut s, 1_500).await;
+    assert!(seen.has("jobs/a/first.txt") && !seen.has("hidden.txt"), "rig: {seen:?}");
+
+    // Widened: jobs/b's very next frame arrives. Narrowed off jobs/a in the same edit.
+    set_paths(vec!["jobs/b"]).await;
+    file_changed(&ws, "jobs/b/widened.txt");
+    file_changed(&ws, "jobs/a/narrowed.txt");
+    let seen = watch(&mut s, 1_500).await;
+    assert!(seen.has("jobs/b/widened.txt"), "a widened folder's frame gets through: {seen:?}");
+    assert!(!seen.has("narrowed.txt"), "a narrowed folder's frame doesn't: {seen:?}");
+    assert!(!seen.ended, "folders changed, nobody lost the room: {seen:?}");
+
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": ["thread:read"] })).await;
+    file_changed(&ws, "jobs/b/after-cap.txt");
+    let seen = watch(&mut s, 1_500).await;
+    assert!(!seen.has("after-cap.txt"), "{seen:?}");
+    assert_eq!(seen.close, Some(4013), "{seen:?}");
+}
+
+/// Overlay: narrowed folders reach the very next frame. The attachment goes
+/// `hidden`, under the pass as it is now, and the socket stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn narrowed_folders_hide_an_attachment_on_the_next_frame() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "attrow");
+    let conv = pin_chat(&ws);
+    for dir in ["open", "closed"] {
+        std::fs::create_dir_all(ws.path.join(dir)).expect("mkdir");
+        std::fs::write(ws.path.join(dir).join("a.txt"), b"a").expect("file");
+    }
+    let (role, pass) = guest_in(port, &ws, "atty", &["thread:read", "files:read"]).await;
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": ws.handle, "read": ["open", "closed"] })).await;
+    let mut s = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let send = |text: &'static str| post(port, "/cli/thread/post", OWNER, json!({ "addr": ws.handle, "from": "k2", "text": text, "attachments": [{ "path": "closed/a.txt" }] }));
+    let r = send("BEFORE-NARROW").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let seen = watch(&mut s, 1_500).await;
+    assert!(seen.has("BEFORE-NARROW") && !seen.has("\"hidden\""), "rig: the folder is readable: {seen:?}");
+
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": ws.handle, "read": ["open"] })).await;
+    let r = send("AFTER-NARROW").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let seen = watch(&mut s, 1_500).await;
+    assert!(seen.has("AFTER-NARROW") && seen.has("\"hidden\""), "the attachment is hidden at once: {seen:?}");
+    assert!(!seen.has("a.txt"), "no name either: {seen:?}");
+    assert!(!seen.ended, "narrowed isn't lost: {seen:?}");
+}
+
+/// Overlay: a re-pinned room's old conversation stops, with a plain close (not
+/// 4013: nobody lost access; the client re-reads the pin). A room with no pin
+/// this moment holds frames and stays. The new conversation opens fine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_pin_is_not_lost_access() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "pinrow");
+    let conv = pin_chat(&ws);
+    let (_, pass) = guest_in(port, &ws, "pinny", ALL_CAPS).await;
+    let mut s = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let set_pin = |pin: Option<&str>| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match pin {
+            Some(p) => WorkspaceSession::update_session_id(&conn, &ws.id, p).expect("pin"),
+            None => WorkspaceSession::clear_session_id(&conn, &ws.id).expect("clear"),
+        };
+    };
+    // No pin for a moment (a Chat restarting): past the tick, still open.
+    set_pin(None);
+    let held = watch(&mut s, CLOSE_WITHIN_MS).await;
+    assert!(!held.ended, "no pin is not a reason to close: {held:?}");
+    set_pin(Some(&conv));
+    say(port, &ws, "BACK-AGAIN").await;
+    let back = watch(&mut s, 1_500).await;
+    assert!(back.has("BACK-AGAIN") && !back.ended, "{back:?}");
+
+    // Another conversation took the pin.
+    let next = uuid::Uuid::new_v4().to_string();
+    set_pin(Some(&next));
+    let moved = watch(&mut s, CLOSE_WITHIN_MS).await;
+    assert!(moved.ended, "the old conversation's socket ends: {moved:?}");
+    assert_ne!(moved.close, Some(4013), "a re-pin isn't lost access: {moved:?}");
+    assert_ne!(moved.close, Some(4003), "nor a dead pass: {moved:?}");
+    let _new = open(port, &format!("/cli/overlay/events?conversation={next}&token={}", enc(&pass))).await;
+}
+
+/// Project chat: adding a room the guest doesn't hold takes the project away
+/// with no write to the guest's own access at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_project_that_grows_past_a_guest_closes_its_socket() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let (ws, other) = (seed_ws(&env, "projrow"), seed_ws(&env, "projother"));
+    let (_, pass) = guest_in(port, &ws, "proj1", &["thread:read"]).await;
+    let (_, idle_pass) = guest_in(port, &ws, "proj2", &["thread:read"]).await;
+    let group = project(port, "growing", &[&ws]).await;
+    let idle_group = project(port, "growing-too", &[&ws]).await;
+    let kept_group = project(port, "unchanged", &[&ws]).await;
+    let mut s = open(port, &format!("/cli/skin/projects/events?group={group}&token={}", enc(&pass))).await;
+    let mut idle = open(port, &format!("/cli/skin/projects/events?group={idle_group}&token={}", enc(&idle_pass))).await;
+    let mut kept = open(port, &format!("/cli/skin/projects/events?group={kept_group}&token={}", enc(&pass))).await;
+    owner_ok(port, "/cli/project-group/add-member", json!({ "group": group, "workspace": other.id })).await;
+    owner_ok(port, "/cli/project-group/add-member", json!({ "group": idle_group, "workspace": other.id })).await;
+    owner_ok(port, "/cli/project-group/msg", json!({ "group": group, "body": "AFTER-GROWN" })).await;
+    let seen = watch(&mut s, 1_500).await;
+    assert!(!seen.has("AFTER-GROWN"), "{seen:?}");
+    assert_eq!(seen.close, Some(4013), "{seen:?}");
+    let seen = watch(&mut idle, CLOSE_WITHIN_MS).await;
+    assert_eq!(seen.close, Some(4013), "idle: {seen:?}");
+    owner_ok(port, "/cli/project-group/msg", json!({ "group": kept_group, "body": "KEPT-LINE" })).await;
+    let seen = watch(&mut kept, 1_500).await;
+    assert!(seen.has("KEPT-LINE") && !seen.ended, "the same pass on a project it still holds: {seen:?}");
+}
+
+/// A platform pass (`session = 0`) keeps its rooms on its own row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_platform_pass_loses_its_sockets_too() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let (ws, other) = (seed_ws(&env, "platrow"), seed_ws(&env, "platother"));
+    let conv = pin_chat(&ws);
+    async fn mint(port: u16, name: &str, room: &str) -> Value {
+        owner_ok(port, "/cli/skin/users", json!({ "username": name })).await;
+        owner_ok(port, "/cli/skin-tokens", json!({ "name": name, "caps": ["thread:read", "tickets:read", "files:read"], "rooms": [room] })).await
+    }
+    let moved = mint(port, "plat-moved", &ws.handle).await;
+    let revoked = mint(port, "plat-revoked", &ws.handle).await;
+    let kept = mint(port, "plat-kept", &ws.handle).await;
+    let raw = |v: &Value| v["token"].as_str().unwrap_or_else(|| panic!("token in {v}")).to_string();
+    let id = |v: &Value| v["id"].as_str().unwrap_or_else(|| panic!("id in {v}")).to_string();
+    let mut m_o = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&raw(&moved)))).await;
+    let mut m_a = open(port, &format!("/cli/activity/events?workspace={}&token={}", ws.handle, enc(&raw(&moved)))).await;
+    let mut m_f = open(port, &format!("/cli/fs/events?workspace={}&token={}", ws.handle, enc(&raw(&moved)))).await;
+    let mut r_o = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&raw(&revoked)))).await;
+    let mut k_o = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&raw(&kept)))).await;
+    owner_ok(port, "/cli/skin-tokens/rooms", json!({ "id": id(&moved), "rooms": [other.handle] })).await;
+    owner_ok(port, "/cli/skin-tokens/revoke", json!({ "id": id(&revoked) })).await;
+    say(port, &ws, "PLAT-AFTER").await;
+    ticket(&ws.id, "PLAT-TICKET");
+    file_changed(&ws, "plat-after.txt");
+    let (a, b, c, e, k) = tokio::join!(watch(&mut m_o, 1_500), watch(&mut m_a, 1_500), watch(&mut m_f, 1_500), watch(&mut r_o, 1_500), watch(&mut k_o, 1_500));
+    assert!(!a.has("PLAT-AFTER") && a.close == Some(4013), "moved pass, overlay: {a:?}");
+    assert!(!b.has("PLAT-TICKET") && b.close == Some(4013), "moved pass, activity: {b:?}");
+    assert!(!c.has("plat-after.txt") && c.close == Some(4013), "moved pass, files: {c:?}");
+    assert!(!e.has("PLAT-AFTER") && e.close == Some(4003), "revoked pass: {e:?}");
+    assert!(k.has("PLAT-AFTER") && !k.ended, "another pass on the room: {k:?}");
+}
+
+// ── Over an App's link ───────────────────────────────────────────────
+
+/// A link's context is task-local, and these checks run on a blocking thread
+/// where it can't be seen: the same rows through a real gateway link, with an
+/// App guest's session. Also a suspended App's guests lose the link's sockets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_rows_hold_over_an_apps_link() {
+    use k2_daemon::apps::gateway::{self, LinkSpec};
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "linkrow");
+    let conv = pin_chat(&ws);
+    let group = project(port, "linkproj", &[&ws]).await;
+    let app = "linkrowapp";
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let svc = k2_core::published_services::insert(&conn, &ws.id, app, k2_core::published_services::CMD_APP_SENTINEL, &ws.path.to_string_lossy(), 0, "local", "stopped", "cmd", "")
+            .expect("service")
+            .id;
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp { app_id: app, service_id: &svc, seed_id: None, owner_workspace: &ws.id, isolation: "process", memory_limit_bytes: None, front_port: 0, created_by: "owner" },
+        )
+        .expect("insert app");
+        svc
+    };
+    let session_of = |user: &'static str, role: String| {
+        let svc = svc.clone();
+        async move {
+            let pid = k2_core::skin::host_login_detail(user).expect("guest").principal_id;
+            k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: pid,
+                kind: "app".into(),
+                target_id: svc.clone(),
+                role: Some(role),
+                scope: None,
+                created_by: Some("owner".into()),
+            })
+            .expect("app grant");
+            k2_core::skin::create_app_session_token(user, &svc).expect("App session").raw
+        }
+    };
+    let (gone_role, _) = guest_in(port, &ws, "linkgone", ALL_CAPS).await;
+    let (revoked_role, _) = guest_in(port, &ws, "linkrevoked", ALL_CAPS).await;
+    let (kept_role, _) = guest_in(port, &ws, "linkkept", ALL_CAPS).await;
+    let gone = session_of("linkgone", gone_role.clone()).await;
+    let revoked = session_of("linkrevoked", revoked_role).await;
+    let kept = session_of("linkkept", kept_role).await;
+
+    let spec = LinkSpec { app_id: app.into(), service_id: svc.clone(), workspace_id: ws.id.clone(), port: 0, caps: ALL_CAPS.iter().map(|c| c.to_string()).collect(), rooms: vec![ws.id.clone()] };
+    let _own_pass = gateway::open(spec, None).expect("open link");
+    let link = gateway::port_of(app).expect("listening");
+
+    let sockets = |pass: String| {
+        let (conv, group, handle) = (conv.clone(), group.clone(), ws.handle.clone());
+        async move {
+            let q = enc(&pass);
+            (
+                open(link, &format!("/cli/overlay/events?conversation={conv}&token={q}")).await,
+                open(link, &format!("/cli/activity/events?workspace={handle}&token={q}")).await,
+                open(link, &format!("/cli/fs/events?workspace={handle}&token={q}")).await,
+                open(link, &format!("/cli/skin/projects/events?group={group}&token={q}")).await,
+            )
+        }
+    };
+    let (mut g_o, mut g_a, mut g_f, mut g_p) = sockets(gone.clone()).await;
+    let (mut r_o, mut r_a, mut r_f, mut r_p) = sockets(revoked.clone()).await;
+    let (mut k_o, mut k_a, mut k_f, mut k_p) = sockets(kept.clone()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cause_guest_frames(port, &ws, &group, "LINKBEFORE").await;
+    let (a, b, c, f) = tokio::join!(watch(&mut k_o, 1_500), watch(&mut k_a, 1_500), watch(&mut k_f, 1_500), watch(&mut k_p, 1_500));
+    assert!(a.has("LINKBEFORE-THREAD") && b.has("LINKBEFORE-TICKET") && c.has("LINKBEFORE-file") && f.has("LINKBEFORE-PROJECT"), "rig: {a:?} {b:?} {c:?} {f:?}");
+
+    // The App session's role, narrowed to what opens none of these sockets.
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": gone_role, "handle": ws.handle, "caps": ["thread:post"] })).await;
+    let rid = k2_core::skin::resolve_skin_token(&revoked).expect("live").id;
+    assert!(k2_core::skin::revoke_token(&rid).expect("revoke"));
+    cause_guest_frames(port, &ws, &group, "LINKAFTER").await;
+    let (a1, a2, a3, a4, b1, b2, b3, b4) = tokio::join!(
+        watch(&mut g_o, 2_000),
+        watch(&mut g_a, 2_000),
+        watch(&mut g_f, 2_000),
+        watch(&mut g_p, 2_000),
+        watch(&mut r_o, 2_000),
+        watch(&mut r_a, 2_000),
+        watch(&mut r_f, 2_000),
+        watch(&mut r_p, 2_000)
+    );
+    for (what, seen, code) in [
+        ("lost room, overlay", &a1, 4013),
+        ("lost room, activity", &a2, 4013),
+        ("lost room, files", &a3, 4013),
+        ("lost room, project", &a4, 4013),
+        ("revoked, overlay", &b1, 4003),
+        ("revoked, activity", &b2, 4003),
+        ("revoked, files", &b3, 4003),
+        ("revoked, project", &b4, 4003),
+    ] {
+        assert!(!seen.has("LINKAFTER"), "{what}: {seen:?}");
+        assert_eq!(seen.close, Some(code), "{what}: {seen:?}");
+    }
+    let (a, b, c, f) = tokio::join!(watch(&mut k_o, 1_500), watch(&mut k_a, 1_500), watch(&mut k_f, 1_500), watch(&mut k_p, 1_500));
+    assert!(a.has("LINKAFTER-THREAD") && !a.ended, "kept: {a:?}");
+    assert!(b.has("LINKAFTER-TICKET") && !b.ended, "kept: {b:?}");
+    assert!(c.has("LINKAFTER-file") && !c.ended, "kept: {c:?}");
+    assert!(f.has("LINKAFTER-PROJECT") && !f.ended, "kept: {f:?}");
+
+    // A suspended App: its link's open sockets end, as a dead pass.
+    let held = post(port, "/cli/app/suspend", OWNER, json!({ "app": app, "reason": "test" })).await;
+    assert_eq!(held.status, 200, "suspend: {}", held.body);
+    let (a, b, c, f) = tokio::join!(
+        watch(&mut k_o, CLOSE_WITHIN_MS),
+        watch(&mut k_a, CLOSE_WITHIN_MS),
+        watch(&mut k_f, CLOSE_WITHIN_MS),
+        watch(&mut k_p, CLOSE_WITHIN_MS)
+    );
+    for (what, seen) in [("overlay", &a), ("activity", &b), ("files", &c), ("project", &f)] {
+        assert_eq!(seen.close, Some(4003), "suspended App, {what}: {seen:?}");
+    }
+    gateway::close(app, None, true);
+}

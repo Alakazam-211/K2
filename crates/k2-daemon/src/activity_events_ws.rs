@@ -554,7 +554,8 @@ async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
 pub async fn serve_activity_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
-    skin_pass: Option<SkinPass>,
+    mut skin_pass: Option<SkinPass>,
+    skin_raw: Option<String>,
     mut login: Option<crate::socket_access::LoginCheck>,
 ) {
     let workspace_q = params
@@ -606,7 +607,7 @@ pub async fn serve_activity_events_connection(
     };
     let project_id = resolved.project_id.clone();
     let room_root = resolved.path.clone();
-    let (want_activity, want_heartbeats, want_tickets) = match skin_pass {
+    let (mut want_activity, mut want_heartbeats, mut want_tickets) = match skin_pass {
         Some(ref pass) => (
             pass.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ),
             pass.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ),
@@ -615,12 +616,13 @@ pub async fn serve_activity_events_connection(
         None => (true, true, true),
     };
     // Room-scope R9/R16 (0.46.1).
-    let want_members = skin_pass.as_ref().is_none_or(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS));
-    let link_app = crate::apps::gateway::current().map(|l| l.app_id.clone());
+    let mut want_members = skin_pass.as_ref().is_none_or(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS));
+    let link = crate::apps::gateway::current();
+    let link_app = link.as_ref().map(|l| l.app_id.clone());
     crate::apps::surfaces::install_listener();
     // app-read-state-v1 (0.46.3): a pass with `thread:read` in this room
     // hears its own reader's cursor or mute moving in the room's Thread.
-    let read_key = skin_pass
+    let mut read_key = skin_pass
         .as_ref()
         .filter(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_THREAD_READ))
         .map(crate::read_routes::guest_person_key);
@@ -642,13 +644,44 @@ pub async fn serve_activity_events_connection(
     let mut roster_owed = false;
     let mut recheck = crate::socket_access::tick();
 
+    let mut skin_gate = crate::socket_access::SkinGate::default();
+    // An App pass, as it is now: its flags follow, a lost cap stops that kind
+    // of frame, and a socket with none of its caps left ends.
+    macro_rules! guest_recheck_or_close {
+        () => {
+            if let Some(raw) = skin_raw.as_ref() {
+                let generation = skin_gate.generation();
+                match crate::socket_access::room_access_now(link.clone(), raw.clone(), project_id.clone(), &SOCKET_CAPS).await {
+                    crate::socket_access::RoomAccess::Still(fresh) => {
+                        want_activity = fresh.has_cap_in_room(&project_id, crate::skin_routes::ACTIVITY_READ);
+                        want_heartbeats = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_HEARTBEATS_READ);
+                        want_tickets = fresh.has_cap_in_room(&project_id, crate::skin_routes::TICKETS_READ);
+                        want_members = fresh.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS);
+                        read_key = fresh
+                            .has_cap_in_room(&project_id, k2_core::skin::CAP_THREAD_READ)
+                            .then(|| crate::read_routes::guest_person_key(&fresh));
+                        skin_pass = Some(fresh);
+                        skin_gate.settled(generation);
+                    }
+                    other => {
+                        let _ = write.send(other.close_message()).await;
+                        break;
+                    }
+                }
+            }
+        };
+    }
     // Before a frame leaves: this socket's caller, as it is now. Only when a
-    // frame would go out: the bus is box-wide.
+    // frame would go out (the bus is box-wide), and for a pass only once skin.db
+    // has been written (counts frames are the busy ones).
     macro_rules! may_send_or_close {
         () => {
             if login.as_mut().is_some_and(|l| !l.frame_ok()) {
                 let _ = write.send(crate::presence::session_revoked_close_message()).await;
                 break;
+            }
+            if skin_gate.due() {
+                guest_recheck_or_close!();
             }
         };
     }
@@ -670,6 +703,7 @@ pub async fn serve_activity_events_connection(
                     let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
+                guest_recheck_or_close!();
             }
             _ = async {
                 match counts_in {
@@ -680,7 +714,12 @@ pub async fn serve_activity_events_connection(
                 may_send_or_close!();
                 let now = chrono::Utc::now().timestamp_millis();
                 let mut closed = false;
-                for frame in guest.flush_due(&wire_workspace, now) {
+                // Taken either way: what's held must not wake this loop again.
+                let due = guest.flush_due(&wire_workspace, now);
+                if !want_activity {
+                    continue;
+                }
+                for frame in due {
                     if write.send(Message::Text(frame)).await.is_err() {
                         closed = true;
                         break;
@@ -696,8 +735,11 @@ pub async fn serve_activity_events_connection(
                     None => std::future::pending::<()>().await,
                 }
             } => {
-                may_send_or_close!();
                 roster_owed = false;
+                may_send_or_close!();
+                if !want_heartbeats {
+                    continue;
+                }
                 last_roster = Some(tokio::time::Instant::now());
                 if write.send(Message::Text(heartbeat_roster_json(&wire_workspace))).await.is_err() {
                     break;
@@ -716,6 +758,10 @@ pub async fn serve_activity_events_connection(
                 }
             }
             moved = crate::read_live::next_guest_move(&mut read_rx, read_key.as_deref()) => {
+                may_send_or_close!();
+                if read_key.is_none() {
+                    continue;
+                }
                 let Some(pass) = skin_pass.clone() else { continue };
                 let room = project_id.clone();
                 let frame = tokio::task::spawn_blocking(move || {
@@ -742,6 +788,9 @@ pub async fn serve_activity_events_connection(
                                 continue;
                             }
                             may_send_or_close!();
+                            if !rooms_changed_reaches(skin_pass.as_ref(), &project_id, changed) {
+                                continue;
+                            }
                             if write.send(Message::Text(ROOMS_CHANGED_FRAME.to_string())).await.is_err() {
                                 break;
                             }
@@ -756,18 +805,24 @@ pub async fn serve_activity_events_connection(
                                 continue;
                             };
                             may_send_or_close!();
+                            if !want_members {
+                                continue;
+                            }
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
                             continue;
                         }
                         if let SessionEvent::AppDeployed { .. } = event {
+                            if app_deployed_frame(&project_id, &wire_workspace, skin_pass.as_ref(), link_app.as_deref(), &event).is_none() {
+                                continue;
+                            }
+                            may_send_or_close!();
                             let Some(frame) =
                                 app_deployed_frame(&project_id, &wire_workspace, skin_pass.as_ref(), link_app.as_deref(), &event)
                             else {
                                 continue;
                             };
-                            may_send_or_close!();
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
@@ -782,6 +837,9 @@ pub async fn serve_activity_events_connection(
                                 continue;
                             };
                             may_send_or_close!();
+                            if !want_tickets {
+                                continue;
+                            }
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
@@ -791,6 +849,9 @@ pub async fn serve_activity_events_connection(
                             let beat = heartbeat_frame(&project_id, &room_root, &wire_workspace, &event);
                             if beat.is_some() {
                                 may_send_or_close!();
+                                if !want_heartbeats {
+                                    continue;
+                                }
                             }
                             match beat {
                                 Some(HeartbeatFrame::Roster) => {
@@ -828,6 +889,9 @@ pub async fn serve_activity_events_connection(
                             continue;
                         };
                         may_send_or_close!();
+                        if !want_activity {
+                            continue;
+                        }
                         if write.send(Message::Text(frame)).await.is_err() {
                             break;
                         }
@@ -926,7 +990,7 @@ mod tests {
             if !workspace.is_empty() {
                 params.insert("workspace".to_string(), workspace);
             }
-            serve_activity_events_connection(&mut stream, params, pass, None).await;
+            serve_activity_events_connection(&mut stream, params, pass, None, None).await;
         });
         let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
         let mut buf = vec![0u8; 4096];
@@ -987,7 +1051,7 @@ mod tests {
             let (mut stream, _) = listener.accept().await.expect("accept");
             let mut params = HashMap::new();
             params.insert("workspace".to_string(), workspace);
-            serve_activity_events_connection(&mut stream, params, pass, None).await;
+            serve_activity_events_connection(&mut stream, params, pass, None, None).await;
         });
         let (ws, resp) =
             tokio_tungstenite::connect_async(format!("ws://{addr}{ACTIVITY_EVENTS_WS_PATH}"))

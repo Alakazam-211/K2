@@ -2885,7 +2885,8 @@ async fn handle_one_request(
             };
             let params = super::http::parse_params(&path, &query);
             let login = skin_ws.is_none().then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
-            crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws, login).await;
+            let skin_raw = skin_ws.as_ref().and_then(|_| super::http::extract_token(&query)).map(str::to_string);
+            crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws, skin_raw, login).await;
             return DispatchOutcome::Done;
         }
         p if p == crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH => {
@@ -2951,7 +2952,8 @@ async fn handle_one_request(
             };
             let params = super::http::parse_params(&path, &query);
             let login = skin_ws.is_none().then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
-            crate::activity_events_ws::serve_activity_events_connection(stream, params, skin_ws, login)
+            let skin_raw = skin_ws.as_ref().and_then(|_| super::http::extract_token(&query)).map(str::to_string);
+            crate::activity_events_ws::serve_activity_events_connection(stream, params, skin_ws, skin_raw, login)
                 .await;
             return DispatchOutcome::Done;
         }

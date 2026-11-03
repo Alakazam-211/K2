@@ -396,21 +396,22 @@ impl Drop for RoomSlots {
 
 // ── the socket ───────────────────────────────────────────────────────
 
-/// Recompute the readable rooms. `None` = the guest's pass no longer
-/// resolves (revoked, expired, App suspended).
-fn readable_now(viewer: &Viewer, link: Option<&LinkCtx>) -> Option<(Readable, Option<SkinPass>)> {
+/// Recompute the readable rooms. `Err` = the close this socket owes: the
+/// guest's pass no longer resolves (revoked, expired, App suspended), or it
+/// couldn't be read.
+fn readable_now(viewer: &Viewer, link: Option<&LinkCtx>) -> Result<(Readable, Option<SkinPass>), Message> {
     match viewer {
         Viewer::Login { .. } => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            Some((readable_for_login(&conn), None))
+            Ok((readable_for_login(&conn), None))
         }
         Viewer::Guest { raw } => {
-            let pass = crate::apps::gateway::resolve_pass_on(link, raw)?;
+            let pass = crate::socket_access::live_pass_or_close(link, raw)?;
             let db = k2_core::db::shared();
             let conn = db.lock();
             let r = readable_for_pass(&conn, &pass);
-            Some((r, Some(pass)))
+            Ok((r, Some(pass)))
         }
     }
 }
@@ -432,9 +433,9 @@ pub fn ear_rooms_of(pass: Option<&SkinPass>, readable: &Readable) -> HashSet<Str
 
 /// One guest frame, re-checked against the pass as it is NOW: `Ok(None)`
 /// = the room is no longer readable (or the conversation no longer its
-/// pinned Chat); `Err(())` = the pass is gone.
-fn guest_doc(raw: &str, link: Option<&LinkCtx>, frame: &OverlayFrame, room: &str) -> Result<Option<Value>, ()> {
-    let pass = crate::apps::gateway::resolve_pass_on(link, raw).ok_or(())?;
+/// pinned Chat); `Err` = the close this socket owes.
+fn guest_doc(raw: &str, link: Option<&LinkCtx>, frame: &OverlayFrame, room: &str) -> Result<Option<Value>, Message> {
+    let pass = crate::socket_access::live_pass_or_close(link, raw)?;
     if !pass.has_room(room) || !pass.has_cap_in_room(room, crate::skin_routes::THREAD_READ) {
         return Ok(None);
     }
@@ -492,7 +493,7 @@ pub async fn serve_room_stream_connection(
         Viewer::Login { login } => overlay_ws::socket_seen(&params, false, login.as_deref()),
         Viewer::Guest { .. } => overlay_ws::socket_seen(&params, true, None),
     };
-    let Some((readable, first_pass)) = readable_now(&viewer, link.as_deref()) else {
+    let Ok((readable, first_pass)) = readable_now(&viewer, link.as_deref()) else {
         let r = crate::skin_routes::revoked_skin_response();
         send_http(stream, r.status, &r.body).await;
         return;
@@ -578,14 +579,14 @@ pub async fn serve_room_stream_connection(
                     break;
                 }
                 match readable_now(&viewer, link.as_deref()) {
-                    Some((r, p)) => {
+                    Ok((r, p)) => {
                         ear_set = ear_rooms_of(p.as_ref(), &r);
                         if !apply!(r, false) {
                             break;
                         }
                     }
-                    None => {
-                        let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    Err(m) => {
+                        let _ = write.send(m).await;
                         break;
                     }
                 }
@@ -614,14 +615,14 @@ pub async fn serve_room_stream_connection(
                             }
                             want = next;
                             match readable_now(&viewer, link.as_deref()) {
-                                Some((r, p)) => {
+                                Ok((r, p)) => {
                         ear_set = ear_rooms_of(p.as_ref(), &r);
                                     if !apply!(r, true) {
                                         break;
                                     }
                                 }
-                                None => {
-                                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                Err(m) => {
+                                    let _ = write.send(m).await;
                                     break;
                                 }
                             }
@@ -697,21 +698,21 @@ pub async fn serve_room_stream_connection(
                                 // Revoked (or a new pinned Chat): never sent;
                                 // the set follows now, not at the next tick.
                                 match readable_now(&viewer, link.as_deref()) {
-                                    Some((r, p)) => {
+                                    Ok((r, p)) => {
                         ear_set = ear_rooms_of(p.as_ref(), &r);
                                         if !apply!(r, false) {
                                             break;
                                         }
                                     }
-                                    None => {
-                                        let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                    Err(m) => {
+                                        let _ = write.send(m).await;
                                         break;
                                     }
                                 }
                                 None
                             }
-                            Ok(Err(())) => {
-                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            Ok(Err(m)) => {
+                                let _ = write.send(m).await;
                                 break;
                             }
                             Err(e) => {
@@ -752,7 +753,7 @@ pub async fn serve_room_stream_connection(
                                         turns.insert(room, crate::thread_activity::current_turn_guest(&conv));
                                     }
                                     overlay_ws::EarCheck::Skip => {}
-                                    overlay_ws::EarCheck::PassGone => return Err(()),
+                                    overlay_ws::EarCheck::Close(m) => return Err(m),
                                 }
                             }
                             Ok(turns)
@@ -764,8 +765,8 @@ pub async fn serve_room_stream_connection(
                                     break;
                                 }
                             }
-                            Ok(Err(())) => {
-                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            Ok(Err(m)) => {
+                                let _ = write.send(m).await;
                                 break;
                             }
                             Err(e) => {
@@ -801,8 +802,8 @@ pub async fn serve_room_stream_connection(
                     // next RECHECK tick (or the next Thread frame), so a
                     // Thread-only guest costs no set rebuild per turn frame.
                     Ok(overlay_ws::EarCheck::Skip) => {}
-                    Ok(overlay_ws::EarCheck::PassGone) => {
-                        let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    Ok(overlay_ws::EarCheck::Close(m)) => {
+                        let _ = write.send(m).await;
                         break;
                     }
                     Err(e) => {

@@ -164,6 +164,20 @@ async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
     crate::routes::http::refuse_upgrade(stream, &resp).await;
 }
 
+/// The folders a pass holds on `room` as it resolves now (live-access S1a).
+/// An unreadable folder list is as good as no `files:read` (fail closed, as at
+/// the door).
+fn files_scope_now(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str) -> Result<k2_core::skin::RoomPathScope, crate::socket_access::RoomAccess> {
+    use crate::socket_access::{room_access, RoomAccess};
+    match room_access(link, raw, room, &[crate::skin_routes::FILES_READ]) {
+        RoomAccess::Still(pass) => pass.path_scope(room).map_err(|e| {
+            log_debug!("[daemon/fs_events_ws] path scope unreadable: {e}");
+            RoomAccess::Lost
+        }),
+        other => Err(other),
+    }
+}
+
 /// WS handler. Dispatcher already token-authed. Requires `workspace=`.
 /// Skin: rooms + cap already checked in the dispatcher for `files:read`;
 /// this still 403s `skin_room` before upgrade if the named workspace is
@@ -172,6 +186,7 @@ pub async fn serve_fs_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     skin_pass: Option<SkinPass>,
+    skin_raw: Option<String>,
     mut login: Option<crate::socket_access::LoginCheck>,
 ) {
     let workspace_q = params
@@ -224,7 +239,7 @@ pub async fn serve_fs_events_connection(
     // R3: the login's folders on this room line, from the pass resolved at
     // the upgrade (like its caps). An unreadable scope refuses the socket
     // with the missing-cap 403 (fail closed).
-    let scope = match &skin_pass {
+    let mut scope = match &skin_pass {
         Some(pass) => match pass.path_scope(&project_id) {
             Ok(s) => Some(s),
             Err(e) => {
@@ -247,6 +262,32 @@ pub async fn serve_fs_events_connection(
     let (mut write, mut read) = ws.split();
     let mut rx = session_events::subscribe();
     let mut recheck = crate::socket_access::tick();
+    // The pass as it resolves now, on the tick and before a frame once skin.db
+    // has been written: a revoke, a lost cap or changed folders reach an open
+    // socket.
+    let link = crate::apps::gateway::current();
+    let mut skin_gate = crate::socket_access::SkinGate::default();
+    macro_rules! scope_now_or_close {
+        () => {
+            if let Some(raw) = skin_raw.clone() {
+                let generation = skin_gate.generation();
+                let (link2, room) = (link.clone(), project_id.clone());
+                let now = tokio::task::spawn_blocking(move || files_scope_now(link2.as_deref(), &raw, &room))
+                    .await
+                    .unwrap_or(Err(crate::socket_access::RoomAccess::Failed));
+                match now {
+                    Ok(fresh) => {
+                        scope = Some(fresh);
+                        skin_gate.settled(generation);
+                    }
+                    Err(end) => {
+                        let _ = write.send(end.close_message()).await;
+                        break;
+                    }
+                }
+            }
+        };
+    }
 
     loop {
         tokio::select! {
@@ -255,6 +296,7 @@ pub async fn serve_fs_events_connection(
                     let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
+                scope_now_or_close!();
             }
             incoming = read.next() => {
                 match incoming {
@@ -271,15 +313,24 @@ pub async fn serve_fs_events_connection(
             event = rx.recv() => {
                 match event {
                     Ok(event) => {
+                        // Nothing for this room at all: nothing to ask. Not the
+                        // folders held at the last check: a widened folder's
+                        // frame must get as far as the fresh ones.
+                        if subscriber_frame_scoped(&project_id, &root, &wire_workspace, &event, None).is_none() {
+                            continue;
+                        }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
+                        }
+                        if skin_gate.due() {
+                            scope_now_or_close!();
+                        }
                         let Some(frame) =
                             subscriber_frame_scoped(&project_id, &root, &wire_workspace, &event, scope.as_ref())
                         else {
                             continue;
                         };
-                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
-                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
-                            break;
-                        }
                         if write.send(Message::Text(frame)).await.is_err() {
                             break;
                         }
@@ -491,7 +542,7 @@ mod tests {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 let mut params = HashMap::new();
                 params.insert("workspace".to_string(), workspace);
-                serve_fs_events_connection(&mut stream, params, Some(pass), None).await;
+                serve_fs_events_connection(&mut stream, params, Some(pass), None, None).await;
             });
             let (ws, resp) =
                 tokio_tungstenite::connect_async(format!("ws://{addr}{FS_EVENTS_WS_PATH}"))

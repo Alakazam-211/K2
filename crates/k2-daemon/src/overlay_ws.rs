@@ -326,22 +326,79 @@ pub(crate) fn guest_ear_allowed(pass: &SkinPass, room: &str, conversation: &str)
 
 /// What a guest socket does with one guest turn frame, after re-resolving
 /// its pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EarCheck {
     Send,
     /// Not (or no longer) allowed: nothing is sent.
     Skip,
-    /// The pass no longer resolves: close the socket.
-    PassGone,
+    /// The pass is gone, or couldn't be read: close the socket with this.
+    Close(Message),
 }
 
 /// [`guest_ear_allowed`] for a raw pass as it resolves NOW (`link`: the
 /// App link the socket arrived on, if any).
 pub(crate) fn guest_ear_check(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str, conversation: &str) -> EarCheck {
-    match crate::apps::gateway::resolve_pass_on(link, raw) {
-        None => EarCheck::PassGone,
-        Some(pass) if guest_ear_allowed(&pass, room, conversation) => EarCheck::Send,
-        Some(_) => EarCheck::Skip,
+    match crate::socket_access::live_pass_or_close(link, raw) {
+        Err(m) => EarCheck::Close(m),
+        Ok(pass) if guest_ear_allowed(&pass, room, conversation) => EarCheck::Send,
+        Ok(_) => EarCheck::Skip,
+    }
+}
+
+/// What a guest's overlay socket does now, by the door's own rules
+/// ([`skin_overlay_gate`]).
+pub(crate) enum GuestNow {
+    /// Send, under this pass.
+    Send(SkinPass),
+    /// The room has no pinned Chat this moment: no frame, and no reason to end
+    /// the socket (it comes back when the Chat does).
+    Hold,
+    /// End the socket with this: 4003 for a dead pass, 4013 for a lost room or
+    /// `thread:read`. A pin that moved is not lost access, so that's a plain
+    /// close: the client re-reads the pin and opens the new conversation.
+    Close(Message),
+}
+
+pub(crate) fn guest_now(link: Option<&crate::apps::gateway::LinkCtx>, raw: &str, room: &str, conversation: &str) -> GuestNow {
+    use crate::socket_access::{room_access, RoomAccess};
+    let pass = match room_access(link, raw, room, &[crate::skin_routes::THREAD_READ]) {
+        RoomAccess::Still(p) => p,
+        other => return GuestNow::Close(other.close_message()),
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let pin = k2_core::db::schema::WorkspaceSession::get(&conn, room).ok().flatten().and_then(|s| s.session_id);
+    match pin.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) if p == conversation => GuestNow::Send(pass),
+        Some(_) => GuestNow::Close(Message::Close(None)),
+        None => GuestNow::Hold,
+    }
+}
+
+/// [`guest_now`], as one guest socket asks it.
+struct GuestProbe {
+    raw: String,
+    link: Option<std::sync::Arc<crate::apps::gateway::LinkCtx>>,
+    room: String,
+    conversation: String,
+    gate: crate::socket_access::SkinGate,
+}
+
+impl GuestProbe {
+    async fn now(&mut self) -> GuestNow {
+        let generation = self.gate.generation();
+        let (raw, link, room, conversation) = (self.raw.clone(), self.link.clone(), self.room.clone(), self.conversation.clone());
+        let now = tokio::task::spawn_blocking(move || guest_now(link.as_deref(), &raw, &room, &conversation))
+            .await
+            .unwrap_or_else(|e| {
+                log_debug!("[daemon/overlay_ws] guest check panicked: {e}");
+                GuestNow::Close(Message::Close(None))
+            });
+        // A held frame asks again next time: the Chat may be back.
+        if matches!(now, GuestNow::Send(_)) {
+            self.gate.settled(generation);
+        }
+        now
     }
 }
 
@@ -720,6 +777,18 @@ pub async fn serve_overlay_events_connection(
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
     let mut recheck = crate::socket_access::tick();
+    // A guest's open socket keeps asking (live-access S1a): on the tick, and
+    // before a frame once skin.db has been written.
+    let mut probe = match (skin_raw.as_ref(), guest_wire.as_ref()) {
+        (Some(raw), Some(g)) => Some(GuestProbe {
+            raw: raw.clone(),
+            link: link.clone(),
+            room: g.project_id.clone(),
+            conversation: conversation.clone(),
+            gate: Default::default(),
+        }),
+        _ => None,
+    };
 
     loop {
         tokio::select! {
@@ -736,11 +805,40 @@ pub async fn serve_overlay_events_connection(
                     let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
+                if let Some(probe) = probe.as_mut() {
+                    match probe.now().await {
+                        GuestNow::Send(fresh) => {
+                            if let Some(g) = guest_wire.as_mut() {
+                                g.pass = fresh;
+                            }
+                        }
+                        GuestNow::Hold => {}
+                        GuestNow::Close(m) => {
+                            let _ = write.send(m).await;
+                            break;
+                        }
+                    }
+                }
             }
             moved = crate::read_live::next_guest_move(&mut guest_rx, guest_key.as_deref()) => {
-                let (Some(pass), true) = (skin_pass.clone(), moved.conversation_id == conversation) else {
+                let (Some(probe), true) = (probe.as_mut(), moved.conversation_id == conversation) else {
                     continue;
                 };
+                if probe.gate.due() {
+                    match probe.now().await {
+                        GuestNow::Send(fresh) => {
+                            if let Some(g) = guest_wire.as_mut() {
+                                g.pass = fresh;
+                            }
+                        }
+                        GuestNow::Hold => continue,
+                        GuestNow::Close(m) => {
+                            let _ = write.send(m).await;
+                            break;
+                        }
+                    }
+                }
+                let Some(pass) = guest_wire.as_ref().map(|g| g.pass.clone()) else { continue };
                 let conv = conversation.clone();
                 let frame = tokio::task::spawn_blocking(move || crate::read_routes::guest_read_frame(&pass, &conv))
                     .await
@@ -797,6 +895,22 @@ pub async fn serve_overlay_events_connection(
                             let _ = write.send(crate::presence::session_revoked_close_message()).await;
                             break;
                         }
+                        if let Some(probe) = probe.as_mut().filter(|p| p.gate.due()) {
+                            match probe.now().await {
+                                // The frame is built under the pass as it is
+                                // now: narrowed folders hide attachments at once.
+                                GuestNow::Send(fresh) => {
+                                    if let Some(g) = guest_wire.as_mut() {
+                                        g.pass = fresh;
+                                    }
+                                }
+                                GuestNow::Hold => continue,
+                                GuestNow::Close(m) => {
+                                    let _ = write.send(m).await;
+                                    break;
+                                }
+                            }
+                        }
                         let text = if needs_blocking(&frame) {
                             // A permission card: projected off the async
                             // worker (guests never get here: skin_may_see_frame
@@ -848,8 +962,8 @@ pub async fn serve_overlay_events_connection(
                                 }
                             }
                             Ok(EarCheck::Skip) => {}
-                            Ok(EarCheck::PassGone) => {
-                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            Ok(EarCheck::Close(m)) => {
+                                let _ = write.send(m).await;
                                 break;
                             }
                             Err(e) => {
@@ -868,7 +982,7 @@ pub async fn serve_overlay_events_connection(
                         let snap = tokio::task::spawn_blocking(move || match guest_ear_check(link2.as_deref(), &raw, &room, &conv) {
                             EarCheck::Send => Ok(Some(crate::thread_activity::current_turn_guest(&conv))),
                             EarCheck::Skip => Ok(None),
-                            EarCheck::PassGone => Err(()),
+                            EarCheck::Close(m) => Err(m),
                         })
                         .await;
                         match snap {
@@ -878,8 +992,8 @@ pub async fn serve_overlay_events_connection(
                                 }
                             }
                             Ok(Ok(None)) => {}
-                            Ok(Err(())) => {
-                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            Ok(Err(m)) => {
+                                let _ = write.send(m).await;
                                 break;
                             }
                             Err(e) => {

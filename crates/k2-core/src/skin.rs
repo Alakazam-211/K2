@@ -2287,7 +2287,38 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
     }
     let conn = &guard.as_ref().expect("skin db opened").conn;
     let _held = ties::HeldGuard::enter();
-    f(conn)
+    let before = rows_changed(conn);
+    let out = f(conn);
+    // Under the mutex: whoever sees it move and then reads, reads the write.
+    if rows_changed(conn) != before {
+        WRITE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    out
+}
+
+/// Moves after any call that changed a row in skin.db through this process's
+/// connection, whichever table and writer (`prd-live-access-changes-v1` S1a).
+/// An open socket compares it before each frame and resolves its pass only when
+/// it moved, so a quiet box costs one atomic load per frame and a revoke stops
+/// the very next frame. A rollback or an unrelated write (a failed login's
+/// lockout row, a new session) moves it too: that costs each socket one extra
+/// resolve, never a wrong answer. `prd-live-access-changes-v1` S2 narrows it to
+/// the access tables. Not a proof of access: it
+/// can't see expiry, the main database or the other daemon during a handoff, so
+/// sockets also resolve on a tick.
+static WRITE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`WRITE_GENERATION`].
+pub fn write_generation() -> u64 {
+    WRITE_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Rows changed on this connection since it opened, foreign key actions and
+/// triggers included.
+fn rows_changed(conn: &Connection) -> i32 {
+    // SAFETY: the handle is live for as long as `conn` is borrowed, and this
+    // call only reads a counter on it.
+    unsafe { rusqlite::ffi::sqlite3_total_changes(conn.handle()) }
 }
 
 /// Close the cached skin.db connection (the next call opens it again). For
@@ -7069,12 +7100,19 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 /// An App **link pass** (`link_id` set, runtime S14) is never returned
 /// here: it is valid only on its own link ([`link::resolve_link_pass`]).
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
+    try_resolve_skin_token(presented_raw).ok().flatten()
+}
+
+/// [`resolve_skin_token`] that tells "no such live pass" (`Ok(None)`) from "the
+/// database couldn't say" (`Err`). An open socket must not read an error as a
+/// dead pass: that tells a person to sign in again for nothing.
+pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, String> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
-        return None;
+        return Ok(None);
     }
     let key_hash = sha256_hex(presented_raw);
     let now = now_secs();
-    with_conn(|conn| {
+    let row = with_conn(|conn| {
         let row = conn
             .query_row(
                 "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy,
@@ -7183,17 +7221,15 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
             (pass, tie)
         });
         Ok(row)
-    })
-    .ok()
-    .flatten()
-    .and_then(|(pass, tie)| match tie {
+    })?;
+    Ok(row.and_then(|(pass, tie)| match tie {
         None => Some(pass),
         // agent-app-users R2 (A2): a tied guest's live session is held to
         // the ceiling on every use, whatever rewrote it since the mint
         // (role and grant edits rewrite live sessions in place). The App's
         // workspace is read after the skin mutex is released (A21).
         Some(tie) => clamp_resolved(pass, &tie),
-    })
+    }))
 }
 
 /// [`resolve_skin_token`]'s clamp for a tied guest's session: `None` when

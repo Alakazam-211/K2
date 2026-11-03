@@ -56,6 +56,7 @@ sudo pacman -R k2
 | `/usr/lib/k2/k2-gui` | GUI binary (crate bin is still `k2` so Darwin `Contents/MacOS/k2` stays put) |
 | `/usr/lib/k2/frpc` | Connect sidecar next to the GUI (not `/usr/bin/frpc`) |
 | `/usr/bin/k2-daemon` | daemon |
+| `/usr/bin/k2-node` | K2 Compute node agent |
 | `/usr/lib/systemd/user/k2-daemon.service` | **user** unit, `ExecStart=/usr/bin/k2-daemon`. Not auto-enabled. Not `k2so-daemon`. Not a system unit. |
 | `/usr/lib/systemd/user/k2-daemon-home.service` | oneshot that creates `~/.k2` before the daemon unit opens its log files. |
 
@@ -71,7 +72,9 @@ A later `k2-bin` package may consume the already-baked GitHub `k2-daemon-linux-x
 
 ## GitHub release
 
-The k2-arch runner builds this on a release tag (`packaging/arch/build-release-pkg.sh`) and uploads `dist/k2-$VERSION-x86_64.pkg.tar.zst`. The Mac does not compile the GUI. AUR and `pkgs.omarchy.org` are out of scope.
+The k2-arch runner builds this on a release tag (`packaging/arch/build-release-pkg.sh`) and uploads `dist/k2-$VERSION-x86_64.pkg.tar.zst`. The Mac does not compile the GUI. This workflow doesn't publish to the AUR or to `pkgs.omarchy.org`.
+
+A published package never changes bytes (`scripts/arch-upload-pkg.sh`): a rebuild of the same tag that comes out different fails instead of replacing the file. The Omarchy recipe in `packaging/omarchy/k2-bin` pins that file's sha256.
 
 `release.sh` does not build or wait for this before the tag; the build runs alongside the other tag workflows. If it fails, `release.sh` Step 10.6 says so with the re-run command, and the release stays live without the package until then. `scripts/check-arch-pkgbuild.sh` checks the PKGBUILD sources and sums on every push.
 
@@ -82,8 +85,12 @@ That script runs `makepkg` without installing. `release.sh` attaches the file wh
 - Air-gap `--features airgap` (separate SKU, never this package).
 - Linux GUI auto-update / `latest.json` linux keys.
 - `k2 daemon status|start|stop` lifecycle CLI (Darwin/`launchctl`).
-- `pkgs.omarchy.org` (later ask). aarch64 GUI (same PKGBUILD `arch=()` later).
+- aarch64 GUI (same PKGBUILD `arch=()` later).
 - AUR name: `k2` here; rename to `k2-bin` at submit if `k2` is taken.
+
+## Omarchy's Install > Package list
+
+That list is `pacman -Slq`: Arch's repos plus `[omarchy]` at `pkgs.omarchy.org`, built from the `omacom/omarchy-pkgs` repo. `packaging/omarchy/k2-bin` holds the recipe for that repo. It unpacks this package from our GitHub release and builds nothing.
 
 ## Wayland / Hyprland
 

@@ -111,9 +111,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          K2_RELEASE_REPO: ${{ github.repository }}
+        # Never --clobber: a published package keeps its bytes. Recipes pin its
+        # sha256 (an Omarchy recipe does). Same bytes: nothing to do. Different
+        # bytes: the job fails and says so.
         run: |
           set -euo pipefail
-          gh release upload "$IN_TAG" "$PKG_PATH" --clobber
+          scripts/arch-upload-pkg.sh "$IN_TAG" "$PKG_PATH"
 
       # The SUMS line for exactly the file just uploaded. The `sums` job
       # writes it into the release's SHA256SUMS-linux-x86_64.txt.

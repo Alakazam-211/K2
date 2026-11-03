@@ -307,7 +307,7 @@ python3 - "$WF" <<'PY' && pass "arch-package.yml still runs on v* tags and uploa
 import re, sys
 s = open(sys.argv[1]).read()
 assert re.search(r'^on:\n  push:\n    tags:\n      - "v\*"\n', s, re.M), "no v* tag trigger"
-assert "gh release upload" in s, "no upload"
+assert "scripts/arch-upload-pkg.sh" in s, "no upload"
 assert "linux-sums.sh merge" in s or "scripts/linux-sums.sh" in s, "no SUMS merge"
 assert "gate_id" not in s, "gate_id left over"
 PY

@@ -60,8 +60,9 @@
 #   app-linux.yml and daemon-binaries.yml; it builds
 #   k2-<version>-x86_64.pkg.tar.zst and uploads it. Step 9 attaches the file
 #   only if one is already in $DIST_DIR. No .sig. Do not add a Linux GUI key
-#   to latest.json or daemon-latest.json. AUR and pkgs.omarchy.org are out of
-#   scope. A build break shows up after the release is live; Step 10.6 says
+#   to latest.json or daemon-latest.json. This script doesn't publish to the
+#   AUR or pkgs.omarchy.org (Omarchy's bot picks the file up from the release:
+#   packaging/omarchy/k2-bin). A build break shows up after the release is live; Step 10.6 says
 #   so and how to re-run it (scripts/lib/linux-sums-step.sh).
 #   k2-arch (40.160.54.134) is shared with Sew: send Sew `HOLD k2-arch` before
 #   the tag (this script does not message Sew) and `k2-arch clear` after the

@@ -1438,6 +1438,14 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 - Either card makes the change itself when it's allowed: don't run `k2 mail sending` again.
 - No card turns another workspace's sending on by itself. That refusal's Ask with: line, if any, asks for `mail.manage` ("manage hosted mail" for your own workspace), which lets you set other workspaces' sending yourself. With no line, tell your human (the owner or an admin runs `k2 mail sending <workspace> on`).
 
+## Refreshing your own chat
+
+A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Can refresh its own pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+
+    k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
+
+Save your work before you ask: once you've asked, this chat can end at any moment. Run it as printed. The owner or an admin allows it once, or from now on (that turns the switch on, and you then run `k2 agent refresh` yourself). The card makes the change: don't run it again. You won't see the approved line in this chat, because this chat ends: the new one gets a summary, your note, then the line. Denied: a `[permission:]` line says so here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh` again, and ask with its new line. `k2 study chat-refresh`.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

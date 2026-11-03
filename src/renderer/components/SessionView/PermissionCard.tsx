@@ -310,14 +310,14 @@ function AnswerControls({
   item,
   actions,
   batchItem,
-  always = false,
+  always,
   onReveal,
 }: {
   item: PermissionItem
   actions: PermissionCardActions
   batchItem: boolean
-  /** The daemon offers `PERMISSION_LABEL.always` on this card. */
-  always?: boolean
+  /** The "from now on" answer the daemon offers on this card, if any. */
+  always?: string
   /** A card that shows its approver a secret: hand it to the card. */
   onReveal?: (r: RevealedSecret) => void
 }): JSX.Element {
@@ -452,12 +452,10 @@ function AnswerControls({
         />
         {always && (
           <CardButton
-            label={PERMISSION_LABEL.always}
+            label={always}
             testId="permission-always"
             disabled={busy || (confirm && !canConfirmHere)}
-            onClick={() =>
-              confirm ? setStep({ kind: 'confirm', answer: PERMISSION_LABEL.always }) : void send({ answer: PERMISSION_LABEL.always })
-            }
+            onClick={() => (confirm ? setStep({ kind: 'confirm', answer: always }) : void send({ answer: always }))}
           />
         )}
         <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
@@ -540,10 +538,10 @@ function ItemOutcome({
   nowSec,
   batchItem,
   offered = true,
-  always = false,
+  always,
   onReveal,
 }: {
-  always?: boolean
+  always?: string
   onReveal?: (r: RevealedSecret) => void
   item: PermissionItem
   viewer: PermissionViewer
@@ -674,7 +672,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         nowSec={now}
         batchItem={false}
         offered={offered}
-        always={options?.some((o) => o.label === PERMISSION_LABEL.always) ?? false}
+        always={options?.find((o) => o.label === PERMISSION_LABEL.always || o.label === PERMISSION_LABEL.alwaysChatRefresh)?.label}
         onReveal={view.reveal ? setRevealed : undefined}
       />
       {revealed && <PermissionReveal secret={revealed} onGone={forget} />}

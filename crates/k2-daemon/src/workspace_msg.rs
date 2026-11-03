@@ -1674,6 +1674,27 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
         .expect("empty composer slash command is always allowed")
 }
 
+/// [`send_message_to_session`] for a session that has only just started:
+/// waits for `provider`'s readiness signal and a settled screen first
+/// ([`deliver_post_wake`]). A paste during a TUI's start-up can be dropped
+/// while the write itself succeeds, and a refreshed chat's note must arrive.
+/// Blocks up to [`DEFAULT_WAKE_TIMEOUT`]; `messageDelivered` still means
+/// "written to a live child", not "read".
+pub fn send_message_after_spawn(session_id: &str, from: &str, text: &str, provider: &str) -> MsgResponse {
+    let payload = format_message_user_with_command(from, text, "").expect("empty composer slash command is always allowed");
+    let Some(live) = SessionId::parse(session_id).and_then(|sid| session_lookup::lookup_by_session_id(&sid)) else {
+        return MsgResponse::fail(MsgReason::PtyDied);
+    };
+    let profile = k2_core::workspace::provider_resume::injection_profile_for_provider(provider);
+    let ceiling = if cfg!(test) { Duration::from_millis(300) } else { DEFAULT_WAKE_TIMEOUT };
+    match deliver_post_wake(&live, &payload, ceiling, &profile) {
+        InjectOutcome::Delivered => MsgResponse::ok(live.session_id().to_string(), "send_message"),
+        InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
+        InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+        InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
+    }
+}
+
 /// Composer `send-message` with an allowlisted slash-command.
 ///
 /// Unknown commands return `Err` and do **not** inject. Empty/whitespace

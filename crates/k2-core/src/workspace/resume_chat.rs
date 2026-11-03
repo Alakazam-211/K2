@@ -431,6 +431,56 @@ fn follow_custom_thread(project_id: &str, old: &str, new: &str) {
     move_thread(old, new);
 }
 
+/// How long a refresh counts as still settling: after this, another refresh
+/// may start even if the new chat never named its id.
+const THREAD_HOLD_SETTLE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// When a refresh's hold started, by project.
+fn thread_hold_started() -> &'static parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static AT: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    AT.get_or_init(Default::default)
+}
+
+/// A refresh (a new chat on the same harness) keeps the Thread: `old`'s
+/// Thread waits for the next chat id this workspace pins, and moves onto it.
+/// Call it before the resolver writes that id. A premint harness (claude,
+/// grok) pins it in the same call, a self-minting one (codex, pi, …) when
+/// its id is adopted. A move to ANOTHER harness doesn't hold: that chat
+/// starts its own Thread, as it always has.
+pub fn hold_thread_for_new_chat(project_id: &str, old: &str) {
+    let old = old.trim();
+    thread_hold_started().lock().insert(project_id.to_string(), std::time::Instant::now());
+    if old.is_empty() {
+        // The chat being replaced never got an id: an earlier hold, if any,
+        // still names the Thread.
+        return;
+    }
+    pending_custom_moves().lock().insert(project_id.to_string(), old.to_string());
+}
+
+/// The Thread waiting for this workspace's next chat id, if any: its address
+/// shows this until the new chat has an id, instead of a 404.
+pub fn held_thread(project_id: &str) -> Option<String> {
+    pending_custom_moves().lock().get(project_id).cloned()
+}
+
+/// A recent refresh's new chat has no id yet. Another refresh now would have
+/// nothing to summarize and would lose the first one's Thread hand-over, so
+/// the caller refuses it.
+pub fn thread_hold_settling(project_id: &str) -> bool {
+    held_thread(project_id).is_some() && refreshed_just_now(project_id)
+}
+
+/// This workspace's pinned chat was refreshed a moment ago, so its new chat
+/// may have written nothing yet. The resolver must not read that as a missing
+/// conversation and converge on the newest one on disk: that's the OLD chat,
+/// and a client's routine ensure would flip the pin back to it (leaving the
+/// Thread, which moved, behind).
+fn refreshed_just_now(project_id: &str) -> bool {
+    thread_hold_started().lock().get(project_id).is_some_and(|at| at.elapsed() < THREAD_HOLD_SETTLE)
+}
+
 fn move_thread(old: &str, new: &str) {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -524,7 +574,8 @@ fn converge_or_mint(
     // an unbounded re-mint / re-resume loop. Resuming the real on-disk
     // session makes the resolver converge: the persisted id now passes the
     // adapter's exists check above on the next call.
-    if let Some(existing) = adapter.newest_on_disk(project_path) {
+    let on_disk = if project_id.is_some_and(refreshed_just_now) { None } else { adapter.newest_on_disk(project_path) };
+    if let Some(existing) = on_disk {
         persist_session_identity(project_id, Some(&existing), adapter.provider);
         let args = adapter.resume_args(&base_args, &existing);
         return Ok(ResumeChatArgs {
@@ -980,6 +1031,13 @@ fn persist_session_identity(project_id: Option<&str>, session_id: Option<&str>, 
                  ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = ?4, last_activity_at = unixepoch()",
                 params![row_id, pid, sid, harness],
             );
+            // A refresh's Thread waited for this pin. Under the DB lock held
+            // across the key change, so no post resolves in between.
+            if let Some(old) = pending_custom_moves().lock().remove(pid) {
+                if let Err(e) = crate::overlay::move_conversation(&conn, &old, sid) {
+                    crate::log_debug!("[core/resume-chat] move refreshed Thread {old} -> {sid} failed: {e}");
+                }
+            }
             // A clone's imported main Thread waited for this pin (CL5).
             if let Err(e) = crate::overlay::transfer::settle_pending(&conn, pid) {
                 crate::log_debug!("[clone/threads] settle on pin {sid} for {pid}: {e}");
@@ -1877,6 +1935,78 @@ mod tests {
 
         let out = resolve_never_chatted_chat_args(&path, "pi").expect("fresh");
         assert_eq!(out.args, ["--thinking", "high"].map(String::from).to_vec());
+    }
+
+    /// A refresh's Thread waits for the next pinned id: at once for a premint
+    /// harness, at adoption for a self-minting one. Nobody else's hold moves.
+    #[test]
+    fn a_refreshed_thread_follows_the_next_pin_and_only_that_one() {
+        let _guard = HomeGuard::new("thread-hold");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/thread-hold-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let old = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &old, "grok");
+        let post = |conv: &str, text: &str| {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::overlay::post_thread(&conn, conv, &project_id, "owner", "ws", text, "compose").expect("post");
+        };
+        let count = |conv: &str| crate::overlay::read_thread_page(conv, None, None, 50).expect("read").items.len();
+        post(&old, "before");
+
+        // Nothing held: nothing settling, and an unrelated pin moves nothing.
+        assert!(!thread_hold_settling(&project_id));
+        persist_session_identity(Some(&project_id), Some(&old), "grok");
+        assert_eq!(count(&old), 1);
+
+        // Premint: the pin itself moves it.
+        hold_thread_for_new_chat(&project_id, &old);
+        assert_eq!(held_thread(&project_id).as_deref(), Some(old.as_str()));
+        assert!(thread_hold_settling(&project_id));
+        let premint = uuid::Uuid::new_v4().to_string();
+        persist_session_identity(Some(&project_id), Some(&premint), "grok");
+        assert_eq!((count(&premint), count(&old)), (1, 0));
+        assert_eq!(held_thread(&project_id), None);
+        assert!(!thread_hold_settling(&project_id));
+
+        // Self-minting: cleared, posts land on the old key, adoption moves all.
+        hold_thread_for_new_chat(&project_id, &premint);
+        clear_session_identity(Some(&project_id), "codex");
+        post(&premint, "while it had no id");
+        let adopted = uuid::Uuid::new_v4().to_string();
+        take_pending_custom_thread_move(&project_id, &adopted);
+        assert_eq!((count(&adopted), count(&premint)), (2, 0));
+        assert_eq!(held_thread(&project_id), None);
+
+        // A chat that never got an id keeps an earlier hold.
+        hold_thread_for_new_chat(&project_id, &adopted);
+        hold_thread_for_new_chat(&project_id, "");
+        assert_eq!(held_thread(&project_id).as_deref(), Some(adopted.as_str()));
+        take_pending_custom_thread_move(&project_id, &adopted);
+    }
+
+    /// Right after a refresh the new chat has written nothing, and the newest
+    /// conversation on disk is the old one. A client's routine resolve must
+    /// not flip the pin back to it.
+    #[test]
+    fn a_routine_resolve_right_after_a_refresh_keeps_the_new_pin() {
+        let guard = HomeGuard::new("fresh-no-flip");
+        crate::db::init_for_tests();
+        let source = "01920000-abcd-7000-8000-00000000abcd";
+        let path = format!("/fixture/fresh-no-flip-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        hold_thread_for_new_chat(&project_id, source);
+        let fresh = resolve_never_chatted_chat_args(&path, "claude").expect("fresh");
+        assert_ne!(fresh.resume_session, source);
+
+        let routine = resolve_resume_chat_args(&path).expect("routine");
+        assert_eq!(routine.resume_session, fresh.resume_session, "the pin stayed on the new chat");
+        assert_eq!(saved_row(&project_id), Some((Some(fresh.resume_session.clone()), "claude".to_string())));
+        thread_hold_started().lock().remove(&project_id);
     }
 
     #[test]

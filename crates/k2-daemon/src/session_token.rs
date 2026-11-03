@@ -1157,6 +1157,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // `harness_needs_person`, a permission card when cards are on).
         "/cli/workspace/swap-canonical",
         "/cli/agent/harness",
+        // `k2 agent refresh` (0.46.8): the handler takes its own main session
+        // with the workspace's switch on; else a permission card or a refusal.
+        "/cli/agent/refresh",
         // Skin roster GET + manage mutations (`k2 skin` / `k2 skin-token`).
         // Exact paths only — never prefix `/cli/skin/` (front-door / hydra
         // stay owner even when the Agent-tab toggle is ON). POST mutate is
@@ -2611,6 +2614,8 @@ mod tests {
         assert!(is_agent_verb("/cli/workspace/swap-canonical"));
         // `k2 agent harness`: the handler refuses an agent with a card.
         assert!(is_agent_verb("/cli/agent/harness"));
+        // `k2 agent refresh`: the handler decides.
+        assert!(is_agent_verb("/cli/agent/refresh"));
         // C2: workspace-addressed terminal read is peer-gated agent verb.
         assert!(
             is_agent_verb("/cli/terminal/read"),

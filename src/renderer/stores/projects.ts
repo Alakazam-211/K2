@@ -322,6 +322,8 @@ interface Project {
   // /cli/agent-access/set `toggle: 'db_upgrade'` (the owner raises, the
   // owner or an Admin lowers).
   agentsCanUpgradePostgres?: number
+  /** "Can refresh its own pinned chat" (0263). Written by agent-access/set. */
+  agentsCanRefreshChat?: number
   // Per-agent App permissions (0197, prd-agent-app-permissions-v1): switch 1
   // "Build and run Apps" is `agentsCanManageSkin`; switch 2 "…and manage
   // them end to end" is this (0/1, default 0; counts only under switch 1).

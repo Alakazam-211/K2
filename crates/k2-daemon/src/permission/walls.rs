@@ -102,6 +102,9 @@ const fn code(status: u16, code: &'static str) -> WallMatch {
     WallMatch::Code { status, code }
 }
 
+const CHAT_REFRESH_PARAMS: &[(&str, &[ParamFrom])] =
+    &[("notes", &[ParamFrom::Response("/error/notes")]), ("mode", &[ParamFrom::Response("/error/mode")])];
+
 const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
@@ -153,7 +156,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 53] = [
+pub(crate) const V1_ACTIONS: [&str; 54] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -196,6 +199,7 @@ pub(crate) const V1_ACTIONS: [&str; 53] = [
     "sew.owner-handoff",
     // 0.46.6 (Rosson): move the agent's own pinned chat to another harness.
     "agent.harness-switch",
+    "chat.refresh",
     // 0.46.6 (Rosson 2026-10-28): let the agent read one of its own
     // workspace's secrets as a file or env (a handed-over or person-given
     // secret it may not widen itself).
@@ -379,6 +383,18 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("harness", &[ParamFrom::Response("/error/harness"), ParamFrom::Body("/provider")])],
         ..row(ask("agent.harness-switch", Floor::Admin), code(403, "harness_needs_person"), "/cli/workspace/swap-canonical", POST)
+    },
+    // `k2 agent refresh`, and swap-canonical on the same harness (0.46.8):
+    // the refusal carries the kept note's hash; no note, no value.
+    Row {
+        params: CHAT_REFRESH_PARAMS,
+        optional: &["notes", "mode"],
+        ..row(ask("chat.refresh", Floor::Admin), code(403, "chat_refresh_needs_person"), "/cli/agent/refresh", POST)
+    },
+    Row {
+        params: CHAT_REFRESH_PARAMS,
+        optional: &["notes", "mode"],
+        ..row(ask("chat.refresh", Floor::Admin), code(403, "chat_refresh_needs_person"), "/cli/workspace/swap-canonical", POST)
     },
     // `k2 heartbeat disable|enable <n> --workspace <another>` (0.46.6): the
     // refusal names the workspace and the heartbeat; `enabled=` (the CLI
@@ -1176,6 +1192,9 @@ mod tests {
             // 0.46.6: an agent moving its own pinned chat (both doors).
             (403, "POST", "/cli/agent/harness", vec![], Some(json!({"workspace":"sales","harness":"Claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"switched":false}), "agent.harness-switch"),
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
+            // 0.46.8: an agent refreshing its own pinned chat (both doors).
+            (403, "POST", "/cli/agent/refresh", vec![], Some(json!({"notes":"n"})), json!({"error":{"code":"chat_refresh_needs_person","notes":"ab"},"refreshed":false}), "chat.refresh"),
+            (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"codex"})), json!({"error":{"code":"chat_refresh_needs_person"},"swapped":false}), "chat.refresh"),
             // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
             (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
             // `k2 app grant add … --kind app` by the App's own agent.
@@ -1684,7 +1703,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 53);
+        assert_eq!(V1_ACTIONS.len(), 54);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

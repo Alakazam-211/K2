@@ -726,7 +726,13 @@ pub fn adopt_fresh_session(
         adapter.provider,
     ) {
         Ok(0) => None,
-        Ok(_) => Some(session_id),
+        Ok(_) => {
+            // A refresh's Thread waiting for this id moves onto it now
+            // (outside the DB lock; the move takes it).
+            drop(conn);
+            crate::workspace::resume_chat::take_pending_custom_thread_move(&project_id, &session_id);
+            Some(session_id)
+        }
         Err(e) => {
             crate::log_debug!(
                 "[core/provider-resume] fresh-adopt {} session for {} failed: {}",
@@ -759,8 +765,21 @@ pub fn defer_adopt_discovered_session(provider: String, project_path: String) {
     });
 }
 
+/// How many times a fresh continue looks for its new chat's id before the
+/// resolver's lazy converge takes over: a slow CLI may write its session file
+/// long after [`ADOPTION_PROBE_DELAY`], and a refresh's Thread waits for it.
+const FRESH_ADOPTION_PROBES: u32 = 12;
+
+/// The newest fresh-continue spawn per workspace. A probe loop stops when a
+/// newer spawn replaced the chat it was looking for.
+fn fresh_adoption_generation() -> &'static parking_lot::Mutex<std::collections::HashMap<String, u64>> {
+    static GEN: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, u64>>> = std::sync::OnceLock::new();
+    GEN.get_or_init(Default::default)
+}
+
 /// Same delay as [`defer_adopt_discovered_session`], but stamps only an
-/// id that was not on disk before the fresh continue spawn.
+/// id that was not on disk before the fresh continue spawn, and looks again
+/// up to [`FRESH_ADOPTION_PROBES`] times.
 pub fn defer_adopt_fresh_session(
     provider: String,
     project_path: String,
@@ -769,9 +788,22 @@ pub fn defer_adopt_fresh_session(
     if provider_resume_for_provider(&provider).is_none() {
         return;
     }
+    let generation = {
+        let mut map = fresh_adoption_generation().lock();
+        let g = map.entry(project_path.clone()).or_insert(0);
+        *g += 1;
+        *g
+    };
     std::thread::spawn(move || {
-        std::thread::sleep(ADOPTION_PROBE_DELAY);
-        let _ = adopt_fresh_session(&provider, &project_path, &exclude);
+        for _ in 0..FRESH_ADOPTION_PROBES {
+            std::thread::sleep(ADOPTION_PROBE_DELAY);
+            if fresh_adoption_generation().lock().get(&project_path) != Some(&generation) {
+                return;
+            }
+            if adopt_fresh_session(&provider, &project_path, &exclude).is_some() {
+                return;
+            }
+        }
     });
 }
 

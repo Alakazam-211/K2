@@ -22,5 +22,5 @@ Topics:
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs
-  folder-trust  email-notifications  box-move  board
+  folder-trust  email-notifications  box-move  board  chat-refresh
 --- requests

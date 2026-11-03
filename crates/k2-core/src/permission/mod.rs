@@ -79,6 +79,8 @@ pub mod label {
     /// users itself from then on. The card and the confirm say so. Single
     /// cards only (`apps::held_cards`).
     pub const ALWAYS: &str = "Allow, and let it manage its Apps' users from now on";
+    /// `chat.refresh`: Allow, then turn on "Can refresh its own pinned chat".
+    pub const ALWAYS_CHAT_REFRESH: &str = "Allow, and let it refresh its chat from now on";
 }
 
 /// Access Audit events (PRD §6.5).

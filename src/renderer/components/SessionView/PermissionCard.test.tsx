@@ -190,6 +190,17 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always, confirmToken: 'tok_1' }))
   })
 
+  it('"Allow, and let it refresh its chat" is a plain click and answers with its label', async () => {
+    const always = 'Allow, and let it refresh its chat from now on'
+    const actions = actionsMock()
+    const view = { ...CONFIRM_VIEW, proof: { kind: 'click' } }
+    draw(permissionDoc({ view, options: ['Allow', 'Deny', always] }), actions)
+    expect(text('permission-always')).toBe(always)
+    fireEvent.click(screen.getByTestId('permission-always'))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always }))
+    expect(screen.queryByTestId('permission-always-covers')).toBeNull()
+  })
+
   it('cancel goes back to the buttons; without a server to confirm on, it says where to', () => {
     const actions = actionsMock()
     draw(permissionDoc({ view: CONFIRM_VIEW }), actions)

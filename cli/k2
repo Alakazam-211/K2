@@ -340,6 +340,9 @@ _cli_tool_id_for_verb() {
                 # terminal, so an agent is refused (it asks with a card)
                 # instead of moving its own pinned chat as the owner.
                 harness) echo "agent-harness" ;;
+                # 0.46.8: `k2 agent refresh` too: an agent's own chat, by its
+                # own passport and its workspace's switch.
+                refresh) echo "agent-harness" ;;
                 *) echo "" ;;
             esac ;;
         # The leftover spelling of `k2 agent identity` rides the same tool.
@@ -6031,8 +6034,10 @@ except Exception:
 # harness. The daemon copies a transcript seed (and optional notes)
 # into that new chat. It does not resume the saved session. Heartbeats
 # on the pinned chat follow it; ones with their own session stay put.
-# The newer door is `k2 agent harness <workspace> <harness>`. Since
-# 0.46.6 an agent never swaps (exit 3, harness_needs_person).
+# The newer doors are `k2 agent harness <workspace> <harness>` and, for the
+# same harness, `k2 agent refresh`. Since 0.46.6 an agent never moves its chat
+# to another harness (exit 3, harness_needs_person); on the same harness it's
+# a refresh, with that verb's rule (0.46.8).
 #
 #   k2 workspace swap-canonical <workspace> --agent claude
 #   k2 workspace swap-canonical <workspace> --agent claude --full --notes-file handoff.md
@@ -6169,7 +6174,7 @@ if d.get("error") and not d.get("swapped"):
     if path:
         print("Handoff file: %s" % path, file=sys.stderr)
     # 0.46.6: a refused caller (an agent, a wrong credential) exits 3.
-    sys.exit(3 if code in ("harness_needs_person", "other_workspace", "wrong_credential", "invalid_token") else 1)
+    sys.exit(3 if code in ("harness_needs_person", "chat_refresh_needs_person", "chat_refresh_main_only", "other_workspace", "wrong_credential", "invalid_token") else 1)
 if not d.get("swapped"):
     print("Error: canonical chat was not swapped", file=sys.stderr)
     sys.exit(1)
@@ -17413,11 +17418,12 @@ if "changed" in v and "before" in v:
 print(line)'
 }
 
-# k2 agent access set <workspace> chat_manage on|off (Sew for Apps, 0.46.6):
-# "Manage Sew" for one workspace's agent. The owner or an admin (the daemon
-# refuses an agent: it never loosens its own access).
+# k2 agent access set <workspace> chat_manage|chat_refresh on|off (Sew for
+# Apps, 0.46.6; the chat refresh switch, 0.46.8): one workspace's agent. The
+# owner or an admin (the daemon refuses an agent: it never loosens its own
+# access).
 cmd_agent_access() {
-    local usage="usage: k2 agent access set <workspace> chat_manage on|off [--json]"
+    local usage="usage: k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]"
     case "${1:-}" in
         -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage Chat / Voice Hosting\": the agent may run Chat / Voice Hosting here, create Spaces and bind them to its Apps. On also makes its own chat account (off keeps it)."; [ -z "${1:-}" ] && exit 2; return 0 ;;
         set) shift ;;
@@ -17432,15 +17438,18 @@ cmd_agent_access() {
             *) if [ -z "$ws" ]; then ws="$1"; elif [ -z "$toggle" ]; then toggle="$1"; elif [ -z "$value" ]; then value="$1"; else echo "$usage" >&2; exit 2; fi; shift ;;
         esac
     done
-    [ -n "$ws" ] && [ "$toggle" = chat_manage ] || { echo "$usage" >&2; exit 2; }
+    [ -n "$ws" ] && { [ "$toggle" = chat_manage ] || [ "$toggle" = chat_refresh ]; } || { echo "$usage" >&2; exit 2; }
     case "$value" in on|off) ;; *) echo "$usage" >&2; exit 2 ;; esac
-    _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=chat_manage K2_CJ_value_b="$([ "$value" = on ] && echo 1 || echo 0)")"
+    _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="$toggle" K2_CJ_value_b="$([ "$value" = on ] && echo 1 || echo 0)")"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("Manage Chat / Voice Hosting is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
+if "agentsCanRefreshChat" in v:
+    print("Can refresh its own pinned chat is %s for %s" % ("on" if v.get("agentsCanRefreshChat") else "off", v.get("workspace")))
+else:
+    print("Manage Chat / Voice Hosting is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
 }
 
 cmd_app_grant_kind() {
@@ -42206,7 +42215,7 @@ cmd_schema() {
     },
     {
       "name": "agent access",
-      "usage": "k2 agent access set <workspace> chat_manage on|off [--json]",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]",
       "description": "\"Manage Chat / Voice Hosting\" for one workspace's agent: it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps. On also makes its own chat account, as a coworker, if it has none; off keeps it. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
@@ -42283,6 +42292,21 @@ cmd_schema() {
         {"name": "--model", "arg": "id", "description": "Start the new chat on this model, even if the preset names another. On the same harness it starts a new chat with the summary. This start only: a later resume uses the preset or workspace model again."},
         {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
+      ]
+    },
+    {
+      "name": "agent refresh",
+      "usage": "k2 agent refresh [<workspace>] [--note <text> | --notes-file <path>] [--full] [--dry-run] [--json]",
+      "description": "Start a new pinned chat on the same harness that carries on from the current one, for a long chat that has gone stale. K2 ends the current chat at once (anything running in it stops), starts a new one with the same launch options, and sends it a summary and your note when it is ready. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new one; sidecars keep running. A person runs it for any workspace (owner, Admin, or a person in a K2 shell tab). An agent's main session may run it for its own workspace with \"Can refresh its own pinned chat\" on; otherwise exit 3, and with permission cards on the refusal ends with the k2 permission request chat.refresh line. Read k2 study chat-refresh. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": false, "description": "Workspace handle, name or path. Default: this workspace."}
+      ],
+      "flags": [
+        {"name": "--note", "arg": "text", "description": "A note for the new chat: what you were doing and what's next. At most 32,000 characters."},
+        {"name": "--notes-file", "arg": "path", "description": "The note, from a file."},
+        {"name": "--full", "arg": null, "description": "Summarize a longer part of the old chat (default: the recent part)."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would happen, and if a person has to allow it; change nothing. It keeps no note and gives no line to ask with."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (refreshed, harness, sessionId, fromSessionId, messageDelivered, handoffPath, oldChatInHistory, ownSessionHeartbeats)."}
       ]
     },
     {
@@ -45895,7 +45919,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
 
 _study_usage() {
     cat <<'EOF'
@@ -45918,7 +45942,7 @@ Topics:
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs
-  folder-trust  email-notifications  box-move  board
+  folder-trust  email-notifications  box-move  board  chat-refresh
 EOF
 }
 
@@ -45978,6 +46002,7 @@ _study_title() {
         email-notifications) echo "One-way email from senders no agent can read" ;;
         box-move) echo "Moving a box: the vault and the tunnel token" ;;
         board) echo "The Board Garden: k2 board, grants, the rules" ;;
+        chat-refresh) echo "Refreshing your own chat: k2 agent refresh, the note, what carries on" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -46106,6 +46131,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
   box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
+  chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -46188,6 +46214,7 @@ _study_page() {
         garden-changes) _study_page_garden_changes ;;
         box-move) _study_page_box_move ;;
         board) _study_page_board ;;
+        chat-refresh) _study_page_chat_refresh ;;
         *) return 1 ;;
     esac
 }
@@ -53017,6 +53044,8 @@ CANONICAL CHAT
       --model <id>                  Start the new chat on this model, even if
                                     the preset names another (this start only)
       harness: claude, grok, cursor, gemini, pi, codex, hermes
+                                    The same harness is a refresh (k2 agent
+                                    refresh): the Thread comes along.
 
 `<path>` defaults to K2_PROJECT_PATH or PWD.
 
@@ -53115,6 +53144,9 @@ COMMANDS
                           claude, codex, grok, gemini, cursor, pi or hermes. Changing the default
                           agent only changes NEW chats. People run it; an agent is refused (exit 3)
                           and asks its person (the refusal says how).
+  refresh [<name>]        Start a new pinned chat on the same harness that carries on from this one,
+                          with a note for it. The old chat stays in Chat history; the Thread comes along.
+                          An agent's main session may, for its own chat, when a person allows it.
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   access set <ws> chat_manage on|off
                           "Manage Chat / Voice Hosting" for that workspace's agent (the owner or an admin)
@@ -54204,6 +54236,195 @@ else:
         print(d["messageHint"])
     if d.get("handoffPath"):
         print("It is on disk: %s" % d["handoffPath"])
+if d.get("seedError"):
+    print("Note: the old transcript was not copied (%s)." % d["seedError"])
+'
+}
+
+cmd_help_agent_refresh() {
+    cat <<'EOF'
+k2 agent refresh — start a new pinned chat that carries on from this one
+
+For a long chat that has gone stale. K2 ends the current pinned chat, starts a
+new one on the same harness with the same launch options, and sends it a summary
+of the old chat and your note once it is ready.
+
+  Stops:         the current chat, at once. It does not wait: anything running
+                 in it stops. If that is you, so does this command.
+  Carries on:    the Thread, messages and heartbeats on the pinned chat, in the
+                 new chat. Sidecars keep running.
+  Stays:         the old chat, in Chat history.
+
+USAGE
+  k2 agent refresh [<workspace>] [flags]
+
+  <workspace>   handle, name or path ("." = the current directory). Default:
+                this workspace.
+
+FLAGS
+  --note <text>           A note for the new chat: what you were doing, what's next
+  --notes-file <path>     The note, from a file (at most 32,000 characters)
+  --full                  Summarize a longer part of the old chat (default: the recent part)
+  --dry-run               Show what would happen, and if a person has to allow it;
+                          change nothing. It keeps no note and gives no line to ask with
+  --json                  The daemon's JSON
+
+WHO
+  A person: the owner (the desktop app, or a terminal outside K2), an Admin login,
+  or a person typing in a K2 shell tab, for any workspace.
+  An agent: its main session, for its own chat, with "Can refresh its own pinned
+  chat" on. Off, it gets exit 3, and with permission cards on the error ends with
+  the line to ask with: k2 permission request chat.refresh … --why "…". Save your
+  work first: once you've asked, the chat can end at any moment. A sidecar can't
+  refresh itself.
+  In the app: the pinned chat's menu → "Continue in a new chat…".
+
+Full page: k2 study chat-refresh
+
+EXAMPLES
+  k2 agent refresh --note "Next: finish the import; the failing test is tests/import.rs"
+  k2 agent refresh sales --notes-file handover.md
+  k2 agent refresh sales --dry-run
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found
+EOF
+}
+
+# `k2 agent refresh [<workspace>]` (0.46.8): one daemon door, POST
+# /cli/agent/refresh. Inside a K2 terminal the passport goes (an `id` tool), so
+# an agent acts as itself, never as the owner.
+cmd_agent_refresh() {
+    if _wants_help "$@"; then cmd_help_agent_refresh; exit 0; fi
+    local usage="usage: k2 agent refresh [<workspace>] [--note <text> | --notes-file <path>] [--full] [--dry-run] [--json]"
+    local ws="" mode="recent" note="" note_set=false notes_file="" dry_run=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --full) mode="full"; shift ;;
+            --note)
+                [ -n "${2:-}" ] || { _agent_err "bad_usage" "--note takes text — $usage"; exit 2; }
+                note="$2"; note_set=true; shift 2 ;;
+            --notes-file)
+                [ -n "${2:-}" ] || { _agent_err "bad_usage" "--notes-file takes a path — $usage"; exit 2; }
+                notes_file="$2"; shift 2 ;;
+            --dry-run) dry_run=true; shift ;;
+            --json) as_json=true; shift ;;
+            -*) _agent_err "bad_usage" "unknown flag '$1' — $usage"; exit 2 ;;
+            *)
+                if [ -z "$ws" ]; then ws="$1"
+                else _agent_err "bad_usage" "unexpected extra argument '$1' — $usage"; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ "$note_set" = true ] && [ -n "$notes_file" ]; then
+        _agent_err "bad_usage" "--note and --notes-file are one note: pass one — $usage"
+        exit 2
+    fi
+    if [ -n "$notes_file" ] && [ ! -f "$notes_file" ]; then
+        _agent_err "not_found" "notes file not found: $notes_file"
+        exit 1
+    fi
+    # No workspace named: this one. An agent's passport names it anyway.
+    [ -n "$ws" ] || ws="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-}}"
+    if [ -z "$ws" ] && [ -z "${SCOPED_TOKEN:-}" ]; then
+        _agent_err "bad_usage" "name the workspace — $usage"
+        exit 2
+    fi
+    if [ -n "$ws" ] && [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+    local body
+    body=$(H_WS="$ws" H_MODE="$mode" H_NOTE="$note" H_NOTES="$notes_file" H_DRY="$dry_run" python3 -c '
+import json, os
+notes = os.environ.get("H_NOTE", "")
+path = os.environ.get("H_NOTES", "")
+if path:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        notes = f.read()
+print(json.dumps({
+    "workspace": os.environ.get("H_WS", ""),
+    "mode": os.environ["H_MODE"],
+    "notes": notes,
+    "dryRun": os.environ.get("H_DRY") == "true",
+}))
+') || { _agent_err "bad_usage" "could not read the notes file: $notes_file"; exit 1; }
+    local raw
+    raw="$(_K2_SEND_MAX_TIME=150 cli_send_json POST /cli/agent/refresh "$body")"
+    local status="${raw##*$'\n'}" resp="${raw%$'\n'*}"
+    if [ "$status" = "000" ] || [ -z "$status" ]; then
+        _agent_err "daemon_unreachable" "no answer from the K2 daemon"
+        exit 1
+    fi
+    printf '%s' "$resp" | H_STATUS="$status" H_JSON="$as_json" python3 -c '
+import json, os, sys
+status = int(os.environ["H_STATUS"])
+as_json = os.environ["H_JSON"] == "true"
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print(json.dumps({"error": {"code": "daemon_error", "hint": "unparseable answer (HTTP %d): %s" % (status, raw[:300])}}), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print(json.dumps({"error": {"code": "daemon_error", "hint": "unexpected answer (HTTP %d): %s" % (status, raw[:300])}}), file=sys.stderr)
+    sys.exit(1)
+if status >= 300 or d.get("error"):
+    err = d.get("error")
+    if isinstance(err, dict):
+        code, hint = err.get("code") or "error", err.get("hint") or err.get("message") or ""
+    else:
+        code, hint = "error", str(err or "HTTP %d" % status)
+    if status == 404 and "route" in hint and "not found" in hint:
+        hint = "this K2 daemon has no k2 agent refresh yet (update it)"
+    if as_json:
+        print(json.dumps(d), file=sys.stderr)
+    else:
+        print("Error (%s): %s" % (code, hint), file=sys.stderr)
+        path = d.get("handoffPath") or ""
+        if path:
+            print("Handoff file: %s" % path, file=sys.stderr)
+    sys.exit(3 if status in (401, 403) else 4 if status == 404 else 2 if code == "usage" else 1)
+if as_json:
+    print(json.dumps(d))
+    sys.exit(0)
+ws = d.get("workspace") or ""
+h = d.get("harness") or ""
+own = d.get("ownSessionHeartbeats") or []
+def own_note():
+    if own:
+        print("Heartbeats with their own session (they do not follow the pinned chat): %s." % ", ".join(own))
+        print("  Move one with: k2 heartbeat use-pinned-session on <name>")
+if d.get("dryRun"):
+    print("DRY RUN: would start a new %s pinned chat for %s." % (h, ws))
+    if d.get("needsPerson"):
+        print("You can'"'"'t run it yourself: a person has to allow this. Save your work, then run this again without --dry-run, with your note, for what to do next.")
+    if d.get("launches"):
+        print("%s is installed: %s" % (h, d["launches"]))
+    print("Note: %s characters." % d.get("noteChars", 0))
+    print("Anything running in the current chat would stop. The old chat would stay in Chat history; the Thread, heartbeats and messages would carry on in the new chat; sidecars would keep running.")
+    own_note()
+    sys.exit(0)
+print("Refreshed %s'"'"'s pinned chat on %s." % (ws, h))
+conv = d.get("claudeSessionId") or ""
+sid = d.get("sessionId") or ""
+if conv or sid:
+    print("New chat: %s%s" % (conv or "(id assigned when it starts)", (" (terminal %s)" % sid) if sid else ""))
+old = d.get("fromSessionId") or ""
+if old:
+    listed = d.get("oldChatInHistory")
+    if listed is False:
+        print("Old chat: %s (not listed in Chat history: it had no saved conversation)." % old)
+    else:
+        print("Old chat: %s (still in Chat history)." % old)
+print("The Thread, heartbeats on the pinned chat and messages carry on in the new chat.")
+own_note()
+if d.get("messageDelivered"):
+    print("The summary and note were sent into the new chat.")
+else:
+    print("The new chat is up, but the summary and note were not sent (%s)." % (d.get("messageReason") or "not delivered"))
+    if d.get("messageHint"):
+        print(d["messageHint"])
+    if d.get("handoffPath"):
+        print("They are on disk: %s" % d["handoffPath"])
 if d.get("seedError"):
     print("Note: the old transcript was not copied (%s)." % d["seedError"])
 '
@@ -78728,6 +78949,14 @@ When the `[permission:]` turn says approved, they have that role on your App, an
 - Either card makes the change itself when it's allowed: don't run `k2 mail sending` again.
 - No card turns another workspace's sending on by itself. That refusal's Ask with: line, if any, asks for `mail.manage` ("manage hosted mail" for your own workspace), which lets you set other workspaces' sending yourself. With no line, tell your human (the owner or an admin runs `k2 mail sending <workspace> on`).
 
+## Refreshing your own chat
+
+A long pinned chat goes stale. `k2 agent refresh --note "<what the next chat needs>"` (or `--notes-file <path>`) starts a new chat on the same harness that carries on from this one. Your main session only; a sidecar has its own chat. With your workspace's "Can refresh its own pinned chat" off, the refusal ends with the line to ask with, and K2 keeps your note for the card:
+
+    k2 permission request chat.refresh notes=<hash> --why "<what you need it for>"
+
+Save your work before you ask: once you've asked, this chat can end at any moment. Run it as printed. The owner or an admin allows it once, or from now on (that turns the switch on, and you then run `k2 agent refresh` yourself). The card makes the change: don't run it again. You won't see the approved line in this chat, because this chat ends: the new one gets a summary, your note, then the line. Denied: a `[permission:]` line says so here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh` again, and ask with its new line. `k2 study chat-refresh`.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -79543,6 +79772,57 @@ elif "meta" in v:
 else:
     dump(v)
 '
+}
+
+_study_page_chat_refresh() {
+    cat <<'EOF'
+k2 study chat-refresh — refreshing your own chat
+
+A long pinned chat goes stale: its context fills, its tools drift. A refresh starts a new chat on the same harness that carries on from this one. It isn't a move to another harness (`k2 agent harness`, which a person runs) and it isn't a restart of the same chat (`k2 agent restart`).
+
+    k2 agent refresh --note "Next: finish the import. The failing test is in tests/import.rs."
+    k2 agent refresh --notes-file note.md
+    k2 agent refresh --full        # a longer part of this chat in the summary
+    k2 agent refresh --dry-run     # what would happen, and if a person has to allow it; changes nothing
+
+Write the note for a reader who knows nothing: what you were doing, what's next, where things are. At most 32,000 characters. No secrets.
+
+## Who may
+
+- Your main session, for its own chat. A sidecar can't refresh itself. A new sidecar knows nothing of this chat, so write a handover to a file first, then ask your main session (`k2 msg <workspace>`) to stop you and open a sidecar under a new name with `--brief <file>` (`k2 sidecar new` on the same name resumes the same chat).
+- With "Can refresh its own pinned chat" on for your workspace (Settings → Workspaces → <you> → Agent, or the owner or an admin runs `k2 agent access set <workspace> chat_refresh on`), it just runs.
+- Off, you get exit 3 (`chat_refresh_needs_person`). With permission cards on, the error ends with the line to ask with. Save your work first: once you've asked, this chat can end at any moment, maybe hours later, so don't start long work. Run the line as printed: K2 keeps your note, and the card shows the person the start of it. They allow it once, or from now on, which turns the switch on. Don't run `k2 agent refresh` again: the card does it. If it's allowed, this chat ends, and the new chat gets the summary, your note, then a `[permission:]` line saying so. If it's denied, that line comes here. To change your note: `k2 permission cancel <id>`, run `k2 agent refresh --note …` again, and ask with its new line.
+- Cards off: K2 doesn't keep your note. Finish your work first: when they run it, this chat ends at once. Save the note to a file and give your person the whole command, with the file's full path, to run from a terminal outside K2: `k2 agent refresh <workspace> --notes-file <path>`. Or ask them to pick "Continue in a new chat…" in the pinned chat's menu (tell them where the note is), or to turn the switch on.
+- Another workspace's chat: not yet, for agents.
+
+## What happens
+
+1. K2 writes the summary and your note to `.k2/handoffs/CANONICAL-HANDOFF.md`.
+2. It ends this chat at once. It does not wait for you to finish: anything running in this chat stops, and so does your `k2 agent refresh` call, so you won't see its answer. Finish or save your work first.
+3. It starts the new chat with the same program and launch options, and when the program is ready it sends the summary and your note.
+
+## What carries on
+
+- **The Thread:** the same conversation, in the new chat. With codex, pi and other harnesses that name their own chat, it takes a little while to move, up to about a minute. Until then it still opens at the workspace's address, and what's posted there moves with it.
+- **Files on disk** aren't touched.
+- **Messages and heartbeats on the pinned chat** go to the new chat. Heartbeats with their own session stay on theirs (`--dry-run` lists them; `k2 heartbeat use-pinned-session on <name>` moves one).
+- **Sidecars** keep running.
+- **The old chat** stays in Chat history, and its transcript stays on disk.
+
+## What doesn't
+
+- This chat's memory: only the summary and your note reach the next one.
+- A secret kept for this session only, and anything else tied to this session's id: ask again in the new chat.
+- A new chat's id is different. A session id is not one thing: your passport's session is K2's terminal, and `K2_SESSION_ID` is the harness's chat id if it has one. Don't save either across a refresh.
+
+## Errors
+
+- `chat_refresh_settling` (exit 1): the last refresh's new chat has no id yet. Try again in a minute.
+- `chat_refresh_main_only` (exit 3): you're a sidecar.
+- `chat_refresh_custom` (exit 1): this workspace runs a custom program, so there's no chat to summarize. `k2 agent restart`.
+- `harness_not_installed` (exit 1): the harness's CLI won't start. Nothing was touched.
+- A card that goes stale: the chat moved to another harness, or your note changed after you asked. Ask again.
+EOF
 }
 
 _study_page_board() {
@@ -88265,6 +88545,7 @@ case "${1:-help}" in
             restart) shift 2; cmd_agent_restart "$@" ;;
             # 0.46.6: move the pinned chat to another harness.
             harness) shift 2; cmd_agent_harness "$@" ;;
+            refresh) shift 2; cmd_agent_refresh "$@" ;;
             # Context management stack — day-2 AGENTS.md layer stack
             # (prd-context-hamburger-v1).
             context) shift 2; cmd_agent_context "$@" ;;

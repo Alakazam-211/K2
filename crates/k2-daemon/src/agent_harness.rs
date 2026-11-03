@@ -169,7 +169,7 @@ pub(crate) fn current_harness(project_id: &str, project_path: &str) -> String {
 
 /// Active heartbeats that resume their own session instead of the pinned
 /// chat: they don't follow a switch (`k2 heartbeat use-pinned-session on`).
-fn own_session_heartbeats(project_id: &str) -> Vec<String> {
+pub(crate) fn own_session_heartbeats(project_id: &str) -> Vec<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     k2_core::db::schema::AgentHeartbeat::list_active(&conn, project_id)
@@ -181,7 +181,7 @@ fn own_session_heartbeats(project_id: &str) -> Vec<String> {
 }
 
 /// Is `session_id` one of the workspace's listed chats (Chat history)?
-fn listed_in_history(project_path: &str, session_id: &str) -> Option<bool> {
+pub(crate) fn listed_in_history(project_path: &str, session_id: &str) -> Option<bool> {
     if session_id.is_empty() {
         return None;
     }

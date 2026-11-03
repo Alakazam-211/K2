@@ -308,7 +308,8 @@ pub const SKILL_VERSION_ZEN: u32 = 47;
 /// Bumped to 47 (0.46.8): the Study topics gain `voice-rooms` and `board`.
 /// Bumped to 48 (0.46.8): the `[guest …]` stamp on an App guest's Thread post.
 /// Bumped to 49 (0.46.8): `k2 mail forward-message` in the mail verbs.
-pub const SKILL_VERSION_WORKSPACE: u32 = 49;
+/// Bumped to 50 (0.46.8): the Study topics gain `chat-refresh`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 50;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and
@@ -323,7 +324,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 49;
 /// v7 = 0.46.8: "Your own chat account" (`chat.manage` first, `chat.account`) and "Email sending"
 /// (`mail.send-mode` from `k2 mail sending`, `mail.stop-sending`).
 /// v8 = 0.46.8: a box login's access to your own App (`apps.user-grant-box`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 8;
+/// v9 = 0.46.8: "Refreshing your own chat" (`chat.refresh`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 9;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -1852,6 +1852,32 @@ mod tests {
     /// key's Thread moves to the provider id. A reply that raced in under
     /// the provider id is merged by time, nothing is lost or duplicated,
     /// and seqs are renumbered 1..n with the next post after them.
+    /// A permission card moves with its Thread, so its request must too: an
+    /// answer on the new key looks the request up by that key.
+    #[test]
+    fn move_conversation_takes_the_permission_requests_along() {
+        let project_id = seed_project("ovl-move-req");
+        let from = uuid::Uuid::new_v4().to_string();
+        let to = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        post_thread(&c, &from, &project_id, "rosson", "ovl-move/1", "first", "compose").expect("post");
+        let rid = format!("pr_{}", uuid::Uuid::new_v4().simple());
+        c.execute(
+            "INSERT INTO permission_requests (id, workspace_id, conversation_id, card_id, action, params_hash, text_hash, why, floor, created_at, expires_at) \
+             VALUES (?1, ?2, ?3, 'c1', 'chat.refresh', 'h', 't', 'w', 'admin', 1, 2)",
+            rusqlite::params![rid, project_id, from],
+        )
+        .expect("request");
+
+        move_conversation(&c, &from, &to).expect("move").expect("something moved");
+
+        let now: String = c
+            .query_row("SELECT conversation_id FROM permission_requests WHERE id = ?1", rusqlite::params![rid], |r| r.get(0))
+            .expect("read");
+        assert_eq!(now, to);
+    }
+
     #[test]
     fn move_conversation_merges_raced_reply_in_time_order_without_duplicates() {
         let project_id = seed_project("ovl-move");

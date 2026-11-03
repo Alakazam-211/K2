@@ -1612,13 +1612,14 @@ fn handle_access(
         && toggle != "app_review"
         && toggle != "db_upgrade"
         && toggle != "permission_cards"
+        && toggle != "chat_refresh"
         && toggle != "app_users"
         && toggle != "sim"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1703,6 +1704,21 @@ fn handle_access(
         let out = crate::sql::versions_access::set_switch(&ws.id, value, caller_is_owner(caller), &access_by(caller))
             .map_err(|r| err(r.code, r.status, r.hint))?;
         return Ok((out, format!("ok {} db_upgrade={value}", ws.handle)));
+    }
+    if toggle == "chat_refresh" {
+        // "Can refresh its own pinned chat" (0263, 0.46.8). Default OFF. The
+        // owner token or an Owner/Admin login, both ways (the route's Admin
+        // floor; a passport never reaches here: `/cli/agent-access/set` is
+        // not an agent verb). "Always" on the `chat.refresh` card comes
+        // through here as the person who clicked. A card still open goes
+        // stale at the click: with the switch on the agent needs no card.
+        k2_core::workspace::settings::set_agents_can_refresh_chat(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_refresh", "agentsCanRefreshChat": value }),
+            format!("ok {} chat_refresh={value}", ws.handle),
+        ));
     }
     if toggle == "permission_cards" {
         // "Can ask for permission cards" (Beta, 0218, prd-agent-settings-

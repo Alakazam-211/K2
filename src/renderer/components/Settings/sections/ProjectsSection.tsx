@@ -115,6 +115,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Allow this agent to manage Postgres versions', description: 'Move this agent\'s databases (and its Apps\' databases) to a newer Postgres, create on a chosen version, and roll back (k2 db upgrade, k2 db create --major); live moves (k2 db upgrade --live) come to agents once proven; every act is logged. Deleting the old copy stays with you. The owner turns it on; the owner or an Admin may turn it off', keywords: ['agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'live', 'dual-run', 'agent'] },
   { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Can ask for permission cards', description: 'Beta: lets this agent ask you or an admin for a setting change with a card in its Thread (k2 permission request); nothing changes until someone allows it. Shown while Permission cards is on for the server (Settings → Access → Permission Cards). The owner or an admin switches it', keywords: ['agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
+  { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Can refresh its own pinned chat', description: 'Lets this agent start a new pinned chat on the same harness when its chat goes stale, with a note for itself (k2 agent refresh). The old chat stays in Chat history and the Thread carries on. Off: it asks you on a card. The owner or an admin switches it', keywords: ['agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
@@ -1477,6 +1478,7 @@ function ProjectDetail({
               <AgentsManageProjectsToggle project={project} />
               <AgentsManageGardensToggle project={project} />
               <AgentPermissionCardsRow project={project} />
+              <AgentsRefreshChatToggle project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -2684,6 +2686,81 @@ export function AgentsManageProjectsToggle({
 // computer's switch, and the window on this computer), the row keeps its
 // data-source powers only and reads "Manage data sources"; who edits a
 // Garden is its list in Settings → Gardens. Off: as 0.46.3.
+/** "Can refresh its own pinned chat" (0263, 0.46.8): the owner or an admin
+ *  (the route's floor; a Member's write is refused and rolls back here). */
+export function AgentsRefreshChatToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const enabled = (project.agentsCanRefreshChat ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanRefreshChat
+    setBusy(true)
+    setError(null)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) => (p.id === project.id ? { ...p, agentsCanRefreshChat: next ? 1 : 0 } : p)),
+    }))
+    try {
+      await daemonCliPost(primaryScope(), 'agent-access/set', {
+        workspace: project.path,
+        toggle: 'chat_refresh',
+        value: next,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) => (p.id === project.id ? { ...p, agentsCanRefreshChat: before } : p)),
+      }))
+      setError(err instanceof Error ? err.message : String(err))
+      console.error('[agent-access] chat_refresh write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Can refresh its own pinned chat"
+          disabled={busy}
+          data-settings-id="projects.agents-can-refresh-chat"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={enabled ? 'This agent starts a new pinned chat itself' : 'This agent asks before it starts a new pinned chat'}
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="min-w-0">
+          <div className="text-xs text-[var(--color-text-secondary)]">Can refresh its own pinned chat</div>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            Lets this agent start a new pinned chat on the same harness when its chat goes stale, with a note for itself
+            (<code>k2 agent refresh</code>). The new chat gets only a summary and that note, and what it&apos;s doing at that moment
+            stops. The old chat stays in Chat history, and the Thread, messages and heartbeats on the pinned chat carry on in the
+            new chat. Off, it asks you on a card when permission cards are on.
+          </p>
+          {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function AgentsManageGardensToggle({
   project,
 }: {

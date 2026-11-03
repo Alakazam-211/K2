@@ -50,6 +50,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An agent with Manage Chat / Voice Hosting on now gets its own chat account,** so it can create and run a Space without a second ask. An agent without the switch can ask for an account on a permission card.
 
 ### Threads
+- **An agent can refresh its own chat, when you allow it.** A long pinned chat goes stale. `k2 agent refresh --note "…"` starts a new chat on the same harness that carries on from it, with a summary and the agent's note, once the new chat is ready. The Thread comes along, messages and heartbeats go to the new chat, sidecars keep running, and the old chat stays in Chat history. Whatever the old chat was doing at that moment stops. Each workspace has a switch, **Can refresh its own pinned chat** (Settings → Workspaces → the agent → Agent), off by default. With it off and permission cards on, the agent asks on a card that shows the start of its note: **Allow** once, or **Allow, and let it refresh its chat from now on**. Agents refresh only their own chat, from their main session. `k2 study chat-refresh`.
+- **`k2 workspace swap-canonical` on the same harness is that refresh.** The Thread comes along, for people too, and an agent's own call follows the switch or the card above.
 - **Posting to a Thread or project chat answers at once.** A post used to wait until its line was typed into the agent's terminal, up to 20 seconds with a sleeping agent. Now it answers once it is stored, and the agent gets it right after, in order.
 - **A Thread on another server opens faster.** It shows the last messages straight away while it loads, and starts loading when you hover its row.
 - **Links in chat have no copy button any more.** Right-click a link for **Copy link**.

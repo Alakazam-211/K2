@@ -241,6 +241,12 @@ pub struct Project {
     /// before 0225 (the upgrade tests read one) still reads as off.
     #[serde(default)]
     pub agents_can_manage_app_users: i64,
+    /// "Can refresh its own pinned chat" (`chat_refresh`, migration 0263).
+    /// DEFAULT 0 (off). Read-only here (the Agent tab shows it); written
+    /// only by `POST /cli/agent-access/set {toggle: "chat_refresh"}` (the
+    /// owner or an Admin). Read by its own query, never in the main SELECT.
+    #[serde(default)]
+    pub agents_can_refresh_chat: i64,
     /// "Show the Mobile tab" (migration 0250, Rosson 2026-10-29). NULL
     /// (`None`) = auto: the room pins the Mobile tab while this server can
     /// run a phone (at least one usable sim lane, the `mobile-sim-v1`
@@ -269,6 +275,17 @@ fn mobile_tab_switches(conn: &Connection) -> std::collections::HashMap<String, O
 /// workspace reads as off (fail closed).
 fn app_users_switches(conn: &Connection) -> std::collections::HashMap<String, i64> {
     let Ok(mut stmt) = conn.prepare("SELECT id, agents_can_manage_app_users FROM projects") else {
+        return std::collections::HashMap::new();
+    };
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// Every project's "Can refresh its own pinned chat". A database from before
+/// 0263 has no column: empty, so every switch reads off.
+fn chat_refresh_switches(conn: &Connection) -> std::collections::HashMap<String, i64> {
+    let Ok(mut stmt) = conn.prepare("SELECT id, agents_can_refresh_chat FROM projects") else {
         return std::collections::HashMap::new();
     };
     stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
@@ -355,14 +372,17 @@ impl Project {
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
+                agents_can_refresh_chat: 0,
                 mobile_tab_enabled: None,
             })
         })?;
         let mut out: Vec<Project> = rows.collect::<Result<_>>()?;
         let users = app_users_switches(conn);
+        let refresh = chat_refresh_switches(conn);
         let mobile_tabs = mobile_tab_switches(conn);
         for p in out.iter_mut() {
             p.agents_can_manage_app_users = users.get(&p.id).copied().unwrap_or(0);
+            p.agents_can_refresh_chat = refresh.get(&p.id).copied().unwrap_or(0);
             p.mobile_tab_enabled = mobile_tabs.get(&p.id).copied().flatten();
         }
         Ok(out)
@@ -431,6 +451,7 @@ impl Project {
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
+                agents_can_refresh_chat: 0,
                 mobile_tab_enabled: None,
                 })
             },
@@ -439,6 +460,9 @@ impl Project {
             // Its own query: a database before 0225 reads as off.
             p.agents_can_manage_app_users = conn
                 .query_row("SELECT agents_can_manage_app_users FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
+                .unwrap_or(0);
+            p.agents_can_refresh_chat = conn
+                .query_row("SELECT agents_can_refresh_chat FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
                 .unwrap_or(0);
             // Its own query too: a database before 0250 reads as auto.
             p.mobile_tab_enabled = conn

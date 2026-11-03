@@ -133,6 +133,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/agent/harness", Admin),
     both("/cli/agent/identity", Member),
     get("/cli/agent/list", Member),
+    // `k2 agent refresh` (0.46.8): a new pinned chat on the same harness. A
+    // person at the Admin floor; an agent passport by its own switch, or a card.
+    post("/cli/agent/refresh", Admin),
     post("/cli/agent/reply", Member),
     post("/cli/agent/retire", Member),
     post("/cli/agent/update", Member),

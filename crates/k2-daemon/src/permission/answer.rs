@@ -202,8 +202,9 @@ pub(crate) fn audit(event: &str, user: &str, via: &str, req: &PermissionRequest)
 enum Decision {
     Allow,
     /// [`label::ALWAYS`] (K2's App cards whose held request "Let this agent
-    /// manage its Apps' users" covers): Allow, then turn that switch on
-    /// (`apps::held_cards::turn_on_always`).
+    /// manage its Apps' users" covers) or [`label::ALWAYS_CHAT_REFRESH`]
+    /// (`chat.refresh`): Allow, then turn that switch on
+    /// (`apps::held_cards::turn_on_always`, `chat_refresh::turn_on_always`).
     Always,
     Deny,
     Close,
@@ -212,7 +213,7 @@ enum Decision {
 fn decision_of(label_text: &str) -> Option<Decision> {
     match label_text {
         label::ALLOW => Some(Decision::Allow),
-        label::ALWAYS => Some(Decision::Always),
+        label::ALWAYS | label::ALWAYS_CHAT_REFRESH => Some(Decision::Always),
         label::DENY => Some(Decision::Deny),
         label::CLOSE => Some(Decision::Close),
         _ => None,
@@ -281,7 +282,12 @@ pub(crate) fn answer(
         let Some(d) = decision_of(&answer) else {
             return err(400, "usage", format!("'{answer}' is not an option on this card"));
         };
-        if d == Decision::Always && (batch || !crate::apps::held_cards::offers_always(&reqs[0])) {
+        let offered = if answer == label::ALWAYS_CHAT_REFRESH {
+            super::actions::chat_refresh::offers_always(&reqs[0])
+        } else {
+            crate::apps::held_cards::offers_always(&reqs[0])
+        };
+        if d == Decision::Always && (batch || !offered) {
             return err(400, "usage", format!("'{answer}' is not an option on this card"));
         }
         let target = if batch {
@@ -315,7 +321,15 @@ pub(crate) fn answer(
     if decided.is_empty() {
         return err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed");
     }
-    let cb = present::refresh_card(card.conversation_id, card.card_id, CardClose::Answer { label: &answer, by });
+    // A refresh moved this Thread (and its requests) to the new chat's key
+    // while it applied: the card is there now. Read fresh: on a batch card the
+    // refresh may not have been the first item decided.
+    let conversation_id = decided
+        .first()
+        .and_then(|r| store::get(r.id.as_str()).ok().flatten())
+        .and_then(|r| r.conversation_id)
+        .unwrap_or_else(|| card.conversation_id.to_string());
+    let cb = present::refresh_card(&conversation_id, card.card_id, CardClose::Answer { label: &answer, by });
     let (user, kind) = who_label(who);
     for r in &decided {
         audit(audit_event::ANSWER, &user, kind, r);
@@ -470,7 +484,12 @@ fn decide_one(
                 // The one-off is done; the switch is a second write through
                 // the Settings route, as this person. Its refusal never
                 // undoes the one-off: the card says what happened.
-                match crate::apps::held_cards::turn_on_always(&ctx, who) {
+                let turned = if req.action == super::actions::chat_refresh::REFRESH.id {
+                    super::actions::chat_refresh::turn_on_always(&ctx, who)
+                } else {
+                    crate::apps::held_cards::turn_on_always(&ctx, who)
+                };
+                match turned {
                     Ok(line) => msg = format!("{msg} {line}"),
                     Err(e) => msg = format!("{msg} The switch was not turned on: {e}"),
                 }

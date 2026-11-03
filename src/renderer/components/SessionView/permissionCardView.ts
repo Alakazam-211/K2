@@ -57,6 +57,7 @@ export const PERMISSION_LABEL = {
    *  users" covers: allow, then turn that switch on. Only when the daemon
    *  offers it (`choice.options`). */
   always: "Allow, and let it manage its Apps' users from now on",
+  alwaysChatRefresh: 'Allow, and let it refresh its chat from now on',
 } as const
 
 /** What "Let this agent manage its Apps' users" covers: the daemon's

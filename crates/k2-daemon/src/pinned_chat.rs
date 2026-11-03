@@ -726,10 +726,13 @@ pub const SWAP_CANONICAL_MAX_BODY: usize = 256 * 1024;
 /// - the owner token, a Connect login (its role already cleared the
 ///   route floor), or a passport from a plain shell tab (a human typing
 ///   in K2) may swap any workspace;
-/// - an agent passport never swaps (0.46.6, Rosson): it would restart its
-///   own session. Its own workspace gets `harness_needs_person` (a
-///   permission card, `agent.harness-switch`, when cards are on); another
-///   workspace gets `other_workspace`. Nothing is written either way;
+/// - an agent passport never moves a chat to another harness (0.46.6,
+///   Rosson): it would restart its own session. Its own workspace gets
+///   `harness_needs_person` (a permission card, `agent.harness-switch`, when
+///   cards are on); another workspace gets `other_workspace`. Nothing is
+///   written either way. On the SAME harness its own main session may, when
+///   "Can refresh its own pinned chat" is on (0.46.8): that's a refresh
+///   ([`crate::chat_refresh`]), and with the switch off it asks;
 /// - app passes, API keys, API cells, and bad tokens are refused before
 ///   anything is written.
 pub fn handle_swap_canonical(
@@ -738,11 +741,12 @@ pub fn handle_swap_canonical(
     ingress: &str,
 ) -> crate::cli_response::CliResponse {
     use crate::sidecar_routes::Caller;
-    let from = match caller {
+    let mut from = match caller {
         // 0.46.0 stamp rule: the owner's linked username, else `owner`.
         Caller::Owner | Caller::Shell { .. } => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
         Caller::Login { username } => username.clone(),
-        // Refused below, after the project is known.
+        // Refused below, after the project is known, unless it's a refresh
+        // the workspace's switch allows.
         Caller::Agent(_) => String::new(),
         Caller::WrongCredential => {
             return swap_refused(
@@ -787,8 +791,20 @@ pub fn handle_swap_canonical(
     if let Caller::Agent(agent) = caller {
         match lookup_project_id(req.project.trim()) {
             Some(id) if id == agent.project_id => {
-                swap_audit(caller, "refused:needs_person", ingress);
-                return crate::agent_harness::needs_person(&id, req.provider.trim());
+                let path = req.project.trim();
+                let same_harness = k2_core::workspace::canonical_swap::normalize_harness(req.provider.trim())
+                    .is_ok_and(|h| crate::agent_harness::current_harness(&id, path) == h);
+                if !same_harness {
+                    swap_audit(caller, "refused:needs_person", ingress);
+                    return crate::agent_harness::needs_person(&id, req.provider.trim());
+                }
+                // Its own chat on the same harness: a refresh. Same rule as
+                // `k2 agent refresh`.
+                if let Err(refused) = crate::chat_refresh::agent_gate(agent, &id, path, &req.notes, req.mode.trim()) {
+                    swap_audit(caller, "refused:refresh_needs_person", ingress);
+                    return refused;
+                }
+                from = crate::chat_refresh::agent_name(&id);
             }
             Some(_) => {
                 swap_audit(caller, "refused:other_workspace", ingress);
@@ -891,12 +907,22 @@ pub(crate) fn run_swap(
     // the workspace is registered and the target CLI can be launched.
     let target = k2_core::workspace::canonical_swap::normalize_harness(provider)
         .map_err(crate::cli_response::CliResponse::bad_request)?;
-    if lookup_project_id(project_path).is_none() {
+    let Some(project_id) = lookup_project_id(project_path) else {
         return Err(crate::cli_response::CliResponse::bad_request(format!(
             "project not registered: {project_path}"
         )));
-    }
+    };
     preflight_harness(project_path, target)?;
+    // The same harness: a refresh. The chat carries on, so its Thread comes
+    // too, and its note must survive the new CLI's start-up.
+    let refresh = crate::agent_harness::current_harness(&project_id, project_path) == target;
+    if refresh && k2_core::workspace::resume_chat::thread_hold_settling(&project_id) {
+        return Err(swap_refused(
+            "409 Conflict",
+            crate::chat_refresh::SETTLING,
+            "the last refresh's new chat has no id yet, so there is nothing to summarize and its Thread hasn't moved. Try again in a minute. The pinned chat was not touched.",
+        ));
+    }
     if let Some(model) = model {
         k2_core::workspace::resume_chat::never_chatted_takes_model(project_path, target, model).map_err(|why| {
             swap_refused(
@@ -908,6 +934,11 @@ pub(crate) fn run_swap(
     }
     let prep = k2_core::workspace::canonical_swap::prepare_canonical_swap(project_path, provider, mode, notes)
         .map_err(crate::cli_response::CliResponse::bad_request)?;
+
+    // Before the new id is written, so the Thread moves with it.
+    if refresh {
+        k2_core::workspace::resume_chat::hold_thread_for_new_chat(&project_id, &prep.from_session_id);
+    }
 
     let ensured = match model {
         Some(model) => ensure_pinned_chat_fresh_on_model(&prep.project_path, &prep.target_provider, model),
@@ -921,7 +952,11 @@ pub(crate) fn run_swap(
         return Err(swap_failed(&prep.handoff_path, "fresh spawn still names the previous session"));
     }
 
-    let sent = crate::workspace_msg::send_message_to_session(&ensured.session_id, from, &prep.message);
+    let sent = if refresh {
+        crate::workspace_msg::send_message_after_spawn(&ensured.session_id, from, &prep.message, &prep.target_provider)
+    } else {
+        crate::workspace_msg::send_message_to_session(&ensured.session_id, from, &prep.message)
+    };
     log_debug!(
         "[daemon/pinned-chat] swap provider={} from={} session={} delivered={} handoff={}",
         prep.target_provider,
@@ -932,6 +967,7 @@ pub(crate) fn run_swap(
     );
     Ok(serde_json::json!({
         "provider": prep.target_provider,
+        "refreshed": refresh,
         "model": model,
         "fromProvider": prep.from_provider,
         "fromSessionId": prep.from_session_id,
@@ -1212,20 +1248,21 @@ mod tests {
     }
 
     #[test]
-    fn swap_canonical_agent_never_swaps_its_own_workspace() {
-        // 0.46.6: swapping restarts the agent's own session, so a person
-        // does it (`harness_needs_person`; a card when cards are on).
+    fn swap_canonical_agent_never_moves_its_own_workspace_to_another_harness() {
+        // 0.46.6: moving restarts the agent's own session, so a person does
+        // it (`harness_needs_person`; a card when cards are on). The same
+        // harness is a refresh, with its own rule (`chat_refresh_tests.rs`).
         let home = crate::test_support::TempHome::new();
         let own = home.path().join("own-ws");
         std::fs::create_dir_all(&own).unwrap();
         let own_path = own.to_string_lossy().to_string();
         let caller = agent_of(&register_project("own-ws", &own_path));
-        let body = serde_json::json!({ "project": own_path, "provider": "claude" }).to_string();
+        let body = serde_json::json!({ "project": own_path, "provider": "grok" }).to_string();
         let result = handle_swap_canonical(body.as_bytes(), &caller, "test");
         assert_eq!(result.status, "403 Forbidden", "got: {}", result.body);
         let v: serde_json::Value = serde_json::from_str(&result.body).expect("json");
         assert_eq!(v["error"]["code"], "harness_needs_person", "got: {v}");
-        assert_eq!(v["error"]["harness"], "claude", "got: {v}");
+        assert_eq!(v["error"]["harness"], "grok", "got: {v}");
         assert_eq!(v["swapped"], false, "got: {v}");
         assert!(!own.join(".k2").join("handoffs").exists(), "no handoff is written for a refused swap");
     }

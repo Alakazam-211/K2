@@ -15,6 +15,7 @@ pub mod active_reaper;
 pub mod session_reaper;
 // `k2 agent harness`: move a workspace's pinned chat to another harness (0.46.6).
 pub mod agent_harness;
+pub mod chat_refresh;
 pub mod agents_routes;
 pub mod agent_name_repair_migrate;
 pub mod agent_retire;

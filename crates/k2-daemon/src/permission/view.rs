@@ -256,7 +256,9 @@ fn current_state(stored: RequestState, request_id: &str, choice_status: &str, an
         "answered" if stored.is_open() || stored == RequestState::Applying => {
             return match answer {
                 Some(a) if a == label::CLOSE => RequestState::AlreadyDone,
-                Some(a) if a == label::ALLOW || a == label::ALWAYS || a == label::ALLOW_ALL => RequestState::Approved,
+                Some(a) if a == label::ALLOW || a == label::ALWAYS || a == label::ALWAYS_CHAT_REFRESH || a == label::ALLOW_ALL => {
+                    RequestState::Approved
+                }
                 Some(a) if a == label::DENY || a == label::DENY_ALL => RequestState::Denied,
                 _ => stored,
             };
@@ -433,6 +435,9 @@ fn approver_options(state: RequestState, answer: Option<&str>, item: &ItemView) 
         _ if answer == Some(label::CLOSE) => labels(&[label::CLOSE]),
         _ if crate::apps::held_cards::offers_always_for(&item.action, &item.request_id) => {
             labels(&[label::ALLOW, label::DENY, label::ALWAYS])
+        }
+        _ if super::actions::chat_refresh::offers_always_for(&item.action, &item.request_id) => {
+            labels(&[label::ALLOW, label::DENY, label::ALWAYS_CHAT_REFRESH])
         }
         _ => answer_labels(),
     }

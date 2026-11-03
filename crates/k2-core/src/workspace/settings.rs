@@ -1529,6 +1529,39 @@ pub fn agents_can_request_permissions(project_id: &str) -> bool {
     crate::permission::gate::agent_switch_on(project_id)
 }
 
+/// "Can refresh its own pinned chat" (migration 0263). DEFAULT OFF. On lets
+/// the workspace's main session run `k2 agent refresh` with no card. Unknown
+/// workspace or a read error → `false` (fail closed).
+pub fn agents_can_refresh_chat(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_refresh_chat FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_refresh_chat` (0/1). Dedicated writer for
+/// `POST /cli/agent-access/set {toggle: "chat_refresh"}` (an Owner or Admin
+/// login, or the owner token), so an agent can never turn it on.
+pub fn set_agents_can_refresh_chat(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_refresh_chat = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
 /// Persist `projects.agents_can_request_permissions` (0/1). Dedicated
 /// writer for `POST /cli/agent-access/set {toggle: "permission_cards"}`
 /// (an Owner or Admin login, or the owner token); not on `workspace/set`,

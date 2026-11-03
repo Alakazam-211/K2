@@ -497,7 +497,7 @@ exit: 0
     },
     {
       "name": "agent access",
-      "usage": "k2 agent access set <workspace> chat_manage on|off [--json]",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]",
       "description": "\"Manage Chat / Voice Hosting\" for one workspace's agent: it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps. On also makes its own chat account, as a coworker, if it has none; off keeps it. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
@@ -574,6 +574,21 @@ exit: 0
         {"name": "--model", "arg": "id", "description": "Start the new chat on this model, even if the preset names another. On the same harness it starts a new chat with the summary. This start only: a later resume uses the preset or workspace model again."},
         {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
+      ]
+    },
+    {
+      "name": "agent refresh",
+      "usage": "k2 agent refresh [<workspace>] [--note <text> | --notes-file <path>] [--full] [--dry-run] [--json]",
+      "description": "Start a new pinned chat on the same harness that carries on from the current one, for a long chat that has gone stale. K2 ends the current chat at once (anything running in it stops), starts a new one with the same launch options, and sends it a summary and your note when it is ready. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new one; sidecars keep running. A person runs it for any workspace (owner, Admin, or a person in a K2 shell tab). An agent's main session may run it for its own workspace with \"Can refresh its own pinned chat\" on; otherwise exit 3, and with permission cards on the refusal ends with the k2 permission request chat.refresh line. Read k2 study chat-refresh. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": false, "description": "Workspace handle, name or path. Default: this workspace."}
+      ],
+      "flags": [
+        {"name": "--note", "arg": "text", "description": "A note for the new chat: what you were doing and what's next. At most 32,000 characters."},
+        {"name": "--notes-file", "arg": "path", "description": "The note, from a file."},
+        {"name": "--full", "arg": null, "description": "Summarize a longer part of the old chat (default: the recent part)."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would happen, and if a person has to allow it; change nothing. It keeps no note and gives no line to ask with."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (refreshed, harness, sessionId, fromSessionId, messageDelivered, handoffPath, oldChatInHistory, ownSessionHeartbeats)."}
       ]
     },
     {

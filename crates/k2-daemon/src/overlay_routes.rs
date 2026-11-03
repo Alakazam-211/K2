@@ -449,7 +449,10 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
                         Some(pin)
                     }
                     None => k2_core::overlay::transfer::pending_canonical_for(&conn, &project_id)
-                        .map_err(|e| error_json("500 Internal Server Error", "db", e))?,
+                        .map_err(|e| error_json("500 Internal Server Error", "db", e))?
+                        // A refreshed chat with no id yet: its Thread is
+                        // waiting to move onto that id (posts merge in).
+                        .or_else(|| k2_core::workspace::resume_chat::held_thread(&project_id)),
                 }
             };
             let Some(conversation_id) = pinned else {

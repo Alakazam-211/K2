@@ -42,7 +42,68 @@ pub fn handoff_path_for(project_path: &str) -> std::path::PathBuf {
 
 /// Extra notes are capped so a swap request cannot hand the new chat a
 /// multi-megabyte paste. The transcript seed has its own caps.
-const NOTES_CHAR_CAP: usize = 32_000;
+pub const NOTES_CHAR_CAP: usize = 32_000;
+
+/// A card can't carry a long note (a card value is one line of at most 200
+/// characters), so the refusal that teaches `chat.refresh` keeps the note
+/// here and the card names it by its sha256. The agent can write to this
+/// folder, so [`read_refresh_note`] checks the hash: what a person allowed is
+/// what the next chat reads. The same 0600 + gitignore as the handoff. It
+/// stays after the refresh (the answered card still quotes it), until the
+/// sweep in [`store_refresh_note`].
+fn refresh_note_path(project_path: &str, sha: &str) -> std::path::PathBuf {
+    crate::workspace_dot_dir(project_path)
+        .join(HANDOFF_DIR_NAME)
+        .join(format!("refresh-note-{sha}.md"))
+}
+
+/// A card lives at most 7 days, so a note older than that has no card.
+const REFRESH_NOTE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+/// Keep a note for a `chat.refresh` card; returns its sha256 (64 lowercase
+/// hex). `Err` on a note past the cap or a write failure.
+pub fn store_refresh_note(project_path: &str, notes: &str) -> Result<String, String> {
+    if notes.chars().count() > NOTES_CHAR_CAP {
+        return Err(format!("notes are at most {NOTES_CHAR_CAP} characters"));
+    }
+    use sha2::{Digest, Sha256};
+    let sha = format!("{:x}", Sha256::digest(notes.as_bytes()));
+    let path = refresh_note_path(project_path, &sha);
+    sweep_refresh_notes(path.parent().expect("a note has a folder"));
+    write_handoff(&path, notes)?;
+    Ok(sha)
+}
+
+/// The note named `sha`. `Err` when it is gone, or was changed after the card
+/// was asked.
+pub fn read_refresh_note(project_path: &str, sha: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let body = fs::read_to_string(refresh_note_path(project_path, sha))
+        .map_err(|_| "the note for this refresh is gone; ask again".to_string())?;
+    if format!("{:x}", Sha256::digest(body.as_bytes())) != sha {
+        return Err("the note for this refresh changed after it was asked; ask again".to_string());
+    }
+    Ok(body)
+}
+
+fn sweep_refresh_notes(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("refresh-note-") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age > REFRESH_NOTE_MAX_AGE);
+        if old {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
 
 /// What the daemon needs after a successful prepare. The session row is
 /// unchanged.
@@ -269,6 +330,33 @@ fn write_handoff(path: &Path, body: &str) -> Result<(), String> {
         format!("save handoff: {err}")
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+
+    #[test]
+    fn a_kept_note_reads_back_only_as_it_was() {
+        let home = crate::test_env::TempHome::new();
+        let path = home.path().to_string_lossy().to_string();
+        let sha = store_refresh_note(&path, "line one\nline two").expect("kept");
+        assert_eq!(sha.len(), 64, "{sha}");
+        assert_eq!(read_refresh_note(&path, &sha).expect("read"), "line one\nline two");
+
+        // The agent can write to the folder: a changed note is refused.
+        fs::write(refresh_note_path(&path, &sha), "something else").expect("tamper");
+        let err = read_refresh_note(&path, &sha).expect_err("changed");
+        assert!(err.contains("changed"), "{err}");
+
+        fs::remove_file(refresh_note_path(&path, &sha)).expect("remove");
+        let err = read_refresh_note(&path, &sha).expect_err("gone");
+        assert!(err.contains("gone"), "{err}");
+
+        let long = "x".repeat(NOTES_CHAR_CAP + 1);
+        let err = store_refresh_note(&path, &long).expect_err("too long");
+        assert!(err.contains("at most"), "{err}");
+    }
 }
 
 #[cfg(test)]

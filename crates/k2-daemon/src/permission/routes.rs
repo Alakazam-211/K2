@@ -379,6 +379,11 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         params: values.clone(),
     };
     let w = present::words(spec, &ctx);
+    // Before the state check: that one tells the MAIN session it may run the
+    // command itself, which a sidecar can't.
+    if let Err(r) = super::actions::chat_refresh::gate_ask(spec.id, workspace_id, session_id, &params_hash(&values)) {
+        return r;
+    }
     match (registered.check)(&ctx) {
         super::actions::Check::AlreadyDone => {
             return ok(json!({

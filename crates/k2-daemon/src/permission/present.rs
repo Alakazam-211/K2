@@ -155,7 +155,8 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::chat_cards::with_computed(spec.id, ctx))
         .or_else(|| super::actions::chat_account::with_computed(spec.id, ctx))
         .or_else(|| super::actions::mail_stop::with_computed(spec.id, ctx))
-        .or_else(|| super::actions::box_login_grant::with_computed(spec.id, ctx));
+        .or_else(|| super::actions::box_login_grant::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::chat_refresh::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();
@@ -313,6 +314,9 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
     let floor = floor_of(&req.floor);
     let mut values = vec![KeyValue { key: "workspace".into(), value: ctx.workspace_handle.clone() }];
     for p in spec.params {
+        if super::actions::chat_refresh::hides_value(spec.id, p.key) {
+            continue;
+        }
         if let Some(v) = ctx.params.get(p.key) {
             // A Garden shows by its current name, as in the words.
             let shown = match (p.kind, v.as_str()) {
@@ -372,7 +376,12 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
 /// shows its approver a secret (one `forYou` per answer; PR-A4).
 pub(crate) fn batchable(r: &Registered) -> bool {
     // A box login's access is read card by card: never under "Allow all".
-    r.spec.proof.batchable() && !super::actions::password_reset::is_reveal(r.spec.id) && r.spec.id != super::actions::box_login_grant::ACTION
+    // Nor a chat refresh: it stops what the agent is doing, so it's answered
+    // on its own.
+    r.spec.proof.batchable()
+        && !super::actions::password_reset::is_reveal(r.spec.id)
+        && r.spec.id != super::actions::box_login_grant::ACTION
+        && r.spec.id != super::actions::chat_refresh::REFRESH.id
 }
 
 /// The `view` JSON for the requests on one card: a `permission` view for
@@ -434,6 +443,9 @@ pub(crate) fn prompt_and_options(reqs: &[PermissionRequest], batch: bool) -> (St
         let mut options = vec![label::ALLOW.to_string(), label::DENY.to_string()];
         if crate::apps::held_cards::offers_always(first) {
             options.push(label::ALWAYS.to_string());
+        }
+        if super::actions::chat_refresh::offers_always(first) {
+            options.push(super::actions::chat_refresh::ALWAYS_LABEL.to_string());
         }
         return (prompt, options);
     }

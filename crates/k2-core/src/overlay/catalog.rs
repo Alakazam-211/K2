@@ -114,6 +114,14 @@ pub fn apply_move(
         params![from],
     )
     .map_err(|e| format!("overlay catalog move: {e}"))?;
+    // A permission card moved with the Thread: its request follows, or an
+    // answer on the new key finds no request (and the [permission:] turn is
+    // lost).
+    conn.execute(
+        "UPDATE permission_requests SET conversation_id = ?2 WHERE conversation_id = ?1",
+        params![from, to],
+    )
+    .map_err(|e| format!("overlay catalog move: {e}"))?;
     Ok(())
 }
 

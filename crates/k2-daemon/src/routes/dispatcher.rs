@@ -3331,6 +3331,62 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // POST /cli/agent/refresh — `k2 agent refresh [<workspace>]` (0.46.8):
+        // a new pinned chat on the same harness that carries on from this
+        // one. Body {workspace?, notes?, mode?, dryRun?}. Classified like
+        // /cli/agent/harness; an agent passport needs its workspace's switch,
+        // or gets `chat_refresh_needs_person` (taught as a permission card).
+        crate::chat_refresh::ROUTE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                crate::chat_refresh::ROUTE,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if matches!(
+                caller,
+                crate::sidecar_routes::Caller::WrongCredential
+                    | crate::sidecar_routes::Caller::Invalid
+            ) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                let r = crate::chat_refresh::handle(&[], &caller, ingress.as_str());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                crate::chat_refresh::MAX_BODY,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
+                        &mut *stream,
+                        &refused,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"error":{"code":"body_too_large","hint":"agent refresh bodies are at most 256 KiB"},"refreshed":false}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let ingress_label = ingress.as_str().to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::chat_refresh::handle(&body_bytes, &caller, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // POST /cli/companion/set-password — Phase 2 Unit 1.
         // Body: `{"password": "..."}`. Hashes argon2id, stores in
         // macOS Keychain (preferred) or settings.json (fallback),

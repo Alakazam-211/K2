@@ -10,10 +10,16 @@
 //     probe message, which must not arrive.
 //   - Canvas: WebKit's toDataURL / toBlob come back empty in a sealed frame
 //     (K2's U0 finding); getImageData works. Recorded, not judged.
+//   - Mobile layout (contract rev 2 §B, §I): k2.view, k2.viewport, k2.setHeight
+//     and k2.onVisible; then touch on the pad: pointer events a second, two
+//     pointers at once, and whether gesture* fires in the sealed frame on iOS
+//     (recorded for K2, not judged).
 // It never sends anything off the phone; text goes in with textContent.
 (function () {
   const verbs = document.getElementById('verbs')
   const escapes = document.getElementById('escapes')
+  const layout = document.getElementById('layout')
+  const touch = document.getElementById('touch')
   const summary = document.getElementById('summary')
   let passed = 0
   let failed = 0
@@ -159,8 +165,69 @@
     })
   }
 
+  function checkLayout() {
+    row(layout, 'k2.view', k2.view === 'phone' ? 'PASS' : 'FAIL', String(k2.view))
+    const v = k2.viewport
+    row(layout, 'k2.viewport', v && v.width > 0 && v.height > 0 ? 'PASS' : 'FAIL', v ? v.width + ' x ' + v.height : 'null: the phone must add viewport to the hello')
+    row(layout, 'k2.setHeight', typeof k2.setHeight === 'function' ? 'PASS' : 'FAIL', 'with height "auto" this frame should fit this page by itself')
+    if (typeof k2.onVisible === 'function') {
+      row(layout, 'k2.onVisible', 'PASS', 'move to another screen and back: the note below changes')
+      let changes = 0
+      k2.onVisible((on) => {
+        changes += 1
+        row(layout, 'heard onVisible', 'note', changes + ': ' + on)
+      })
+    } else {
+      row(layout, 'k2.onVisible', 'FAIL', 'missing')
+    }
+  }
+
+  function watchTouch() {
+    const pad = document.getElementById('touch-pad')
+    if (!pad) return
+    const down = new Set()
+    let most = 0
+    let moves = 0
+    let startedAt = 0
+    const gestures = { gesturestart: 0, gesturechange: 0, gestureend: 0 }
+    const show = () => {
+      const secs = startedAt ? (Date.now() - startedAt) / 1000 : 0
+      const rate = secs > 0 ? Math.round(moves / secs) : 0
+      touch.textContent = ''
+      row(touch, 'pointer events a second', 'note', String(rate))
+      row(touch, 'pointers at once', 'note', String(most))
+      row(touch, 'gesture* in the sealed frame', 'note', JSON.stringify(gestures))
+    }
+    pad.addEventListener('pointerdown', (e) => {
+      if (!startedAt) startedAt = Date.now()
+      down.add(e.pointerId)
+      most = Math.max(most, down.size)
+      show()
+    })
+    pad.addEventListener('pointermove', () => {
+      moves += 1
+      if (moves % 10 === 0) show()
+    })
+    for (const end of ['pointerup', 'pointercancel']) {
+      pad.addEventListener(end, (e) => {
+        down.delete(e.pointerId)
+        show()
+      })
+    }
+    for (const g of Object.keys(gestures)) {
+      pad.addEventListener(g, (e) => {
+        e.preventDefault()
+        gestures[g] += 1
+        show()
+      })
+    }
+    show()
+  }
+
   k2.connected.then(async () => {
     k2.ready()
+    checkLayout()
+    watchTouch()
     await checkVerbs()
     await checkEscapes()
     await checkCanvas()

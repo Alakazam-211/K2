@@ -1139,8 +1139,8 @@ phone (K2 Companion) reaches the Gardens only through `/cli/zen/remote/*`:
 | Route | Answer |
 |---|---|
 | `GET remote/gardens[?since=<cursor>]` | `{ok, serverId, person: "owner", setUp, cursor, full, gardens: [{id, name, index, template, theme, locked, version}]}`. `since` equal to the current cursor answers `full: false, gardens: []`; anything else the whole list |
-| `GET remote/page?garden=[&scheme=]` | `GET /cli/zen/get`'s answer without `sources`, plus `remote: {widgets: [{id, run: frame \| native \| placeholder, reason?}], features}` |
-| `GET remote/frame?garden=&placement=[&scheme=]` | `{ok, garden, placement, widget, hash, nonce, scheme, srcdoc, libs: [{slot, key, source, id?, version?, files?, url?, integrity?}], hello}`. `srcdoc` is the desktop wrapper (`frameSrcDoc` + `zenFramePrelude`, the shared golden) with one `__K2_LIB_<n>__` slot per library; 404 `unknown_placement`, 409 `not_a_frame` / `widget_broken` / `stale_widget` |
+| `GET remote/page?garden=[&scheme=]` | `GET /cli/zen/get`'s answer without `sources`, plus `remote: {widgets: [{id, run: frame \| native \| placeholder, reason?, frameVersion?}], features}`. `page.phone` is there when the Garden has a mobile layout (below). A `frame` row with a good version has `frameVersion` |
+| `GET remote/frame?garden=&placement=[&scheme=]` | `{ok, garden, placement, widget, hash, frameVersion, nonce, scheme, srcdoc, libs: [{slot, key, source, id?, version?, files?, url?, integrity?}], hello}`. `hello` has `view: "phone"`, the merged `config` and `height` (below). `srcdoc` is the desktop wrapper (`frameSrcDoc` + `zenFramePrelude`, the shared golden) with one `__K2_LIB_<n>__` slot per library; 404 `unknown_placement`, 409 `not_a_frame` / `widget_broken` / `stale_widget` |
 | `GET remote/lib?id=&version=&file=` (or `?integrity=`), `POST remote/lib/fetch` | Every library a widget loads: bundled ones from the bytes K2's release carries (`zen_lib_bundled`, checked against `src/shared/zen-lib.json`), download and CDN ones from the daemon's checked cache (`/cli/zen/lib/*`). The phone carries no copy and checks each file's sha256 again |
 | `POST remote/call {garden, placement, hash, verb, args}` | The catalog's `phone` column first (`door` runs; `later` → 501 `verb_unavailable` + `feature`; `host` / `never` / non-widget → `not_exposed`; unknown → `unknown_verb`), then the same runner as `/cli/zen/call` (placement, live hash, caps, signer gate, pause, budgets): `{ok: true, result}` |
 | `POST remote/blob/put`, `GET remote/blob/get` | The widget door's blob routes (same bodies and answers) |
@@ -1155,6 +1155,53 @@ desktop frame's minus every feature whose rows are all `later`/`never`
 there. No new event: the phone re-reads on `zen_changed`,
 `zen_agents_order_changed` and `garden_data_changed`. The headless smoke is
 `scripts/test/gardens_remote_smoke.sh`.
+
+### A Garden's mobile layout (`page.phone`, 0.46.8)
+
+Source: `contract-gardens-phone-v2` (rev 2). **One Garden, two versions:**
+every device lists the same Gardens. A Garden is never left off a phone's
+list; one with no mobile version uses the default layout. There is no
+per-device visibility field. A widget may be left out of `page.phone`.
+
+```jsonc
+"page": { "phone": { "screens": [
+  { "label": "Fleet", "canvas": "full", "widgets": [{ "id": "fleet", "height": "fill", "config": { "bubble": false } }] },
+  { "label": "Talk", "widgets": [{ "id": "agents", "height": "auto" }, { "id": "talk", "height": 420 }] }
+] } }
+```
+
+- From `[[phone.screen]]` / `[[phone.screen.widget]]` in the Garden file
+  (`k2 zen guide phone`), through `garden/put` like any edit, so it needs
+  `garden.access`. Sent only when set; the page's `version` covers it; the
+  desktop never reads it. `zen_changed` and the feed's `version` announce it.
+- **Against a template's widgets** (a file with no content `[[widget]]` of its
+  own) what the template decides is a warning on a live file and is left out
+  at resolve (no screens left: no `page.phone`), so a K2 update never makes a
+  good file an error. `garden/put` still refuses that text
+  (`Checked.authoring`). Against the file's own widgets each is an error.
+- **`hello`:** `view: "phone"` always; `config` is the desktop's with the
+  row's `config` merged over it, key by key; `height` is the row's, else
+  `fill` alone on its screen and `auto` in a stack. With no `page.phone`,
+  `fill` alone in its column's body and `auto` otherwise (native and
+  placeholder widgets count; controls and band items don't). A placement the
+  layout leaves out has no `height`. The phone adds only `viewport`.
+- **`frameVersion`** covers the bundle `hash`, the hello's `config` and
+  `height`, and K2's frame runtime. A phone reloads a frame on it, not `hash`:
+  a `config` edit moves the page's `version` but not `hash`. With an older
+  daemon that doesn't send it, the phone falls back to `hash`.
+- **Sources:** `sourceAddresses` stays the desktop frame's bound list.
+  `phoneSourceAddresses` (only when there are any) is what a phone's merged
+  `config` binds beyond it. A lock and Settings count both.
+- **`save.*` through `remote/call`** uses `save:phone~<widget>`, shared by the
+  person's phones. A read of a key the phone hasn't set falls back to
+  `save:<widget>`; writes and removes never touch it; `save.keys` lists both.
+  `~` can't be in a widget's name, so no widget reaches it by name. Deleting or
+  moving a widget's data takes it too. `store.*` stays shared.
+- **Runtime (`k2-frame.js`):** `k2.view`, `k2.viewport`, `k2.setHeight(px)`
+  (posts `{size: {height}}`, at most 4 a second), `k2.onVisible(fn)`; hears
+  `{visible}` and `{viewport}` on the port. With `hello.height == "auto"` it
+  reports the larger of the body's box and each top-level `scrollHeight`. A
+  desktop's hello has neither `view` nor `height`, and none of this posts there.
 
 ## Contract changes from the PRD text (flagged for the renderer)
 

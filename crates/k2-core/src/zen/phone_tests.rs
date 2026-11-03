@@ -528,3 +528,18 @@ fn a_bad_phone_table_on_disk_falls_back_to_the_last_good_page() {
     assert_eq!(v["errors"][0]["message"], "phone screen 1 has no widgets; add [[phone.screen.widget]] or drop the screen");
     assert_eq!(v["page"]["phone"]["screens"][0]["label"], "People", "last good: {}", v["page"]);
 }
+
+// ── the docs say what the checker does ──────────────────────────────
+
+#[test]
+fn the_k2_zen_skill_has_the_section_and_its_toml_checks_clean() {
+    let body = zen::skill::generate_k2_zen_skill();
+    assert!(body.contains("## A Garden's mobile layout"), "the skill names it");
+    assert!(body.contains("k2 zen guide phone"), "and points at the page");
+    let section = zen::skill::phone_section();
+    assert!(section.contains("1 to 12 screens") && section.contains("160 to 4000") && section.contains("1 to 24 characters"), "{section}");
+    let toml = section.split("```toml\n").nth(1).and_then(|r| r.split("```").next()).expect("a TOML block");
+    let widgets = "[[widget]]\nid = \"fleet\"\nkind = \"custom\"\nwidget = \"fleet-canvas\"\ncolumn = 0\n";
+    let c = check(&format!("schema = 1\n{widgets}{toml}"));
+    assert!(c.is_clean() && c.warnings.is_empty(), "the skill's example: {:?} {:?}", c.errors, c.warnings);
+}

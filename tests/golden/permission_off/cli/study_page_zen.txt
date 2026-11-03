@@ -25,6 +25,10 @@ THE FULL GUIDE
   k2 zen guide gardens               start here
   k2 zen guide example --list        whole files you can pipe
 
+A PHONE
+  Every Garden shows on a phone: one screen per column until its file adds
+  [[phone.screen]] (k2 zen guide phone). No per-device Garden lists.
+
 FULL CANVAS AND LOCKS
   On [layout] canvas = "full" K2's top band floats over a custom widget:
   take clicks with k2.canvas.setHitRegions(rects), drag the window with

@@ -24,7 +24,10 @@
 #      remote.widgets), frame (sealed document + hello), call (store.put,
 #      store.get, a stale hash, a later verb), blob put/get, report, pause
 #      and Resume, agents order
-#   5  revoke the phone: the next request is 403 device_session_ended
+#   5  a mobile layout (contract rev 2): a bad one refused, a good one on the
+#      page; the hello's merged config, view and height; frameVersion moves on a
+#      config edit and not on a label; saves apart from the desktop's
+#   6  revoke the phone: the next request is 403 device_session_ended
 set -uo pipefail
 for t in curl jq cargo; do command -v "$t" >/dev/null || { echo "[gr-smoke] FAIL: needs $t" >&2; exit 1; }; done
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -183,9 +186,9 @@ CURSOR="$(jq -r '.cursor' <<<"$BODY")"
 call "$PHONE" GET /cli/zen/remote/gardens "" "since=$CURSOR"
 want "the feed, unchanged" 200 '.full == false and .gardens == []'
 call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
-want "the page" 200 '(has("sources") | not) and .remote.widgets == [{"id":"b1","run":"frame"}] and (.remote.features | index("garden-data-v1"))'
+want "the page" 200 '(has("sources") | not) and .page.phone == null and .remote.widgets[0].id == "b1" and .remote.widgets[0].run == "frame" and (.remote.widgets[0].frameVersion | length) > 0 and (.remote.features | index("garden-data-v1"))'
 call "$PHONE" GET /cli/zen/remote/frame "" "garden=$GARDEN&placement=b1&scheme=dark"
-want "the frame" 200 '(.srcdoc | contains("Content-Security-Policy")) and .hello.k2 == "hello" and (.hash | length) == 64'
+want "the frame" 200 '(.srcdoc | contains("Content-Security-Policy")) and .hello.k2 == "hello" and (.hash | length) == 64 and .hello.view == "phone" and .hello.height == "fill" and .hello.config == {} and (.frameVersion | length) > 0'
 HASH="$(jq -r '.hash' <<<"$BODY")"
 call "$PHONE" POST /cli/zen/remote/call "{\"garden\":\"$GARDEN\",\"placement\":\"b1\",\"hash\":\"$HASH\",\"verb\":\"viewer.get\",\"args\":[]}"
 want "call viewer.get" 200 '.ok == true'
@@ -203,7 +206,78 @@ call "$PHONE" GET /cli/zen/remote/agents-order "" "garden=$GARDEN"
 want "agents order (read-only)" 200 '.ok == true'
 
 # ── 5 ────────────────────────────────────────────────────────────────
-say "step 5: revoke the phone"
+say "step 5: a mobile layout"
+PAGE_TOML='schema = 1
+[layout]
+kind = "columns"
+[[layout.column]]
+size = 100
+min-width = 200
+[[widget]]
+id = "b1"
+kind = "custom"
+widget = "board"
+column = 0
+[widget.props.config]
+source = "fleet"
+zoom = 1
+[[widget]]
+id = "b2"
+kind = "custom"
+widget = "board"
+column = 0
+'
+PHONE_TOML='[[phone.screen]]
+label = "Board"
+canvas = "full"
+[[phone.screen.widget]]
+id = "b1"
+height = "fill"
+[phone.screen.widget.config]
+zoom = 2
+'
+put_page() { must "$OWNER" POST /cli/zen/garden/put "$(jq -n --arg g "$GARDEN" --arg t "$1" '{garden: $g, text: $t}')"; }
+call "$OWNER" POST /cli/zen/garden/put "$(jq -n --arg g "$GARDEN" --arg t "$PAGE_TOML[[phone.screen]]
+[[phone.screen.widget]]
+id = \"nope\"
+" '{garden: $g, text: $t}')"
+want "a layout naming a widget not on the page is refused" 400 '.message | contains("phone screen 1 names widget '"'"'nope'"'"', which is not on this page")'
+call "$OWNER" POST /cli/zen/garden/put "$(jq -n --arg g "$GARDEN" --arg t "$PAGE_TOML[[phone.screen]]
+[[phone.screen.widget]]
+id = \"b1\"
+height = 3
+" '{garden: $g, text: $t}')"
+want "a bad height is refused" 400 '.message | contains("widget height is")'
+put_page "$PAGE_TOML"
+call "$PHONE" GET /cli/zen/remote/frame "" "garden=$GARDEN&placement=b1&scheme=dark"
+want "no layout: height from the column" 200 '.hello.height == "auto" and .hello.config == {"source":"fleet","zoom":1}'
+call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
+want "no layout: no page.phone" 200 '(.page | has("phone") | not)'
+put_page "$PAGE_TOML$PHONE_TOML"
+call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
+want "page.phone is on the page" 200 '.page.phone == {"screens":[{"label":"Board","canvas":"full","widgets":[{"id":"b1","height":"fill","config":{"zoom":2}}]}]} and (.remote.widgets | map(.id)) == ["b1","b2"]'
+FV1="$(jq -r '.remote.widgets[0].frameVersion' <<<"$BODY")"
+call "$PHONE" GET /cli/zen/remote/frame "" "garden=$GARDEN&placement=b1&scheme=dark"
+want "the hello merges config" 200 '.hello.view == "phone" and .hello.height == "fill" and .hello.config == {"source":"fleet","zoom":2} and .frameVersion == "'"$FV1"'"'
+HASH="$(jq -r '.hash' <<<"$BODY")"
+call "$PHONE" GET /cli/zen/remote/frame "" "garden=$GARDEN&placement=b2&scheme=dark"
+want "a widget the layout leaves out still answers, with no height" 200 '(.hello | has("height") | not) and .hello.view == "phone"'
+put_page "$PAGE_TOML${PHONE_TOML/label = \"Board\"/label = \"Renamed\"}"
+call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
+want "a label edit leaves frameVersion alone" 200 '.remote.widgets[0].frameVersion == "'"$FV1"'"'
+put_page "$PAGE_TOML${PHONE_TOML/zoom = 2/zoom = 3}"
+call "$PHONE" GET /cli/zen/remote/page "" "garden=$GARDEN"
+want "a config edit moves frameVersion" 200 '.remote.widgets[0].frameVersion != "'"$FV1"'"'
+save_body() { jq -n --arg g "$GARDEN" --arg h "$HASH" --arg v "$1" --argjson a "$2" '{garden: $g, placement: "b1", hash: $h, verb: $v, args: $a}'; }
+call "$PHONE" POST /cli/zen/remote/call "$(save_body save.set '["camera", {"zoom": 3}]')"
+want "a phone saves" 200 '.ok == true'
+call "$PHONE" POST /cli/zen/remote/call "$(save_body save.get '["camera"]')"
+want "and reads its own" 200 '.result == {"zoom": 3}'
+curl -sS -X POST "$U/cli/zen/call" -H "Authorization: Bearer $OWNER" -H 'Origin: tauri://localhost' -H 'content-type: application/json' --data "$(save_body save.get '["camera"]')" >"$ROOT/desk.json"
+if jq -e '.result == null' "$ROOT/desk.json" >/dev/null; then ok "the desktop's saves didn't move"; else bad "the desktop reads the phone's save: $(cat "$ROOT/desk.json")"; fi
+
+# ── 6 ────────────────────────────────────────────────────────────────
+say "step 6: revoke the phone"
 must "$OWNER" GET /cli/auth/devices
 DEV="$(jq -r '.devices[] | select(.deviceId == "ios-smoke-1" or .device_id == "ios-smoke-1" or .device.id == "ios-smoke-1") | .id' <<<"$BODY" | head -1)"
 [[ -n "$DEV" ]] || die "the owner's phone isn't listed: $BODY"

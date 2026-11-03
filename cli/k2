@@ -45614,7 +45614,7 @@ cmd_schema() {
     {
       "name": "zen guide",
       "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
-      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, sync, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
+      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, phone, themes, sync, examples, undo, safe-mode, api, services, libs), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
       "args": [{"name": "topic|example", "required": false}, {"name": "name", "required": false}],
       "flags": [
         {"name": "--toml", "arg": null, "description": "example <name>: print only the Garden file, ready for > ~/.k2/zen/gardens/<id>.toml."},
@@ -51106,6 +51106,10 @@ THE FULL GUIDE
   k2 zen guide                       short pages; no daemon needed
   k2 zen guide gardens               start here
   k2 zen guide example --list        whole files you can pipe
+
+A PHONE
+  Every Garden shows on a phone: one screen per column until its file adds
+  [[phone.screen]] (k2 zen guide phone). No per-device Garden lists.
 
 FULL CANVAS AND LOCKS
   On [layout] canvas = "full" K2's top band floats over a custom widget:
@@ -80151,9 +80155,11 @@ COMMANDS
             this computer (they drag and pin in Zen). Read only: agents
             can read it, never set it.
   guide     The user guide: short pages (gardens, files, widgets, bands,
-            required, menus, themes, sync, examples, undo, safe-mode, api)
+            required, menus, phone, themes, sync, examples, undo, safe-mode,
+            api, services, libs)
             and whole example files to pipe into a Garden. Needs no daemon.
-  put       garden put writes one Garden page (gardens/<id>.toml); widget
+  put       garden put writes one Garden page (gardens/<id>.toml), its
+            mobile layout too (k2 zen guide phone); widget
             put writes one code file (.html .js .css .json) in a widget
             folder (made if missing), or with --dir a whole staged folder
             (code, images, fonts) in one checked write: a folder with errors
@@ -80221,7 +80227,7 @@ EOF
 # zen_core Rust test checks every example with the daemon's own schema and
 # that the pages name every slot, align, edge and control kind.
 
-_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api services libs"
+_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus phone themes sync examples undo safe-mode api services libs"
 _ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
 
 _zen_guide_usage() {
@@ -80233,7 +80239,7 @@ Usage: k2 zen guide [<topic>] [--json]
 Short pages on building Zen Gardens. Works with no daemon running.
 
 Topics:
-  gardens  files  widgets  bands  required  menus  themes  sync
+  gardens  files  widgets  bands  required  menus  phone  themes  sync
   examples  undo  safe-mode  api  services  libs
 
   k2 zen guide                          the index (start here)
@@ -80259,6 +80265,7 @@ _zen_guide_title() {
         bands) echo "Bands, column edges, align and drag" ;;
         required) echo "The two buttons every page keeps" ;;
         menus) echo "Menus" ;;
+        phone) echo "A Garden's mobile layout" ;;
         themes) echo "Themes" ;;
         sync) echo "Synced with K2's defaults, or its own copy" ;;
         examples) echo "Examples you can pipe" ;;
@@ -80304,6 +80311,7 @@ Start here: k2 zen guide gardens
   bands       Where things go: bands, column edges, align, corners, drag
   required    The two buttons every page keeps; what validate refuses
   menus       A menu button that holds controls
+  phone       A Garden's mobile layout: screens, heights, phone settings
   themes      Colours, font, shape, motion; k2 zen theme
   sync        Synced with K2's defaults, or the Garden's own copy
   examples    Whole Garden files you can pipe into a Garden
@@ -80414,6 +80422,7 @@ A GARDEN FILE
                                  Widgets stacked in a column are separate
                                  tiles; joined = true keeps one panel
   [[widget]]                     see k2 zen guide widgets and bands
+  [[phone.screen]]               a mobile layout: see k2 zen guide phone
   [colors.light]  [font]  ...    see k2 zen guide themes
 
 The template gives the page its layout, its content widgets and its Zen
@@ -80422,7 +80431,7 @@ controls until the file declares its own.
 RULES
   Unknown keys are errors at their line, with a "did you mean".
   No raw CSS, no selectors, no HTML, no fonts from the network.
-  [layout], [[widget]] and template go only in gardens/<id>.toml.
+  [layout], [[widget]], [[phone.screen]] and template go only in gardens/<id>.toml.
   A file with errors is not shown: Zen keeps the last good version.
 EOF
 }
@@ -80484,6 +80493,15 @@ out, and is then the kind)
 LIMITS
   12 content widgets and 10 Zen controls per page. Each Zen control at
   most once, except menu. A page never names caps: K2 grants them.
+
+ON A PHONE (k2 zen guide phone has the layout)
+  k2.view is 'phone' in K2 Companion, else 'desktop'; await k2.connected first.
+  k2.viewport is the visible area in CSS px, or null. k2.setHeight(px) asks for a
+  height (auto-height widgets only need it to fit by hand). k2.onVisible(fn) hears
+  true/false as the frame leaves or comes back: stop timers and re-reads on false.
+  k2.save.* on a phone is the phone's own copy, so panning never moves the desktop.
+  Handle touch yourself: matchMedia('(pointer: coarse)'), touch-action, pointers. A
+  phone never drops files, so keep a pick button. Use k2-png@1, not canvas.toBlob.
 
 Where each one may go: k2 zen guide bands. Every prop: the k2-zen skill.
 EOF
@@ -80648,6 +80666,87 @@ KEYBOARD
 A required control in a menu is reachable when the menu button is on
 screen (k2 zen guide required). Whole files: k2 zen guide example
 menu-both, and k2 zen guide example menu-bottom-right.
+EOF
+}
+
+_zen_guide_page_phone() {
+    cat <<'EOF'
+A Garden's mobile layout
+
+Every Garden shows on a phone in K2 Companion. With no [[phone.screen]] it uses
+the default layout: one screen per column, every widget. Add them to choose the
+screens, leave widgets out and give a custom widget its own phone settings.
+Nothing changes on the computer. There's no preview: look in K2 Companion.
+
+Every device lists the same Gardens. You can't hide a Garden on a phone or show
+one only there. A widget you leave out just doesn't load on a phone.
+
+THE TABLE (in the Garden's file, beside [layout] and [[widget]])
+    [[phone.screen]]
+    label = "Fleet"             # optional: 1 to 24 characters, names its tab
+    canvas = "full"             # optional: "full", or "framed" (the default)
+
+    [[phone.screen.widget]]
+    id = "fleet"                # a widget on this page
+    height = "fill"             # optional: "fill", "auto" or px, 160 to 4000
+    [phone.screen.widget.config]
+    bubble = false              # optional, custom widgets only
+
+    [[phone.screen]]
+    label = "Talk"
+
+    [[phone.screen.widget]]
+    id = "agents"
+
+    [[phone.screen.widget]]
+    id = "talk"
+    height = 420
+
+A phone layout has 1 to 12 screens. A widget sits on one screen. Controls (the
+switcher, the toggle, menus) aren't listed: the phone draws its own.
+
+WRITE AND CHECK
+  k2 zen garden put <id> --from page.toml     needs the Garden's list, like any
+                                              edit; a bad [phone] writes nothing
+  k2 zen validate --garden <id> [--from page.toml]
+                                              the same rules, with file:line:col
+
+HEIGHT
+  fill   fills the screen. The widget must be alone on it. The default when alone.
+  auto   starts at 60% of the screen and fits the widget's content. The default
+         in a stack.
+  420    that many px: at least 160, at most 3x the visible height.
+  A screen with several widgets scrolls, so they may add up past the screen.
+  With no layout: fill when the widget is alone in its column, auto otherwise.
+  canvas = "full" gives the widget the whole screen, with the phone's own controls
+  floating over it. It holds one widget. As on a desktop, it takes touches under
+  those controls with k2.canvas.setHitRegions(rects).
+
+LISTING A CONVERSATION
+  A Conversation follows its Agents widget: list both, or validate warns.
+
+CONFIG
+  Merged over the desktop's [widget.props.config], key by key: write only what
+  differs. Sources stay bound that way. A key can be overridden but not removed.
+  The merged config is at most 4 KB. Only custom widgets take one. It reaches the
+  widget as k2.config. A key does nothing unless the widget's code reads it.
+
+SAVES
+  On a phone k2.save.* writes the phone's own copy, shared by the person's phones.
+  A key the phone hasn't set reads the desktop's value. save.remove drops the
+  phone's copy, so the desktop's shows again. Nothing a phone does changes the
+  desktop's saves. k2.store is the widget's data: one for every device. K2 doesn't
+  choose between k2.config and a saved value: the widget's code does.
+
+IN THE WIDGET (k2 zen guide widgets has the rest)
+  k2.view === 'phone', k2.viewport, k2.setHeight(px), k2.onVisible(fn)
+
+ON A TEMPLATE
+  A file with only [phone] keeps the template's page. If a K2 update takes a widget
+  off the template, the phone leaves it out, with a warning, and the file stays
+  good. Against your own [[widget]] blocks a wrong id is an error.
+
+k2 zen widget show <name> lists the sources each placement binds, a phone's too.
 EOF
 }
 
@@ -81169,7 +81268,8 @@ Every service here is LOCAL: the data lives in a file K2 keeps on this
 computer, never on a server, and no Connect login reaches it.
 
   k2.store.*  data:<widget>   shared with agents you grant; pushed live
-  k2.save.*   save:<widget>   the widget's private saves; never shared
+  k2.save.*   save:<widget>   the widget's private saves; never shared. A phone
+                              keeps its own copy (k2 zen guide phone)
   k2.viewer() {kind, name}    who is looking (for labels)
 
 KEYS, REVS, CONFLICTS
@@ -81381,6 +81481,7 @@ _zen_guide_page() {
         bands) _zen_guide_page_bands ;;
         required) _zen_guide_page_required ;;
         menus) _zen_guide_page_menus ;;
+        phone) _zen_guide_page_phone ;;
         themes) _zen_guide_page_themes ;;
         sync) _zen_guide_page_sync ;;
         examples) _zen_guide_page_examples ;;

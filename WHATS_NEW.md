@@ -65,6 +65,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **You can see your own carets from your other tabs and devices.** In the Live editor they are dashed, in your colour, and named "You · other tab".
 
 ### Gardens
+- **A Garden can have a mobile layout.** Add `[[phone.screen]]` to its file to pick the screens, heights and phone settings for K2 Companion (`k2 zen guide phone`). Every device still lists the same Gardens, and a Garden with no mobile layout uses the default on a phone. Panning or saving on a phone no longer moves the same widget on your desktop.
 - **Board Garden (Beta):** a whiteboard you and your agent share, beside your Conversation. Add it from New Garden, which turns on the Board core after one confirm; you can also turn it on in Settings → Cores. Agents work on it with `k2 board`, and `k2 study board` explains the rules.
 
 ### Compute

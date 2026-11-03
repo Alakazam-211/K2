@@ -458,6 +458,7 @@ manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
     );
     s.push_str(&custom_widgets_section());
+    s.push_str(&phone_section());
     s.push_str(&garden_data_section());
     s.push_str(&whats_available_section());
     s
@@ -705,6 +706,35 @@ the rest belong to K2's own widgets and controls.\n\n",
 }
 
 /// "Custom widgets" (UW42 as amended: UWA11, UWB2–UWB13, UWB21–UWB24).
+/// A Garden's mobile layout (contract-gardens-phone rev 2 §A), from the
+/// constants, so the limits here can't drift from the checker's.
+pub(crate) fn phone_section() -> String {
+    use super::phone::{HEIGHT_AUTO, HEIGHT_FILL, HEIGHT_MAX, HEIGHT_MIN, LABEL_MAX, MAX_SCREENS};
+    format!(
+        "## A Garden's mobile layout\n\n\
+Every Garden shows on a phone in K2 Companion, and every device lists the same Gardens:\n\
+there is no way to hide a Garden on a phone or show one only there. With no `[phone]`\n\
+table a Garden uses the default layout (one screen per column, every widget). Add\n\
+`[[phone.screen]]` when the person asks for a mobile version; a widget you leave out of it\n\
+doesn't load on a phone. `k2 zen guide phone` has the whole page.\n\n\
+```toml\n\
+[[phone.screen]]\n\
+label = \"Fleet\"          # optional, 1 to {LABEL_MAX} characters\n\
+canvas = \"full\"          # optional; holds one widget\n\n\
+[[phone.screen.widget]]\n\
+id = \"fleet\"             # a widget on this page, on one screen only\n\
+height = \"{HEIGHT_FILL}\"          # \"{HEIGHT_FILL}\" (alone on its screen), \"{HEIGHT_AUTO}\" or px, {HEIGHT_MIN} to {HEIGHT_MAX}\n\
+[phone.screen.widget.config]\n\
+bubble = false            # custom widgets only; merged over the desktop's config\n\
+```\n\n\
+- 1 to {MAX_SCREENS} screens. Write it with `k2 zen garden put <id> --from page.toml`, like any edit:\n\
+  you need the Garden's list, and a bad `[phone]` writes nothing.\n\
+- `config` is merged, key by key: write only what differs, and the desktop's sources stay bound.\n\
+- In the widget: `k2.view === 'phone'`, `k2.viewport`, `k2.setHeight(px)`, `k2.onVisible(fn)`.\n\
+  `k2.save.*` on a phone is the phone's own copy; `k2.store` is one for every device.\n\n"
+    )
+}
+
 fn custom_widgets_section() -> String {
     let c = contract::catalog();
     let mut s = String::from(

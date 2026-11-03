@@ -52,6 +52,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Your profile is in the web version too.** The person icon at the top right, with your name, colour and password on that server, used to appear only in the desktop app.
 
 ### Fixes
+- **K2 checks for updates at most once every 3 hours, however many windows you have open or times you reload.** An update it already found stays on offer. **Check for Updates** in Settings always checks right away.
 - **Mailed links reach your server.** Confirm and stop links for mailbox forwards and email notifications, and set-password links, could answer "Unknown subdomain", which left forwards waiting for confirmation. They now use your server's own address.
 - **Scrolling a remote Claude Code session is steadier,** because K2 now tells Claude Code it supports synchronized output.
 - **Claude Max 20x now shows as Ultra,** matching Anthropic's new name for the plan.

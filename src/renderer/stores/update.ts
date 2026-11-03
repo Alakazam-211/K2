@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isAirgap } from '@/lib/airgap'
+import {
+  rememberUpdateCheckResult,
+  rememberUpdateCheckStarted,
+  type UpdateOffer,
+} from '@/lib/auto-update-checks'
 // relaunch handled by Rust-side relaunch_via_open (helper script)
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
@@ -54,7 +59,13 @@ interface UpdateState {
   /** pkexec could not run (missing, cancelled, no agent, tool failed):
    *  the exact command for a terminal. */
   linuxManualCommand: string | null
+  /** Asks GitHub, always. The automatic timer's interval guard is in
+   *  `useUpdateChecker`. Records the time and what it found per install. */
   checkForUpdate: () => Promise<boolean>
+  /** Shows what an earlier check found, with no fetch, after a reload or
+   *  from another window. Leaves a running check, download or error alone.
+   *  Returns true when `offer` is now on show. */
+  restoreOffer: (offer: UpdateOffer | null) => boolean
   /** Available-row button: Linux packages install in-app when they can
    *  (else open the package / release page); anything else runs the
    *  Tauri updater download. */
@@ -77,7 +88,8 @@ function updateErrorText(err: unknown): string {
  *  and installed in Rust (prd-security-sweep-0464-v1 SS4); the webview
  *  never calls the Tauri updater plugin. Download, then Install & Relaunch:
  *  never one step (on Windows that would run NSIS over a live
- *  `k2-daemon.exe`). */
+ *  `k2-daemon.exe`). False on an offer restored from an earlier check: this
+ *  page didn't find it and Rust may hold nothing (a relaunch empties it). */
 let pendingUpdate = false
 
 export const useUpdateStore = create<UpdateState>((set, get) => ({
@@ -96,6 +108,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       set({ status: 'idle', error: null, archDownloadUrl: null, linuxCanInstall: false })
       return false
     }
+    rememberUpdateCheckStarted()
     set({
       status: 'checking',
       error: null,
@@ -110,6 +123,12 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       if (probe.kind === 'arch' || probe.kind === 'linux-package') {
         pendingUpdate = false
         if (probe.has_update && probe.version && probe.download_url) {
+          rememberUpdateCheckResult({
+            version: probe.version,
+            notes: null,
+            downloadUrl: probe.download_url,
+            canInstall: probe.can_install === true,
+          })
           set({
             status: 'available',
             version: probe.version,
@@ -120,6 +139,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           })
           return true
         }
+        rememberUpdateCheckResult(null)
         set({
           status: 'idle',
           version: null,
@@ -144,6 +164,12 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       const update = await invoke<AppUpdateAvailable | null>('app_update_check')
       if (update) {
         pendingUpdate = true
+        rememberUpdateCheckResult({
+          version: update.version,
+          notes: update.notes ?? null,
+          downloadUrl: null,
+          canInstall: false,
+        })
         set({
           status: 'available',
           version: update.version,
@@ -154,6 +180,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         return true
       }
       pendingUpdate = false
+      rememberUpdateCheckResult(null)
       set({ status: 'idle', archDownloadUrl: null })
       return false
     } catch (err) {
@@ -161,6 +188,27 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       set({ status: 'error', error: String(err), archDownloadUrl: null })
       return false
     }
+  },
+
+  restoreOffer: (offer) => {
+    const status = get().status
+    if (status !== 'idle' && status !== 'available') return false
+    if (!offer) {
+      if (status === 'available') {
+        pendingUpdate = false
+        set({ status: 'idle', version: null, notes: null, archDownloadUrl: null, linuxCanInstall: false })
+      }
+      return false
+    }
+    set({
+      status: 'available',
+      version: offer.version,
+      notes: offer.notes,
+      error: null,
+      archDownloadUrl: offer.downloadUrl,
+      linuxCanInstall: offer.canInstall,
+    })
+    return true
   },
 
   openAvailableDownload: async () => {
@@ -217,6 +265,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   startDownload: async () => {
+    // A restored offer: have Rust find the update before downloading it.
+    if (!pendingUpdate && get().status === 'available' && !get().archDownloadUrl) {
+      await get().checkForUpdate()
+    }
     if (!pendingUpdate) return
     set({ status: 'downloading', progress: 0 })
     let unlisten: (() => void) | null = null

@@ -8,8 +8,12 @@ import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
 import {
   AUTO_UPDATE_CHECKS_EVENT,
+  LS_LAST_UPDATE_CHECK,
   autoUpdateChecksEnabled,
+  msUntilUpdateCheckDue,
+  readLastUpdateCheck,
 } from '@/lib/auto-update-checks'
+import { compareVersions } from '@/lib/server-capabilities'
 
 interface UpdateInfo {
   current_version: string
@@ -20,6 +24,23 @@ interface UpdateInfo {
 
 // Track latest known version to avoid repeat toasts for the same update
 let lastNotifiedVersion: string | null = null
+
+function notifyUpdateAvailable(version: string, label: string): void {
+  if (version === lastNotifiedVersion) return
+  lastNotifiedVersion = version
+  useToastStore.getState().addToast(
+    `K2 v${version} is available`,
+    'info',
+    8000,
+    {
+      label,
+      onClick: () => {
+        useSettingsStore.getState().openSettings('general')
+        useSettingsStore.setState({ pendingUpdateCheck: true })
+      },
+    }
+  )
+}
 
 async function checkForUpdate(showToastIfNone = false): Promise<void> {
   if (isAirgap()) {
@@ -51,21 +72,7 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
     const hasUpdate = await updateStore.checkForUpdate()
     if (hasUpdate) {
       const version = useUpdateStore.getState().version
-      if (version && version !== lastNotifiedVersion) {
-        lastNotifiedVersion = version
-        useToastStore.getState().addToast(
-          `K2 v${version} is available`,
-          'info',
-          8000,
-          {
-            label: 'Update',
-            onClick: () => {
-              useSettingsStore.getState().openSettings('general')
-              useSettingsStore.setState({ pendingUpdateCheck: true })
-            },
-          }
-        )
-      }
+      if (version) notifyUpdateAvailable(version, 'Update')
       return
     }
     // A failed Arch manifest fetch returns false with status `error`.
@@ -81,20 +88,8 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
   // Fallback: legacy check via Rust command (browser download)
   try {
     const info = await invoke<UpdateInfo>('check_for_update')
-    if (info.has_update && info.latest_version !== lastNotifiedVersion) {
-      lastNotifiedVersion = info.latest_version
-      useToastStore.getState().addToast(
-        `K2 v${info.latest_version} is available`,
-        'info',
-        8000,
-        {
-          label: 'Download',
-          onClick: () => {
-            useSettingsStore.getState().openSettings('general')
-            useSettingsStore.setState({ pendingUpdateCheck: true })
-          },
-        }
-      )
+    if (info.has_update) {
+      notifyUpdateAvailable(info.latest_version, 'Download')
     } else if (showToastIfNone && !info.has_update) {
       useToastStore.getState().addToast(
         `K2 v${info.current_version} is up to date`,
@@ -107,38 +102,82 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
   }
 }
 
+/** Shows the update an earlier check found (this page's, or another
+ *  window's) with no fetch. Skipped when it isn't newer than what's running,
+ *  as after installing it. */
+async function offerRememberedUpdate(): Promise<void> {
+  let current: string
+  try {
+    current = await invoke<string>('get_current_version')
+  } catch (err) {
+    console.warn('[update-checker] Failed to read the running version:', err)
+    return
+  }
+  if (isAirgap() || !autoUpdateChecksEnabled()) return
+  const remembered = readLastUpdateCheck()
+  if (!remembered) return
+  const offer =
+    remembered.offer && compareVersions(current, remembered.offer.version) < 0 ? remembered.offer : null
+  if (useUpdateStore.getState().restoreOffer(offer) && offer) {
+    notifyUpdateAvailable(offer.version, 'Update')
+  }
+}
+
 /** Exported for Settings to trigger a manual check */
 export { checkForUpdate }
 export type { UpdateInfo }
 
+const STARTUP_DELAY_MS = 5000
+/** Windows waiting on the same stored time wake spread out over this, so one
+ *  has written the new time before the next rechecks it. localStorage reaches
+ *  other windows a moment after the write. */
+const WAKE_SPREAD_MS = 60_000
+
 /**
- * Hook that checks for updates on mount and every 3 hours.
- * Uses Tauri updater plugin for in-app download when available,
- * falls back to legacy GitHub API check for browser download.
+ * Hook that checks for updates automatically: 5 seconds after a load if the
+ * last check, by any window of this install, is at least one interval old,
+ * and otherwise when the interval is up. Manual checks and remote update
+ * triggers skip this guard and always fetch.
  */
 export function useUpdateChecker(): void {
   useEffect(() => {
     if (!webFeatures.appUpdater) return
-    let startupTimeout: ReturnType<typeof setTimeout> | undefined
-    let interval: ReturnType<typeof setInterval> | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
     const stop = (): void => {
-      if (startupTimeout !== undefined) clearTimeout(startupTimeout)
-      if (interval !== undefined) clearInterval(interval)
-      startupTimeout = undefined
-      interval = undefined
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+    }
+    const wake = (delayMs: number): void => {
+      timer = setTimeout(fire, delayMs)
+    }
+    const fire = (): void => {
+      const spread = Math.random() * WAKE_SPREAD_MS
+      const wait = msUntilUpdateCheckDue(UPDATE_CHECK_INTERVAL)
+      if (wait > 0) {
+        void offerRememberedUpdate()
+        wake(wait + spread)
+        return
+      }
+      void checkForUpdate()
+      wake(UPDATE_CHECK_INTERVAL + spread)
     }
     const start = (): void => {
       stop()
       if (isAirgap()) return
       if (!autoUpdateChecksEnabled()) return
-      startupTimeout = setTimeout(() => checkForUpdate(), 5000)
-      interval = setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL)
+      wake(STARTUP_DELAY_MS)
+    }
+    // Another window's check landed: show its answer without waiting.
+    const onStorage = (e: StorageEvent): void => {
+      if (e.key === LS_LAST_UPDATE_CHECK) void offerRememberedUpdate()
     }
     start()
     window.addEventListener(AUTO_UPDATE_CHECKS_EVENT, start)
+    window.addEventListener('storage', onStorage)
     return () => {
       stop()
       window.removeEventListener(AUTO_UPDATE_CHECKS_EVENT, start)
+      window.removeEventListener('storage', onStorage)
     }
   }, [])
 }

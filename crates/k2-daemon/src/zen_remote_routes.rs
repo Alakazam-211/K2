@@ -35,7 +35,10 @@
 //!
 //! **Audit** (GP-A22): every request writes one `zen.remote.*` line with
 //! `client=phone` (or `owner-token`), the login and the device id; never
-//! args or values.
+//! args or values. A data **read** through [`CALL`] is thinned to one line per
+//! device, placement and verb per minute ([`audit_thinned`]): a live card reads
+//! once or twice a second, and the log rotates at 5 MiB, so unthinned reads
+//! would push login history out within hours. Writes always log.
 //!
 //! **No secrets**: no answer carries a credential, a path or any of the
 //! catalog's `bannedFields`; the page drops `sources` (file names); the
@@ -52,7 +55,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
-use k2_core::contract::{catalog, phone, Phone};
+use k2_core::contract::{catalog, phone, Effect, Phone};
 use k2_core::zen::stdlib::{self, LibRef, LibSource};
 use k2_core::zen::widget_shot::{self, Scheme};
 use k2_core::zen::{phone as garden_phone, ZenError, ZenFiles};
@@ -261,6 +264,43 @@ fn audit(event: &str, p: &Person, outcome: String) {
         "-",
         p.client,
     ));
+}
+
+/// At most one line per this long for one device, placement, verb and outcome.
+const THIN_AUDIT_SECS: u64 = 60;
+/// Keys kept before the old ones go, so a widget can't grow this without end.
+const THIN_AUDIT_MAX_KEYS: usize = 4096;
+
+/// May this request write its audit line now? False when one with the same
+/// `key` did inside [`THIN_AUDIT_SECS`].
+fn thin_audit_allows(key: String) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let window = Duration::from_secs(THIN_AUDIT_SECS);
+    let now = Instant::now();
+    let mut last = LAST.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|p| p.into_inner());
+    if last.get(&key).is_some_and(|at| now.duration_since(*at) < window) {
+        return false;
+    }
+    if last.len() >= THIN_AUDIT_MAX_KEYS {
+        last.retain(|_, at| now.duration_since(*at) < window);
+        // All live: forget them rather than grow. A line too many beats a
+        // line lost, and each is bounded by the phone's own call budget.
+        if last.len() >= THIN_AUDIT_MAX_KEYS {
+            last.clear();
+        }
+    }
+    last.insert(key, now);
+    true
+}
+
+/// [`audit`] for a read: at most one line per device, placement, verb and
+/// outcome per minute. The line still says who and what; only repeats go.
+fn audit_thinned(event: &str, p: &Person, what: &str, outcome: String) {
+    if thin_audit_allows(format!("{event}|{}|{}|{what}", p.login, p.device)) {
+        audit(event, p, outcome);
+    }
 }
 
 // ── the door ────────────────────────────────────────────────────────
@@ -649,6 +689,16 @@ fn bundled_file(e: &stdlib::ZenLibEntry, name: Option<&str>) -> CliResponse {
 
 // ── POST call ───────────────────────────────────────────────────────
 
+/// The door's person as the data-source routes see them: the owner token, or
+/// the phone's login with its own role, so a source's `viewers` floor holds.
+fn source_who(p: &Person) -> crate::compute_routes::Who {
+    if p.client == "owner-token" {
+        return crate::compute_routes::Who::Owner;
+    }
+    let role = k2_core::connect_users::role_for_user(&p.login).unwrap_or(k2_core::connect_users::Role::Member);
+    crate::compute_routes::Who::Login { username: p.login.clone(), role }
+}
+
 /// Garden data refusal codes that aren't in the catalog's closed error
 /// list, and the catalog code a frame gets for each (GP-A3).
 fn catalog_code(code: &str) -> &str {
@@ -726,13 +776,32 @@ fn call(p: &Person, body: &[u8]) -> CliResponse {
         )),
         (Some(_), Some(Phone::Door)) => None,
     };
+    let what = format!("{}/{} verb={}", b.garden, b.placement, b.verb);
     if let Some(r) = refusal {
-        audit("zen.remote.call", p, format!("{}/{} verb={} refused", b.garden, b.placement, b.verb));
+        audit_thinned("zen.remote.call", p, &format!("{what} refused"), format!("{what} refused"));
         return r;
     }
-    audit("zen.remote.call", p, format!("{}/{} verb={}", b.garden, b.placement, b.verb));
+    // A write always logs; a read is thinned.
+    let reads = c.verb(&b.verb).is_some_and(|row| row.effect == Effect::Read);
+    if reads {
+        audit_thinned("zen.remote.call", p, &what, what.clone());
+    } else {
+        audit("zen.remote.call", p, what.clone());
+    }
+    let door_row = crate::garden_data::phone_rows::is_verb(&b.verb);
     let cb = CallBody { garden: b.garden, placement: b.placement, hash: b.hash, verb: b.verb, args: b.args, confirm_token: None };
-    call_envelope(crate::garden_data::call::run_call_on(&cb, Device::Phone))
+    let r = if door_row {
+        crate::garden_data::phone_rows::handle(&cb, &source_who(p))
+    } else {
+        crate::garden_data::call::run_call_on(&cb, Device::Phone)
+    };
+    let r = call_envelope(r);
+    if door_row && !r.status.starts_with('2') {
+        // A refused door row names its code, never its args.
+        let code = serde_json::from_str::<J>(&r.body).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string)).unwrap_or_default();
+        audit_thinned("zen.remote.call", p, &format!("{what} code={code}"), format!("{what} refused code={code}"));
+    }
+    r
 }
 
 // ── blobs ───────────────────────────────────────────────────────────

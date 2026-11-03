@@ -419,3 +419,52 @@ fn a_phone_s_saves_go_with_the_widget_s_data() {
     data(&DataWho::Owner, "POST", "/cli/zen/data/space/delete", json!({ "widget": "board", "confirm": "board" }), &[]);
     assert_eq!(phone_call(&fx, "save.get", json!(["camera"])), J::Null, "gone with the widget's data");
 }
+
+// ── audit thinning (plan B0) ────────────────────────────────────────
+
+fn audit_lines(event: &str, contains: &str) -> usize {
+    let text = std::fs::read_to_string(k2_core::auth_audit::path()).unwrap_or_default();
+    text.lines().filter(|l| l.contains(event) && l.contains(contains)).count()
+}
+
+/// A read writes one line per device, placement and verb per minute. It still
+/// says who; only the repeats go.
+#[test]
+fn reads_are_thinned_and_writes_always_log() {
+    let fx = fx(&["store:read", "store:write"]);
+    let garden = fx.d.garden.clone();
+    let line = |verb: &str| format!("{garden}/b1 verb={verb}");
+    for _ in 0..5 {
+        ok_of(CALL, &fx.phone, &[], call_body(&fx, "viewer.get", json!([])));
+    }
+    assert_eq!(audit_lines("zen.remote.call", &line("viewer.get")), 1, "one line for five reads");
+    for i in 0..3 {
+        ok_of(CALL, &fx.phone, &[], call_body(&fx, "store.put", json!([format!("k{i}"), 1])));
+    }
+    assert_eq!(audit_lines("zen.remote.call", &line("store.put")), 3, "every write");
+    // Another verb is its own line, and another device is too.
+    ok_of(CALL, &fx.phone, &[], call_body(&fx, "widget.self", json!([])));
+    assert_eq!(audit_lines("zen.remote.call", &line("widget.self")), 1);
+    let second = pair("rosphone", "ios-rosson-2");
+    ok_of(CALL, &second, &[], call_body(&fx, "viewer.get", json!([])));
+    assert_eq!(audit_lines("zen.remote.call", &line("viewer.get")), 2, "another device");
+    let text = std::fs::read_to_string(k2_core::auth_audit::path()).expect("audit");
+    assert!(text.contains("device=ios-rosson-2"), "{text}");
+    // A refused read is thinned too, and says so; a widget can't flood it.
+    for _ in 0..5 {
+        refused(CALL, &fx.phone, &[], call_body(&fx, "thread.post", json!([])));
+    }
+    assert_eq!(audit_lines("zen.remote.call", &format!("{} refused", line("thread.post"))), 1);
+}
+
+/// The key table can't grow without end, and a line is never lost to it.
+#[test]
+fn the_thin_table_is_bounded() {
+    let key = format!("bounded-{}", uuid::Uuid::new_v4());
+    assert!(thin_audit_allows(key.clone()));
+    assert!(!thin_audit_allows(key.clone()), "a repeat inside the minute");
+    for i in 0..(THIN_AUDIT_MAX_KEYS + 10) {
+        assert!(thin_audit_allows(format!("{key}-{i}")), "a new key always logs");
+    }
+    assert!(thin_audit_allows(key), "the table was forgotten rather than grown");
+}

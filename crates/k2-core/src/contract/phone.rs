@@ -38,9 +38,14 @@ pub fn lint_phone(c: &Catalog, out: &mut Vec<String>) {
             _ => {}
         }
         // A `door` row reaches the daemon: a garden-local row (the call
-        // runner) or one of the byte verbs (the remote blob routes).
-        if v.phone == Some(Phone::Door) && !v.exposed_to(Exposure::GardenLocal) && !BYTE_VERBS.contains(&v.verb.as_str()) {
-            out.push(format!("{}: phone door needs a daemon runner (a garden-local row or a byte verb)", v.verb));
+        // runner), a byte verb (the remote blob routes) or a door-only row
+        // (`garden_data::phone_rows`).
+        if v.phone == Some(Phone::Door)
+            && !v.exposed_to(Exposure::GardenLocal)
+            && !BYTE_VERBS.contains(&v.verb.as_str())
+            && !DOOR_ROW_VERBS.contains(&v.verb.as_str())
+        {
+            out.push(format!("{}: phone door needs a daemon runner (a garden-local row, a byte verb or a door-only row)", v.verb));
         }
     }
 }
@@ -48,6 +53,11 @@ pub fn lint_phone(c: &Catalog, out: &mut Vec<String>) {
 /// The byte verbs: `door` rows that move bytes over the remote blob routes
 /// instead of `remote/call`.
 pub const BYTE_VERBS: &[&str] = &["blobs.put", "blobs.get"];
+
+/// `door` rows only the remote door answers (`garden_data::phone_rows`): a
+/// desktop frame's renderer answers them itself, so they have no `garden-local`
+/// runner. They stay `widget` exposure, so `/cli/zen/call` still refuses them.
+pub const DOOR_ROW_VERBS: &[&str] = &[];
 
 /// Where `verb` runs on a phone; `None` for a verb that isn't a widget row
 /// (the remote door answers it `not_exposed`).

@@ -32,6 +32,7 @@ pub mod grant_routes;
 pub mod guest_rooms;
 pub mod history_routes;
 pub mod person_rows;
+pub mod phone_rows;
 pub mod tx_routes;
 pub mod workbench_rows;
 pub mod workbench_sessions;

@@ -454,7 +454,7 @@ impl ZenFiles {
 }
 
 /// This computer's Connect name (`<sub>.k2.dev`), when it has one.
-fn this_host() -> Option<String> {
+pub fn this_host() -> Option<String> {
     let cfg = crate::tunnel::config::load().ok()?;
     let sub = cfg.subdomain.trim().to_ascii_lowercase();
     (!sub.is_empty()).then(|| format!("{sub}.{}", crate::tunnel::config::SUBDOMAIN_HOST))

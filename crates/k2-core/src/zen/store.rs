@@ -1678,6 +1678,23 @@ impl ZenFiles {
         }))
     }
 
+    /// A Garden's page alone, as [`ZenFiles::resolve_view_with`] builds it, but
+    /// without the theme, background or widget folders: what a door row reads
+    /// on every call. Custom widgets aren't filled in.
+    pub fn page_of(&self, garden: &str) -> Result<J, ZenError> {
+        self.require()?;
+        let (_, entry) = self.garden(garden)?;
+        let view = super::sync::View::current();
+        let gd = self.garden_defaults(&entry.id, &view);
+        let active = self.active_theme_in(Some(&entry.id), Some(&gd.theme));
+        let (_, _, tbase) = self.theme_stack_in(&gd.theme, &active.name);
+        let zen = self.effective(&ZenFile::Zen, &tbase);
+        let base = schema::merge(&[&tbase, &zen.layer]);
+        let page = self.effective_in(&ZenFile::Garden(entry.id.clone()), &base, &gd.page);
+        let (layer, template) = gd.page_layer(&page.layer, &entry.template);
+        Ok(super::garden_page_in(&gd.page, &layer, &template))
+    }
+
     /// Garden ids with a list entry or a page file: the list's order, then
     /// files the list doesn't name.
     fn garden_ids(&self) -> Vec<String> {

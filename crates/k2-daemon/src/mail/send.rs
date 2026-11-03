@@ -1540,8 +1540,8 @@ pub fn purge_held_for_address(address: &str, now: i64) -> usize {
 /// nothing else removes the last. Rows stay: they're the audit trail. Returns how
 /// many things went.
 pub fn sweep_store(store: &DbOutboundStore, now: i64) -> usize {
-    let Ok(rd) = std::fs::read_dir(&store.body_dir) else { return 0 };
-    let status_of = |id: &str| -> Option<(String, i64)> {
+    use rusqlite::OptionalExtension as _;
+    sweep_store_with(store, now, &|id| {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.query_row(
@@ -1549,8 +1549,16 @@ pub fn sweep_store(store: &DbOutboundStore, now: i64) -> usize {
             rusqlite::params![id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .ok()
-    };
+        .optional()
+    })
+}
+
+/// A row's status and `updated_at`. `Ok(None)`: no such row. An error says
+/// nothing about the row, so what belongs to it stays.
+type RowState = rusqlite::Result<Option<(String, i64)>>;
+
+fn sweep_store_with(store: &DbOutboundStore, now: i64, status_of: &dyn Fn(&str) -> RowState) -> usize {
+    let Ok(rd) = std::fs::read_dir(&store.body_dir) else { return 0 };
     let old_enough = |e: &std::fs::DirEntry| {
         e.metadata()
             .and_then(|m| m.modified())
@@ -1563,20 +1571,25 @@ pub fn sweep_store(store: &DbOutboundStore, now: i64) -> usize {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(id) = name.strip_suffix(".files") {
             let gone = match status_of(id) {
-                None => old_enough(&entry),
-                Some((status, _)) => !matches!(status.as_str(), "pending" | "scheduled" | "approved"),
+                Err(e) => {
+                    k2_core::log_debug!("[mail/send] tidy: leaving {name}, its row can't be read: {e}");
+                    false
+                }
+                Ok(None) => old_enough(&entry),
+                Ok(Some((status, _))) => !matches!(status.as_str(), "pending" | "scheduled" | "approved"),
             };
             if gone && std::fs::remove_dir_all(entry.path()).is_ok() {
                 n += 1;
             }
         } else if let Some(id) = name.strip_suffix(".json") {
             match status_of(id) {
-                None if old_enough(&entry) => {
+                Err(e) => k2_core::log_debug!("[mail/send] tidy: leaving {name}, its row can't be read: {e}"),
+                Ok(None) if old_enough(&entry) => {
                     if std::fs::remove_file(entry.path()).is_ok() {
                         n += 1;
                     }
                 }
-                Some((status, updated_at))
+                Ok(Some((status, updated_at)))
                     if matches!(status.as_str(), "sent" | "denied" | "failed")
                         && updated_at + DECIDED_BODY_KEEP_SECS < now =>
                 {
@@ -4506,6 +4519,31 @@ mod tests {
         let short = unique_from(msg());
         let req = OutboundRequest { project_id: &project, agent_name: "bot", account_id: "acct", message: &short, send_after: None };
         assert!(gate_and_dispatch(&store, None, Gate::Approval, &req, now_unix()).is_ok());
+        cleanup_rows(&project);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A busy database at boot says nothing about a row: however old, nothing goes.
+    #[test]
+    fn the_boot_sweep_deletes_nothing_when_a_row_cant_be_read() {
+        let (store, dir) = temp_store();
+        let project = format!("P-{}", uuid::Uuid::new_v4());
+        let waiting = queued_with_file(&store, &project, b"waiting");
+        std::fs::create_dir_all(dir.join("out_noread0000000.files")).unwrap();
+        std::fs::write(dir.join("out_noread0000000.json"), b"{}").unwrap();
+        let busy = || {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                Some("database is locked".to_string()),
+            )
+        };
+        let years_later = now_unix() + 10 * 365 * 86_400;
+        assert_eq!(sweep_store_with(&store, years_later, &|_| Err(busy())), 0);
+        assert!(store.files_dir(&waiting).exists() && store.body_path(&waiting).exists());
+        assert!(dir.join("out_noread0000000.files").exists() && dir.join("out_noread0000000.json").exists());
+        // Told plainly that there's no such row, the same files do go.
+        assert!(sweep_store_with(&store, years_later, &|_| Ok(None)) >= 2);
+        assert!(!dir.join("out_noread0000000.files").exists());
         cleanup_rows(&project);
         let _ = std::fs::remove_dir_all(&dir);
     }

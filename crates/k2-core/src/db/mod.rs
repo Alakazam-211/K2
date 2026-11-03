@@ -2141,6 +2141,22 @@ mod tests {
     //! migration application order, PRAGMA state, and idempotency,
     //! which would be polluted by a process-wide handle.
     use super::*;
+
+    /// One column already there mustn't skip the others: a batch stops at its
+    /// first error, and the migration would still be recorded as applied.
+    #[test]
+    fn a_column_already_there_does_not_skip_the_rest_of_0261() {
+        let sql = include_str!("../../drizzle_sql/0261_mail_outbound_reply_to.sql");
+        assert_eq!(sql.matches("ALTER TABLE").count(), sql.matches("--> statement-breakpoint").count() + 1);
+        let conn = Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (name TEXT); CREATE TABLE mail_outbound (id TEXT, reply_to_json TEXT);",
+        )
+        .expect("tables");
+        run_single_migration(&conn, "0261", sql).expect("applies");
+        conn.prepare("SELECT reply_to_json, body_sha256, forward_of_json, source_check FROM mail_outbound")
+            .expect("every column is there");
+    }
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
     fn fresh_memory() -> Connection {

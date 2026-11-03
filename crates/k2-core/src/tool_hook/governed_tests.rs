@@ -712,6 +712,8 @@ fn the_view_names_the_spaces_steps_toward_sew() {
     row("blok-1", &settings, "blocked", Some(409), Some("app_mismatch: the Space is bound to another App"));
     row("gone-1", &settings, "superseded", None, None);
     row("else-1", &settings_subject("spc_other"), "blocked", Some(500), Some("another Space"));
+    // `_` in a Space id is data, not a wildcard.
+    row("near-1", "space:spcXmeeting1:k2:principal:x", "blocked", Some(500), Some("a Space whose id only looks alike"));
 
     let v = skin::with_skin_conn(|c| view(c, APP)).expect("view");
     let steps = &v.spaces[0].sync;

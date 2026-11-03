@@ -614,10 +614,11 @@ pub fn handle_owner_image_clear(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
-/// May an agent of `ws` see and end `p`'s sessions on `app`? Only an App of
-/// its workspace, only someone with a login on that App, never a box login.
-/// Someone else's person is the same `not_found` as nobody.
-fn agent_may_end_sessions(ws: &str, app: &str, p: &SkinPrincipal) -> Result<(), CliResponse> {
+/// May an agent of `ws` see and end the sessions of `user` on `app`? Only an
+/// App of its workspace, only someone with a login on that App, never a box
+/// login. A name nobody has and someone not on this App get one answer, so
+/// this route can't test whether a name exists.
+fn agent_may_end_sessions(ws: &str, app: &str, user: &str) -> Result<(), CliResponse> {
     if app == skin::HOST_APP_ID || !app_of_workspace(app, ws) {
         return Err(refusal(
             "403 Forbidden",
@@ -625,9 +626,11 @@ fn agent_may_end_sessions(ws: &str, app: &str, p: &SkinPrincipal) -> Result<(), 
             "that isn't an App of your workspace: only the owner ends sessions there (ask your human)",
         ));
     }
+    let not_here = || refusal("404 Not Found", "not_found", "no such App user on that App");
+    let Some(p) = principal_named(user)? else { return Err(not_here()) };
     let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
     if !grants.iter().any(|g| g.subject_kind == "principal" && g.subject_id == p.id && g.kind == "app" && g.target_id == app) {
-        return Err(refusal("404 Not Found", "not_found", "no such App user on that App"));
+        return Err(not_here());
     }
     if crate::skin_routes::has_box_login(&p.id, &grants) {
         return Err(crate::skin_routes::box_login_refused(&p.username));
@@ -646,16 +649,16 @@ pub fn handle_user_sessions(agent_ws: Option<&str>, params: &HashMap<String, Str
     let Some(user) = params.get("user").or_else(|| params.get("username")).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
         return usage("name the person (user)");
     };
+    if let Some(ws) = agent_ws {
+        if let Err(r) = agent_may_end_sessions(ws, &app, user) {
+            return r;
+        }
+    }
     let p = match principal_named(user) {
         Ok(Some(p)) => p,
         Ok(None) => return refusal("404 Not Found", "not_found", "no such App user"),
         Err(r) => return r,
     };
-    if let Some(ws) = agent_ws {
-        if let Err(r) = agent_may_end_sessions(ws, &app, &p) {
-            return r;
-        }
-    }
     match profile::sessions_for(&p.id, &app, "") {
         Ok(sessions) => CliResponse::ok_json(
             json!({ "ok": true, "username": p.username, "app": app, "sessions": sessions.iter().map(session_json).collect::<Vec<_>>() }).to_string(),
@@ -679,12 +682,7 @@ pub fn handle_user_sessions_revoke(agent_ws: Option<&str>, body: &[u8], actor: &
             Err(r) => return r,
         };
         let Some(user) = text(&v, &["user", "username"]) else { return usage("name the person (user)") };
-        let p = match principal_named(user) {
-            Ok(Some(p)) => p,
-            Ok(None) => return refusal("404 Not Found", "not_found", "no such App user"),
-            Err(r) => return r,
-        };
-        if let Err(r) = agent_may_end_sessions(ws, &app, &p) {
+        if let Err(r) = agent_may_end_sessions(ws, &app, user) {
             return r;
         }
     }

@@ -1692,14 +1692,15 @@ pub struct SyncStep {
 /// them: every open step (blocked first), then the last one that finished.
 fn sync_steps(conn: &Connection, space: &str) -> Result<Vec<SyncStep>, String> {
     let settings = settings_subject(space);
-    let members = format!("{}{space}:%", super::app_space::SUBJECT_PREFIX);
-    let chan = format!("{CHAN_PREFIX}{space}:%");
+    let like = space.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let members = format!("{}{like}:%", super::app_space::SUBJECT_PREFIX);
+    let chan = format!("{CHAN_PREFIX}{like}:%");
     let chans = format!("{CHANS_PREFIX}{space}");
     let read = |filter: &str, limit: i64| -> Result<Vec<SyncStep>, String> {
         let mut st = conn
             .prepare(&format!(
                 "SELECT id, op, subject_key, state, attempts, last_status, last_error, updated_at FROM tool_outbox
-                 WHERE (subject_key = ?1 OR subject_key LIKE ?2 OR subject_key LIKE ?3 OR subject_key = ?4) AND {filter}
+                 WHERE (subject_key = ?1 OR subject_key LIKE ?2 ESCAPE '\\' OR subject_key LIKE ?3 ESCAPE '\\' OR subject_key = ?4) AND {filter}
                  ORDER BY CASE state WHEN 'blocked' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, seq DESC LIMIT ?5"
             ))
             .map_err(|e| format!("app chat sync: {e}"))?;

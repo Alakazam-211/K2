@@ -8154,7 +8154,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         --app tags the role for one App (usable only on that App's grants).
   k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
-                                        files:write never reaches the agent's .k2/ folder unless you add
+                                        files:write never reaches the agent's .k2/ folder or its root
+                                        CLAUDE.md, AGENTS.md and GEMINI.md unless you add
                                         files:agentconfig too (not recommended). k2 study apps.
                                         files:upload = drop files into --upload folders, never see them.
                                         Chat caps (App-wide; any room line counts): chat:read, chat:post,
@@ -8269,7 +8270,7 @@ thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
 files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move|rename;
   never into the agent's .k2/ folder),
-files:agentconfig (opt-in: also lets files:write reach .k2/; not recommended),
+files:agentconfig (opt-in: also lets files:write reach .k2/ and the root CLAUDE.md, AGENTS.md, GEMINI.md; not recommended),
 files:download (opt-in: save Thread files, GET /cli/thread/attachment
   mode=download; never implied by thread:read or files:read; opening files is unchanged).
 Rooms: workspace handles. Empty = Thread dark.

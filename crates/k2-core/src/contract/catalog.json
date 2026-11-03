@@ -59,7 +59,7 @@
       "label": "Read files (also shows heartbeat instructions)",
       "sentence": "Read files in the agents' rooms on this computer (the room's files, never a path outside it)."
     },
-    {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder)"},
+    {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder or root CLAUDE.md, AGENTS.md, GEMINI.md)"},
     {"name": "push:send", "exposure": ["app"], "label": "Send notifications to this App's users' phones"},
     {"name": "email:send", "exposure": ["app"], "label": "Send email from this App's sender"},
     {
@@ -110,7 +110,7 @@
     {
       "name": "files:agentconfig",
       "exposure": ["app"],
-      "label": "Also allow writing the agent's .k2 folder (not recommended)"
+      "label": "Also allow writing the agent's .k2 folder and root instruction files (not recommended)"
     },
     {
       "name": "room:members",

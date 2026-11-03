@@ -268,6 +268,16 @@ pub fn allows_rel(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Result<bo
     Ok(allows(scope, &rel_segments(rel)?, need))
 }
 
+/// The files an LLM CLI loads as its standing orders from the room's root.
+pub const ROOT_INSTRUCTION_FILES: &[&str] = &["CLAUDE.md", "AGENTS.md", "GEMINI.md"];
+
+/// `true` when a room-root name is one of [`ROOT_INSTRUCTION_FILES`], ASCII
+/// case-folded, trailing dots and spaces ignored.
+pub fn is_root_instruction_file(name: &str) -> bool {
+    let name = name.trim_end_matches(['.', ' ']);
+    ROOT_INSTRUCTION_FILES.iter().any(|f| f.eq_ignore_ascii_case(name))
+}
+
 /// `true` when a folder names the agent's config folder `.k2` or sits
 /// inside it: its first segment, ASCII case-folded, trailing dots and
 /// spaces ignored (the daemon's `is_agent_config_segment` rule).

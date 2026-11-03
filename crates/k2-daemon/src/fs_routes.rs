@@ -1023,6 +1023,13 @@ fn is_agent_config_segment(seg: &str) -> bool {
     seg.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".k2")
 }
 
+/// `true` when a room-root name is one a guest's `files:write` alone doesn't
+/// reach: the config folder, or a file the agent's CLI loads as standing orders.
+/// Writes only: what a guest may read or download is unchanged.
+fn is_write_protected_root_name(seg: &str) -> bool {
+    is_agent_config_segment(seg) || k2_core::skin::paths::is_root_instruction_file(seg)
+}
+
 /// Normal segments of a room-relative path, with `/` and `\` both
 /// treated as separators and `.` dropped.
 fn rel_segments(rel: &str) -> Vec<&str> {
@@ -1038,6 +1045,14 @@ pub fn lexically_in_agent_config(rel: &str, ancestors: bool) -> bool {
     let segs = rel_segments(rel);
     match segs.first() {
         Some(first) => is_agent_config_segment(first),
+        None => ancestors,
+    }
+}
+
+/// Lexical: `rel` is at or under a name [`is_write_protected_root_name`] holds.
+fn lexically_write_protected(rel: &str, ancestors: bool) -> bool {
+    match rel_segments(rel).first() {
+        Some(first) => is_write_protected_root_name(first),
         None => ancestors,
     }
 }
@@ -1104,6 +1119,15 @@ fn resolve_parent_keep_leaf(abs: &Path) -> Option<PathBuf> {
 /// [`abs_in_agent_config`] on an already resolved target (`None` = could
 /// not be resolved: fails closed).
 fn resolved_in_agent_config(root: &str, target: Option<&Path>, ancestors: bool) -> bool {
+    resolved_first_segment(root, target, ancestors, is_agent_config_segment)
+}
+
+/// [`resolved_in_agent_config`] for a write: [`is_write_protected_root_name`].
+fn resolved_write_protected(root: &str, target: Option<&Path>, ancestors: bool) -> bool {
+    resolved_first_segment(root, target, ancestors, is_write_protected_root_name)
+}
+
+fn resolved_first_segment(root: &str, target: Option<&Path>, ancestors: bool, protected: fn(&str) -> bool) -> bool {
     let Ok(canon_root) = dunce::canonicalize(&root) else {
         return true;
     };
@@ -1120,7 +1144,7 @@ fn resolved_in_agent_config(root: &str, target: Option<&Path>, ancestors: bool) 
         Some(rest) => rest
             .split('/')
             .find(|s| !s.is_empty() && *s != ".")
-            .is_some_and(is_agent_config_segment),
+            .is_some_and(protected),
         // Jailed paths stay under the room; anything else fails closed.
         None => true,
     }
@@ -1133,7 +1157,7 @@ pub fn agent_config_protected_response() -> CliResponse {
         content_type: "application/json",
         body: serde_json::json!({
             "error": "agent_config_protected",
-            "message": "the agent's .k2 folder is protected: app guests can't write it unless their role holds files:agentconfig for this room",
+            "message": "the agent's .k2 folder and its root CLAUDE.md, AGENTS.md and GEMINI.md are protected: app guests can't write them unless their role holds files:agentconfig for this room",
         })
         .to_string(),
     }
@@ -1215,8 +1239,8 @@ fn refuse_protected_write_at(
     if need != PathNeed::Upload && pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_AGENT_CONFIG) {
         return None;
     }
-    if lexically_in_agent_config(rel, ancestors)
-        || resolved_in_agent_config(&resolved.path, full.as_deref(), ancestors)
+    if lexically_write_protected(rel, ancestors)
+        || resolved_write_protected(&resolved.path, full.as_deref(), ancestors)
     {
         return Some(agent_config_protected_response());
     }
@@ -4188,6 +4212,27 @@ mod tests {
         assert_eq!(room.read_role(), "original role");
         assert_eq!(std::fs::read_dir(room.dir.join(".k2/inbox")).expect("inbox").count(), 0);
         std::fs::remove_dir_all(&outside).expect("cleanup outside");
+    }
+
+    /// `files:write` alone doesn't reach the files the agent's CLI loads as standing
+    /// orders; `files:agentconfig` does. Only at the room's root, and only writes.
+    #[test]
+    fn guest_writes_to_root_instruction_files_need_the_opt_in() {
+        let room = config_room("instr");
+        let pass = writer(&room, false);
+        for path in ["CLAUDE.md", "AGENTS.md", "GEMINI.md", "claude.md", "./AGENTS.md", "GEMINI.md.", "CLAUDE.md "] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_protected(&r, &format!("write-file {path}"));
+        }
+        for path in ["notes/CLAUDE.md", "README.md", "notes/AGENTS.md"] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_eq!(r.status, "200 OK", "{path}: {}", r.body);
+        }
+        let opted = writer(&room, true);
+        let r = handle_write_file_gated(&write_body(&room, "CLAUDE.md", "guest text"), Some(opted));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        // What a guest may read or download doesn't change.
+        assert!(!lexically_in_agent_config("CLAUDE.md", false));
     }
 
     #[test]

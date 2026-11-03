@@ -49063,12 +49063,13 @@ CAPS
 
 SENDING ON
   With sending on, an agent that reads a malicious email can be talked into
-  sending that mail, its attachments and any workspace file that doesn't
-  look like a secret, to any address: up to 20 messages an hour and 100 a
-  day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the
-  outbox records it afterwards. The secret check catches mistakes, not
-  intent. The DMARC check only slows forged senders, and an attacker's own
-  domain passes it. Use approval for any agent that reads mail from outside.
+  sending any mail it can read, with its attachments, and any workspace file
+  that doesn't look like a secret, to any address: up to 20 messages an hour
+  and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send
+  time; the outbox records it afterwards. The secret check catches mistakes,
+  not intent. The DMARC check only slows forged senders, and an attacker's
+  own domain passes it. Use approval for any agent that reads mail from
+  outside.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -72366,16 +72367,16 @@ FLAGS
   --agent-send <m>       Agent send gating: off (default) | approval | on
                          (pair with --workspace for a per-workspace override)
                          With sending on, an agent that reads a malicious
-                         email can be talked into sending that mail, its
-                         attachments and any workspace file that doesn't
-                         look like a secret, to any address: up to 20
-                         messages an hour and 100 a day per mailbox, at 25
-                         MiB each. Nobody is asked or told at send time; the
-                         outbox records it afterwards. The secret check
-                         catches mistakes, not intent. The DMARC check only
-                         slows forged senders, and an attacker's own domain
-                         passes it. Use approval for any agent that reads
-                         mail from outside.
+                         email can be talked into sending any mail it can
+                         read, with its attachments, and any workspace file
+                         that doesn't look like a secret, to any address: up
+                         to 20 messages an hour and 100 a day per mailbox,
+                         at 25 MiB each. Nobody is asked or told at send
+                         time; the outbox records it afterwards. The secret
+                         check catches mistakes, not intent. The DMARC check
+                         only slows forged senders, and an attacker's own
+                         domain passes it. Use approval for any agent that
+                         reads mail from outside.
   --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
                          Pair with --workspace; the global default is owner.
   --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
@@ -72430,12 +72431,12 @@ use; this mode says whether that workspace may send at all. Works on
 every OS (macOS included).
 
 With sending on, an agent that reads a malicious email can be talked into
-sending that mail, its attachments and any workspace file that doesn't look
-like a secret, to any address: up to 20 messages an hour and 100 a day per
-mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox
-records it afterwards. The secret check catches mistakes, not intent. The
-DMARC check only slows forged senders, and an attacker's own domain passes
-it. Use approval for any agent that reads mail from outside.
+sending any mail it can read, with its attachments, and any workspace file
+that doesn't look like a secret, to any address: up to 20 messages an hour
+and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send
+time; the outbox records it afterwards. The secret check catches mistakes,
+not intent. The DMARC check only slows forged senders, and an attacker's own
+domain passes it. Use approval for any agent that reads mail from outside.
 
 Owner/admin verb (a terminal outside a K2 agent session), with one
 exception: an agent whose workspace may manage hosted mail may set it for

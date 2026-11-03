@@ -16,7 +16,7 @@ describe('Email sending control (per-workspace agent-send)', () => {
     const at = src.indexOf('function MailAgentSendControl')
     const body = src.slice(at, src.indexOf('ariaLabel="Agent email sending"', at))
     expect(body).toContain('mail-agent-send-on-warning')
-    expect(body).toContain('talked into sending that mail')
+    expect(body).toContain('talked into sending any mail it can read, with its attachments,')
     expect(body).toContain('Use approval for any agent that reads mail from')
   })
 

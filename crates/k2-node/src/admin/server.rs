@@ -236,6 +236,7 @@ pub const MAX_CONNS: usize = 32;
 pub fn serve(exec: &Executor, rule: &PeerRule, l: UnixListener, stop: &(dyn Fn() -> bool + Sync)) -> Result<(), String> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let live = AtomicUsize::new(0);
+    let mut backoff = crate::accept_backoff::AcceptBackoff::new("admin:");
     std::thread::scope(|scope| {
         loop {
             if stop() {
@@ -249,9 +250,17 @@ pub fn serve(exec: &Executor, rule: &PeerRule, l: UnixListener, stop: &(dyn Fn()
                 continue;
             }
             let s = match l.accept() {
-                Ok((s, _)) => s,
+                Ok((s, _)) => {
+                    backoff.on_accept();
+                    s
+                }
                 Err(e) => {
-                    crate::nlog!("admin: accept: {e}");
+                    // Out of descriptors the connection stays queued, so
+                    // `poll` is ready again at once: pause, don't spin.
+                    match backoff.on_error(&e) {
+                        Some(pause) => std::thread::sleep(pause),
+                        None => crate::nlog!("admin: accept: {e}"),
+                    }
                     continue;
                 }
             };

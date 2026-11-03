@@ -20,6 +20,7 @@
 // Server-only feature (Linux boxes); not shipped on personal Windows machines.
 #![cfg(unix)]
 
+pub mod accept_backoff;
 pub mod build;
 pub mod oci;
 pub mod peer;

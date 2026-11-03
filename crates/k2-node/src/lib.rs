@@ -8,6 +8,7 @@
 // until its Windows port (Phase 3: Job Objects instead of uids and cgroups).
 #![cfg(unix)]
 
+pub mod accept_backoff;
 pub mod admin;
 pub mod artifacts;
 pub mod cgroup;

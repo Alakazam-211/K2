@@ -1142,8 +1142,22 @@ pub fn serve(engine: Engine, socket: &Path) -> Result<(), String> {
     }
     let engine = std::sync::Arc::new(engine);
     let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut backoff = crate::accept_backoff::AcceptBackoff::new("k2-app-engine:");
     for c in l.incoming() {
-        let Ok(mut c) = c else { continue };
+        let mut c = match c {
+            Ok(c) => {
+                backoff.on_accept();
+                c
+            }
+            Err(e) => {
+                // Out of descriptors the connection stays queued and accept
+                // fails again at once: pause, don't spin.
+                if let Some(pause) = backoff.on_error(&e) {
+                    std::thread::sleep(pause);
+                }
+                continue;
+            }
+        };
         if active.load(std::sync::atomic::Ordering::SeqCst) >= 64 {
             answer(&mut c, &Answer::err(codes::IO, "busy"));
             continue;

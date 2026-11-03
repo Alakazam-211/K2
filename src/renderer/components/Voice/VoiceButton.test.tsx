@@ -74,6 +74,7 @@ vi.mock('@/stores/voice', async () => {
 
 import VoiceButton from './VoiceButton'
 import { voice } from '@/stores/voice'
+import { overlayClaims } from '@/lib/browser-overlay'
 
 function entry(hostKey: string, patch: Partial<HostEntry> = {}, features = ['voice-rooms-v1']): HostEntry {
   return {
@@ -129,6 +130,30 @@ describe('VoiceButton', () => {
     const { container } = render(<VoiceButton withPipe />)
     expect(screen.getByTestId('voice-button')).toBeTruthy()
     expect(container.querySelector('[data-top-bar-pipe]')).not.toBeNull()
+  })
+
+  it('the open list claims its own box over the Browser page, and the claim goes with the list', () => {
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    act(() => voice.recompute())
+    render(<VoiceButton />)
+    expect(overlayClaims()).toEqual([])
+
+    fireEvent.click(screen.getByTestId('voice-button'))
+    const popover = screen.getByTestId('voice-popover')
+    expect(overlayClaims().map((c) => [c.kind, c.element])).toEqual([['popover', popover]])
+
+    fireEvent.click(screen.getByTestId('voice-button'))
+    expect(overlayClaims()).toEqual([])
+
+    // The headset hides with the list still flagged open (the last voice
+    // server signed out): nothing may keep covering the page.
+    fireEvent.click(screen.getByTestId('voice-button'))
+    expect(overlayClaims()).toHaveLength(1)
+    h.entries = {}
+    act(() => voice.recompute())
+    expect(screen.queryByTestId('voice-popover')).toBeNull()
+    expect(voice.store.getState().popoverOpen).toBe(true)
+    expect(overlayClaims()).toEqual([])
   })
 
   it('lists This server first, then A to Z; occupied tooltip; join, the call on top, then leave', async () => {

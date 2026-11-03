@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import { HeadsetIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
-import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { anyVoiceServer } from '@/lib/voice/voice-servers'
 import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { headsetState } from './voice-labels'
@@ -34,9 +33,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
   const call = useVoice((s) => s.call)
   const open = useVoice((s) => s.popoverOpen)
   const rootRef = useRef<HTMLDivElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
   const [, setTick] = useState(0)
-  useBrowserOverlay({ active: open, ref: popoverRef, kind: 'popover' })
 
   const close = useCallback(() => voice.setPopoverOpen(false), [])
   useEffect(() => {
@@ -78,7 +75,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
         >
           <HeadsetIcon muted={look.look === 'in-call' && look.muted} live={look.look === 'occupied' || look.look === 'in-call'} />
         </button>
-        {open ? <VoicePopover ref={popoverRef} /> : null}
+        {open ? <VoicePopover /> : null}
       </div>
       {withPipe ? <TopBarPipe /> : null}
     </>

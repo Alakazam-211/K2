@@ -3,10 +3,11 @@
 // per signed-in server that reports rooms, "This server" first, then A to Z
 // (S5). Every action goes to THAT server with its own login.
 
-import { useEffect, useState, type Ref } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import type { PresenceRole } from '@/components/Presence/PresenceChip'
 import { roomFailureActions } from '@/components/Home/room/RoomFailure'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { useSettingsStore } from '@/stores/settings'
 import { useVoice, voice } from '@/stores/voice'
 import type { VoiceCall, ServerRooms } from '@/stores/voice-core'
@@ -272,7 +273,11 @@ function ServerSection({
   )
 }
 
-export default function VoicePopover({ ref }: { ref?: Ref<HTMLDivElement> }): React.JSX.Element {
+export default function VoicePopover(): React.JSX.Element {
+  // The list drops over the room, so it gives way over a live Browser page.
+  // The claim lives and dies with this box, not with the store's open flag.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref: rootRef, kind: 'popover' })
   const servers = useVoice((s) => s.servers)
   const rooms = useVoice((s) => s.rooms)
   const call = useVoice((s) => s.call)
@@ -294,7 +299,7 @@ export default function VoicePopover({ ref }: { ref?: Ref<HTMLDivElement> }): Re
 
   return (
     <div
-      ref={ref}
+      ref={rootRef}
       role="dialog"
       aria-label="Voice rooms"
       data-testid="voice-popover"

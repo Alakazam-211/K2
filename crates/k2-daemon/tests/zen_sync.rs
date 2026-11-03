@@ -839,8 +839,9 @@ fn gs51_news_catalog_updates_and_seen() {
     let news = f.news().expect("news");
     let ids: Vec<&str> = news["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str()).collect();
     // The Kanban is new catalog data in 0.45.7 (Rosson 2026-10-15), the
-    // Workbench in 0.46.7 (workbench-v1, Rosson 2026-10-29).
-    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban", "catalog:workbench"], "the first run lists the catalog: {news}");
+    // Workbench in 0.46.7 (workbench-v1, Rosson 2026-10-29), the Board in
+    // 0.46.8 (plan-board-garden-v1, Rosson 2026-11-01). By catalog order.
+    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban", "catalog:board", "catalog:workbench"], "the first run lists the catalog: {news}");
     assert_eq!(news["items"][0]["label"], "Diary");
     // The binary's newest Diary (k2.diary@2 since 0.45.2) is the one offered.
     assert_eq!(news["items"][0]["template"], zen::garden_catalog::DIARY_TEMPLATE_ID);
@@ -867,9 +868,10 @@ fn gs51_news_catalog_updates_and_seen() {
     let uid = update["id"].as_str().expect("id").to_string();
     f.news_seen(&[uid], false).expect("seen");
     let left: Vec<String> = f.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
-    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string(), "catalog:workbench".to_string()]);
+    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string(), "catalog:board".to_string(), "catalog:workbench".to_string()]);
     f.news_mark_template_seen("k2.diary@1").expect("made a Diary");
     f.news_mark_template_seen(zen::garden_catalog::KANBAN_TEMPLATE_ID).expect("made a Kanban");
+    f.news_mark_template_seen(zen::garden_catalog::BOARD_TEMPLATE_ID).expect("made a Board");
     f.news_mark_template_seen(WORKBENCH_TEMPLATE_ID).expect("made a Workbench");
     assert_eq!(f.news().expect("news")["items"], json!([]), "creating from the catalog marks it seen");
     assert!(f.news_seen(&["nonsense".into()], false).is_err(), "unknown id shapes are refused");
@@ -892,19 +894,33 @@ fn strip_0467(s: &mut DefaultsSet) {
     assert!(s.templates.remove(WORKBENCH_TEMPLATE_ID).is_some(), "this build ships the Workbench");
 }
 
+/// Take 0.46.8's Board out of a set: its catalog template.
+fn strip_0468(s: &mut DefaultsSet) {
+    assert!(s.templates.remove(zen::garden_catalog::BOARD_TEMPLATE_ID).is_some(), "this build ships the Board");
+}
+
+/// K2's catalog as 0.46.7 shipped it: this build's set without the Board.
+fn release_0467() -> Defaults {
+    fake_set(strip_0468)
+}
+
 /// K2's catalog as 0.46.6 (and every release from 0.45.7) shipped it: this
-/// build's set without the Workbench. Only the catalog differs; the
-/// release_* sets below model their releases' Garden 1, not the catalog.
+/// build's set without the Board or the Workbench. Only the catalog differs;
+/// the release_* sets below model their releases' Garden 1, not the catalog.
 fn release_0466() -> Defaults {
-    fake_set(strip_0467)
+    fake_set(|s| {
+        strip_0468(s);
+        strip_0467(s);
+    })
 }
 
 /// 0.45.7 (Rosson 2026-10-15): a computer that already saw the Diary
 /// (every 0.45.x one) gets the Kanban as one "New in the Garden catalog"
 /// item; making a Kanban Garden, or Seen, clears it. A fresh computer sees
 /// it as the catalog, not as new (GS38). The upgrade lands on a catalog of
-/// the Kanban's time (0.45.7 to 0.46.6, no Workbench); the Workbench's own
-/// step is `the_workbench_is_new_in_the_catalog_after_0466`.
+/// the Kanban's time (0.45.7 to 0.46.6, no Workbench or Board); their own
+/// steps are `the_workbench_is_new_in_the_catalog_after_0466` and
+/// `the_board_is_new_in_the_catalog_after_0467`.
 #[test]
 fn gs51_the_kanban_is_new_in_the_catalog() {
     let (_t, z) = temp_dir("news-kanban");
@@ -946,16 +962,16 @@ fn gs51_the_kanban_is_new_in_the_catalog() {
 /// computer sees it as the catalog, not as new (GS38).
 #[test]
 fn the_workbench_is_new_in_the_catalog_after_0466() {
-    // A computer set up on 0.46.6, then this build on the same folder.
+    // A computer set up on 0.46.6, then 0.46.7 on the same folder.
     let on_0466 = |tag: &str| {
         let (t, z) = temp_dir(tag);
         let old = ZenFiles::with_defaults(&z, release_0466());
         old.setup().expect("setup on 0.46.6");
         assert_eq!(old.news().expect("news on 0.46.6")["items"], json!([]), "0.46.6's catalog was seen at setup");
         assert!(old.read_news().catalog_seen.get("workbench").is_none(), "0.46.6 had no Workbench");
-        // This build's set (with_defaults replaces the folder's override
-        // and forgets the boot, as a daemon restart does).
-        (t, ZenFiles::with_defaults(&z, fake_set(|_| {})))
+        // 0.46.7's set (with_defaults replaces the folder's override and
+        // forgets the boot, as a daemon restart does).
+        (t, ZenFiles::with_defaults(&z, release_0467()))
     };
     let (_t, f) = on_0466("news-workbench");
     let news = f.news().expect("news after the upgrade");
@@ -988,6 +1004,54 @@ fn the_workbench_is_new_in_the_catalog_after_0466() {
     assert_eq!(fresh.news().expect("news")["items"], json!([]));
     assert_eq!(fresh.read_news().catalog_seen.get("workbench"), Some(&1));
     assert!(fresh.find_garden("Workbench").is_none(), "never preinstalled");
+}
+
+/// 0.46.8 (plan-board-garden-v1, Rosson 2026-11-01): a computer on 0.46.7,
+/// which already saw the rest of the catalog, gets the Board as one "New in
+/// the Garden catalog" item, whose description says it's a Beta that adding
+/// turns on. Making a Board Garden, or Seen, clears it. A fresh computer sees
+/// it as the catalog, not as new (GS38).
+#[test]
+fn the_board_is_new_in_the_catalog_after_0467() {
+    let on_0467 = |tag: &str| {
+        let (t, z) = temp_dir(tag);
+        let old = ZenFiles::with_defaults(&z, release_0467());
+        old.setup().expect("setup on 0.46.7");
+        assert_eq!(old.news().expect("news on 0.46.7")["items"], json!([]), "0.46.7's catalog was seen at setup");
+        assert!(old.read_news().catalog_seen.get("board").is_none(), "0.46.7 had no Board");
+        (t, ZenFiles::with_defaults(&z, fake_set(|_| {})))
+    };
+    let (_t, f) = on_0467("news-board");
+    let news = f.news().expect("news after the upgrade");
+    let items = news["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "only the Board is new, and no Garden moved: {news}");
+    let b = &items[0];
+    assert_eq!(b["kind"], "catalog");
+    assert_eq!(b["id"], "catalog:board");
+    assert_eq!(b["short"], "board");
+    assert_eq!(b["label"], "Board");
+    assert_eq!(b["template"], zen::garden_catalog::BOARD_TEMPLATE_ID);
+    assert_eq!(b["version"], 1);
+    assert!(b["description"].as_str().is_some_and(|d| d.contains("Beta: adding it turns on the Board core")), "{b}");
+    // Making a Board Garden marks it seen.
+    let g = f.new_garden("Board", Some("board"), None, None).expect("new Board");
+    assert_eq!(g.template, zen::garden_catalog::BOARD_TEMPLATE_ID);
+    assert_eq!(f.news().expect("news")["items"], json!([]), "made from the catalog: seen");
+    assert_eq!(f.read_news().catalog_seen.get("board"), Some(&1));
+
+    // Seen clears it too.
+    let (_t2, f2) = on_0467("news-board-seen");
+    f2.news_seen(&["catalog:board".into()], false).expect("seen");
+    assert_eq!(f2.news().expect("news")["items"], json!([]));
+    assert_eq!(f2.read_news().catalog_seen.get("board"), Some(&1));
+
+    // A fresh computer: the Board is part of the catalog it starts with.
+    let (_t3, z3) = temp_dir("news-board-fresh");
+    let fresh = ZenFiles::new(&z3);
+    fresh.setup().expect("setup");
+    assert_eq!(fresh.news().expect("news")["items"], json!([]));
+    assert_eq!(fresh.read_news().catalog_seen.get("board"), Some(&1));
+    assert!(fresh.find_garden("Board").is_none(), "never preinstalled");
 }
 
 /// 0.46.1 (Rosson 2026-10-18; GS21, GS45, never-revert): K2's default

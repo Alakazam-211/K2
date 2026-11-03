@@ -485,18 +485,119 @@ pub fn agent_scoped(
         // differently for an agent get its workspace.
         // The write marks the row it wrote, in its own transaction
         // (`skin::guest_rooms::written_by`), never a name from this body.
+        let before = write_apps(path, body, Some(ws));
         let r = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Agent(actor.to_string()), || match path {
             "/cli/skin/users/rooms" => users_rooms(body, actor, Some(ws)),
             "/cli/skin/users/password" => users_password(body, actor, Some(ws)),
             "/cli/skin/users/email" => users_email(body, actor, Some(ws)),
             _ => handler(body, actor),
         });
+        audit_write(path, body, actor, Some(ws), before, &r);
         if r.status.starts_with("200") && matches!(path, "/cli/skin/users/rooms" | "/cli/skin/roles/assign") {
             return with_waiting(r, body);
         }
         return r;
     }
-    skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || handler(body, actor))
+    let before = write_apps(path, body, None);
+    let r = skin::guest_rooms::written_by(skin::guest_rooms::WrittenBy::Owner, || handler(body, actor));
+    audit_write(path, body, actor, None, before, &r);
+    r
+}
+
+/// The line a write [`agent_scoped`] guards (and the add) leaves. Unlock and
+/// removal write their own lines, in their handlers.
+fn write_event(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "/cli/skin/users" => "app_user_added",
+        "/cli/skin/users/full-name" => "app_user_name_set",
+        "/cli/skin/users/password" => "app_user_password_set",
+        "/cli/skin/users/email" => "app_user_email_set",
+        "/cli/skin/users/rooms" => "app_user_rooms_changed",
+        "/cli/skin/roles/assign" => "app_user_role_assigned",
+        "/cli/skin/roles/unassign" => "app_user_role_unassigned",
+        "/cli/skin/roles" => "app_user_role_written",
+        "/cli/skin/roles/update" => "app_user_role_updated",
+        "/cli/skin/roles/room" => "app_user_role_room_changed",
+        "/cli/skin/roles/paths" => "app_user_role_folders_changed",
+        "/cli/skin/roles/remove" => "app_user_role_removed",
+        "/cli/skin/roles/from-template" => "app_user_role_from_template",
+        "/cli/skin-tokens" => "app_user_pass_minted",
+        "/cli/skin-tokens/rooms" => "app_user_pass_rooms_changed",
+        "/cli/skin-tokens/revoke" => "app_user_pass_revoked",
+        _ => return None,
+    })
+}
+
+/// What a write's line may say, by name: who, which role, which rooms and caps.
+/// Never a password or a token: what isn't listed here isn't written.
+const WRITE_AUDIT_FIELDS: &[&str] = &[
+    "username", "name", "id", "role", "roleId", "role_id", "app", "appId", "handle", "room", "workspace", "rooms", "agents",
+    "caps", "roomAccess", "scope", "read", "write", "upload", "download", "clear", "template", "from", "email", "generate",
+    "fullName", "full_name", "tokenId", "token_id",
+];
+
+/// The Apps a write on `body` touches: the one it names, its role's, its login's.
+/// An agent's only ever its own workspace's. Read before the write as well as
+/// after it: a removed role has no App afterwards, a new login none before.
+fn write_apps(path: &str, body: &[u8], ws: Option<&str>) -> Vec<String> {
+    if write_event(path).is_none() {
+        return Vec::new();
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else { return Vec::new() };
+    let mut apps: Vec<String> = Vec::new();
+    if let Some(app) = str_field(&v, &["app", "appId"]).and_then(|a| resolve_app_target(a).ok()) {
+        apps.push(app);
+    }
+    if path.starts_with("/cli/skin/roles") {
+        for key in ["role", "id", "name"] {
+            let Some(token) = v.get(key).and_then(|x| x.as_str()) else { continue };
+            if let Ok(Some(role)) = skin::find_role(token) {
+                apps.extend(role.app_id);
+                break;
+            }
+        }
+    }
+    if path.starts_with("/cli/skin/users") || matches!(path, "/cli/skin/roles/assign" | "/cli/skin/roles/unassign") {
+        if let Some(Ok(Some(p))) = str_field(&v, &["username", "name"]).map(principal_named) {
+            apps.extend(apps_of_principal(&p.id));
+        }
+    }
+    apps.retain(|a| a != skin::HOST_APP_ID && ws.is_none_or(|w| app_of_workspace(a, w)));
+    apps
+}
+
+/// A successful write's line: `auth_audit`, and the record of each App it touched
+/// (`k2 app history <app> --users`). A write that names no App (a box-wide role, a
+/// platform pass of the workspace) goes on the record of each of the agent's Apps,
+/// which it reaches through their logins.
+fn audit_write(path: &str, body: &[u8], actor: &str, ws: Option<&str>, before: Vec<String>, r: &CliResponse) {
+    if !r.status.starts_with("200") {
+        return;
+    }
+    let Some(event) = write_event(path) else { return };
+    let mut apps = before;
+    apps.extend(write_apps(path, body, ws));
+    if let (true, Some(ws)) = (apps.is_empty(), ws) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        apps.extend(k2_core::published_services::list_for_project(&conn, ws).unwrap_or_default().into_iter().map(|s| s.id));
+    }
+    apps.sort();
+    apps.dedup();
+    let v = serde_json::from_slice::<serde_json::Value>(body).unwrap_or(serde_json::Value::Null);
+    let mut line = serde_json::Map::new();
+    line.insert("route".to_string(), serde_json::json!(path));
+    for key in WRITE_AUDIT_FIELDS {
+        if let Some(x) = v.get(*key).filter(|x| !x.is_null()) {
+            line.insert((*key).to_string(), x.clone());
+        }
+    }
+    if v.get("password").is_some() {
+        line.insert("passwordSet".to_string(), serde_json::json!(true));
+    }
+    let payload = serde_json::Value::Object(line);
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, actor, payload.to_string(), "-", "-", "cli"));
+    note_user_event_on(&apps, event, actor, payload);
 }
 
 /// What a tied login's App grant names that the tie holds back, as handles
@@ -1214,14 +1315,18 @@ fn login_app_is_live(app: &str) -> bool {
 /// The guest's creator stamp (`skin::creators`) is written in the same
 /// transaction as the guest and its grant. The owner's path is unchanged.
 pub fn handle_users_post_as(agent_ws: Option<&str>, body: &[u8], actor: &str) -> CliResponse {
-    users_post(body, actor, agent_ws)
+    let r = users_post(body, actor, agent_ws);
+    audit_write("/cli/skin/users", body, actor, agent_ws, Vec::new(), &r);
+    r
 }
 
 /// The owner's `POST /cli/skin/users` (no agent workspace). An agent
 /// actor that reaches it without the scoped gate never names an App and
 /// never gets a box login.
 pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
-    users_post(body, actor, None)
+    let r = users_post(body, actor, None);
+    audit_write("/cli/skin/users", body, actor, None, Vec::new(), &r);
+    r
 }
 
 fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {

@@ -588,6 +588,113 @@ async fn an_agent_holding_the_temp_password_can_release_the_tie_itself() {
     assert_eq!(release_lines(&u).len(), 1, "it shows in the audit log like any other");
 }
 
+/// The App's own record of its people (`k2 app history <app> --users`), newest first.
+async fn people_record(port: u16, agent: &str, app_name: &str) -> Vec<Value> {
+    let r = get(port, "/cli/app/history", agent, &format!("app={app_name}&users=1&limit=200")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    r.json()["audit"].as_array().expect("rows").clone()
+}
+
+fn line_named<'a>(rows: &'a [Value], event: &str) -> &'a Value {
+    rows.iter().find(|x| x["event"] == event).unwrap_or_else(|| panic!("no {event} in {rows:?}"))
+}
+
+/// The most powerful things an agent does to an App's people leave a line, with
+/// the route, role, room and caps, and never a password.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_write_on_an_apps_people_leaves_a_line_and_never_a_password() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let (shop, agent) = (b.shop.clone(), b.agent.clone());
+    let (added_pw, set_pw) = (format!("added-secret-{t}"), format!("set-secret-{t}"));
+
+    let role = format!("mine{t}");
+    let caps = json!(["thread:read", "files:write", "files:agentconfig"]);
+    let r = post(port, "/cli/skin/roles", &agent, json!({ "name": role, "app": shop, "roomAccess": [{ "handle": b.ops.handle, "caps": caps }] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/room", &agent, json!({ "name": role, "handle": b.desk.handle, "caps": ["thread:read"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": b.desk.handle, "read": ["public"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let tmpl = format!("tmpl{t}");
+    let r = post(port, "/cli/skin/roles/from-template", &agent, json!({ "template": "client", "app": shop, "name": tmpl })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/remove", &agent, json!({ "name": tmpl })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "password": added_pw })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/assign", &agent, json!({ "username": u, "role": role })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/roles/unassign", &agent, json!({ "username": u })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": u, "app": shop, "rooms": [b.ops.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u, "email": format!("{u}@example.test") })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": u, "password": set_pw })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": u, "generate": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let generated = r.json()["generatedPassword"].as_str().expect("shown once").to_string();
+
+    let rows = people_record(port, &agent, &b.shop_name).await;
+    for event in [
+        "app_user_role_written",
+        "app_user_role_room_changed",
+        "app_user_role_folders_changed",
+        "app_user_role_from_template",
+        "app_user_role_removed",
+        "app_user_added",
+        "app_user_role_assigned",
+        "app_user_role_unassigned",
+        "app_user_rooms_changed",
+        "app_user_email_set",
+        "app_user_password_set",
+    ] {
+        let row = line_named(&rows, event);
+        assert!(row["actor"].as_str().unwrap().contains(&b.sales.handle), "who: {row}");
+        assert!(row["payload"]["route"].as_str().unwrap().starts_with("/cli/skin/"), "the route: {row}");
+    }
+    let written = line_named(&rows, "app_user_role_written");
+    assert_eq!(written["payload"]["roomAccess"][0]["caps"], caps, "the caps: {written}");
+    assert_eq!(written["payload"]["roomAccess"][0]["handle"], json!(b.ops.handle), "the room: {written}");
+    let rooms = line_named(&rows, "app_user_rooms_changed");
+    assert_eq!(rooms["payload"]["rooms"], json!([b.ops.handle]), "the rooms: {rooms}");
+    assert_eq!(rooms["payload"]["username"], json!(u), "{rooms}");
+    let assigned = line_named(&rows, "app_user_role_assigned");
+    assert_eq!(assigned["payload"]["role"], json!(role), "the role: {assigned}");
+    assert_eq!(line_named(&rows, "app_user_role_removed")["payload"]["name"], json!(tmpl), "a removed role's App still gets the line");
+
+    // Never the password, in the record or the audit log; it does say one was set.
+    assert_eq!(line_named(&rows, "app_user_added")["payload"]["passwordSet"], json!(true));
+    let record = serde_json::to_string(&rows).unwrap();
+    let log = serde_json::to_string(&k2_core::auth_audit::read_all().unwrap()).unwrap();
+    for secret in [&added_pw, &set_pw, &generated] {
+        assert!(!record.contains(secret.as_str()), "the record never holds a password");
+        assert!(!log.contains(secret.as_str()), "the audit log never holds a password");
+    }
+    for event in ["app_user_role_written", "app_user_added", "app_user_rooms_changed", "app_user_password_set"] {
+        assert!(log.contains(event), "{event} in the audit log");
+    }
+
+    // An owner's `k2 app user rooms` shows too: the record is the App's, not the agent's.
+    let n = rows.iter().filter(|x| x["event"] == "app_user_rooms_changed").count();
+    let r = post(port, "/cli/skin/users/rooms", OWNER, json!({ "username": u, "app": shop, "rooms": [b.desk.handle] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = people_record(port, &agent, &b.shop_name).await;
+    assert_eq!(rows.iter().filter(|x| x["event"] == "app_user_rooms_changed").count(), n + 1);
+
+    // A refused write leaves nothing.
+    let n = rows.len();
+    let r = post(port, "/cli/skin/users/rooms", &agent, json!({ "username": "nobody-here", "app": shop, "rooms": [] })).await;
+    assert_ne!(r.status, 200, "{}", r.body);
+    assert_eq!(people_record(port, &agent, &b.shop_name).await.len(), n);
+}
+
 /// While the owner's reset is live it's the only way out of a tie: the App's reset
 /// is already refused, and an invite link or a temporary password don't release
 /// either. Using the owner's link does.

@@ -55,34 +55,26 @@
 #   soft-fails unless K2_REQUIRE_WINDOWS_NSIS=1.
 #   See scripts/windows-nsis-build.sh + wiki "Ops - Windows Build Box".
 #
-# Arch/Omarchy pacman (Step 9) — not built on this Mac. An Arch host runs
-#   packaging/arch/build-release-pkg.sh. Copy
-#   dist/k2-<version>-x86_64.pkg.tar.zst into $DIST_DIR
-#   (target/release/daemon-dist) before this script. Missing file is FATAL
-#   (no silent skip, no .sig). Do not add a Linux GUI key to latest.json
-#   or daemon-latest.json. AUR and pkgs.omarchy.org are out of scope.
-#
-# Arch build gate (Step 1.6 start, Step 7.9 wait) — scripts/arch-build-gate.sh.
-#   After the version bump, a preview of the release commit (HEAD + the
-#   bumped files Step 8.9 commits) is built on the k2-arch runner by
-#   arch-package.yml with upload=false, in the background while the Mac
-#   builds. Before Step 8 the release waits for it (45 min from dispatch,
-#   K2_ARCH_GATE_TIMEOUT_MIN) and stops on failure. No tag, no release.
-#   This uses k2-arch (40.160.54.134), which Sew shares. Before running:
-#     - send Sew `HOLD k2-arch` (this script does not message Sew);
-#     - the gate writes /var/tmp/k2-release.lock on k2-arch itself over
-#       ssh k2-ci@40.160.54.134 and removes it when the gate ends, pass or
-#       fail. A lock that was already there is left alone.
-#   After the post-tag arch-package run succeeds, send Sew `k2-arch clear`.
-#   Escape: K2_SKIP_ARCH_GATE=1 (loud). Arch breaks then surface only
-#   after the tag, which is what sank 0.41.6 and 0.43.0.
+# Arch/Omarchy pacman — not built on this Mac and not waited on before the
+#   tag. The tag push starts arch-package.yml on the k2-arch runner, alongside
+#   app-linux.yml and daemon-binaries.yml; it builds
+#   k2-<version>-x86_64.pkg.tar.zst and uploads it. Step 9 attaches the file
+#   only if one is already in $DIST_DIR. No .sig. Do not add a Linux GUI key
+#   to latest.json or daemon-latest.json. AUR and pkgs.omarchy.org are out of
+#   scope. A build break shows up after the release is live; Step 10.6 says
+#   so and how to re-run it (scripts/lib/linux-sums-step.sh).
+#   k2-arch (40.160.54.134) is shared with Sew: send Sew `HOLD k2-arch` before
+#   the tag (this script does not message Sew) and `k2-arch clear` after the
+#   arch-package run ends.
 #
 # Linux SHA256SUMS (Step 10.6) — scripts/linux-sums.sh check. After the
 #   tag, app-linux.yml and arch-package.yml each merge their packages'
 #   lines into the release's SHA256SUMS-linux-x86_64.txt. Step 10.6 waits
 #   (K2_LINUX_SUMS_WAIT_MIN, default 120) until all four Linux packages and
 #   their lines are up and match GitHub's asset digests, else the release
-#   ends with exit 1 and a re-run line. Escape: K2_SKIP_LINUX_SUMS_CHECK=1.
+#   ends with exit 1 and a re-run line. A failed Arch build is reported as
+#   soon as it fails and not waited for; the rest is still checked, and the
+#   script still ends with exit 1. Escape: K2_SKIP_LINUX_SUMS_CHECK=1.
 #
 # Linux builds on K2 Compute (plan-ci-release-on-k2-compute-v1), switch
 #   K2_LINUX_BUILDS:
@@ -155,7 +147,7 @@ fi
 source "$(cd "$(dirname "$0")" && pwd)/release-lock.sh"
 if [ "$(uname -s)" = "Darwin" ]; then
     k2_release_lock_acquire "$VERSION"
-    # The Arch gate trap (below) replaces this one and also releases.
+    # The later EXIT trap (below) replaces this one and also releases.
     trap 'k2_release_lock_release' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -224,6 +216,9 @@ source "$PROJECT_DIR/scripts/lib/compute-release.sh"
 # Wait loops: one line, then dots, a status line every few minutes.
 # shellcheck source=scripts/lib/wait-progress.sh
 source "$PROJECT_DIR/scripts/lib/wait-progress.sh"
+# Step 10.6: the Linux SHA256SUMS check, and saying so when Arch fails.
+# shellcheck source=scripts/lib/linux-sums-step.sh
+source "$PROJECT_DIR/scripts/lib/linux-sums-step.sh"
 # Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
@@ -279,8 +274,8 @@ if [ "$SKIP_BUILD" = 1 ]; then
     echo "K2_RELEASE_RESUME=${K2_RELEASE_RESUME} — skipping build/sign/notarize; using $DMG_RESUME"
 fi
 
-# The files Step 8.9 commits as the release commit. The Arch gate builds
-# HEAD plus these same files, so it builds what will be tagged.
+# The files Step 8.9 commits as the release commit. The shadow compute builds
+# use HEAD plus these same files, so they build what will be tagged.
 RELEASE_COMMIT_FILES=(
     package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock
     src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml
@@ -288,19 +283,12 @@ RELEASE_COMMIT_FILES=(
     WHATS_NEW.md
 )
 
-# ── Arch build gate helpers (see header; scripts/arch-build-gate.sh) ──
-ARCH_GATE_PID=""
-ARCH_GATE_RC=""
-ARCH_GATE_LOG="/tmp/k2-arch-gate-${VERSION}.log"
-
 # A commit object for the release commit without touching HEAD or the
 # real index: HEAD's tree plus the working-tree copies of
-# RELEASE_COMMIT_FILES. Cargo.lock may still carry the old workspace
-# versions here (Step 2 rewrites it); the Arch build does not use
-# --locked, so cargo updates it on the runner the same way.
+# RELEASE_COMMIT_FILES. The shadow compute builds use it.
 k2_release_preview_commit() {
     local tmpd tree
-    tmpd="$(mktemp -d -t k2-arch-gate)"
+    tmpd="$(mktemp -d -t k2-release-preview)"
     GIT_INDEX_FILE="$tmpd/index" git read-tree HEAD
     GIT_INDEX_FILE="$tmpd/index" git add -- "${RELEASE_COMMIT_FILES[@]}"
     tree="$(GIT_INDEX_FILE="$tmpd/index" git write-tree)"
@@ -410,83 +398,10 @@ k2_shadow_report() {
     return 0
 }
 
-k2_arch_gate_start() {
-    local commit
-    if [ "${K2_SKIP_ARCH_GATE:-0}" = "1" ]; then
-        echo "  ⚠⚠ ARCH BUILD GATE SKIPPED (K2_SKIP_ARCH_GATE=1) ⚠⚠"
-        echo "  An Arch packaging break will not surface until arch-package.yml"
-        echo "  runs on the pushed tag, after the release is live."
-        ARCH_GATE_RC=0
-        return 0
-    fi
-    commit="$(cd "$PROJECT_DIR" && k2_release_preview_commit)"
-    echo "  Release preview commit ${commit:0:12}. Building on k2-arch in the background."
-    echo "  Did you send Sew 'HOLD k2-arch'? The gate writes /var/tmp/k2-release.lock itself."
-    echo "  Log: ${ARCH_GATE_LOG}"
-    # exec: $! is the gate itself, so the exit trap's TERM reaches its trap.
-    (cd "$PROJECT_DIR" && exec "$PROJECT_DIR/scripts/arch-build-gate.sh" "$commit" "$TAG") \
-        >"$ARCH_GATE_LOG" 2>&1 &
-    ARCH_GATE_PID=$!
-}
-
-k2_arch_gate_report() {
-    echo "  ── Arch build gate log (${ARCH_GATE_LOG}) ──"
-    sed 's/^/  │ /' "$ARCH_GATE_LOG"
-    if [ "$ARCH_GATE_RC" -ne 0 ]; then
-        echo "" >&2
-        echo "  FATAL: Arch build gate failed (rc=${ARCH_GATE_RC}). Release stopped before tagging." >&2
-        echo "  FATAL: nothing was committed, tagged or published. Fix the Arch build, or" >&2
-        echo "  FATAL: re-run with K2_SKIP_ARCH_GATE=1 to ship and find out after the tag." >&2
-        exit 1
-    fi
-    echo "  Arch build gate passed."
-}
-
-# Non-blocking: stop the release early if the gate already failed, before
-# spending a notarization round-trip.
-k2_arch_gate_check() {
-    [ -n "$ARCH_GATE_PID" ] || return 0
-    if kill -0 "$ARCH_GATE_PID" 2>/dev/null; then
-        echo "  (Arch build gate still running in the background: ${ARCH_GATE_LOG})"
-        return 0
-    fi
-    ARCH_GATE_RC=0
-    wait "$ARCH_GATE_PID" || ARCH_GATE_RC=$?
-    ARCH_GATE_PID=""
-    k2_arch_gate_report
-}
-
-# Blocking. Starts the gate first if it never started (K2_RELEASE_RESUME).
-k2_arch_gate_wait() {
-    if [ -z "$ARCH_GATE_PID" ] && [ -z "$ARCH_GATE_RC" ]; then
-        echo "  Arch build gate did not run earlier (resume); running it now."
-        k2_arch_gate_start
-    fi
-    if [ -n "$ARCH_GATE_PID" ]; then
-        echo "  Waiting for the Arch build gate (pid ${ARCH_GATE_PID})..."
-        ARCH_GATE_RC=0
-        wait "$ARCH_GATE_PID" || ARCH_GATE_RC=$?
-        ARCH_GATE_PID=""
-        k2_arch_gate_report
-    elif [ "$ARCH_GATE_RC" != 0 ]; then
-        k2_arch_gate_report
-    fi
-}
-
-# If release.sh dies while the gate runs, TERM it: its own trap cancels
-# the GitHub run, deletes the throwaway branch and removes the k2-arch lock.
+# EXIT trap: stop shadow jobs nobody will read and drop the release lock.
+# (The name is left over from the pre-tag Arch gate.)
 k2_arch_gate_on_exit() {
     local rc=$?
-    if [ -n "$ARCH_GATE_PID" ] && kill -0 "$ARCH_GATE_PID" 2>/dev/null; then
-        echo "Stopping the Arch build gate (pid ${ARCH_GATE_PID}): cancel run, drop k2-arch lock..." >&2
-        kill -TERM "$ARCH_GATE_PID"
-        local gate_rc=0
-        wait "$ARCH_GATE_PID" || gate_rc=$?
-        echo "  Arch build gate stopped (rc=${gate_rc}). Log: ${ARCH_GATE_LOG}" >&2
-        if [ -f "$ARCH_GATE_LOG" ]; then
-            tail -n 8 "$ARCH_GATE_LOG" >&2
-        fi
-    fi
     if [ "$K2_LINUX_BUILDS" = "shadow" ]; then
         k2cr_cancel_open || true
     fi
@@ -661,16 +576,8 @@ if ! grep -qE "^## ${VERSION//./\\.} " WHATS_NEW.md; then
 fi
 echo "  Found '## ${VERSION}' entry. OK to proceed."
 
-# ── Step 1.6: Arch build gate on k2-arch (background) ──
-# Runs while the Mac builds, signs and notarizes. Checked (non-blocking)
-# before each notarization and waited on at Step 7.9, before anything is
-# published or tagged. See the header and scripts/arch-build-gate.sh.
-echo ""
-echo "Step 1.6: Arch build gate (k2-arch, background)..."
-# Shadow compute builds first: their Cargo.lock refresh is part of the
-# release preview commit the Arch gate builds too.
+# ── Step 1.6c: Linux builds on K2 Compute (shadow only, background) ──
 k2_shadow_start
-k2_arch_gate_start
 
 # ── Step 2: Build K2.app + every sidecar binary ──
 #
@@ -798,7 +705,6 @@ fi
 
 # ── Step 4: Notarize app via ZIP ──
 echo ""
-k2_arch_gate_check
 echo "Step 4: Notarizing app..."
 cd target/release/bundle/macos
 ditto -c -k --keepParent "K2.app" "/tmp/K2_${VERSION}.zip"
@@ -880,7 +786,6 @@ codesign --force --timestamp \
 
 # ── Step 7: Notarize DMG ──
 echo ""
-k2_arch_gate_check
 echo "Step 7: Notarizing DMG..."
 xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
     "${NOTARY_AUTH[@]}" --wait
@@ -901,13 +806,7 @@ echo "Step 7.5: Clean-VM new-user pairing smoke..."
   "$VERSION"
 fi # SKIP_SMOKE
 
-# ── Step 7.9: Wait for the Arch build gate ──
-# Last stop before anything leaves this Mac: Step 8.6 publishes to R2 and
-# Step 8.9 pushes main + the tag. A failed or timed-out Arch build stops
-# the release here. On a K2_RELEASE_RESUME run the gate starts now.
-echo ""
-echo "Step 7.9: Arch build gate result..."
-k2_arch_gate_wait
+# ── Step 7.9c: Collect the shadow compute builds ──
 k2_shadow_collect
 
 # ── Step 8: Generate latest.json ──
@@ -1435,17 +1334,21 @@ fi
 # merge their lines into SHA256SUMS-linux-x86_64.txt after the tag. The
 # desktop updater refuses a Linux package with no line (v0.46.0 shipped
 # without the Arch line). Waits for both workflows, then checks each line
-# against GitHub's own asset digest. Re-run by hand:
+# against GitHub's own asset digest. The release is already live here. If
+# arch-package.yml fails, this says so at once and stops waiting for that
+# package; deb, rpm and AppImage are still checked. Re-run by hand:
 #   bash scripts/linux-sums.sh check ${VERSION} --wait-min 60
 LINUX_SUMS_FAILED=""
+ARCH_PKG_FAILED=""
+ARCH_PKG_RUN_URL=""
 if [ "${K2_SKIP_LINUX_SUMS_CHECK:-0}" = "1" ]; then
     echo ""
     echo "  ⚠⚠ LINUX SHA256SUMS CHECK SKIPPED (K2_SKIP_LINUX_SUMS_CHECK=1) ⚠⚠"
 else
     echo ""
-    echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (waits for app-linux + arch-package)..."
-    if ! bash "$PROJECT_DIR/scripts/linux-sums.sh" check "${VERSION}" --wait-min "${K2_LINUX_SUMS_WAIT_MIN:-120}"; then
-        LINUX_SUMS_FAILED=1
+    echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (waits for app-linux + arch-package; a failed Arch build is reported, not waited for)..."
+    k2_linux_sums_step "${VERSION}" "${K2_LINUX_SUMS_WAIT_MIN:-120}"
+    if [ -n "$LINUX_SUMS_FAILED" ]; then
         echo "  ✗ Linux SHA256SUMS incomplete or wrong — re-run: bash scripts/linux-sums.sh check ${VERSION} --wait-min 60" >&2
     fi
 fi
@@ -1464,5 +1367,6 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"
 [ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
 [ -n "$LINUX_SUMS_FAILED" ] && echo "  ⚠  LINUX SHA256SUMS INCOMPLETE — bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
+[ -n "$ARCH_PKG_FAILED" ] && echo "  ⚠  ARCH PACKAGE NOT PUBLISHED, THE ARCH BUILD FAILED (the release itself is live; Step 10.6 above has the re-run) — ${ARCH_PKG_RUN_URL}"
 echo "═══════════════════════════════════════════════════"
-[ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1
+[ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] && [ -z "$ARCH_PKG_FAILED" ] || exit 1

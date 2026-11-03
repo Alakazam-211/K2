@@ -41,8 +41,8 @@ part_web() {
     step "Arch/Omarchy packaging lock";            bash tests/packaging/arch-omarchy-bundle.sh
     step "Arch PKGBUILD sources, sums, syntax";    bash scripts/check-arch-pkgbuild.sh
     step "Arch PKGBUILD check on broken fixtures"; bash tests/packaging/check-arch-pkgbuild.sh
-    step "Arch build gate script (stubbed)";       bash tests/packaging/arch-build-gate.sh
     step "Linux SHA256SUMS (stubbed)";             bash tests/packaging/linux-sums.sh
+    step "Step 10.6, failed Arch build (stubbed)"; bash tests/packaging/linux-sums-step.sh
     step "Release lock (stub k2-node)";            bash tests/packaging/release-lock.sh
     step "Release k2-ptyd checks (dry)";           bash tests/packaging/release-ptyd-checks.sh
     step "Linux builds on K2 Compute (stubbed)";   bash tests/packaging/compute-release.sh

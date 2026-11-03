@@ -136,9 +136,9 @@ grep -q 'source "$(cd "$(dirname "$0")" && pwd)/release-lock.sh"' "$RS" \
     && grep -q "trap 'k2_release_lock_release' EXIT" "$RS" \
     && grep -q '^    k2_release_wait_node_idle$' "$RS" \
     && pass "release.sh takes the lock and waits for the node" || fail "release.sh wiring" "missing lines"
-# The Arch gate's EXIT trap replaces the early one, so it must release too.
+# release.sh's later EXIT trap replaces the early one, so it must release too.
 awk '/^k2_arch_gate_on_exit\(\) \{/,/^\}/' "$RS" | grep -q 'k2_release_lock_release' \
-    && pass "the Arch gate exit trap also releases the lock" || fail "arch gate trap releases" "not found"
+    && pass "the later exit trap also releases the lock" || fail "exit trap releases" "not found"
 # The lock comes before any build step.
 lock_line="$(grep -n 'k2_release_lock_acquire "$VERSION"' "$RS" | cut -d: -f1)"
 cargo_line="$(grep -n 'command -v cargo' "$RS" | head -1 | cut -d: -f1)"

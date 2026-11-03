@@ -5,11 +5,11 @@
 # packaging/arch/build-release-pkg.sh and uploads
 # k2-<version>-x86_64.pkg.tar.zst onto that GitHub release.
 #
-# Pre-tag gate: release.sh (scripts/arch-build-gate.sh) dispatches this
-# with upload=false, ref=<release commit> and a gate_id. That run builds
-# the same package and keeps it only as a short-lived workflow artifact.
-# It never touches a release. gate_id goes into run-name so the script
-# can find the run it started.
+# This is the only Arch build in a release: it runs alongside the other
+# tag workflows and release.sh does not wait for it before the tag. A failed
+# run shows up at release.sh Step 10.6, after the release is live. Re-run it,
+# or dispatch it by hand with tag=<tag>, ref=<fix>. upload=false builds
+# without touching a release and keeps the package as a workflow artifact.
 #
 # runs-on includes k2-arch and must not include k2-linux. The Ubuntu ship
 # runner also has self-hosted + Linux + X64. The extra label is what keeps
@@ -23,8 +23,6 @@
 # No .sig. Do not pacman -U. Do not add a Linux GUI key to latest.json.
 
 name: arch-package
-
-run-name: ${{ inputs.gate_id && format('arch-package gate {0}', inputs.gate_id) || format('arch-package {0}', github.ref_name) }}
 
 on:
   push:
@@ -41,14 +39,10 @@ on:
         required: false
         default: ""
       upload:
-        description: "Upload the package to the release. false = build only and keep it as a workflow artifact (release.sh pre-tag gate)."
+        description: "Upload the package to the release. false = build only and keep it as a workflow artifact."
         type: boolean
         required: false
         default: true
-      gate_id:
-        description: "Set by release.sh so it can find this run. Leave empty by hand."
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -144,13 +138,13 @@ jobs:
           K2_RELEASE_REPO: ${{ github.repository }}
         run: scripts/linux-sums.sh wait "$IN_TAG" 150
 
-      # Gate build: keep the package for a day so a human can pull it with
+      # Build only: keep the package for a day so a human can pull it with
       # `gh run download`. Never a release asset.
-      - name: Keep as a workflow artifact (gate build, no release)
+      - name: Keep as a workflow artifact (build only, no release)
         if: github.event_name == 'workflow_dispatch' && !inputs.upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: arch-package-gate
+          name: arch-package-build
           path: ${{ env.PKG_PATH }}
           retention-days: 1
           if-no-files-found: error

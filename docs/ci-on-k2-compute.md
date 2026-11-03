@@ -97,7 +97,7 @@ and `logs/<sha>.log`. Nothing goes in `~/.k2`.
 What shadow mode does:
 
 - **Step 1.6c:** refreshes Cargo.lock's workspace versions, makes the
-  release commit C (the same preview commit the Arch gate builds), and
+  release commit C (a preview of the commit Step 8.9 makes), and
   submits two jobs with `--sha C --gate --detach --artifact 'dist/*'`:
   - L1 `scripts/ci/build-linux-bins.sh x86_64` on k2n4-vin;
   - L3 `scripts/ci/build-linux-app.sh` on k2n5-vin.

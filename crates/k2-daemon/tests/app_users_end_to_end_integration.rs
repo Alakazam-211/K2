@@ -588,6 +588,59 @@ async fn an_agent_holding_the_temp_password_can_release_the_tie_itself() {
     assert_eq!(release_lines(&u).len(), 1, "it shows in the audit log like any other");
 }
 
+/// While the owner's reset is live it's the only way out of a tie: the App's reset
+/// is already refused, and an invite link or a temporary password don't release
+/// either. Using the owner's link does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_owners_reset_holds_the_tie_through_every_door() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let (shop, agent) = (b.shop.clone(), b.agent.clone());
+
+    // The temporary password's door.
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u, "app": shop, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": u, "app": shop, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let owners = r.json()["link"].as_str().expect("the link").split('#').nth(1).expect("the token").to_string();
+    person_chooses(port, &u, TEMP, &shop, PW).await;
+    assert!(tie_of(&u).is_some(), "the temporary password's door doesn't release while the owner's reset is live");
+    assert!(release_lines(&u).is_empty());
+
+    // The owner's link still does.
+    assert_eq!(use_link(port, &owners, "chosen-by-them-33").await.status, 200);
+    assert!(tie_of(&u).is_none(), "the owner's reset unties");
+    assert_eq!(release_lines(&u).len(), 1);
+
+    // The invite link's door, then the door opens once the owner's is gone.
+    let v = format!("v{t}");
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": v, "app": shop, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pid = principal_id(&v);
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": v, "app": shop, "code": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mint = |purpose: &str| {
+        k2_core::skin::invites::mint(&pid, &shop, purpose, 3600, Some("x@example.test"), false, None, "test")
+            .expect("a link")
+            .token
+    };
+    // An invite never voids the owner's reset, so it can sit beside it.
+    let first = mint(k2_core::skin::invites::PURPOSE_INVITE);
+    assert_eq!(use_link(port, &first, "chose-this-one-44").await.status, 200);
+    assert!(tie_of(&v).is_some(), "the invite link's door doesn't release while the owner's reset is live");
+    assert!(release_lines(&v).is_empty());
+    let r = post(port, "/cli/skin/users/reset-link", OWNER, json!({ "username": v, "app": shop, "revoke": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["revoked"], json!(1), "{}", r.body);
+    let again = mint(k2_core::skin::invites::PURPOSE_RESET);
+    assert_eq!(use_link(port, &again, "chose-this-one-55").await.status, 200);
+    assert!(tie_of(&v).is_none(), "with the owner's reset gone, the person's choice releases");
+}
+
 /// A password that opens K2 itself never comes free through an App's page, an
 /// agent's own login stays the agent's, and an owner's untied person isn't tied
 /// by using the App's link.

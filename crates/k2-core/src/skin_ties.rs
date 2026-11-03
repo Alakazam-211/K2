@@ -29,6 +29,10 @@
 //! agent that made a temporary password can take the first-password step
 //! itself). The audit line says so.
 //!
+//! **What holds it.** While the owner's reset is live it's the only way out:
+//! the App's reset is refused, and an invite link or a temporary password set the
+//! password without releasing.
+//!
 //! **What doesn't release.** A login holding a box login (a password that opens
 //! K2 itself never comes free through an App's page; a link's use still ties
 //! them, and only the owner's reset lifts it), an agent's own login (the owner's
@@ -473,12 +477,15 @@ pub(super) fn has_box_login_conn(conn: &Connection, principal_id: &str) -> Resul
 /// The person chose their own password through an App's flow, inside the
 /// caller's transaction: the tie goes (see the module's **Release**), unless
 /// this login is one a person's choice can't free: a box login, an agent's own
-/// login, an agent's test guest. `None`: nothing was released.
+/// login, an agent's test guest; or the owner's reset is live, which stays the one
+/// way out until it is used or runs out, whichever door the agent could open
+/// meanwhile (an invite link, a temporary password). `None`: nothing was released.
 pub(super) fn release_by_person_conn(conn: &Connection, principal_id: &str, via: &'static str) -> Result<Option<Released>, String> {
     let Some(tie) = get_conn(conn, principal_id)? else { return Ok(None) };
     if tie.reasons.iter().any(|r| r == REASON_AGENT_LOGIN)
         || has_box_login_conn(conn, principal_id)?
         || super::test_guests::get_conn(conn, principal_id)?.is_some()
+        || super::invites::owner_reset_live_conn(conn, principal_id, now_secs())?
     {
         return Ok(None);
     }

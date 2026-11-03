@@ -540,7 +540,7 @@ pub fn void_for_app(principal_id: &str, app: &str, owners_too: bool) -> Result<u
     })
 }
 
-fn owner_reset_live_conn(conn: &Connection, principal_id: &str, now: i64) -> Result<bool, String> {
+pub(super) fn owner_reset_live_conn(conn: &Connection, principal_id: &str, now: i64) -> Result<bool, String> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM app_user_invites WHERE principal_id = ?1 AND purpose = 'owner_reset'
             AND used_at IS NULL AND (expires_at IS NULL OR expires_at > ?2))",

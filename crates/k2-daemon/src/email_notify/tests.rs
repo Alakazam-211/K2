@@ -1836,7 +1836,7 @@ fn v_links_use_the_box_host_without_a_stored_door_and_never_a_derived_skin_host(
     assert_eq!(k2_page.as_deref(), Some("https://box.k2.dev/cli/skin/password/set"));
     let host_settings = k2_core::skin::invites::settings(k2_core::skin::HOST_APP_ID).expect("host settings");
     assert_eq!(host_settings.set_password_url, None, "the fixture's box login has no page of its own");
-    let app_page = crate::app_user_invites::set_password_page(&host_settings);
+    let app_page = crate::app_user_invites::set_password_page(k2_core::skin::HOST_APP_ID, &host_settings);
     assert_eq!(app_page.as_deref(), Some("https://box.k2.dev/cli/skin/password/set"), "never skin.box.k2.dev/reset");
 
     // A stored front door wins over the box host.
@@ -1848,7 +1848,7 @@ fn v_links_use_the_box_host_without_a_stored_door_and_never_a_derived_skin_host(
     assert!(!text.contains("https://box.k2.dev/cli/email/"), "{text}");
     let k2_page = crate::app_user_invites::k2_set_password_page().expect("stored door is safe");
     assert_eq!(k2_page.as_deref(), Some("https://door.brand.test/cli/skin/password/set"));
-    assert_eq!(crate::app_user_invites::set_password_page(&host_settings).as_deref(), Some("https://door.brand.test/reset"), "a stored door keeps its /reset");
+    assert_eq!(crate::app_user_invites::set_password_page(k2_core::skin::HOST_APP_ID, &host_settings).as_deref(), Some("https://door.brand.test/reset"), "a stored door keeps its /reset");
 
     // An App's host is refused (the fixture's App `shop` answers on
     // `shop.box.k2.dev`): nothing is sent, no row is left.

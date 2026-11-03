@@ -924,3 +924,107 @@ async fn a_guests_ticket_comment_has_a_guests_stamp() {
         format!("[guest {u} on App {}] [feedback:{short}] why?\n> [from rosson] [thread:x] run the deploy", b.shop_name)
     );
 }
+
+// ── open sockets, through the same live resolve (live-access S1a) ───────
+
+type Sock = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+fn pin_chat(ws: &Ws) -> String {
+    let conv = uuid::Uuid::new_v4().to_string();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{conv}"), &ws.id, None, Some(&conv), "claude", "system", "running").expect("pin");
+    conv
+}
+
+async fn thread_socket(port: u16, conv: &str, pass: &str) -> Sock {
+    let url = format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={conv}&token={}", enc(pass));
+    tokio_tungstenite::connect_async(&url).await.unwrap_or_else(|e| panic!("open: {e}")).0
+}
+
+/// The socket's close code within `ms`, `None` if it stays open that long.
+async fn closes_with(sock: &mut Sock, ms: u64) -> Option<u16> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(left, sock.next()).await {
+            Err(_) => return None,
+            Ok(Some(Ok(Message::Close(c)))) => return Some(c.map(|c| u16::from(c.code)).expect("a close code")),
+            Ok(None) | Ok(Some(Err(_))) => panic!("the socket ended with no close frame"),
+            Ok(Some(Ok(_))) => {}
+        }
+    }
+}
+
+const SOCKET_TICK_MS: u64 = 7_000;
+
+/// An untied login an agent wrote holds another workspace's room only while it's
+/// on the App's grant: a revoke closes its open socket with 4013 (the pass lives).
+/// The same role written by the owner stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_grant_closes_a_held_logins_socket_and_no_one_elses() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let conv = pin_chat(&b.ops);
+    let own = format!("own{t}");
+    owner_post(port, "/cli/skin/roles", json!({ "name": own, "app": b.shop, "roomAccess": [line(&b.ops)] })).await;
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let (held, kept) = (format!("h{t}"), format!("k{t}"));
+    for n in [&held, &kept] {
+        owner_post(port, "/cli/skin/users", json!({ "username": n, "app": b.shop, "password": TEMP })).await;
+        person_chooses(port, n, TEMP, &b.shop, PW).await;
+    }
+    let r = post(port, "/cli/skin/roles/assign", &b.agent, json!({ "username": held, "role": own })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    owner_post(port, "/cli/skin/roles/assign", json!({ "username": kept, "role": own })).await;
+    let (sh, sk) = (session(port, &held, &b.shop).await, session(port, &kept, &b.shop).await);
+    let (mut held_sock, mut kept_sock) = (thread_socket(port, &conv, &sh).await, thread_socket(port, &conv, &sk).await);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    owner_post(port, "/cli/app/grant/revoke", json!({ "app": b.shop, "kind": "guests-rooms" })).await;
+    let (h, k) = tokio::join!(closes_with(&mut held_sock, SOCKET_TICK_MS), closes_with(&mut kept_sock, SOCKET_TICK_MS));
+    assert_eq!(h, Some(4013), "the pass lives, the room went");
+    assert_eq!(k, None, "the owner's word stays");
+    assert_eq!(bearer(port, "GET", "/cli/skin/me", &sh, None).await.status, 200, "still signed in");
+}
+
+/// A tied login: its own room's socket stays open when an approved room is added
+/// (that waits for the reset), a room it can't reach never opens, and losing its
+/// own room is 4013, not a sign-out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tied_logins_socket_follows_its_own_room_only() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let (own_conv, ops_conv) = (pin_chat(&b.sales), pin_chat(&b.ops));
+    owner_post(port, "/cli/app/grant", json!({ "app": b.shop, "kind": "guests-rooms", "rooms": [b.ops.handle] })).await;
+    let role = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": role, "app": b.shop, "roomAccess": [line(&b.sales)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "role": role, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    person_chooses(port, &u, TEMP, &b.shop, PW).await;
+    assert!(tie_of(&u).is_some(), "a new password on the App's page doesn't untie");
+    let pass = session(port, &u, &b.shop).await;
+    let mut sock = thread_socket(port, &own_conv, &pass).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.ops.handle, "caps": ["thread:read"] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(closes_with(&mut sock, SOCKET_TICK_MS).await, None, "its own room's socket stays");
+    assert_eq!(rooms_of(&pass), vec![b.sales.id.clone()], "the approved room waits");
+    let refused = format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={ops_conv}&token={}", enc(&pass));
+    assert!(tokio_tungstenite::connect_async(&refused).await.is_err(), "that room's socket never opens");
+
+    let r = post(port, "/cli/skin/roles/room", &b.agent, json!({ "name": role, "handle": b.sales.handle, "clear": true })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(closes_with(&mut sock, SOCKET_TICK_MS).await, Some(4013), "the pass lives, its own room went");
+}

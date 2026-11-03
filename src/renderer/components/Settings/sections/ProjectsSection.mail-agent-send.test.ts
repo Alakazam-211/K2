@@ -12,6 +12,14 @@ const src = readFileSync(
 // ("Settings → Workspaces / Agents → <workspace> → Email sending"), so it
 // must exist, read and write the daemon's value, and not be hosted-only.
 describe('Email sending control (per-workspace agent-send)', () => {
+  it('says plainly what sending on allows, beside the setting', () => {
+    const at = src.indexOf('function MailAgentSendControl')
+    const body = src.slice(at, src.indexOf('ariaLabel="Agent email sending"', at))
+    expect(body).toContain('mail-agent-send-on-warning')
+    expect(body).toContain('talked into sending that mail')
+    expect(body).toContain('Use approval for any agent that reads mail from')
+  })
+
   it('has manifest id, the group the hint names, daemon read + write, never fetchProjects', () => {
     expect(src).toContain("id: 'projects.mail-agent-send'")
     expect(src).toContain('data-settings-id="projects.mail-agent-send"')

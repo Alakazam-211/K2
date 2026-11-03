@@ -221,12 +221,14 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
             "missing 'address' — the connected account to remove ('k2 mail external list')",
         );
     }
-    if let Ok(addr) = crate::mail::addresses::normalize_address(&b.address) {
-        // Waiting messages from it can't leave any more; their files go now.
-        crate::mail::send::purge_held_for_address(&addr, chrono::Utc::now().timestamp());
-    }
     match external::remove_inbox(&FileSecretStore::default(), &b.address) {
-        Ok(v) => ok_json(v),
+        Ok(v) => {
+            // Waiting messages from it can't leave any more; their files go now.
+            if let Ok(addr) = crate::mail::addresses::normalize_address(&b.address) {
+                crate::mail::send::purge_held_for_address(&addr, chrono::Utc::now().timestamp());
+            }
+            ok_json(v)
+        }
         Err(e) => ext_error_response(e),
     }
 }

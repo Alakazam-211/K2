@@ -4213,6 +4213,10 @@ pub struct MailOutbound {
     /// asEml), as JSON. NULL for every other message.
     #[serde(default)]
     pub forward_of_json: Option<String>,
+    /// 0261: a reply or forward whose original the sender check didn't clear:
+    /// why. The one-click card refuses such a message.
+    #[serde(default)]
+    pub source_check: Option<String>,
 }
 
 /// One `mail_doctor_runs` row (PRD §9). `domain_id` is `None` for

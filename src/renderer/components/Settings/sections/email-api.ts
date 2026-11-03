@@ -181,6 +181,8 @@ export interface ApprovalItem extends OutboundItem {
   files?: ApprovalFile[]
   /** The display name the recipient sees, which the sender chose. */
   fromName?: string | null
+  /** A reply or forward whose original the sender check didn't clear: why. */
+  sourceCheck?: string
   /** A reply or forward: the DMARC verdict on the original. */
   sourceDmarc?: string
   /** `k2 mail forward-message`: what this message forwards. */

@@ -244,7 +244,7 @@ pub(crate) static MAIL_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Email approvals",
         what_changes: "Send {ws}'s held email {message}",
-        consequences: "The message leaves exactly as it was queued: the same sender, recipients and text. Read it first in Settings → Email Hosting → Approvals.",
+        consequences: "The message leaves exactly as it was queued: the same sender, recipients and text. This card only covers a message with no files, no Reply-To and no forward, and a reply whose original's sender cleared the DMARC check. Anything else is approved in Settings → Email Hosting → Approvals, or with k2 hostmail approvals. Read it first in Settings → Email Hosting → Approvals.",
         scope: "message {message}",
         duration: ONE_TIME,
         retry: "",
@@ -286,21 +286,24 @@ fn outbound(id: &str) -> Option<(String, String, i64)> {
 
 /// Why a one-click card can't release this message, if it can't. The card
 /// names only the message id, so what it can't show has to be looked at: files
-/// (`attachments_ref`), a Reply-To, a forward. Unknown or unreadable counts.
+/// (`attachments_ref`), a Reply-To, a forward, and an original whose sender the
+/// check didn't clear. Unknown or unreadable counts.
 fn needs_a_closer_look(id: &str) -> Option<String> {
-    let row: Option<(Option<String>, Option<String>, Option<String>)> = db(|c| {
+    type Row = (Option<String>, Option<String>, Option<String>, Option<String>);
+    let row: Option<Row> = db(|c| {
         c.query_row(
-            "SELECT attachments_ref, reply_to_json, forward_of_json FROM mail_outbound WHERE id = ?1",
+            "SELECT attachments_ref, reply_to_json, forward_of_json, source_check FROM mail_outbound WHERE id = ?1",
             rusqlite::params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .ok()
     });
     let what = match row {
-        None => "something this card can't show",
-        Some((Some(_), _, _)) => "files",
-        Some((_, Some(_), _)) => "a Reply-To",
-        Some((_, _, Some(_))) => "a forwarded message",
+        None => "something",
+        Some((Some(_), _, _, _)) => "files",
+        Some((_, Some(_), _, _)) => "a Reply-To",
+        Some((_, _, Some(_), _)) => "a forwarded message",
+        Some((_, _, _, Some(_))) => "a reply to a message whose sender the DMARC check didn't clear",
         Some(_) => return None,
     };
     Some(format!(

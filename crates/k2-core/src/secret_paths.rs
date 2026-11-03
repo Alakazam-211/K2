@@ -362,7 +362,15 @@ fn value_assignment_present(text: &str) -> bool {
             lower.match_indices(key).any(|(i, _)| {
                 let rest = after_key(&lower[i + key.len()..]).trim_start_matches(['"', '\'']).trim_start();
                 let Some(value) = rest.strip_prefix([':', '=']) else { return false };
-                let value = value.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+                let value = value.trim();
+                // A quoted value ends at its quote, whatever follows on the line.
+                let value = match value.chars().next() {
+                    Some(q @ ('"' | '\'')) => {
+                        let inner = &value[1..];
+                        inner.find(q).map_or(inner, |end| &inner[..end])
+                    }
+                    _ => value.trim_end_matches([',', ';', '"', '\'']),
+                };
                 value.len() >= 6 && !value.contains(char::is_whitespace)
             })
         })
@@ -594,11 +602,11 @@ mod tests {
             ("a.txt", b"sk_live_your_key_goes_here\n", None),
             ("a.txt", b"xoxb-1234567890-abcdefgh\n", Some(SecretHit::Content)),
             ("a.txt", b"xoxb-your-bot-token-goes-here\n", None),
-            ("a.txt", b"k2skn_0123456789abcdefghijABCDEFGHIJ0123456789a\n", Some(SecretHit::Content)),
-            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789a\n", Some(SecretHit::Content)),
+            ("a.txt", b"k2skn_0123456789abcdefghijABCDEFGHIJ0123456789abc\n", Some(SecretHit::Content)),
+            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789abc\n", Some(SecretHit::Content)),
             ("a.txt", b"fn k2rs_token_is_refused_when_it_has_expired_long_ago_ok() {}\n", None),
             ("a.txt", b"k2rs_abcdefghijklmnop\n", None),
-            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789abc\n", None),
+            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789abcd\n", None),
             ("a.txt", b"sk-ant- is a prefix\n", None),
             // JSON, where a quote closes the key first.
             ("a.json", b"{ \"password\": \"hunter2hunter2\", \"x\": 1 }\n", Some(SecretHit::Content)),
@@ -641,7 +649,7 @@ mod tests {
             "sk_live_abcd1234efgh5678",
             "xoxb-1234567890-abcdefgh",
             "key AKIAZ2GH7QK4LMNP8RST here",
-            "k2rs_0123456789abcdefghijABCDEFGHIJ0123456789a",
+            "k2rs_0123456789abcdefghijABCDEFGHIJ0123456789abc",
         ] {
             assert!(!content_has_credential_str(text), "{text}");
         }

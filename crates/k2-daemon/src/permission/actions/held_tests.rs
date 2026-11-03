@@ -700,6 +700,7 @@ fn mail_approve_refuses_a_message_the_card_cannot_show() {
         ("attachments_ref", r#"[{"name":"a.pdf","size":1,"sha256":"x"}]"#),
         ("reply_to_json", r#"["x@y.example"]"#),
         ("forward_of_json", r#"{"mailbox":"a@b.example","sender":"c@d.example","asEml":true}"#),
+        ("source_check", "FAILED DMARC"),
     ] {
         let msg = held_mail(&ws, now(), None);
         {

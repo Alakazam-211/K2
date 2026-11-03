@@ -1486,6 +1486,11 @@ function ApprovalCard({
           <span className="font-mono"> · bcc (owner policy) {item.policyBcc?.join(', ')}</span>
         )}
       </p>
+      {item.sourceCheck && (
+        <p className="text-[10px] text-[var(--color-status-warn)] break-words">
+          The original message {item.sourceCheck}. Its sender may be forged.
+        </p>
+      )}
       {item.sourceDmarc && (
         <p className={`text-[10px] break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn)]' : 'text-[var(--color-text-muted)]'}`}>
           The original message&apos;s DMARC check: {item.sourceDmarc}

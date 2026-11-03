@@ -255,6 +255,13 @@ pub fn flush_one_scheduled(
         Ok(m) => m,
         Err(e) => return refuse(store, &format!("not sent: stored message unreadable: {e}")),
     };
+    if !send::row_matches_message(&row, &msg) {
+        return refuse(
+            store,
+            "not sent: the stored message changed after it was queued. Tell your human before \
+             queuing it again",
+        );
+    }
     if msg.policy_bcc != rules.policy_bcc {
         send::apply_policy_bcc(&mut msg, rules.policy_bcc);
         if let Err(SendError::Usage(h)) = send::check_recipient_limit(&msg) {
@@ -387,6 +394,13 @@ pub fn spawn_scheduled_flusher() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let tick = scheduled_tick_interval();
         k2_core::log_debug!("[mail/schedule] flusher started — tick={}s", tick.as_secs());
+        let _ = tokio::task::spawn_blocking(|| {
+            let swept = send::sweep_store(&DbOutboundStore::default(), now_secs_wall());
+            if swept > 0 {
+                k2_core::log_debug!("[mail/schedule] tidied {swept} old stored message(s)");
+            }
+        })
+        .await;
         loop {
             let _ = tokio::task::spawn_blocking(|| {
                 let now = now_secs_wall();
@@ -465,6 +479,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         }
     }
 
@@ -513,6 +528,30 @@ mod tests {
 
     fn now() -> i64 {
         now_secs_wall()
+    }
+
+    /// Finding 10 at send time: the row is what a person saw when it was queued.
+    #[test]
+    fn a_body_that_disagrees_with_its_row_never_leaves_at_its_send_time() {
+        let rig = Rig::new();
+        let t = now();
+        let msg = message();
+        let id = rig.scheduled(&msg, t);
+        let path = rig.store.load(&id).unwrap().unwrap().body_ref.expect("a body");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let edited = raw.replace(msg.to[0].as_str(), "evil@x.example");
+        assert_ne!(raw, edited);
+        std::fs::write(&path, edited).unwrap();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE mail_outbound SET body_sha256 = NULL WHERE id = ?1", rusqlite::params![id]).unwrap();
+        }
+        let keep = Keep::default();
+        let out = rig.flush(&id, &keep, Ok(on()), t + 61);
+        assert!(matches!(&out, Some(FlushOutcome::Failed(r)) if r.contains("changed")), "{out:?}");
+        assert!(keep.0.lock().unwrap().is_empty(), "nothing left");
+        assert_eq!(rig.store.load(&id).unwrap().unwrap().status, "failed");
     }
 
     #[test]

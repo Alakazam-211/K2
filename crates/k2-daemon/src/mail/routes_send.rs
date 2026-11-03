@@ -938,6 +938,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         notify: None,
         forward_of: None,
         source_dmarc: None,
+        source_check: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1308,6 +1309,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 notify: None,
                 forward_of: None,
                 source_dmarc: None,
+                source_check: None,
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1409,6 +1411,10 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 source_dmarc: messages::parse_auth_results(&ctx.auth_results, &authority)["dmarc"]
                     .as_str()
                     .map(String::from),
+                source_check: match messages::sender_check(&ctx.auth_results, &authority, &ctx.from, on_box) {
+                    messages::SenderCheck::Clear => None,
+                    messages::SenderCheck::NeedsPerson(why) => Some(why),
+                },
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1619,6 +1625,7 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
         notify: None,
         forward_of: None,
         source_dmarc: None,
+        source_check: None,
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1676,6 +1683,15 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
     msg.subject = composed.subject;
     msg.text_body = composed.text_body;
     msg.attachments = composed.attachments;
+    msg.source_check = match messages::sender_check(
+        &src.full.auth_results,
+        &messages::ReadBackend::auth_authority(&read),
+        &src.full.summary.from,
+        on_box,
+    ) {
+        messages::SenderCheck::Clear => None,
+        messages::SenderCheck::NeedsPerson(why) => Some(why),
+    };
     msg.source_dmarc = messages::parse_auth_results(
         &src.full.auth_results,
         &messages::ReadBackend::auth_authority(&read),
@@ -1687,7 +1703,34 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
         sender: crate::mail::fwd_message::one_line(original_sender.as_deref().unwrap_or("")),
         as_eml,
     });
-    dispatch_and_respond(&project_id, &path, &agent_name, &account_id, &msg, gate, wait_timeout, None)
+    let resp = dispatch_and_respond(&project_id, &path, &agent_name, &account_id, &msg, gate, wait_timeout, None);
+    audit_forward(&agent_name, &msg, &resp);
+    resp
+}
+
+/// One line per forward in the audit log, whatever became of it: who, from where,
+/// to whom, and what it carried. Never a subject, a body or a file's bytes.
+fn audit_forward(agent_name: &str, msg: &OutboundMessage, resp: &CliResponse) {
+    let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or_default();
+    let (mailbox, sender, as_eml) = match msg.forward_of.as_ref() {
+        Some(f) => (f.mailbox.as_str(), f.sender.as_str(), f.as_eml),
+        None => ("?", "?", false),
+    };
+    crate::thread_attachments::audit(
+        "mail.forward_message",
+        &format!("agent:{agent_name}"),
+        format!(
+            "id={} status={} from={} source={mailbox} source_sender={sender} as_eml={as_eml} files={} to={:?} cc={:?} bcc={:?} reply_to={:?}",
+            v["id"].as_str().unwrap_or("-"),
+            v["status"].as_str().unwrap_or("refused"),
+            msg.from,
+            msg.attachments.len(),
+            msg.to,
+            msg.cc,
+            msg.all_bcc(),
+            msg.reply_to,
+        ),
+    );
 }
 
 /// As for a reply (§8.4): passing on a message whose sender nothing vouches for,
@@ -2689,6 +2732,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2747,6 +2791,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -3245,6 +3290,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -3406,6 +3452,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -4080,6 +4127,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         }
     }
 
@@ -4378,7 +4426,7 @@ mod tests {
             "subject": "Quote",
             "header:Message-ID:asText": format!("<{id}@dest.example>"),
             "header:References:asText": null,
-            "header:Authentication-Results:asText:all": [],
+            "header:Authentication-Results:asText:all": ["mail.box.test; dmarc=pass header.from=dest.example"],
         })
     }
 
@@ -4972,6 +5020,7 @@ mod tests {
                 as_eml: true,
             }),
             source_dmarc: None,
+            source_check: None,
         };
         let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &msg, send_after: None };
         let SendOutcome::Queued { id, .. } = send::gate_and_dispatch(&store, None, Gate::Approval, &req, now_secs()).expect("queue") else {
@@ -5010,7 +5059,7 @@ mod tests {
             "htmlBody": [],
             "bodyValues": { "1": { "value": "Please see the quote.\n" } },
             "attachments": [{ "blobId": "att-1", "name": "quote.pdf", "type": "application/pdf", "size": 9 }],
-            "header:Authentication-Results:asText:all": [],
+            "header:Authentication-Results:asText:all": ["mail.box.test; dmarc=pass header.from=outside.example"],
         })
     }
 
@@ -5268,6 +5317,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         };
         for _ in 0..send::RATE_LIMIT_HOURLY {
             let req = OutboundRequest { project_id: &project_id, agent_name: "bot", account_id: "a", message: &m, send_after: None };
@@ -5353,6 +5403,106 @@ mod tests {
         assert_eq!(ours["files"][1]["scanned"], false, "{ours}");
         assert_eq!(ours["files"][2]["scanned"], true, "{ours}");
         send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    /// The approver and the card see an original the check didn't clear, and a
+    /// forward leaves one audit line.
+    #[test]
+    fn a_forward_records_the_sender_check_and_an_audit_line() {
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
+        let _home = crate::test_support::TempHome::new();
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        let fake = seed_forward_fake();
+        fake.state.lock().unwrap().emails.get_mut("e1").unwrap()["header:Authentication-Results:asText:all"] =
+            serde_json::json!(["mail.box.test; dmarc=none header.from= policy.dmarc=none"]);
+        let (path, project_id, domain) = seed_files_sender("fwdcheck", "approval");
+        let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert!(ours["sourceCheck"].as_str().unwrap_or("").contains("different domain"), "{ours}");
+        let lines = k2_core::auth_audit::read_all().expect("audit log");
+        let line = lines
+            .iter()
+            .find(|l| l.to_string().contains("mail.forward_message") && l.to_string().contains(&id))
+            .unwrap_or_else(|| panic!("no audit line for {id}: {lines:?}"));
+        let text = line.to_string();
+        assert!(text.contains("dest@else.example") && text.contains("source_sender="), "{text}");
+        assert!(!text.contains("Please see the quote"), "never a body: {text}");
+        send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
+    }
+
+    /// Once a domain has gone, its mailboxes' waiting mail ends and its files go.
+    #[test]
+    fn removing_a_domain_ends_its_waiting_mail() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let (path, project_id, domain) = seed_files_sender("rmdom", "approval");
+        {
+            // `seed_address` doesn't tie the address to its domain's row.
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let tied = conn
+                .execute(
+                    "UPDATE mail_addresses SET domain_id = (SELECT id FROM mail_domains WHERE domain = ?1) \
+                     WHERE address = ?2",
+                    rusqlite::params![domain, format!("bot@{domain}")],
+                )
+                .expect("tie the address to its domain");
+            assert_eq!(tied, 1);
+        }
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let store = DbOutboundStore::default();
+        assert!(matches!(
+            crate::mail::domains::remove_domain(None, &domain, false, false),
+            Err(crate::mail::domains::OpError::ConfirmRequired(_))
+        ));
+        assert_eq!(store.load(&id).unwrap().unwrap().status, "pending", "not confirmed, not removed");
+        crate::mail::domains::remove_domain(None, &domain, true, false).expect("removed");
+        let row = store.load(&id).unwrap().unwrap();
+        assert_eq!(row.status, "denied");
+        assert!(row.note.as_deref().unwrap_or("").contains("mailbox was removed"), "{:?}", row.note);
+        done(&path, &project_id, &domain);
+    }
+
+    /// A linked inbox's remove that works ends its waiting mail.
+    #[test]
+    fn removing_a_linked_inbox_ends_its_waiting_mail() {
+        let (name, path) = unique("rmlink");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        let row = seed_linked(&project_id, &linked, "send");
+        FileSecretStore::default().store_exact(&external::vault_key(&row), "app-pw").expect("vault");
+        set_gating(&path, "approval");
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let body = serde_json::json!({ "address": linked }).to_string();
+        let r = crate::mail::routes_external::handle_external_remove(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(DbOutboundStore::default().load(&id).unwrap().unwrap().status, "denied");
+        cleanup_linked(&project_id);
+        cleanup(&project_id, None);
+    }
+
+    /// A linked inbox's remove that fails leaves the waiting mail alone.
+    #[test]
+    fn removal_of_an_address_purges_only_after_it_worked() {
+        let (path, project_id, domain) = seed_files_sender("rmfail", "approval");
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let body = serde_json::json!({ "address": format!("bot@{domain}") }).to_string();
+        let r = crate::mail::routes_external::handle_external_remove(body.as_bytes());
+        assert_ne!(r.status, "200 OK", "{}", r.body);
+        let store = DbOutboundStore::default();
+        assert_eq!(store.load(&id).unwrap().unwrap().status, "pending", "nothing denied: {}", r.body);
+        send::deny(&store, &id, "owner", "cleanup", now_secs()).expect("deny");
         done(&path, &project_id, &domain);
     }
 }

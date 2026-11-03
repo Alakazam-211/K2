@@ -561,6 +561,7 @@ fn dispatch(m: &Mail<'_>, minted: &invites::Minted) -> Result<Delivered, CliResp
         notify: None,
         forward_of: None,
         source_dmarc: None,
+        source_check: None,
     };
     if let Err(e) = send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), &m.sender.address) {
         return Err(fail(send_error(e)));

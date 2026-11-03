@@ -1212,9 +1212,16 @@ pub fn remove_domain(
         stalwart_deleted = true;
     }
 
-    let retired = {
+    let (retired, gone_addresses) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let gone_addresses: Vec<String> = conn
+            .prepare("SELECT address FROM mail_addresses WHERE domain_id = ?1 AND status = 'active'")
+            .and_then(|mut st| {
+                st.query_map(rusqlite::params![row.id], |r| r.get(0))
+                    .map(|rows| rows.filter_map(Result::ok).collect())
+            })
+            .unwrap_or_default();
         let retired = conn
             .execute(
                 "UPDATE mail_addresses SET status = 'retired', retired_at = ?1 \
@@ -1226,8 +1233,12 @@ pub fn remove_domain(
             "DELETE FROM mail_domains WHERE id = ?1",
             rusqlite::params![row.id],
         );
-        retired
+        (retired, gone_addresses)
     };
+    // Their waiting messages can't leave any more; their files go now.
+    for address in &gone_addresses {
+        crate::mail::send::purge_held_for_address(address, now_secs());
+    }
 
     Ok(serde_json::json!({
         "ok": true,

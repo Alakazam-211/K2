@@ -696,6 +696,7 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
         }),
         forward_of: None,
         source_dmarc: None,
+        source_check: None,
     };
     let store_ob = crate::mail::send::DbOutboundStore::default();
     let inserted = store_ob.insert(&NewOutbound {

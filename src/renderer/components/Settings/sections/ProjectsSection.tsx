@@ -4730,6 +4730,12 @@ function MailAgentSendControl({
             <span className="font-mono">k2 mail sending &lt;workspace&gt; on</span>.
             {inherited && mode !== null ? ' Using the server default.' : ''}
           </div>
+          <div
+            className="text-[10px] text-[var(--color-status-warn)] mt-1 leading-relaxed"
+            data-testid="mail-agent-send-on-warning"
+          >
+            With sending on, an agent that reads a malicious email can be talked into sending that mail, its attachments and any workspace file that doesn&apos;t look like a secret, to any address: up to 20 messages an hour and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox records it afterwards. The secret check catches mistakes, not intent. The DMARC check only slows forged senders, and an attacker&apos;s own domain passes it. Use approval for any agent that reads mail from outside.
+          </div>
           {error && (
             <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</div>
           )}

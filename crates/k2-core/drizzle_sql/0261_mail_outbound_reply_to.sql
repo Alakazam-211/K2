@@ -8,3 +8,5 @@ ALTER TABLE mail_outbound ADD COLUMN reply_to_json TEXT;
 ALTER TABLE mail_outbound ADD COLUMN body_sha256 TEXT;
 -- What a `k2 mail forward-message` forwarded, as JSON, for the outbox.
 ALTER TABLE mail_outbound ADD COLUMN forward_of_json TEXT;
+-- A reply or forward whose original the sender check didn't clear: why.
+ALTER TABLE mail_outbound ADD COLUMN source_check TEXT;

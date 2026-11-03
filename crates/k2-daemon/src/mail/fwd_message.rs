@@ -64,12 +64,13 @@ pub fn forward_subject(raw: &str) -> String {
 }
 
 /// A plain `type/subtype` from a value the original's sender wrote, or
-/// `application/octet-stream`. Of `message/*` only `rfc822` passes:
-/// `external-body` and `partial` make a client fetch or reassemble something
-/// the approver never saw. A multipart isn't a file.
+/// `application/octet-stream`. Nothing of `message/*` passes: `external-body`
+/// and `partial` make a client fetch or reassemble something the approver never
+/// saw, and the mail server sends an attached `rfc822` as base64, which RFC 2046
+/// doesn't allow. A multipart isn't a file.
 pub fn safe_media_type(raw: &str) -> String {
     let media = raw.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-    if media.starts_with("multipart/") || (media.starts_with("message/") && media != "message/rfc822") {
+    if media.starts_with("multipart/") || media.starts_with("message/") {
         return "application/octet-stream".to_string();
     }
     let token = |s: &str| {
@@ -262,7 +263,7 @@ mod tests {
             ("application/pdf", "application/pdf"),
             ("IMAGE/PNG", "image/png"),
             ("text/plain; charset=utf-8", "text/plain"),
-            ("message/rfc822", "message/rfc822"),
+            ("message/rfc822", "application/octet-stream"),
             ("message/external-body", "application/octet-stream"),
             ("message/partial", "application/octet-stream"),
             ("multipart/mixed", "application/octet-stream"),
@@ -342,6 +343,7 @@ mod tests {
             notify: None,
             forward_of: None,
             source_dmarc: None,
+            source_check: None,
         }
     }
 

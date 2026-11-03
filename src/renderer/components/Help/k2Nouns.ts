@@ -49,6 +49,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: 'Chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage Chat / Voice Hosting.',
         example: 'k2 chat send hearth/general "deploy done"',
       },
+      {
+        noun: 'voice',
+        blurb: 'Preview: voice rooms on this server. See who is in them; the owner and Admins change and moderate them. People talk from the K2 app.',
+        example: 'k2 voice rooms',
+      },
       { noun: 'read', blurb: "Peek at another agent's terminal before injecting.", example: 'k2 read sales --lines 40' },
       { noun: 'talk', blurb: 'Beta: read their screen first, then send, in one call.', example: 'k2 talk sales "ready?"' },
       { noun: 'terminal', blurb: 'Raw bytes into a terminal, or spawn one (advanced).' },
@@ -189,6 +194,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'publish', blurb: 'Expose a local process, optionally on a nested URL.', example: 'k2 publish ps' },
       { noun: 'zen', blurb: 'Zen Gardens: gardens, themes, widgets and their data.', example: 'k2 zen guide' },
       { noun: 'store', blurb: "A Garden widget's own data (granted keys only)." },
+      {
+        noun: 'board',
+        blurb: "The Board Garden's whiteboards, for an agent with a grant on the board: read and change them by Board's own rules.",
+        example: 'k2 board boards',
+      },
       { noun: 'db', blurb: "This workspace's loopback Postgres.", example: 'k2 db create' },
       { noun: 'wiki', blurb: 'Workspace notes.', example: 'k2 wiki index' },
     ],

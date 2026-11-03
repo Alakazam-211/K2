@@ -9,9 +9,8 @@
 //!
 //! - App targets: the box login (`host`) only when `host_ok` (they already
 //!   had it when the tie was set), and any App of `workspace_id`;
-//! - rooms: `workspace_id`, and on an App the rooms the owner approved for
-//!   that App's guests (its `guests-rooms` grant, read live: 0.46.8, Rosson
-//!   2026-11-02), minus [`super::PERSON_ONLY_CAPS`];
+//! - rooms: only `workspace_id`, minus [`super::PERSON_ONLY_CAPS`]. One rule,
+//!   one place: [`room_inside`] ([`TIED_REACHES_APPROVED_ROOMS`]);
 //! - no chat-only box login and no chat pass (a chat grant is box-wide).
 //!
 //! The owner may widen a tied user at any time; what reaches past the
@@ -21,15 +20,12 @@
 //! App's server can host that screen and see the new password, so only K2's
 //! own page proves the agent doesn't know it.
 //!
-//! **Why the App's approved rooms are inside the ceiling.** The owner
-//! already said this App may hand those rooms to its guests, and the App's
-//! server already sees its guests' sessions, so holding them back from a
-//! login the App's agent made protects nothing new. The tie itself stays:
-//! it still says an agent could know the credential, which is what keeps
-//! such a login from answering a person's cards, from having its stored
-//! email trusted, from a chat pass, from `host` and other workspaces' Apps,
-//! and from person-only caps. Read live, so revoking the grant takes those
-//! rooms away from these logins on their next request.
+//! **Why an App's approved rooms wait too (security review 2026-11-02).** A
+//! `guests-rooms` approval lets an App hand a room to its guests. With a real
+//! person that needs them to sign in. With a login whose password the agent
+//! could know, the agent could sign in alone and read and post in another
+//! agent's Thread, so those rooms wait for the reset like any other.
+//! Rosson may still rule on this: flip [`TIED_REACHES_APPROVED_ROOMS`].
 //!
 //! skin.db step 6 adds the table (and `app_user_invites`, used by the
 //! invite and owner-reset slices): a numbered step, so a K2 older than
@@ -447,16 +443,46 @@ pub fn app_rooms(app: &str) -> Result<Vec<String>, String> {
     with_conn(|conn| app_rooms_conn(conn, app))
 }
 
+/// THE rule on a tied login and its App's `guests-rooms` rooms: `false`, it
+/// reaches only its App's own room, and those rooms wait for a reset link on
+/// K2's own page (the default since the 2026-11-02 security review; Rosson
+/// may rule otherwise). `true` would let them through, each cut to
+/// [`CAPS_ELSEWHERE`] by [`clamp`].
+pub const TIED_REACHES_APPROVED_ROOMS: bool = false;
+
+/// The most a login an agent wrote (or holds the password of) may hold on a
+/// room other than its App's own: a role-less guest's Thread caps. More
+/// (files, heartbeats, the workspace's settings) reaches into another agent's
+/// workspace.
+pub const CAPS_ELSEWHERE: &[&str] = &[super::CAP_THREAD_READ, super::CAP_THREAD_POST];
+
 /// Is `room` one `tie` lets through on an App with these approved rooms?
 pub fn room_inside(tie: &Tie, app: &str, app_rooms: &[String], room: &str) -> bool {
-    room == tie.workspace_id || (app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
+    room == tie.workspace_id || (TIED_REACHES_APPROVED_ROOMS && app != HOST_APP_ID && app_rooms.iter().any(|r| r == room))
+}
+
+/// What an untied login reaches when an agent wrote its role or its App
+/// login (`guest_rooms::written`): its App's own room as written; any other
+/// room only while it is on the App's `guests-rooms` grant, read live, and
+/// only [`CAPS_ELSEWHERE`] there. So revoking the grant takes those rooms from
+/// everyone it reached. What the owner wrote never comes through here.
+pub fn hold_written(own_room: Option<&str>, app_rooms: &[String], policy: RoomPolicy) -> RoomPolicy {
+    let mut out = RoomPolicy::new();
+    for (room, caps) in policy {
+        if own_room == Some(room.as_str()) {
+            out.insert(room, caps);
+        } else if app_rooms.iter().any(|r| *r == room) {
+            out.insert(room, caps.into_iter().filter(|c| CAPS_ELSEWHERE.contains(&c.as_str())).collect());
+        }
+    }
+    out
 }
 
 /// What a tied user may use of `policy` on `app` (§5.2): no tie → the
 /// policy as is; an App outside the ceiling → [`Denied`]; inside → the
-/// tie's room and `app_rooms` ([`app_rooms_conn`]: the rooms the owner
-/// approved for this App's guests), without person-only caps (an empty
-/// result is allowed: the session is Thread-dark).
+/// rooms [`room_inside`] lets through, without person-only caps, and at most
+/// [`CAPS_ELSEWHERE`] on a room other than the tie's own (an empty result is
+/// allowed: the session is Thread-dark).
 pub fn clamp(tie: Option<&Tie>, app: &str, app_workspace: Option<&str>, app_rooms: &[String], policy: RoomPolicy) -> Result<RoomPolicy, Denied> {
     let Some(tie) = tie else { return Ok(policy) };
     if !app_inside(tie, app, app_workspace) {
@@ -467,7 +493,9 @@ pub fn clamp(tie: Option<&Tie>, app: &str, app_workspace: Option<&str>, app_room
         if !room_inside(tie, app, app_rooms, &room) {
             continue;
         }
-        let caps: Vec<String> = caps.into_iter().filter(|c| !PERSON_ONLY_CAPS.contains(&c.as_str())).collect();
+        let own = room == tie.workspace_id;
+        let caps: Vec<String> =
+            caps.into_iter().filter(|c| !PERSON_ONLY_CAPS.contains(&c.as_str()) && (own || CAPS_ELSEWHERE.contains(&c.as_str()))).collect();
         out.insert(room, caps);
     }
     Ok(out)
@@ -595,17 +623,23 @@ mod tests {
         // The box login only with host_ok.
         assert_eq!(clamp(Some(&tie("ws", false)), HOST_APP_ID, None, &[], wide.clone()), Err(Denied));
         assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &[], wide.clone()).unwrap(), kept);
-        // The rooms the owner approved for this App's guests are inside on
-        // this App, person-only caps still gone; another room still isn't.
+        // A room the owner approved for this App's guests still waits.
         let approved = vec!["sales".to_string()];
-        let mixed = policy(&[("ws", &["thread:read"]), ("sales", &["thread:read", "files:download"]), ("ops", &["thread:read"])]);
+        let mixed = policy(&[("ws", &["thread:read"]), ("sales", &["thread:read", "files:write", "files:download"]), ("ops", &["thread:read"])]);
         assert_eq!(
             clamp(Some(&tie("ws", false)), "svc-a", Some("ws"), &approved, mixed.clone()).unwrap(),
-            policy(&[("ws", &["thread:read"]), ("sales", &["thread:read"])]),
+            policy(&[("ws", &["thread:read"])]),
         );
         // Never on the box login, and never for another workspace's App.
         assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &approved, mixed.clone()).unwrap(), policy(&[("ws", &["thread:read"])]));
-        assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), &approved, mixed), Err(Denied));
+        assert_eq!(clamp(Some(&tie("ws", false)), "svc-b", Some("sales"), &approved, mixed.clone()), Err(Denied));
+        // What an agent wrote, on an untied login: the App's own room as
+        // written, an approved room at Thread caps, any other room gone.
+        assert_eq!(
+            hold_written(Some("ws"), &approved, policy(&[("ws", &["thread:read", "files:write"]), ("sales", &["thread:read", "files:write"]), ("ops", &["thread:read"])])),
+            policy(&[("ws", &["thread:read", "files:write"]), ("sales", &["thread:read"])]),
+        );
+        assert_eq!(hold_written(Some("ws"), &[], mixed), policy(&[("ws", &["thread:read"])]), "the grant revoked: gone");
         // Nothing in the tie's room: an empty (Thread-dark) policy, allowed.
         assert_eq!(clamp(Some(&tie("ws", true)), HOST_APP_ID, None, &[], policy(&[("sales", &["thread:read"])])), Ok(RoomPolicy::new()));
     }
@@ -656,11 +690,11 @@ mod tests {
         let no_rooms = |_: &str| Vec::new();
         let inside = vec![grant("app", "svc-a", Some("r-in"), None)];
         assert!(!pending(&t, "p1", &inside, &roles, &ws_of, &no_rooms), "inside the ceiling");
-        // A room the owner approved for that App's guests doesn't wait.
+        // A room the owner approved for that App's guests waits like any other.
         let wide = vec![grant("app", "svc-a", Some("r-wide"), None)];
         let approved = |app: &str| if app == "svc-a" { vec!["sales".to_string()] } else { Vec::new() };
         assert!(pending(&t, "p1", &wide, &roles, &ws_of, &no_rooms), "without the grant it waits");
-        assert!(!pending(&t, "p1", &wide, &roles, &ws_of, &approved), "inside the App's approved rooms");
+        assert!(pending(&t, "p1", &wide, &roles, &ws_of, &approved), "with the grant it still waits");
         for (what, extra) in [
             ("box login without host_ok", grant("app", HOST_APP_ID, None, Some("[]"))),
             ("another workspace's App", grant("app", "svc-b", Some("r-in"), None)),

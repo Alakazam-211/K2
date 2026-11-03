@@ -114,6 +114,24 @@ mod tie_tests {
     }
 }
 
+/// The start of the refusal when an agent or App key picks a reserved name.
+pub const NAME_RESERVED: &str = "login_name_reserved";
+
+/// May a login an agent or App key makes not take this name? `owner` and the
+/// like, any K2 Connect login on this box (disabled ones too), and the name the
+/// owner stamps under. A guest's name shows up in Threads and in other agents'
+/// terminals: it must never read as a person who signs in to the box itself.
+pub fn name_reserved(username: &str) -> Result<bool, String> {
+    let u = username.trim().to_ascii_lowercase();
+    if matches!(u.as_str(), "owner" | "root" | "admin" | "administrator" | "system" | "k2") {
+        return Ok(true);
+    }
+    if crate::connect_users::list_users()?.iter().any(|c| c.username.eq_ignore_ascii_case(&u)) {
+        return Ok(true);
+    }
+    Ok(crate::person_name::sender_identity_now(crate::person_name::Sender::OwnerToken).eq_ignore_ascii_case(&u))
+}
+
 /// Stamp `principal_id` as added by the agent of `workspace_id`.
 pub fn stamp(principal_id: &str, workspace_id: &str) -> Result<(), String> {
     let (pid, ws) = (principal_id.trim().to_string(), workspace_id.trim().to_string());

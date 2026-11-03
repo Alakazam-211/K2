@@ -73,9 +73,75 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
             granted_by TEXT NOT NULL,
             granted_at INTEGER NOT NULL,
             PRIMARY KEY (service_id, kind)
+         );
+         CREATE TABLE IF NOT EXISTS agent_written_access (
+            kind TEXT NOT NULL,
+            id TEXT NOT NULL,
+            written_by TEXT NOT NULL,
+            written_at INTEGER NOT NULL,
+            PRIMARY KEY (kind, id)
          );",
     )
     .map_err(|e| format!("skin.db app_owner_grants: {e}"))
+}
+
+// ── what an agent wrote (0.46.8) ─────────────────────────────────────
+//
+// A role or an App login an agent (or an App, under its grant) last wrote.
+// Reads of a login's access hold these to the App's own room and the App's
+// `guests-rooms` rooms, live ([`super::ties::hold_written`]), so revoking the
+// grant takes those rooms from everyone it reached, an untied person included,
+// and what the owner wrote stays. The owner's own write clears the mark.
+
+/// `agent_written_access.kind` of a role.
+pub const WRITTEN_ROLE: &str = "role";
+/// `agent_written_access.kind` of an App login (a `kind=app` grant).
+pub const WRITTEN_GRANT: &str = "grant";
+
+pub(super) fn mark_written_conn(conn: &Connection, kind: &str, id: &str, by: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO agent_written_access (kind, id, written_by, written_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(kind, id) DO UPDATE SET written_by = excluded.written_by, written_at = excluded.written_at",
+        params![kind, id, by, now_secs()],
+    )
+    .map_err(|e| format!("agent written mark: {e}"))?;
+    Ok(())
+}
+
+/// An agent (`by`) wrote this role or App login.
+pub fn mark_written(kind: &str, id: &str, by: &str) -> Result<(), String> {
+    with_conn(|conn| mark_written_conn(conn, kind, id, by))
+}
+
+/// The owner wrote it: what it holds now is the owner's. On a role, that
+/// goes for the logins holding it too: the owner set what that role gives.
+pub fn clear_written(kind: &str, id: &str) -> Result<(), String> {
+    with_conn(|conn| {
+        conn.execute("DELETE FROM agent_written_access WHERE kind = ?1 AND id = ?2", params![kind, id])
+            .map_err(|e| format!("agent written clear: {e}"))?;
+        if kind == WRITTEN_ROLE {
+            conn.execute(
+                "DELETE FROM agent_written_access WHERE kind = ?1 AND id IN (SELECT id FROM grants WHERE kind = 'app' AND role_id = ?2)",
+                params![WRITTEN_GRANT, id],
+            )
+            .map_err(|e| format!("agent written clear: {e}"))?;
+        }
+        Ok(())
+    })
+}
+
+pub(super) fn written_conn(conn: &Connection, kind: &str, id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM agent_written_access WHERE kind = ?1 AND id = ?2)",
+        params![kind, id],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(|e| format!("agent written lookup: {e}"))
+}
+
+/// Did an agent write this role or App login?
+pub fn written(kind: &str, id: &str) -> Result<bool, String> {
+    with_conn(|conn| written_conn(conn, kind, id))
 }
 
 // ── the owner's per-App grant ────────────────────────────────────────
@@ -260,7 +326,7 @@ impl Refusal {
 pub fn outside_app_hint(app: &str, rooms: &[String]) -> String {
     let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
     format!(
-        "not a room this App may hand out: {}. Ask for it once for the whole App: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them; the owner approves it on a card on your Thread)",
+        "not a room this App may hand out: {}. Ask for it once for the whole App: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them; the owner approves it on a card on your Thread). Then people on the App can be given it; a login you set up reaches it only after the person uses a reset link on K2's own page",
         rooms.join(", "),
         flags.join(" "),
     )
@@ -622,7 +688,11 @@ pub fn set(app: &str, username: &str, room_tokens: &[String], ceiling: &Ceiling,
     if !out.view.changed {
         return Ok(out);
     }
-    super::set_app_grant_rooms(&out.view.username, app.trim(), &ids, true, actor).map_err(Refusal::Store)?;
+    let grant = super::set_app_grant_rooms(&out.view.username, app.trim(), &ids, true, actor).map_err(Refusal::Store)?;
+    // Under the App's grant, not the owner's rights: revoking it takes these back.
+    if matches!(ceiling, Ceiling::Rooms(_)) {
+        mark_written(WRITTEN_GRANT, &grant.id, actor).map_err(Refusal::Store)?;
+    }
     audit(
         app.trim(),
         AUDIT_CHANGE,

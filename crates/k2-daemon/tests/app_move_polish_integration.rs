@@ -1013,13 +1013,12 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     let alice = user("scope-alice");
     assert_eq!((alice.has_password, alice.email.clone(), alice.default_rooms.clone(), alice.role_id.clone()), (false, None, Vec::<String>::new(), None), "{alice:?}");
 
-    // Its own App's guest: allowed.
+    // A person the owner added on its own App: the owner's (security review
+    // 2026-11-02: a new password would hand the agent their sign-in).
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-ga", "password": "agent-chosen-pw-2"})).await;
-    assert_eq!(r.status, 200, "its own App's guest: {}", r.body);
-    assert!(user("scope-ga").has_password);
-    // 0.46.6: an agent's password for a person: they choose their own at sign-in.
-    assert_eq!(r.json()["passwordMustChange"], json!(true), "{}", r.body);
-    assert!(k2_core::skin::must_change::is_flagged(&user("scope-ga").id).unwrap());
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "the owner's person: {}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("was added by the owner"), "{}", r.body);
+    assert!(!user("scope-ga").has_password);
 
     // A box guest it may not add (agent-app-users S2: App users only).
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh"})).await;
@@ -1030,6 +1029,9 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     assert_eq!(k2_core::skin::creators::workspace_of(&user("scope-fresh").id).unwrap().as_deref(), Some(a.id.as_str()), "stamped");
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-fresh", "password": "agent-chosen-pw-4"})).await;
     assert_eq!(r.status, 200, "its own new guest, still empty: {}", r.body);
+    // 0.46.6: an agent's password for a person: they choose their own at sign-in.
+    assert_eq!(r.json()["passwordMustChange"], json!(true), "{}", r.body);
+    assert!(k2_core::skin::must_change::is_flagged(&user("scope-fresh").id).unwrap());
     let r = post(d.port, "/cli/skin/users/rooms", &agent, json!({"username": "scope-fresh", "rooms": [b.handle]})).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "another workspace's room: {}", r.body);
     // 0.46.8: the role's room is outside what this App may hand out; the

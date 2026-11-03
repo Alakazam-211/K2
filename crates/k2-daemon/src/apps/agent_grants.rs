@@ -428,7 +428,7 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
             lines: vec![
                 format!("let {handle} set its own guests' rooms (guests-rooms): {shown}"),
                 format!(
-                    "then any of {handle}'s guests can be given {shown}, at once: that includes test guests and logins {ws} sets up itself, and {ws} could know those logins' passwords",
+                    "then {handle}'s guests can be given {shown}, with Thread access at most when {ws} sets it. Logins {ws} sets up itself reach it only after the person uses a reset link on K2's own page. Take it back with k2 app grant {handle} --kind guests-rooms --revoke: what {ws} handed out goes at the next request; rooms you put on a role yourself stay",
                     ws = ws_handle(ws)
                 ),
             ],

@@ -834,7 +834,12 @@ fn interpret_token_policy(
     }
     match parse_room_policy_json(raw) {
         Ok(Some(p)) => p,
-        Ok(None) | Err(_) => cartesian_policy(caps, rooms),
+        Ok(None) => cartesian_policy(caps, rooms),
+        // Unreadable: nothing, never every cap in every room.
+        Err(e) => {
+            crate::log_debug!("[skin] session room policy unreadable: {e}");
+            RoomPolicy::new()
+        }
     }
 }
 
@@ -2852,8 +2857,12 @@ pub(crate) fn mint_app_session_conn(
             }
         }
         let tie = ties::get_conn(conn, &principal.id)?;
+        let mut written = false;
         let (policy, role_name) = match enabled_app_grant(conn, &principal.id, &app)? {
-            Some(grant) => grant_login_policy(conn, &grant)?,
+            Some(grant) => {
+                written = grant_written(conn, &grant)?;
+                grant_login_policy(conn, &grant)?
+            }
             // Sew S28 §13 (G7): chat-only login. A box login (`host`) with
             // no host grant but a `chat` grant gets a session with an
             // EMPTY room policy (Thread, files, tickets, wiki and store
@@ -2873,6 +2882,7 @@ pub(crate) fn mint_app_session_conn(
                 return Err(HOST_LOGIN_DENIED.to_string());
             }
         };
+        let policy = if written && tie.is_none() { ties::hold_written(app_ws, &app_rooms, policy) } else { policy };
         let caps = union_caps(&policy);
         let rooms = rooms_from_policy(&policy);
         let caps_stored = caps_json(&caps);
@@ -4406,8 +4416,12 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let paths_raw: Option<String> = r.get(7)?;
     let caps = caps_from_json(&caps_raw);
     let rooms = rooms_from_json(&rooms_raw);
-    let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw))
-        .unwrap_or_else(|_| cartesian_policy(&caps, &rooms));
+    // A room policy that can't be read gives nothing, never every cap in
+    // every room (security review 2026-11-02).
+    let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw)).unwrap_or_else(|e| {
+        crate::log_debug!("[skin] role room policy unreadable: {e}");
+        RoomPolicy::new()
+    });
     Ok(SkinRole {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -6193,6 +6207,9 @@ pub fn add_principal_for_app_by(
     if app.is_empty() || app == HOST_APP_ID {
         return Err("app must be a published App (use a plain add for the box login)".to_string());
     }
+    if (by.agent_workspace.is_some() || by.app_key_workspace.is_some()) && creators::name_reserved(&username)? {
+        return Err(format!("{}: '{username}' is a name people on this box sign in or stamp under: pick another", creators::NAME_RESERVED));
+    }
     let role = role.map(str::trim).filter(|s| !s.is_empty());
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = now_secs();
@@ -6223,12 +6240,13 @@ pub fn add_principal_for_app_by(
             params![id, username, created_at, email],
         )
         .map_err(|e| unique_email_err(email.as_deref(), e, "skin principal insert"))?;
+        let grant_id = uuid::Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO grants
              (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
              VALUES (?1, 'principal', ?2, 'app', ?3, ?4, ?5, ?6, 1, ?7)",
             params![
-                uuid::Uuid::new_v4().to_string(),
+                grant_id,
                 id,
                 app,
                 role_id,
@@ -6238,6 +6256,9 @@ pub fn add_principal_for_app_by(
             ],
         )
         .map_err(|e| format!("skin app grant insert: {e}"))?;
+        if by.agent_workspace.is_some() || by.app_key_workspace.is_some() {
+            guest_rooms::mark_written_conn(&tx, guest_rooms::WRITTEN_GRANT, &grant_id, created_by)?;
+        }
         if let Some(ws) = by.agent_workspace {
             creators::stamp_conn(&tx, &id, ws)?;
         }
@@ -7219,12 +7240,14 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
             .map_err(|e| format!("skin token resolve: {e}"))?
             .flatten();
         let Some((mut pass, tie)) = row else { return Ok(None) };
+        let mut written = false;
         if pass.session {
             // 0.46.8 (Rosson 2026-11-02): new access at the next request, no
             // sign-out. A login's rooms and caps are its grant's, now, like
             // its folders (R3); the stored copy only says what it was when
             // last written. A role that can't be read fails closed.
-            if let Some(policy) = live_session_policy(conn, &pass)? {
+            if let Some((policy, was_written)) = live_session_policy(conn, &pass)? {
+                written = was_written;
                 pass.caps = union_caps(&policy);
                 pass.rooms = rooms_from_policy(&policy);
                 pass.room_policy = policy;
@@ -7233,13 +7256,11 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
             // app-user-profile §3.7: last used, in memory only.
             profile::touch(&pass.id);
         }
-        let app_rooms = match &tie {
-            Some(_) => ties::app_rooms_conn(conn, &pass.app)?,
-            None => Vec::new(),
-        };
-        Ok(Some((pass, tie, app_rooms)))
+        let app_rooms = if tie.is_some() || written { ties::app_rooms_conn(conn, &pass.app)? } else { Vec::new() };
+        Ok(Some((pass, tie, app_rooms, written)))
     })?;
-    Ok(row.and_then(|(pass, tie, app_rooms)| match tie {
+    Ok(row.and_then(|(pass, tie, app_rooms, written)| match tie {
+        None if written => Some(hold_resolved(pass, &app_rooms)),
         None => Some(pass),
         // agent-app-users R2 (A2): a tied guest's live session is held to
         // the ceiling on every use. The App's workspace is read after the
@@ -7248,14 +7269,38 @@ pub fn try_resolve_skin_token(presented_raw: &str) -> Result<Option<SkinPass>, S
     }))
 }
 
+/// Did an agent write this App login, or the role it carries?
+fn grant_written(conn: &Connection, grant: &SkinGrant) -> Result<bool, String> {
+    if guest_rooms::written_conn(conn, guest_rooms::WRITTEN_GRANT, &grant.id)? {
+        return Ok(true);
+    }
+    match grant.role_id.as_deref() {
+        Some(rid) => guest_rooms::written_conn(conn, guest_rooms::WRITTEN_ROLE, rid),
+        None => Ok(false),
+    }
+}
+
+/// [`resolve_skin_token`]'s hold on an untied login an agent wrote: what
+/// [`ties::hold_written`] leaves, after the skin mutex is released (A21).
+fn hold_resolved(mut pass: SkinPass, app_rooms: &[String]) -> SkinPass {
+    let app_ws = ties::app_workspace(&pass.app);
+    let policy = ties::hold_written(app_ws.as_deref(), app_rooms, std::mem::take(&mut pass.room_policy));
+    pass.caps = union_caps(&policy);
+    pass.rooms = rooms_from_policy(&policy);
+    pass.room_policy = policy;
+    pass
+}
+
 /// The policy a login session has right now: its App's enabled grant's
-/// ([`grant_login_policy`], what a fresh sign-in would get). `None`: no
-/// such grant (a chat-only box login, S28 §13, whose stored policy is
-/// empty), or no principal; the stored row stands.
-fn live_session_policy(conn: &Connection, pass: &SkinPass) -> Result<Option<RoomPolicy>, String> {
+/// ([`grant_login_policy`], what a fresh sign-in would get), and whether an
+/// agent wrote that login or its role ([`grant_written`]). `None`: no such
+/// grant (a chat-only box login, S28 §13, whose stored policy is empty), or
+/// no principal; the stored row stands.
+fn live_session_policy(conn: &Connection, pass: &SkinPass) -> Result<Option<(RoomPolicy, bool)>, String> {
     let Some(principal_id) = pass.principal_id.as_deref() else { return Ok(None) };
     let Some(grant) = enabled_app_grant(conn, principal_id, &pass.app)? else { return Ok(None) };
-    Ok(Some(grant_login_policy(conn, &grant)?.0))
+    let written = grant_written(conn, &grant)?;
+    Ok(Some((grant_login_policy(conn, &grant)?.0, written)))
 }
 
 /// [`resolve_skin_token`]'s clamp for a tied guest's session: `None` when
@@ -10415,6 +10460,75 @@ mod tests {
             assert!(resolve_skin_token(&ada_raw).unwrap().has_room(&c));
             let bp = resolve_skin_token(&bob_raw).unwrap();
             assert!(bp.has_room(&a) && bp.has_room(&b), "bob untouched: {bp:?}");
+        });
+    }
+
+    /// A role or session whose room policy can't be read gives nothing, never
+    /// every cap in every room.
+    #[test]
+    fn an_unreadable_room_policy_fails_closed() {
+        with_temp_home(|| {
+            add_principal("ada").expect("ada");
+            let room = uuid::Uuid::new_v4().to_string();
+            let mut p = RoomPolicy::new();
+            p.insert(room.clone(), vec![CAP_THREAD_READ.into(), CAP_FILES_READ.into()]);
+            create_role_for_app("broken", &p, None).unwrap();
+            assign_role("ada", "broken").unwrap();
+            let (_, raw) = create_session_token("ada").unwrap();
+            assert!(resolve_skin_token(&raw).unwrap().has_room(&room));
+            with_conn(|conn| {
+                conn.execute("UPDATE roles SET room_policy = 'not json' WHERE name = 'broken'", []).map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            let pass = resolve_skin_token(&raw).expect("still a session");
+            assert!(pass.room_policy.is_empty() && pass.caps.is_empty(), "no caps at all: {pass:?}");
+            with_conn(|conn| {
+                conn.execute("UPDATE roles SET room_policy = '{}', caps = '[]', rooms = '[]' WHERE name = 'broken'", []).map_err(|e| e.to_string())?;
+                conn.execute("UPDATE tokens SET room_policy = 'not json' WHERE session = 1", []).map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(interpret_token_policy(true, &[CAP_FILES_READ.to_string()], &[room.clone()], Some("not json")), RoomPolicy::new());
+        });
+    }
+
+    /// Item 12: what resolving a pass costs on a busy room's shape (a role of
+    /// 20 rooms, 40 caps each, folder limits on one, a tied login's extra
+    /// reads), against an owner-made and a platform pass. Prints; run with
+    /// `--ignored --nocapture`. Guest sockets resolve once per frame.
+    #[test]
+    #[ignore = "a timing report, not a test"]
+    fn resolve_timing_on_a_busy_room_shape() {
+        with_temp_home(|| {
+            let rooms: Vec<String> = (0..20).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+            let mut p = RoomPolicy::new();
+            for r in &rooms {
+                p.insert(r.clone(), ACCEPTED_CAPS.iter().map(|c| c.to_string()).collect());
+            }
+            create_role_for_app("busy", &p, None).unwrap();
+            add_principal("ada").unwrap();
+            assign_role("ada", "busy").unwrap();
+            let (_, session) = create_session_token("ada").unwrap();
+            let mut small = RoomPolicy::new();
+            small.insert(rooms[0].clone(), vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into(), CAP_FILES_READ.into()]);
+            create_role_for_app("typical", &small, None).unwrap();
+            add_principal("bo").unwrap();
+            assign_role("bo", "typical").unwrap();
+            let (_, typical) = create_session_token("bo").unwrap();
+            let (_, platform) = create_token("plat", Some(&[CAP_THREAD_READ.to_string()]), &rooms).unwrap();
+            let time = |what: &str, raw: &str| {
+                let n = 2000u32;
+                let start = std::time::Instant::now();
+                for _ in 0..n {
+                    assert!(resolve_skin_token(raw).is_some());
+                }
+                let per = start.elapsed() / n;
+                println!("TIMING {what}: {per:?} per resolve; {:.0} resolves/s on one core under the skin mutex", 1.0 / per.as_secs_f64());
+            };
+            time("platform pass (no grant read)", &platform);
+            time("login session, role of 1 room, 3 caps", &typical);
+            time("login session, role of 20 rooms, every cap", &session);
         });
     }
 

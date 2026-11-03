@@ -824,7 +824,13 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
     match dispatch(&mail, &minted) {
         Ok(d) => {
             audit("app_user_invite", by.actor(), &format!("{} app={app} to={email}", person.username));
-            delivered_json(d, &person, &app, &email, &sender, minted.ttl_secs, "Invite")
+            let r = delivered_json(d, &person, &app, &email, &sender, minted.ttl_secs, "Invite");
+            // An agent hears what waits and which card clears it, as on an add.
+            if matches!(by, By::Agent { .. }) {
+                crate::skin_routes::with_waiting(r, body)
+            } else {
+                r
+            }
         }
         Err(r) => r,
     }

@@ -43,6 +43,10 @@ pub const SHELL_IDLE_SECS: u64 = 15 * 60;
 /// Largest framed one-shot output (the tail is kept).
 const EXEC_CAP: usize = 256 * 1024;
 
+/// What a shell's client reads when its caller's access to the App ended.
+#[cfg(unix)]
+const ACCESS_REMOVED_NOTICE: &str = "your access to this App ended: the shell was hung up";
+
 pub const NOT_RUNNING: &str = "app_not_running";
 pub const EXEC_UNAVAILABLE: &str = "exec_unavailable";
 
@@ -206,6 +210,71 @@ fn refusal_body(r: &Refusal) -> (String, String) {
     (status.to_string(), json!({ "error": { "code": r.code, "hint": r.hint } }).to_string())
 }
 
+/// What an open shell keeps asking about its caller (live-access S1a): the
+/// door's own checks, again, for as long as the shell lives. It takes a login
+/// or a passport, so a shell ends when either does, or when an agent's App
+/// switch goes off.
+#[derive(Debug, Clone)]
+pub struct ShellAccess {
+    query: String,
+    bearer: Option<String>,
+    owner: String,
+    presented: String,
+    login: crate::socket_access::LoginCheck,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+impl ShellAccess {
+    pub fn new(query: &str, bearer: Option<&str>, owner: &str) -> Self {
+        // The credential `who_from_tcp` takes.
+        let presented = crate::routes::http::extract_token(query).filter(|s| !s.is_empty()).or(bearer.map(str::trim)).unwrap_or_default();
+        Self {
+            query: query.to_string(),
+            bearer: bearer.map(str::to_string),
+            owner: owner.to_string(),
+            presented: presented.to_string(),
+            login: crate::socket_access::LoginCheck::new(presented, owner),
+        }
+    }
+
+    fn who(&self) -> Who {
+        crate::compute_routes::who_from_tcp(&self.query, self.bearer.as_deref(), &self.owner)
+    }
+
+    /// The tick: may this caller still exec into `app`? Reads the database
+    /// (a blocking thread). Only a real refusal ends a shell. A database error
+    /// isn't one, and some reads turn an error into "no" (the App switches, a
+    /// workspace lookup), so a refusal counts only if the database answers.
+    pub fn allowed_now(&self, app: &str) -> bool {
+        let who = self.who();
+        match may_exec(&who).and_then(|()| app_for(&who, Some(app))) {
+            Ok(_) => true,
+            Err(r) if r.status >= 500 => true,
+            Err(_) => !main_db_answers(),
+        }
+    }
+
+    /// Before input reaches the shell, or output leaves it: is the credential
+    /// itself still live? Cheap (keystrokes and output chunks): the login store
+    /// only when it moved; a passport's check is in memory. The caller's App
+    /// rights wait for the tick.
+    pub(crate) fn credential_ok(&mut self, opened_by: &Who) -> bool {
+        match opened_by {
+            Who::Owner | Who::Login { .. } => self.login.frame_ok(),
+            Who::Agent { .. } | Who::Shell { .. } => crate::session_token::validate_hook(&self.presented).is_some(),
+            Who::Wrong | Who::Invalid => false,
+        }
+    }
+}
+
+/// Can the database read what [`ShellAccess::allowed_now`]'s checks read?
+#[cfg_attr(not(unix), allow(dead_code))]
+fn main_db_answers() -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT (SELECT COUNT(*) FROM projects) + (SELECT COUNT(*) FROM apps)", [], |r| r.get::<_, i64>(0)).is_ok()
+}
+
 /// GET `/cli/app/shell?app=&cols=&rows=[&argv=<json>]` (WebSocket, S28).
 ///
 /// Frames: binary both ways for terminal bytes; text JSON for control —
@@ -213,8 +282,8 @@ fn refusal_body(r: &Refusal) -> (String, String) {
 /// `{"type":"banner","text":…}` at start and end and `{"type":"exit",
 /// "code":N}` last.
 #[cfg(unix)]
-pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: HashMap<String, String>) {
-    use futures_util::{SinkExt, StreamExt};
+pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: HashMap<String, String>, access: ShellAccess) {
+    use futures_util::SinkExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::tungstenite::Message;
 
@@ -264,6 +333,26 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
             return;
         }
     };
+    run_shell(ws, conn, who, app, dep, argv, access).await;
+}
+
+/// The shell, once the engine has it: bytes both ways until it exits, the
+/// client leaves, it idles out, or its caller loses access.
+#[cfg(unix)]
+pub(crate) async fn run_shell<S>(
+    mut ws: tokio_tungstenite::WebSocketStream<S>,
+    conn: std::os::unix::net::UnixStream,
+    who: Who,
+    app: AppRow,
+    dep: String,
+    argv: Vec<String>,
+    mut access: ShellAccess,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
     let started = deploy::now();
     let banner = |end: bool| {
         json!({
@@ -319,13 +408,19 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
     let mut filter = deploy::framing::TermFilter::new();
     let mut last_input = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(30));
+    let mut access_tick = crate::socket_access::tick();
     let (mut bytes_in, mut bytes_out) = (0u64, 0u64);
     let mut exit: Option<i32> = None;
     let mut why = "exited";
+    let mut access_lost = false;
     loop {
         tokio::select! {
             f = rx.recv() => match f {
                 Some((wire::tty::OUTPUT, b)) => {
+                    if !access.credential_ok(&who) {
+                        access_lost = true;
+                        break;
+                    }
                     bytes_out += b.len() as u64;
                     let clean = filter.push(&b);
                     if !clean.is_empty() && ws.send(Message::Binary(clean.into())).await.is_err() {
@@ -345,6 +440,10 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
             },
             m = ws.next() => match m {
                 Some(Ok(Message::Binary(b))) => {
+                    if !access.credential_ok(&who) {
+                        access_lost = true;
+                        break;
+                    }
                     last_input = Instant::now();
                     bytes_in += b.len() as u64;
                     for chunk in b.chunks(wire::tty::MAX_FRAME) {
@@ -383,12 +482,30 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
                     break;
                 }
             }
+            _ = access_tick.tick() => {
+                let (a, app_id) = (access.clone(), app.app_id.clone());
+                // A check that panicked is no refusal: the next tick asks again.
+                let allowed = tokio::task::spawn_blocking(move || a.allowed_now(&app_id)).await.unwrap_or(true);
+                if !allowed {
+                    access_lost = true;
+                    break;
+                }
+            }
         }
+    }
+    if access_lost {
+        why = "access removed";
+        let _ = wtx.send(wire::tty::encode(wire::tty::HANGUP, &[]));
+        let _ = ws.send(Message::Text(json!({ "type": "notice", "text": ACCESS_REMOVED_NOTICE }).to_string().into())).await;
     }
     drop(wtx);
     let _ = ws.send(Message::Text(banner(true).into())).await;
     let _ = ws.send(Message::Text(json!({ "type": "exit", "code": exit, "why": why }).to_string().into())).await;
-    let _ = ws.close(None).await;
+    if access_lost {
+        let _ = ws.send(crate::presence::session_revoked_close_message()).await;
+    } else {
+        let _ = ws.close(None).await;
+    }
     let ended = deploy::now();
     let _ = tokio::task::spawn_blocking(move || {
         audit(
@@ -402,7 +519,7 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
 }
 
 #[cfg(not(unix))]
-pub async fn serve_shell(stream: &mut tokio::net::TcpStream, _who: Who, _params: HashMap<String, String>) {
+pub async fn serve_shell(stream: &mut tokio::net::TcpStream, _who: Who, _params: HashMap<String, String>, _access: ShellAccess) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buf = [0u8; 8192];
     let _ = stream.read(&mut buf).await;
@@ -430,6 +547,241 @@ pub fn shell_on_cell() -> crate::cli_response::CliResponse {
 /// Member login too. Kept for the docs' sake.
 #[allow(dead_code)]
 const _FLOOR: Role = Role::Admin;
+
+#[cfg(all(test, unix))]
+mod shell_access_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::os::unix::net::UnixStream;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+    use tokio_tungstenite::tungstenite::Message;
+
+    const OWNER: &str = "owner-token-shell-access";
+
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// A real App row, a real `run_shell` over a real WebSocket. Only the
+    /// engine at the far end of its stream is a stand-in: a guarded App needs
+    /// a Linux box with the engine, and this loop is what's under test.
+    struct Rig {
+        ws_path: String,
+        ws_id: String,
+        app: AppRow,
+    }
+
+    fn rig(name: &str) -> Rig {
+        let dir = std::env::temp_dir().join(format!("k2-shell-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let root = dunce::canonicalize(&dir).expect("canon").to_string_lossy().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)", rusqlite::params![id, name, root]).expect("project");
+        let svc = k2_core::published_services::insert(&conn, &id, name, k2_core::published_services::CMD_APP_SENTINEL, &root, 0, "local", "stopped", "cmd", "").expect("service").id;
+        deploy::store::insert_app(
+            &conn,
+            &deploy::store::NewApp { app_id: name, service_id: &svc, seed_id: None, owner_workspace: &id, isolation: "container", memory_limit_bytes: None, front_port: 0, created_by: "owner" },
+        )
+        .expect("app");
+        let app = deploy::store::get_app(&conn, name).expect("read").expect("row");
+        Rig { ws_path: root, ws_id: id, app }
+    }
+
+    /// Open a shell as `token`. Returns the client socket, and what the engine
+    /// heard.
+    async fn open(rig: &Rig, token: &str) -> (Client, UnboundedReceiver<(u8, Vec<u8>)>, UnixStream) {
+        let query = format!("token={token}");
+        let who = crate::compute_routes::who_from_tcp(&query, None, OWNER);
+        assert!(may_exec(&who).is_ok() && app_for(&who, Some(&rig.app.app_id)).is_ok(), "the door admits {who:?}");
+        let access = ShellAccess::new(&query, None, OWNER);
+        let (daemon_end, mut engine) = UnixStream::pair().expect("pair");
+        let keep = engine.try_clone().expect("clone");
+        let (tx, heard) = unbounded_channel();
+        std::thread::spawn(move || {
+            while let Ok(Some(f)) = wire::tty::read(&mut engine) {
+                if tx.send(f).is_err() {
+                    break;
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = rig.app.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let ws = tokio_tungstenite::accept_async(stream).await.expect("upgrade");
+            run_shell(ws, daemon_end, who, app, "dep-1".into(), vec!["/bin/sh".into()], access).await;
+        });
+        let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}{SHELL_PATH}")).await.expect("dial");
+        (client, heard, keep)
+    }
+
+    /// Everything the client gets until the socket ends: `(texts, close code)`.
+    async fn until_closed(c: &mut Client, secs: u64) -> (Vec<String>, Option<u16>) {
+        let mut texts = Vec::new();
+        let end = tokio::time::Instant::now() + Duration::from_secs(secs);
+        loop {
+            let left = end.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(left, c.next()).await {
+                Err(_) => panic!("the socket stayed open past {secs} s; saw {texts:?}"),
+                Ok(None) | Ok(Some(Err(_))) => return (texts, None),
+                Ok(Some(Ok(Message::Close(f)))) => return (texts, f.map(|f| u16::from(f.code))),
+                Ok(Some(Ok(Message::Text(t)))) => texts.push(t.to_string()),
+                Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
+    /// What the engine hears, up to and including the frame `stop` picks. Its
+    /// reader is another thread, so a frame can land after the client's close.
+    async fn engine_hears(heard: &mut UnboundedReceiver<(u8, Vec<u8>)>, what: &str, stop: impl Fn(&(u8, Vec<u8>)) -> bool) -> Vec<(u8, Vec<u8>)> {
+        let mut out = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), heard.recv()).await {
+                Err(_) | Ok(None) => panic!("{what}: the engine never got it; heard {out:?}"),
+                Ok(Some(f)) => {
+                    let done = stop(&f);
+                    out.push(f);
+                    if done {
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn assert_hung_up(heard: &mut UnboundedReceiver<(u8, Vec<u8>)>, texts: &[String], close: Option<u16>, what: &str) {
+        assert_eq!(close, Some(crate::presence::WS_CLOSE_SESSION_REVOKED), "{what}: {texts:?}");
+        assert!(texts.iter().any(|t| t.contains(ACCESS_REMOVED_NOTICE)), "{what}: the client is told why: {texts:?}");
+        assert!(texts.iter().any(|t| t.contains("\"why\":\"access removed\"")), "{what}: the exit says why: {texts:?}");
+        engine_hears(heard, what, |(k, _)| *k == wire::tty::HANGUP).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_open_shell_ends_with_its_callers_access() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let rig = rig("shellapp");
+        for u in ["sh_idle", "sh_typing", "sh_kept"] {
+            k2_core::connect_users::add_user(u, "password123").expect("add");
+            k2_core::connect_users::set_role(u, Role::Admin).expect("role");
+        }
+        let idle = k2_core::connect_users::create_session("sh_idle");
+        let typing = k2_core::connect_users::create_session("sh_typing");
+        let kept = k2_core::connect_users::create_session("sh_kept");
+        let (mut idle_c, mut idle_heard, _k1) = open(&rig, &idle).await;
+        let (mut typing_c, mut typing_heard, _k2) = open(&rig, &typing).await;
+        let (mut kept_c, mut kept_heard, kept_engine) = open(&rig, &kept).await;
+        let (mut owner_c, mut owner_heard, _k4) = open(&rig, OWNER).await;
+
+        // A live login's input reaches the shell.
+        typing_c.send(Message::Binary(b"before".to_vec().into())).await.expect("send");
+        let (k, b) = tokio::time::timeout(Duration::from_secs(5), typing_heard.recv()).await.expect("input arrives").expect("frame");
+        assert_eq!((k, b.as_slice()), (wire::tty::INPUT, &b"before"[..]));
+
+        k2_core::connect_users::revoke_user_sessions("sh_idle");
+        k2_core::connect_users::revoke_user_sessions("sh_typing");
+
+        // Typing into a revoked login's shell: refused at once, not at the tick.
+        let t0 = Instant::now();
+        typing_c.send(Message::Binary(b"AFTER-REVOKE".to_vec().into())).await.expect("send");
+        let (texts, close) = until_closed(&mut typing_c, 3).await;
+        assert!(t0.elapsed() < crate::socket_access::TICK, "input is checked, not only the tick: {:?}", t0.elapsed());
+        let frames = engine_hears(&mut typing_heard, "typing into a revoked login's shell", |(k, _)| *k == wire::tty::HANGUP).await;
+        assert!(!frames.iter().any(|(k, b)| *k == wire::tty::INPUT && b == b"AFTER-REVOKE"), "the input never reached the shell: {frames:?}");
+        assert_eq!(close, Some(crate::presence::WS_CLOSE_SESSION_REVOKED), "{texts:?}");
+
+        // Output from the shell of a kicked login that isn't typing: it never
+        // reaches the client, and that ends the shell, with no tick.
+        k2_core::connect_users::add_user("sh_reading", "password123").expect("add");
+        k2_core::connect_users::set_role("sh_reading", Role::Admin).expect("role");
+        let reading = k2_core::connect_users::create_session("sh_reading");
+        let (mut reading_c, mut reading_heard, reading_engine) = open(&rig, &reading).await;
+        k2_core::connect_users::revoke_user_sessions("sh_reading");
+        let t0 = Instant::now();
+        {
+            use std::io::Write;
+            (&reading_engine).write_all(&wire::tty::encode(wire::tty::OUTPUT, b"AFTER-KICK-OUTPUT")).expect("engine writes");
+        }
+        let mut binary: Vec<Vec<u8>> = Vec::new();
+        let close = loop {
+            match tokio::time::timeout(Duration::from_secs(3), reading_c.next()).await.expect("the shell ends well before the tick") {
+                Some(Ok(Message::Binary(b))) => binary.push(b.to_vec()),
+                Some(Ok(Message::Close(f))) => break f.map(|f| u16::from(f.code)),
+                Some(Ok(_)) => {}
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(t0.elapsed() < crate::socket_access::TICK, "output is checked, not only the tick: {:?}", t0.elapsed());
+        assert!(binary.is_empty(), "no output after the kick: {binary:?}");
+        assert_eq!(close, Some(crate::presence::WS_CLOSE_SESSION_REVOKED));
+        engine_hears(&mut reading_heard, "a kicked reader's shell", |(k, _)| *k == wire::tty::HANGUP).await;
+
+        // An idle shell: the tick.
+        let (texts, close) = until_closed(&mut idle_c, 7).await;
+        assert_hung_up(&mut idle_heard, &texts, close, "an idle revoked login").await;
+
+        // Control: nobody else's access changed. Both still work, both ways.
+        for (c, heard, what) in [(&mut kept_c, &mut kept_heard, "another login"), (&mut owner_c, &mut owner_heard, "the owner token")] {
+            c.send(Message::Binary(b"still-here".to_vec().into())).await.expect("send");
+            let frames = engine_hears(heard, what, |(k, b)| *k == wire::tty::INPUT && b == b"still-here").await;
+            assert!(!frames.iter().any(|(k, _)| *k == wire::tty::HANGUP), "{what} is not hung up: {frames:?}");
+        }
+        use std::io::Write;
+        (&kept_engine).write_all(&wire::tty::encode(wire::tty::OUTPUT, b"from-the-shell")).expect("engine writes");
+        let got = loop {
+            match tokio::time::timeout(Duration::from_secs(5), kept_c.next()).await.expect("output arrives") {
+                Some(Ok(Message::Binary(b))) => break b,
+                Some(Ok(Message::Close(f))) => panic!("a login whose access didn't change was closed: {f:?}"),
+                Some(Ok(_)) => continue,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(got.as_ref() as &[u8], b"from-the-shell");
+    }
+
+    /// An agent's passport can hold a shell too: it ends when the passport does,
+    /// or when the agent's App switch goes off, or when the App leaves its
+    /// workspace. Another agent's shell stays.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_agents_shell_ends_with_its_passport_or_its_switch() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let rig_a = rig("agentapp");
+        let rig_b = rig("otherapp");
+        k2_core::workspace::settings::set_agents_can_manage_skin(&rig_a.ws_path, true).expect("switch");
+        k2_core::workspace::settings::set_agents_can_manage_skin(&rig_b.ws_path, true).expect("switch");
+        let mint = |ws: &str| {
+            let sid = k2_core::session::SessionId::new();
+            let tok = crate::session_token::mint_session_token(
+                &sid,
+                &sid.to_string(),
+                crate::session_token::HookPrincipal { workspace_uuid: ws.to_string(), agent_address: "agent".into() },
+                crate::session_token::CredMode::ApiKey,
+                crate::session_token::Provider::Anthropic,
+            );
+            (sid, tok)
+        };
+        let (_sid_a, tok_a) = mint(&rig_a.ws_id);
+        let (sid_a2, tok_a2) = mint(&rig_a.ws_id);
+        let (_sid_b, tok_b) = mint(&rig_b.ws_id);
+        let (mut switch_c, mut switch_heard, _k1) = open(&rig_a, &tok_a).await;
+        let (mut pass_c, mut pass_heard, _k2) = open(&rig_a, &tok_a2).await;
+        let (mut kept_c, mut kept_heard, _k3) = open(&rig_b, &tok_b).await;
+
+        crate::session_token::revoke_session(&sid_a2);
+        k2_core::workspace::settings::set_agents_can_manage_skin(&rig_a.ws_path, false).expect("switch off");
+
+        let (texts, close) = until_closed(&mut pass_c, 7).await;
+        assert_hung_up(&mut pass_heard, &texts, close, "a revoked passport").await;
+        let (texts, close) = until_closed(&mut switch_c, 7).await;
+        assert_hung_up(&mut switch_heard, &texts, close, "the App switch off").await;
+
+        kept_c.send(Message::Binary(b"still-here".to_vec().into())).await.expect("send");
+        let frames = engine_hears(&mut kept_heard, "the other agent's shell stays", |(k, b)| *k == wire::tty::INPUT && b == b"still-here").await;
+        assert!(!frames.iter().any(|(k, _)| *k == wire::tty::HANGUP), "{frames:?}");
+    }
+}
 
 #[cfg(test)]
 mod tests {

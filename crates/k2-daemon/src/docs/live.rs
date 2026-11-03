@@ -66,6 +66,12 @@
 //! code:"core_off", core, version, written}` and close code 4010. A socket
 //! that sees the switch off first (within a second) waits briefly for
 //! that; a switch that closed nothing here makes it write back itself.
+//! The person's token ends (a kick, a removal, a role change): `closed` with
+//! `kicked` when the login is still on the box, else `rights_lost`, then close
+//! code 4003. The worker asks before every frame that reads or writes the doc
+//! and at each poll while the store moved, and on a 5 s tick for what the store
+//! can't show (expiry): rights come from the login, so a token that ends leaves
+//! them untouched, and the kit alone would keep this connection.
 //!
 //! **Keepalive** (as `overlay_ws.rs`): a WS Ping every 20 s
 //! (`K2_DOCS_LIVE_PING_MS` overrides it for tests); no frame at all from the
@@ -520,7 +526,7 @@ enum Inbound {
 
 /// Serve one upgrade. The dispatcher resolved `caller` (a person) and ran
 /// its gates.
-pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, caller: DocCaller) {
+pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, caller: DocCaller, login: crate::socket_access::LoginCheck) {
     let mut cfg = WebSocketConfig::default();
     cfg.max_message_size = Some(wire::HARD_CAP);
     cfg.max_frame_size = Some(wire::HARD_CAP);
@@ -582,7 +588,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                 dead: dead.clone(),
             },
         );
-    let worker = Worker::new(opened, in_rx, ctl_rx, out_tx, dead);
+    let worker = Worker::new(opened, in_rx, ctl_rx, out_tx, dead, login);
     let spawned = std::thread::Builder::new().name(format!("k2-docs-live-{id}")).spawn(move || worker.run());
     if let Err(e) = spawned {
         log_debug!("[docs/live] WARN: worker thread: {e}");
@@ -808,6 +814,8 @@ struct Worker {
     own: HashSet<Seq>,
     /// The doc's version as this socket last told the client.
     seen: Seq,
+    /// The person's credential: when it ends, so does this socket.
+    login: crate::socket_access::LoginCheck,
 }
 
 /// However the worker ends (a spawn that failed included), its connection
@@ -825,6 +833,7 @@ impl Worker {
         ctl: Receiver<Ctl>,
         out: tokio::sync::mpsc::Sender<Out>,
         dead: Arc<AtomicBool>,
+        login: crate::socket_access::LoginCheck,
     ) -> Self {
         Worker {
             session: o.session,
@@ -843,6 +852,7 @@ impl Worker {
             host_closed: false,
             own: HashSet::new(),
             seen: o.version,
+            login,
         }
     }
 
@@ -861,7 +871,18 @@ impl Worker {
 
     fn serve(&mut self) -> Stop {
         let mut next_gate = Instant::now() + GATE_EVERY;
+        let mut next_login = Instant::now() + crate::socket_access::TICK;
         loop {
+            // Before anything more goes out or comes in.
+            if !self.login.frame_ok() {
+                return Stop::Close(self.signed_out());
+            }
+            if Instant::now() >= next_login {
+                next_login = Instant::now() + crate::socket_access::TICK;
+                if !self.login.valid_now() {
+                    return Stop::Close(self.signed_out());
+                }
+            }
             if let Err(s) = self.pump() {
                 return s;
             }
@@ -1025,6 +1046,18 @@ impl Worker {
         Ok(())
     }
 
+    /// The person's token ended: the same words as the kit's own removal
+    /// (WIRE.md "Closing"), and 4003 for a client that misses the frame.
+    fn signed_out(&self) -> Closed {
+        let store = super::runtime().ok().and_then(|rt| rt.store());
+        let c = if host::rights_for(&self.pid, &self.key, store.as_deref()).read {
+            Closed::k2(CloseReason::Kicked, "kicked", "your sign-in to this server ended: sign in again to keep editing")
+        } else {
+            Closed::k2(CloseReason::RightsLost, "rights_lost", "you can no longer read this doc")
+        };
+        Closed { ws_code: crate::presence::WS_CLOSE_SESSION_REVOKED, ..c }
+    }
+
     /// The kit dropped this connection's queue: why.
     fn why_gone(&self) -> Closed {
         if self.dead.load(Ordering::SeqCst) {
@@ -1108,6 +1141,15 @@ impl Worker {
             Ok(f) => f,
             Err(b) => return self.send(b.reply()),
         };
+        // Anything that writes or reads the doc asks the store first, never
+        // only the last tick. Carets and view hints wait for the next poll.
+        let touches_doc = matches!(
+            f,
+            ClientFrame::Edit { .. } | ClientFrame::Since { .. } | ClientFrame::Undo { .. } | ClientFrame::Redo { .. } | ClientFrame::Snapshot { .. }
+        );
+        if touches_doc && !self.login.valid_now() {
+            return Err(Stop::Close(self.signed_out()));
+        }
         match f {
             ClientFrame::Edit { op, root, base, hunks, group } => self.edit(op, &root, base, hunks, group),
             ClientFrame::Since { op, version } => match self.session.events_since(self.conn, version) {

@@ -555,6 +555,7 @@ pub async fn serve_activity_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     skin_pass: Option<SkinPass>,
+    mut login: Option<crate::socket_access::LoginCheck>,
 ) {
     let workspace_q = params
         .get("workspace")
@@ -639,6 +640,18 @@ pub async fn serve_activity_events_connection(
     // AH31: last roster frame sent, and a trailing frame owed.
     let mut last_roster: Option<tokio::time::Instant> = None;
     let mut roster_owed = false;
+    let mut recheck = crate::socket_access::tick();
+
+    // Before a frame leaves: this socket's caller, as it is now. Only when a
+    // frame would go out: the bus is box-wide.
+    macro_rules! may_send_or_close {
+        () => {
+            if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                break;
+            }
+        };
+    }
 
     loop {
         let flush_at = if roster_owed {
@@ -652,12 +665,19 @@ pub async fn serve_activity_events_connection(
             std::time::Duration::from_millis(wait.clamp(0, COUNTS_THROTTLE_MS) as u64)
         });
         tokio::select! {
+            _ = recheck.tick() => {
+                if login.as_ref().is_some_and(|l| !l.valid_now()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+            }
             _ = async {
                 match counts_in {
                     Some(wait) => tokio::time::sleep(wait).await,
                     None => std::future::pending::<()>().await,
                 }
             } => {
+                may_send_or_close!();
                 let now = chrono::Utc::now().timestamp_millis();
                 let mut closed = false;
                 for frame in guest.flush_due(&wire_workspace, now) {
@@ -676,6 +696,7 @@ pub async fn serve_activity_events_connection(
                     None => std::future::pending::<()>().await,
                 }
             } => {
+                may_send_or_close!();
                 roster_owed = false;
                 last_roster = Some(tokio::time::Instant::now());
                 if write.send(Message::Text(heartbeat_roster_json(&wire_workspace))).await.is_err() {
@@ -717,12 +738,11 @@ pub async fn serve_activity_events_connection(
                 match event {
                     Ok(event) => {
                         if let SessionEvent::AgentIdentityChanged { project_id: ref changed, .. } = event {
-                            if rooms_changed_reaches(skin_pass.as_ref(), &project_id, changed)
-                                && write
-                                    .send(Message::Text(ROOMS_CHANGED_FRAME.to_string()))
-                                    .await
-                                    .is_err()
-                            {
+                            if !rooms_changed_reaches(skin_pass.as_ref(), &project_id, changed) {
+                                continue;
+                            }
+                            may_send_or_close!();
+                            if write.send(Message::Text(ROOMS_CHANGED_FRAME.to_string())).await.is_err() {
                                 break;
                             }
                             continue;
@@ -735,6 +755,7 @@ pub async fn serve_activity_events_connection(
                             let Some(frame) = members_changed_frame(&project_id, &wire_workspace, &event) else {
                                 continue;
                             };
+                            may_send_or_close!();
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
@@ -746,6 +767,7 @@ pub async fn serve_activity_events_connection(
                             else {
                                 continue;
                             };
+                            may_send_or_close!();
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
@@ -759,13 +781,18 @@ pub async fn serve_activity_events_connection(
                             let Some(frame) = ticket_frame(&project_id, &wire_workspace, &event) else {
                                 continue;
                             };
+                            may_send_or_close!();
                             if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
                             continue;
                         }
                         if want_heartbeats {
-                            match heartbeat_frame(&project_id, &room_root, &wire_workspace, &event) {
+                            let beat = heartbeat_frame(&project_id, &room_root, &wire_workspace, &event);
+                            if beat.is_some() {
+                                may_send_or_close!();
+                            }
+                            match beat {
                                 Some(HeartbeatFrame::Roster) => {
                                     let now = tokio::time::Instant::now();
                                     let recent = last_roster
@@ -800,6 +827,7 @@ pub async fn serve_activity_events_connection(
                         let Some(frame) = guest.on_event(&project_id, &wire_workspace, &event, now) else {
                             continue;
                         };
+                        may_send_or_close!();
                         if write.send(Message::Text(frame)).await.is_err() {
                             break;
                         }
@@ -898,7 +926,7 @@ mod tests {
             if !workspace.is_empty() {
                 params.insert("workspace".to_string(), workspace);
             }
-            serve_activity_events_connection(&mut stream, params, pass).await;
+            serve_activity_events_connection(&mut stream, params, pass, None).await;
         });
         let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
         let mut buf = vec![0u8; 4096];
@@ -959,7 +987,7 @@ mod tests {
             let (mut stream, _) = listener.accept().await.expect("accept");
             let mut params = HashMap::new();
             params.insert("workspace".to_string(), workspace);
-            serve_activity_events_connection(&mut stream, params, pass).await;
+            serve_activity_events_connection(&mut stream, params, pass, None).await;
         });
         let (ws, resp) =
             tokio_tungstenite::connect_async(format!("ws://{addr}{ACTIVITY_EVENTS_WS_PATH}"))

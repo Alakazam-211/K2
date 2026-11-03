@@ -647,6 +647,7 @@ pub async fn serve_overlay_events_connection(
     skin_pass: Option<SkinPass>,
     skin_raw: Option<String>,
     viewer_login: Option<String>,
+    mut login: Option<crate::socket_access::LoginCheck>,
 ) {
     let skin = skin_pass.is_some();
     let conversation = params
@@ -718,6 +719,7 @@ pub async fn serve_overlay_events_connection(
     let mut guest_rx = crate::read_live::subscribe_guest();
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
+    let mut recheck = crate::socket_access::tick();
 
     loop {
         tokio::select! {
@@ -726,6 +728,12 @@ pub async fn serve_overlay_events_connection(
             biased;
             _ = keepalive.tick() => {
                 if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
+            _ = recheck.tick() => {
+                if login.as_ref().is_some_and(|l| !l.valid_now()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
                     break;
                 }
             }
@@ -784,6 +792,10 @@ pub async fn serve_overlay_events_connection(
                     Ok(frame) => {
                         if !skin_may_see_frame(&frame, &conversation, skin) {
                             continue;
+                        }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
                         }
                         let text = if needs_blocking(&frame) {
                             // A permission card: projected off the async
@@ -887,6 +899,10 @@ pub async fn serve_overlay_events_connection(
                         if !skin_may_see_frame(&frame, &conversation, skin) {
                             continue;
                         }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
+                        }
                         if write
                             .send(Message::Text(wire_json(&frame)))
                             .await
@@ -904,6 +920,10 @@ pub async fn serve_overlay_events_connection(
                         log_debug!("[daemon/overlay_ws] activity subscriber lagged {n} frames; sending a reset");
                         if skin {
                             continue;
+                        }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
                         }
                         let conv = conversation.clone();
                         match tokio::task::spawn_blocking(move || crate::thread_activity::current_turn(&conv)).await {

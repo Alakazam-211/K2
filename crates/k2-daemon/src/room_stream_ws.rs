@@ -467,7 +467,12 @@ async fn send_http(stream: &mut TcpStream, status: &str, body: &str) {
 
 /// WS handler. The dispatcher has authenticated `viewer` (a guest pass
 /// that resolved with `thread:read` admitted at the door, or `token_ok`).
-pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMap<String, String>, viewer: Viewer) {
+pub async fn serve_room_stream_connection(
+    stream: &mut TcpStream,
+    params: HashMap<String, String>,
+    viewer: Viewer,
+    mut login: Option<crate::socket_access::LoginCheck>,
+) {
     let guest = matches!(viewer, Viewer::Guest { .. });
     let mut want = match params.get(ROOMS_PARAM).map(|s| parse_rooms_param(s)) {
         Some(Ok(w)) => w,
@@ -516,6 +521,7 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
     keepalive.tick().await;
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
+    let mut token_tick = crate::socket_access::tick();
 
     // Apply a fresh readable set to `want`; send `inbox_subscribed` when
     // the set changed or `announce` (an answer to a subscribe message).
@@ -559,7 +565,18 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                     break;
                 }
             }
+            // A login reads every room on the box: its token decides.
+            _ = token_tick.tick() => {
+                if login.as_ref().is_some_and(|l| !l.valid_now()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+            }
             _ = recheck.tick() => {
+                if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
                 match readable_now(&viewer, link.as_deref()) {
                     Some((r, p)) => {
                         ear_set = ear_rooms_of(p.as_ref(), &r);
@@ -590,6 +607,11 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                             }
                         }
                         Some(Ok(next)) => {
+                            // Its answer names rooms.
+                            if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                                let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                                break;
+                            }
                             want = next;
                             match readable_now(&viewer, link.as_deref()) {
                                 Some((r, p)) => {
@@ -626,6 +648,10 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 };
                 let Some(conv) = frame.conversation_id.clone() else { continue };
                 let Some(room) = view.room_of(&conv).map(str::to_string) else { continue };
+                if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
                 let out = match (&viewer, frame.collection.as_str()) {
                     (Viewer::Login { .. }, "thread") => {
                         let doc = if overlay_ws::needs_blocking(&frame) {
@@ -795,6 +821,10 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                         if !ear || !matches!(viewer, Viewer::Login { .. }) {
                             continue;
                         }
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
+                        }
                         let rooms: Vec<(String, String)> = view.rooms.iter().map(|(r, c)| (r.clone(), c.clone())).collect();
                         let built = tokio::task::spawn_blocking(move || {
                             rooms
@@ -824,6 +854,10 @@ pub async fn serve_room_stream_connection(stream: &mut TcpStream, params: HashMa
                 }
                 let (Some(conv), Some(body)) = (frame.conversation_id.as_deref(), frame.activity.as_ref()) else { continue };
                 let Some(room) = view.room_of(conv).map(str::to_string) else { continue };
+                if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
                 if write.send(Message::Text(activity_message(conv, &room, &frame.id, body))).await.is_err() {
                     break;
                 }

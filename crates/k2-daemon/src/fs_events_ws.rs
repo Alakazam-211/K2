@@ -172,6 +172,7 @@ pub async fn serve_fs_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     skin_pass: Option<SkinPass>,
+    mut login: Option<crate::socket_access::LoginCheck>,
 ) {
     let workspace_q = params
         .get("workspace")
@@ -245,9 +246,16 @@ pub async fn serve_fs_events_connection(
     };
     let (mut write, mut read) = ws.split();
     let mut rx = session_events::subscribe();
+    let mut recheck = crate::socket_access::tick();
 
     loop {
         tokio::select! {
+            _ = recheck.tick() => {
+                if login.as_ref().is_some_and(|l| !l.valid_now()) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+            }
             incoming = read.next() => {
                 match incoming {
                     Some(Ok(Message::Ping(p))) => {
@@ -268,6 +276,10 @@ pub async fn serve_fs_events_connection(
                         else {
                             continue;
                         };
+                        if login.as_mut().is_some_and(|l| !l.frame_ok()) {
+                            let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                            break;
+                        }
                         if write.send(Message::Text(frame)).await.is_err() {
                             break;
                         }
@@ -479,7 +491,7 @@ mod tests {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 let mut params = HashMap::new();
                 params.insert("workspace".to_string(), workspace);
-                serve_fs_events_connection(&mut stream, params, Some(pass)).await;
+                serve_fs_events_connection(&mut stream, params, Some(pass), None).await;
             });
             let (ws, resp) =
                 tokio_tungstenite::connect_async(format!("ws://{addr}{FS_EVENTS_WS_PATH}"))

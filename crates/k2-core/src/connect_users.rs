@@ -655,7 +655,21 @@ fn save_store(store: &Store) -> Result<(), String> {
         format!("rename into place {}: {e}", file.display())
     })?;
     restrict_mode(&file);
+    AUTH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(())
+}
+
+/// Moves after every write of the login or session store in this process
+/// (`prd-live-access-changes-v1` S1a). An open socket compares it before each
+/// frame, so a kick or a removal stops that login's frames at once, and a
+/// socket pays one atomic load while nothing moved. Not a proof of validity:
+/// [`validate_session`] is the answer, and expiry or the other daemon's write
+/// during a handoff doesn't move it, so sockets also re-validate on a tick.
+static AUTH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`AUTH_GENERATION`].
+pub fn auth_generation() -> u64 {
+    AUTH_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Load-modify-save under a process lock so concurrent mutations don't
@@ -1532,6 +1546,7 @@ fn save_sessions(store: &SessionStore) -> Result<(), String> {
         format!("rename into place {}: {e}", file.display())
     })?;
     restrict_mode(&file);
+    AUTH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 

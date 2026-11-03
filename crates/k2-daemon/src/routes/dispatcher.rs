@@ -2381,7 +2381,11 @@ async fn handle_one_request(
             match crate::docs::live::person_for(caller, app_pass) {
                 Ok(person) => {
                     let params = super::http::parse_params(&path, &query);
-                    crate::docs::live::serve(stream, params, person).await;
+                    // The credential `caller_from_tcp` took (query, then
+                    // Bearer): the open socket keeps asking about it.
+                    let presented = super::http::extract_token(&query).filter(|t| !t.is_empty()).or(bearer_token.as_deref()).unwrap_or_default();
+                    let login = crate::socket_access::LoginCheck::new(presented.trim(), state.token.as_str());
+                    crate::docs::live::serve(stream, params, person, login).await;
                 }
                 Err(r) => {
                     let _ = stream.read(&mut buf).await;
@@ -2746,7 +2750,9 @@ async fn handle_one_request(
                 .as_ref()
                 .and_then(|_| super::http::extract_token(&query))
                 .map(str::to_string);
-            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, skin_raw, viewer_login).await;
+            // An open login socket follows its token (live-access S1a).
+            let login = skin_ws.is_none().then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
+            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, skin_raw, viewer_login, login).await;
             return DispatchOutcome::Done;
         }
         // 0.46.3 App project chat: `project.events`, one project's live
@@ -2817,7 +2823,9 @@ async fn handle_one_request(
                 }
             };
             let params = super::http::parse_params(&path, &query);
-            crate::room_stream_ws::serve_room_stream_connection(stream, params, viewer).await;
+            let login = matches!(viewer, crate::room_stream_ws::Viewer::Login { .. })
+                .then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
+            crate::room_stream_ws::serve_room_stream_connection(stream, params, viewer, login).await;
             return DispatchOutcome::Done;
         }
         p if p == crate::fs_events_ws::FS_EVENTS_WS_PATH => {
@@ -2876,7 +2884,8 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             };
             let params = super::http::parse_params(&path, &query);
-            crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws).await;
+            let login = skin_ws.is_none().then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
+            crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws, login).await;
             return DispatchOutcome::Done;
         }
         p if p == crate::activity_events_ws::ACTIVITY_EVENTS_WS_PATH => {
@@ -2941,7 +2950,8 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             };
             let params = super::http::parse_params(&path, &query);
-            crate::activity_events_ws::serve_activity_events_connection(stream, params, skin_ws)
+            let login = skin_ws.is_none().then(|| crate::socket_access::LoginCheck::from_query(&query, state.token.as_str()));
+            crate::activity_events_ws::serve_activity_events_connection(stream, params, skin_ws, login)
                 .await;
             return DispatchOutcome::Done;
         }
@@ -8205,7 +8215,8 @@ async fn handle_one_request(
             if p == crate::apps::exec::SHELL_PATH {
                 let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
                 let params = super::http::parse_params(&path, &query);
-                crate::apps::exec::serve_shell(&mut *stream, who, params).await;
+                let access = crate::apps::exec::ShellAccess::new(&query, bearer_token.as_deref(), state.token.as_str());
+                crate::apps::exec::serve_shell(&mut *stream, who, params, access).await;
                 return DispatchOutcome::Done;
             }
             if crate::apps::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

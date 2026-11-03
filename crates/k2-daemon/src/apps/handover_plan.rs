@@ -213,6 +213,7 @@ impl Plan {
             "domains": self.domains,
             "guests": guests,
             "sharedRoles": self.rooms.shared_roles,
+            "switchedOffRoles": self.rooms.switched_off_roles,
             "secrets": secrets,
             "refsUnresolved": self.refs_unresolved,
             "db": [self.db.case, self.db.name.clone().unwrap_or_default().as_str()],
@@ -276,6 +277,12 @@ impl Plan {
                     kept.join(", ")
                 ));
             }
+        }
+        for (role, n) in &self.rooms.switched_off_roles {
+            let (who, hold) = if *n == 1 { (format!("1 of {app}'s logins is switched off and"), "holds") } else { (format!("{n} of {app}'s logins are switched off and"), "hold") };
+            out.push(format!(
+                "{who} {hold} {role}, a role for the whole server that includes {a}'s room. If you turn them on, they reach {a}, not {b}. Before you do, give them a role of {app} (k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids)."
+            ));
         }
         let retired = self.guests.iter().filter(|g| (g.class == sh::CLASS_GIVER_TIED || g.class == sh::CLASS_APP_KEY_TIED) && g.has_password).count();
         if retired > 0 {

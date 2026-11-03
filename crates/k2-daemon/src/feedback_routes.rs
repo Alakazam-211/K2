@@ -962,8 +962,8 @@ fn injection_target(_session_id: Option<&str>, _session_kind: Option<&str>) -> I
 
 /// The injected body (PRD §4.3): `[feedback:<short-id>] <body>` —
 /// shared by the answer route AND human comments so both read the
-/// same in-session. The `[from <sender>]` attribution prefix is added
-/// by the shared msg framing, so the line reads like any other
+/// same in-session. The `[from <sender>]` attribution prefix (an App
+/// guest's `[guest …]`) is added by the shared msg framing, so the line reads like any other
 /// `k2 msg` delivery; the short id is a resolvable prefix
 /// (`k2 feedback show <short-id>`).
 fn feedback_payload(feedback_id: &str, body: &str) -> String {
@@ -977,12 +977,12 @@ fn feedback_payload(feedback_id: &str, body: &str) -> String {
 /// `(delivered, reason, target_session_id)`.
 fn deliver_to_asker(
     item: &feedback::FeedbackItem,
-    from: &str,
+    from: crate::workspace_msg::Sender<'_>,
     body: &str,
 ) -> (bool, Option<String>, Option<String>) {
     let payload = feedback_payload(&item.id, body);
     #[cfg(debug_assertions)]
-    crate::ticket_attachments::note_last_inject(&item.id, &payload);
+    crate::ticket_attachments::note_last_inject(&item.id, &crate::workspace_msg::format_sender(from, &payload, ""));
     // D5: v1 always WorkspaceAgent. Classifier is kept + called so the
     // unit matrix stays honest; the SandboxSession arm is never taken.
     let _ = injection_target(item.session_id.as_deref(), item.session_kind.as_deref());
@@ -990,15 +990,41 @@ fn deliver_to_asker(
     let Some(path) = path else {
         return (false, Some("workspace_not_found".to_string()), None);
     };
-    let resp = crate::workspace_msg::deliver_live(
+    let resp = crate::workspace_msg::deliver_live_as(
         &path,
         &payload,
         from,
         "",
         true,
         crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        "msg",
     );
     (resp.success, resp.reason, resp.target_session_id)
+}
+
+/// Deliver a just-stored comment or answer: an App guest's as a guest's
+/// (`[guest …]`, its later lines quoted; K2's own `Attached:` lines stay plain),
+/// anyone else's as `from`.
+fn deliver_ticket_words(
+    item: &feedback::FeedbackItem,
+    skin: Option<&SkinPass>,
+    from: &str,
+    words: &str,
+    files_root: Option<&std::path::Path>,
+    attachments: &[k2_core::overlay::attachments::ThreadAttachment],
+) -> (bool, Option<String>, Option<String>) {
+    match skin {
+        Some(pass) => {
+            let label = crate::overlay_routes::guest_stamp(pass);
+            let quoted = crate::workspace_msg::quote_guest_lines(words);
+            let inject = crate::ticket_attachments::with_attached_lines(&quoted, files_root, attachments);
+            deliver_to_asker(item, crate::workspace_msg::Sender::Guest(&label), &inject)
+        }
+        None => {
+            let inject = crate::ticket_attachments::with_attached_lines(words, files_root, attachments);
+            deliver_to_asker(item, crate::workspace_msg::Sender::Named(from), &inject)
+        }
+    }
 }
 
 // ── POST handlers ─────────────────────────────────────────────────────
@@ -1590,9 +1616,8 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     // Shared F3 delivery: the stored author IS the stamp (0.46.0 rule,
     // resolved above). Matches project-group/msg framing. Files reach the
     // agent as `Attached: <abs path>` lines, never stored (TK6).
-    let from = author.to_string();
-    let inject = crate::ticket_attachments::with_attached_lines(&comment.body, files_root.as_deref(), &comment.attachments);
-    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(&item, &from, &inject);
+    let (delivered, delivery_reason, delivered_session) =
+        deliver_ticket_words(&item, skin, author, &comment.body, files_root.as_deref(), &comment.attachments);
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -1711,12 +1736,14 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
     // failure never fails the answer. An unnamed answerer is framed
     // with the owner's display name (same server-side resolution as
     // the composer, D3), so the line reads natively in-session.
-    let inject = crate::ticket_attachments::with_attached_lines(
+    let (delivered, delivery_reason, delivered_session) = deliver_ticket_words(
+        &item,
+        skin,
+        &from_owned,
         item.answer.as_deref().unwrap_or_default(),
         files_root.as_deref(),
         &comment.attachments,
     );
-    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(&item, &from_owned, &inject);
 
     CliResponse::ok_json(
         serde_json::json!({

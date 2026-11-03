@@ -33,7 +33,8 @@
 //! **Author.** A guest's line is stored as `guest:<username>` with
 //! `authorKind: "guest"`, so no client that reads only `author` can take it
 //! for `owner`, a Connect login or an agent. It wakes the point of contact
-//! like any line (`[from guest:<username>]`) and pushes to every person.
+//! with a guest's stamp (`[guest <login> on App <app>]`, later lines quoted) and
+//! pushes to every person.
 //!
 //! **Read state** is per person and shared across surfaces (Rosson Q11):
 //! a guest is the person `guest:<principalId>` (`read_routes::PassReader`,
@@ -371,6 +372,7 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
         None,
         text,
         client,
+        Some(crate::overlay_routes::guest_stamp(pass)),
         // Send-delay fix 2: the guest's answer never waits for the inject.
         crate::project_group_routes::PocDelivery::Later,
     ) {

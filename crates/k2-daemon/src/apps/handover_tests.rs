@@ -886,6 +886,9 @@ fn a_switched_off_login_doesnt_block_the_handover() {
     k2_core::skin::set_grant_enabled(&g.id, false).unwrap();
     let (st, v) = ask(&f);
     assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let lines = v["diff"]["lines"].to_string();
+    assert!(lines.contains("logins is switched off and holds swr2-boxwide, a role for the whole server"), "the card says so: {lines}");
+    assert!(lines.contains("If you turn them on, they reach"), "{lines}");
 }
 
 #[test]

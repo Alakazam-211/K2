@@ -12,7 +12,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`guests-rooms` approvals you already gave still don't open those rooms to logins an agent set up.** Those logins keep their App's own room until the person uses a reset link on K2's own page. You don't need to do anything.
 - **An agent can no longer set the password of, or remove, a person you added.** Only people its own agent added.
 - **Handing an App to another agent is stricter.** It's refused while the App's guests (not ones switched off) hold box-wide roles naming the old agent's room, and logins the old agent set up are signed out at the switch.
-- **Guests look different to your agents.** A post from someone signed in to an App now reaches the agent as `[guest <login> on App <app>]`, not `[from <login>]`, and so does their answer on a card. Every line after the first starts with `> `, so nothing they type can read as someone else's line. Anything reading these lines should expect both.
+- **Guests look different to your agents.** A post from someone signed in to an App now reaches the agent as `[guest <login> on App <app>]`, not `[from <login>]`, and so does their answer on a card, ticket comment or project chat line. Every line after the first starts with `> `, so nothing they type can read as someone else's line. Anything reading these lines should expect both.
 
 ### Hosted mail
 - **A mailbox can now forward to several addresses, up to 5.** `k2 hostmail forward set <mailbox> --to a@x --to b@y` sets the whole list; `add` and `rm` change one without touching the others. Each address has its own state, so one can pause or stop while the rest carry on. A single `--to` still works the way it did.

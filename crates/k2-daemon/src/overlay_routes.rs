@@ -1100,6 +1100,12 @@ fn guest_stamp_label(pass: &SkinPass) -> String {
     out
 }
 
+/// The inside of `pass`'s `[guest …]` stamp ([`workspace_msg::Sender::Guest`]),
+/// for every door a guest's words reach an agent through.
+pub(crate) fn guest_stamp(pass: &SkinPass) -> String {
+    workspace_msg::guest_label(&guest_stamp_label(pass))
+}
+
 /// Human Message-the-agent on Thread: token identity, never body `from`.
 /// Owner token (`"owner"`) → the stamp rule (linked username, else `owner`). Connect-user → username.
 fn compose_from_for_session(session_author: &str) -> String {
@@ -3426,7 +3432,7 @@ fn inject_thread_compose(
 /// of a person on this box, a login an agent could know says so, and every
 /// line after the first is quoted ([`workspace_msg::quote_guest_lines`]).
 fn inject_skin_thread(resolved: &ResolvedOverlay, pass: &SkinPass, text: &str, turn: ThreadTurn<'_>) {
-    let label = workspace_msg::guest_label(&guest_stamp_label(pass));
+    let label = guest_stamp(pass);
     let payload = format!("[thread:{}] {}", resolved.addr, workspace_msg::quote_guest_lines(text));
     record_test_inject(&workspace_msg::format_sender(workspace_msg::Sender::Guest(&label), &payload, ""));
     deliver_thread_later(ThreadDeliveryJob::new(resolved, payload, &label, "thread", "", Some(turn)).from_guest());
@@ -3562,7 +3568,7 @@ pub fn spawn_card_expiry() {
 fn fire_card_callbacks(resolved: &ResolvedOverlay, from: &str, cbs: Vec<CardCallback>, start_turns: bool) {
     let addr = resolved.addr.as_str();
     let started_at = chrono::Utc::now().timestamp_millis();
-    let guest = request_skin().map(|pass| workspace_msg::guest_label(&guest_stamp_label(&pass)));
+    let guest = request_skin().map(|pass| guest_stamp(&pass));
     for cb in cbs {
         publish_card_frame(&cb);
         let turn = start_turns.then_some(ThreadTurn {

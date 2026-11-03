@@ -151,6 +151,9 @@ pub struct RoomFootprint {
     /// Box-wide roles (no `app_id`) this App's grants use that name room
     /// A: untouched (other Apps share them), listed on the card.
     pub shared_roles: Vec<String>,
+    /// Such roles held only by switched-off logins, with how many: they don't
+    /// block a handover, and the card says what turning one on would do.
+    pub switched_off_roles: Vec<(String, usize)>,
     pub grants: usize,
     pub sessions: usize,
     pub guest_rooms_grant: bool,
@@ -199,22 +202,27 @@ fn footprint_conn(conn: &Connection, svc: &str, from: &str) -> Result<RoomFootpr
         .map_err(|e| format!("handover test guests: {e}"))? as usize;
     let mut st = conn
         .prepare(
-            "SELECT DISTINCT r.name, r.rooms, COALESCE(r.room_policy, '{}') FROM grants g JOIN roles r ON r.id = g.role_id \
-             WHERE g.kind = 'app' AND g.target_id = ?1 AND g.enabled != 0 AND (r.app_id IS NULL OR r.app_id != ?1)",
+            "SELECT r.name, r.rooms, COALESCE(r.room_policy, '{}'), SUM(g.enabled != 0), SUM(g.enabled = 0) FROM grants g JOIN roles r ON r.id = g.role_id \
+             WHERE g.kind = 'app' AND g.target_id = ?1 AND (r.app_id IS NULL OR r.app_id != ?1) GROUP BY r.id",
         )
         .map_err(|e| format!("handover shared roles: {e}"))?;
-    let shared: Vec<(String, String, String)> = st
-        .query_map(params![svc], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+    let shared: Vec<(String, String, String, i64, i64)> = st
+        .query_map(params![svc], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
         .map_err(|e| format!("handover shared roles: {e}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("handover shared roles: {e}"))?;
-    for (name, rooms, policy) in shared {
+    for (name, rooms, policy, on, off) in shared {
         let p = parse_room_policy_json(Some(&policy))?.unwrap_or_default();
         if names(&parse_rooms_json(Some(&rooms)), from) || p.contains_key(from) {
-            fp.shared_roles.push(name);
+            if on > 0 {
+                fp.shared_roles.push(name);
+            } else if off > 0 {
+                fp.switched_off_roles.push((name, off as usize));
+            }
         }
     }
     fp.shared_roles.sort();
+    fp.switched_off_roles.sort();
     Ok(fp)
 }
 

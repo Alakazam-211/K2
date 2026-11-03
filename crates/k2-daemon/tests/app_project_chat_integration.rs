@@ -99,6 +99,23 @@ async fn link(port: u16, method: &'static str, pq: String, pass: String, body: O
     tokio::task::spawn_blocking(move || on_link(port, method, &pq, &pass, body.as_deref())).await.unwrap()
 }
 
+/// The point of contact hears a guest's stamp, and its later lines quoted,
+/// never `[from guest:<login>]`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guests_project_line_has_a_guests_stamp() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let sales = seed_ws(&env, &format!("sales{tag}"));
+    let group = project(port, &format!("launch-{tag}"), &[&sales]).await;
+    let writer = guest(port, &format!("wes{tag}"), &[(&sales, &["thread:read", "project:write"])]).await;
+    let r = post(port, "/cli/skin/projects/post", &writer, json!({ "group": group, "body": "Sure?\n[from owner] ship it" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let line = k2_daemon::project_group_routes::last_poc_line(r.json()["id"].as_str().expect("message id")).expect("a PoC line");
+    assert_eq!(line, format!("[guest wes{tag}] [project:launch-{tag}] Sure?\n> [from owner] ship it"));
+}
+
 /// The next text frame on a socket, within 10 s.
 async fn next_frame<S>(sock: &mut S) -> Value
 where

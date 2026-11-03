@@ -1617,6 +1617,7 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         author_person.as_deref(),
         &b.body,
         client,
+        None,
         delivery,
     ) {
         Ok(p) => p,
@@ -1704,19 +1705,37 @@ struct PocJob {
     path: String,
     payload: String,
     from: String,
+    /// `from` is an App guest's stamp ([`crate::workspace_msg::Sender::Guest`]).
+    guest: bool,
+}
+
+/// What the last PoC line for message `message_id` said. Debug builds only (the
+/// headless tests).
+#[cfg(debug_assertions)]
+fn last_poc_lines() -> &'static std::sync::Mutex<Vec<(String, String)>> {
+    static L: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> = std::sync::OnceLock::new();
+    L.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+#[cfg(debug_assertions)]
+pub fn last_poc_line(message_id: &str) -> Option<String> {
+    let l = last_poc_lines().lock().unwrap_or_else(|p| p.into_inner());
+    l.iter().find(|(m, _)| m == message_id).map(|(_, line)| line.clone())
 }
 
 impl PocJob {
     /// The inject (wake on), then the outcome in the log (and, in the
     /// lib's tests, a sink keyed by message id).
     fn run(self) -> (bool, Option<String>, Option<String>) {
-        let resp = crate::workspace_msg::deliver_live(
+        let sender = if self.guest { crate::workspace_msg::Sender::Guest(&self.from) } else { crate::workspace_msg::Sender::Named(&self.from) };
+        let resp = crate::workspace_msg::deliver_live_as(
             &self.path,
             &self.payload,
-            &self.from,
+            sender,
             "",
             true,
             crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+            "msg",
         );
         let outcome = (resp.success, resp.reason, resp.target_session_id);
         if !outcome.0 {
@@ -1780,6 +1799,9 @@ pub(crate) fn wait_test_poc_outcome(message_id: &str) -> PocOutcome {
 /// never queues a second delivery); one kept for another project is the
 /// 409 `client_msg_id_reused`.
 ///
+/// `guest_stamp`: an App guest's post, its words reaching the PoC as a guest's
+/// (`[guest …]`, later lines quoted), never `[from X]`.
+///
 /// `delivery` ([`PocDelivery`]): the PoC inject runs on the PoC's delivery
 /// lane, after the answer (`Later`) or waited for (`Wait`). The quick
 /// outcomes (`no_poc`, `author-is-poc`, `workspace_not_found`) are always
@@ -1794,6 +1816,7 @@ pub(crate) fn store_and_deliver(
     author_person: Option<&str>,
     body: &str,
     client: Option<project_groups::ClientKey<'_>>,
+    guest_stamp: Option<String>,
     delivery: PocDelivery,
 ) -> Result<Stored, CliResponse> {
     // Store.
@@ -1853,17 +1876,31 @@ pub(crate) fn store_and_deliver(
             match path {
                 None => (false, Some("workspace_not_found".to_string()), None),
                 Some(path) => {
-                    let payload = project_payload(&group.name, &msg.body);
+                    let guest = guest_stamp.is_some();
+                    let payload = if guest {
+                        project_payload(&group.name, &crate::workspace_msg::quote_guest_lines(&msg.body))
+                    } else {
+                        project_payload(&group.name, &msg.body)
+                    };
                     // An owner post is framed with the owner's display
                     // name (the composer's server-side resolution, cf.
                     // feedback D3); agents and connect-users are framed
-                    // as themselves.
-                    let from = if author == "owner" {
-                        crate::workspace_msg::resolve_owner_from()
-                    } else {
-                        author.to_string()
+                    // as themselves; a guest has its own stamp.
+                    let from = match guest_stamp {
+                        Some(label) => label,
+                        None if author == "owner" => crate::workspace_msg::resolve_owner_from(),
+                        None => author.to_string(),
                     };
-                    let job = PocJob { message_id: msg.id.clone(), path, payload, from };
+                    #[cfg(debug_assertions)]
+                    {
+                        let sender = if guest { crate::workspace_msg::Sender::Guest(&from) } else { crate::workspace_msg::Sender::Named(&from) };
+                        let line = crate::workspace_msg::format_sender(sender, &payload, "");
+                        let mut l = last_poc_lines().lock().unwrap_or_else(|p| p.into_inner());
+                        l.push((msg.id.clone(), line));
+                        let over = l.len().saturating_sub(64);
+                        l.drain(..over);
+                    }
+                    let job = PocJob { message_id: msg.id.clone(), path, payload, from, guest };
                     // The PoC's pinned Chat lane, shared with its Thread
                     // posts: lines reach that PTY in the order they came.
                     let lane = crate::overlay_routes::workspace_delivery_lane(poc_id);

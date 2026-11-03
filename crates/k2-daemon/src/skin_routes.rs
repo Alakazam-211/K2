@@ -3499,19 +3499,15 @@ fn form_field<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> 
         .map(|(_, v)| v.as_str())
 }
 
-/// Relative path only — block `//host` and scheme URLs.
+/// A path on this host only, by the same rule as the site gate
+/// ([`k2_core::site_visibility::safe_path`]): browsers read `/\host` and a
+/// tab inside the path as another host. Anything else lands on `/`.
 pub fn safe_next(raw: Option<&str>) -> String {
     let t = raw.unwrap_or("/").trim();
-    if t.starts_with('/')
-        && !t.starts_with("//")
-        && !t.contains("://")
-        && !t.contains('\r')
-        && !t.contains('\n')
-    {
-        t.to_string()
-    } else {
-        "/".to_string()
+    if t.contains("://") {
+        return "/".to_string();
     }
+    k2_core::site_visibility::safe_path(t).unwrap_or_else(|| "/".to_string())
 }
 
 /// The username a login body names, read exactly as the login handler
@@ -4471,6 +4467,11 @@ mod tests {
         assert_eq!(safe_next(Some("https://evil.example")), "/");
         assert_eq!(safe_next(Some("//evil")), "/");
         assert_eq!(safe_next(Some("/app")), "/app");
+        // Browsers resolve these to another host.
+        assert_eq!(safe_next(Some("/\\evil.example")), "/");
+        assert_eq!(safe_next(Some("/\t/evil.example")), "/");
+        assert_eq!(safe_next(Some("/a\nb")), "/");
+        assert_eq!(safe_next(Some("/app?x=1#y")), "/app?x=1#y");
     }
 
     #[test]

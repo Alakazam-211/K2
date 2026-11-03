@@ -8232,7 +8232,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         confirm. Narrower or --revoke: the owner, an Admin or the App's agent.
                                         k2 app grant <app> --kind chat-key --help: every flag.
   k2 app guest rooms <app> <user> [set <room,...>]
-                                        Read/set one guest's rooms on <app> (owner; an agent within the grant).
+                                        Read/set one guest's rooms on <app> (owner; an agent with the App-users switch).
                                         k2 app guest --help.
   k2 app guest ceiling <app> | list <app> [--json]
                                         What <app> may hand its guests; its guests with their rooms (0.46.4).
@@ -50740,14 +50740,15 @@ THE AGENT'S .k2 FOLDER (0.45.6)
     403 {"error":"agent_config_protected","message":"…"}
   Reads are unchanged: files:read reads .k2/ like any other folder, and
   copying a file OUT of .k2/ is a read.
-  Opt-in, per room, owner only: add files:agentconfig next to files:write
+  Opt-in, per room (the owner, or the agent that owns the App on that App's
+  roles): add files:agentconfig next to files:write
     k2 app role room <role> <handle> --caps files:read,files:write,files:agentconfig
   or tick "Also allow writing the agent's .k2 folder (not recommended)"
   under files:write in Settings → User Access. It means nothing without
   files:write (refused alone). .k2/heartbeats/ stays heartbeat-managed
-  even with it (heartbeats_area). An agent with "manage Apps" can never
-  add it, mint it on a platform token, widen a token that holds it, or
-  give a guest a role that holds it (403 owner_only).
+  even with it (heartbeats_area). An agent can't mint it on a platform token,
+  widen a token that holds it, or put it on a box-wide role (403 owner_only).
+  A login an agent set up doesn't get it until the person chooses a password.
 
 TICKETS
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

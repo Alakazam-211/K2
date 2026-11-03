@@ -1133,7 +1133,7 @@ pub fn agent_config_protected_response() -> CliResponse {
         content_type: "application/json",
         body: serde_json::json!({
             "error": "agent_config_protected",
-            "message": "the agent's .k2 folder is protected: app guests can't write it unless the owner turns on files:agentconfig for this room",
+            "message": "the agent's .k2 folder is protected: app guests can't write it unless their role holds files:agentconfig for this room",
         })
         .to_string(),
     }

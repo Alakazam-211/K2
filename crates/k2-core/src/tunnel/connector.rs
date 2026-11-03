@@ -1405,7 +1405,8 @@ pub fn start(
             old.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ")
         );
     }
-    // 0.46.8: the Path B name list this render carries (PB-2).
+    // 0.46.8: the Path B name list this render carries (PB-2), recorded below
+    // if the frpc already running on it is adopted.
     let names_gen = super::custom_names::generation();
     let rendered = render_frpc_toml_for_relay(&cfg, &dial.relays[0], resolved_local_port, e2e);
 
@@ -1545,6 +1546,10 @@ pub fn start(
     let failover = Arc::new(Mutex::new(
         new_selector(initial_relays.clone(), failover_mode).failover_status(),
     ));
+    // Before the supervisor starts: it reads this for the first child.
+    if adopted.is_some() {
+        super::custom_names::note_rendered(names_gen);
+    }
     spawn_supervised(
         frpc.clone(),
         initial_relays,
@@ -1562,7 +1567,6 @@ pub fn start(
         health.clone(),
         adopted,
     )?;
-    super::custom_names::note_rendered(names_gen);
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
     // lease on its own timer so it never lapses with the Settings panel
@@ -2305,7 +2309,13 @@ fn wait_for_exit(
         }
         // 0.46.8 (Path B): a changed custom-name list needs frpc to
         // re-register its second proxy: one restart once the list settles.
-        if e2e && super::custom_names::restart_due(run.names_gen, Instant::now()) {
+        // Never of a child younger than SETTLE: a change made after this
+        // child started is only due SETTLE later anyway, and a child wrongly
+        // seen as behind can't be killed in a tight loop.
+        if e2e
+            && spawned_at.elapsed() >= super::custom_names::SETTLE
+            && super::custom_names::restart_due(run.names_gen, Instant::now())
+        {
             crate::log_debug!("[tunnel] Path B custom names changed — restarting frpc to carry them (a few seconds' blip)");
             child.kill_and_wait();
             return ChildOutcome::CustomNamesChanged;
@@ -2633,7 +2643,6 @@ fn spawn_supervised(
                             }
                         }
                         watch = new_watch();
-                        let names_gen = super::custom_names::generation();
                         match render_and_spawn(
                             &frpc_thread,
                             &cfg_thread,
@@ -2647,7 +2656,6 @@ fn spawn_supervised(
                             Ok((c, stop)) => {
                                 drop(slot);
                                 tail_stop = stop;
-                                super::custom_names::note_rendered(names_gen);
                                 c
                             }
                             Err(e) => {
@@ -3175,6 +3183,11 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
 /// in the per-user temp dir untouched for ~3 days) crash-looped frpc on
 /// `open …/frpc.toml: no such file or directory` until a manual stop+start.
 /// A render or spawn error counts as a failed run.
+///
+/// A started child is recorded as carrying the Path B name list's generation
+/// from BEFORE the render, so a name that changes during the render still
+/// restarts it. Without the record, `restart_due` is true for the new child
+/// at once and the restart repeats forever (the 0.46.8 hot loop).
 #[allow(clippy::too_many_arguments)]
 fn render_and_spawn(
     frpc: &Path,
@@ -3186,15 +3199,18 @@ fn render_and_spawn(
     proxy: &Arc<ProxyRegistration>,
     health: &Arc<FrpcHealth>,
 ) -> Result<(FrpcProc, Arc<AtomicBool>), String> {
+    let names_gen = super::custom_names::generation();
     if let Err(e) = write_relay_config(cfg, relay, local_port, e2e) {
         let msg = format!("render frpc config: {e}");
         health.fail_with(msg.clone());
         return Err(msg);
     }
-    spawn_once(frpc, watch, proxy, health).map_err(|e| {
+    let spawned = spawn_once(frpc, watch, proxy, health).map_err(|e| {
         health.fail_with(e.clone());
         e
-    })
+    })?;
+    super::custom_names::note_rendered(names_gen);
+    Ok(spawned)
 }
 
 /// Spawn a single `frpc -c <config>` child that writes stdout+stderr
@@ -5129,6 +5145,145 @@ mod tests {
                 "solo stop must leave no process matching `{pattern}`"
             );
             let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// A launched-frpc count that can't miss one: a child killed before its
+    /// shell runs records nothing in `<dir>/spawns`.
+    fn frpc_runs() -> u64 {
+        state()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .expect("a started tunnel")
+            .proxy
+            .current_run()
+    }
+
+    /// Longer than a restart loop's period with the belt in `wait_for_exit`
+    /// (SETTLE, then the next 1 s poll), so the loop shows in the count.
+    const NO_MORE_RESTARTS: Duration = Duration::from_secs(5);
+
+    /// Stops the tunnel and clears the name list on the way out, also when an
+    /// assert fails: a supervisor left in the hot loop would run into the
+    /// next test.
+    struct PathBTunnel {
+        dir: PathBuf,
+        _e2e: crate::test_env::EnvVar,
+        _lease: crate::test_env::EnvVar,
+        _listener: std::net::TcpListener,
+    }
+
+    impl Drop for PathBTunnel {
+        fn drop(&mut self) {
+            let _ = stop("test");
+            super::super::custom_names::reset_for_test();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// An E2E tunnel on the real supervisor with a fake frpc that stays up;
+    /// `names` is the list it starts with. The listener keeps the localPort
+    /// self-heal quiet.
+    fn start_path_b_tunnel(names: Vec<String>) -> PathBTunnel {
+        super::super::custom_names::reset_for_test();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind E2E stand-in");
+        let port = listener.local_addr().expect("listener address").port();
+        let e2e_env = crate::test_env::EnvVar::remove("K2_E2E");
+        let lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+        super::super::tls::publish_https_port(port).expect("publish https port");
+        config::save(&TunnelConfig {
+            server_addr: "9.9.9.9".to_string(),
+            server_port: 7009,
+            token: "tok".to_string(),
+            subdomain: "rosson".to_string(),
+            e2e: true,
+            ..Default::default()
+        })
+        .expect("seed config");
+        super::super::custom_names::set(names);
+        let dir = crate::test_env::unique_temp_path("fake-frpc-names");
+        let frpc = long_lived_frpc(&dir);
+        let tunnel = PathBTunnel { dir, _e2e: e2e_env, _lease: lease, _listener: listener };
+        start(None, 57839, &FrpcBinary::Explicit(frpc)).expect("start");
+        wait_until("the first frpc launch", 10, || tunnel.dir.join("spawns").exists());
+        tunnel
+    }
+
+    fn wait_for_new_pid(old: i32) -> i32 {
+        wait_until("a new frpc pid", 10, || {
+            frpc_proc::read_pid_record(&frpc_config_path()).is_some_and(|r| r.pid != old)
+        });
+        running_pid()
+    }
+
+    /// `want` launches so far, a child that stayed up, and it is the one
+    /// recorded as carrying generation `g`. The launch count comes first: it
+    /// is what the hot loop breaks.
+    fn assert_settled_on(tunnel: &PathBTunnel, want: u64, pid: i32, g: u64) {
+        std::thread::sleep(NO_MORE_RESTARTS);
+        assert_eq!(frpc_runs(), want, "frpc launches: a restart loop, not one restart per change");
+        assert_eq!(spawn_count(&tunnel.dir) as u64, want, "launches the fake frpc recorded");
+        assert_eq!(running_pid(), pid, "the fresh frpc must not be replaced");
+        assert!(frpc_proc::pid_alive(pid), "the fresh frpc (pid {pid}) must still be running");
+        assert!(status().running);
+        assert_eq!(super::super::custom_names::running_generation(), g);
+        // What custom_domain_flow's certificate order waits on.
+        assert!(super::super::custom_names::wait_running(g, Duration::from_millis(1)));
+    }
+
+    /// The 0.46.8 hot loop, through the REAL supervisor: a Path B name joining
+    /// restarted frpc, and the respawn didn't record the generation it
+    /// rendered, so every new child was killed at once (125 spawns a second)
+    /// and the tunnel stayed down until the daemon restarted. One change is
+    /// one restart, the new child stays up, and a later change is one more.
+    #[cfg(unix)]
+    #[test]
+    fn a_changed_custom_name_restarts_frpc_once_and_the_new_child_stays() {
+        use super::super::custom_names as names;
+        with_temp_home(|| {
+            // Names set before the tunnel starts (a daemon boot) are in the
+            // first render: no restart for them.
+            let tunnel = start_path_b_tunnel(vec!["boot.example.com".to_string()]);
+            let pid = running_pid();
+            assert_settled_on(&tunnel, 1, pid, names::generation());
+
+            assert!(names::set(vec!["boot.example.com".to_string(), "a.example.com".to_string()]));
+            let changed = Instant::now();
+            wait_until("the restart for the first change", 10, || frpc_runs() >= 2);
+            assert!(changed.elapsed() >= names::SETTLE, "a restart waits for the list to settle");
+            let pid = wait_for_new_pid(pid);
+            assert_settled_on(&tunnel, 2, pid, names::generation());
+
+            assert!(names::set(vec!["a.example.com".to_string()]));
+            let changed = Instant::now();
+            wait_until("the restart for the second change", 10, || frpc_runs() >= 3);
+            assert!(changed.elapsed() >= names::SETTLE, "a restart waits for the list to settle");
+            let pid = wait_for_new_pid(pid);
+            assert_settled_on(&tunnel, 3, pid, names::generation());
+        });
+    }
+
+    /// The other respawns share the post-exit spawn site. Here frpc dies on
+    /// its own just after a change: the respawn already renders the new list,
+    /// so the change costs no second restart.
+    #[cfg(unix)]
+    #[test]
+    fn a_respawn_after_frpc_exits_carries_a_changed_name_without_another_restart() {
+        use super::super::custom_names as names;
+        with_temp_home(|| {
+            let tunnel = start_path_b_tunnel(Vec::new());
+            let pid = running_pid();
+            assert!(names::set(vec!["a.example.com".to_string()]));
+            let killed = crate::bg_proc::command("kill")
+                .arg("-9")
+                .arg(pid.to_string())
+                .status()
+                .expect("run kill");
+            assert!(killed.success(), "kill -9 {pid}: {killed:?}");
+            wait_until("the respawn after the exit", 10, || frpc_runs() >= 2);
+            let pid = wait_for_new_pid(pid);
+            assert_settled_on(&tunnel, 2, pid, names::generation());
         });
     }
 

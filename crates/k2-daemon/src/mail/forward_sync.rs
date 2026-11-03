@@ -16,8 +16,10 @@
 //! start (after the Sieve lockdown; it also imports same-box forwards that
 //! predate the rows) and hourly. A script that doesn't match what K2 would
 //! write is rewritten and the change is logged as a `drift` event. The hourly
-//! pass also reads the mailboxes with no rows: an outbound action in one of
-//! their scripts has no row behind it, so it goes, and the owner is told.
+//! pass also reads the mailboxes with no rows ([`plan_strip`]): an outbound
+//! action in one of their scripts has no row behind it, so that action goes
+//! (K2's own same-box forward becomes a row instead). Every other rule stays,
+//! the old script is kept, the audit log has the targets, and the owner is told.
 //!
 //! **Out-of-office** changes come through here too ([`patch_ooo`]), under the
 //! same lock: the forward block is written from the rows, never read back
@@ -67,12 +69,16 @@ pub struct Current {
     pub k2_src: Option<String>,
     /// A leftover `k2-forward` script is present.
     pub legacy: bool,
+    /// Its source, if it has one.
+    pub legacy_src: Option<String>,
 }
 
 /// Read and write a mailbox's K2 script (Stalwart; a fake in tests).
 pub trait SieveIo {
     fn read(&self, account_id: &str) -> Result<Current, String>;
     fn write(&self, account_id: &str, current: &Current, next: &UserSieve) -> Result<(), String>;
+    /// Write a source K2 didn't compose (someone's rules, less an outbound action).
+    fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String>;
 }
 
 impl SieveIo for StalwartClient {
@@ -83,10 +89,17 @@ impl SieveIo for StalwartClient {
             k2_src = Some(String::from_utf8_lossy(&self.sieve_script_blob(account_id, &sc.blob_id)?).into_owned());
         }
         let legacy = scripts.iter().any(|s| s.name == sieve_user::LEGACY_FORWARD_NAME);
-        Ok(Current { sieve, scripts, k2_src, legacy })
+        let mut legacy_src = None;
+        for sc in scripts.iter().filter(|s| s.name == sieve_user::LEGACY_FORWARD_NAME && !s.blob_id.trim().is_empty()) {
+            legacy_src = Some(String::from_utf8_lossy(&self.sieve_script_blob(account_id, &sc.blob_id)?).into_owned());
+        }
+        Ok(Current { sieve, scripts, k2_src, legacy, legacy_src })
     }
     fn write(&self, account_id: &str, current: &Current, next: &UserSieve) -> Result<(), String> {
         sieve_user::save_user_sieve(self, account_id, &current.scripts, next)
+    }
+    fn write_source(&self, account_id: &str, current: &Current, source: &str) -> Result<(), String> {
+        sieve_user::save_user_source(self, account_id, &current.scripts, source)
     }
 }
 
@@ -536,6 +549,8 @@ pub struct Report {
     pub held: usize,
     pub imported: usize,
     pub failed: usize,
+    /// Mailboxes the import couldn't read or record: it's still owed.
+    pub import_failed: usize,
 }
 
 /// Every mailbox with a forward row (and, with `import`, every active
@@ -554,8 +569,10 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
             }
         }
     };
+    let mut unread = std::collections::HashSet::new();
     if import {
-        r.imported = import_with(io, &ids, ctx, &mut r.failed);
+        r.imported = import_with(io, &ids, ctx, &mut r.failed, &mut unread);
+        r.import_failed = unread.len();
     }
     for id in &ids {
         r.checked += 1;
@@ -571,7 +588,7 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
             }
         }
     }
-    strip_unbacked(io, &mut r);
+    strip_unbacked(io, ctx, &unread, &mut r);
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = store::purge(&conn, ctx.now) {
@@ -580,10 +597,167 @@ pub fn reconcile_with(io: &dyn SieveIo, import: bool, ctx: &Ctx) -> Report {
     r
 }
 
+/// What to do about the outbound actions in a mailbox with no live row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StripPlan {
+    /// Nothing outbound, or only redirects to mailboxes here in rules K2 didn't write.
+    Nothing,
+    /// K2's own same-box forward from before the rows: it becomes a row.
+    Import(ForwardBlock),
+    /// K2 wrote all of it: write it again without the forward.
+    Compose(UserSieve),
+    /// Someone's rules: only the outbound commands go.
+    Source(String),
+}
+
+/// The one decision for a mailbox with no live row. `is_here`: an active mailbox
+/// on this box. A script K2 didn't write is never recomposed: that would lose
+/// its other rules (the lockdown keeps those on purpose, `K2Unrecognised`).
+pub(crate) fn plan_strip(current: &Current, address: &str, is_here: &dyn Fn(&str) -> bool) -> StripPlan {
+    use super::sieve_lockdown::{classify, outbound_actions, remove_outbound, Owner};
+    let own = |name: &str, src: &str| classify(name, src, &|_| true).0 == Owner::K2;
+    let k2 = current.k2_src.as_deref();
+    let legacy = current.legacy_src.as_deref();
+    if ![k2, legacy].into_iter().flatten().any(|src| !outbound_actions(src).is_empty()) {
+        return StripPlan::Nothing;
+    }
+    let k2_own = k2.is_none_or(|src| own(sieve_user::SCRIPT_NAME, src));
+    let legacy_own = legacy.is_none_or(|src| own(sieve_user::LEGACY_FORWARD_NAME, src));
+    let without_forward = || StripPlan::Compose(UserSieve { ooo: current.sieve.ooo.clone(), forward: None });
+    if k2_own && legacy_own {
+        let same_box = current.sieve.forward.as_ref().filter(|f| f.guard.is_none() && is_here(&f.dest) && !f.dest.eq_ignore_ascii_case(address));
+        return same_box.map_or_else(without_forward, |f| StripPlan::Import(f.clone()));
+    }
+    let legacy_changes = legacy.is_some_and(|src| remove_outbound(src, is_here) != src);
+    match k2 {
+        // K2's script, and someone's rules in the old `k2-forward` beside it. The
+        // old one only ever ran instead of `k2`, and its copy is kept.
+        Some(_) if k2_own => {
+            if legacy_changes {
+                without_forward()
+            } else {
+                StripPlan::Nothing
+            }
+        }
+        Some(src) => {
+            let next = remove_outbound(src, is_here);
+            if next == src && !legacy_changes {
+                StripPlan::Nothing
+            } else {
+                StripPlan::Source(next)
+            }
+        }
+        None => match legacy {
+            Some(src) if legacy_changes => StripPlan::Source(remove_outbound(src, is_here)),
+            _ => StripPlan::Nothing,
+        },
+    }
+}
+
+/// Where the scripts K2 changed are kept: `~/.k2/mail-sieve-removed/`, 0600.
+fn removed_dir() -> std::path::PathBuf {
+    #[cfg(test)]
+    if let Some(d) = TEST_REMOVED_DIR.with(|c| c.borrow().clone()) {
+        return d;
+    }
+    if cfg!(test) {
+        // House rule: tests never touch the real `~/.k2`.
+        return std::env::temp_dir().join(format!("k2-mail-sieve-removed-test-{}", std::process::id()));
+    }
+    k2_core::paths::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".k2").join("mail-sieve-removed")
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_REMOVED_DIR: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_AUDIT: std::cell::RefCell<Vec<serde_json::Value>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Tests: keep old scripts here on this thread.
+#[cfg(test)]
+pub(crate) fn set_test_removed_dir(d: Option<std::path::PathBuf>) {
+    TEST_REMOVED_DIR.with(|c| *c.borrow_mut() = d);
+}
+
+/// Tests: the strip's audit lines on this thread.
+#[cfg(test)]
+pub(crate) fn take_strip_audit() -> Vec<serde_json::Value> {
+    TEST_AUDIT.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// Keep what's about to change, whole, for the owner. The name follows the
+/// content, so a write that keeps failing doesn't pile up copies.
+fn keep_old_scripts(address: &str, current: &Current) -> Result<std::path::PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    use std::io::Write;
+    let mut text = String::new();
+    for (name, src) in [(sieve_user::SCRIPT_NAME, &current.k2_src), (sieve_user::LEGACY_FORWARD_NAME, &current.legacy_src)] {
+        if let Some(src) = src {
+            text.push_str(&format!("# ---- {address}, script {name}, as it was before K2 changed it ----\n{src}\n"));
+        }
+    }
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hash);
+    let dir = removed_dir();
+    let safe: String = address.chars().map(|c| if c.is_ascii_alphanumeric() || "@._-".contains(c) { c } else { '_' }).collect();
+    let path = dir.join(format!("{safe}-{:016x}.sieve", hash.finish()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        open.mode(0o600);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("chmod {}: {e}", dir.display()))?;
+    }
+    let mut f = open.open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    f.write_all(text.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// The outbound targets about to go, by domain only.
+fn strip_targets(current: &Current, plan: &StripPlan, is_here: &dyn Fn(&str) -> bool) -> Vec<super::sieve_lockdown::Target> {
+    let hosted = super::sieve_lockdown::hosted_domains().unwrap_or_default();
+    // A script K2 wrote loses its whole forward; someone's rules keep their
+    // redirects to mailboxes here.
+    let stays: &dyn Fn(&str) -> bool = if matches!(plan, StripPlan::Source(_)) { is_here } else { &|_| false };
+    let mut out = Vec::new();
+    for src in [&current.k2_src, &current.legacy_src].into_iter().flatten() {
+        out.extend(super::sieve_lockdown::removed_targets(src, stays, &|d| hosted.contains(d)));
+    }
+    out
+}
+
+/// The audit line, before the write.
+fn audit_strip(id: &str, address: &str, account: &str, targets: &[super::sieve_lockdown::Target], kept: &std::path::Path) {
+    let detail = json!({
+        "accountId": account,
+        "address": address,
+        "script": sieve_user::SCRIPT_NAME,
+        "action": "remove-outbound",
+        "targets": targets.iter().map(super::sieve_lockdown::Target::to_json).collect::<Vec<_>>(),
+        "keptAt": kept.display().to_string(),
+    });
+    k2_core::log_debug!("{P} mailbox {id}: removing a forward nobody set: {} target(s)", targets.len());
+    #[cfg(test)]
+    TEST_AUDIT.with(|c| c.borrow_mut().push(detail));
+    #[cfg(not(test))]
+    {
+        let ev = k2_core::auth_audit::AuditEvent::new(super::sieve_lockdown::AUDIT_EVENT, address, "removing", "daemon", "-", "daemon");
+        if let Err(e) = k2_core::auth_audit::try_record_detail(&ev, detail) {
+            k2_core::log_debug!("{P} WARN auth-audit write failed: {e}");
+        }
+    }
+}
+
+/// Mailboxes the owner has already heard K2 couldn't clean, this run.
+static TOLD_LEFT: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+
 /// The active mailboxes with no live row: anything in their scripts that sends
 /// mail out has no row behind it. It goes, whatever wrote it, and the owner
-/// hears. The out-of-office block stays.
-fn strip_unbacked(io: &dyn SieveIo, r: &mut Report) {
+/// hears. Everything else in the script stays ([`plan_strip`]). `skip`: the
+/// import couldn't read them, so it isn't known what they hold yet.
+fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<String>, r: &mut Report) {
     let rows: Vec<(String, String, String)> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -605,27 +779,84 @@ fn strip_unbacked(io: &dyn SieveIo, r: &mut Report) {
         }
     };
     let mut stripped: Vec<String> = Vec::new();
+    let mut imported: Vec<String> = Vec::new();
+    let mut left: Vec<String> = Vec::new();
     for (id, address, account) in rows {
+        if skip.contains(&id) {
+            continue;
+        }
         let _g = SYNC.lock().unwrap_or_else(|e| e.into_inner());
         let Ok(current) = io.read(&account) else {
             r.failed += 1;
             continue;
         };
-        let k2_outbound = current.k2_src.as_deref().is_some_and(|src| !super::sieve_lockdown::outbound_actions(src).is_empty());
-        if !k2_outbound && !current.legacy {
+        // The list above is old by now: a forward set since then has its row,
+        // and the redirect is that row's. Rows only change under this lock.
+        match has_live_row(&id) {
+            Ok(false) => {}
+            Ok(true) => continue,
+            Err(e) => {
+                r.failed += 1;
+                k2_core::log_debug!("{P} mailbox {id} not cleaned: {e}");
+                continue;
+            }
+        }
+        let plan = plan_strip(&current, &address, &is_minted);
+        if matches!(plan, StripPlan::Nothing) {
             continue;
         }
-        let want = UserSieve { ooo: current.sieve.ooo.clone(), forward: None };
-        match io.write(&account, &current, &want) {
+        if let StripPlan::Import(fwd) = &plan {
+            match import_one(io, &id, &address, fwd, ctx) {
+                Ok(()) => {
+                    r.imported += 1;
+                    imported.push(format!("{address} to {}", fwd.dest));
+                }
+                Err(e) => {
+                    r.failed += 1;
+                    k2_core::log_debug!("{P} import of mailbox {id}: {}", crate::email_notify::send::mask_addresses(&e));
+                }
+            }
+            continue;
+        }
+        // Before the write: never lose what we can't keep.
+        let kept = match keep_old_scripts(&address, &current) {
+            Ok(p) => p,
+            Err(e) => {
+                r.failed += 1;
+                k2_core::log_debug!("{P} mailbox {id} not cleaned: the old script can't be kept: {}", crate::email_notify::send::mask_addresses(&e));
+                continue;
+            }
+        };
+        let targets = strip_targets(&current, &plan, &is_minted);
+        audit_strip(&id, &address, &account, &targets, &kept);
+        let wrote = match &plan {
+            StripPlan::Compose(want) => io.write(&account, &current, want),
+            StripPlan::Source(src) => {
+                if super::sieve_lockdown::removed_targets(src, &is_minted, &|_| true).is_empty() {
+                    io.write_source(&account, &current, src)
+                } else {
+                    Err("something outbound would still be in the script".to_string())
+                }
+            }
+            StripPlan::Nothing | StripPlan::Import(_) => Ok(()),
+        };
+        match wrote {
             Ok(()) => {
                 k2_core::log_debug!("{P} mailbox {id}: removed a redirect with no forward row behind it");
                 r.drift += 1;
                 r.wrote += 1;
-                stripped.push(address);
+                TOLD_LEFT.lock().unwrap_or_else(|p| p.into_inner()).remove(&address);
+                let mut domains: Vec<String> = targets.into_iter().map(|t| t.domain).collect();
+                domains.sort();
+                domains.dedup();
+                stripped.push(format!("{address}: it sent mail to {}. The old script is kept in {} on this server.", domains.join(", "), kept.display()));
             }
             Err(e) => {
                 r.failed += 1;
                 k2_core::log_debug!("{P} mailbox {id} not cleaned: {}", crate::email_notify::send::mask_addresses(&e));
+                if TOLD_LEFT.lock().unwrap_or_else(|p| p.into_inner()).insert(address.clone()) {
+                    left.push(format!("{address}: its script is as it was, and a copy is in {} on this server.", kept.display()));
+                }
             }
         }
     }
@@ -633,19 +864,78 @@ fn strip_unbacked(io: &dyn SieveIo, r: &mut Report) {
         super::forward_outcomes::notice(
             "K2 removed a forward nobody set",
             &format!(
-                "The mail filter of {} sent mail somewhere with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed it. Check who could change these mailboxes, and their recent activity: k2 hostmail audit-sieve.",
-                stripped.join(", ")
+                "These mail filters sent mail somewhere with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed only that; any other rules in the script are still there.\n\n{}\n\nThe removal is in the audit log (k2 users audit --json). Check who could change these mailboxes, and their recent activity.",
+                stripped.join("\n")
+            ),
+            &[],
+        );
+    }
+    if !left.is_empty() {
+        super::forward_outcomes::notice(
+            "K2 couldn't remove a forward nobody set",
+            &format!(
+                "These mail filters send mail somewhere with no forward on record behind it, and K2 couldn't take that out. K2 keeps trying each hour. Until it works, mail may still leave.\n\n{}",
+                left.join("\n")
+            ),
+            &[],
+        );
+    }
+    if !imported.is_empty() {
+        super::forward_outcomes::notice(
+            "K2 found a same-box forward with no record",
+            &format!(
+                "K2 found these in mail filters with no forward on record, so it recorded them and they keep running. If you didn't expect one, remove it: k2 hostmail forward unset <mailbox>.\n\n{}",
+                imported.join("\n")
             ),
             &[],
         );
     }
 }
 
-/// FW-A5: same-box forwards K2 wrote before 0256 become rows. A forward
-/// block on a mailbox with no row that isn't a same-box mailbox (or that
-/// carries a guard with no row behind it) is not K2's to keep: it's
-/// stripped and recorded as a removed row.
-fn import_with(io: &dyn SieveIo, skip: &[String], ctx: &Ctx, failed: &mut usize) -> usize {
+fn has_live_row(address_id: &str) -> Result<bool, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM mail_forwards WHERE address_id = ?1 AND state <> 'removed')",
+        rusqlite::params![address_id],
+        |x| x.get(0),
+    )
+    .map_err(|e| format!("mail forwards: rows: {e}"))
+}
+
+/// A same-box forward K2 wrote before its rows: it becomes a row, and the row
+/// writes the script. The caller holds [`SYNC`].
+fn import_one(io: &dyn SieveIo, id: &str, address: &str, fwd: &ForwardBlock, ctx: &Ctx) -> Result<(), String> {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let f = store::create(
+            &conn,
+            &store::NewForward {
+                address_id: id,
+                address,
+                dest: &fwd.dest.to_ascii_lowercase(),
+                dest_kind: store::KIND_INTERNAL,
+                keep: fwd.keep,
+                set_by: ACTOR_K2,
+                state: store::ST_ACTIVE,
+                verified_address_id: None,
+            },
+            ctx.now,
+        )
+        .map_err(|e| e.to_string())?;
+        let _ = store::record_event(&conn, &f.id, store::E_IMPORTED, ACTOR_K2, &json!({ "internal": true }), ctx.now);
+    }
+    // Write right away (the row is the truth now).
+    sync_locked(io, id, Why::Change, ctx)?;
+    Ok(())
+}
+
+/// FW-A5: same-box forwards K2 wrote before 0256 become rows. Anything else in
+/// a mailbox with no row is [`strip_unbacked`]'s, later in the same pass.
+/// `unread`: mailboxes this couldn't read or record. The import is owed until
+/// there are none, and the strip leaves them alone.
+fn import_with(io: &dyn SieveIo, skip: &[String], ctx: &Ctx, failed: &mut usize, unread: &mut std::collections::HashSet<String>) -> usize {
     let mailboxes: Vec<(String, String, String)> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -677,53 +967,18 @@ fn import_with(io: &dyn SieveIo, skip: &[String], ctx: &Ctx, failed: &mut usize)
             Ok(c) => c,
             Err(_) => {
                 *failed += 1;
+                unread.insert(id);
                 continue;
             }
         };
-        let Some(fwd) = cur.sieve.forward.clone() else { continue };
-        let internal = fwd.guard.is_none() && is_minted(&fwd.dest) && !fwd.dest.eq_ignore_ascii_case(&address);
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let made = store::create(
-            &conn,
-            &store::NewForward {
-                address_id: &id,
-                address: &address,
-                dest: &fwd.dest.to_ascii_lowercase(),
-                dest_kind: if internal { store::KIND_INTERNAL } else { store::KIND_EXTERNAL },
-                keep: fwd.keep,
-                set_by: ACTOR_K2,
-                state: if internal { store::ST_ACTIVE } else { store::ST_PENDING_VERIFY },
-                verified_address_id: None,
-            },
-            ctx.now,
-        );
-        let f = match made {
-            Ok(f) => f,
+        let StripPlan::Import(fwd) = plan_strip(&cur, &address, &is_minted) else { continue };
+        match import_one(io, &id, &address, &fwd, ctx) {
+            Ok(()) => n += 1,
             Err(e) => {
-                k2_core::log_debug!("{P} import of mailbox {id}: {e}");
                 *failed += 1;
-                continue;
+                k2_core::log_debug!("{P} import of mailbox {id}: {}", crate::email_notify::send::mask_addresses(&e));
+                unread.insert(id);
             }
-        };
-        let _ = store::record_event(&conn, &f.id, store::E_IMPORTED, ACTOR_K2, &json!({ "internal": internal }), ctx.now);
-        if !internal {
-            // Never forwarded outside without a confirm: strip it.
-            let _ = store::transition(
-                &conn,
-                &f.id,
-                store::ST_REMOVED,
-                &store::Change { actor: ACTOR_K2, detail: Some(json!({ "why": "unverified_outside_forward" })), ..Default::default() },
-                ctx.now,
-            );
-            k2_core::log_debug!("{P} mailbox {id}: a forward block with no confirmed destination was removed");
-        }
-        drop(conn);
-        n += 1;
-        // Write right away (the row is the truth now).
-        if let Err(e) = sync_locked(io, &id, Why::Change, ctx) {
-            *failed += 1;
-            k2_core::log_debug!("{P} import sync of mailbox {id}: {}", crate::email_notify::send::mask_addresses(&e));
         }
     }
     n
@@ -772,6 +1027,9 @@ fn run_live() {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
     let mut first = true;
+    // Owed until a pass has read every mailbox: one it couldn't read may hold
+    // a same-box forward from before the rows.
+    let mut import_owed = true;
     let mut last_air = k2_core::airgap::enabled();
     loop {
         let status = super::supervisor::current_status();
@@ -779,21 +1037,23 @@ fn run_live() {
         let busy = super::supervisor::enable_running().load(Ordering::SeqCst);
         if gated.is_none() && !busy {
             let ctx = ctx();
-            match with_io(|io| Ok(reconcile_with(io, first, &ctx))) {
+            match with_io(|io| Ok(reconcile_with(io, import_owed, &ctx))) {
                 Ok(r) => {
                     if first || r.wrote + r.held + r.failed + r.imported > 0 {
                         k2_core::log_debug!("{P} pass: {r:?}");
                     }
                     first = false;
+                    import_owed = r.import_failed > 0;
                 }
                 Err(e) => k2_core::log_debug!("{P} pass skipped: {}", crate::email_notify::send::mask_addresses(&e)),
             }
         }
-        // Hourly, sooner when nudged or air-gap flips (checked each minute).
-        for _ in 0..60 {
+        // Hourly, sooner when nudged or air-gap flips (checked each minute),
+        // and every 10 minutes while the import is owed.
+        for minute in 0..60 {
             std::thread::sleep(Duration::from_secs(if first { 10 } else { 60 }));
             let air = k2_core::airgap::enabled();
-            if NUDGE.swap(false, Ordering::SeqCst) || air != last_air || first {
+            if NUDGE.swap(false, Ordering::SeqCst) || air != last_air || first || (import_owed && minute >= 9) {
                 last_air = air;
                 break;
             }

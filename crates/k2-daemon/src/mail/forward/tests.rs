@@ -425,6 +425,229 @@ fn the_hourly_pass_removes_a_redirect_with_no_row_and_tells_the_owner() {
     assert!(crate::mail::forward_outcomes::take_notices().is_empty());
 }
 
+/// A fake Sieve with a hook on the first read and a one-time read failure.
+struct HookIo {
+    inner: std::rc::Rc<FakeSieve>,
+    hook: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
+    fail_once: std::cell::RefCell<Option<String>>,
+}
+impl crate::mail::forward_sync::SieveIo for HookIo {
+    fn read(&self, account_id: &str) -> Result<crate::mail::forward_sync::Current, String> {
+        if let Some(h) = self.hook.borrow_mut().take() {
+            h();
+        }
+        if self.fail_once.borrow().as_deref() == Some(account_id) {
+            *self.fail_once.borrow_mut() = None;
+            return Err("fake: a passing read failure".to_string());
+        }
+        self.inner.read(account_id)
+    }
+    fn write(&self, account_id: &str, current: &crate::mail::forward_sync::Current, next: &crate::mail::sieve_user::UserSieve) -> Result<(), String> {
+        self.inner.write(account_id, current, next)
+    }
+    fn write_source(&self, account_id: &str, current: &crate::mail::forward_sync::Current, source: &str) -> Result<(), String> {
+        self.inner.write_source(account_id, current, source)
+    }
+}
+
+const HAND: &str = "require [\"fileinto\"];\nif header :contains \"subject\" \"invoice\" {\nfileinto \"Invoices\";\n}\nredirect \"boss@outside.test\";\n";
+
+/// The list goes stale: a forward set after the SELECT keeps its redirect, and
+/// nobody is told a false alarm. (Before this fix the redirect went.)
+#[test]
+fn the_hourly_pass_leaves_a_forward_set_after_it_listed_the_mailboxes() {
+    let t = t("fwstripr");
+    seed_mailbox("zed@notify.brand.test", "direct");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let src = "# k2-forward\nredirect \"x@outside.test\";\n";
+    let inner = t.io.clone();
+    let io = HookIo {
+        inner: t.io.clone(),
+        hook: std::cell::RefCell::new(Some(Box::new(move || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::create(
+                &conn,
+                &store::NewForward {
+                    address_id: "ma-zed@notify.brand.test",
+                    address: "zed@notify.brand.test",
+                    dest: "x@outside.test",
+                    dest_kind: store::KIND_EXTERNAL,
+                    keep: false,
+                    set_by: "owner",
+                    state: store::ST_ACTIVE,
+                    verified_address_id: Some("v"),
+                },
+                crate::email_notify::now(),
+            )
+            .expect("row");
+            inner.put("acc-zed", src);
+        }))),
+        fail_once: std::cell::RefCell::new(None),
+    };
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(&io, false, &ctx);
+    assert_eq!(t.io.src("acc-zed").as_deref(), Some(src), "the row's redirect stays");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert!(!n.iter().any(|(title, _, _)| title.contains("nobody set")), "no false alarm: {n:?}");
+    assert!(crate::mail::forward_sync::take_strip_audit().is_empty());
+}
+
+/// Someone's rules stay: only the redirect goes, the old script is kept for the
+/// owner, the audit line names the domain, and the notice is honest. (Before
+/// this fix the whole script became `keep;` and nothing recorded where it went.)
+#[test]
+fn the_hourly_pass_takes_only_the_redirect_out_of_a_hand_written_script() {
+    let t = t("fwstriph");
+    let dir = std::env::temp_dir().join(format!("k2-strip-test-{}-h", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    crate::mail::forward_sync::set_test_removed_dir(Some(dir.clone()));
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let _ = crate::mail::forward_sync::take_strip_audit();
+    t.io.put(ACC, HAND);
+    let (owner, _) = crate::mail::sieve_lockdown::classify("k2", HAND, &|_| false);
+    assert!(owner == crate::mail::sieve_lockdown::Owner::K2Unrecognised, "the lockdown keeps this one");
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.drift, r.failed), (1, 0), "{r:?}");
+    let after = t.io.src(ACC).expect("script");
+    assert_eq!(after, HAND.replace("redirect \"boss@outside.test\";", "keep;"), "only the redirect changed");
+    assert!(crate::mail::sieve_lockdown::outbound_actions(&after).is_empty(), "{after}");
+
+    let audit = crate::mail::forward_sync::take_strip_audit();
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["targets"][0]["domain"], "outside.test");
+    assert!(!audit[0].to_string().contains("boss@"), "domain only: {}", audit[0]);
+    let kept = audit[0]["keptAt"].as_str().expect("kept path");
+    let copy = std::fs::read_to_string(kept).expect("the old script is kept");
+    assert!(copy.contains(HAND), "{copy}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(kept).expect("meta").permissions().mode() & 0o777, 0o600);
+    }
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("outside.test") && n[0].1.contains(kept) && n[0].1.contains("k2 users audit"), "{}", n[0].1);
+    assert!(!n[0].1.contains("audit-sieve"), "it would find nothing: {}", n[0].1);
+
+    // Done once: the next pass finds nothing.
+    let writes = *t.io.writes.borrow();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(*t.io.writes.borrow(), writes);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+    crate::mail::forward_sync::set_test_removed_dir(None);
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}
+
+/// If the old script can't be kept, nothing is written: K2 never destroys what
+/// it can't keep. If the mail server refuses the edit, the owner hears once.
+#[test]
+fn the_hourly_pass_writes_nothing_it_cant_keep_and_says_when_it_cant_clean() {
+    let t = t("fwstripk");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let _ = crate::mail::forward_sync::take_strip_audit();
+    t.io.put(ACC, HAND);
+    // A file where the directory should be.
+    let blocked = std::env::temp_dir().join(format!("k2-strip-test-{}-k", std::process::id()));
+    std::fs::write(&blocked, "x").expect("a file");
+    crate::mail::forward_sync::set_test_removed_dir(Some(blocked.clone()));
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(r.failed, 1, "{r:?}");
+    assert_eq!(t.io.src(ACC).as_deref(), Some(HAND), "not written");
+    assert!(crate::mail::forward_sync::take_strip_audit().is_empty());
+    crate::mail::forward_sync::set_test_removed_dir(None);
+    std::fs::remove_file(&blocked).expect("clean up");
+
+    *t.io.source_fail.borrow_mut() = true;
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(r.failed, 1, "{r:?}");
+    assert_eq!(t.io.src(ACC).as_deref(), Some(HAND), "as it was");
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].0.contains("couldn't remove") && n[0].1.contains(MB), "{n:?}");
+    // Not every hour.
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty());
+}
+
+/// A read that fails at first boot: the same-box forward isn't stripped, the
+/// pass says the import is owed, and the retry imports it. (Before this fix it
+/// was removed in the same pass, and the import never ran again.)
+#[test]
+fn a_failed_import_read_keeps_the_same_box_forward_and_the_import_is_retried() {
+    let t = t("fwstripi");
+    seed_mailbox("team@notify.brand.test", "direct");
+    let src = "# k2-forward\nredirect \"team@notify.brand.test\";\n";
+    t.io.put(ACC, src);
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let io = HookIo { inner: t.io.clone(), hook: std::cell::RefCell::new(None), fail_once: std::cell::RefCell::new(Some(ACC.to_string())) };
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(&io, true, &ctx);
+    assert_eq!((r.imported, r.import_failed), (0, 1), "{r:?}");
+    assert_eq!(t.io.src(ACC).as_deref(), Some(src), "untouched");
+    assert!(forwards_on(MB).is_none());
+    let r = crate::mail::forward_sync::reconcile_with(&io, true, &ctx);
+    assert_eq!((r.imported, r.import_failed), (1, 0), "{r:?}");
+    assert_eq!(forwards_on(MB).as_deref(), Some("team@notify.brand.test"));
+    assert!(t.io.forward(ACC).is_some(), "still running");
+    assert!(crate::mail::forward_outcomes::take_notices().is_empty(), "the import at boot is routine");
+}
+
+/// A same-box redirect K2 wrote, found later: a row, not a strip, and the owner hears.
+/// In someone's rules, a redirect to a mailbox here stays: it can't leave.
+#[test]
+fn the_hourly_pass_imports_a_same_box_redirect_and_leaves_one_in_hand_written_rules() {
+    let t = t("fwstrips");
+    seed_mailbox("team@notify.brand.test", "direct");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    t.io.put(ACC, "# k2-forward\nredirect \"team@notify.brand.test\";\n");
+    let ctx = crate::mail::forward_sync::ctx();
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.imported, r.drift), (1, 0), "{r:?}");
+    assert_eq!(forwards_on(MB).as_deref(), Some("team@notify.brand.test"));
+    let n = crate::mail::forward_outcomes::take_notices();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert!(n[0].1.contains("team@notify.brand.test"), "{n:?}");
+
+    let hand = format!("require [\"fileinto\"];\nfileinto \"X\";\nredirect \"{MB}\";\nredirect :copy \"out@outside.test\";\n");
+    t.io.put("acc-team", &hand);
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(r.failed, 0, "{r:?}");
+    assert_eq!(
+        t.io.src("acc-team"),
+        Some(format!("require [\"fileinto\"];\nfileinto \"X\";\nredirect \"{MB}\";\n\n")),
+        "only the one that leaves goes"
+    );
+}
+
+/// The old `k2-forward` script: a hand-written one with nothing outbound is left,
+/// and one with a redirect moves into `k2` less the redirect.
+#[test]
+fn the_hourly_pass_treats_a_hand_written_legacy_script_the_same_way() {
+    let t = t("fwstripl");
+    let _ = crate::mail::forward_outcomes::take_notices();
+    let quiet = "require [\"fileinto\"];\nfileinto \"X\";\n";
+    t.io.legacy.borrow_mut().insert(ACC.to_string(), quiet.to_string());
+    let ctx = crate::mail::forward_sync::ctx();
+    crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!(t.io.legacy.borrow().get(ACC).map(String::as_str), Some(quiet), "nothing outbound: left alone");
+    assert_eq!(t.io.src(ACC), None);
+
+    t.io.legacy.borrow_mut().insert(ACC.to_string(), HAND.to_string());
+    let r = crate::mail::forward_sync::reconcile_with(t.io.as_ref(), false, &ctx);
+    assert_eq!((r.drift, r.failed), (1, 0), "{r:?}");
+    assert!(t.io.legacy.borrow().get(ACC).is_none());
+    assert_eq!(t.io.src(ACC), Some(HAND.replace("redirect \"boss@outside.test\";", "keep;")));
+}
+
+fn forwards_on(addr: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::live_for_address(&conn, &format!("ma-{addr}")).expect("live").map(|f| f.dest)
+}
+
 fn sieve_user_ooo(text: &str) -> crate::mail::sieve_user::UserSieve {
     crate::mail::sieve_user::UserSieve {
         ooo: Some(crate::mail::sieve_user::OooBlock { days: 7, text: text.to_string(), until: None, from: MB.to_string() }),

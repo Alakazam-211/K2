@@ -50,7 +50,10 @@
 //! scan, read-only, across EVERY user account on the server (K2-minted
 //! or not): non-K2 scripts with their targets (domain only), K2-named
 //! scripts with unrecognised content, which mailboxes still lack the
-//! lock, and whether `enotify` is off. Owner/admin only. It also reports
+//! lock, and whether `enotify` is off. `scriptsWithOutsideTargets` counts the
+//! non-K2 scripts only; a redirect in K2's own script that no active forward
+//! row backs is listed apart (`k2ScriptRedirectsNoRow`), by domain, never with
+//! the script's text. Owner/admin only. It also reports
 //! the API key lockdown (`mail::api_key_lockdown`, run from this pass):
 //! K2 mailboxes that can still mint keys, and every account's key count.
 
@@ -132,10 +135,21 @@ enum Tok {
 }
 
 fn tokenize(src: &str) -> Vec<Tok> {
+    tokenize_spans(src).0
+}
+
+/// The tokens, and for each one where it sits in `src` (in chars).
+fn tokenize_spans(src: &str) -> (Vec<Tok>, Vec<(usize, usize)>) {
     let c: Vec<char> = src.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
     while i < c.len() {
+        if out.len() > spans.len() {
+            spans.push((start, i));
+        }
+        start = i;
         let ch = c[i];
         if ch.is_whitespace() {
             i += 1;
@@ -214,7 +228,10 @@ fn tokenize(src: &str) -> Vec<Tok> {
             i += 1;
         }
     }
-    out
+    if out.len() > spans.len() {
+        spans.push((start, i.min(c.len())));
+    }
+    (out, spans)
 }
 
 /// Every outbound action in `src`: (`redirect`|`notify`, its target
@@ -222,7 +239,19 @@ fn tokenize(src: &str) -> Vec<Tok> {
 /// positional argument, after any tagged ones (RFC 5228 §4.2, RFC 5435
 /// §3), so the last string or string list before `;` is the target.
 pub(crate) fn outbound_actions(src: &str) -> Vec<(&'static str, Vec<String>)> {
-    let toks = tokenize(src);
+    outbound_commands(&tokenize(src)).into_iter().map(|c| (c.action, c.args)).collect()
+}
+
+/// One `redirect` or `notify` command: tokens `first..end` (`end` is past
+/// its `;` when it has one).
+struct OutboundCommand {
+    action: &'static str,
+    args: Vec<String>,
+    first: usize,
+    end: usize,
+}
+
+fn outbound_commands(toks: &[Tok]) -> Vec<OutboundCommand> {
     let mut out = Vec::new();
     let mut at_command = true;
     let mut i = 0;
@@ -241,6 +270,7 @@ pub(crate) fn outbound_actions(src: &str) -> Vec<(&'static str, Vec<String>)> {
                 } else {
                     None
                 };
+                let first = i;
                 i += 1;
                 let Some(action) = action else { continue };
                 let mut last: Vec<String> = Vec::new();
@@ -263,13 +293,70 @@ pub(crate) fn outbound_actions(src: &str) -> Vec<(&'static str, Vec<String>)> {
                     }
                     i += 1;
                 }
-                out.push((action, last));
+                let end = if toks.get(i) == Some(&Tok::Punct(';')) { i + 1 } else { i };
+                out.push(OutboundCommand { action, args: last, first, end });
             }
             _ => {
                 if matches!(toks[i], Tok::Word(_)) {
                     at_command = false;
                 }
                 i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Does this command stay in a script K2 didn't write? Only a redirect to
+/// one plain address that `stays` accepts (a mailbox on this box: it can't
+/// leave). `notify`, a variable and anything unparsed go.
+fn command_stays(c: &OutboundCommand, stays: &dyn Fn(&str) -> bool) -> bool {
+    c.action == "redirect" && matches!(c.args.as_slice(), [one] if !one.contains("${") && stays(one))
+}
+
+/// `src` with its outbound commands taken out and every other rule as it was:
+/// a plain `redirect` (which cancels the implicit keep) becomes `keep;`, so the
+/// mail stays in the mailbox; `redirect :copy` and `notify` just go.
+pub(crate) fn remove_outbound(src: &str, stays: &dyn Fn(&str) -> bool) -> String {
+    let (toks, spans) = tokenize_spans(src);
+    let c: Vec<char> = src.chars().collect();
+    let mut out = String::new();
+    let mut at = 0;
+    let mut changed = false;
+    for cmd in outbound_commands(&toks).iter().filter(|cmd| !command_stays(cmd, stays)) {
+        let (from, to) = (spans[cmd.first].0, spans[cmd.end - 1].1);
+        out.extend(&c[at..from]);
+        let has_copy = spans[cmd.first..cmd.end].iter().zip(&toks[cmd.first..cmd.end]).any(|((a, b), t)| {
+            *t == Tok::Tag && c[*a..*b].iter().collect::<String>().eq_ignore_ascii_case(":copy")
+        });
+        if cmd.action == "redirect" && !has_copy {
+            out.push_str("keep;");
+        }
+        at = to;
+        changed = true;
+    }
+    if !changed {
+        return src.to_string();
+    }
+    out.extend(&c[at..]);
+    // Nothing left that runs: K2's no-op, as save_user_sieve writes it.
+    if tokenize(&out).is_empty() {
+        return "keep;\n".to_string();
+    }
+    out
+}
+
+/// What [`remove_outbound`] takes out of `src`, by domain only.
+pub(crate) fn removed_targets(src: &str, stays: &dyn Fn(&str) -> bool, is_hosted: &dyn Fn(&str) -> bool) -> Vec<Target> {
+    let mut out = Vec::new();
+    for cmd in outbound_commands(&tokenize(src)).iter().filter(|cmd| !command_stays(cmd, stays)) {
+        if cmd.args.is_empty() {
+            out.push(Target { action: cmd.action, domain: "(unparsed)".to_string(), external: true });
+        }
+        for raw in &cmd.args {
+            for domain in target_domains(cmd.action, raw) {
+                let external = !is_hosted(&domain);
+                out.push(Target { action: cmd.action, domain, external });
             }
         }
     }
@@ -397,7 +484,7 @@ pub struct Target {
 }
 
 impl Target {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         serde_json::json!({ "action": self.action, "domain": self.domain, "external": self.external })
     }
 }
@@ -411,6 +498,9 @@ pub struct ScriptView {
     pub active: bool,
     pub owner: Owner,
     pub targets: Vec<Target>,
+    /// Each `redirect`'s address, lower case, to check against the forward rows.
+    /// Never in any output: the local part is redacted everywhere.
+    pub redirects: Vec<String>,
 }
 
 impl ScriptView {
@@ -584,6 +674,12 @@ pub fn scan_account(
             String::from_utf8_lossy(&api.script_source(account_id, &sc.blob_id)?).into_owned()
         };
         let (owner, targets) = classify(&sc.name, &src, is_hosted);
+        let redirects = outbound_actions(&src)
+            .into_iter()
+            .filter(|(action, _)| *action == "redirect")
+            .flat_map(|(_, args)| args)
+            .map(|a| a.trim().to_ascii_lowercase())
+            .collect();
         out.push(ScriptView {
             id: sc.id,
             name: sc.name,
@@ -591,6 +687,7 @@ pub fn scan_account(
             active: sc.is_active,
             owner,
             targets,
+            redirects,
         });
     }
     Ok(out)
@@ -928,11 +1025,13 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
 /// maps K2's account ids to their addresses. 0.46.6: also, per account,
 /// whether it can still mint API keys (`sysApiKeyCreate`, K2 mailboxes)
 /// and how many API keys it holds (`keys`, `x:ApiKey/query`).
+/// `active_dests`: an account's destinations with an active forward row.
 pub fn audit(
     api: &dyn SieveLockApi,
     keys: &dyn ApiKeyLockApi,
     k2_minted: &HashMap<String, String>,
     is_hosted: &dyn Fn(&str) -> bool,
+    active_dests: &dyn Fn(&str) -> HashSet<String>,
 ) -> Result<Value, String> {
     let mut ids = api.all_account_ids()?;
     for id in k2_minted.keys() {
@@ -947,6 +1046,7 @@ pub fn audit(
     let (mut user_scripts, mut unrecognised, mut outside, mut errors, mut skipped) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     let (mut key_locked, mut key_unlocked, mut key_holders, mut key_total) = (0usize, 0usize, 0usize, 0usize);
+    let mut k2_no_row = 0usize;
     for row in &rows {
         let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
         if protected_reason(row).is_some() {
@@ -1007,7 +1107,24 @@ pub fn audit(
                 outside += listed.iter().filter(|s| s.targets.iter().any(|t| t.external)).count();
                 entry["k2Scripts"] = serde_json::json!(scripts.len() - listed.len());
                 entry["scripts"] = Value::Array(listed.iter().map(|s| s.to_json()).collect());
-                if listed.is_empty() && (sieve_locked || !is_k2) && !keys_flag {
+                // K2's own scripts aren't in `scripts`, so a redirect in one with
+                // no row behind it is listed here. Domain only, never the text.
+                let rows_say = active_dests(id);
+                let no_row: Vec<Value> = scripts
+                    .iter()
+                    .filter(|s| s.owner == Owner::K2)
+                    .flat_map(|s| s.redirects.iter().filter(|d| !rows_say.contains(*d)).map(move |d| (s, d)))
+                    .flat_map(|(s, d)| {
+                        target_domains("redirect", d).into_iter().map(move |domain| {
+                            let external = !is_hosted(&domain);
+                            serde_json::json!({ "script": s.name, "active": s.active, "domain": domain, "external": external })
+                        })
+                    })
+                    .collect();
+                k2_no_row += no_row.len();
+                let any_no_row = !no_row.is_empty();
+                entry["k2RedirectsNoRow"] = Value::Array(no_row);
+                if listed.is_empty() && !any_no_row && (sieve_locked || !is_k2) && !keys_flag {
                     continue;
                 }
             }
@@ -1034,7 +1151,9 @@ pub fn audit(
             "unlockedMailboxes": unlocked,
             "userScripts": user_scripts,
             "unrecognisedK2Scripts": unrecognised,
+            // Non-K2 scripts only (`userScripts` + `unrecognisedK2Scripts`).
             "scriptsWithOutsideTargets": outside,
+            "k2ScriptRedirectsNoRow": k2_no_row,
             "apiKeyLockedMailboxes": key_locked,
             "apiKeyUnlockedMailboxes": key_unlocked,
             "accountsWithApiKeys": key_holders,
@@ -1116,6 +1235,27 @@ fn save_flagged(set: &HashSet<String>) -> Result<(), String> {
         .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+/// Each mail-server account's destinations with an active forward row.
+fn active_forward_dests() -> Result<HashMap<String, HashSet<String>>, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.stalwart_account_id, f.dest FROM mail_forwards f JOIN mail_addresses a ON a.id = f.address_id \
+             WHERE f.state = 'active' AND a.stalwart_account_id IS NOT NULL",
+        )
+        .map_err(|e| format!("forward rows: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("forward rows: {e}"))?;
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    for row in rows {
+        let (account, dest) = row.map_err(|e| format!("forward rows: {e}"))?;
+        out.entry(account).or_default().insert(dest.trim().to_ascii_lowercase());
+    }
+    Ok(out)
+}
+
 // ── Route ───────────────────────────────────────────────────────────────
 
 /// `GET /cli/mail/sieve-audit` — read-only. Owner/admin
@@ -1144,7 +1284,12 @@ pub fn handle_audit_get(_params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return crate::mail::hosted::err_json("500 Internal Server Error", "error", e),
     };
     let is_hosted = |d: &str| hosted.contains(d);
-    match audit(&client, &client, &minted, &is_hosted) {
+    let active = match active_forward_dests() {
+        Ok(v) => v,
+        Err(e) => return crate::mail::hosted::err_json("500 Internal Server Error", "error", e),
+    };
+    let active_dests = |account: &str| active.get(account).cloned().unwrap_or_default();
+    match audit(&client, &client, &minted, &is_hosted, &active_dests) {
         Ok(v) => CliResponse::ok_json(v.to_string()),
         Err(e) => crate::mail::hosted::err_json("502 Bad Gateway", "engine", e),
     }
@@ -1299,6 +1444,31 @@ mod tests {
 
     fn hosted(d: &str) -> bool {
         d == "example.test" || d == "brand.test"
+    }
+
+    #[test]
+    fn remove_outbound_takes_only_the_commands_that_leave() {
+        let none = |_: &str| false;
+        // A plain redirect keeps the mail; :copy and notify just go.
+        assert_eq!(remove_outbound("redirect \"a@b.test\";\n", &none), "keep;\n");
+        assert_eq!(remove_outbound("require [\"copy\"];\nredirect :copy \"a@b.test\";\n", &none), "require [\"copy\"];\n\n");
+        assert_eq!(remove_outbound("if true { REDIRECT :Copy \"a@b.test\"; stop; }\n", &none), "if true {  stop; }\n");
+        assert_eq!(remove_outbound("notify \"mailto:a@b.test\"; keep;\n", &none), " keep;\n");
+        // A variable or a list is never "a mailbox here".
+        assert_eq!(remove_outbound("redirect \"${x}\";", &|_| true), "keep;");
+        assert_eq!(remove_outbound("redirect [\"a@b.test\", \"c@b.test\"];", &|_| true), "keep;");
+        // Comments, strings and text bodies aren't commands; UTF-8 survives.
+        let text = "# redirect \"n@b.test\";\nvacation text:\nredirect \"n@b.test\";\n.\n;\nfileinto \"é redirect\";\n";
+        assert_eq!(remove_outbound(text, &none), text);
+        assert_eq!(remove_outbound("# é\nredirect \"a@b.test\";# é\n", &none), "# é\nkeep;# é\n");
+        // Nothing left to run: K2's no-op.
+        assert_eq!(remove_outbound("notify \"mailto:a@b.test\";\n", &none), "keep;\n");
+        // No terminating semicolon: up to the end, and nothing is left outbound.
+        assert_eq!(remove_outbound("if true { redirect \"a@b.test\" }", &none), "if true { keep; }");
+        // What stays, stays.
+        let here = |t: &str| t == "t@b.test";
+        assert_eq!(remove_outbound("redirect \"t@b.test\";\nredirect \"o@c.test\";\n", &here), "redirect \"t@b.test\";\nkeep;\n");
+        assert_eq!(removed_targets("redirect \"t@b.test\";\nredirect \"o@c.test\";\n", &here, &hosted).iter().map(|t| t.domain.as_str()).collect::<Vec<_>>(), ["c.test"]);
     }
 
     // ── permissions ──
@@ -1502,6 +1672,7 @@ mod tests {
 
     fn view(id: &str, name: &str, active: bool, owner: Owner) -> ScriptView {
         ScriptView {
+            redirects: Vec::new(),
             id: id.into(),
             name: name.into(),
             blob_id: format!("B{id}"),
@@ -1782,6 +1953,38 @@ mod tests {
     }
 
     #[test]
+    fn audit_lists_a_redirect_in_k2_s_own_script_with_no_active_row() {
+        let full_lock = api_key_lockdown::mint_permissions(mint_permissions(None).unwrap()).unwrap();
+        let src = sieve_user::compose(&sieve_user::UserSieve {
+            ooo: None,
+            forward: Some(sieve_user::ForwardBlock::internal("secret.person@outside.test", true)),
+        })
+        .expect("script");
+        let mut fake = Fake { rows: vec![user_row("b", full_lock)], caps: RefCell::new(Value::Null), ..Fake::default() };
+        fake.scripts.insert("b".into(), vec![(info("k", "k2", true), src)]);
+        let minted: HashMap<String, String> = [("b".to_string(), "bob@example.test".to_string())].into_iter().collect();
+
+        // No row: it's K2's own script, so the old count says clean, and this doesn't.
+        let v = audit(&fake, &fake, &minted, &hosted, &|_| HashSet::new()).expect("audit");
+        assert_eq!(v["summary"]["scriptsWithOutsideTargets"], 0, "that count is the non-K2 scripts");
+        assert_eq!(v["summary"]["k2ScriptRedirectsNoRow"], 1);
+        let accts = v["accounts"].as_array().expect("accounts");
+        assert_eq!(accts.len(), 1, "listed although clean otherwise: {v}");
+        assert_eq!(accts[0]["k2RedirectsNoRow"], serde_json::json!([{ "script": "k2", "active": true, "domain": "outside.test", "external": true }]));
+        let text = v.to_string();
+        assert!(!text.contains("secret.person") && !text.contains("redirect :copy"), "domain only, no script text: {text}");
+        for entry in fake.log.borrow().iter() {
+            assert!(entry.starts_with("list:") || entry.starts_with("keys:"), "audit wrote something: {entry}");
+        }
+
+        // With its row (any case): nothing to report.
+        let backed = |_: &str| -> HashSet<String> { ["secret.person@outside.test".to_string()].into_iter().collect() };
+        let v = audit(&fake, &fake, &minted, &hosted, &backed).expect("audit");
+        assert_eq!(v["summary"]["k2ScriptRedirectsNoRow"], 0);
+        assert_eq!(v["accounts"].as_array().expect("accounts").len(), 0, "{v}");
+    }
+
+    #[test]
     fn audit_is_read_only_and_lists_non_k2_scripts() {
         let full_lock = api_key_lockdown::mint_permissions(mint_permissions(None).unwrap()).unwrap();
         let mut fake = Fake {
@@ -1813,7 +2016,15 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let v = audit(&fake, &fake, &minted, &hosted).expect("audit");
+        // Bob's forward has its row; Alice's (in an inactive script) doesn't.
+        let rows_say = |account: &str| -> HashSet<String> {
+            if account == "b" {
+                ["carol@example.test".to_string()].into_iter().collect()
+            } else {
+                HashSet::new()
+            }
+        };
+        let v = audit(&fake, &fake, &minted, &hosted, &rows_say).expect("audit");
         for entry in fake.log.borrow().iter() {
             assert!(
                 entry.starts_with("list:") || entry.starts_with("keys:"),
@@ -1827,6 +2038,7 @@ mod tests {
         assert_eq!(v["summary"]["unlockedMailboxes"], 1);
         assert_eq!(v["summary"]["userScripts"], 2);
         assert_eq!(v["summary"]["scriptsWithOutsideTargets"], 1);
+        assert_eq!(v["summary"]["k2ScriptRedirectsNoRow"], 1, "alice's");
         // 0.46.6: API keys.
         assert_eq!(v["summary"]["apiKeyLockedMailboxes"], 2);
         assert_eq!(v["summary"]["apiKeyUnlockedMailboxes"], 2, "a and d");

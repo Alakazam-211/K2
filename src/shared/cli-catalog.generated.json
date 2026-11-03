@@ -1036,7 +1036,7 @@
    {
     "name": "hostmail audit-sieve",
     "usage": "k2 hostmail audit-sieve [--json]",
-    "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage."
+    "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; scriptsWithOutsideTargets counts only those scripts, and redirects in K2's own scripts with no active forward behind them are counted apart (k2ScriptRedirectsNoRow, listed per account as k2RedirectsNoRow, domain only); also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage."
    },
    {
     "name": "hostmail calendar status",

@@ -43328,7 +43328,7 @@ cmd_schema() {
     {
       "name": "hostmail audit-sieve",
       "usage": "k2 hostmail audit-sieve [--json]",
-      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
+      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; scriptsWithOutsideTargets counts only those scripts, and redirects in K2's own scripts with no active forward behind them are counted apart (k2ScriptRedirectsNoRow, listed per account as k2RedirectsNoRow, domain only); also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -64211,8 +64211,10 @@ elif verb == "audit_sieve":
         enotify = "off" if en.get("disabled") is True else ("ON" if en.get("disabled") is False else "unknown (%s)" % (en.get("error") or "?"))
         print("accounts scanned : %s (%s skipped: admin/service/group)" % (s.get("accountsScanned", "?"), s.get("accountsSkipped", "?")))
         print("k2 mailboxes     : %s (%s locked, %s NOT locked)" % (s.get("k2Mailboxes", "?"), s.get("lockedMailboxes", "?"), s.get("unlockedMailboxes", "?")))
-        print("user scripts     : %s (%s reach outside this box)" % (s.get("userScripts", "?"), s.get("scriptsWithOutsideTargets", "?")))
+        print("user scripts     : %s" % s.get("userScripts", "?"))
         print("k2-named, other  : %s" % s.get("unrecognisedK2Scripts", "?"))
+        print("of those, outside: %s reach outside this box" % s.get("scriptsWithOutsideTargets", "?"))
+        print("k2's own, no row : %s redirect(s) with no active forward behind them" % s.get("k2ScriptRedirectsNoRow", "?"))
         print("enotify          : %s" % enotify)
         print("api key lock     : %s K2 mailboxes locked, %s NOT locked (can still create API keys)" % (s.get("apiKeyLockedMailboxes", "?"), s.get("apiKeyUnlockedMailboxes", "?")))
         print("api keys held    : %s on %s account(s)" % (s.get("apiKeys", "?"), s.get("accountsWithApiKeys", "?")))
@@ -64233,6 +64235,8 @@ elif verb == "audit_sieve":
                 print("  api keys: could not list (%s)" % a["apiKeysError"])
             if a.get("error"):
                 print("  error: %s" % a["error"])
+            for r in a.get("k2RedirectsNoRow") or []:
+                print("  %-24s %-8s redirect → %s%s, no active forward behind it" % ('"%s"' % r.get("script"), "active" if r.get("active") else "inactive", r.get("domain"), " (outside)" if r.get("external") else ""))
             for sc in a.get("scripts") or []:
                 tg = ", ".join("%s → %s%s" % (t.get("action"), t.get("domain"), " (outside)" if t.get("external") else "")
                                for t in sc.get("targets") or []) or "no forward or notify"
@@ -72197,7 +72201,8 @@ COMMANDS
   footer set|unset|show       Host-wide outbound company footer (plain text).
                               mail_manage. --domain is 400 this cut.
   audit-sieve [--json]        Read-only: user Sieve scripts on every mailbox
-                              (targets as domains), mailboxes without the
+                              (targets as domains), redirects in K2's own
+                              scripts with no forward behind them, mailboxes without the
                               Sieve lock, enotify state, mailboxes that can
                               still create API keys or hold any. Owner/admin.
   cert renew                  Retry ACME for the mail hostname (enable is
@@ -73685,6 +73690,11 @@ user account on the mail server: scripts that are not K2's own `k2` /
 write (owner `k2-unrecognised-content`), each one's redirect/notify
 targets as DOMAINS only (external = not hosted on this box), and which
 K2 mailboxes still lack the Sieve lock; plus whether enotify is off.
+
+scriptsWithOutsideTargets counts only those scripts (owner `user` and
+`k2-unrecognised-content`), not K2's own. A redirect in K2's own script with
+no active forward behind it is counted apart, k2ScriptRedirectsNoRow, and
+listed per account (k2RedirectsNoRow: the target's domain, no script text).
 
 It also covers mail server API keys: which K2 mailboxes can still create
 their own API keys (marked [API keys NOT locked]) and how many API keys

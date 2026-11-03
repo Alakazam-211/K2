@@ -15,6 +15,10 @@ use crate::mail::sieve_user::{self, OooBlock, UserSieve};
 #[derive(Default)]
 pub(crate) struct FakeSieve {
     pub scripts: RefCell<HashMap<String, String>>,
+    /// A leftover `k2-forward` script, per account.
+    pub legacy: RefCell<HashMap<String, String>>,
+    /// Refuse a source K2 didn't compose (Stalwart wouldn't compile it).
+    pub source_fail: RefCell<bool>,
     pub writes: RefCell<usize>,
     pub fail: RefCell<bool>,
 }
@@ -38,7 +42,12 @@ impl SieveIo for FakeSieve {
             .as_ref()
             .map(|_| vec![SieveScriptInfo { id: "s1".into(), name: "k2".into(), blob_id: "b1".into(), is_active: true }])
             .unwrap_or_default();
-        Ok(Current { sieve: src.as_deref().map(sieve_user::parse).unwrap_or_default(), scripts, k2_src: src, legacy: false })
+        let legacy_src = self.legacy.borrow().get(account_id).cloned();
+        let mut sieve = src.as_deref().map(sieve_user::parse).unwrap_or_default();
+        if sieve.forward.is_none() {
+            sieve.forward = legacy_src.as_deref().and_then(sieve_user::parse_legacy_forward);
+        }
+        Ok(Current { sieve, scripts, k2_src: src, legacy: legacy_src.is_some(), legacy_src })
     }
     fn write(&self, account_id: &str, _current: &Current, next: &UserSieve) -> Result<(), String> {
         if *self.fail.borrow() {
@@ -47,6 +56,16 @@ impl SieveIo for FakeSieve {
         *self.writes.borrow_mut() += 1;
         let src = sieve_user::compose(next).unwrap_or_else(|| "keep;\n".to_string());
         self.put(account_id, &src);
+        self.legacy.borrow_mut().remove(account_id);
+        Ok(())
+    }
+    fn write_source(&self, account_id: &str, _current: &Current, source: &str) -> Result<(), String> {
+        if *self.fail.borrow() || *self.source_fail.borrow() {
+            return Err("fake: the mail server refused the script".into());
+        }
+        *self.writes.borrow_mut() += 1;
+        self.put(account_id, source);
+        self.legacy.borrow_mut().remove(account_id);
         Ok(())
     }
 }
@@ -288,7 +307,8 @@ fn import_keeps_same_box_forwards_and_strips_unconfirmed_outside_ones() {
     io.put("acc-old", &sieve_user::compose(&UserSieve { ooo: None, forward: Some(sieve_user::ForwardBlock::internal("team@brand.test", true)) }).expect("s"));
     io.put("acc-leak", "require [\"copy\"];\n# k2-forward\nredirect :copy \"x@outside.test\";\n");
     let r = reconcile_with(io.as_ref(), true, &ctx());
-    assert_eq!((r.imported, r.failed), (2, 0), "{r:?}");
+    assert_eq!((r.imported, r.failed, r.import_failed), (1, 0, 0), "{r:?}");
+    assert_eq!(r.drift, 1, "the strip took the outside one: {r:?}");
     let db = k2_core::db::shared();
     let conn = db.lock();
     let kept = store::live_for_address(&conn, &a).expect("live").expect("row");

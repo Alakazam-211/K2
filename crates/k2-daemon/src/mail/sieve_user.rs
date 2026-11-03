@@ -478,39 +478,31 @@ pub fn save_user_sieve(
     scripts: &[SieveScriptInfo],
     sieve: &UserSieve,
 ) -> Result<(), String> {
-    let k2 = scripts.iter().find(|s| s.name == SCRIPT_NAME);
-    let legacy: Vec<&SieveScriptInfo> = scripts
-        .iter()
-        .filter(|s| s.name == LEGACY_FORWARD_NAME)
-        .collect();
-    match compose(sieve) {
-        None => {
-            // RFC 9661 / Stalwart: destroy of an *active* script is
-            // `scriptIsActive` ("Deactivate Sieve script before deletion").
-            // `onSuccessActivateScript: null` means "leave current active",
-            // so empty remainder replaces `k2` with a no-op `keep;` (still
-            // the active script) then destroys leftover `k2-forward`.
-            let blob_id = client.blob_upload(account_id, b"keep;\n")?;
-            let existing_id = k2.map(|s| s.id.as_str());
-            client.sieve_script_put_k2(account_id, existing_id, &blob_id, &[])?;
-            let destroy_ids: Vec<String> = legacy.iter().map(|s| s.id.clone()).collect();
-            if !destroy_ids.is_empty() {
-                client.sieve_scripts_destroy(account_id, &destroy_ids)?;
-            }
-            Ok(())
-        }
-        Some(source) => {
-            let blob_id = client.blob_upload(account_id, source.as_bytes())?;
-            let existing_id = k2.map(|s| s.id.as_str());
-            client.sieve_script_put_k2(account_id, existing_id, &blob_id, &[])?;
-            let destroy_ids: Vec<String> = legacy.iter().map(|s| s.id.clone()).collect();
-            if !destroy_ids.is_empty() {
-                client.sieve_scripts_destroy(account_id, &destroy_ids)?;
-            }
-            Ok(())
-        }
-    }
+    // RFC 9661 / Stalwart: destroy of an *active* script is `scriptIsActive`
+    // ("Deactivate Sieve script before deletion"). So an empty remainder
+    // replaces `k2` with a no-op `keep;` (still the active script).
+    let source = compose(sieve).unwrap_or_else(|| "keep;\n".to_string());
+    save_user_source(client, account_id, scripts, &source)
 }
+
+/// Write `source` as the active `k2` script, then destroy a leftover
+/// `k2-forward`.
+pub fn save_user_source(
+    client: &StalwartClient,
+    account_id: &str,
+    scripts: &[SieveScriptInfo],
+    source: &str,
+) -> Result<(), String> {
+    let k2 = scripts.iter().find(|s| s.name == SCRIPT_NAME);
+    let blob_id = client.blob_upload(account_id, source.as_bytes())?;
+    client.sieve_script_put_k2(account_id, k2.map(|s| s.id.as_str()), &blob_id, &[])?;
+    let destroy_ids: Vec<String> = scripts.iter().filter(|s| s.name == LEGACY_FORWARD_NAME).map(|s| s.id.clone()).collect();
+    if !destroy_ids.is_empty() {
+        client.sieve_scripts_destroy(account_id, &destroy_ids)?;
+    }
+    Ok(())
+}
+
 
 /// Read, patch, write, with no lock and no rows behind it. Production code goes
 /// through `forward_sync` instead; this is for tests against a mail server.

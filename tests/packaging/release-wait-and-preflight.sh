@@ -203,11 +203,14 @@ check "a caller's SDKROOT wins" 'grep -qx "SDKROOT=/caller/sdk" "$tmp/step05.log
 # (c) The updater key and its password never ride on argv (0.46.6): the
 # tauri signer reads TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) from the env, and
 # argv is visible to every process on the build Mac (ps).
-for f in scripts/release.sh scripts/windows-patch-latest-json.sh; do
+for f in scripts/release.sh scripts/windows-patch-latest-json.sh scripts/lib/sign-updater.sh; do
     check "$f: no --private-key / --password on argv" \
         '! grep -nE -- "--private-key|--password[ =]" "$ROOT/$f"'
-    check "$f: still signs with the tauri signer" \
-        'grep -q "signer sign" "$ROOT/$f"'
+done
+# Signing moved into scripts/lib/sign-updater.sh; both callers still sign.
+for f in scripts/release.sh scripts/windows-patch-latest-json.sh; do
+    check "$f: still signs through sign-updater.sh" \
+        'grep -q "sign-updater.sh" "$ROOT/$f" && grep -qE "^[[:space:]]*k2u_sign " "$ROOT/$f"'
 done
 
 echo ""

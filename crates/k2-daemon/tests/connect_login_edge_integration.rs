@@ -52,7 +52,36 @@ impl Resp {
 }
 
 fn http(port: u16, method: &str, path: &str, body: Option<&str>, extra: &[&str]) -> Resp {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
+    let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
+    http_on(stream, method, path, body, extra)
+}
+
+/// A tunnel connection whose hop carries the address the relay saw, as the
+/// E2E listener's splice registers it after reading frpc's PROXY v2 header.
+/// `visitor`: `None` is a relay that passed no address.
+fn http_through_relay(
+    port: u16,
+    visitor: Option<&str>,
+    path: &str,
+    body: &str,
+    extra: &[&str],
+) -> Resp {
+    let stream = futures_block(tokio::net::TcpStream::connect(("127.0.0.1", port)))
+        .expect("connect to the tunnel-ingress listener");
+    let ip: Option<std::net::IpAddr> = visitor.map(|v| v.parse().expect("a visitor address"));
+    let _hop = k2_daemon::client_ip::register_hop(&stream, ip);
+    let stream = stream.into_std().expect("into a std stream");
+    stream.set_nonblocking(false).expect("blocking again");
+    http_on(stream, "POST", path, Some(body), extra)
+}
+
+fn http_on(
+    mut stream: TcpStream,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    extra: &[&str],
+) -> Resp {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .expect("set read timeout");
@@ -1440,6 +1469,75 @@ async fn any_mode_unattested_tunnel_logins_share_tunnel_bucket_not_splice_peer()
             &[],
         );
         assert_rate_limited(&r, "shared tunnel bucket over its limit");
+    });
+}
+
+/// Path B vs-live PB-A7 + LM4: the address the relay saw (frpc's PROXY v2
+/// header, read back by the hop) keys an unattested tunnel Connect login.
+/// One visitor's failures close only that visitor: the shared tunnel bucket
+/// is never touched and nothing counts toward the global ceiling, so a full
+/// ceiling refuses only logins with no address. A forwarded header never
+/// picks the bucket.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_seen_visitor_ip_keys_tunnel_login_outside_shared_bucket_and_ceiling() {
+    use k2_daemon::login_throttle::{Door, GLOBAL_FAIL_LIMIT, LIMIT};
+    let _g = lock();
+    with_temp_home(|| {
+        let _s = seed("lmrelay", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        set_ingress_mode("any");
+        let right = r#"{"username":"lmrelay","password":"password123"}"#;
+        let forged = ["X-Forwarded-For: 198.51.100.200", "CF-Connecting-IP: 198.51.100.200"];
+        let port = d.tunnel_port;
+
+        for i in 1..=LIMIT {
+            let body = format!(r#"{{"username":"lmrelay{i}","password":"WRONG"}}"#);
+            let r = http_through_relay(port, Some("203.0.113.50"), LOGIN, &body, &forged);
+            assert_eq!(r.status, 401, "visitor A attempt {i}; body={}", r.body);
+        }
+        let over = http_through_relay(port, Some("203.0.113.50"), LOGIN, right, &forged);
+        assert_rate_limited(&over, "visitor A over its own limit, right password or not");
+
+        let other = http_through_relay(port, Some("203.0.113.51"), LOGIN, right, &forged);
+        assert_eq!(other.status, 200, "visitor B is not closed by A; body={}", other.body);
+        assert_eq!(
+            d.login_limiter.tracked_keys(),
+            (2, 0),
+            "exactly the two visitors: no shared tunnel bucket, no header, no splice peer"
+        );
+
+        // None of A's failures counted: one short of the ceiling after adding
+        // the rest by hand. Had they counted, the ceiling would be full here.
+        for _ in 1..GLOBAL_FAIL_LIMIT {
+            d.login_limiter.record_global_failure(Door::Connect, now());
+        }
+        assert!(
+            !d.login_limiter.global_ceiling_reached(Door::Connect, now()),
+            "a failure from a visitor the relay named never counts toward the ceiling"
+        );
+
+        d.login_limiter.record_global_failure(Door::Connect, now());
+        assert!(d.login_limiter.global_ceiling_reached(Door::Connect, now()), "ceiling full now");
+        let vouched = http_through_relay(port, Some("203.0.113.52"), LOGIN, right, &[]);
+        assert_eq!(
+            vouched.status, 200,
+            "a full ceiling never refuses a visitor the relay named; body={}",
+            vouched.body
+        );
+        let unknown = http_through_relay(port, None, LOGIN, right, &[]);
+        assert_rate_limited(&unknown, "a full ceiling refuses a login with no address");
+        assert_eq!(
+            d.login_limiter.tracked_keys(),
+            (4, 0),
+            "the three visitors and, for the login with no address, the shared bucket"
+        );
+        let spoofed = http_through_relay(port, None, LOGIN, right, &["X-Forwarded-For: 203.0.113.53"]);
+        assert_rate_limited(&spoofed, "a forwarded header doesn't make a login vouched");
+        assert_eq!(
+            d.login_limiter.tracked_keys(),
+            (4, 0),
+            "a forwarded header opens no bucket: that login counted against the shared one"
+        );
     });
 }
 

@@ -1678,6 +1678,9 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         let scope = vault.meta(&sel, &c.actor)?.scope.kind;
         session_self_grant(&c.actor, scope, session_workspace(&consumer.id))?;
     }
+    if consumer.kind == ConsumerKind::Session {
+        session_can_receive(c, &consumer.id)?;
+    }
     if matches!(c.actor, Actor::Owner) && delivery.readable() {
         let m = vault.meta(&sel, &c.actor)?;
         if grant_needs_confirm(&c.actor, m.namespace, delivery) {
@@ -1822,6 +1825,34 @@ fn session_workspace(session_id: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     k2_core::workspace_session_handles::project_id_for_session_id(&conn, session_id).ok().flatten()
+}
+
+/// A share with a session reaches only the id a running session's passport
+/// holds. `k2 whoami` and `$K2_SESSION_ID` show the chat's id, which is another
+/// id, and an ended session never comes back: refused, so a share can't
+/// silently reach nothing. Revoking is never refused.
+fn session_can_receive(c: &VaultCaller, id: &str) -> Result<(), VaultError> {
+    let known = c.session_id.as_deref() == Some(id)
+        || crate::session_token::workspace_for_session(id).is_some()
+        || crate::session_liveness::is_live(id);
+    if known {
+        return Ok(());
+    }
+    let is_a_chat = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace_session_handles::project_id_for_session_id(&conn, id).ok().flatten().is_some()
+    };
+    let what = if is_a_chat {
+        format!("{id} is a chat's id (the one k2 whoami shows), not a running session's")
+    } else {
+        format!("no running session has the id {id}")
+    };
+    Err(err(
+        "session_not_running",
+        400,
+        format!("{what}, so this share would reach nothing. Share with ws:<name>, or ask the owner for the id (k2 sessions live <workspace>, owner only)"),
+    ))
 }
 
 /// R8 review fix 3: an IT agent ("Allow managing server-wide secrets") may

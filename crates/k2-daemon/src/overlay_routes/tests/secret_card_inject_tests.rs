@@ -413,6 +413,54 @@ fn saving_for_a_session_that_ended_is_refused_and_the_card_stays_open() {
     assert!(vault.user_secret_exists(&k2_vault::Scope::workspace(project_id), "ENDED_FILE"));
 }
 
+/// `k2 vault grant --to session:<id>` reaches only the id a running session's
+/// passport holds. `k2 whoami` prints the chat's id, which is another id: a
+/// share with that, or with a session that isn't running, would reach nothing,
+/// so it is refused and no grant is made.
+#[test]
+fn a_share_with_a_session_needs_a_running_sessions_id() {
+    use k2_vault::{Actor, Delivery, Kind, Namespace, PutRequest, Scope, SecretBytes};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (_handle, project_id) = ws("ovlsh");
+    let chat = uuid::Uuid::new_v4().to_string();
+    pin(&project_id, &chat);
+    let mut put = PutRequest::new(Namespace::User, Scope::workspace(project_id.clone()), "SHARED_FILE", Kind::Generic);
+    put.default_delivery = Some(Delivery::File);
+    put.delivery_ceiling = Some(Delivery::Env);
+    let id = vault.put(put, SecretBytes::from_slice(SESSION_PW.as_bytes()), &Actor::Owner).expect("put").meta.id;
+    let selector = k2_vault::Selector::Id(id.clone());
+    // An owner's own login: the raw owner token needs a confirm to share a file.
+    let owner = crate::vault::actor::VaultCaller {
+        actor: Actor::Login { username: "ada".into(), role: k2_vault::Role::Owner },
+        channel: crate::vault::actor::Channel::Login,
+        session_id: None,
+    };
+    let grant = |to: &str| {
+        let body = serde_json::json!({ "id": id, "to": to, "as": "file" }).to_string();
+        crate::vault_routes::handle_on(&vault, crate::vault_routes::GRANT, Ok(owner.clone()), body.as_bytes(), &HashMap::new(), "test", None)
+    };
+
+    let r = grant(&format!("session:{chat}"));
+    assert!(r.status.starts_with("400"), "{}", r.body);
+    assert!(r.body.contains("session_not_running") && r.body.contains("k2 whoami") && r.body.contains("k2 sessions live"), "{}", r.body);
+    let r = grant("session:never-ran");
+    assert!(r.status.starts_with("400"), "{}", r.body);
+    assert!(r.body.contains("session_not_running") && !r.body.contains("k2 whoami"), "{}", r.body);
+    assert!(vault.grants(&selector, &Actor::Owner).expect("grants").is_empty(), "a refusal makes no grant");
+
+    // A running session's id works, and the file arrives.
+    let s = live_session("sess-share", &uuid::Uuid::new_v4().to_string());
+    let r = grant(&format!("session:{}", s.sid));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(std::fs::read(s.dir.join("SHARED_FILE")).expect("arrived"), SESSION_PW.as_bytes());
+    // Removing a share from a session that has ended is never refused.
+    let revoke = serde_json::json!({ "id": id, "from": format!("session:{}", s.sid) }).to_string();
+    crate::vault::spawn::session_ended(&s.sid);
+    let r = crate::vault_routes::handle_on(&vault, crate::vault_routes::REVOKE, Ok(owner.clone()), revoke.as_bytes(), &HashMap::new(), "test", None);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+}
+
 /// A guest can't choose where a secret is kept, so a refusal never sends them
 /// to that option. Nothing is kept and the card stays open.
 #[test]

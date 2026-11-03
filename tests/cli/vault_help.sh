@@ -225,6 +225,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+        if self.path.split("?")[0] in ("/cli/vault/revoke", "/cli/vault/destroy", "/cli/vault/disable"):
+            return self.reply({"ok": True, "filesRemoved": 2, "recall": "K2 removed its file from 2 running sessions."})
         if self.path.startswith("/cli/vault/file"):
             b = json.loads(body or "{}")
             if b.get("done"):
@@ -380,5 +382,29 @@ mkdir -p "$WORK/site"
 want_cwd="$(cd "$WORK/site" && pwd -P)"
 grep -F '/cli/publish/run' "$WORK/posts.log" | grep -Fq "\"cwd\": \"$want_cwd\"" || fail "--cwd site → $want_cwd: $(grep -F '/cli/publish/run' "$WORK/posts.log")"
 ok "publish run --cwd site resolves against the caller's folder"
+
+# Destroy, disable and revoke say what they did to delivered files; revoke
+# says what it removed and that the secret stays.
+recall="K2 removed its file from 2 running sessions."
+out="$(k2s vault revoke OLD_KEY --from ws:billing)" || fail "revoke: $out"
+[ "$out" = "OLD_KEY: no longer shared with ws:billing; the secret itself is still in the vault
+$recall" ] || fail "revoke by name: $out"
+out="$(k2s vault revoke --grant g-123)" || fail "revoke --grant: $out"
+[ "$out" = "share g-123 removed; the secret itself is still in the vault
+$recall" ] || fail "revoke by grant: $out"
+out="$(k2s vault disable OLD_KEY)" || fail "disable: $out"
+[ "$out" = "OLD_KEY: disabled
+$recall" ] || fail "disable: $out"
+out="$(k2s vault destroy OLD_KEY --yes)" || fail "destroy: $out"
+[ "$out" = "OLD_KEY: destroyed on this box (backups made earlier keep it until they expire)
+$recall" ] || fail "destroy: $out"
+ok "revoke, disable and destroy print what happened to delivered files"
+
+out="$(k2n vault destroy --help)"
+printf '%s' "$out" | grep -Fq 'Its file' || fail "destroy help names the file: $out"
+printf '%s' "$out" | grep -Fq 'environment variable' || fail "destroy help names env: $out"
+out="$(k2n vault grant --help)"
+printf '%s' "$out" | grep -Fq "not k2 whoami's" || fail "grant help warns about the whoami id: $out"
+ok "destroy and grant help say what they can't reach"
 
 echo "PASS: vault help ($pass checks)"

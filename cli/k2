@@ -31552,7 +31552,10 @@ k2 vault grant NAME --to <who> [--as <d>] [--env-name X] [--file-name F] [--scop
 
 Share NAME, or set how one consumer gets it (one grant per consumer and
 delivery; a new one replaces the old).
-  --to ws:<name>     a workspace; ws:* = every workspace; session:<id>;
+  --to ws:<name>     a workspace; ws:* = every workspace;
+                     session:<id> (a running session's id, not k2 whoami's; the
+                     owner lists them: k2 sessions live <workspace>. Other ids
+                     are refused, and the share ends with that session);
                      service:<label> (a k2 publish service);
                      job:<name> (a k2 job; its runs get only these);
                      compute:<ws>/<node> (that workspace's compute jobs on

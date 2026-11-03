@@ -323,7 +323,9 @@ Notes:
   conversation id for a custom preset at launch (the program never sees it;
   it survives wakes and restarts; New chat mints a new one). `k2 thread
   <agent>` reads and posts; a post reaches the program's stdin as
-  `[from <who>] [thread:<agent>] <text>` (§3), and the program answers with
+  `[from <who>] [thread:<agent>] <text>` (§3; someone signed in to an App is
+  `[guest <login> on App <app>] [thread:<agent>] <text>`, never `[from …]`, with
+  `; login set up by <ws>'s agent` when an agent could know the password), and the program answers with
   `k2 thread <agent> "…"`.
 - **Lifecycle hooks are opt-in**: a custom program reports working / idle with
   `k2 hooks emit <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Notification|Stop|SessionEnd> [--json '<object>']`,

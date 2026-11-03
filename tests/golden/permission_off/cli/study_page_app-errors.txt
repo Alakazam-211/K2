@@ -328,6 +328,10 @@ HANDOVER (moving Apps between workspaces and boxes)
   handoff_needs_v1 (exit 3)
       fix: Clear what it lists, or move the App by hand: the refusal's
       manual steps (a new App id, its data, labels and domains).
+  handover_shared_roles (exit 3)
+      fix: Give them a role of this App (k2 app role create <name> --app
+      <app-id>, then k2 app grant role <grant-id> --role <name>), or take
+      the room off those roles, then ask again.
   handover_vault_closed (exit 3)
       fix: Wait until K2 has finished starting (k2 vault status), then run
       it again.
@@ -518,16 +522,20 @@ GENERAL (any App route)
       fix: Slow down and try again later; the hint says how often is fine.
   skin_error (exit 3)
       fix: Run it again. If it repeats, report it with the hint.
+  login_name_reserved (exit 3)
+      fix: Pick another username.
   outside_app_rooms (exit 3)
       fix: Ask for it once for the whole App: k2 app grant <app-id> --kind
       guests-rooms --room <room>, adding a --room for each room it has
       already (k2 app guest ceiling <app-id>). The owner approves it on a
-      card; then every login of the App can use it.
+      card. A login an agent set up reaches it only after the person uses a
+      reset link on K2's own page.
   skin_room (exit 3)
       fix: Use a room the pass holds, or have the owner add the room to the
-      pass. Agent-tied: get the room approved for the App (k2 app grant
-      <app-id> --kind guests-rooms --room <room>), or the person uses a
-      reset link the owner sends (k2 app user reset <username>).
+      pass. Agent-tied: the person uses a reset link the owner sends on K2's
+      own page (k2 app user reset <username>; an agent asks on a card: k2
+      permission request apps.user-password-reset user=<username>
+      mode=link).
   state_write_failed (exit 3)
       fix: Check the box's disk, then run it again. If it repeats, report
       it.

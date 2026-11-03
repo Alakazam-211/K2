@@ -772,7 +772,7 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
       <p className="text-[10px] text-[var(--color-text-muted)]">
         {person.pendingReset
           ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
-          : `${person.tiedTo}'s agent set ${person.username} up, so they use ${person.tiedTo}'s room and the rooms you approved for its App. Anything more you give waits for a reset link from you.`}
+          : `${person.tiedTo}'s agent set ${person.username} up, so they use ${person.tiedTo}'s room only. Anything more you give waits for a reset link from you, rooms you approved for its App included.`}
         {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so a reset never goes there: send it to an email you know is theirs, or get a one-time link.`}
         {' '}Links open K2's own page.
       </p>

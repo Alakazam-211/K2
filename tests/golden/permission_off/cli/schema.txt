@@ -2860,12 +2860,11 @@ exit: 0
     },
     {
       "name": "app user rooms",
-      "usage": "k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]",
-      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. Signed-in people get the change at their next request (--apply-tokens is kept for scripts and changes nothing). --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
+      "usage": "k2 app user rooms <username> --agent sales [--app <app>]",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. Signed-in people get the change at their next request. --app sets the rooms of that guest's role-less grant on one App, creating it if missing (the owner, or an agent for its own workspace's Apps).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
-        {"name": "--apply-tokens", "arg": null, "description": "Kept for scripts; changes nothing. Signed-in people get the change at their next request."},
         {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>. Agents: one of their own workspace's Apps."}
       ]
     },
@@ -3278,12 +3277,12 @@ exit: 0
     },
     {
       "name": "skin user rooms",
-      "usage": "k2 skin user rooms <username> --agent sales [--apply-tokens]",
+      "usage": "k2 skin user rooms <username> --agent sales",
       "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens).",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
-        {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."}
+        {"name": "--app", "arg": "app", "description": "That App's rooms."}
       ]
     },
     {

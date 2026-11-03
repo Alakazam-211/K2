@@ -8,7 +8,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### When you update
 - **Going back to Sew 0.6.0 after upgrading to 0.6.1 needs `k2 hostchat rollback --accept-data-loss`,** because 0.6.1 changes Sew's data.
 - **Outside mail forwards still waiting for a confirm:** K2 no longer asks for one. Those set in the 7 days before you update turn on by themselves over a few minutes, and each address gets an email first with a link to stop it. Older ones stay off and send nothing until someone sets them again (`k2 hostmail forward add`). You get one notice listing both, and `k2 hostmail forward list` shows them.
-- **A `guests-rooms` grant now reaches logins the App's agent set up.** Those logins start using the rooms on the grant on their next request, and that agent could know their passwords. To see what an App holds, run `k2 app grants <app>`; `k2 app grant <app> --kind guests-rooms --revoke` takes it back.
+- **Access changes reach signed-in people at their next request.** A role, room or cap you changed sometimes waited until the person signed in again. Now adding and removing both apply at once, so the `--apply-tokens` flag on `k2 app user rooms` is gone.
+- **`guests-rooms` approvals you already gave still don't open those rooms to logins an agent set up.** Those logins keep their App's own room until the person uses a reset link on K2's own page. You don't need to do anything.
+- **An agent can no longer set the password of, or remove, a person you added.** Only people its own agent added.
+- **Handing an App to another agent is stricter.** It's refused while the App's guests hold box-wide roles naming the old agent's room, and logins the old agent set up are signed out at the switch.
+- **Guests look different to your agents.** A post from someone signed in to an App now reaches the agent as `[guest <login> on App <app>]`, not `[from <login>]`, so anything reading that line should expect it.
 
 ### Hosted mail
 - **A mailbox can now forward to several addresses, up to 5.** `k2 hostmail forward set <mailbox> --to a@x --to b@y` sets the whole list; `add` and `rm` change one without touching the others. Each address has its own state, so one can pause or stop while the rest carry on. A single `--to` still works the way it did.
@@ -72,12 +76,15 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The Mobile tab and `k2 sim status` show the owner's answer right away.** When the owner accepts the Android licence, status says accepted and installing, with progress, instead of still asking for the licence until the download ends. If the install fails, it says so and the owner runs Retry setup; the licence stays accepted.
 
 ### An agent runs its App's users
-- **An agent's login works right away.** A login an agent makes on its own App can use the App's own room and every room the owner approved for that App (its `guests-rooms` grant), with no owner step and no reset. A room past those is refused as `outside_app_rooms`, and the refusal names the one line that asks for it for the whole App. Logins that were waiting clear by themselves, with the same password and session. Take the grant back and those logins lose those rooms at their next request.
+- **An agent's login works right away in its App's own room.** With "Let this agent manage its Apps' users" on, an agent adds a login, gives it a role there and ends its sessions, with no owner step. A room on the App's `guests-rooms` grant waits until the person uses a reset link on K2's own page; the answer says what waits and which card to ask on. A role past those rooms is refused as `outside_app_rooms`, and a role with more than Thread access on another workspace's room is refused too.
+- **Names can't be borrowed.** A login an agent or App key makes can't take `owner` or a name someone signs in to this box with.
 - **Temporary passwords.** `k2 app user add <name> --app <app> --temp-password` makes one and shows it once. The person chooses their own at first sign-in.
-- **New access at the next request.** When someone's role or rooms change, they get it at their next request, without signing out. That covers App logins and box logins; `--apply-tokens` is no longer needed.
+- **New access at the next request.** When someone's role or rooms change, they get it at their next request, without signing out. That covers App logins and box logins.
+- **Taking a `guests-rooms` grant back works.** Revoking it takes those rooms from everyone an agent handed them to, at their next request. Rooms you put on a role yourself stay.
 - **Ending sessions.** With "Let this agent manage its Apps' users" on, an agent can list and end its own App's people's sessions with `k2 app user sessions`, chat sessions included.
-- **Box logins.** An agent still can't change a box login's access, but it can ask: the owner approves the new `apps.user-grant-box` card from the Thread, so nobody needs a terminal.
+- **Box logins.** An agent still can't change a box login's access, but it can ask: the owner approves the new `apps.user-grant-box` card from the Thread, so nobody needs a terminal. The card shows a change from one role to another, and warns that signing in to an App sends the person's password through that App's server.
 - **Clearer words.** A login held back says "waiting for reset (agent-tied)" and what clears it, `k2 explain outside_app_rooms` explains that refusal, and the password-reset card says whether the reset unties someone. A new password chosen on an App's own page still doesn't untie: that page could see it. Only a reset link on K2's own page does.
+- **A signed-out person's file updates stop.** An open files connection now checks the person's access before every update, not only when it opened.
 - **Handing over an App.** The rooms the owner approved stay with the App and carry to the new agent, and the handover card says so. `k2 app handover status <app> --detail` shows the card's list and its id.
 - **`k2 app chat` shows what it's waiting on.** The App's own agent sees the current step toward Sew and Sew's last answer, including a blocked one, not only "sending to Sew".
 - **Signing out from any App's server.** Logout on an App's link now takes any valid session the caller presents and ends only that one. It no longer answers `pass_wrong_link`.

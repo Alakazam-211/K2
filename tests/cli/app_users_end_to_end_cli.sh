@@ -55,7 +55,8 @@ CHAT = {"ok": True, "name": "shop", "chat": {"appId": "svc-1", "feature": True, 
         {"id": "d1", "op": "space_settings", "subject": "space:5101", "state": "done", "attempts": 1, "lastStatus": 200, "lastError": None, "updatedAt": 1},
      ]}]}}
 ANSWERS = {
-    "/cli/skin/users": {"username": "lee", "generatedPassword": "Temp-Pass-123", "passwordMustChange": True},
+    "/cli/skin/users": {"username": "lee", "generatedPassword": "Temp-Pass-123", "passwordMustChange": True,
+        "waitingForReset": {"rooms": ["ops"], "ask": "k2 permission request apps.user-password-reset user=wes app=shop mode=link --why x"}},
     "/cli/skin/users/sessions": {"ok": True, "username": "lee", "app": "svc-1", "sessions": [
         {"id": "ses_1", "kind": "browser", "client": "Safari on macOS", "createdAt": 1, "lastSeenAt": 2, "push": False}]},
     "/cli/skin/users/sessions/revoke": {"ok": True, "username": "lee", "app": "svc-1", "ended": 1},
@@ -124,6 +125,14 @@ run app user add lee --app shop --temp-password --password-stdin
 expect_eq "not both: exit 2" "$RC" "2"
 expect_has "not both: says so" "$(cat "$SANDBOX/err")" "--password-stdin or --temp-password"
 expect_eq "not both: nothing sent" "$(wc -c < "$SANDBOX/log" | tr -d ' ')" "0"
+
+echo "== the waiting note and a gone flag =="
+run app user rooms lee --app shop --agent ops --apply-tokens
+expect_eq "--apply-tokens: exit 2" "$RC" "2"
+expect_has "--apply-tokens: says why" "$(cat "$SANDBOX/err")" "next request"
+run app user add wes --app shop
+expect_has "add: what waits and the card" "$(cat "$SANDBOX/out")" "Waiting: they can't use room ops until they use a reset link on K2's own page"
+expect_has "add: the card line" "$(cat "$SANDBOX/out")" "k2 permission request apps.user-password-reset user=wes app=shop mode=link"
 
 echo "== k2 app user sessions =="
 run app user sessions lee --app shop

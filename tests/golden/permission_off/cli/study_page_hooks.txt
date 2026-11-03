@@ -14,6 +14,7 @@ THREAD (0.45.6+)
     k2 thread <agent>             read it
   A post is typed into the program's stdin as one line, then Enter:
     [from <who>] [thread:<agent>] <text>
+  (someone signed in to an App: [guest <login> on App <app>] [thread:<agent>] <text>)
   Read the line, act, and answer with `k2 thread <agent> "…"` from
   inside the program (it runs as the agent). Don't answer on stdout.
 

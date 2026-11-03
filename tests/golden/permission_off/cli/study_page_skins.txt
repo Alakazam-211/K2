@@ -110,22 +110,23 @@ PER-APP LOGINS (0.45.5)
   their rooms (k2 app user rooms <u> --app <app> --agent <its room>). Those
   people get that App only, never the box login: an agent add without
   --app is refused (owner_only); box logins are the owner's.
-  WHAT WORKS AT ONCE: such a login uses the App's own room and every room on
-  the App's guests-rooms grant, right away, with no owner step and no reset:
-  the owner already approved those rooms for this App's guests. A role naming
-  another room is refused (outside_app_rooms); ask for the room once for the
-  whole App (k2 app grant <app> --kind guests-rooms --room <room>, a card for
-  the owner). Take the grant back and those logins lose those rooms at their
-  next request. --temp-password or an invite lets the person choose their own
-  password at first sign-in. Signed-in people get new rooms and caps at their
-  next request; nobody signs out for it. An agent may end its App's people's
-  sessions (k2 app user sessions <u> --app <app> --revoke-all); a box login's
+  WHAT WORKS AT ONCE: such a login uses the App's own room right away, with no
+  owner step. A room on the App's guests-rooms grant waits until the person uses
+  a reset link on K2's own page: the answer says what waits and names the card
+  (k2 permission request apps.user-password-reset user=<u> mode=link). A role
+  naming another room, or holding more than thread:read and thread:post on
+  another workspace's room, is refused. A name people on this box use is refused
+  (login_name_reserved). --temp-password or an invite lets the person choose
+  their own password at first sign-in. Signed-in people get new rooms and caps
+  at their next request; nobody signs out for it. An agent may end its App's
+  people's sessions (k2 app user sessions <u> --app <app> --revoke-all); it sets
+  the password of or removes only people its own agent added, and a box login's
   access is a card for the owner (k2 permission request apps.user-grant-box).
   WAITS FOR A RESET: a person an agent created, or whose password or
   email it set, or invited (or an App key made) is tied to that agent's
   workspace: an agent could know their password. If you give them more than
-  that workspace's rooms and the App's approved ones (the box login, another
-  App or room, files:download, chat), the extra waits until they use your
+  that workspace's room (the box login, another App or room, a room on the App's
+  guests-rooms grant, files:download, chat), the extra waits until they use your
   reset link. A password they choose on the App's own page doesn't count:
   that page could see it. Sign-in, refresh and live sessions stay held back
   until then, no chat pass. Settings → User Access shows "Waiting for reset"; K2 also

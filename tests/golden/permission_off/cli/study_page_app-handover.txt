@@ -31,14 +31,15 @@ WHAT MOVES, AND HOW
   addresses   every hostname the App answers on is B's (taken labels stay
               with the App: they no longer go back to A's old service)
   guests      keep their access and stay signed in; they talk to B now.
-              Their Thread history with A stays in A's room.
-  passwords   a guest whose password A set keeps its sign-in, but the
-              password is cleared; they set a new one when the sign-in
-              ends (B sends k2 app user reset). Guests who also use A's
+              Their Thread history with A stays in A's room. Logins A set up
+              are signed out at the switch: A could hold one of their sign-ins.
+  passwords   a guest whose password A set has it cleared; they set a new
+              one to sign in again (B sends k2 app user reset). Guests who also use A's
               other Apps stay A's unless the owner takes them over.
   rooms       the rooms the owner approved for the App's guests (its
               guests-rooms grant) stay with the App: B hands them out as A
-              could, and the card lists them.
+              could, and the card lists them. A login B sets up reaches them
+              only after the person uses a reset link on K2's own page.
   secrets     A's secrets only this App uses move to B; ones A uses too are
               copied (rotate them: A knew them). A name B already has keeps
               the App's value as NAME__<app>. The Seed's k2v://ws/<A>/NAME
@@ -53,6 +54,8 @@ WHAT MOVES, AND HOW
 
 REFUSED (409), and what to do
   handover_open           another handover of the App is open (cancel it)
+  handover_shared_roles   the App's guests hold box-wide roles naming A's room:
+                          give them a role of this App, or take the room off
   handover_db_shared      choose --db share, or wait for per-App databases
   handover_db_busy        a database upgrade is running; hand over after
   handover_vault_closed   open the vault, then ask again

@@ -171,6 +171,8 @@ export interface ApprovalFile {
   name: string
   size: number
   contentType: string
+  /** The secret check read all of it. False for a binary file or a forwarded one. */
+  scanned?: boolean
 }
 
 export interface ApprovalItem extends OutboundItem {

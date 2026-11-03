@@ -765,16 +765,18 @@ fn read_one_attachment(
     if bytes.len() as u64 > budget {
         return Err(attachment_too_large(&format!("attachment '{spec}'"), bytes.len() as u64, "in total"));
     }
-    if k2_core::secret_paths::classify_bytes(&rel, &bytes).is_some() {
+    let scan = k2_core::secret_paths::scan_attachment(&rel, &bytes);
+    if scan.hit.is_some() {
         return Err(attachment_refused(
             spec,
-            "it looks like a secret (its content holds a credential). Secrets travel through the \
-             vault (k2 vault), not email",
+            "its content looks like it holds a credential (a private key, a token, or a `password=` \
+             style line). If it does, secrets travel through the vault (k2 vault), not email. If it \
+             doesn't, reword that line, or ask your human to send the file",
         ));
     }
     let filename = safe_attachment_name(path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
     let content_type = content_type_for(&filename);
-    Ok(external_smtp::OutAttachment { scanned: false, filename, content_type, bytes })
+    Ok(external_smtp::OutAttachment { scanned: scan.read_as_text, filename, content_type, bytes })
 }
 
 /// Read every requested file ([`read_one_attachment`]) under the per-message
@@ -5229,17 +5231,16 @@ mod tests {
         let _fake = seed_forward_fake();
         let (path, project_id, domain) = seed_files_sender("fwdrate", "approval");
         let token = messages::encode_message_id(&format!("bot@{domain}"), "e1");
+        let missing = messages::encode_message_id(&format!("bot@{domain}"), "gone");
+        let resp = handle_forward_message(&forward_body_json(&path, &missing, serde_json::json!({})));
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["hint"], format!("no message '{missing}' in this workspace"));
         for i in 0..send::RATE_LIMIT_HOURLY {
             let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
             assert_eq!(resp.status, "200 OK", "{i}: {}", resp.body);
         }
         let resp = handle_forward_message(&forward_body_json(&path, &token, serde_json::json!({})));
         assert_eq!(resp.status, "429 Too Many Requests", "{}", resp.body);
-
-        let missing = messages::encode_message_id(&format!("bot@{domain}"), "gone");
-        let resp = handle_forward_message(&forward_body_json(&path, &missing, serde_json::json!({})));
-        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
-        assert_eq!(body_json(&resp)["error"]["hint"], format!("no message '{missing}' in this workspace"));
         done(&path, &project_id, &domain);
     }
 
@@ -5333,5 +5334,25 @@ mod tests {
         assert_eq!(decided_by_for(&MailCaller::Owner, Some("rosson")), "rosson");
         assert_eq!(decided_by_for(&MailCaller::Owner, None), "owner");
         cleanup(&project_id, None);
+    }
+
+    /// What the check read is shown to the approver.
+    #[test]
+    fn the_approver_is_told_what_wasnt_scanned() {
+        let (path, project_id, domain) = seed_files_sender("scanned", "approval");
+        let ws = std::path::Path::new(&path);
+        std::fs::write(ws.join("note.txt"), b"plain words").unwrap();
+        std::fs::write(ws.join("photo.bin"), [0u8, 1, 2, 3]).unwrap();
+        std::fs::write(ws.join("help.txt"), b"The password: field is required.\n").unwrap();
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "attachments": ["note.txt", "photo.bin", "help.txt"] })));
+        assert_eq!(resp.status, "200 OK", "a sentence about passwords isn't one: {}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        let ours = list["pending"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).expect("queued").clone();
+        assert_eq!(ours["files"][0]["scanned"], true, "{ours}");
+        assert_eq!(ours["files"][1]["scanned"], false, "{ours}");
+        assert_eq!(ours["files"][2]["scanned"], true, "{ours}");
+        send::deny(&DbOutboundStore::default(), &id, "owner", "cleanup", now_secs()).expect("deny");
+        done(&path, &project_id, &domain);
     }
 }

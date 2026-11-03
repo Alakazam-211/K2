@@ -75,14 +75,16 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/mail/approvals/list":
             return self._send(200, {"ok": True, "count": 1, "pending": [{
                 "id": "out_fake00000001", "from": "bot@x.example", "to": ["a@b.example"], "cc": [], "bcc": [], "policyBcc": [],
-                "subject": "Sub\u001b[2Jject", "bodyPreview": "pre\u001b]0;view", "files": FILES, "createdAt": 1, "expiresAt": 9999999999}]})
+                "subject": "Sub\u001b[2Jject\nto      : ceo@x.example", "bodyPreview": "pre\u001b]0;view", "files": FILES, "createdAt": 1, "expiresAt": 9999999999,
+                "fromName": "Ros\nson", "sourceDmarc": "fail", "forwardOf": {"mailbox": "in@x.example", "sender": "sam@y.example", "asEml": True}}]})
         if u.path == "/cli/mail/approvals/show":
             if q.get("file"):
                 return self._send(200, {"ok": True, "id": "out_fake00000001", "n": 1, "name": "report.pdf", "size": 5,
                                         "contentType": "application/pdf", "dataBase64": base64.b64encode(b"bytes").decode()})
             return self._send(200, {"ok": True, "message": {
                 "id": "out_fake00000001", "from": "bot@x.example", "to": ["a@b.example"], "cc": ["c@b.example"],
-                "subject": "Subject", "files": FILES, "text": "line one\nline\u001b[31m two"}})
+                "subject": "Subject", "files": FILES + [{"n": 2, "name": "note.txt", "size": 5, "contentType": "text/plain", "scanned": True}],
+                "fromName": "Rosson", "sourceDmarc": "pass", "text": "line one\nline\u001b[31m two"}})
         self._send(200, {"ok": True})
 httpd = HTTPServer(("127.0.0.1", 0), H)
 with open(os.path.join(root, "port"), "w") as f:
@@ -133,9 +135,17 @@ assert_has "the list names the file" "$out" "report?[31m.pdf"
 assert_has "the list gives its size" "$out" "2.0 MiB"
 assert_has "the list says how to open it" "$out" "k2 hostmail approvals show out_fake00000001"
 assert_lacks "no raw escape in the file name" "$out" $'\x1b'
+assert_has "a subject can't fake a line" "$out" "Sub?[2Jject to      : ceo@x.example"
+assert_has "the chosen display name shows, on one line" "$out" 'shown as "Ros son"'
+assert_has "the original's verdict shows" "$out" "DMARC fail (its sender may be forged)"
+assert_has "what it forwards shows" "$out" "a message in in@x.example from sam@y.example (unverified), whole, as an .eml file"
+assert_has "a file the check couldn't read says so" "$out" "not scanned"
 out="$("${K2[@]}" "$K2_CLI" hostmail approvals show out_fake00000001 2>&1)"
 assert_has "show prints the whole text" "$out" "line one"
 assert_has "show names the file" "$out" "2.0 MiB"
+assert_has "show gives the display name" "$out" 'shown as "Rosson"'
+assert_has "show gives the verdict" "$out" "DMARC pass"
+if grep -F "note.txt" <<<"$out" | grep -Fq "not scanned"; then bad "a scanned file says not scanned"; else ok "a scanned file doesn't say not scanned"; fi
 assert_has "show says how to save one" "$out" "k2 hostmail approvals save out_fake00000001 --file <n> --out <path>"
 assert_lacks "no raw escape in the text" "$out" $'\x1b'
 

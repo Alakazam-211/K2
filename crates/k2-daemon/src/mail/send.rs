@@ -542,7 +542,8 @@ pub fn check_hosted_text_size(subject: &str, text: &str) -> Result<(), SendError
     if n > MAX_HOSTED_TEXT_JSON_BYTES {
         return Err(SendError::Usage(format!(
             "message text too large for a hosted mailbox ({n} bytes as sent to the mail server; \
-             the limit is {MAX_HOSTED_TEXT_JSON_BYTES}) — shorten it, or attach the long part as a file"
+             the limit is {MAX_HOSTED_TEXT_JSON_BYTES}) — shorten it, or attach the long part as a \
+             file (on a forward, use --as-eml)"
         )));
     }
     Ok(())
@@ -1191,7 +1192,8 @@ impl OutboundStore for DbOutboundStore {
         // What the row was told at queue time. A row from an older K2 has none.
         if want_hash.is_some_and(|h| h != sha256_hex(raw.as_bytes())) {
             return Err(format!(
-                "the stored message for '{id}' changed after it was queued, so it can't be shown or sent"
+                "the stored message for '{id}' changed after it was queued, so it can't be shown or sent. \
+                 Tell your human"
             ));
         }
         serde_json::from_str(&raw).map_err(|e| format!("outbound body parse: {e}"))
@@ -1214,8 +1216,8 @@ impl OutboundStore for DbOutboundStore {
         if held.saturating_add(bytes) > self.max_held_bytes {
             return Err(format!(
                 "this server is already holding {} of files waiting for approval or a send time, \
-                 and its limit is {}. Nothing was queued. Ask your human to decide the queue \
-                 (k2 hostmail approvals), or send a link instead",
+                 and its limit is {}. Nothing was queued. Send fewer files, or ask your human to \
+                 decide the queue (k2 hostmail approvals)",
                 gib(held),
                 gib(self.max_held_bytes)
             ));
@@ -1226,7 +1228,7 @@ impl OutboundStore for DbOutboundStore {
             Some(f) if f >= bytes.saturating_add(self.min_free_after_hold) => Ok(()),
             Some(f) => Err(format!(
                 "this server's disk has {} free, too little to hold these files until they're \
-                 sent. Nothing was queued",
+                 sent. Nothing was queued. Tell your human, or send fewer files",
                 gib(f)
             )),
             None => Err("can't read this server's free disk space, so nothing was queued".to_string()),
@@ -1548,7 +1550,11 @@ pub fn check_addresses_at_submit(msg: &OutboundMessage) -> Result<(), String> {
         .chain(&msg.reply_to)
     {
         if addresses::normalize_address(a).ok().as_deref() != Some(a.as_str()) {
-            return Err("a stored address isn't a plain address, so nothing was sent".to_string());
+            return Err(
+                "an address in this message isn't a plain local@domain address, so nothing was sent. \
+                 Tell your human"
+                    .to_string(),
+            );
         }
     }
     Ok(())
@@ -4050,7 +4056,7 @@ mod tests {
         let mut m = msg();
         m.reply_to = vec!["x@y.example\r\nBcc: z@y.example".to_string()];
         let err = client.submit("acct", &m).expect_err("refused");
-        assert!(err.contains("plain address"), "{err}");
+        assert!(err.contains("plain local@domain"), "{err}");
         let mut m = msg();
         m.to = vec!["Not@Normal.Example".to_string()];
         assert!(client.submit("acct", &m).is_err());

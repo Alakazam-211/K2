@@ -690,6 +690,7 @@ fn garden_proposal_approve_follows_the_queue() {
     assert_eq!(s, "200 OK", "{r}");
     let (s, v) = ask(&ws, "garden.proposal.approve", json!({ "proposal": done }));
     assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+}
 
 #[test]
 fn mail_approve_refuses_a_message_the_card_cannot_show() {
@@ -711,7 +712,7 @@ fn mail_approve_refuses_a_message_the_card_cannot_show() {
             .expect("update");
         }
         let refused = ask_refused(&ws, "mail.approve", json!({ "message": msg }));
-        assert!(refused.contains("a person approves it"), "{column}: {refused}");
+        assert!(refused.contains("a permission card can't show"), "{column}: {refused}");
         assert_eq!(mail_row(&msg).0, "pending", "{column}: nothing moved");
     }
     // A card already open when the row is found to carry one: refused on click.
@@ -728,5 +729,4 @@ fn mail_approve_refuses_a_message_the_card_cannot_show() {
     }
     let (_, a) = answer_as("owner", &ws, &card_of(&v), json!({ "answer": "Allow" }));
     assert_eq!(mail_row(&msg).0, "pending", "not released: {a}");
-}
 }

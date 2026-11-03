@@ -42825,7 +42825,7 @@ cmd_schema() {
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address is unchanged. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
         {"name": "--reply-to", "arg": "addr", "description": "Where answers go instead of From (repeatable, max 3). A header: nothing is sent there and it doesn't count toward the 10 recipients. Shown to your human under approval and in k2 mail outbox. HOSTED mailboxes only."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and files that look like secrets (.env, keys, .ssh/, a file holding a credential); a check for mistakes, not a guarantee. Under approval the bytes are captured when you send."},
         {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
         {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
         {"name": "--wait", "arg": null, "description": "Block until DECIDED (not with --at/--in). Exit 2 on timeout — still queued."},
@@ -42862,7 +42862,7 @@ cmd_schema() {
         {"name": "--body", "arg": "text", "description": "The reply text."},
         {"name": "--body-file", "arg": "f", "description": "Read the reply from a file."},
         {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address stays the one that received the message. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and secrets (.env, keys, .ssh/, a file holding a credential). Under approval the bytes are captured when you send."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Max 10 files, 25 MiB each and 25 MiB in total. Refused: outside the workspace, anything in .k2/, and files that look like secrets (.env, keys, .ssh/, a file holding a credential); a check for mistakes, not a guarantee. Under approval the bytes are captured when you send."},
         {"name": "--wait", "arg": null, "description": "Block until decided (exit 2 on timeout, still queued)."},
         {"name": "--timeout", "arg": "secs", "description": "With --wait: 1-900 (default 300)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -61933,8 +61933,9 @@ def human_size(n):
     return "%.1f MiB" % (n / (1024.0 * 1024.0))
 
 def file_line(f):
-    return "%s (%s, %s)" % (term_line(f.get("name") or "?"), human_size(f.get("size")),
-                            term_line(f.get("contentType") or "?"))
+    return "%s (%s, %s%s)" % (term_line(f.get("name") or "?"), human_size(f.get("size")),
+                              term_line(f.get("contentType") or "?"),
+                              "" if f.get("scanned") else ", not scanned")
 
 def shown_as(r):
     # The display name the recipient sees, which the sender chose.
@@ -72047,13 +72048,19 @@ ARGUMENTS / FLAGS
                          in total (a linked Microsoft 365 inbox: 3 MiB each).
                          Refused: anything outside the workspace, anything in
                          .k2/ (copy it out first if you mean to send it), and
-                         secrets (.env, keys, .ssh/, a file holding a
-                         credential). Under approval the file is captured
-                         when you send: changing it later changes nothing, and
-                         your human sees each file's name and size. Files grow
-                         by a third in the email: many mail servers refuse a
-                         message over 25 MB, so a file over about 18 MiB may
-                         bounce. `k2 mail outbox` lists the filenames.
+                         files that look like secrets (.env, keys, .ssh/, a
+                         file holding a credential). That check catches
+                         mistakes; it isn't a guarantee. Under approval the
+                         file is captured when you send: changing it later
+                         changes nothing, and your human sees each file's name
+                         and size, and whether it could be scanned. The server
+                         refuses to hold more when its queue or disk is full.
+                         Files grow by a third in the email: many mail servers
+                         refuse a message over 25 MB, so a file over about 18
+                         MiB may bounce. `k2 mail outbox` lists the filenames.
+  --at <when>            Leave at this time: RFC3339 with offset, at most 30
+                         days ahead (hosted mailboxes; with files, 7 days)
+  --in <duration>        Leave after this long: 30m, 2h, 1d (same limits)
   --wait                 Block until the message is DECIDED:
                          approved-and-submitted or denied (approval mode) /
                          accepted-for-delivery (on mode). Exit 2 on timeout —
@@ -72064,6 +72071,8 @@ ARGUMENTS / FLAGS
 STATUSES
   pending_approval → approved → submitted | failed
   pending_approval → rejected (your human's note lands in `k2 mail outbox`)
+  scheduled → submitted | failed | pending_approval, under the rules at its send
+  time: sending turned off fails it, and sending moved to approval queues it
   "submitted" means accepted-for-delivery — final delivery is the receiving
   server's business; K2 never claims "delivered".
 
@@ -72119,7 +72128,7 @@ cmd_help_mail_forward_message() {
 Send one message you can read on to someone else, as a new message from your
 mailbox. It's a send, governed like `k2 mail send`: off → exit 3; approval →
 queued for your human, who sees what it forwards and every file (with --as-eml,
-one file to save and open); on → sent.
+the one file); on → sent.
 The recipient cap, your owner's always-BCC, rate limits and `k2 mail outbox`
 all apply.
 
@@ -72173,7 +72182,7 @@ WHAT IS SENT
   approved is what leaves, even if the original is deleted first. The original's
   files came from outside and are not scanned the way `--attach` files are.
 
-REFUSED (nothing is sent, nothing dropped)
+REFUSED (nothing is sent, and no file is left out quietly)
   More than 10 attachments, or 25 MiB of them. --as-eml sends them inside one
   file, so 10 is no limit there, but the 25 MiB still is. Past that, tell your
   human.
@@ -72452,6 +72461,9 @@ USAGE
                                                  exists is refused. The file isn't opened. It came
                                                  from an agent or, in a forward, from outside, so
                                                  treat it as untrusted.
+
+A file marked "not scanned": K2's check for secrets couldn't read it (a binary
+file, or one a forward copied from outside). Neither mark means virus scanned.
   k2 hostmail approvals approve <id> [--note "..."] [--json]
   k2 hostmail approvals deny <id> --note "..." [--json]
 

@@ -12,7 +12,10 @@
 //!    - ssh private keys `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`;
 //!    - key stores `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`;
 //!    - `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`;
-//!    - token files: `*.token`, `credentials.json`, `.credentials.json`.
+//!    - token files: `*.token`, `credentials.json`, `.credentials.json`;
+//!    - other tools' login folders and files: `.aws/`, `.gnupg/`, `.kube/`,
+//!      `.docker/config.json`, gcloud's credentials, `.codex/auth.json`,
+//!      `.config/gh/hosts.yml`.
 //! 2. **Content-gated paths and the content scan** ([`classify`], reads
 //!    the file): `.env.k2` is a secret only when a sensitive key in it
 //!    holds a literal value (it normally holds `k2v://` references);
@@ -60,7 +63,16 @@ const LOGIN_FILES: &[&str] = &[
     "credentials.json",
     ".credentials.json",
 ];
-const SECRET_DIRS: &[&str] = &[".auth", ".ssh"];
+const SECRET_DIRS: &[&str] = &[".auth", ".ssh", ".aws", ".gnupg", ".kube"];
+/// Secret by these last path segments, at any depth.
+const SECRET_SUFFIXES: &[&[&str]] = &[
+    &[".docker", "config.json"],
+    &[".config", "gcloud", "credentials.db"],
+    &[".config", "gcloud", "access_tokens.db"],
+    &[".config", "gcloud", "application_default_credentials.json"],
+    &[".codex", "auth.json"],
+    &[".config", "gh", "hosts.yml"],
+];
 
 /// The path-pattern half: true when `rel` (workspace-relative, `/` or `\`
 /// separators) names a secret by its path alone. No disk access.
@@ -74,6 +86,12 @@ pub fn is_secret_rel(rel: &str) -> bool {
         return false;
     };
     if dirs.iter().any(|d| SECRET_DIRS.contains(&d.as_str())) {
+        return true;
+    }
+    if SECRET_SUFFIXES.iter().any(|tail| {
+        parts.len() >= tail.len()
+            && parts[parts.len() - tail.len()..].iter().zip(tail.iter()).all(|(p, t)| p == t)
+    }) {
         return true;
     }
     let name = name.as_str();
@@ -105,24 +123,44 @@ pub fn classify(rel: &str, abs: &Path) -> Option<SecretHit> {
     content_has_credential(abs).then_some(SecretHit::Content)
 }
 
-/// [`classify`] over bytes the caller already holds, so what is checked is
-/// exactly what is used (mail attachments read a file once, through one
-/// handle; a file swapped between a check and a read can't pass). Same
-/// rules as [`classify`]; `rel` is workspace-relative.
-pub fn classify_bytes(rel: &str, bytes: &[u8]) -> Option<SecretHit> {
+/// What [`scan_attachment`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachmentScan {
+    pub hit: Option<SecretHit>,
+    /// All of the file was read as text. False for a binary file: tokens were
+    /// looked for in it, but a zip or a PDF can hold anything. This is a check
+    /// for mistakes, not a guarantee, so an approver is told when it read little.
+    pub read_as_text: bool,
+}
+
+/// [`classify`] for a file leaving in an email, over the bytes the caller will
+/// send (a file swapped between a check and a read can't pass). Differences, as
+/// a person pays for a false alarm here and a mail can't be recalled:
+/// - it reads the whole file, however big, and a NUL doesn't end the search for
+///   tokens;
+/// - `password:` counts only with something shaped like a value after it, so
+///   "The password: field is required." passes.
+pub fn scan_attachment(rel: &str, bytes: &[u8]) -> AttachmentScan {
+    let read_as_text = !bytes.contains(&0u8);
+    let found = |hit| AttachmentScan { hit: Some(hit), read_as_text };
     if is_secret_rel(rel) {
-        return Some(SecretHit::Path);
+        return found(SecretHit::Path);
     }
     if final_component(rel).eq_ignore_ascii_case(".env.k2") {
         // Not UTF-8 = unreadable = a secret, as in [`env_k2_secret`].
-        let hit = std::str::from_utf8(bytes).map_or(true, env_k2_text_secret);
-        return hit.then_some(SecretHit::Content);
+        if std::str::from_utf8(bytes).map_or(true, env_k2_text_secret) {
+            return found(SecretHit::Content);
+        }
+        return AttachmentScan { hit: None, read_as_text };
     }
-    let text = small_text(bytes)?;
+    let text = String::from_utf8_lossy(bytes);
     if is_git_config(rel) && git_config_text_has_login(&text) {
-        return Some(SecretHit::Content);
+        return found(SecretHit::Content);
     }
-    content_has_credential_str(&text).then_some(SecretHit::Content)
+    if token_present(&text) || (read_as_text && value_assignment_present(&text)) {
+        return found(SecretHit::Content);
+    }
+    AttachmentScan { hit: None, read_as_text }
 }
 
 fn final_component(rel: &str) -> &str {
@@ -231,13 +269,64 @@ pub fn content_has_credential(abs: &Path) -> bool {
 /// - `password`, `secret`, `api[_-]?key` followed by `:` or `=` and a
 ///   value.
 pub fn content_has_credential_str(text: &str) -> bool {
+    token_present(text)
+        || assignment_present(text, "password")
+        || assignment_present(text, "secret")
+        || api_key_assignment_present(text)
+}
+
+/// A credential by its shape alone: nothing about the line around it matters.
+fn token_present(text: &str) -> bool {
     jwt_present(text)
         || gh_token_present(text)
         || text.contains("service_role")
         || text.contains("PRIVATE KEY")
-        || assignment_present(text, "password")
-        || assignment_present(text, "secret")
-        || api_key_assignment_present(text)
+        || aws_key_present(text)
+        || ["sk-ant-", "sk-proj-", "sk_live_", "rk_live_", "xoxb-", "xoxp-", "xoxa-", "xoxs-", "k2skn_", "k2rs_"]
+            .iter()
+            .any(|p| prefixed_token_present(text, p))
+}
+
+/// `prefix` then at least 16 token characters.
+fn prefixed_token_present(text: &str, prefix: &str) -> bool {
+    text.match_indices(prefix).any(|(i, _)| {
+        text[i + prefix.len()..]
+            .bytes()
+            .take_while(|b| is_b64url(*b))
+            .take(16)
+            .count()
+            >= 16
+    })
+}
+
+/// `AKIA` or `ASIA` then 16 upper-case letters or digits.
+fn aws_key_present(text: &str) -> bool {
+    ["AKIA", "ASIA"].iter().any(|prefix| {
+        text.match_indices(prefix).any(|(i, _)| {
+            text[i + prefix.len()..]
+                .bytes()
+                .take_while(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                .take(16)
+                .count()
+                >= 16
+        })
+    })
+}
+
+/// [`assignment_present`] for the three key words, counting a line only when
+/// what follows looks like a value: one unbroken token of at least 6 characters.
+fn value_assignment_present(text: &str) -> bool {
+    text.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        ["password", "secret", "api_key", "api-key", "apikey"].iter().any(|key| {
+            lower.match_indices(key).any(|(i, _)| {
+                let rest = lower[i + key.len()..].trim_start();
+                let Some(value) = rest.strip_prefix([':', '=']) else { return false };
+                let value = value.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+                value.len() >= 6 && !value.contains(char::is_whitespace)
+            })
+        })
+    })
 }
 
 fn jwt_present(text: &str) -> bool {
@@ -427,33 +516,72 @@ mod tests {
         assert!(!content_has_credential_str("eyJshort"));
     }
 
-    /// `classify_bytes` answers as `classify` does, over bytes in hand.
+    /// The check on a file leaving in an email, over the bytes in hand.
     #[test]
-    fn classify_bytes_matches_classify() {
-        let dir = std::env::temp_dir().join(format!("k2-secret-bytes-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn scan_attachment_finds_what_a_mail_must_not_carry() {
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\n";
         let cases: &[(&str, &[u8], Option<SecretHit>)] = &[
             (".env", b"A=1\n", Some(SecretHit::Path)),
             ("sub/.ssh/known", b"x\n", Some(SecretHit::Path)),
             ("server.pem", b"x\n", Some(SecretHit::Path)),
+            (".aws/credentials", b"x\n", Some(SecretHit::Path)),
+            (".gnupg/secring.gpg", b"x\n", Some(SecretHit::Path)),
+            (".kube/config", b"x\n", Some(SecretHit::Path)),
+            (".docker/config.json", b"{}\n", Some(SecretHit::Path)),
+            ("home/.config/gcloud/application_default_credentials.json", b"{}\n", Some(SecretHit::Path)),
+            (".codex/auth.json", b"{}\n", Some(SecretHit::Path)),
+            (".config/gh/hosts.yml", b"x\n", Some(SecretHit::Path)),
+            ("config.json", b"{}\n", None),
             ("notes.txt", b"nothing to see\n", None),
             ("notes.txt", b"password = hunter2hunter2\n", Some(SecretHit::Content)),
-            ("key.txt", b"-----BEGIN RSA PRIVATE KEY-----\n", Some(SecretHit::Content)),
-            ("photo.bin", b"\0password = hunter2hunter2\n", None),
+            ("notes.txt", b"api_key: \"abcd1234\"\n", Some(SecretHit::Content)),
+            ("notes.txt", pem.as_bytes(), Some(SecretHit::Content)),
+            // Words about passwords, not one.
+            ("help.txt", b"The password: field is required.\n", None),
+            ("help.txt", b"secret: true\n", None),
+            ("help.txt", b"Reset your password = see the wiki page.\n", None),
             (".env.k2", b"API_KEY=k2v://vault/x\n", None),
             (".env.k2", b"API_KEY=literal\n", Some(SecretHit::Content)),
             (".env.k2", b"\xff\xfe", Some(SecretHit::Content)),
             ("repo/.git/config", b"[remote]\n url = https://me:tok@host/x\n", Some(SecretHit::Content)),
             ("repo/.git/config", b"[remote]\n url = https://host/x\n", None),
+            ("a.txt", b"key AKIAIOSFODNN7EXAMPLE here\n", Some(SecretHit::Content)),
+            ("a.txt", b"not AKIAshort\n", None),
+            ("a.txt", b"sk-ant-api03-abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk-proj-abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk_live_abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"xoxb-1234567890-abcdefgh\n", Some(SecretHit::Content)),
+            ("a.txt", b"k2skn_abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"k2rs_abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk-ant- is a prefix\n", None),
         ];
         for (rel, bytes, want) in cases {
-            let abs = dir.join("f");
-            std::fs::write(&abs, bytes).unwrap();
-            assert_eq!(classify_bytes(rel, bytes), *want, "bytes: {rel} {bytes:?}");
-            assert_eq!(classify(rel, &abs), *want, "path: {rel} {bytes:?}");
+            let scan = scan_attachment(rel, bytes);
+            assert_eq!(scan.hit, *want, "{rel} {:?}", String::from_utf8_lossy(bytes));
+            assert!(scan.read_as_text, "{rel}");
         }
-        let big = vec![b'a'; MAX_SCAN_BYTES as usize + 1];
-        assert_eq!(classify_bytes("big.txt", &big), None, "past the scan limit, as classify");
-        std::fs::remove_dir_all(&dir).unwrap();
+        // A NUL doesn't hide a key, and past the old limits it's still read.
+        let mut hidden = vec![0u8];
+        hidden.extend_from_slice(pem.as_bytes());
+        let scan = scan_attachment("a.bin", &hidden);
+        assert_eq!(scan.hit, Some(SecretHit::Content));
+        assert!(!scan.read_as_text);
+        let mut big = vec![b'a'; MAX_SCAN_BYTES as usize + 9000];
+        big.extend_from_slice(b"\n");
+        big.extend_from_slice(pem.as_bytes());
+        assert_eq!(scan_attachment("big.txt", &big).hit, Some(SecretHit::Content));
+        // A binary file with nothing in it isn't refused, and says it wasn't read.
+        let scan = scan_attachment("photo.bin", b"\0\x01\x02 password = hunter2hunter2\n");
+        assert_eq!(scan.hit, None, "assignment words in a binary file are noise");
+        assert!(!scan.read_as_text);
+    }
+
+    /// The new shared patterns reach the file check clone and Threads use.
+    #[test]
+    fn the_shared_list_knows_the_new_folders_and_tokens() {
+        assert!(is_secret_rel(".aws/credentials"));
+        assert!(is_secret_rel("x/.docker/config.json"));
+        assert!(!is_secret_rel("docker/config.json"));
+        assert!(content_has_credential_str("sk-ant-api03-abcdefghijklmnop"));
     }
 }

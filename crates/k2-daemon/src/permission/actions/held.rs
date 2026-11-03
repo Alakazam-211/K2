@@ -304,8 +304,9 @@ fn needs_a_closer_look(id: &str) -> Option<String> {
         Some(_) => return None,
     };
     Some(format!(
-        "email {id} carries {what}, which this card can't show, so a person approves it in Settings → \
-         Email Hosting → Approvals or with k2 hostmail approvals show {id}"
+        "email {id} is still waiting. It carries {what}, which a permission card can't show, so it has \
+         to be approved where they're shown: Settings → Email Hosting → Approvals, or k2 hostmail \
+         approvals show {id}"
     ))
 }
 

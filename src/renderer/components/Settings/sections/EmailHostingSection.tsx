@@ -1517,7 +1517,9 @@ function ApprovalCard({
           {item.files?.map((f) => (
             <div key={f.n} className="flex items-center gap-2 min-w-0 text-[10px]">
               <span className="font-mono truncate text-[var(--color-text-secondary)]" title={f.name}>{f.name}</span>
-              <span className="flex-shrink-0 text-[var(--color-text-muted)]">{fmtFileSize(f.size)}</span>
+              <span className="flex-shrink-0 text-[var(--color-text-muted)]">
+                {fmtFileSize(f.size)}{f.scanned ? '' : ' · not scanned'}
+              </span>
               <button
                 type="button"
                 onClick={() => void saveFile(f)}

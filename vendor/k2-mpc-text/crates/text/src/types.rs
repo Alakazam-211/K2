@@ -462,7 +462,7 @@ pub const NOT_TEXT: &[&str] = &[
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "key", "pages",
     "numbers", "epub", // archives
     "zip", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar", "tar", "jar", "war", "apk", "ipa", "dmg",
-    "iso", // program binaries
+    "iso", "k5board", // program binaries
     "wasm", "bin", "exe", "dll", "so", "dylib", "class", "o", "a", "lib", "pyc", "pyo", "pdb",
     // fonts
     "woff", "woff2", "ttf", "otf", "eot", // databases and 3D binaries
@@ -603,6 +603,18 @@ mod tests {
         }
         let n = extensions().count();
         assert!(n >= 150, "the table lists {n} extensions");
+    }
+
+    #[test]
+    fn a_k5board_is_never_text() {
+        for p in ["board.k5board", "Board.K5BOARD", "a.b.K5Board"] {
+            assert_eq!(lookup(p), Lookup::NotText, "{p}");
+            assert_eq!(lookup(p).file_type(), None, "{p}");
+            assert!(crate::TextPack::for_path(p).is_none(), "{p}");
+        }
+        // a name that merely contains it stays text
+        assert!(matches!(lookup("k5board.txt"), Lookup::Known { .. }));
+        assert!(crate::TextPack::for_path("k5board.txt").is_some());
     }
 
     #[test]

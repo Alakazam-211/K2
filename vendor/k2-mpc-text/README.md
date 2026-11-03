@@ -131,7 +131,7 @@ text under the strict guard, so the set a grid pack takes over is exactly `.csv`
 **Unknown names:** `text` family, 4 MiB, LF, strict control-byte guard.
 
 **Not text (opened some other way, e.g. tier 0):**
-`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.icns` `.heic` `.heif` `.avif` `.tif` `.tiff` `.psd` `.svgz` `.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac` `.opus` `.mp4` `.webm` `.mov` `.mkv` `.avi` `.m4v` `.pdf` `.doc` `.docx` `.xls` `.xlsx` `.ppt` `.pptx` `.odt` `.ods` `.odp` `.key` `.pages` `.numbers` `.epub` `.zip` `.gz` `.tgz` `.bz2` `.xz` `.zst` `.7z` `.rar` `.tar` `.jar` `.war` `.apk` `.ipa` `.dmg` `.iso` `.wasm` `.bin` `.exe` `.dll` `.so` `.dylib` `.class` `.o` `.a` `.lib` `.pyc` `.pyo` `.pdb` `.woff` `.woff2` `.ttf` `.otf` `.eot` `.sqlite` `.sqlite3` `.db` `.glb` `.3mf` `.blend`
+`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.icns` `.heic` `.heif` `.avif` `.tif` `.tiff` `.psd` `.svgz` `.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac` `.opus` `.mp4` `.webm` `.mov` `.mkv` `.avi` `.m4v` `.pdf` `.doc` `.docx` `.xls` `.xlsx` `.ppt` `.pptx` `.odt` `.ods` `.odp` `.key` `.pages` `.numbers` `.epub` `.zip` `.gz` `.tgz` `.bz2` `.xz` `.zst` `.7z` `.rar` `.tar` `.jar` `.war` `.apk` `.ipa` `.dmg` `.iso` `.k5board` `.wasm` `.bin` `.exe` `.dll` `.so` `.dylib` `.class` `.o` `.a` `.lib` `.pyc` `.pyo` `.pdb` `.woff` `.woff2` `.ttf` `.otf` `.eot` `.sqlite` `.sqlite3` `.db` `.glb` `.3mf` `.blend`
 
 Files another pack serves (`.md` and `.markdown` for Markdown; later `.ipynb`, ...) aren't
 listed here: a host asks the more specific pack first, and this pack is the fallback. `.csv`

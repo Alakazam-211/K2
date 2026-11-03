@@ -8,5 +8,7 @@ cargo clippy -q --locked --all-targets -- -D warnings
 cargo test -q --locked --all-targets
 ./scripts/check-licences.sh
 sh scripts/check-private.sh
+sh scripts/test-windows-names.sh
+sh scripts/check-windows-names.sh
 ../k2-mpc-base/scripts/pack-checks/engine-free.sh .
 echo "pack checks: ok"

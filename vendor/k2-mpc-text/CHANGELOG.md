@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.13 (2026-11-03): pairs with kit v0.10.2
+
+**Requires `k2-mpc-base` v0.10.2** (unchanged from v0.2.12).
+
+- The refused-file test case `nul.binary.json` is now `nul-byte.binary.json`: `nul` is a reserved name on
+  Windows, and a tree holding that name can't be checked out there.
+- `.k5board` is on the not-text list: the file is a zip, so `TextPack::for_path` returns `None` for it and a
+  host opens it some other way.
+- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one Windows can
+  check out (no reserved name or refused character, no trailing dot or space, no case collision, and up
+  to 200 bytes).
+
 ## v0.2.12 (2026-11-02): pairs with kit v0.10.2
 
 **Requires `k2-mpc-base` v0.10.2** (the first host release after v0.10.0.3; it keeps the

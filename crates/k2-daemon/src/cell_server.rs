@@ -1153,6 +1153,18 @@ mod unix_impl {
             "/cli/skin/roles/suggest" if !is_post => from_cli(crate::app_mobile_routes::handle_roles_suggest()),
             crate::skin_routes::GRANTS_OWN if !is_post => from_cli(crate::skin_routes::handle_grants_own(&principal.workspace_uuid)),
             "/cli/skin-tokens" if !is_post => from_cli(crate::skin_routes::handle_tokens_get()),
+            // 0.46.8: a person's sessions in one App, with the main port's
+            // gate ("Let this agent manage its Apps' users"); the handler
+            // holds the agent to its own App's guests. Ending one is a manage
+            // POST, so it keeps the sentinel below.
+            crate::app_profile_routes::USER_SESSIONS if !is_post => {
+                let ws = principal.workspace_uuid.trim();
+                let on = crate::workspace_msg::resolve_workspace(ws).is_some_and(|p| crate::skin_routes::agent_may_manage_app_users(&p));
+                if !on {
+                    return from_cli(crate::skin_routes::app_users_off_response());
+                }
+                from_cli(crate::app_profile_routes::handle_user_sessions(Some(ws), params))
+            }
             // `/cli/respond` is POST-only (TCP answers a GET with 405).
             "/cli/respond" if !is_post => {
                 from_cli(crate::cli_response::CliResponse::method_not_allowed())
@@ -2071,6 +2083,67 @@ mod unix_impl {
             }
             assert!(checked >= 100, "sweep must cover the agent GET verbs, saw {checked}");
             assert!(misses.is_empty(), "agent GET verbs unknown on the cell socket:\n{}", misses.join("\n"));
+        }
+
+        /// 0.46.8 `GET /cli/skin/users/sessions` on the cell socket answers as
+        /// the main port does: its own refusal with the switch off, only its
+        /// own App's guests with it on. Ending a session stays on the main
+        /// port (the sentinel), where the CLI already sends it.
+        #[test]
+        fn cell_serves_app_user_sessions_behind_the_main_port_gate() {
+            let _home = crate::test_support::TempHome::new();
+            let _db = k2_core::db::scoped_for_test();
+            let p = principal();
+            let ws = p.workspace_uuid.clone();
+            {
+                let h = k2_core::db::shared();
+                let c = h.lock();
+                c.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, '/tmp/cs-own', ?1)", rusqlite::params![ws]).unwrap();
+                c.execute("INSERT INTO projects (id, name, path, handle) VALUES ('ws-theirs', 'ws-theirs', '/tmp/cs-theirs', 'ws-theirs')", []).unwrap();
+                for (id, project, port) in [("svc-cs-own", ws.as_str(), 41201), ("svc-cs-theirs", "ws-theirs", 41202)] {
+                    c.execute(
+                        "INSERT INTO published_services (id, project_id, name, cmd, cwd, port, expose, desired) VALUES (?1, ?2, ?1, '(app)', '/t', ?3, 'tunnel', 'running')",
+                        rusqlite::params![id, project, port],
+                    )
+                    .unwrap();
+                }
+            }
+            k2_core::skin::add_principal_for_app("cellguest", None, "svc-cs-own", None, "owner-token").expect("guest");
+            let q = |app: &str, user: &str| -> HashMap<String, String> {
+                [("app".to_string(), app.to_string()), ("user".to_string(), user.to_string())].into_iter().collect()
+            };
+            let ask = |params: &HashMap<String, String>| -> (String, serde_json::Value) {
+                let (status, _, body) = dispatch_cell_verb("GET", "/cli/skin/users/sessions", params, b"", &p, "sid-cs");
+                (status, serde_json::from_str(&body).unwrap_or_else(|e| panic!("{e}: {body}")))
+            };
+
+            // The switch off: the main port's refusal, not a 404.
+            let (status, v) = ask(&q("svc-cs-own", "cellguest"));
+            assert!(status.starts_with("403"), "{status} {v}");
+            assert_eq!(v["error"]["code"], crate::skin_routes::APP_USERS_OFF, "{v}");
+
+            k2_core::db::shared()
+                .lock()
+                .execute("UPDATE projects SET agents_can_manage_app_users = 1 WHERE id = ?1", rusqlite::params![ws])
+                .unwrap();
+
+            // Its own App's guest.
+            let (status, v) = ask(&q("svc-cs-own", "cellguest"));
+            assert_eq!(status, "200 OK", "{v}");
+            assert_eq!(v["username"], "cellguest", "{v}");
+            assert_eq!(v["sessions"], serde_json::json!([]), "{v}");
+            // Another workspace's App, and a name nobody has.
+            let (status, v) = ask(&q("svc-cs-theirs", "cellguest"));
+            assert!(status.starts_with("403"), "{status} {v}");
+            assert_eq!(v["error"]["code"], "owner_only", "{v}");
+            let (status, v) = ask(&q("svc-cs-own", "nobody"));
+            assert!(status.starts_with("404"), "{status} {v}");
+            assert_eq!(v["error"]["code"], "not_found", "{v}");
+
+            // Ending a session is a manage POST: the sentinel, so the CLI uses TCP.
+            let (status, _, body) = dispatch_cell_verb("POST", "/cli/skin/users/sessions/revoke", &HashMap::new(), b"{}", &p, "sid-cs");
+            assert_eq!(status, "404 Not Found", "{body}");
+            assert!(body.contains("not served on cell socket"), "{body}");
         }
 
         /// 0.46.3 box usage (prd-app-resources-disk-guard-v1 §12): the

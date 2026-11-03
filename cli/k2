@@ -30790,6 +30790,15 @@ elif s:
 print(json.dumps(o))' "$s"
 }
 
+# What a destroy, disable or revoke did to delivered files, and can't undo.
+_vault_print_recall() {
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+words = json.load(sys.stdin).get("recall")
+if words:
+    print(words)'
+}
+
 _vault_merge() {
     python3 -c '
 import json, sys
@@ -31485,10 +31494,11 @@ EOF
         rotate) cat <<'EOF'
 k2 vault rotate NAME [--scope <s>] < value
 
-A new version of an existing secret (value on stdin). Older versions stop
-working; sessions with env or file delivery get the new value when they
-restart. An agent may rotate a secret a person gave it (the owner is
-told, with undo).
+A new version of an existing secret (value on stdin). K2 stops using older
+versions; sessions with env or file delivery get the new value when they
+restart (until then, their env value and any file already in $K2_SECRETS_DIR
+hold the old one).
+An agent may rotate a secret a person gave it (the owner is told, with undo).
 
 Example: k2 vault rotate STRIPE_KEY < new-key.txt
 EOF
@@ -31579,10 +31589,12 @@ k2 vault revoke NAME --from <who> [--scope <s>]
 k2 vault revoke --grant <id>
 
 Remove a share (<who> as in grant --to; grant ids are in k2 vault show
---json). New sessions and fetches stop getting it. A value already read
-stays read: rotate the key at the provider if that matters. A compute:
-grant's running jobs keep what they got (they're listed); the next
-attempt is refused.
+--json). New sessions and fetches stop getting it, and its file goes from
+$K2_SECRETS_DIR in running sessions that no longer get it. A value already
+read stays read, and an environment variable stays in a running session
+until it restarts: rotate the key at the provider if that matters. A
+compute: grant's running jobs keep what they got (they're listed); the
+next attempt is refused.
 
 Example: k2 vault revoke STRIPE_KEY --from ws:billing
 EOF
@@ -31591,8 +31603,11 @@ EOF
 k2 vault disable NAME [--scope <s>]
 k2 vault enable NAME [--scope <s>]
 
-Stop every use of NAME without deleting it, or start it again. Enabling
-counts as widening: a secret a person gave needs the owner.
+Stop every use of NAME without deleting it, or start it again. Disabling
+takes its file out of $K2_SECRETS_DIR in running sessions; enabling puts it
+back within a minute. An environment variable stays in a running session
+until it restarts. Enabling counts as widening: a secret a person gave needs
+the owner.
 
 Example: k2 vault disable STRIPE_KEY
 EOF
@@ -31600,8 +31615,12 @@ EOF
         destroy) cat <<'EOF'
 k2 vault destroy NAME --yes [--scope <s>]
 
-Delete every version on this box. The name can't be used again. Backups
-made earlier keep it until they expire. To pause instead: k2 vault disable.
+Delete every version on this box. The name can't be used again. Its file
+goes from $K2_SECRETS_DIR in every running session at once. K2 can't take
+back a value a session already read or copied, or an environment variable
+in a running session (it stays until that session restarts): rotate the key
+at the provider if that matters. Backups made earlier keep it until they
+expire. To pause instead: k2 vault disable.
 
 Example: k2 vault destroy OLD_KEY --yes
 EOF
@@ -33090,7 +33109,12 @@ if sys.argv[2]: o["from"]=sys.argv[2]
 print(json.dumps(o))' "$grant_id" "$from")"
             _vault_call POST revoke "$(_vault_merge "$sj" "$nj" "$rj")"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
-            echo "removed"
+            if [ -n "$grant_id" ]; then
+                echo "share $grant_id removed; the secret itself is still in the vault"
+            else
+                echo "${name}: no longer shared with ${from}; the secret itself is still in the vault"
+            fi
+            _vault_print_recall
             # A compute grant (secret-env SE28): jobs that already got it keep it.
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
@@ -33108,12 +33132,14 @@ for j in v.get("stillRunning") or []:
             _vault_call POST "$sub" "$(_vault_merge "$sj" "$nj")"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_SC_BODY"; exit 0; }
             echo "${name}: ${sub}d"
+            _vault_print_recall
             ;;
         destroy)
             [ -n "$name" ] || { echo "usage: k2 vault destroy NAME --yes" >&2; exit 2; }
             _vault_call POST destroy "$(_vault_merge "$sj" "$nj" "$( [ "$yes" = 1 ] && echo '{"yes": true}' || echo '{}')")"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_SC_BODY"; exit 0; }
             echo "${name}: destroyed on this box (backups made earlier keep it until they expire)"
+            _vault_print_recall
             ;;
         get)
             [ -n "$name" ] || { echo "usage: k2 vault get NAME" >&2; exit 2; }

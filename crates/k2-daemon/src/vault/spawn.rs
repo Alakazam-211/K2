@@ -31,6 +31,12 @@
 //! check and audit as at spawn (`spawn_items` + `resolve(Use::File)`). Env
 //! and ssh-agent items can't reach a running process: they are listed as
 //! "restart your session to receive it".
+//!
+//! Taking back (0.46.8): the same pass ([`sweep_live`]) removes a file K2
+//! delivered once its secret is no longer this session's: at once after a
+//! destroy, a disable or a revoke, on the minute tick when a grant or a
+//! secret's time ran out. A rotation doesn't touch a delivered file (a new
+//! value arrives at restart). Env can't be taken back from a running process.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -53,12 +59,90 @@ static DIRS: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
 
 /// What live delivery needs to know about a session with a dir: its
 /// workspace, the env names it got at spawn (`None`: unknown, a session
-/// kept across a restart), and secrets whose live delivery failed (not
-/// retried for [`RETRY_AFTER`], so a refusal isn't audited every minute).
+/// kept across a restart), secrets whose live delivery failed (not
+/// retried for [`RETRY_AFTER`], so a refusal isn't audited every minute),
+/// and the files K2 wrote into its dir ([`Delivered`]).
 struct LiveSession {
     workspace_id: String,
     env_names: Option<Vec<String>>,
     failed: HashMap<String, Instant>,
+    delivered: Delivered,
+}
+
+/// The files K2 itself wrote into a session's dir (file name → secret id),
+/// so a file goes when its secret stops being this session's and nothing
+/// else in the dir is ever touched. Kept in a file beside the dir
+/// (`<dir>.delivered`, names and ids only, in the memory-backed root), so a
+/// session that survives a daemon restart is known from boot. The dir and
+/// this file are writable by any same-user process: names are checked on
+/// load, and a wrong entry can only reach that session's own dir.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Delivered {
+    /// False for a session from before this record existed (one kept across
+    /// the update): K2 can't tell what it wrote there earlier.
+    complete: bool,
+    files: HashMap<String, String>,
+}
+
+const DELIVERED_SUFFIX: &str = ".delivered";
+
+fn delivered_path(dir: &Path) -> Option<PathBuf> {
+    let name = dir.file_name()?.to_str()?;
+    Some(dir.with_file_name(format!("{name}{DELIVERED_SUFFIX}")))
+}
+
+fn save_delivered(dir: &Path, d: &Delivered) {
+    let write = || -> std::io::Result<()> {
+        let path = delivered_path(dir).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no name"))?;
+        let tmp = path.with_extension("delivered.tmp");
+        let _ = std::fs::remove_file(&tmp);
+        let mut f = private_fs::create_new_private_file(&tmp)?;
+        f.write_all(&serde_json::to_vec(d).map_err(std::io::Error::other)?)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        k2_core::log_debug!("[vault] WARN: can't record delivered files for {}: {}", dir.display(), e.kind());
+    }
+}
+
+/// The record beside `dir`. Missing or unreadable: not complete, so K2 says
+/// it can't tell rather than guessing from what is in the folder.
+fn load_delivered(dir: &Path) -> Delivered {
+    let read = || -> Option<Delivered> {
+        let path = delivered_path(dir)?;
+        let m = std::fs::symlink_metadata(&path).ok()?;
+        if !m.is_file() || !private_fs::owned_by_me(&path, &m) || m.len() > 1024 * 1024 {
+            return None;
+        }
+        serde_json::from_slice(&std::fs::read(&path).ok()?).ok()
+    };
+    let mut d = read().unwrap_or_default();
+    d.files.retain(|name, _| k2_vault::delivery::validate_file_name(name).is_ok());
+    d
+}
+
+/// A session that survived a daemon restart: live delivery and taking back
+/// work for it from now on, not from the first tick.
+fn register_survivor(session_id: &str, workspace_id: &str, dir: &Path) {
+    LIVE.lock().insert(
+        session_id.to_string(),
+        LiveSession { workspace_id: workspace_id.to_string(), env_names: None, failed: HashMap::new(), delivered: load_delivered(dir) },
+    );
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the vault can't say what a session gets.
+    static FAIL_SPAWN_ITEMS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn items_for(vault: &k2_vault::LocalVault, who: &Requester) -> Result<Vec<k2_vault::SpawnItem>, k2_vault::VaultError> {
+    #[cfg(test)]
+    if FAIL_SPAWN_ITEMS.with(std::cell::Cell::get) {
+        return Err(k2_vault::VaultError::internal("spawn items failed"));
+    }
+    vault.spawn_items(who)
 }
 
 static LIVE: LazyLock<Mutex<HashMap<String, LiveSession>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -213,6 +297,8 @@ pub struct Materialized {
     /// (secret id, version) of everything delivered: the `/v1` cell audit
     /// line ([`SpawnRefs::via`]). Ids only.
     pub delivered: Vec<(String, u32)>,
+    /// (file name, secret id) of each file written.
+    pub file_secrets: Vec<(String, String)>,
 }
 
 /// Where a spawn's env came from, for its `k2v://` references (R8,
@@ -300,9 +386,11 @@ pub fn materialize(env: &mut HashMap<String, String>, workspace_id: &str, sessio
         // k2-ptyd launches); the 60 s sweep must not take the dir first.
         crate::session_liveness::note_spawning(session_id);
         DIRS.lock().push((session_id.to_string(), d.clone()));
+        let delivered = Delivered { complete: true, files: out.file_secrets.iter().cloned().collect() };
+        save_delivered(d, &delivered);
         LIVE.lock().insert(
             session_id.to_string(),
-            LiveSession { workspace_id: ws.to_string(), env_names: Some(out.env_names.clone()), failed: HashMap::new() },
+            LiveSession { workspace_id: ws.to_string(), env_names: Some(out.env_names.clone()), failed: HashMap::new(), delivered },
         );
     }
     out
@@ -413,7 +501,10 @@ fn deliver_items(
                 let d = dir.as_ref().expect("dir set above");
                 let fname = it.file_name.clone().unwrap_or_else(|| it.name.clone());
                 match write_secret_file(d, &fname, r.value.expose()) {
-                    Ok(()) => out.files.push(fname),
+                    Ok(()) => {
+                        out.file_secrets.push((fname.clone(), it.secret_id.clone()));
+                        out.files.push(fname);
+                    }
                     Err(e) => out.skipped.push(format!("{}: {}", it.name, e.kind())),
                 }
             }
@@ -538,6 +629,9 @@ fn remove_dir(d: &Path) {
         }
     }
     let _ = std::fs::remove_dir(d);
+    if let Some(p) = delivered_path(d) {
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 /// Remove one entry of a secrets dir; a regular file we own is zeroed
@@ -596,13 +690,11 @@ pub fn sweep_at_boot() {
     let keep: Vec<(String, PathBuf)> = survivors.iter().map(|(s, d, _)| (s.clone(), d.clone())).collect();
     let kept = sweep_at_boot_keeping(&keep);
     // Live delivery for the survivors (papercut 8): their workspace from
-    // the ptyd meta; the env they got at spawn isn't known.
-    {
-        let mut live = LIVE.lock();
-        for (sid, _) in &kept {
-            if let Some((_, _, Some(ws))) = survivors.iter().find(|(s, _, _)| s == sid) {
-                live.insert(sid.clone(), LiveSession { workspace_id: ws.clone(), env_names: None, failed: HashMap::new() });
-            }
+    // the ptyd meta; the env they got at spawn isn't known; the files K2
+    // delivered from their record.
+    for (sid, dir) in &kept {
+        if let Some((_, _, Some(ws))) = survivors.iter().find(|(s, _, _)| s == sid) {
+            register_survivor(sid, ws, dir);
         }
     }
     if let Ok(v) = super::get() {
@@ -657,6 +749,12 @@ fn sweep_root_keeping(root: &Path, keep: &[(String, PathBuf)]) -> Vec<(String, P
                     continue;
                 }
                 remove_dir(&p);
+            } else if e.file_name().to_str().is_some_and(|n| n.ends_with(DELIVERED_SUFFIX) || n.ends_with(".delivered.tmp")) {
+                // A record whose session is gone.
+                let p = e.path();
+                if !kept.iter().any(|(_, d)| delivered_path(d).as_ref() == Some(&p)) {
+                    let _ = std::fs::remove_file(&p);
+                }
             }
         }
     }
@@ -687,6 +785,30 @@ pub struct TopUp {
     pub restart: Vec<String>,
     /// Granted, but delivery failed: `NAME: code`.
     pub skipped: Vec<String>,
+    /// Files taken out now, their secret no longer this session's:
+    /// `(file name, secret id)`.
+    pub removed: Vec<(String, String)>,
+    /// Files that should have gone and are still there (kept on the record,
+    /// tried again on the next pass): `(file name, secret id)`.
+    pub not_removed: Vec<(String, String)>,
+    /// The vault couldn't say what this session gets: nothing was checked.
+    pub unchecked: Option<String>,
+}
+
+/// What one pass over every live session did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LiveSweep {
+    /// Files written.
+    pub written: usize,
+    /// One `(file name, secret id)` per session a file was taken from.
+    pub removed: Vec<(String, String)>,
+    /// One `(file name, secret id)` per session a file wouldn't come out of.
+    pub not_removed: Vec<(String, String)>,
+    /// Sessions the vault couldn't check, by error code.
+    pub unchecked: Vec<String>,
+    /// Sessions holding files K2 has no record of: from before the record
+    /// existed, or with no workspace known. K2 can't tell whose they are.
+    pub untracked: usize,
 }
 
 /// Live delivery for one session: the caller's own (`k2 vault sync`).
@@ -698,31 +820,69 @@ pub fn top_up(vault: &k2_vault::LocalVault, session_id: &str, workspace_id: &str
     let mut live = LIVE.lock();
     match live.get_mut(session_id) {
         Some(r) if r.workspace_id != workspace_id => TopUp::default(),
-        Some(r) => top_up_one(vault, session_id, workspace_id, dir.as_deref(), r.env_names.as_deref(), &mut r.failed, true),
-        None => top_up_one(vault, session_id, workspace_id, dir.as_deref(), None, &mut HashMap::new(), true),
+        Some(r) => top_up_one(vault, session_id, workspace_id, dir.as_deref(), r.env_names.as_deref(), &mut r.failed, &mut r.delivered, true),
+        None => {
+            let mut delivered = dir.as_deref().map(load_delivered).unwrap_or_default();
+            top_up_one(vault, session_id, workspace_id, dir.as_deref(), None, &mut HashMap::new(), &mut delivered, true)
+        }
     }
+}
+
+/// Regular files in `dir` K2 has no record of.
+fn unrecorded_files(dir: &Path, d: &Delivered) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten().any(|e| e.file_type().is_ok_and(|t| t.is_file()) && e.file_name().to_str().is_none_or(|n| !d.files.contains_key(n)))
+    })
 }
 
 /// Live delivery for every live session with a dir (after a grant or a
 /// set, and on the vault's minute tick). Returns how many files it wrote.
 pub fn top_up_all(vault: &k2_vault::LocalVault) -> usize {
-    let _turn = TOPUP.lock();
-    let dirs: Vec<(String, PathBuf)> = DIRS.lock().clone();
-    let mut n = 0;
-    for (sid, dir) in dirs {
-        let mut live = LIVE.lock();
-        let Some(r) = live.get_mut(&sid) else { continue };
-        let ws = r.workspace_id.clone();
-        let t = top_up_one(vault, &sid, &ws, Some(&dir), r.env_names.as_deref(), &mut r.failed, false);
-        drop(live);
-        if !t.delivered.is_empty() || !t.skipped.is_empty() {
-            k2_core::log_debug!("[vault] live delivery {sid}: files {:?} skipped {:?}", t.delivered, t.skipped);
-        }
-        n += t.delivered.len();
-    }
-    n
+    sweep_live(vault).written
 }
 
+/// One pass over every live session with a dir: files it now gets go in,
+/// files it no longer gets come out. After a destroy, a disable or a revoke
+/// this is what takes the file back at once; the vault's minute tick catches
+/// a grant or a secret whose time ran out.
+pub fn sweep_live(vault: &k2_vault::LocalVault) -> LiveSweep {
+    let _turn = TOPUP.lock();
+    let dirs: Vec<(String, PathBuf)> = DIRS.lock().clone();
+    let mut out = LiveSweep::default();
+    for (sid, dir) in dirs {
+        let mut live = LIVE.lock();
+        let Some(r) = live.get_mut(&sid) else {
+            drop(live);
+            if unrecorded_files(&dir, &Delivered::default()) {
+                out.untracked += 1;
+            }
+            continue;
+        };
+        let ws = r.workspace_id.clone();
+        let t = top_up_one(vault, &sid, &ws, Some(&dir), r.env_names.as_deref(), &mut r.failed, &mut r.delivered, false);
+        if !r.delivered.complete && unrecorded_files(&dir, &r.delivered) {
+            out.untracked += 1;
+        }
+        drop(live);
+        if !t.delivered.is_empty() || !t.skipped.is_empty() || !t.removed.is_empty() || !t.not_removed.is_empty() {
+            let names = |v: &[(String, String)]| v.iter().map(|(f, _)| f.clone()).collect::<Vec<_>>();
+            k2_core::log_debug!(
+                "[vault] live delivery {sid}: files {:?} skipped {:?} removed {:?} couldn't remove {:?}",
+                t.delivered,
+                t.skipped,
+                names(&t.removed),
+                names(&t.not_removed)
+            );
+        }
+        out.written += t.delivered.len();
+        out.removed.extend(t.removed);
+        out.not_removed.extend(t.not_removed);
+        out.unchecked.extend(t.unchecked);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
 fn top_up_one(
     vault: &k2_vault::LocalVault,
     session_id: &str,
@@ -730,19 +890,46 @@ fn top_up_one(
     dir: Option<&Path>,
     env_names: Option<&[String]>,
     failed: &mut HashMap<String, Instant>,
+    delivered: &mut Delivered,
     retry_now: bool,
 ) -> TopUp {
     let mut out = TopUp { dir: dir.map(Path::to_path_buf), ..Default::default() };
     let who = Requester::Session { workspace_id: workspace_id.to_string(), session_id: Some(session_id.to_string()) };
-    let items = match vault.spawn_items(&who) {
+    let items = match items_for(vault, &who) {
         Ok(i) => i,
         Err(e) => {
             out.skipped.push(format!("*: {}", e.code));
+            out.unchecked = Some(e.code.to_string());
             return out;
         }
     };
+    let mut record_changed = false;
     let now = Instant::now();
     failed.retain(|_, t| now.duration_since(*t) < RETRY_AFTER);
+    // A file K2 delivered whose secret this session no longer gets (destroyed,
+    // disabled, unshared, expired) goes first, so a secret of the same name it
+    // does get can take its place below. Only files on K2's record: a file
+    // already in the folder under a secret's name was never K2's. A secret
+    // it still gets at another delivery (a grant moved it to env) keeps the
+    // file. One that won't come out stays on the record for the next pass.
+    if let Some(d) = dir {
+        delivered.files.retain(|fname, id| {
+            if items.iter().any(|it| it.secret_id == *id) {
+                return true;
+            }
+            let p = d.join(fname.as_str());
+            if std::fs::symlink_metadata(&p).is_ok() {
+                wipe_entry(&p);
+                if std::fs::symlink_metadata(&p).is_ok() {
+                    out.not_removed.push((fname.clone(), id.clone()));
+                    return true;
+                }
+                out.removed.push((fname.clone(), id.clone()));
+            }
+            record_changed = true;
+            false
+        });
+    }
     let mut dir_ok = false;
     for it in items {
         match it.delivery {
@@ -788,6 +975,8 @@ fn top_up_one(
                 match write_secret_file(d, &fname, r.value.expose()) {
                     Ok(()) => {
                         failed.remove(&it.secret_id);
+                        delivered.files.insert(fname.clone(), it.secret_id.clone());
+                        record_changed = true;
                         out.delivered.push(fname);
                     }
                     // Made by someone else since the check: it's there.
@@ -799,6 +988,9 @@ fn top_up_one(
                 }
             }
         }
+    }
+    if let (true, Some(d)) = (record_changed, dir) {
+        save_delivered(d, delivered);
     }
     out
 }
@@ -1618,5 +1810,238 @@ mod tests {
         assert!(s3["hint"].as_str().expect("hint").ends_with(RESTART_TO_RECEIVE), "{s3}");
         assert_eq!(s3["restart"], serde_json::json!([format!("SYNC_FILE (file; this session has no $K2_SECRETS_DIR): {RESTART_TO_RECEIVE}")]), "{s3}");
         assert!(!dir.exists(), "sync never makes an ended session's dir");
+    }
+
+    /// A destroyed, disabled or unshared secret's file stayed readable in
+    /// every session it had reached until that session ended, and no output
+    /// said so. Now it goes at once from every live session, by spawn or by
+    /// live delivery; the answer counts them and says a value already read
+    /// or in an environment can't be taken back. Files K2 didn't deliver,
+    /// and other secrets' files, stay.
+    #[test]
+    fn destroying_disabling_or_unsharing_takes_the_file_from_live_sessions() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use crate::vault_routes::{DESTROY, DISABLE, ENABLE, REVOKE};
+        use k2_vault::{Actor, Scope, Selector};
+        let (_env, _t, _over, v, ws, other) = late_grant_setup(
+            "spawn-recall",
+            &[
+                ("GONE_FILE", Delivery::File, "gone-value-1"),
+                ("PAUSED_FILE", Delivery::File, "paused-value-2"),
+                ("UNSHARED_FILE", Delivery::File, "unshared-value-3"),
+                ("KEPT_FILE", Delivery::File, "kept-value-4"),
+            ],
+        );
+        // This session starts first, so it gets them by live delivery.
+        let live_sid = uuid::Uuid::new_v4().to_string();
+        let live = materialize(&mut HashMap::new(), &ws, &live_sid, false, &SpawnRefs::default()).dir.expect("dir");
+        for n in ["GONE_FILE", "PAUSED_FILE", "UNSHARED_FILE", "KEPT_FILE"] {
+            grant_to_ws(&v, &other, &ws, n, Delivery::File);
+        }
+        let id_of = |n: &str| v.meta(&Selector::user(Scope::workspace(other.clone()), n), &Actor::Owner).expect("meta").id;
+        let owner = VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None };
+        let call = |path: &str, body: serde_json::Value| -> serde_json::Value {
+            let r = crate::vault_routes::handle_on(&v, path, Ok(owner.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+            assert_eq!(r.status, "200 OK", "{path}: {}", r.body);
+            serde_json::from_str(&r.body).expect("json")
+        };
+
+        // This one gets them at spawn.
+        let spawned_sid = uuid::Uuid::new_v4().to_string();
+        let spawned = materialize(&mut HashMap::new(), &ws, &spawned_sid, false, &SpawnRefs::default());
+        assert!(spawned.files.contains(&"GONE_FILE".to_string()), "{spawned:?}");
+        let spawned = spawned.dir.expect("dir");
+        top_up_all(&v);
+        // A file nobody delivered stays, whatever happens to the secrets.
+        std::fs::write(live.join("mine.txt"), b"not a secret file").expect("write");
+        // A session kept across a daemon restart, with no tick since: what K2
+        // delivered is known from its record alone.
+        let kept_sid = uuid::Uuid::new_v4().to_string();
+        let kept = materialize(&mut HashMap::new(), &ws, &kept_sid, false, &SpawnRefs::default()).dir.expect("dir");
+        daemon_restarted(&kept_sid, &ws, &kept);
+        for d in [&live, &spawned, &kept] {
+            assert_eq!(std::fs::read(d.join("GONE_FILE")).expect("delivered"), b"gone-value-1");
+        }
+
+        // Destroy: gone from all three now, not on the tick.
+        let a = call(DESTROY, serde_json::json!({ "id": id_of("GONE_FILE"), "yes": true }));
+        assert_eq!(a["filesRemoved"], 3, "{a}");
+        let words = a["recall"].as_str().expect("recall words");
+        assert!(words.contains("removed its file from 3 running sessions"), "{words}");
+        assert!(words.contains("environment variable") && words.contains("can't take"), "{words}");
+        for d in [&live, &spawned, &kept] {
+            assert!(!d.join("GONE_FILE").exists(), "{}", d.display());
+            assert_eq!(std::fs::read(d.join("KEPT_FILE")).expect("kept"), b"kept-value-4", "another secret's file stays");
+        }
+        assert_eq!(std::fs::read(live.join("mine.txt")).expect("mine"), b"not a secret file");
+
+        // Disable stops it; enable brings it back on the next delivery.
+        let a = call(DISABLE, serde_json::json!({ "id": id_of("PAUSED_FILE") }));
+        assert_eq!(a["filesRemoved"], 3, "{a}");
+        assert!(!live.join("PAUSED_FILE").exists());
+        call(ENABLE, serde_json::json!({ "id": id_of("PAUSED_FILE") }));
+        top_up_all(&v);
+        assert_eq!(std::fs::read(live.join("PAUSED_FILE")).expect("back"), b"paused-value-2");
+
+        // Revoke, by grant id.
+        let grants = v.grants(&Selector::user(Scope::workspace(other.clone()), "UNSHARED_FILE"), &Actor::Owner).expect("grants");
+        let a = call(REVOKE, serde_json::json!({ "grantId": grants[0].id }));
+        assert_eq!(a["filesRemoved"], 3, "{a}");
+        let words = a["recall"].as_str().expect("recall words");
+        assert!(words.contains("removed its file from 3 running sessions that no longer get it"), "{a}");
+        assert!(words.contains("Sessions it is still shared with keep their file."), "{a}");
+        assert!(!spawned.join("UNSHARED_FILE").exists());
+
+        // Nothing held as a file: the answer says that, not a count of zero files gone.
+        let quiet = call(DESTROY, serde_json::json!({ "id": id_of("UNSHARED_FILE"), "yes": true }));
+        assert_eq!(quiet["filesRemoved"], 0, "{quiet}");
+        assert!(quiet["recall"].as_str().expect("words").starts_with("No running session had it as a file."), "{quiet}");
+
+        for s in [&live_sid, &spawned_sid, &kept_sid] {
+            session_ended(s);
+        }
+    }
+
+    /// What a daemon restart leaves: nothing in memory but the session.
+    fn daemon_restarted(sid: &str, ws: &str, dir: &Path) {
+        LIVE.lock().remove(sid);
+        register_survivor(sid, ws, dir);
+    }
+
+    fn destroy_as_owner(v: &std::sync::Arc<k2_vault::LocalVault>, id: &str) -> serde_json::Value {
+        use crate::vault::actor::{Channel, VaultCaller};
+        let owner = VaultCaller { actor: k2_vault::Actor::Owner, channel: Channel::Plain, session_id: None };
+        let body = serde_json::json!({ "id": id, "yes": true }).to_string();
+        let r = crate::vault_routes::handle_on(v, crate::vault_routes::DESTROY, Ok(owner), body.as_bytes(), &HashMap::new(), "test", None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        serde_json::from_str(&r.body).expect("json")
+    }
+
+    fn secret_id(v: &k2_vault::LocalVault, other: &str, name: &str) -> String {
+        use k2_vault::{Actor, Scope, Selector};
+        v.meta(&Selector::user(Scope::workspace(other.to_string()), name), &Actor::Owner).expect("meta").id
+    }
+
+    /// A file already in the folder under a secret's name was never K2's:
+    /// the session's own file survives the destroy, across a restart too.
+    #[test]
+    fn destroy_leaves_a_file_k2_did_not_deliver() {
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-mine", &[("MINE_FILE", Delivery::File, "vault-value-1")]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        std::fs::write(dir.join("MINE_FILE"), b"the agent's own").expect("write");
+        grant_to_ws(&v, &other, &ws, "MINE_FILE", Delivery::File);
+        assert_eq!(top_up(&v, &sid, &ws).present, vec!["MINE_FILE".to_string()]);
+        top_up_all(&v);
+        daemon_restarted(&sid, &ws, &dir);
+        top_up_all(&v);
+        let a = destroy_as_owner(&v, &secret_id(&v, &other, "MINE_FILE"));
+        assert_eq!(a["filesRemoved"], 0, "{a}");
+        assert_eq!(std::fs::read(dir.join("MINE_FILE")).expect("still there"), b"the agent's own");
+        session_ended(&sid);
+    }
+
+    /// The vault can't say what sessions get: the answer says K2 couldn't
+    /// check, never that no session had it, and the next pass removes it.
+    #[test]
+    fn an_unchecked_session_is_reported_and_retried() {
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-unchecked", &[("LOCKED_FILE", Delivery::File, "locked-value-1")]);
+        grant_to_ws(&v, &other, &ws, "LOCKED_FILE", Delivery::File);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        assert!(dir.join("LOCKED_FILE").exists());
+        let id = secret_id(&v, &other, "LOCKED_FILE");
+        FAIL_SPAWN_ITEMS.with(|f| f.set(true));
+        let a = destroy_as_owner(&v, &id);
+        FAIL_SPAWN_ITEMS.with(|f| f.set(false));
+        assert_eq!(a["filesRemoved"], 0, "{a}");
+        assert!(a["sessionsUnchecked"].as_u64().expect("count") >= 1, "{a}");
+        let words = a["recall"].as_str().expect("words");
+        assert!(words.contains("couldn't check") && words.contains("may still be in $K2_SECRETS_DIR"), "{words}");
+        assert!(!words.contains("No running session"), "never a claim it didn't check: {words}");
+        assert!(dir.join("LOCKED_FILE").exists(), "not removed while unchecked");
+        top_up_all(&v);
+        assert!(!dir.join("LOCKED_FILE").exists(), "the next pass removes it");
+        session_ended(&sid);
+    }
+
+    /// A session from before the record existed: K2 can't tell whose its
+    /// files are, so it touches none and says so.
+    #[test]
+    fn a_session_with_no_record_is_left_alone_and_reported() {
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-norecord", &[("OLD_FILE", Delivery::File, "old-value-1")]);
+        grant_to_ws(&v, &other, &ws, "OLD_FILE", Delivery::File);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        std::fs::remove_file(delivered_path(&dir).expect("path")).expect("rm record");
+        daemon_restarted(&sid, &ws, &dir);
+        let a = destroy_as_owner(&v, &secret_id(&v, &other, "OLD_FILE"));
+        assert_eq!(a["filesRemoved"], 0, "{a}");
+        assert_eq!(a["sessionsUntracked"], 1, "{a}");
+        let words = a["recall"].as_str().expect("words");
+        assert!(words.contains("has no record of the files in 1 running session"), "{words}");
+        assert!(!words.contains("No running session"), "{words}");
+        assert!(dir.join("OLD_FILE").exists());
+        session_ended(&sid);
+    }
+
+    /// The record: names are checked on load, it goes with its session, and
+    /// the boot sweep clears one whose session is gone.
+    #[test]
+    fn the_delivered_record_is_checked_and_cleaned_up() {
+        let (_env, t, _over, v, ws, _other) = late_grant_setup("spawn-record", &[]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        let record = delivered_path(&dir).expect("path");
+        assert_eq!(load_delivered(&dir), Delivered { complete: true, files: HashMap::new() });
+        assert_private(&record, 0o600);
+        // A same-user process can write it; a path in it never loads.
+        let forged = serde_json::json!({ "complete": true, "files": { "../../outside": "id-1", "OK_NAME": "id-2" } });
+        std::fs::write(&record, forged.to_string()).expect("forge");
+        assert_eq!(load_delivered(&dir).files.keys().collect::<Vec<_>>(), vec!["OK_NAME"]);
+        std::fs::write(&record, b"not json").expect("garbage");
+        assert!(!load_delivered(&dir).complete, "unreadable: not complete");
+        session_ended(&sid);
+        assert!(!record.exists(), "goes with its session");
+        let _ = &v;
+
+        let root = t.path().join("sweep-root");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("gone-12345678.delivered"), b"{}").expect("stale record");
+        std::fs::write(root.join("not-ours.txt"), b"x").expect("other file");
+        sweep_root_keeping(&root, &[]);
+        assert!(!root.join("gone-12345678.delivered").exists(), "a dead session's record is swept");
+        assert!(root.join("not-ours.txt").exists());
+    }
+
+    /// A secret that stops being this session's by other means (its grant
+    /// or its own time ran out) goes on the minute tick.
+    #[test]
+    fn the_tick_removes_a_file_whose_secret_this_session_no_longer_gets() {
+        use k2_vault::{Actor, Consumer, GrantRequest, Scope, Selector};
+        let (_env, _t, _over, v, ws, other) = late_grant_setup("spawn-expire", &[("BRIEF_FILE", Delivery::File, "brief-value-1")]);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let dir = materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("dir");
+        let sel = Selector::user(Scope::workspace(other.clone()), "BRIEF_FILE");
+        v.grant(
+            GrantRequest {
+                selector: sel.clone(),
+                consumer: Consumer::workspace(&ws),
+                delivery: Delivery::File,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: Some((chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                version: None,
+            },
+            &Actor::Owner,
+        )
+        .expect("grant");
+        top_up_all(&v);
+        assert!(dir.join("BRIEF_FILE").exists(), "delivered while the grant lasts");
+        std::thread::sleep(Duration::from_millis(3200));
+        top_up_all(&v);
+        assert!(!dir.join("BRIEF_FILE").exists(), "gone once the grant ran out");
+        session_ended(&sid);
     }
 }

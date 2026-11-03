@@ -1865,24 +1865,82 @@ fn revoke(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
         let before = vault.grant_info(id);
         vault.revoke(id, &c.actor)?;
         let running: Vec<Value> = before.iter().flat_map(|g| crate::compute_secrets::running_with(&g.secret_id, &g.consumer)).collect();
-        return Ok(revoked_json(&[id.to_string()], running));
+        let mut out = revoked_json(&[id.to_string()], running);
+        let secret_ids: Vec<String> = before.iter().map(|g| g.secret_id.clone()).collect();
+        recall_files(vault, &secret_ids, true, &mut out);
+        return Ok(out);
     }
     let sel = selector(c, &b.sel)?;
     let from = b.from.as_deref().ok_or_else(|| err("consumer_required", 400, "--from ws:<name> or a grant id"))?;
     let consumer = consumer_for(c, from)?;
     let mut done = vec![];
     let mut running = vec![];
+    let mut secret_ids = vec![];
     for g in vault.grants(&sel, &c.actor)? {
         if g.consumer == consumer {
             vault.revoke(&g.id, &c.actor)?;
             running.extend(crate::compute_secrets::running_with(&g.secret_id, &g.consumer));
+            secret_ids.push(g.secret_id);
             done.push(g.id);
         }
     }
     if done.is_empty() {
         return Err(VaultError::not_found("no share to remove"));
     }
-    Ok(revoked_json(&done, running))
+    let mut out = revoked_json(&done, running);
+    recall_files(vault, &secret_ids, true, &mut out);
+    Ok(out)
+}
+
+/// "1 running session", "2 running sessions".
+fn running_sessions(n: usize) -> String {
+    format!("{n} running session{}", if n == 1 { "" } else { "s" })
+}
+
+/// After a secret stopped reaching someone: take its file out of every live
+/// session that no longer gets it, and say what that did, what K2 couldn't
+/// check and what it can't do. It never says "no session had it" unless K2
+/// checked them all. `share_only`: a revoke, so other sessions may keep it.
+fn recall_files(vault: &LocalVault, secret_ids: &[String], share_only: bool, out: &mut Value) {
+    let swept = crate::vault::spawn::sweep_live(vault);
+    let of_this = |v: &[(String, String)]| v.iter().filter(|(_, id)| secret_ids.contains(id)).count();
+    let removed = of_this(&swept.removed);
+    let not_removed = of_this(&swept.not_removed);
+    let unchecked = swept.unchecked.len();
+    let mut words: Vec<String> = vec![];
+    if removed > 0 {
+        let who = if share_only { " that no longer get it" } else { "" };
+        words.push(format!("K2 removed its file from {}{who}.", running_sessions(removed)));
+    } else if not_removed + unchecked + swept.untracked == 0 {
+        words.push(if share_only { "No file had to be removed from a running session." } else { "No running session had it as a file." }.to_string());
+    }
+    if not_removed > 0 {
+        words.push(format!(
+            "K2 couldn't remove its file from {}: K2 tries again within a minute. Until then the file can still be read in $K2_SECRETS_DIR there.",
+            running_sessions(not_removed)
+        ));
+    }
+    if let Some(code) = swept.unchecked.first() {
+        words.push(format!(
+            "K2 couldn't check {} ({code}), so its file may still be in $K2_SECRETS_DIR there. K2 tries again within a minute. To be sure now, delete the file there, or restart those sessions.",
+            running_sessions(unchecked)
+        ));
+    }
+    if swept.untracked > 0 {
+        words.push(format!(
+            "K2 has no record of the files in {} (they started before this K2 update), so it left them alone. A file in $K2_SECRETS_DIR there named after this secret may be its copy: delete it, or restart those sessions.",
+            running_sessions(swept.untracked)
+        ));
+    }
+    if share_only {
+        words.push("Sessions it is still shared with keep their file.".to_string());
+    }
+    words.push("K2 can't take back a value a session already read or copied, or an environment variable in a running session (it stays until that session restarts). If the key may have leaked, change it at the provider.".to_string());
+    out["filesRemoved"] = json!(removed);
+    out["filesNotRemoved"] = json!(not_removed);
+    out["sessionsUnchecked"] = json!(unchecked);
+    out["sessionsUntracked"] = json!(swept.untracked);
+    out["recall"] = json!(words.join(" "));
 }
 
 /// The revoke answer. `stillRunning` (compute grants, SE28): jobs that
@@ -1909,9 +1967,15 @@ struct StatusBody {
 fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -> Result<Value, VaultError> {
     let b: StatusBody = parse(body)?;
     let sel = selector(c, &b.sel)?;
+    // Its id, before a destroy takes it. Only to count its files below: the
+    // calls that follow make the caller's own checks.
+    let secret_id = vault.meta(&sel, &Actor::System("vault-recall".into())).map(|m| m.id);
     match path {
         DISABLE => vault.disable(&sel, &c.actor)?,
-        ENABLE => vault.enable(&sel, &c.actor)?,
+        ENABLE => {
+            vault.enable(&sel, &c.actor)?;
+            return Ok(json!({ "ok": true }));
+        }
         _ => {
             if !b.yes {
                 return Err(err("confirm_destroy", 400, "destroying removes every version; add --yes"));
@@ -1919,7 +1983,9 @@ fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -
             vault.destroy(&sel, &c.actor)?
         }
     }
-    Ok(json!({ "ok": true }))
+    let mut out = json!({ "ok": true });
+    recall_files(vault, &secret_id.into_iter().collect::<Vec<_>>(), false, &mut out);
+    Ok(out)
 }
 
 fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

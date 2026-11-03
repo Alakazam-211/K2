@@ -6462,6 +6462,9 @@ mod tests {
     /// App it signed in to, and says so when an agent could know the password.
     #[test]
     fn a_guest_post_reaches_the_agent_stamped_guest() {
+        // Its own home: the guest and its tie live in the home's App database,
+        // and without this another test's HOME can change between the two.
+        let _home = crate::test_support::TempHome::new();
         let handle = format!("ovlguest{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());

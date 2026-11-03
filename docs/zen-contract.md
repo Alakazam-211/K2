@@ -1185,7 +1185,7 @@ per-device visibility field. A widget may be left out of `page.phone`.
   `fill` alone in its column's body and `auto` otherwise (native and
   placeholder widgets count; controls and band items don't). A placement the
   layout leaves out has no `height`. The phone adds only `viewport`.
-- **`frameVersion`** covers the bundle `hash`, the hello's `config` and
+- **`frameVersion`** covers the bundle `hash`, the hello's `config`, `caps` and
   `height`, and K2's frame runtime. A phone reloads a frame on it, not `hash`:
   a `config` edit moves the page's `version` but not `hash`. With an older
   daemon that doesn't send it, the phone falls back to `hash`.

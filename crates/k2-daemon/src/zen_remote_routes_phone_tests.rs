@@ -166,12 +166,42 @@ fn frame_version_moves_on_config_and_height_and_on_nothing_else_on_the_page() {
     write(&fx, &phone("[phone.screen.widget.config]\nzoom = 2"));
     write(&fx, &phone("[phone.screen.widget.config]\nzoom = 2").replace("zoom = 1", "zoom = 9"));
     assert_eq!(fv(&fx, "b1"), with_config, "the same merged config");
+    // It's opaque to the phone, and what it covers is set here, not by a phone.
+    assert_eq!(frame_of(&fx, "b1")["frameVersion"].as_str().map(str::len), Some(16), "a fingerprint");
 
     // The code: `hash` moves, so frameVersion does.
     write(&fx, &phone(""));
     std::fs::write(fx.d.f.widget_dir("board").join("hello.js"), "// new code\n").expect("edit the code");
     assert_ne!(frame_of(&fx, "b1")["hash"], json!(hash), "the bundle changed");
     assert_ne!(fv(&fx, "b1"), base, "new code");
+}
+
+/// Signing a widget changes its caps and not its code: `hash` stays, and
+/// without this the phone would keep a hello whose `k2.can` answers wrong.
+#[test]
+fn frame_version_moves_when_signing_changes_the_caps() {
+    struct SwitchOn;
+    impl Drop for SwitchOn {
+        fn drop(&mut self) {
+            k2_core::zen::garden_access::set_switch(false);
+        }
+    }
+    // Not signed yet: fx stamps the owner, so this fixture does it by hand.
+    let d = door(&["store:read", "store:write", "thread:post"]);
+    login("rosphone", Role::Admin);
+    link(&["rosphone"]);
+    let phone = pair("rosphone", "ios-rosson-1");
+    k2_core::zen::garden_access::set_switch(true);
+    let _on = SwitchOn;
+    let g = d.garden.clone();
+    let before = ok_of(FRAME, &phone, &[("garden", &g), ("placement", "b1")], J::Null);
+    d.stamp(MadeBy::Owner);
+    let after = ok_of(FRAME, &phone, &[("garden", &g), ("placement", "b1")], J::Null);
+    assert_eq!(before["hash"], after["hash"], "the code didn't change");
+    assert_ne!(before["hello"]["caps"], after["hello"]["caps"], "signing changed the caps: {} then {}", before["hello"]["caps"], after["hello"]["caps"]);
+    assert_ne!(before["frameVersion"], after["frameVersion"], "so the frame must reload");
+    let page = ok_of(PAGE, &phone, &[("garden", &g)], J::Null);
+    assert_eq!(page["remote"]["widgets"][0]["frameVersion"], after["frameVersion"], "the page's row says the same");
 }
 
 /// A row with no good version has none; `remote/frame` answers 409.

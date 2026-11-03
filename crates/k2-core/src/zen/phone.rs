@@ -199,10 +199,12 @@ fn runtime_fingerprint() -> &'static str {
 
 /// `frameVersion` (contract rev 2 §C): what a phone reloads a frame on and
 /// caches its document by. It covers the bundle `hash`, what the hello carries
-/// from the page (`config`, `height`) and K2's frame runtime, so it moves on a
-/// `config` edit, which `hash` doesn't, and on nothing else on the page.
-pub fn frame_version(hash: &str, config: &J, height: Option<&J>) -> String {
-    let covered = json!({ "hash": hash, "config": config, "height": height, "runtime": runtime_fingerprint() });
+/// from the page (`config`, `height`, `caps`) and K2's frame runtime, so it
+/// moves on a `config` edit, which `hash` doesn't, and on nothing else on the
+/// page. `caps` is here because signing a widget changes them with no change to
+/// its code: a frame keeping the old hello would give a wrong `k2.can`.
+pub fn frame_version(hash: &str, config: &J, height: Option<&J>, caps: &J) -> String {
+    let covered = json!({ "hash": hash, "config": config, "height": height, "caps": caps, "runtime": runtime_fingerprint() });
     super::schema::fnv_hex(covered.to_string().as_bytes())
 }
 

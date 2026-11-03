@@ -396,7 +396,7 @@ fn run_of(kind: &str) -> (&'static str, Option<&'static str>) {
 /// `None` with no good version: `remote/frame` answers 409 `widget_broken`.
 fn frame_version_of(page: &J, w: &J) -> Option<String> {
     let hash = w["hash"].as_str().filter(|h| !h.is_empty())?;
-    Some(garden_phone::frame_version(hash, &garden_phone::merged_config(page, w), garden_phone::hello_height(page, w).as_ref()))
+    Some(garden_phone::frame_version(hash, &garden_phone::merged_config(page, w), garden_phone::hello_height(page, w).as_ref(), &w["caps"]))
 }
 
 /// The hello's `features` on a phone (GP-A5): the desktop frame's, minus
@@ -554,7 +554,7 @@ fn frame(p: &Person, params: &HashMap<String, String>) -> CliResponse {
     // `viewport`. A placement `page.phone` leaves out gets no `height`.
     let config = garden_phone::merged_config(&v["page"], &w);
     let height = garden_phone::hello_height(&v["page"], &w);
-    let frame_version = garden_phone::frame_version(&bundle.hash, &config, height.as_ref());
+    let frame_version = garden_phone::frame_version(&bundle.hash, &config, height.as_ref(), &w["caps"]);
     let mut hello = json!({
         "k2": "hello",
         "v": 1,

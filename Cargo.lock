@@ -4664,9 +4664,11 @@ dependencies = [
 name = "kessel-audio"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "bytes",
  "cpal",
  "crossbeam-queue",
+ "objc2",
  "ropus",
  "rtrb",
  "rubato",

@@ -129,6 +129,10 @@ speech by about 1 dB.
 - Linux needs the ALSA development headers (`alsa-lib` / `libasound2-dev`)
   for the default `cpal` feature. Build with `--no-default-features` for the
   null device only.
+- On macOS, a bundled app needs `NSMicrophoneUsageDescription` in its
+  Info.plist, and `com.apple.security.device.audio-input` if it uses the
+  hardened runtime. If the person refuses the microphone, or the app can't ask,
+  the engine raises `no_permission` rather than capture silence.
 - cpal's `realtime` feature is deliberately not enabled (it pulls an
   MPL-2.0 crate); the device threads run at the priority the OS gives them.
 - `deny.toml` lists the licence allowlist; `tests/licences.rs` checks the

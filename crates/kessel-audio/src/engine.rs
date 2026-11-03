@@ -87,6 +87,38 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
+    pub(crate) fn new(cfg: &EngineConfig) -> Arc<Shared> {
+        let core_cfg = CoreConfig {
+            processing: cfg.processing.clone(),
+            encoder: cfg.encoder,
+            jitter: cfg.jitter.clone(),
+            initial_ts48k: cfg.initial_ts48k,
+            levels_interval_ms: cfg.levels_interval_ms,
+            speaking_threshold_dbov: cfg.speaking_threshold_dbov,
+            max_participants: cfg.max_participants,
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.levels.participants.reserve(cfg.max_participants);
+        snapshot.stats.participants.reserve(cfg.max_participants);
+        Arc::new(Shared {
+            ctrl: ArrayQueue::new(256),
+            recv: ArrayQueue::new(cfg.recv_queue_frames),
+            frames: Arc::new(ArrayQueue::new(cfg.capture_queue_frames)),
+            events: Arc::new(ArrayQueue::new(256)),
+            snapshot: Mutex::new(snapshot),
+            devices: Mutex::new(DeviceList::default()),
+            in_use: Mutex::new(DevicesInUse::default()),
+            garbage: ArrayQueue::new(1024),
+            io: IoCounters::default(),
+            stop: AtomicBool::new(false),
+            recv_drops: AtomicU64::new(0),
+            dev_req: ArrayQueue::new(16),
+            core_cfg,
+            playout_buffer_ms: cfg.playout_buffer_ms,
+            device_poll: cfg.device_poll_interval,
+        })
+    }
+
     pub(crate) fn emit(&self, e: Event) {
         self.events.force_push(e);
     }
@@ -141,37 +173,19 @@ impl AudioEngine {
     /// don't stop the engine: they arrive as [`Event::Error`] on
     /// [`AudioEngine::events`], and the engine runs with whatever devices
     /// it could open.
+    ///
+    /// On macOS the input device opens only once the person has allowed the
+    /// microphone. If they've never been asked, this shows the OS prompt
+    /// without waiting for it: playback starts at once, and the input opens
+    /// when they say yes ([`Event::DevicesInUse`]) or
+    /// [`crate::ErrorCode::NoPermission`] arrives when they say no. The app
+    /// needs `NSMicrophoneUsageDescription` in its Info.plist; without it the
+    /// OS would kill the app for asking, so the engine raises
+    /// [`crate::ErrorCode::NoPermission`] instead.
     pub fn start(cfg: EngineConfig) -> Result<AudioEngine, AudioError> {
         cfg.validate()?;
-        let core_cfg = CoreConfig {
-            processing: cfg.processing.clone(),
-            encoder: cfg.encoder,
-            jitter: cfg.jitter.clone(),
-            initial_ts48k: cfg.initial_ts48k,
-            levels_interval_ms: cfg.levels_interval_ms,
-            speaking_threshold_dbov: cfg.speaking_threshold_dbov,
-            max_participants: cfg.max_participants,
-        };
-        let mut snapshot = Snapshot::default();
-        snapshot.levels.participants.reserve(cfg.max_participants);
-        snapshot.stats.participants.reserve(cfg.max_participants);
-        let shared = Arc::new(Shared {
-            ctrl: ArrayQueue::new(256),
-            recv: ArrayQueue::new(cfg.recv_queue_frames),
-            frames: Arc::new(ArrayQueue::new(cfg.capture_queue_frames)),
-            events: Arc::new(ArrayQueue::new(256)),
-            snapshot: Mutex::new(snapshot),
-            devices: Mutex::new(DeviceList::default()),
-            in_use: Mutex::new(DevicesInUse::default()),
-            garbage: ArrayQueue::new(1024),
-            io: IoCounters::default(),
-            stop: AtomicBool::new(false),
-            recv_drops: AtomicU64::new(0),
-            dev_req: ArrayQueue::new(16),
-            core_cfg: core_cfg.clone(),
-            playout_buffer_ms: cfg.playout_buffer_ms,
-            device_poll: cfg.device_poll_interval,
-        });
+        let shared = Shared::new(&cfg);
+        let core_cfg = shared.core_cfg.clone();
         let engine = AudioEngine {
             shared: shared.clone(),
             threads: Mutex::new(Vec::new()),
@@ -317,6 +331,11 @@ impl AudioEngine {
     }
 
     /// Switch devices. Waits (up to 10 s) for the new device to open.
+    ///
+    /// An input switch returns [`crate::ErrorCode::NoPermission`] if the
+    /// microphone is refused. While the OS prompt is still up it returns
+    /// `Ok` and the chosen device opens if the person says yes; see
+    /// [`AudioEngine::start`].
     pub fn set_device(&self, sel: DeviceSelection) -> Result<(), AudioError> {
         let (tx, rx) = sync_channel(1);
         if self

@@ -6,6 +6,7 @@ use crate::device::{pop_playback, push_capture, ring_capacity, CaptureIo, PlayIo
 use crate::engine::{lock, Ctrl, Shared};
 use crate::error::{AudioError, ErrorCode};
 use crate::events::{DeviceChoice, DeviceInfo, DeviceList, DeviceSelection, Event};
+use crate::mic::{Gate, MicGate, MicOs};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, FromSample, SampleFormat, SizedSample, SupportedBufferSize};
 use crossbeam_queue::ArrayQueue;
@@ -41,6 +42,7 @@ pub(crate) struct System {
     generation: u64,
     last_poll: Instant,
     list: DeviceList,
+    mic: MicGate,
 }
 
 /// Map an error from opening a device.
@@ -211,6 +213,15 @@ where
 
 impl System {
     pub(crate) fn start(shared: &Arc<Shared>, input: DeviceChoice, output: DeviceChoice) -> System {
+        Self::start_with(shared, input, output, crate::mic::system_os())
+    }
+
+    fn start_with(
+        shared: &Arc<Shared>,
+        input: DeviceChoice,
+        output: DeviceChoice,
+        mic: Box<dyn MicOs>,
+    ) -> System {
         let host = cpal::default_host();
         let mut s = System {
             host,
@@ -222,6 +233,7 @@ impl System {
             generation: 0,
             last_poll: Instant::now(),
             list: DeviceList::default(),
+            mic: MicGate::new(mic),
         };
         s.refresh_list(shared);
         let _ = s.open(shared, Dir::In);
@@ -254,6 +266,22 @@ impl System {
 
     fn open(&mut self, shared: &Arc<Shared>, dir: Dir) -> Result<(), AudioError> {
         self.close(shared, dir);
+        // Before anything touches an input device: on macOS a refused input
+        // stream opens fine and captures silence.
+        if dir == Dir::In {
+            match self.mic.check() {
+                Gate::Open => {}
+                Gate::Waiting => {
+                    shared.set_in_use(|u| u.input = None);
+                    return Ok(());
+                }
+                Gate::Refused(e) => {
+                    shared.emit(Event::Error(e.clone()));
+                    shared.set_in_use(|u| u.input = None);
+                    return Err(e);
+                }
+            }
+        }
         self.generation += 1;
         let generation = self.generation;
         let r = self.try_open(shared, dir, generation);
@@ -403,10 +431,20 @@ impl System {
             }
         }
 
+        // The person answered the prompt. The reopen goes through the gate,
+        // which opens the device or raises the refusal.
+        if self.mic.answered() && self.input.is_none() {
+            let _ = self.open(shared, Dir::In);
+        }
+
         if shared.device_poll.is_zero() || self.last_poll.elapsed() < shared.device_poll {
             return;
         }
         self.last_poll = Instant::now();
+        // The person changed it in the system settings, either way.
+        if self.mic.status_changed() {
+            let _ = self.open(shared, Dir::In);
+        }
         if !self.refresh_list(shared) {
             return;
         }
@@ -466,5 +504,135 @@ mod tests {
         for (kind, code) in cases {
             assert_eq!(open_err(cpal::Error::new(kind)).code, code, "{kind:?}");
         }
+    }
+
+    use crate::config::EngineConfig;
+    use crate::device::NullDevice;
+    use crate::mic::fake::FakeOs;
+    use crate::mic::MicStatus;
+    use std::time::Duration;
+
+    const NO_MIC: &str = "no-such-mic";
+    const NO_SPEAKER: &str = "no-such-speaker";
+    const NEVER: Duration = Duration::from_secs(3600);
+
+    /// A system backend on a scripted OS gate. The device ids don't exist,
+    /// so these tests never open a real device: an attempt to open the
+    /// input shows up as `no_device`, a refusal by the gate as
+    /// `no_permission`. Playback fails `no_device` once, at start.
+    fn rig_on(os: &FakeOs, poll: Duration) -> (Arc<Shared>, System) {
+        let cfg = EngineConfig {
+            device_poll_interval: poll,
+            ..EngineConfig::null(NullDevice::default())
+        };
+        let shared = Shared::new(&cfg);
+        let sys = System::start_with(
+            &shared,
+            DeviceChoice::Id(NO_MIC.into()),
+            DeviceChoice::Id(NO_SPEAKER.into()),
+            Box::new(os.clone()),
+        );
+        (shared, sys)
+    }
+
+    fn rig(status: MicStatus, poll: Duration) -> (Arc<Shared>, FakeOs, System) {
+        let os = FakeOs::new(status);
+        let (shared, sys) = rig_on(&os, poll);
+        (shared, os, sys)
+    }
+
+    fn errors(shared: &Shared) -> Vec<ErrorCode> {
+        let mut out = Vec::new();
+        while let Some(e) = shared.events.pop() {
+            if let Event::Error(e) = e {
+                out.push(e.code);
+            }
+        }
+        out
+    }
+
+    fn another_mic() -> DeviceSelection {
+        DeviceSelection {
+            input: Some(DeviceChoice::Id("another-mic".into())),
+            output: None,
+        }
+    }
+
+    #[test]
+    fn a_denied_mic_raises_no_permission_and_never_opens() {
+        for status in [MicStatus::Denied, MicStatus::Restricted] {
+            let (shared, os, _sys) = rig(status, NEVER);
+            assert_eq!(errors(&shared), [ErrorCode::NoPermission, ErrorCode::NoDevice], "{status:?}");
+            assert_eq!(lock(&shared.in_use).input, None);
+            assert_eq!(os.asks(), 0);
+        }
+    }
+
+    #[test]
+    fn a_device_switch_on_a_denied_mic_returns_no_permission() {
+        let (shared, _os, mut sys) = rig(MicStatus::Denied, NEVER);
+        errors(&shared);
+        let e = sys.set_device(&shared, another_mic()).expect_err("the switch must fail");
+        assert_eq!(e.code, ErrorCode::NoPermission);
+        assert_eq!(errors(&shared), [ErrorCode::NoPermission]);
+    }
+
+    #[test]
+    fn a_never_asked_mic_prompts_once_and_a_no_raises_no_permission() {
+        let (shared, os, mut sys) = rig(MicStatus::NotDetermined, NEVER);
+        assert_eq!(os.asks(), 1);
+        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "playback only: the prompt is up");
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), []);
+        os.answer(false);
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [ErrorCode::NoPermission]);
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [], "raised once");
+        assert_eq!(os.asks(), 1);
+    }
+
+    #[test]
+    fn a_yes_opens_the_device_chosen_during_the_prompt() {
+        let (shared, os, mut sys) = rig(MicStatus::NotDetermined, NEVER);
+        errors(&shared);
+        sys.set_device(&shared, another_mic()).expect("the prompt is still up");
+        assert_eq!(errors(&shared), []);
+        assert_eq!(os.asks(), 1);
+        assert_eq!(sys.want_in, DeviceChoice::Id("another-mic".into()));
+        os.answer(true);
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "the gate let the open through");
+    }
+
+    #[test]
+    fn no_usage_description_raises_no_permission_without_asking() {
+        let os = FakeOs::new(MicStatus::NotDetermined).no_usage_description();
+        let (shared, _sys) = rig_on(&os, NEVER);
+        assert_eq!(errors(&shared), [ErrorCode::NoPermission, ErrorCode::NoDevice]);
+        assert_eq!(os.asks(), 0);
+    }
+
+    #[test]
+    fn turning_it_on_in_the_settings_opens_the_input() {
+        let (shared, os, mut sys) = rig(MicStatus::Denied, Duration::from_millis(1));
+        errors(&shared);
+        std::thread::sleep(Duration::from_millis(5));
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [], "nothing changed");
+        os.set_status(MicStatus::Granted);
+        std::thread::sleep(Duration::from_millis(5));
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [ErrorCode::NoDevice], "the gate let the open through");
+    }
+
+    #[test]
+    fn turning_it_off_in_the_settings_raises_no_permission() {
+        let (shared, os, mut sys) = rig(MicStatus::Granted, Duration::from_millis(1));
+        assert_eq!(errors(&shared), [ErrorCode::NoDevice, ErrorCode::NoDevice]);
+        os.set_status(MicStatus::Denied);
+        std::thread::sleep(Duration::from_millis(5));
+        sys.tick(&shared);
+        assert_eq!(errors(&shared), [ErrorCode::NoPermission]);
     }
 }

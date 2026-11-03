@@ -18,8 +18,9 @@ default = ["cpal"]
 # System audio devices through cpal (CoreAudio, WASAPI, ALSA). Without it only
 # the null device backend is available, which needs no audio hardware or
 # system libraries. cpal's `realtime` feature stays off: it pulls an MPL-2.0
-# crate.
-cpal = ["dep:cpal"]
+# crate. objc2 and block2 reach macOS's microphone permission calls; cpal
+# already uses objc2, and the permission check is why block2 is here.
+cpal = ["dep:cpal", "dep:objc2", "dep:block2"]
 # cpal's PulseAudio host (a pure-Rust protocol client; works on PipeWire
 # through pipewire-pulse).
 pulseaudio = ["cpal", "cpal/pulseaudio"]
@@ -36,6 +37,10 @@ sonora = "=0.2.0"
 ropus = "=0.12.18"
 rubato = "5.0.1"
 cpal = { version = "0.18.2", optional = true, default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
 
 [dev-dependencies]
 rustfft = "6"

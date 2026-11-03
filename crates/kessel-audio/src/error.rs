@@ -11,7 +11,10 @@ pub enum ErrorCode {
     DeviceLost,
     /// The device is in use by something else, or temporarily unavailable.
     DeviceBusy,
-    /// The OS refused access (for example microphone privacy settings).
+    /// The OS refused access: the person declined or turned off microphone
+    /// access, policy forbids it, or (macOS) the app has no
+    /// `NSMicrophoneUsageDescription` so the OS can't ask. No input device is
+    /// open. The engine opens one by itself if access is granted later.
     NoPermission,
     /// No such device, or no device of that kind at all.
     NoDevice,

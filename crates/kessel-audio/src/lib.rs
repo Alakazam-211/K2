@@ -53,8 +53,13 @@
 //! the engine is bounded and lock-free, and the audio side never blocks on
 //! one: a full queue drops (and counts) instead.
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
-#![cfg_attr(test, deny(unsafe_code))]
+// macOS's microphone permission calls (`mic::macos`) are the only `unsafe`
+// outside tests.
+#![cfg_attr(
+    not(any(test, all(feature = "cpal", target_os = "macos"))),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(any(test, all(feature = "cpal", target_os = "macos")), deny(unsafe_code))]
 
 mod apm;
 mod codec;
@@ -66,6 +71,8 @@ mod events;
 mod frame;
 mod jitter;
 mod level;
+#[cfg(feature = "cpal")]
+mod mic;
 mod null;
 mod pipeline;
 mod resample;

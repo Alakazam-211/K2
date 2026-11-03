@@ -6,8 +6,10 @@ This crate contains code ported from LiveKit, modified by Alakazam Labs:
 - livekit/client-sdk-js (src/e2ee/worker/FrameCryptor.ts, src/e2ee/worker/naluUtils.ts,
   src/e2ee/utils.ts, src/e2ee/constants.ts, src/room/utils.ts, src/api/SignalClient.ts)
   @ 53dd840, Copyright 2021 LiveKit, Inc.
+  (in src/e2ee/lkgcm.rs and src/compat.rs)
 - livekit/livekit (test/client/client.go, test/integration_helpers.go) @ 8d11efd,
-  Copyright 2023 LiveKit, Inc.
+  Copyright 2023 LiveKit, Inc. (src/session/ and src/signal/ were ported from these and
+  have since been rewritten by Alakazam Labs from a written behaviour specification)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,5 +24,5 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 Each ported file keeps its "Ported from ... (Apache-2.0, (c) LiveKit, Inc.)" header and a
-"Modified by Alakazam Labs, 2026" line. No livekit/rust-sdks code is used. This crate is not
-affiliated with or endorsed by LiveKit, Inc.
+"Modified by Alakazam Labs, 2026" line. The other files are Alakazam Labs' own. No
+livekit/rust-sdks code is used. This crate is not affiliated with or endorsed by LiveKit, Inc.

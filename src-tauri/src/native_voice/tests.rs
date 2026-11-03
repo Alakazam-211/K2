@@ -492,12 +492,12 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every vendored file is what VENDOR.txt pinned: nothing changed, missing or
+/// Every vendored file is what SEW-CRATES-VENDOR.txt pinned: nothing changed, missing or
 /// extra, the plugin's build script's output included.
 #[test]
 fn vendor_manifest_matches_the_tree() {
-    let root = repo_root().join("third_party/sew-voice");
-    let text = std::fs::read_to_string(root.join("VENDOR.txt")).expect("VENDOR.txt");
+    let root = repo_root().join("third_party/sew-crates");
+    let text = std::fs::read_to_string(repo_root().join("third_party/SEW-CRATES-VENDOR.txt")).expect("SEW-CRATES-VENDOR.txt");
     let manifest = text.split("# manifest\n").nth(1).expect("a manifest section");
     let want: HashMap<&str, &str> = manifest.lines().map(|l| l.split_once("  ").map(|(h, p)| (p, h)).expect("sha  path")).collect();
     let mut files = Vec::new();
@@ -505,9 +505,6 @@ fn vendor_manifest_matches_the_tree() {
     let mut seen = 0;
     for f in &files {
         let rel = f.strip_prefix(&root).expect("under root").to_string_lossy().replace('\\', "/");
-        if rel == "VENDOR.txt" {
-            continue;
-        }
         let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("read {rel}: {e}"));
         let have = format!("{:x}", Sha256::digest(&bytes));
         let pinned = want.get(rel.as_str()).unwrap_or_else(|| panic!("{rel} isn't in the manifest"));
@@ -523,7 +520,7 @@ fn the_app_ships_the_notices_the_licences_ask_for() {
     let conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).expect("conf");
     for krate in ["sew-lk-compat", "sew-mls-crypto"] {
         let shipped = std::fs::read(root.join(format!("resources/notices/{krate}-NOTICE"))).expect("the copy");
-        let vendored = std::fs::read(root.join(format!("third_party/sew-voice/crates/{krate}/NOTICE"))).expect("Sew's");
+        let vendored = std::fs::read(root.join(format!("third_party/sew-crates/{krate}/NOTICE"))).expect("Sew's");
         assert_eq!(shipped, vendored, "{krate}");
         assert!(conf.contains(&format!("../resources/notices/{krate}-NOTICE")), "{krate} isn't in bundle.resources");
     }

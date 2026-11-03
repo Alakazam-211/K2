@@ -26,6 +26,7 @@ impl LazyEngine {
     }
 
     /// True once something has needed the engine.
+    #[cfg(test)]
     pub fn started(&self) -> bool {
         self.real.get().is_some()
     }

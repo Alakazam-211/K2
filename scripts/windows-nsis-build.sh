@@ -94,6 +94,22 @@ fi
 git update-ref -d "$BUNDLE_REF"
 echo "  bundle: $(du -h "$STAGE/release.bundle" | cut -f1) (base ${BASE:0:9})"
 "${SCP[@]}" "$STAGE/release.bundle" "${HOST}:D:/tmp/k2-release.bundle"
+# Paths Windows can't hold (reserved names like nul.*, or characters NTFS refuses)
+# stop `git checkout` with "invalid path" before it changes anything. A test
+# fixture can do that to the whole release, so leave those paths out of the box's
+# tree, and say which. The build needs none of them, or it fails here loudly.
+WIN_BAD_PATHS="$(git ls-tree -r --name-only "$COMMIT" \
+    | grep -Ei '(^|/)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.[^/]*)?(/|$)|[<>:"|?*\\]|[. ](/|$)' || true)"
+if [ -n "$WIN_BAD_PATHS" ]; then
+    echo "  leaving out of the box's tree (Windows can't hold these paths):"
+    printf '%s\n' "$WIN_BAD_PATHS" | sed 's/^/    /'
+    { echo '/*'; printf '%s\n' "$WIN_BAD_PATHS" | sed 's/^/!\//'; } > "$STAGE/sparse-checkout"
+    REMOTE_GIT_SCP="$(printf '%s' "$REMOTE_DIR" | tr '\\' '/')/.git/info/sparse-checkout"
+    "${SCP[@]}" "$STAGE/sparse-checkout" "${HOST}:${REMOTE_GIT_SCP}"
+    "${SSH[@]}" "$HOST" "cmd /c \"git -C ${REMOTE_DIR} config core.protectNTFS false && git -C ${REMOTE_DIR} config core.sparseCheckout true && git -C ${REMOTE_DIR} config core.sparseCheckoutCone false\""
+else
+    "${SSH[@]}" "$HOST" "cmd /c \"git -C ${REMOTE_DIR} config --unset-all core.sparseCheckout & git -C ${REMOTE_DIR} config --unset-all core.protectNTFS & exit /b 0\""
+fi
 # Detached at the release commit; untracked files go, ignored ones
 # (node_modules, src-tauri/binaries) stay so bun and the sidecars are reused.
 "${SSH[@]}" "$HOST" "cmd /c \"git -C ${REMOTE_DIR} fetch -q D:\\tmp\\k2-release.bundle +${BUNDLE_REF}:${BUNDLE_REF} && git -C ${REMOTE_DIR} checkout -q -f --detach ${COMMIT} && git -C ${REMOTE_DIR} clean -qfd && del /Q D:\\tmp\\k2-release.bundle\""

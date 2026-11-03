@@ -493,11 +493,13 @@ fn vendor_manifest_matches_the_tree() {
 }
 
 #[test]
-fn the_app_ships_sew_lk_compats_notice() {
+fn the_app_ships_the_notices_the_licences_ask_for() {
     let root = repo_root();
-    let shipped = std::fs::read(root.join("resources/notices/sew-lk-compat-NOTICE")).expect("the copy");
-    let vendored = std::fs::read(root.join("third_party/sew-voice/crates/sew-lk-compat/NOTICE")).expect("Sew's");
-    assert_eq!(shipped, vendored);
     let conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).expect("conf");
-    assert!(conf.contains("../resources/notices/sew-lk-compat-NOTICE"), "not in bundle.resources");
+    for krate in ["sew-lk-compat", "sew-mls-crypto"] {
+        let shipped = std::fs::read(root.join(format!("resources/notices/{krate}-NOTICE"))).expect("the copy");
+        let vendored = std::fs::read(root.join(format!("third_party/sew-voice/crates/{krate}/NOTICE"))).expect("Sew's");
+        assert_eq!(shipped, vendored, "{krate}");
+        assert!(conf.contains(&format!("../resources/notices/{krate}-NOTICE")), "{krate} isn't in bundle.resources");
+    }
 }

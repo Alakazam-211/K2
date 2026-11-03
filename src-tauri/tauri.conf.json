@@ -71,7 +71,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
     },
-    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-lk-compat-NOTICE"],
+    "resources": ["../cli/k2", "../cli/k2so", "../cli/k2-widget-shot.mjs", "../resources/notices/sew-lk-compat-NOTICE", "../resources/notices/sew-mls-crypto-NOTICE"],
     "externalBin": ["binaries/frpc"]
   },
   "plugins": {

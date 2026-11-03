@@ -137,9 +137,9 @@ K2's desktop app can carry voice calls with Sew's client crates (the `native-voi
 
 | | |
 |--|--|
-| **What** | `tauri-plugin-sew-voice`, `sew-call-client` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto`, `sew-proto`, `sew-e2ee` (Apache-2.0) |
+| **What** | `tauri-plugin-sew-voice`, `sew-call-client`, `sew-mls-crypto` (MIT OR Apache-2.0); `sew-lk-compat`, `sew-lkproto`, `sew-proto`, `sew-e2ee` (Apache-2.0) |
 | **Upstream** | Alakazam Labs, Sew |
-| **Notice** | `sew-lk-compat` holds code ported from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). Its NOTICE ships in the app as `resources/notices/sew-lk-compat-NOTICE`. Not affiliated with or endorsed by LiveKit, Inc. |
+| **Notice** | `sew-lk-compat` holds code ported from LiveKit (Apache-2.0, Copyright LiveKit, Inc.). Its NOTICE ships in the app as `resources/notices/sew-lk-compat-NOTICE`. Not affiliated with or endorsed by LiveKit, Inc. `sew-mls-crypto` holds code derived from openmls_rust_crypto (MIT, Copyright OpenMLS Authors); its NOTICE ships as `resources/notices/sew-mls-crypto-NOTICE`. |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crates do **not** relicense the product. |
 
 ## Third-party: objc2 (MIT)

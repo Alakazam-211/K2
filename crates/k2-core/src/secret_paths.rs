@@ -138,6 +138,7 @@ pub struct AttachmentScan {
 /// a person pays for a false alarm here and a mail can't be recalled:
 /// - it reads the whole file, however big, and a NUL doesn't end the search for
 ///   tokens;
+/// - it knows other services' token shapes ([`outbound_token_present`]);
 /// - `password:` counts only with something shaped like a value after it, so
 ///   "The password: field is required." passes.
 pub fn scan_attachment(rel: &str, bytes: &[u8]) -> AttachmentScan {
@@ -157,7 +158,7 @@ pub fn scan_attachment(rel: &str, bytes: &[u8]) -> AttachmentScan {
     if is_git_config(rel) && git_config_text_has_login(&text) {
         return found(SecretHit::Content);
     }
-    if token_present(&text) || (read_as_text && value_assignment_present(&text)) {
+    if outbound_token_present(&text) || (read_as_text && value_assignment_present(&text)) {
         return found(SecretHit::Content);
     }
     AttachmentScan { hit: None, read_as_text }
@@ -275,52 +276,91 @@ pub fn content_has_credential_str(text: &str) -> bool {
         || api_key_assignment_present(text)
 }
 
-/// A credential by its shape alone: nothing about the line around it matters.
+/// A credential by its shape alone, for every user of this list (clone,
+/// Thread attachments, downloads): nothing about the line around it matters.
 fn token_present(text: &str) -> bool {
     jwt_present(text)
         || gh_token_present(text)
         || text.contains("service_role")
         || text.contains("PRIVATE KEY")
-        || aws_key_present(text)
-        || ["sk-ant-", "sk-proj-", "sk_live_", "rk_live_", "xoxb-", "xoxp-", "xoxa-", "xoxs-", "k2skn_", "k2rs_"]
-            .iter()
-            .any(|p| prefixed_token_present(text, p))
 }
 
-/// `prefix` then at least 16 token characters.
+/// [`token_present`] plus other services' token shapes, for a file leaving in
+/// an email only. They aren't in the shared list: a false hit here is a refusal
+/// with a next step, while in a clone it silently drops a source file.
+fn outbound_token_present(text: &str) -> bool {
+    token_present(text)
+        || aws_key_present(text)
+        || ["sk-ant-", "sk-proj-", "sk_live_", "rk_live_", "xoxb-", "xoxp-", "xoxa-", "xoxs-"]
+            .iter()
+            .any(|p| prefixed_token_present(text, p))
+        || ["k2skn_", "k2rs_"].iter().any(|p| k2_token_present(text, p))
+}
+
+/// `prefix` then at least 16 token characters, a digit among them: placeholder
+/// words (`xoxb-your-bot-token-goes-here`) have none.
 fn prefixed_token_present(text: &str, prefix: &str) -> bool {
     text.match_indices(prefix).any(|(i, _)| {
-        text[i + prefix.len()..]
-            .bytes()
-            .take_while(|b| is_b64url(*b))
-            .take(16)
-            .count()
-            >= 16
+        let run = text[i + prefix.len()..].bytes().take_while(|b| is_b64url(*b)).take(64);
+        let (mut n, mut digit) = (0, false);
+        for b in run {
+            n += 1;
+            digit |= b.is_ascii_digit();
+        }
+        n >= 16 && digit
     })
 }
 
-/// `AKIA` or `ASIA` then 16 upper-case letters or digits.
+/// A K2 token: `prefix` then exactly its 43 base62 characters. An identifier
+/// like `k2rs_token_is_refused` has underscores.
+fn k2_token_present(text: &str, prefix: &str) -> bool {
+    text.match_indices(prefix).any(|(i, _)| {
+        let n = text[i + prefix.len()..].bytes().take_while(|b| is_b64url(*b)).take(44);
+        n.clone().count() == 43 && n.clone().all(|b| b.is_ascii_alphanumeric())
+    })
+}
+
+/// `AKIA` or `ASIA` then 16 upper-case letters or digits, unless it's the kind
+/// of key documentation prints (`AKIAIOSFODNN7EXAMPLE`).
 fn aws_key_present(text: &str) -> bool {
     ["AKIA", "ASIA"].iter().any(|prefix| {
         text.match_indices(prefix).any(|(i, _)| {
-            text[i + prefix.len()..]
+            let key: Vec<u8> = text[i + prefix.len()..]
                 .bytes()
                 .take_while(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
                 .take(16)
-                .count()
-                >= 16
+                .collect();
+            key.len() >= 16 && !key.windows(7).any(|w| w == b"EXAMPLE")
         })
     })
 }
 
-/// [`assignment_present`] for the three key words, counting a line only when
-/// what follows looks like a value: one unbroken token of at least 6 characters.
+/// How far past a key word to look for its value. A file can repeat a key word
+/// many times on one long line, and looking at the rest of the line each time
+/// would take hours on a 25 MiB file, in the daemon.
+const ASSIGNMENT_WINDOW: usize = 4096;
+
+/// The first [`ASSIGNMENT_WINDOW`] bytes of `s`, ending on a character.
+fn after_key(s: &str) -> &str {
+    if s.len() <= ASSIGNMENT_WINDOW {
+        return s;
+    }
+    let mut end = ASSIGNMENT_WINDOW;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// [`assignment_present`] for the key words, counting a line only when what
+/// follows looks like a value: one unbroken token of at least 6 characters. A
+/// quote may close the key first, as in JSON.
 fn value_assignment_present(text: &str) -> bool {
     text.lines().any(|line| {
         let lower = line.to_ascii_lowercase();
         ["password", "secret", "api_key", "api-key", "apikey"].iter().any(|key| {
             lower.match_indices(key).any(|(i, _)| {
-                let rest = lower[i + key.len()..].trim_start();
+                let rest = after_key(&lower[i + key.len()..]).trim_start_matches(['"', '\'']).trim_start();
                 let Some(value) = rest.strip_prefix([':', '=']) else { return false };
                 let value = value.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
                 value.len() >= 6 && !value.contains(char::is_whitespace)
@@ -394,7 +434,7 @@ fn line_is_assignment(line: &str, key: &str) -> bool {
     let mut search_from = 0;
     while let Some(off) = lower[search_from..].find(&key) {
         let after = search_from + off + key.len();
-        let rest = lower[after..].trim_start();
+        let rest = after_key(&lower[after..]).trim_start();
         if let Some(stripped) = rest.strip_prefix([':', '=']) {
             if !stripped.trim().is_empty() {
                 return true;
@@ -545,15 +585,25 @@ mod tests {
             (".env.k2", b"\xff\xfe", Some(SecretHit::Content)),
             ("repo/.git/config", b"[remote]\n url = https://me:tok@host/x\n", Some(SecretHit::Content)),
             ("repo/.git/config", b"[remote]\n url = https://host/x\n", None),
-            ("a.txt", b"key AKIAIOSFODNN7EXAMPLE here\n", Some(SecretHit::Content)),
+            ("a.txt", b"key AKIAZ2GH7QK4LMNP8RST here\n", Some(SecretHit::Content)),
+            ("a.txt", b"docs say AKIAIOSFODNN7EXAMPLE\n", None),
             ("a.txt", b"not AKIAshort\n", None),
             ("a.txt", b"sk-ant-api03-abcdefghijklmnop\n", Some(SecretHit::Content)),
-            ("a.txt", b"sk-proj-abcdefghijklmnop\n", Some(SecretHit::Content)),
-            ("a.txt", b"sk_live_abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk-proj-abcd1234efgh5678\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk_live_abcd1234efgh5678\n", Some(SecretHit::Content)),
+            ("a.txt", b"sk_live_your_key_goes_here\n", None),
             ("a.txt", b"xoxb-1234567890-abcdefgh\n", Some(SecretHit::Content)),
-            ("a.txt", b"k2skn_abcdefghijklmnop\n", Some(SecretHit::Content)),
-            ("a.txt", b"k2rs_abcdefghijklmnop\n", Some(SecretHit::Content)),
+            ("a.txt", b"xoxb-your-bot-token-goes-here\n", None),
+            ("a.txt", b"k2skn_0123456789abcdefghijABCDEFGHIJ0123456789a\n", Some(SecretHit::Content)),
+            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789a\n", Some(SecretHit::Content)),
+            ("a.txt", b"fn k2rs_token_is_refused_when_it_has_expired_long_ago_ok() {}\n", None),
+            ("a.txt", b"k2rs_abcdefghijklmnop\n", None),
+            ("a.txt", b"k2rs_0123456789abcdefghijABCDEFGHIJ0123456789abc\n", None),
             ("a.txt", b"sk-ant- is a prefix\n", None),
+            // JSON, where a quote closes the key first.
+            ("a.json", b"{ \"password\": \"hunter2hunter2\", \"x\": 1 }\n", Some(SecretHit::Content)),
+            ("a.json", b"{ 'api_key' : 'abcd1234' }\n", Some(SecretHit::Content)),
+            ("a.json", b"{ \"secret\": true }\n", None),
         ];
         for (rel, bytes, want) in cases {
             let scan = scan_attachment(rel, bytes);
@@ -576,12 +626,51 @@ mod tests {
         assert!(!scan.read_as_text);
     }
 
-    /// The new shared patterns reach the file check clone and Threads use.
+    /// The list clone and Threads use takes the new folders, not the new token
+    /// shapes: a false hit there drops a source file from a clone.
     #[test]
-    fn the_shared_list_knows_the_new_folders_and_tokens() {
-        assert!(is_secret_rel(".aws/credentials"));
-        assert!(is_secret_rel("x/.docker/config.json"));
-        assert!(!is_secret_rel("docker/config.json"));
-        assert!(content_has_credential_str("sk-ant-api03-abcdefghijklmnop"));
+    fn the_shared_list_has_the_folders_but_not_the_outbound_token_shapes() {
+        for rel in [".aws/credentials", "deploy/.aws/template.yaml", "k8s/.kube/README.md", ".gnupg/x", "x/.docker/config.json"] {
+            assert!(is_secret_rel(rel), "{rel}");
+        }
+        for rel in ["docker/config.json", ".aws-sam/build.toml"] {
+            assert!(!is_secret_rel(rel), "{rel}");
+        }
+        for text in [
+            "sk-ant-api03-abcdefghijklmnop",
+            "sk_live_abcd1234efgh5678",
+            "xoxb-1234567890-abcdefgh",
+            "key AKIAZ2GH7QK4LMNP8RST here",
+            "k2rs_0123456789abcdefghijABCDEFGHIJ0123456789a",
+        ] {
+            assert!(!content_has_credential_str(text), "{text}");
+        }
+        assert!(content_has_credential_str("gho_abcdefghijklmnopqrstuvwxyz"));
+        assert!(content_has_credential_str("password = x"), "the shared rule is unchanged");
+    }
+
+    /// A key word repeated all along one long line used to take hours, in the
+    /// daemon. The file below took about 29 minutes before the window.
+    #[test]
+    fn a_pathological_file_scans_in_seconds() {
+        let mut file = "secret:a b ".repeat((1 << 20) / 11).into_bytes();
+        file.extend(std::iter::repeat(b' ').take(24 * 1024 * 1024));
+        let started = std::time::Instant::now();
+        let scan = scan_attachment("big.txt", &file);
+        let took = started.elapsed();
+        assert_eq!(scan.hit, None);
+        assert!(took.as_secs() < 60, "took {took:?}");
+        let shared = format!("secret:{}", " ".repeat(ASSIGNMENT_WINDOW + 1)).repeat(200);
+        let started = std::time::Instant::now();
+        assert!(!content_has_credential_str(&shared));
+        assert!(started.elapsed().as_secs() < 60, "the shared rule is bounded too");
+        // A value past the window isn't seen, one inside it is, and a window
+        // never cuts a character.
+        let far = format!("password:{}hunter2hunter2\n", " ".repeat(ASSIGNMENT_WINDOW));
+        assert_eq!(scan_attachment("a.txt", far.as_bytes()).hit, None);
+        let near = format!("password:{}hunter2hunter2\n", " ".repeat(100));
+        assert_eq!(scan_attachment("a.txt", near.as_bytes()).hit, Some(SecretHit::Content));
+        let wide = format!("password:{}", "é".repeat(ASSIGNMENT_WINDOW));
+        assert_eq!(scan_attachment("a.txt", wide.as_bytes()).hit, Some(SecretHit::Content));
     }
 }

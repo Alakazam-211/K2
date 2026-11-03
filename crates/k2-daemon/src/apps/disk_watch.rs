@@ -736,12 +736,54 @@ impl EngineSeeds for LiveEngine {
     }
 }
 
+/// Hashes per `seeds-gc` call. Each call answers inside its timeout, and the
+/// list is checked against the DB again between calls: a sweep can run for
+/// minutes, and a rebuild of the same source can bring a hash back.
+pub const SEEDS_GC_BATCH: usize = 8;
+
+/// Ask the engine to remove `list`, a batch at a time, dropping any hash
+/// that has a row again or is kept now. Stops at the first error: a hash not
+/// asked for stays as an orphan for the next sweep.
+pub(super) fn gc_in_batches(engine: &dyn EngineSeeds, list: &[String]) -> (k2_root_proto::engine::SeedsGcAnswer, Option<String>) {
+    let mut all = k2_root_proto::engine::SeedsGcAnswer::default();
+    for chunk in list.chunks(SEEDS_GC_BATCH) {
+        let now_true = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::seed_hashes(&conn).and_then(|rows| Ok((rows, store::referenced_seeds(&conn, store::SWEEP_KEEP_DEPLOYMENTS)?)))
+        };
+        let (rows, keep) = match now_true {
+            Ok(v) => v,
+            Err(e) => return (all, Some(format!("keep set: {e}"))),
+        };
+        let batch: Vec<String> = chunk.iter().filter(|h| !rows.contains(*h) && !keep.contains(*h)).cloned().collect();
+        if batch.is_empty() {
+            continue;
+        }
+        match engine.gc(&batch) {
+            Ok(a) => {
+                all.removed.extend(a.removed);
+                all.skipped.extend(a.skipped);
+                all.absent.extend(a.absent);
+                all.freed_bytes = all.freed_bytes.saturating_add(a.freed_bytes);
+            }
+            Err(e) => return (all, Some(e)),
+        }
+    }
+    (all, None)
+}
+
 /// What one sweep did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SweepReport {
+    /// Fully freed: tree and row gone.
     pub seeds: Vec<String>,
+    /// `seeds`' size. Only what really went.
     pub bytes: u64,
+    /// `(hash, why)`: a tree that couldn't be moved (nothing changed) or
+    /// couldn't be deleted (its row is gone, the rest goes at the next boot).
+    pub failed: Vec<(String, String)>,
     pub engine_removed: Vec<String>,
     pub engine_skipped: Vec<String>,
     pub engine_freed_bytes: u64,
@@ -753,7 +795,13 @@ pub struct SweepReport {
 /// and for each detach (a rename and a row delete); every tree is deleted
 /// with the lock released.
 pub fn run_sweep(now: i64, engine: &dyn EngineSeeds) -> SweepReport {
+    run_sweep_with(now, engine, &k2_core::deploy::seed::remove_detached)
+}
+
+fn run_sweep_with(now: i64, engine: &dyn EngineSeeds, remove: &dyn Fn(&std::path::Path) -> Result<(), String>) -> SweepReport {
     let mut r = SweepReport::default();
+    // Swept but not deleted: the engine's copy still goes.
+    let mut undeleted: Vec<String> = Vec::new();
     let picks = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -774,12 +822,18 @@ pub fn run_sweep(now: i64, engine: &dyn EngineSeeds) -> SweepReport {
             store::detach_seed(&conn, &s.hash, now, store::SWEEP_MAX_AGE_SECS, store::SWEEP_KEEP_DEPLOYMENTS)
         };
         match aside {
-            Ok(Some(p)) => {
-                k2_core::deploy::seed::remove_detached(&p);
-                r.bytes = r.bytes.saturating_add(s.size_bytes.max(0) as u64);
-                r.seeds.push(s.hash);
-            }
-            Ok(None) => {}
+            Ok(store::Detach::Moved(p)) => match remove(&p) {
+                Ok(()) => {
+                    r.bytes = r.bytes.saturating_add(s.size_bytes.max(0) as u64);
+                    r.seeds.push(s.hash);
+                }
+                Err(e) => {
+                    undeleted.push(s.hash.clone());
+                    r.failed.push((s.hash, e));
+                }
+            },
+            Ok(store::Detach::Kept) => {}
+            Ok(store::Detach::Failed(e)) => r.failed.push((s.hash, e)),
             Err(e) => {
                 r.error = Some(format!("detach {}: {e}", s.hash));
                 break;
@@ -789,33 +843,27 @@ pub fn run_sweep(now: i64, engine: &dyn EngineSeeds) -> SweepReport {
     if engine.can_gc() {
         // The swept hashes, plus engine-only copies no daemon row or kept
         // reference names (orphans).
-        let (rows, keep) = {
+        // A failed read fails this sweep's engine step: with no rows to go
+        // by, every engine copy in its grace would look like an orphan.
+        let read = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let rows: std::collections::BTreeSet<String> =
-                store::list_seeds(&conn).map(|v| v.into_iter().map(|s| s.hash).collect()).unwrap_or_default();
-            (rows, store::referenced_seeds(&conn, store::SWEEP_KEEP_DEPLOYMENTS))
+            store::seed_hashes(&conn).and_then(|rows| Ok((rows, store::referenced_seeds(&conn, store::SWEEP_KEEP_DEPLOYMENTS)?)))
         };
-        match keep {
+        match read {
             Err(e) => r.engine_error = Some(format!("keep set: {e}")),
-            Ok(keep) => {
-                let mut list: Vec<String> = r.seeds.clone();
+            Ok((rows, keep)) => {
+                let mut list: Vec<String> = r.seeds.iter().chain(&undeleted).cloned().collect();
                 for h in engine.hashes() {
                     if !rows.contains(&h) && !keep.contains(&h) && !list.contains(&h) {
                         list.push(h);
                     }
                 }
-                list.retain(|h| !keep.contains(h));
-                if !list.is_empty() {
-                    match engine.gc(&list) {
-                        Ok(a) => {
-                            r.engine_removed = a.removed;
-                            r.engine_skipped = a.skipped;
-                            r.engine_freed_bytes = a.freed_bytes;
-                        }
-                        Err(e) => r.engine_error = Some(e),
-                    }
-                }
+                let (a, err) = gc_in_batches(engine, &list);
+                r.engine_removed = a.removed;
+                r.engine_skipped = a.skipped;
+                r.engine_freed_bytes = a.freed_bytes;
+                r.engine_error = err;
             }
         }
     }
@@ -824,6 +872,7 @@ pub fn run_sweep(now: i64, engine: &dyn EngineSeeds) -> SweepReport {
         json!({
             "seeds": r.seeds.len(), "bytes": r.bytes, "hashes": r.seeds,
             "engine": { "removed": r.engine_removed, "skipped": r.engine_skipped, "freedBytes": r.engine_freed_bytes, "error": r.engine_error },
+            "failed": r.failed,
             "error": r.error,
         }),
     );

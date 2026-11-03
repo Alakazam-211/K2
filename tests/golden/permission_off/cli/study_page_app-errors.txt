@@ -63,6 +63,10 @@ DEPLOY (validate, build, deploy, rollback)
   rollback_crosses_migration (exit 3)
       fix: Deploy a Seed that declares dataDown, or roll the data back
       first. Past deploys: k2 app history <app-id>
+  rollback_seed_gone (exit 3)
+      fix: Go back to a Seed that's still kept (k2 app history <app-id>
+      marks them), or deploy the old code again from its source: k2 app
+      deploy <app-id> <folder>
   seed_corrupt (exit 3)
       fix: Build it again from the folder (k2 app build <folder>) and deploy
       the new hash.

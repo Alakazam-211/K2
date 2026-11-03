@@ -114,8 +114,11 @@ pub fn list_seeds(conn: &Connection) -> rusqlite::Result<Vec<SeedRow>> {
     Ok(v)
 }
 
-/// Seeds still referenced: any App's live or preview Seed, a Seed in one
-/// of an App's last `keep_deployments` deployments (§7.1), a Seed of an
+/// Seeds still referenced: any App's live or preview Seed, the last
+/// `keep_deployments` Seeds that went live and stayed live on an App
+/// (0.46.8, [`went_live_seeds`]: a restart or re-host of the same Seed uses
+/// no place, nor does a deploy that failed or crashed in its watch window,
+/// so a crash loop or a run of bad deploys can't push a rollback target out), a Seed of an
 /// unfinished deployment (`pending` / `starting`), and any Seed a
 /// **pending** held request names (0.46.3, prd-app-resources-disk-guard-v1
 /// §9.1: a held deploy or install carries `seed`, a held `manage` replay
@@ -175,7 +178,9 @@ fn hex_tokens(v: &J, out: &mut std::collections::BTreeSet<String>) {
     }
 }
 
-/// Live, preview and the last `keep_deployments` deployments' Seeds.
+/// Live, preview and the last `keep_deployments` Seeds that went live on
+/// each App. The newest of these is what a rollback with no `--to` goes to
+/// ([`went_live_seeds`] is its pick too), so that target is always kept.
 fn referenced_by_apps(conn: &Connection, keep_deployments: usize) -> rusqlite::Result<std::collections::BTreeSet<String>> {
     let mut out = std::collections::BTreeSet::new();
     let mut st = conn.prepare("SELECT live_seed, preview_seed FROM apps")?;
@@ -185,70 +190,202 @@ fn referenced_by_apps(conn: &Connection, keep_deployments: usize) -> rusqlite::R
         out.extend(a);
         out.extend(b);
     }
-    let mut st = conn.prepare(
-        "SELECT from_seed, to_seed FROM (SELECT from_seed, to_seed, ROW_NUMBER() OVER (PARTITION BY app_id ORDER BY started_at DESC, rowid DESC) AS n FROM deployments) WHERE n <= ?1",
-    )?;
-    let rows = st.query_map(params![keep_deployments as i64], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)))?;
-    for r in rows {
-        let (a, b) = r?;
-        out.extend(a);
-        out.extend(b);
+    let mut st = conn.prepare("SELECT DISTINCT app_id FROM deployments")?;
+    let app_ids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    for app_id in app_ids {
+        out.extend(went_live_seeds(conn, &app_id, keep_deployments)?);
     }
     Ok(out)
 }
 
-/// What the sweep keeps every Seed for (prd-app-resources-disk-guard-v1
-/// §9.1): 30 days unused, and the last 10 deployments of every App.
-pub const SWEEP_MAX_AGE_SECS: i64 = 30 * 86_400;
-pub const SWEEP_KEEP_DEPLOYMENTS: usize = 10;
+/// The `error` of a deployment someone chose to leave (a rollback through
+/// the warm instance, by a person or an agent): it ran fine until then. A
+/// crash in the watch window has `<why> inside the watch window; …` here.
+/// Both have the result `rolled_back`; this text is what tells them apart,
+/// and it is what rows written by earlier releases already hold.
+pub const ROLLED_BACK_BY_CHOICE: &str = "rolled back";
+
+/// Did this deployment go live and hold? A rollback someone chose doesn't
+/// undo that; a crash in the watch window does.
+pub fn stayed_live(d: &DeploymentRow) -> bool {
+    d.live_at.is_some() && (d.result != RESULT_ROLLED_BACK || d.error.as_deref() == Some(ROLLED_BACK_BY_CHOICE))
+}
+
+/// [`stayed_live`] as SQL, over `deployments`' own columns.
+fn stayed_live_sql() -> String {
+    format!("live_at IS NOT NULL AND (result != '{RESULT_ROLLED_BACK}' OR error = '{ROLLED_BACK_BY_CHOICE}')")
+}
+
+/// The Seeds that went live on an App and stayed live, newest first, each
+/// once. A restart, re-host or rollback moves a Seed to the front. A deploy
+/// that never went live isn't here, nor is one that crashed in its watch
+/// window: those take no place and are no rollback target. At most `limit`.
+pub fn went_live_seeds(conn: &Connection, app_id: &str, limit: usize) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn.prepare(&format!(
+        "SELECT to_seed FROM deployments WHERE app_id = ?1 AND to_seed IS NOT NULL AND {} \
+         GROUP BY to_seed ORDER BY MAX(started_at) DESC, MAX(rowid) DESC LIMIT ?2",
+        stayed_live_sql()
+    ))?;
+    let v = st.query_map(params![app_id, limit as i64], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// Would a rollback from `live` to a Seed at `target_revision` cross an
+/// applied data migration with no way down (§7.3)? Then it is refused.
+pub fn crosses_migration(live: &SeedRow, target_revision: i64) -> bool {
+    live.data_revision > target_revision && !live.manifest.get("dataDown").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// A Seed that went live on an App, is still stored and isn't the live one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackTarget {
+    pub seed: String,
+    pub started_at: i64,
+    /// One of the App's last `keep_deployments`: stays until newer deploys
+    /// push it out. Otherwise the sweep frees it when its grace ends.
+    pub kept: bool,
+    /// A rollback to it is refused (`rollback_crosses_migration`).
+    pub crosses_migration: bool,
+}
+
+impl RollbackTarget {
+    /// Safe to name to someone as a place to go back to.
+    pub fn usable(&self) -> bool {
+        self.kept && !self.crosses_migration
+    }
+}
+
+/// An App's [`RollbackTarget`]s, newest first.
+pub fn rollback_targets(conn: &Connection, app_id: &str, live_seed: Option<&str>, keep_deployments: usize) -> rusqlite::Result<Vec<RollbackTarget>> {
+    let kept: std::collections::BTreeSet<String> = went_live_seeds(conn, app_id, keep_deployments)?.into_iter().collect();
+    let live = match live_seed {
+        Some(h) => get_seed(conn, h)?,
+        None => None,
+    };
+    let mut st = conn.prepare(&format!(
+        "SELECT d.to_seed, MAX(d.started_at), s.data_revision FROM deployments d JOIN seeds s ON s.hash = d.to_seed \
+         WHERE d.app_id = ?1 AND {} \
+         GROUP BY d.to_seed ORDER BY MAX(d.started_at) DESC, MAX(d.rowid) DESC",
+        stayed_live_sql()
+    ))?;
+    let rows = st.query_map(params![app_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (seed, started_at, revision) = row?;
+        if live_seed != Some(seed.as_str()) {
+            let crosses = live.as_ref().is_some_and(|l| crosses_migration(l, revision));
+            out.push(RollbackTarget { kept: kept.contains(&seed), crosses_migration: crosses, seed, started_at });
+        }
+    }
+    Ok(out)
+}
+
+/// The newest deployment of this App that went live on `token` (a full hash
+/// or a prefix of 8+ hex characters) whose Seed is no longer stored: how a
+/// rollback tells a Seed that was freed from one that never ran here (a
+/// Seed that only ever failed never ran).
+pub fn freed_deployment_of_seed(conn: &Connection, app_id: &str, token: &str) -> rusqlite::Result<Option<DeploymentRow>> {
+    let t = token.trim().to_ascii_lowercase();
+    if t.len() < 8 || t.len() > 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    conn.query_row(
+        &format!(
+            "SELECT {DEP_COLS} FROM deployments WHERE app_id = ?1 AND to_seed LIKE ?2 AND live_at IS NOT NULL AND to_seed NOT IN (SELECT hash FROM seeds) \
+             ORDER BY started_at DESC, rowid DESC LIMIT 1"
+        ),
+        params![app_id, format!("{t}%")],
+        dep_row,
+    )
+    .optional()
+}
+
+/// Every stored Seed's hash.
+pub fn seed_hashes(conn: &Connection) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    let mut st = conn.prepare("SELECT hash FROM seeds")?;
+    let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// What the sweep keeps a Seed for (prd-app-resources-disk-guard-v1 §9.1;
+/// 0.46.8, Rosson: was 30 days and 10): a Seed goes once it is past the
+/// last 5 that went live on its App and 3 days past its last use, the later
+/// of its `last_used_at` and when it last stopped serving ([`replaced_at`]).
+pub const SWEEP_MAX_AGE_SECS: i64 = 3 * 86_400;
+pub const SWEEP_KEEP_DEPLOYMENTS: usize = 5;
+
+/// When each Seed last stopped serving: the moment a later deployment went
+/// live in its place. `last_used_at` is stamped when a Seed is built or
+/// starts, so a Seed live for a month has a month-old stamp on the day it is
+/// replaced. Read from the rows, not stamped, so it holds for Seeds replaced
+/// before this release too.
+fn replaced_at(conn: &Connection) -> rusqlite::Result<std::collections::HashMap<String, i64>> {
+    let mut st = conn.prepare("SELECT from_seed, MAX(live_at) FROM deployments WHERE live_at IS NOT NULL AND from_seed IS NOT NULL GROUP BY from_seed")?;
+    let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
 
 /// The Seeds the sweep would remove now: not referenced
-/// ([`referenced_seeds`]) and unused for `max_age_secs`. Reads only (the
-/// caller holds the DB lock for this pick, never for the deletes).
+/// ([`referenced_seeds`]) and past `max_age_secs` since their last use.
+/// Reads only (the caller holds the DB lock for this pick, never for the
+/// deletes).
 pub fn sweep_candidates(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<SeedRow>> {
     let keep = referenced_seeds(conn, keep_deployments)?;
-    Ok(list_seeds(conn)?.into_iter().filter(|s| !keep.contains(&s.hash) && now - s.last_used_at >= max_age_secs).collect())
+    let replaced = replaced_at(conn)?;
+    Ok(list_seeds(conn)?
+        .into_iter()
+        .filter(|s| !keep.contains(&s.hash) && now - s.last_used_at.max(replaced.get(&s.hash).copied().unwrap_or(i64::MIN)) >= max_age_secs)
+        .collect())
+}
+
+/// What [`detach_seed`] did with one candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Detach {
+    /// Out of the store and its row gone. The caller removes this tree.
+    Moved(std::path::PathBuf),
+    /// No longer a candidate (a deploy started using it since the pick).
+    Kept,
+    /// Still a candidate, but its tree couldn't be moved: nothing changed.
+    Failed(String),
 }
 
 /// Take one candidate out of the store, fast enough to run under the DB
 /// lock: check again that it is still a candidate (a deploy may have
 /// started using it since the pick), move its tree aside (one rename, out
 /// of the store's name: a build of the same tree stores a fresh copy), and
-/// delete its row. `Ok(None)` = no longer a candidate (kept). The caller
-/// removes the returned tree with [`super::seed::remove_detached`] **after**
-/// releasing the lock.
-pub fn detach_seed(
-    conn: &Connection,
-    hash: &str,
-    now: i64,
-    max_age_secs: i64,
-    keep_deployments: usize,
-) -> rusqlite::Result<Option<std::path::PathBuf>> {
-    let Some(row) = get_seed(conn, hash)? else { return Ok(None) };
-    if now - row.last_used_at < max_age_secs || referenced_seeds(conn, keep_deployments)?.contains(hash) {
-        return Ok(None);
+/// delete its row. The caller removes a [`Detach::Moved`] tree with
+/// [`super::seed::remove_detached`] **after** releasing the lock.
+pub fn detach_seed(conn: &Connection, hash: &str, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Detach> {
+    let Some(row) = get_seed(conn, hash)? else { return Ok(Detach::Kept) };
+    let replaced: Option<i64> =
+        conn.query_row("SELECT MAX(live_at) FROM deployments WHERE live_at IS NOT NULL AND from_seed = ?1", params![hash], |r| r.get(0))?;
+    if now - row.last_used_at.max(replaced.unwrap_or(i64::MIN)) < max_age_secs || referenced_seeds(conn, keep_deployments)?.contains(hash) {
+        return Ok(Detach::Kept);
     }
     let aside = match super::seed::detach_tree(hash) {
         Ok(p) => p,
-        Err(e) => {
-            crate::log_debug!("[seeds] sweep kept {hash}: {}", e.message);
-            return Ok(None);
-        }
+        Err(e) => return Ok(Detach::Failed(e.message)),
     };
     conn.execute("DELETE FROM seeds WHERE hash = ?1", params![hash])?;
-    Ok(Some(aside))
+    Ok(Detach::Moved(aside))
 }
 
-/// The sweep in one call, on the caller's connection: pick, detach,
-/// remove. Returns the hashes removed. The daemon's daily sweep does the
-/// same steps but holds the shared DB lock only for the pick and each
-/// detach, never while deleting a tree (`apps::disk_watch`).
-pub fn sweep_seeds(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<String>> {
+/// The sweep in one call, for tests: pick, detach, remove. Returns the
+/// hashes removed. The daemon's sweep does the same steps but holds the
+/// shared DB lock only for the pick and each detach, never while deleting a
+/// tree (`apps::disk_watch`).
+#[cfg(test)]
+pub(crate) fn sweep_seeds(conn: &Connection, now: i64, max_age_secs: i64, keep_deployments: usize) -> rusqlite::Result<Vec<String>> {
     let mut removed = Vec::new();
     for s in sweep_candidates(conn, now, max_age_secs, keep_deployments)? {
-        if let Some(aside) = detach_seed(conn, &s.hash, now, max_age_secs, keep_deployments)? {
-            super::seed::remove_detached(&aside);
-            removed.push(s.hash);
+        match detach_seed(conn, &s.hash, now, max_age_secs, keep_deployments)? {
+            Detach::Moved(aside) => {
+                super::seed::remove_detached(&aside).unwrap();
+                removed.push(s.hash);
+            }
+            Detach::Kept => {}
+            Detach::Failed(e) => panic!("detach {}: {e}", s.hash),
         }
     }
     Ok(removed)
@@ -515,6 +652,8 @@ pub fn set_isolation(conn: &Connection, app_id: &str, isolation: &str) -> rusqli
 }
 
 pub fn delete_app(conn: &Connection, app_id: &str) -> rusqlite::Result<bool> {
+    // It served until now, and the rows that would say so are about to go.
+    conn.execute("UPDATE seeds SET last_used_at = ?2 WHERE hash = (SELECT live_seed FROM apps WHERE app_id = ?1)", params![app_id, super::now()])?;
     conn.execute("DELETE FROM deployments WHERE app_id = ?1", params![app_id])?;
     Ok(conn.execute("DELETE FROM apps WHERE app_id = ?1", params![app_id])? > 0)
 }
@@ -784,7 +923,7 @@ pub(crate) mod tests {
     }
 
     /// 0.46.3 (prd-app-resources-disk-guard-v1 §9.1, G7): the sweep keeps
-    /// live, preview, the last 10 deployments, unfinished deployments and
+    /// live, preview, the last Seeds that went live, unfinished deployments and
     /// every Seed a pending held request names (`seed`, a `manage`
     /// replay's `body.seed`, an 8+ hex prefix); a decided request keeps
     /// nothing. It removes the rest, both tree and row.
@@ -817,8 +956,8 @@ pub(crate) mod tests {
         )
         .unwrap();
         set_live(&c, "jim", Some(&live), None).unwrap();
-        // 11 finished deployments of other Seeds push `unfinished` out of the
-        // last 10; it is kept only because its own deployment is pending.
+        // `unfinished` never went live; it is kept only because its own
+        // deployment is pending.
         let dep = insert_deployment(
             &c,
             &NewDeployment { app_id: "jim", kind: KIND_DEPLOY, from_seed: None, to_seed: Some(&unfinished), commit_ref: None, actor: "owner", reason: None },
@@ -845,7 +984,7 @@ pub(crate) mod tests {
         assert_eq!(got, want, "only the decided request's Seed and the unreferenced one");
         // A deploy starts using `gone` between the pick and the detach: kept.
         touch_seed(&c, &gone, now).unwrap();
-        assert_eq!(detach_seed(&c, &gone, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), None);
+        assert_eq!(detach_seed(&c, &gone, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Kept);
         assert!(super::super::seed::seed_path(&gone).is_dir());
         let removed = sweep_seeds(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap();
         assert_eq!(removed, vec![denied.clone()]);
@@ -864,6 +1003,454 @@ pub(crate) mod tests {
         // No held-request table: an error, never "nothing pending".
         c.execute_batch("DROP TABLE app_widenings").unwrap();
         assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).is_err());
+    }
+
+    fn app(c: &Connection, id: &str, manifest_id: &str) {
+        insert_app(
+            c,
+            &NewApp {
+                app_id: id,
+                service_id: &format!("svc-{id}"),
+                seed_id: Some(manifest_id),
+                owner_workspace: "ws",
+                isolation: "process",
+                memory_limit_bytes: None,
+                front_port: 40000,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+    }
+
+    /// One deployment row with its own time. Live, superseded and
+    /// rolled-back rows went live; a failed one never did. A rolled-back row
+    /// here is a crash in the watch window, with `auto_rollback`'s text.
+    fn dep(c: &Connection, app_id: &str, kind: &str, seed: &str, at: i64, result: &str) -> String {
+        dep_from(c, app_id, kind, None, seed, at, result)
+    }
+
+    /// [`dep`] replacing `from`, as a real deployment row does.
+    fn dep_from(c: &Connection, app_id: &str, kind: &str, from: Option<&str>, seed: &str, at: i64, result: &str) -> String {
+        let d = insert_deployment(c, &NewDeployment { app_id, kind, from_seed: from, to_seed: Some(seed), commit_ref: None, actor: "owner", reason: None }).unwrap();
+        let live_at = [RESULT_LIVE, RESULT_SUPERSEDED, RESULT_ROLLED_BACK].contains(&result).then_some(at);
+        c.execute("UPDATE deployments SET started_at = ?2, live_at = ?3, result = ?4 WHERE id = ?1", params![d, at, live_at, result]).unwrap();
+        if result == RESULT_ROLLED_BACK {
+            set_result(c, &d, RESULT_ROLLED_BACK, Some("exited inside the watch window; rolled back to abcdef012345")).unwrap();
+        }
+        d
+    }
+
+    /// 0.46.8 (Rosson: "retain the most recent 5 seeds"): the box that
+    /// reached 255 Seeds. Previews and soak deploys of one manifest id on
+    /// ONE App row come down to its last 5, tree and row; the sweep never
+    /// looks at the manifest id. `preview_seed` keeps only the Seed it
+    /// names now, not every Seed that ever was a preview.
+    #[test]
+    fn a_box_with_255_seeds_on_one_manifest_id_comes_down_to_the_last_5() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let now = old + 10_000 + SWEEP_MAX_AGE_SECS;
+        app(&c, "site", "site");
+        let seeds: Vec<String> = (0..255).map(|i| store_tree(&h, &c, &format!("s{i}"), &format!("build {i}"), old + i)).collect();
+        assert!(seeds.iter().all(|s| get_seed(&c, s).unwrap().unwrap().seed_id == "jim"), "one manifest id across every Seed");
+        for (i, s) in seeds.iter().enumerate() {
+            let from = i.checked_sub(1).map(|p| seeds[p].as_str());
+            dep_from(&c, "site", KIND_DEPLOY, from, s, old + i as i64, RESULT_SUPERSEDED);
+        }
+        let live = seeds[254].clone();
+        set_live(&c, "site", Some(&live), None).unwrap();
+        let preview = seeds[100].clone();
+        c.execute("UPDATE apps SET preview_seed = ?1 WHERE app_id = 'site'", params![preview]).unwrap();
+
+        let t = std::time::Instant::now();
+        let picks = sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        eprintln!("[sweep] the pick, under the lock in the daemon: {:?}", t.elapsed());
+        assert_eq!(picks.len(), 255 - 5 - 1, "all but the last 5 and the preview");
+        // The daemon's loop: lock, detach; unlock, delete the tree.
+        let mut longest = std::time::Duration::ZERO;
+        let mut removed = Vec::new();
+        for s in &picks {
+            let t = std::time::Instant::now();
+            let Detach::Moved(aside) = detach_seed(&c, &s.hash, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap() else {
+                panic!("{} is still a candidate", s.hash)
+            };
+            longest = longest.max(t.elapsed());
+            super::super::seed::remove_detached(&aside).unwrap();
+            removed.push(s.hash.clone());
+        }
+        eprintln!("[sweep] longest detach, under the lock in the daemon: {longest:?}");
+        assert_eq!(removed.len(), 249);
+
+        let mut want: std::collections::BTreeSet<String> = seeds[250..].iter().cloned().collect();
+        want.insert(preview.clone());
+        assert_eq!(seed_hashes(&c).unwrap(), want, "the rows");
+        for s in &seeds {
+            assert_eq!(super::super::seed::seed_path(s).is_dir(), want.contains(s), "the tree of {s}");
+        }
+        let left: Vec<String> = std::fs::read_dir(super::super::seeds_dir())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| !want.contains(n))
+            .collect();
+        assert!(left.is_empty(), "nothing else stays in the store: {left:?}");
+        // Rollback reaches the last 4, plus the preview while it is stored
+        // (a place to go, not one K2 promises to keep).
+        let targets = rollback_targets(&c, "site", Some(&live), SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(targets.iter().map(|t| t.seed.clone()).collect::<Vec<_>>(), vec![seeds[253].clone(), seeds[252].clone(), seeds[251].clone(), seeds[250].clone(), preview.clone()]);
+        assert_eq!(targets.iter().map(|t| t.kept).collect::<Vec<_>>(), vec![true, true, true, true, false]);
+        // Clearing the preview lets it go at the next sweep.
+        c.execute("UPDATE apps SET preview_seed = NULL WHERE app_id = 'site'", []).unwrap();
+        assert_eq!(sweep_seeds(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), vec![preview]);
+    }
+
+    /// Previews on separate App rows with one manifest id: each App row
+    /// counts for itself, so its Seeds stay until the App is uninstalled;
+    /// then they go like any other unused Seed.
+    #[test]
+    fn app_rows_sharing_a_manifest_id_each_keep_their_own_and_uninstall_frees_them() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let now = super::super::now();
+        let mut lives = Vec::new();
+        for a in 0..8 {
+            let id = format!("preview-{a}");
+            app(&c, &id, "site");
+            let s = store_tree(&h, &c, &id, &format!("p{a}"), old);
+            dep(&c, &id, KIND_DEPLOY, &s, old, RESULT_LIVE);
+            set_live(&c, &id, Some(&s), None).unwrap();
+            lives.push(s);
+        }
+        assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty(), "every App row keeps its own");
+        for a in 0..6 {
+            delete_app(&c, &format!("preview-{a}")).unwrap();
+        }
+        assert!(sweep_candidates(&c, now + 60, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty(), "it served until the uninstall: the grace runs from there");
+        let later = now + 60 + SWEEP_MAX_AGE_SECS;
+        let removed: std::collections::BTreeSet<String> = sweep_seeds(&c, later, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().collect();
+        assert_eq!(removed, lives[..6].iter().cloned().collect(), "an uninstalled App's Seeds go");
+    }
+
+    /// Restarts and re-hosts of the live Seed use no place, and neither do
+    /// failed deploys: crash restarts or a run of bad deploys never lose the
+    /// Seed `k2 app rollback` would go to. A failed Seed itself goes once
+    /// unused for the grace.
+    #[test]
+    fn restarts_and_failures_never_push_the_rollback_target_out() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let now = old + 1_000 + SWEEP_MAX_AGE_SECS;
+        app(&c, "jim", "jim");
+        let good: Vec<String> = (0..7).map(|i| store_tree(&h, &c, &format!("g{i}"), &format!("good {i}"), old)).collect();
+        for (i, s) in good.iter().enumerate() {
+            dep(&c, "jim", KIND_DEPLOY, s, old + i as i64, RESULT_SUPERSEDED);
+        }
+        set_live(&c, "jim", Some(&good[6]), None).unwrap();
+        for i in 0..60 {
+            dep(&c, "jim", if i % 2 == 0 { KIND_RESTART } else { KIND_REHOST }, &good[6], old + 100 + i, RESULT_SUPERSEDED);
+        }
+        let bad: Vec<String> = (0..6).map(|i| store_tree(&h, &c, &format!("b{i}"), &format!("bad {i}"), old)).collect();
+        for (i, s) in bad.iter().enumerate() {
+            dep(&c, "jim", KIND_DEPLOY, s, old + 200 + i as i64, RESULT_FAILED);
+        }
+        let removed: std::collections::BTreeSet<String> = sweep_seeds(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().collect();
+        let mut want: std::collections::BTreeSet<String> = good[..2].iter().cloned().collect();
+        want.extend(bad.iter().cloned());
+        assert_eq!(removed, want, "the two oldest good Seeds and the failed ones");
+        assert_eq!(went_live_seeds(&c, "jim", 2).unwrap(), vec![good[6].clone(), good[5].clone()], "the rollback target, past 66 rows");
+        assert!(super::super::seed::seed_path(&good[5]).is_dir());
+    }
+
+    /// 0.46.8: the grace runs from when a Seed last served. One live since
+    /// a month ago and replaced by five quick deploys today has a month-old
+    /// stamp, but it served until today: often the last known good version.
+    /// Read from the rows, so it holds for what was replaced before this
+    /// release. A Seed replaced long ago still goes.
+    #[test]
+    fn a_seed_that_served_until_today_gets_its_three_days() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let today = old + 30 * 86_400;
+        app(&c, "jim", "jim");
+        let earlier = store_tree(&h, &c, "earlier", "e", old);
+        let long = store_tree(&h, &c, "long", "l", old);
+        dep_from(&c, "jim", KIND_DEPLOY, None, &earlier, old, RESULT_SUPERSEDED);
+        dep_from(&c, "jim", KIND_DEPLOY, Some(&earlier), &long, old + 1, RESULT_SUPERSEDED);
+        let quick: Vec<String> = (0..5).map(|i| store_tree(&h, &c, &format!("q{i}"), &format!("quick {i}"), today - 300 + i)).collect();
+        let mut from = long.clone();
+        for (i, s) in quick.iter().enumerate() {
+            dep_from(&c, "jim", KIND_DEPLOY, Some(&from), s, today - 300 + i as i64, RESULT_SUPERSEDED);
+            from = s.clone();
+        }
+        set_live(&c, "jim", Some(&quick[4]), None).unwrap();
+        assert_eq!(get_seed(&c, &long).unwrap().unwrap().last_used_at, old, "the old stamp this test is about");
+        assert!(!referenced_seeds(&c, SWEEP_KEEP_DEPLOYMENTS).unwrap().contains(&long), "past the last 5");
+
+        let picks: Vec<String> = sweep_candidates(&c, today, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().map(|s| s.hash).collect();
+        assert_eq!(picks, vec![earlier.clone()], "replaced a month ago: goes. Replaced today: stays");
+        assert_eq!(detach_seed(&c, &long, today, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Kept);
+        assert!(super::super::seed::seed_path(&long).is_dir());
+        // A second before its 3 days from today's replacement, then after.
+        let served_until = today - 300;
+        assert_eq!(detach_seed(&c, &long, served_until + SWEEP_MAX_AGE_SECS - 1, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Kept);
+        let at = served_until + SWEEP_MAX_AGE_SECS;
+        assert!(sweep_candidates(&c, at, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().iter().any(|s| s.hash == long));
+        assert!(matches!(detach_seed(&c, &long, at, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Moved(_)));
+    }
+
+    /// The review's proof, inverted: a Seed that served for 60 days and
+    /// stopped an hour ago isn't picked, and the rollback hint doesn't name
+    /// it (it is stored, but the sweep will take it when its grace ends).
+    /// Everything `usable` names is in the sweep's keep set.
+    #[test]
+    fn a_long_serving_seed_isnt_freed_an_hour_after_it_stopped_serving() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let day = 86_400;
+        let t0 = 1_000_000;
+        let now = t0 + 60 * day;
+        app(&c, "jim", "jim");
+        let long = store_tree(&h, &c, "long", "long serving", t0);
+        dep(&c, "jim", KIND_DEPLOY, &long, t0, RESULT_SUPERSEDED);
+        let mut ds = Vec::new();
+        let mut from = long.clone();
+        for i in 0..5i64 {
+            let at = now - 3600 + i;
+            let s = store_tree(&h, &c, &format!("d{i}"), &format!("new {i}"), at);
+            dep_from(&c, "jim", KIND_DEPLOY, Some(&from), &s, at, RESULT_SUPERSEDED);
+            from = s.clone();
+            ds.push(s);
+        }
+        set_live(&c, "jim", Some(&ds[4]), None).unwrap();
+        assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty(), "it served until an hour ago");
+        assert!(sweep_seeds(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty());
+        assert!(super::super::seed::seed_path(&long).is_dir());
+        let targets = rollback_targets(&c, "jim", Some(&ds[4]), SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        let last = targets.last().unwrap();
+        assert_eq!((last.seed.as_str(), last.kept, last.usable()), (long.as_str(), false, false), "listed as stored, never named as a place to go");
+        let keep = referenced_seeds(&c, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        let usable: Vec<&RollbackTarget> = targets.iter().filter(|t| t.usable()).collect();
+        assert_eq!(usable.len(), 4, "{targets:?}");
+        assert!(usable.iter().all(|t| keep.contains(&t.seed)), "the hint names only what the sweep won't take: {targets:?}");
+        // Its 3 days from when it stopped, not from its old stamp.
+        let picks = sweep_candidates(&c, now - 3600 + 3 * day, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(picks.iter().map(|s| s.hash.as_str()).collect::<Vec<_>>(), vec![long.as_str()]);
+    }
+
+    /// The review's second proof, inverted, through the same store calls the
+    /// supervisor makes: crashed deploys don't take the places of good ones.
+    #[test]
+    fn auto_rolled_back_seeds_dont_take_the_places_of_good_ones() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        app(&c, "jim", "jim");
+        let mk = |n: &str, at: i64| store_tree(&h, &c, n, n, at);
+        let live_row = |kind: &str, from: Option<&str>, to: &str| {
+            let d = insert_deployment(&c, &NewDeployment { app_id: "jim", kind, from_seed: from, to_seed: Some(to), commit_ref: None, actor: "owner", reason: None }).unwrap();
+            set_went_live(&c, &d, 0).unwrap();
+            d
+        };
+        let good: Vec<String> = (0..4).map(|i| mk(&format!("good{i}"), 1_000)).collect();
+        for s in &good {
+            let d = live_row(KIND_DEPLOY, None, s);
+            set_result(&c, &d, RESULT_SUPERSEDED, None).unwrap();
+        }
+        let p = mk("stable", 1_000);
+        live_row(KIND_DEPLOY, None, &p);
+        set_live(&c, "jim", Some(&p), None).unwrap();
+        let mut bad = Vec::new();
+        for i in 0..4 {
+            let b = mk(&format!("bad{i}"), 1_000);
+            let d = live_row(KIND_DEPLOY, Some(&p), &b);
+            set_result(&c, &d, RESULT_ROLLED_BACK, Some("crashed inside the watch window; rolled back to stable")).unwrap();
+            live_row(KIND_AUTO_ROLLBACK, Some(&b), &p);
+            bad.push(b);
+        }
+        let top = went_live_seeds(&c, "jim", SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(top, vec![p.clone(), good[3].clone(), good[2].clone(), good[1].clone(), good[0].clone()]);
+        let now = crate::deploy::now();
+        assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty(), "the good ones are kept and the crashed ones just stopped");
+        let later = now + 5 + SWEEP_MAX_AGE_SECS;
+        let picks: std::collections::BTreeSet<String> = sweep_candidates(&c, later, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().map(|s| s.hash).collect();
+        assert_eq!(picks, bad.iter().cloned().collect(), "after the grace only the crashed ones go");
+    }
+
+    /// A rollback someone chose isn't a crash: the deploy they left ran fine,
+    /// so it keeps its place and stays a target. The row's text tells them
+    /// apart, with the same `rolled_back` result on both.
+    #[test]
+    fn a_deploy_someone_chose_to_leave_stays_a_good_rollback_point() {
+        let c = conn();
+        app(&c, "jim", "jim");
+        for ch in ['0', '1', '2', '3', '4', '5', '6'] {
+            upsert_seed(&c, &seed(ch, 1)).unwrap();
+        }
+        let hash = |ch: char| seed(ch, 1).hash;
+        for (i, ch) in ['0', '1', '2', '3', '4', '5'].into_iter().enumerate() {
+            dep(&c, "jim", KIND_DEPLOY, &hash(ch), 10 + i as i64, RESULT_SUPERSEDED);
+        }
+        // Left by choice: '6' ran, and someone went back from it to '5'.
+        let left = dep(&c, "jim", KIND_DEPLOY, &hash('6'), 20, RESULT_LIVE);
+        set_result(&c, &left, RESULT_ROLLED_BACK, Some(ROLLED_BACK_BY_CHOICE)).unwrap();
+        // `retire` sets the same result again later, with no text.
+        set_result(&c, &left, RESULT_ROLLED_BACK, None).unwrap();
+        dep(&c, "jim", KIND_ROLLBACK, &hash('5'), 21, RESULT_LIVE);
+        set_live(&c, "jim", Some(&hash('5')), None).unwrap();
+        assert!(stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
+        assert_eq!(went_live_seeds(&c, "jim", 2).unwrap(), vec![hash('5'), hash('6')], "a plain rollback goes back to the one left");
+        assert_eq!(went_live_seeds(&c, "jim", 5).unwrap().len(), 5);
+        assert!(went_live_seeds(&c, "jim", 5).unwrap().contains(&hash('6')), "it keeps its place");
+        // Same shape, but a crash: no place, no target.
+        c.execute("UPDATE deployments SET error = 'exited inside the watch window; rolled back to x' WHERE id = ?1", params![left]).unwrap();
+        assert!(!stayed_live(&get_deployment(&c, &left).unwrap().unwrap()));
+        assert!(!went_live_seeds(&c, "jim", 5).unwrap().contains(&hash('6')));
+        assert!(rollback_targets(&c, "jim", Some(&hash('5')), SWEEP_KEEP_DEPLOYMENTS).unwrap().iter().all(|t| t.seed != hash('6')));
+    }
+
+    /// 0.46.8: a deploy that went live and crashed in its watch window takes
+    /// no place, so four crashing deploys don't push out older good Seeds,
+    /// and it is no rollback target: a plain rollback goes to the last good
+    /// one, not the one that crashed. Its Seed gets the grace from when it
+    /// stopped. A Seed that ran well once and crashed later still counts for
+    /// the run that went well.
+    #[test]
+    fn deploys_rolled_back_take_no_place_and_are_no_target() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let crash_at = old + 30 * 86_400;
+        app(&c, "jim", "jim");
+        let good: Vec<String> = (0..6).map(|i| store_tree(&h, &c, &format!("g{i}"), &format!("good {i}"), old)).collect();
+        let mut from: Option<String> = None;
+        for (i, s) in good.iter().enumerate() {
+            dep_from(&c, "jim", KIND_DEPLOY, from.as_deref(), s, old + i as i64, RESULT_SUPERSEDED);
+            from = Some(s.clone());
+        }
+        let live = good[5].clone();
+        set_live(&c, "jim", Some(&live), None).unwrap();
+        let bad: Vec<String> = (0..4).map(|i| store_tree(&h, &c, &format!("b{i}"), &format!("bad {i}"), old)).collect();
+        for (i, s) in bad.iter().enumerate() {
+            let at = crash_at + i as i64 * 10;
+            dep_from(&c, "jim", KIND_DEPLOY, Some(&live), s, at, RESULT_ROLLED_BACK);
+            dep_from(&c, "jim", KIND_AUTO_ROLLBACK, Some(s), &live, at + 1, RESULT_LIVE);
+        }
+        // good[2] is deployed again and crashes: its earlier run still counts.
+        dep_from(&c, "jim", KIND_DEPLOY, Some(&live), &good[2], crash_at + 100, RESULT_ROLLED_BACK);
+        dep_from(&c, "jim", KIND_AUTO_ROLLBACK, Some(&good[2]), &live, crash_at + 101, RESULT_LIVE);
+
+        assert_eq!(went_live_seeds(&c, "jim", 5).unwrap(), vec![good[5].clone(), good[4].clone(), good[3].clone(), good[2].clone(), good[1].clone()]);
+        assert_eq!(went_live_seeds(&c, "jim", 2).unwrap(), vec![live.clone(), good[4].clone()], "a plain rollback: the last good one");
+        let targets = rollback_targets(&c, "jim", Some(&live), SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert!(targets.iter().all(|t| !bad.contains(&t.seed)), "a crashed deploy is no target: {targets:?}");
+        // The crashed Seeds served until their rollback: not freed at once.
+        let picks: Vec<String> = sweep_candidates(&c, crash_at + 200, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().map(|s| s.hash).collect();
+        assert_eq!(picks, vec![good[0].clone()], "only the oldest good Seed, replaced long ago");
+        let later = crash_at + 200 + SWEEP_MAX_AGE_SECS;
+        let removed: std::collections::BTreeSet<String> = sweep_seeds(&c, later, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().into_iter().collect();
+        let mut want: std::collections::BTreeSet<String> = bad.iter().cloned().collect();
+        want.insert(good[0].clone());
+        assert_eq!(removed, want, "after the grace the crashed ones go; the good ones stay");
+    }
+
+    /// What a person is told they can go back to: `usable` names only Seeds
+    /// K2 is keeping and a rollback would accept. One past the last 5 is
+    /// stored but next to be freed; one across a migration is refused.
+    #[test]
+    fn rollback_targets_say_what_is_kept_and_what_crosses_a_migration() {
+        let c = conn();
+        app(&c, "jim", "jim");
+        for (i, ch) in ['0', '1', '2', '3', '4', '5', '6'].into_iter().enumerate() {
+            let mut s = seed(ch, 1);
+            s.data_revision = if ch == '3' { 1 } else { 2 };
+            upsert_seed(&c, &s).unwrap();
+            dep(&c, "jim", KIND_DEPLOY, &s.hash, 10 + i as i64, RESULT_SUPERSEDED);
+        }
+        let live = seed('6', 1).hash;
+        set_live(&c, "jim", Some(&live), None).unwrap();
+        let t = rollback_targets(&c, "jim", Some(&live), SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        let row = |ch: char| t.iter().find(|x| x.seed == seed(ch, 1).hash).unwrap();
+        assert_eq!(t.len(), 6, "{t:?}");
+        assert!(row('5').usable() && row('4').usable() && row('2').usable());
+        assert!(row('3').kept && row('3').crosses_migration && !row('3').usable(), "kept, but a rollback is refused");
+        assert!(!row('1').kept && !row('1').usable(), "stored, next to be freed");
+        // A live Seed that declares a way down crosses nothing.
+        c.execute("UPDATE seeds SET manifest_json = '{\"dataDown\":true}' WHERE hash = ?1", params![live]).unwrap();
+        let t = rollback_targets(&c, "jim", Some(&live), SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert!(t.iter().all(|x| !x.crosses_migration), "{t:?}");
+    }
+
+    /// A tree that can't be moved is a failure the caller can report, never
+    /// "kept": the row stays, and a failed delete is an error too.
+    #[test]
+    fn a_seed_that_cant_be_moved_is_reported_as_failed() {
+        let _h = crate::test_env::TempHome::new();
+        let c = conn();
+        let mut bad = seed('0', 1);
+        bad.hash = "not-a-seed-hash".into();
+        upsert_seed(&c, &bad).unwrap();
+        let now = 1 + SWEEP_MAX_AGE_SECS;
+        assert!(matches!(detach_seed(&c, &bad.hash, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Failed(_)));
+        assert!(get_seed(&c, &bad.hash).unwrap().is_some(), "nothing changed");
+        let outside = std::env::temp_dir().join(".tmp-sweep-outside");
+        assert!(super::super::seed::remove_detached(&outside).is_err(), "only inside the store");
+        let gone = super::super::seeds_dir().join(format!("{}never-there", super::super::seed::DETACHED_PREFIX));
+        assert_eq!(super::super::seed::remove_detached(&gone), Ok(()), "already gone is fine");
+    }
+
+    /// A Seed being deployed is never deleted, however old its last use:
+    /// not picked, and refused again at the detach, which is what a deploy
+    /// that started after the pick meets.
+    #[test]
+    fn a_seed_being_deployed_is_never_deleted() {
+        let h = crate::test_env::TempHome::new();
+        let c = conn();
+        let old = 1_000;
+        let now = old + SWEEP_MAX_AGE_SECS + 1;
+        app(&c, "jim", "jim");
+        let s = store_tree(&h, &c, "s", "1", old);
+        let from = store_tree(&h, &c, "from", "2", old);
+        let picks = sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(picks.len(), 2, "both are candidates before the deploy");
+        for result in [RESULT_PENDING, RESULT_STARTING] {
+            let d = insert_deployment(&c, &NewDeployment { app_id: "jim", kind: KIND_DEPLOY, from_seed: Some(&from), to_seed: Some(&s), commit_ref: None, actor: "owner", reason: None }).unwrap();
+            c.execute("UPDATE deployments SET result = ?2 WHERE id = ?1", params![d, result]).unwrap();
+            assert_eq!(detach_seed(&c, &s, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Kept, "{result}");
+            assert_eq!(detach_seed(&c, &from, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap(), Detach::Kept, "{result}: the Seed it comes from");
+            assert!(sweep_candidates(&c, now, SWEEP_MAX_AGE_SECS, SWEEP_KEEP_DEPLOYMENTS).unwrap().is_empty(), "{result}");
+            assert!(super::super::seed::seed_path(&s).is_dir() && get_seed(&c, &s).unwrap().is_some(), "{result}");
+            c.execute("UPDATE deployments SET result = 'failed' WHERE id = ?1", params![d]).unwrap();
+        }
+    }
+
+    /// What a rollback reads: a Seed that was freed is told from one that
+    /// never ran here, by full hash or prefix; junk tokens match nothing.
+    #[test]
+    fn a_freed_seed_is_found_by_its_deployment() {
+        let c = conn();
+        app(&c, "jim", "jim");
+        app(&c, "kim", "kim");
+        let gone: String = std::iter::repeat_n('a', 64).collect();
+        let d = dep(&c, "jim", KIND_DEPLOY, &gone, 5, RESULT_SUPERSEDED);
+        assert_eq!(freed_deployment_of_seed(&c, "jim", &gone).unwrap().map(|r| r.id), Some(d.clone()));
+        assert_eq!(freed_deployment_of_seed(&c, "jim", "AAAAAAAA").unwrap().map(|r| r.id), Some(d));
+        assert_eq!(freed_deployment_of_seed(&c, "kim", &gone).unwrap(), None, "another App's");
+        assert_eq!(freed_deployment_of_seed(&c, "jim", "aaaa").unwrap(), None, "too short");
+        assert_eq!(freed_deployment_of_seed(&c, "jim", "%%%%%%%%").unwrap(), None, "not hex");
+        let only_failed: String = std::iter::repeat_n('c', 64).collect();
+        dep(&c, "jim", KIND_DEPLOY, &only_failed, 7, RESULT_FAILED);
+        assert_eq!(freed_deployment_of_seed(&c, "jim", &only_failed).unwrap(), None, "it never ran here");
+        let crashed: String = std::iter::repeat_n('d', 64).collect();
+        let d = dep(&c, "jim", KIND_DEPLOY, &crashed, 8, RESULT_ROLLED_BACK);
+        assert_eq!(freed_deployment_of_seed(&c, "jim", &crashed).unwrap().map(|r| r.id), Some(d), "it ran, then crashed");
+        upsert_seed(&c, &seed('b', 1)).unwrap();
+        dep(&c, "jim", KIND_DEPLOY, &seed('b', 1).hash, 6, RESULT_SUPERSEDED);
+        assert_eq!(freed_deployment_of_seed(&c, "jim", &seed('b', 1).hash).unwrap(), None, "still stored: not freed");
+        let targets = rollback_targets(&c, "jim", None, SWEEP_KEEP_DEPLOYMENTS).unwrap();
+        assert_eq!(targets.iter().map(|t| t.seed.as_str()).collect::<Vec<_>>(), vec![seed('b', 1).hash.as_str()], "only what is stored");
     }
 
     pub(crate) fn seed(hash_char: char, at: i64) -> SeedRow {

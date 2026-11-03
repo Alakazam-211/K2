@@ -233,6 +233,8 @@ pub mod codes {
     pub const STATIC_NOT_ON_RUNTIME: &str = "static_not_on_runtime";
     pub const ROLLBACK_CROSSES_MIGRATION: &str = "rollback_crosses_migration";
     pub const NOTHING_TO_ROLL_BACK: &str = "nothing_to_roll_back";
+    /// 0.46.8: the Seed went live on this App once but has been freed.
+    pub const ROLLBACK_SEED_GONE: &str = "rollback_seed_gone";
     pub const CRASHLOOPING: &str = "crashlooping";
     pub const SUSPENDED: &str = "suspended";
     pub const TEST_GUEST_UNAVAILABLE: &str = "test_guest_unavailable";

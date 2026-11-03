@@ -364,19 +364,20 @@ pub fn detach_tree(hash: &str) -> Result<PathBuf, SeedError> {
 }
 
 /// Remove a tree [`detach_tree`] moved aside. Only paths in the Seed
-/// store with the detached prefix (never anything else).
-pub fn remove_detached(p: &Path) {
+/// store with the detached prefix (never anything else). `Err` = its disk
+/// isn't free yet (what is left goes at the next boot, [`clean_tmp`]), so a
+/// caller never counts it as freed.
+pub fn remove_detached(p: &Path) -> Result<(), String> {
     let ok = p.parent() == Some(super::seeds_dir().as_path())
         && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(DETACHED_PREFIX));
     if !ok {
-        crate::log_debug!("[seeds] refused to remove {} (not a detached Seed)", p.display());
-        return;
+        return Err(format!("refused to remove {} (not a detached Seed)", p.display()));
     }
     unseal(p);
-    if let Err(e) = fs::remove_dir_all(p) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            crate::log_debug!("[seeds] remove {}: {e} (cleaned at the next boot)", p.display());
-        }
+    match fs::remove_dir_all(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove {}: {e} (what is left goes at the next boot)", p.display())),
     }
 }
 

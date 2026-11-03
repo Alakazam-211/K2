@@ -266,7 +266,7 @@ sleep 75
 expect_eq "the level falls to ok" "$(level)" "ok"
 expect_has "the watch logged the fall" "$(tail -20 "$HOME/.k2/disk-guard-log.jsonl")" "\"event\""
 
-# ── 10: the Seed sweep keeps the last 10, the live one and rollbacks ─
+# ── 10: the Seed sweep keeps the last 5, the live one and rollbacks ──
 step=10-seed-sweep
 if [ -n "${SWEEP_CMD:-}" ]; then
     for i in $(seq 1 12); do
@@ -274,7 +274,8 @@ if [ -n "${SWEEP_CMD:-}" ]; then
         "$K2" app deploy "$APP_A" "$APP_A_FOLDER" > /dev/null 2>&1 || bad "deploy $i"
     done
     rm -f "$APP_A_FOLDER/drill-version.txt"
-    sqlite3 "$HOME/.k2/k2.db" "UPDATE seeds SET last_used_at = last_used_at - 31*86400, created_at = created_at - 31*86400" \
+    # Their rows too: a Seed's grace runs from when it last served.
+    sqlite3 "$HOME/.k2/k2.db" "UPDATE seeds SET last_used_at = last_used_at - 31*86400, created_at = created_at - 31*86400; UPDATE deployments SET live_at = live_at - 31*86400 WHERE live_at IS NOT NULL" \
         || bad "back-date the Seeds"
     seeds_before="$(ls "$HOME/.k2/seeds" | wc -l)"
     bash -c "$SWEEP_CMD" > "$OUT/$step-sweep.txt" 2>&1 || bad "the sweep command failed"

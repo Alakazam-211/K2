@@ -2207,11 +2207,32 @@ fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let deps = store::list_deployments(&conn, &app.app_id, limit).map_err(db_err)?;
     let audit = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_APP, &app.app_id, limit).map_err(db_err)?;
     let chain = deploy::audit::verify(&conn).map_err(db_err)?;
+    // 0.46.8: which of these `k2 app rollback --to` can still reach.
+    let stored = store::seed_hashes(&conn).map_err(db_err)?;
+    let targets = store::rollback_targets(&conn, &app.app_id, app.live_seed.as_deref(), store::SWEEP_KEEP_DEPLOYMENTS).map_err(db_err)?;
+    let deployments = deps
+        .iter()
+        .map(|d| {
+            // A row that crashed is no way back, even when an earlier run
+            // of its Seed is.
+            let target = targets.iter().find(|t| Some(&t.seed) == d.to_seed.as_ref()).filter(|_| store::stayed_live(d));
+            let mut row = serde_json::to_value(d).map_err(db_err)?;
+            row["seedStored"] = json!(d.to_seed.as_ref().is_some_and(|h| stored.contains(h)));
+            row["rollbackable"] = json!(target.is_some_and(|t| !t.crosses_migration));
+            row["crossesMigration"] = json!(target.is_some_and(|t| t.crosses_migration));
+            row["freedSoon"] = json!(target.is_some_and(|t| !t.kept));
+            Ok(row)
+        })
+        .collect::<R<Vec<J>>>()?;
+    let rollback_to: Vec<&store::RollbackTarget> = targets.iter().filter(|t| t.usable()).collect();
     Ok(json!({
         "ok": true,
         "app": app.app_id,
         "liveSeed": app.live_seed,
-        "deployments": deps,
+        "rollbackTo": rollback_to,
+        "keepDeployments": store::SWEEP_KEEP_DEPLOYMENTS,
+        "keepUnusedDays": store::SWEEP_MAX_AGE_SECS / 86_400,
+        "deployments": deployments,
         "audit": audit,
         "auditVerified": chain.is_ok(),
     }))

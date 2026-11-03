@@ -451,6 +451,13 @@ async fn s7_watch_window_auto_rollback_then_crash_restart_and_stall_alert() {
     wait_until("auto-rollback to v1", 15, || body_of(front, "/") == "200 v1").await;
     let r = get(d.port, "/cli/app/deployment", OWNER, &format!("app=s7b&id={}", d2["id"].as_str().unwrap())).await;
     assert_eq!(r.json()["state"], "rolled_back");
+    // 0.46.8: a real crash rollback leaves a row no rollback can go to.
+    let r = get(d.port, "/cli/app/history", OWNER, "app=s7b").await;
+    let h = r.json();
+    let rows = h["deployments"].as_array().unwrap_or_else(|| panic!("{h}"));
+    let crashed = rows.iter().find(|x| x["id"] == d2["id"]).unwrap_or_else(|| panic!("{h}"));
+    assert_eq!((crashed["result"].as_str(), crashed["rollbackable"].as_bool()), (Some("rolled_back"), Some(false)), "{h}");
+    assert!(!h["rollbackTo"].as_array().unwrap_or_else(|| panic!("{h}")).iter().any(|t| t["seed"] == crashed["toSeed"]), "{h}");
     wait_until("the agent is told", 5, || alerts.lock().unwrap().iter().any(|(w, t)| w == &ws.id && t.contains("rolled it back"))).await;
     // 0.46.3: the failure history has it, marked rolled back.
     let r = get(d.port, "/cli/app/errors", OWNER, "app=s7b").await;

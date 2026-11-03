@@ -651,6 +651,215 @@ fn a_rehost_is_a_fresh_instance_with_a_fingerprint_and_rolls_back_to_warm() {
     assert_eq!(app_row(id).live_deployment.as_deref(), Some(dep2.as_str()), "nothing moved");
 }
 
+/// 0.46.8: nine Seeds went live; the sweep frees what is past the last 5 and
+/// past its grace. A rollback to a freed one is a refusal that names each
+/// Seed K2 keeps and a rollback would accept (never one next to be freed or
+/// across a migration) and where the code came from; it moves nothing and
+/// starts nothing. A Seed that never ran here, or only ever failed, stays
+/// `seed_not_found`. History marks each row. A rollback with no `--to` goes
+/// to what's kept, and refuses rather than reach further back when an older
+/// K2 lost it.
+#[test]
+fn a_rollback_past_what_is_kept_names_what_is_left_and_history_marks_it() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-freed";
+    app(id, &f.seed, store::STATE_RUNNING, eng);
+    k2_core::deploy::set_enabled(true);
+    let hash = |i: u32| format!("{i:02x}{}", "0".repeat(62));
+    let now = k2_core::deploy::now();
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        let base = store::get_seed(&c, &f.seed).unwrap().unwrap();
+        // The live Seed is at data revision 1; only s5 is older.
+        c.execute("UPDATE seeds SET last_used_at = 1, data_revision = 1 WHERE hash = ?1", params![f.seed]).unwrap();
+        let row = |seed: &str, at: i64, commit: &str, live: bool| {
+            let d = store::insert_deployment(
+                &c,
+                &store::NewDeployment { app_id: id, kind: store::KIND_DEPLOY, from_seed: None, to_seed: Some(seed), commit_ref: Some(commit), actor: "owner", reason: None },
+            )
+            .unwrap();
+            c.execute(
+                "UPDATE deployments SET started_at = ?2, live_at = ?3, result = ?4 WHERE id = ?1",
+                params![d, at, live.then_some(at), if live { "superseded" } else { "failed" }],
+            )
+            .unwrap();
+        };
+        for i in 0..8u32 {
+            // s3 is past the last 5 but in its grace: stored, next to go.
+            let last_used_at = if i == 3 { now } else { 1 };
+            store::upsert_seed(&c, &store::SeedRow { hash: hash(i), last_used_at, data_revision: i64::from(i != 5), ..base.clone() }).unwrap();
+            row(&hash(i), 86_400 * (i64::from(i) + 1), &format!("commit{i}abcdef0123"), true);
+        }
+        row(&f.seed, 86_400 * 9, &f.seed, true);
+        // A failed deploy of a Seed still stored: not a target.
+        store::upsert_seed(&c, &store::SeedRow { hash: hash(50), last_used_at: now, ..base.clone() }).unwrap();
+        row(&hash(50), 86_400 * 10, "bad", false);
+        // A deploy that only ever failed, its Seed gone: it never ran.
+        row(&hash(60), 86_400 * 11, "bad2", false);
+        // One Seed at a time: this DB is shared with other tests' Apps.
+        for i in 0..8u32 {
+            let d = store::detach_seed(&c, &hash(i), now, store::SWEEP_MAX_AGE_SECS, store::SWEEP_KEEP_DEPLOYMENTS).unwrap();
+            assert_eq!(matches!(d, store::Detach::Moved(_)), i < 3, "s0..s2 go; s3 is in its grace; s4..s7 and the live one are the last 5: s{i}");
+        }
+    }
+    let rows_before = deployments(id).len();
+    let post = |body: serde_json::Value| super::super::routes::handle("/cli/app/rollback", super::super::routes::Who::Owner, body.to_string().as_bytes(), &Default::default());
+
+    for to in [hash(1), hash(1)[..12].to_string()] {
+        let r = post(serde_json::json!({ "app": id, "to": to }));
+        assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["error"]["code"], codes::ROLLBACK_SEED_GONE, "{}", r.body);
+        let hint = v["error"]["hint"].as_str().unwrap();
+        for want in [
+            "last 5 deployments",
+            "3 days after they last ran",
+            &format!("You can go back to {} (1970-01-09), {} (1970-01-08), {} (1970-01-06):", &hash(7)[..12], &hash(6)[..12], &hash(4)[..12]),
+            &format!("k2 app rollback {id} --to <seed>"),
+            &format!("k2 app history {id}"),
+            "its source (commit commit1abcde)",
+            "k2 app deploy",
+        ] {
+            assert!(hint.contains(want), "missing {want:?} in: {hint}");
+        }
+        assert!(!hint.contains(&hash(3)[..12]), "next to be freed: never named: {hint}");
+        assert!(!hint.contains(&hash(5)[..12]), "across a migration: never named: {hint}");
+    }
+    for unknown in ["abcdef0123456789".to_string(), hash(60)] {
+        let r = post(serde_json::json!({ "app": id, "to": unknown }));
+        assert!(r.status.starts_with("404") && r.body.contains("seed_not_found"), "{unknown}: {} {}", r.status, r.body);
+        assert!(r.body.contains("You can go back to") && !r.body.contains("last ran on"), "{}", r.body);
+    }
+    assert_eq!(deployments(id).len(), rows_before, "no refusal starts anything");
+    assert_eq!(app_row(id).live_seed.as_deref(), Some(f.seed.as_str()), "nothing moved");
+
+    let r = super::super::routes::handle(
+        "/cli/app/history",
+        super::super::routes::Who::Owner,
+        b"",
+        &std::collections::HashMap::from([("app".to_string(), id.to_string())]),
+    );
+    assert!(r.status.starts_with("200"), "{} {}", r.status, r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    let to: Vec<&str> = v["rollbackTo"].as_array().unwrap().iter().map(|t| t["seed"].as_str().unwrap()).collect();
+    assert_eq!(to, vec![hash(7), hash(6), hash(4)], "{v}");
+    assert_eq!((v["keepDeployments"].as_u64(), v["keepUnusedDays"].as_u64()), (Some(5), Some(3)), "{v}");
+    let flag = |d: &serde_json::Value, k: &str| d[k].as_bool().unwrap_or_else(|| panic!("{k}: {d}"));
+    let marks: Vec<(String, bool, bool, bool, bool)> = v["deployments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["toSeed"].as_str().unwrap().to_string(), flag(d, "rollbackable"), flag(d, "seedStored"), flag(d, "freedSoon"), flag(d, "crossesMigration")))
+        .collect();
+    let want = vec![
+        (hash(60), false, false, false, false),
+        (hash(50), false, true, false, false),
+        (f.seed.clone(), false, true, false, false),
+        (hash(7), true, true, false, false),
+        (hash(6), true, true, false, false),
+        (hash(5), false, true, false, true),
+        (hash(4), true, true, false, false),
+        (hash(3), true, true, true, false),
+        (hash(2), false, false, false, false),
+        (hash(1), false, false, false, false),
+        (hash(0), false, false, false, false),
+    ];
+    assert_eq!(marks, want, "newest first (seed, rollbackable, stored, freed soon, crosses)");
+
+    // No --to: the newest earlier one, never the failed deploy.
+    let a = app_row(id);
+    assert_eq!(rollback_target(&a, None).unwrap(), hash(7));
+    // A box an older K2 swept: refused, not a jump further back.
+    db(|c| c.execute("DELETE FROM seeds WHERE hash = ?1", params![hash(7)])).unwrap();
+    let e = rollback_target(&a, None).unwrap_err();
+    assert_eq!(e.code, codes::ROLLBACK_SEED_GONE, "{}", e.message);
+    assert!(e.message.contains(&format!("You can go back to {} ", &hash(6)[..12])), "{}", e.message);
+}
+
+/// A second Seed with its own tree, for a real deploy over `f.seed`.
+fn second_seed(f: &Fx) -> String {
+    let dir = f._home.path().join("src").join("app2");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("server.js"), "require('http').createServer((q,s)=>s.end('two')).listen(process.env.PORT)").unwrap();
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    let base = store::get_seed(&c, &f.seed).unwrap().unwrap();
+    std::fs::write(dir.join("manifest.json"), base.manifest.to_string()).unwrap();
+    let st = k2_core::deploy::seed::store_folder(&dir, &std::collections::BTreeSet::new()).unwrap();
+    store::upsert_seed(&c, &store::SeedRow { hash: st.hash.clone(), ..base }).unwrap();
+    st.hash
+}
+
+/// 0.46.8, through the real pipeline: a rollback someone chose through the
+/// warm instance marks the outgoing deploy `rolled_back`, but it ran fine,
+/// so it stays a rollback point, and its text survives the retire that
+/// follows. A plain rollback goes back to it, as it always did.
+#[test]
+fn a_chosen_rollback_through_the_warm_instance_keeps_the_deploy_it_left() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-chosen";
+    app(id, &f.seed, store::STATE_INSTALLING, eng);
+    let two = second_seed(&f);
+    go_live_first(id, &f.seed);
+    let second = begin(&app_row(id), &two, store::KIND_DEPLOY, "owner", None).unwrap();
+    assert_eq!(wait_done(&second, 30).unwrap().result, store::RESULT_LIVE);
+    rollback_to_warm(&app_row(id), &f.seed, "owner").unwrap().expect("the warm instance answers");
+    let end = Instant::now() + Duration::from_secs(15);
+    while !audit_events(id).iter().any(|e| e == "stopped") {
+        assert!(Instant::now() < end, "the deploy it left must be retired: {:?}", audit_events(id));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let row = db(|c| store::get_deployment(c, &second)).unwrap().unwrap();
+    assert_eq!((row.result.as_str(), row.error.as_deref()), (store::RESULT_ROLLED_BACK, Some(store::ROLLED_BACK_BY_CHOICE)));
+    assert!(store::stayed_live(&row));
+    let a = app_row(id);
+    assert_eq!(a.live_seed.as_deref(), Some(f.seed.as_str()));
+    assert_eq!(db(|c| store::went_live_seeds(c, id, 2)).unwrap(), vec![f.seed.clone(), two.clone()]);
+    assert_eq!(rollback_target(&a, None).unwrap(), two);
+    let targets = db(|c| store::rollback_targets(c, id, a.live_seed.as_deref(), store::SWEEP_KEEP_DEPLOYMENTS)).unwrap();
+    assert!(targets.iter().any(|t| t.seed == two && t.usable()), "{targets:?}");
+    settle(id);
+}
+
+/// 0.46.8: a Seed that goes between `begin`'s first read and its lock hold
+/// (the sweep's detach getting in there) is refused by the check under the
+/// lock: no deployment row, and the App isn't left busy. A start counts as a
+/// use, so a Seed that then fails gets its full grace.
+#[test]
+fn begin_refuses_a_seed_freed_under_it_and_a_start_is_a_use() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s2t-begin-gone";
+    app(id, &f.seed, store::STATE_RUNNING, eng);
+    let before = deployments(id).len();
+    let e = begin(&app_row(id), &"f".repeat(64), store::KIND_ROLLBACK, "owner", None).unwrap_err();
+    assert_eq!(e.code, codes::SEED_NOT_FOUND, "{}", e.message);
+    assert_eq!(deployments(id).len(), before, "no row for a Seed that isn't there");
+
+    let going = second_seed(&f);
+    let g2 = going.clone();
+    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let r2 = ran.clone();
+    test_hooks::on_seed_read(id, move || {
+        db(|c| c.execute("DELETE FROM seeds WHERE hash = ?1", params![g2])).unwrap();
+        r2.store(true, Ordering::SeqCst);
+    });
+    let e = begin(&app_row(id), &going, store::KIND_DEPLOY, "owner", None).unwrap_err();
+    assert!(ran.load(Ordering::SeqCst), "the first read saw the Seed, then it went");
+    assert_eq!(e.code, codes::SEED_NOT_FOUND, "{}", e.message);
+    assert_eq!(deployments(id).len(), before, "no row for the Seed that went");
+
+    let t0 = k2_core::deploy::now();
+    let dep = begin(&app_row(id), &f.seed, store::KIND_DEPLOY, "owner", None).expect("not held busy by the refusals");
+    let used = db(|c| store::get_seed(c, &f.seed)).unwrap().unwrap().last_used_at;
+    assert!(used >= t0, "the start touched the Seed: {used} < {t0}");
+    wait_done(&dep, 30).expect("row");
+    settle(id);
+}
+
 /// prd-app-pg-choice-dualrun-v1 PA10–PA11: a database switch's re-host is
 /// a fresh instance through the gate with NOTHING warm (the old instance
 /// held the closed source's DSN), records its epoch, is never an

@@ -157,6 +157,26 @@ pub(crate) mod test_hooks {
         engines().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).copied()
     }
 
+    /// Runs once inside `begin`, after its first read of the Seed and before
+    /// the lock hold that inserts the deployment: where a sweep could get in.
+    type SeedReadHook = Box<dyn FnOnce() + Send>;
+
+    fn seed_read_hooks() -> &'static Mutex<HashMap<String, SeedReadHook>> {
+        static H: OnceLock<Mutex<HashMap<String, SeedReadHook>>> = OnceLock::new();
+        H.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub fn on_seed_read(app_id: &str, f: impl FnOnce() + Send + 'static) {
+        seed_read_hooks().lock().unwrap_or_else(|e| e.into_inner()).insert(app_id.to_string(), Box::new(f));
+    }
+
+    pub fn run_seed_read(app_id: &str) {
+        let hook = seed_read_hooks().lock().unwrap_or_else(|e| e.into_inner()).remove(app_id);
+        if let Some(f) = hook {
+            f();
+        }
+    }
+
     /// A test-engine App's port, still bound from [`super::free_port`] until
     /// the test engine's start takes it. Released in between, another test
     /// in this binary binding port 0 could be handed the same port first
@@ -873,7 +893,17 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
         }
     }
     let commit = seed_row.source_ref.clone().unwrap_or_else(|| seed_row.hash.clone());
+    #[cfg(test)]
+    test_hooks::run_seed_read(&app.app_id);
+    // 0.46.8: one lock hold, the one the sweep's detach checks under. Either
+    // the Seed went since the read above (refused here), or this pending row
+    // keeps it for as long as the deploy runs. Starting a deploy counts as a
+    // use, so a Seed that fails keeps its grace from now.
     let dep = match db(|c| {
+        if store::get_seed(c, seed)?.is_none() {
+            return Ok(None);
+        }
+        store::touch_seed(c, seed, now())?;
         store::insert_deployment(
             c,
             &NewDeployment {
@@ -886,8 +916,13 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
                 reason,
             },
         )
+        .map(Some)
     }) {
-        Ok(d) => d,
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            release();
+            return Err(fail(codes::SEED_NOT_FOUND, 404, format!("no Seed {seed}")));
+        }
         Err(e) => {
             release();
             return Err(e);
@@ -1908,16 +1943,70 @@ fn stall_check(t: &Timings) {
 /// went live.
 pub fn rollback_target(app: &AppRow, to: Option<&str>) -> Result<String, Fail> {
     if let Some(t) = to {
-        let row = db(|c| store::find_seed(c, t))?.ok_or_else(|| fail(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}'")))?;
-        return Ok(row.hash);
+        return match db(|c| store::find_seed(c, t))? {
+            Some(row) => Ok(row.hash),
+            None => Err(seed_gone_or_unknown(app, t)?),
+        };
     }
-    let live = app.live_seed.clone();
-    let deps = db(|c| store::list_deployments(c, &app.app_id, 50))?;
-    deps.iter()
-        .filter(|d| d.live_at.is_some())
-        .filter_map(|d| d.to_seed.clone())
-        .find(|s| Some(s) != live.as_ref())
-        .ok_or_else(|| fail(codes::NOTHING_TO_ROLL_BACK, 409, format!("{} has no earlier Seed that went live", app.app_id)))
+    // Two: the newest that isn't the live one is one of the first two.
+    let seeds = db(|c| store::went_live_seeds(c, &app.app_id, 2))?;
+    let target = seeds
+        .into_iter()
+        .find(|s| Some(s) != app.live_seed.as_ref())
+        .ok_or_else(|| fail(codes::NOTHING_TO_ROLL_BACK, 409, format!("{} has no earlier Seed that went live", app.app_id)))?;
+    // The sweep keeps this one; a box swept by an older K2 may not have it.
+    // Refuse rather than go further back than asked.
+    if db(|c| store::get_seed(c, &target))?.is_none() {
+        return Err(seed_gone_or_unknown(app, &target)?);
+    }
+    Ok(target)
+}
+
+fn short_seed(h: &str) -> &str {
+    h.get(..12).unwrap_or(h)
+}
+
+fn day(at: i64) -> String {
+    chrono::DateTime::from_timestamp(at, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "an unknown day".into())
+}
+
+/// The refusal for a rollback to a Seed that isn't stored: freed, when it
+/// ran on this App (saying how to get the old code back), else plainly
+/// unknown. Both name each Seed K2 is keeping that a rollback would accept,
+/// never one about to be freed or across a migration.
+fn seed_gone_or_unknown(app: &AppRow, token: &str) -> Result<Fail, Fail> {
+    let id = &app.app_id;
+    let (ran, targets) = db(|c| {
+        Ok((store::freed_deployment_of_seed(c, id, token)?, store::rollback_targets(c, id, app.live_seed.as_deref(), store::SWEEP_KEEP_DEPLOYMENTS)?))
+    })?;
+    let usable: Vec<String> = targets.iter().filter(|t| t.usable()).map(|t| format!("{} ({})", short_seed(&t.seed), day(t.started_at))).collect();
+    let reach = if !usable.is_empty() {
+        format!("You can go back to {}: k2 app rollback {id} --to <seed>.", usable.join(", "))
+    } else if targets.iter().any(|t| t.kept && t.crosses_migration) {
+        format!("{id} has nothing to go back to: the Seeds K2 keeps are across a data migration.")
+    } else {
+        format!("{id} has nothing older than its live Seed to go back to.")
+    };
+    let Some(d) = ran else {
+        return Ok(fail(codes::SEED_NOT_FOUND, 404, format!("no Seed '{token}' on this server. {reach} Every one: k2 app history {id}")));
+    };
+    let seed = d.to_seed.as_deref().unwrap_or(token);
+    let source = match d.commit_ref.as_deref().filter(|c| Some(*c) != d.to_seed.as_deref()) {
+        Some(commit) => format!("its source (commit {})", short_seed(commit)),
+        None => "its source".to_string(),
+    };
+    Ok(fail(
+        codes::ROLLBACK_SEED_GONE,
+        409,
+        format!(
+            "{} last ran on {id} on {} and its Seed has been freed: K2 keeps the Seeds of an App's last {} deployments and frees \
+             older ones {} days after they last ran. {reach} Every one: k2 app history {id}. To run it again, deploy {source}: k2 app deploy {id} <folder>",
+            short_seed(seed),
+            day(d.started_at),
+            store::SWEEP_KEEP_DEPLOYMENTS,
+            store::SWEEP_MAX_AGE_SECS / 86_400,
+        ),
+    ))
 }
 
 /// Refuse a rollback across an applied data migration (§7.3) unless the
@@ -1927,19 +2016,16 @@ pub fn check_data_revision(app: &AppRow, target: &str) -> Result<(), Fail> {
     let cur = db(|c| store::get_seed(c, live))?;
     let tgt = db(|c| store::get_seed(c, target))?;
     let (Some(cur), Some(tgt)) = (cur, tgt) else { return Ok(()) };
-    if cur.data_revision > tgt.data_revision {
-        let down = cur.manifest.get("dataDown").and_then(|v| v.as_bool()).unwrap_or(false);
-        if !down {
-            return Err(fail(
-                codes::ROLLBACK_CROSSES_MIGRATION,
-                409,
-                format!(
-                    "the live Seed is at data revision {} and the target at {}; code rollback isn't data rollback. \
-                     Deploy a Seed that declares dataDown, or roll the data back first",
-                    cur.data_revision, tgt.data_revision
-                ),
-            ));
-        }
+    if store::crosses_migration(&cur, tgt.data_revision) {
+        return Err(fail(
+            codes::ROLLBACK_CROSSES_MIGRATION,
+            409,
+            format!(
+                "the live Seed is at data revision {} and the target at {}; code rollback isn't data rollback. \
+                 Deploy a Seed that declares dataDown, or roll the data back first",
+                cur.data_revision, tgt.data_revision
+            ),
+        ));
     }
     Ok(())
 }
@@ -2005,7 +2091,7 @@ fn rollback_to_warm_where(app: &AppRow, actor: &str, pick: impl Fn(&Instance) ->
         )?;
         store::set_went_live(c, &id, now())?;
         if let Some(b) = &bad {
-            store::set_result(c, &b.handle.deployment_id, store::RESULT_ROLLED_BACK, Some("rolled back"))?;
+            store::set_result(c, &b.handle.deployment_id, store::RESULT_ROLLED_BACK, Some(store::ROLLED_BACK_BY_CHOICE))?;
         }
         store::set_live(c, &app.app_id, Some(target), Some(&warm.handle.deployment_id))?;
         store::set_state(c, &app.app_id, store::STATE_RUNNING, None)?;

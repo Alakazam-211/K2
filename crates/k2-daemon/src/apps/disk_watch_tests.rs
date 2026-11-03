@@ -405,11 +405,19 @@ fn per_app_budgets_note_at_80_and_wake_at_100() {
     assert!(matches!(&out[0], Notice::Wake { workspace, text } if workspace == "id-a" && text.contains("disk_low")), "{out:#?}");
 }
 
+/// Runs at the first `seeds-gc` call, with that call's list.
+type OnGc = Box<dyn FnOnce(&[String]) + Send>;
+
 struct FakeEngine {
     hashes: Vec<String>,
     asked: Mutex<Vec<Vec<String>>>,
     db: Arc<parking_lot::ReentrantMutex<rusqlite::Connection>>,
     lock_free: Mutex<Option<bool>>,
+    on_gc: Mutex<Option<OnGc>>,
+}
+
+fn fake(hashes: Vec<String>, guard_db: &k2_core::db::TestDbGuard) -> FakeEngine {
+    FakeEngine { hashes, asked: Mutex::new(Vec::new()), db: guard_db.handle(), lock_free: Mutex::new(None), on_gc: Mutex::new(None) }
 }
 
 impl EngineSeeds for FakeEngine {
@@ -425,6 +433,10 @@ impl EngineSeeds for FakeEngine {
         let free = std::thread::spawn(move || db.try_lock().is_some()).join().unwrap();
         *self.lock_free.lock().unwrap() = Some(free);
         self.asked.lock().unwrap().push(remove.to_vec());
+        let hook = self.on_gc.lock().unwrap().take();
+        if let Some(f) = hook {
+            f(remove);
+        }
         Ok(k2_root_proto::engine::SeedsGcAnswer { removed: remove.to_vec(), freed_bytes: 1, ..Default::default() })
     }
 }
@@ -460,7 +472,7 @@ fn stored(h: &crate::test_support::TempHome, conn: &rusqlite::Connection, name: 
     st.hash
 }
 
-/// Test 18: the daily sweep keeps live, the last 10, pending-request and
+/// Test 18: the daily sweep keeps live, pending-request and
 /// unfinished-deployment Seeds, removes the rest (tree and row), asks the
 /// engine for exactly the swept hashes plus orphans (never a kept one),
 /// holds no DB lock while the engine works, and logs one line.
@@ -508,12 +520,7 @@ fn the_sweep_removes_only_k2s_unused_seeds_both_copies() {
         (live, held, pending_dep, unused, recent)
     };
     let orphan = "e".repeat(64);
-    let engine = FakeEngine {
-        hashes: vec![live.clone(), held.clone(), unused.clone(), orphan.clone()],
-        asked: Mutex::new(Vec::new()),
-        db: guard_db.handle(),
-        lock_free: Mutex::new(None),
-    };
+    let engine = fake(vec![live.clone(), held.clone(), unused.clone(), orphan.clone()], &guard_db);
     let r = run_sweep(now, &engine);
     assert_eq!(r.error, None);
     assert_eq!(r.seeds, vec![unused.clone()]);
@@ -535,10 +542,184 @@ fn the_sweep_removes_only_k2s_unused_seeds_both_copies() {
     assert_eq!(line["seeds"], 1);
     assert_eq!(line["engine"]["removed"].as_array().unwrap().len(), 2);
     // Nothing old left: a second sweep removes nothing and asks nothing.
-    let engine2 = FakeEngine { hashes: vec![], asked: Mutex::new(Vec::new()), db: guard_db.handle(), lock_free: Mutex::new(None) };
+    let engine2 = fake(vec![], &guard_db);
     let r = run_sweep(now, &engine2);
     assert!(r.seeds.is_empty());
     assert!(engine2.asked.lock().unwrap().is_empty());
+}
+
+fn sweep_app(conn: &rusqlite::Connection) {
+    conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('ws', 'ws', '/tmp/k2-sweep-ws', 'ws')", []).unwrap();
+    store::insert_app(
+        conn,
+        &store::NewApp {
+            app_id: "jobs",
+            service_id: "svc-jobs",
+            seed_id: Some("jobs"),
+            owner_workspace: "ws",
+            isolation: "process",
+            memory_limit_bytes: None,
+            front_port: 0,
+            created_by: "owner",
+        },
+    )
+    .unwrap();
+}
+
+/// A deployment that went live at `at`, replacing `from`.
+fn went_live(conn: &rusqlite::Connection, from: Option<&str>, seed: &str, at: i64) {
+    let d = store::insert_deployment(
+        conn,
+        &store::NewDeployment { app_id: "jobs", kind: store::KIND_DEPLOY, from_seed: from, to_seed: Some(seed), commit_ref: None, actor: "owner", reason: None },
+    )
+    .unwrap();
+    conn.execute("UPDATE deployments SET started_at = ?2, live_at = ?2, result = 'superseded' WHERE id = ?1", params![d, at]).unwrap();
+}
+
+/// 0.46.8, through the daemon's sweep with more Seeds than it keeps: the
+/// last 5 and the Seed that served until today stay in BOTH copies, and the
+/// engine is asked only for what really went, plus an orphan.
+#[test]
+fn a_sweep_past_the_last_5_spares_what_it_keeps_in_both_copies() {
+    let h = crate::test_support::TempHome::new();
+    let guard_db = k2_core::db::scoped_for_test();
+    let old = 1_000;
+    let today = old + 30 * 86_400;
+    let (old_seeds, long, quick) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        sweep_app(&conn);
+        let old_seeds: Vec<String> = (0..4).map(|i| stored(&h, &conn, &format!("o{i}"), &format!("old {i}"), old)).collect();
+        let long = stored(&h, &conn, "long", "long", old);
+        let mut from: Option<String> = None;
+        for (i, s) in old_seeds.iter().chain([&long]).enumerate() {
+            went_live(&conn, from.as_deref(), s, old + i as i64);
+            from = Some(s.clone());
+        }
+        let quick: Vec<String> = (0..5).map(|i| stored(&h, &conn, &format!("q{i}"), &format!("quick {i}"), today - 300)).collect();
+        for (i, s) in quick.iter().enumerate() {
+            went_live(&conn, from.as_deref(), s, today - 300 + i as i64);
+            from = Some(s.clone());
+        }
+        store::set_live(&conn, "jobs", Some(&quick[4]), None).unwrap();
+        (old_seeds, long, quick)
+    };
+    let orphan = "e".repeat(64);
+    let mut on_engine: Vec<String> = old_seeds.iter().chain([&long]).chain(&quick).cloned().collect();
+    on_engine.push(orphan.clone());
+    let engine = fake(on_engine, &guard_db);
+    let r = run_sweep(today, &engine);
+    assert_eq!((r.error.as_deref(), r.engine_error.as_deref()), (None, None));
+    let swept: std::collections::BTreeSet<String> = r.seeds.iter().cloned().collect();
+    assert_eq!(swept, old_seeds.iter().cloned().collect(), "the 4 replaced a month ago");
+    let asked: std::collections::BTreeSet<String> = engine.asked.lock().unwrap().iter().flatten().cloned().collect();
+    let mut want = swept.clone();
+    want.insert(orphan);
+    assert_eq!(asked, want, "the engine is asked for those and the orphan only");
+    for kept in quick.iter().chain([&long]) {
+        assert!(k2_core::deploy::seed::seed_path(kept).is_dir(), "{kept}");
+        assert!(!asked.contains(kept), "{kept}");
+    }
+    for gone in &old_seeds {
+        assert!(!k2_core::deploy::seed::seed_path(gone).exists(), "{gone}");
+    }
+}
+
+/// 0.46.8: the engine is asked a batch at a time, and a hash that has a row
+/// again by the next batch (the same source rebuilt mid-sweep) is dropped.
+#[test]
+fn a_seed_rebuilt_during_the_sweep_is_dropped_from_the_next_batch() {
+    let h = crate::test_support::TempHome::new();
+    let guard_db = k2_core::db::scoped_for_test();
+    let old = 1_000;
+    let now = old + store::SWEEP_MAX_AGE_SECS + 1;
+    let (seeds, template) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let seeds: Vec<String> = (0..(SEEDS_GC_BATCH * 2 + 1)).map(|i| stored(&h, &conn, &format!("s{i}"), &format!("seed {i}"), old)).collect();
+        let template = store::get_seed(&conn, &seeds[0]).unwrap().unwrap();
+        (seeds, template)
+    };
+    let engine = fake(vec![], &guard_db);
+    let back = Arc::new(Mutex::new(None::<String>));
+    let (all, back2) = (seeds.clone(), back.clone());
+    *engine.on_gc.lock().unwrap() = Some(Box::new(move |first: &[String]| {
+        let again = all.iter().find(|s| !first.contains(s)).unwrap().clone();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::upsert_seed(&conn, &store::SeedRow { hash: again.clone(), last_used_at: now, ..template }).unwrap();
+        *back2.lock().unwrap() = Some(again);
+    }));
+    let r = run_sweep(now, &engine);
+    assert_eq!(r.engine_error, None);
+    assert_eq!(r.seeds.len(), seeds.len(), "{r:?}");
+    let asked = engine.asked.lock().unwrap().clone();
+    assert!(asked.len() >= 2, "more than one call: {asked:?}");
+    assert!(asked.iter().all(|b| b.len() <= SEEDS_GC_BATCH && !b.is_empty()), "{asked:?}");
+    let again = back.lock().unwrap().clone().expect("the rebuild ran");
+    let flat: Vec<&String> = asked.iter().flatten().collect();
+    assert!(!flat.contains(&&again), "a hash with a row again is never sent: {asked:?}");
+    assert_eq!(flat.len(), seeds.len() - 1, "the rest, once each: {asked:?}");
+    assert_eq!(r.engine_removed.len(), seeds.len() - 1, "every batch's answer is kept");
+}
+
+/// 0.46.8: a tree that couldn't be deleted isn't counted as freed, is named,
+/// and its engine copy still goes. A tree that couldn't be moved stays whole
+/// with its row and the rest of the sweep goes on.
+#[test]
+fn a_failed_delete_or_move_is_reported_not_counted_as_freed() {
+    let h = crate::test_support::TempHome::new();
+    let guard_db = k2_core::db::scoped_for_test();
+    let old = 1_000;
+    let now = old + store::SWEEP_MAX_AGE_SECS + 1;
+    let unmovable = "not-a-seed-hash".to_string();
+    let sticky = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let sticky = stored(&h, &conn, "sticky", "1", old);
+        let row = store::get_seed(&conn, &sticky).unwrap().unwrap();
+        store::upsert_seed(&conn, &store::SeedRow { hash: unmovable.clone(), last_used_at: old, ..row }).unwrap();
+        sticky
+    };
+    let engine = fake(vec![], &guard_db);
+    let r = run_sweep_with(now, &engine, &|_| Err("disk said no".to_string()));
+    assert_eq!(r.bytes, 0, "nothing really went: {r:?}");
+    assert!(r.seeds.is_empty(), "{r:?}");
+    let named: std::collections::BTreeMap<String, String> = r.failed.iter().cloned().collect();
+    assert_eq!(named.get(&sticky).map(String::as_str), Some("disk said no"), "{r:?}");
+    assert!(named.contains_key(&unmovable), "{r:?}");
+    assert_eq!(engine.asked.lock().unwrap().clone(), vec![vec![sticky.clone()]], "its engine copy still goes; the unmoved one's stays");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert!(store::get_seed(&conn, &unmovable).unwrap().is_some(), "not moved: nothing changed");
+    assert!(store::get_seed(&conn, &sticky).unwrap().is_none(), "moved: its row went");
+}
+
+/// 0.46.8: if the rows can't be read after the deletes, this sweep's engine
+/// step fails. With no rows to go by, every engine copy in its grace would
+/// look like an orphan.
+#[test]
+fn a_failed_read_fails_the_engine_step_instead_of_making_orphans() {
+    let h = crate::test_support::TempHome::new();
+    let guard_db = k2_core::db::scoped_for_test();
+    let old = 1_000;
+    let now = old + store::SWEEP_MAX_AGE_SECS + 1;
+    let in_grace = "d".repeat(64);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        stored(&h, &conn, "one", "1", old);
+    }
+    let engine = fake(vec![in_grace], &guard_db);
+    let r = run_sweep_with(now, &engine, &|p| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute_batch("DROP TABLE app_widenings").unwrap();
+        k2_core::deploy::seed::remove_detached(p)
+    });
+    assert_eq!(r.seeds.len(), 1, "{r:?}");
+    assert!(r.engine_error.as_deref().is_some_and(|e| e.starts_with("keep set:")), "{r:?}");
+    assert!(engine.asked.lock().unwrap().is_empty(), "nothing sent to the engine");
 }
 
 /// The drill's trigger: `~/.k2/disk-sweep-now` runs the sweep at once,

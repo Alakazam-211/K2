@@ -39,6 +39,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "The owner sets up what it names, then install or deploy again. K2 doesn't turn these on by itself."),
     r("rollback_crosses_migration", "deploy", 409, Who::Agent, "The target Seed is at an older data revision than the live one; rolling back code doesn't roll back data.",
         "Deploy a Seed that declares dataDown, or roll the data back first. Past deploys: k2 app history <app-id>"),
+    r("rollback_seed_gone", "deploy", 409, Who::Agent, "That version's Seed was freed: K2 keeps the Seeds of each App's last 5 deployments. The refusal names what you can still go back to.",
+        "Go back to a Seed that's still kept (k2 app history <app-id> marks them), or deploy the old code again from its source: k2 app deploy <app-id> <folder>"),
     r("seed_corrupt", "deploy", 409, Who::Agent, "The stored Seed's files don't match its hash, so K2 won't deploy it.",
         "Build it again from the folder (k2 app build <folder>) and deploy the new hash."),
     // k2 app build / deploy print the report and exit 1 on a 422.

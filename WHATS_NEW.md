@@ -12,6 +12,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`guests-rooms` approvals you already gave still don't open those rooms to logins an agent set up.** Those logins keep their App's own room until the person uses a reset link on K2's own page. You don't need to do anything.
 - **An agent can no longer set the password of, or remove, a person you added.** Only people its own agent added.
 - **Handing an App to another agent is stricter.** It's refused while the App's guests (not ones switched off) hold box-wide roles naming the old agent's room, and logins the old agent set up are signed out at the switch.
+- **K2 now keeps the last 5 deployments of each App, so you can roll back that far, and frees the rest after a few days.** `k2 app history` marks the ones you can still go back to; asking for one that's gone is refused and names the ones you can.
 - **Guests look different to your agents.** A post from someone signed in to an App now reaches the agent as `[guest <login> on App <app>]`, not `[from <login>]`, and so does their answer on a card, ticket comment or project chat line. Every line after the first starts with `> `, so nothing they type can read as someone else's line. Anything reading these lines should expect both.
 
 ### Hosted mail

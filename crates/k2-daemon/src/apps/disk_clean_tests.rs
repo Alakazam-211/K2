@@ -181,6 +181,35 @@ fn untouched(f: &Fx) {
     }
 }
 
+/// 0.46.8: `clean` follows the sweep's rule: a Seed unused for over 3 days
+/// goes, one used in the last 3 days stays (it used to be 30). A deployment
+/// log keeps its own 30 days.
+#[test]
+fn clean_uses_the_sweeps_three_days_and_logs_keep_their_thirty() {
+    let f = fx("grace");
+    let (four, two) = (hash('d'), hash('e'));
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        for (s, used) in [(&four, f.now - 4 * DAY), (&two, f.now - 2 * DAY)] {
+            conn.execute(
+                "INSERT INTO seeds (hash, seed_id, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at) \
+                 VALUES (?1, 'not-an-app', 'cmd', '{}', '{}', '{\"ok\":true}', 'owner', 8192, ?2, ?2)",
+                params![s, used],
+            )
+            .unwrap();
+        }
+        // Past the log's 10 rows but only 4 days ago: the log stays.
+        conn.execute("UPDATE deployments SET finished_at = ?1 WHERE app_id = 'plain' AND id = 'd-01'", params![f.now - 4 * DAY]).unwrap();
+    }
+    let (st, v) = clean(&Who::Owner, json!({ "dryRun": true }));
+    assert_eq!(st, 200, "{v}");
+    let seeds = ids(&v, "seed");
+    assert!(seeds.contains(&short('d')), "unused 4 days: {v}");
+    assert!(!seeds.contains(&short('e')), "unused 2 days: {v}");
+    assert_eq!(ids(&v, "deploymentLog"), vec!["apps/plain/logs/d-02.log"], "a log ended 4 days ago stays: {v}");
+}
+
 #[test]
 fn a_dry_run_lists_what_k2_made_and_removes_nothing() {
     let f = fx("dry");
@@ -188,7 +217,7 @@ fn a_dry_run_lists_what_k2_made_and_removes_nothing() {
     assert_eq!(st, 200, "{v}");
     assert_eq!(v["dryRun"], true);
     assert_eq!(v["scope"], "box");
-    assert_eq!(ids(&v, "seed"), vec![short('a'), short('c')], "unused 30 days, not live: {v}");
+    assert_eq!(ids(&v, "seed"), vec![short('a'), short('c')], "unused 3 days, not live: {v}");
     assert_eq!(ids(&v, "deploymentLog"), vec!["apps/plain/logs/d-01.log", "apps/plain/logs/d-02.log"], "past the last 10: {v}");
     assert_eq!(
         ids(&v, "rotatedLog"),
@@ -286,6 +315,42 @@ fn an_agent_cleans_only_its_own_and_needs_the_switch() {
     assert!(k2(&format!("publish-logs/{}/other.log.1", f.ws_b)).is_file(), "another agent's log stays");
     assert!(k2("apps/tmp/build-old.tar").is_file());
     untouched(&f);
+}
+
+/// 0.46.8: a Seed whose tree can't be moved is reported as that, never as
+/// "in use again", for the owner's clean and an agent's, and counts as
+/// nothing freed. The row stays.
+#[test]
+fn a_seed_that_cant_be_moved_is_an_error_not_in_use_again() {
+    let f = fx("nomove");
+    let bad = "not-a-seed-hash-at-all";
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "INSERT INTO seeds (hash, seed_id, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at, built_for) \
+             VALUES (?1, 'not-an-app', 'cmd', '{}', '{}', '{\"ok\":true}', 'agent:hand-ws-a', 8192, ?2, ?2, 'plain')",
+            params![bad, f.now - 40 * DAY],
+        )
+        .unwrap();
+    }
+    let item = |v: &J| -> J {
+        v["items"].as_array().unwrap().iter().find(|i| i["kind"] == "seed" && i["id"] == bad[..12]).unwrap_or_else(|| panic!("the bad Seed's item: {v}")).clone()
+    };
+    k2_core::workspace::settings::set_agents_can_manage_skin(&f.ws_a_path.to_string_lossy(), true).unwrap();
+    let (st, v) = clean(&agent(&f.ws_a), json!({}));
+    assert_eq!(st, 200, "{v}");
+    let it = item(&v);
+    assert_eq!(it["removed"], false, "{v}");
+    let why = it["error"].as_str().unwrap_or_else(|| panic!("an error: {v}"));
+    assert!(!why.contains("in use again"), "{why}");
+    let (st, v) = clean(&Who::Owner, json!({}));
+    assert_eq!(st, 200, "{v}");
+    let it = item(&v);
+    assert!(it["error"].is_string() && it["removed"] == false, "{v}");
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    assert!(store::get_seed(&conn, bad).unwrap().is_some(), "nothing changed");
 }
 
 #[test]

@@ -11,12 +11,12 @@
 //!
 //! | Kind | What | Why it is safe |
 //! |---|---|---|
-//! | `seed` | the daemon's copy of an unused Seed (`~/.k2/seeds/<hash>`) | the daily sweep's rule (§9.1): not live, not preview, not in the last 10 deployments, not named by a pending request or an unfinished deployment, unused 30 days |
+//! | `seed` | the daemon's copy of an unused Seed (`~/.k2/seeds/<hash>`) | the daily sweep's rule (§9.1): not live, not preview, not one of the last 5 that went live and stayed live on its App, 3 days past its last use, not named by a pending request or an unfinished deployment, unused 30 days |
 //! | `engineSeed` | the walled engine's copy of such a Seed, or one no daemon row names | the same keep set; the engine refuses one a unit still mounts |
 //! | `image` | a container image nothing uses (no container, no unit, not a current base) | Podman loads it again when needed |
 //! | `engineLeftover` | the engine's cut-off build tars, image loads, half-written Seeds, over an hour old | temp files of a step that ended |
 //! | `rotatedLog` | `*.log.1` beside an App's or a `--cmd` service's log | an old copy of a capped log (never `egress.log.1`, an audit trail) |
-//! | `deploymentLog` | the log of an old deployment: not live, not in the App's last 10, ended over 30 days ago | its Seed is past rollback too |
+//! | `deploymentLog` | the log of an old deployment: not live, not in the App's last 10, ended over 30 days ago | its Seed is past rollback too; a log is small, so it outlasts the Seed |
 //! | `buildTemp` | `~/.k2/apps/tmp/*` and `~/.k2/apps/images/.fetch-*`, over an hour old | temp files of a build or fetch that ended |
 //! | `updateStaging` | an update push's staging copy (`~/.k2/apps/<app>/updates/staging/<release>`) whose release isn't uploading, over a day old | the archive was signed and pushed from the workspace; push again |
 //! | `imageArchive` | a base-image archive in `~/.k2/apps/images` for a base K2 no longer pins (not on an air-gapped box) | K2 fetches the current one by digest |
@@ -48,6 +48,10 @@ pub const ROUTE: &str = "/cli/app/resources/clean";
 
 /// Temp files of a step that ended are this old before `clean` takes them.
 pub const TEMP_AGE_SECS: i64 = 3600;
+/// An old deployment's log goes once it is past the App's last 10 rows and
+/// ended over 30 days ago.
+const LOG_KEEP_DEPLOYMENTS: usize = 10;
+const LOG_MAX_AGE_SECS: i64 = 30 * 86_400;
 
 /// What `clean` never touches (said in every answer).
 pub const NEVER: &str =
@@ -236,7 +240,8 @@ fn pick(scope: &Scope, now: i64) -> R<Picked> {
         seeds.retain(|s| seed_belongs(&conn, s, &own, signer));
     }
     // Old deployments: ended, not live, not in the App's last 10, over 30
-    // days ago (the Seed rule's numbers).
+    // days ago. Their own numbers, not the Seed rule's (0.46.8): a log is
+    // small, and it is how you read what went wrong.
     let mut old_deployments = Vec::new();
     for a in &apps {
         let mut st = conn
@@ -248,7 +253,7 @@ fn pick(scope: &Scope, now: i64) -> R<Picked> {
         let rows: Vec<(String, i64)> =
             st.query_map(rusqlite::params![a.app_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?.flatten().collect();
         for (i, (dep, ended)) in rows.into_iter().enumerate() {
-            if i < store::SWEEP_KEEP_DEPLOYMENTS || a.live_deployment.as_deref() == Some(dep.as_str()) || now - ended < store::SWEEP_MAX_AGE_SECS {
+            if i < LOG_KEEP_DEPLOYMENTS || a.live_deployment.as_deref() == Some(dep.as_str()) || now - ended < LOG_MAX_AGE_SECS {
                 continue;
             }
             old_deployments.push((a.app_id.clone(), dep));
@@ -366,6 +371,9 @@ pub(crate) fn run(scope: &Scope, dry_run: bool, now: i64, engine: &dyn EngineCle
                 ..Item::default()
             });
         }
+        for (h, e) in &r.failed {
+            items.push(Item { kind: "seed", id: short(h), error: Some(e.clone()), ..Item::default() });
+        }
         for h in &r.engine_removed {
             items.push(Item { kind: "engineSeed", id: short(h), bytes: engine_bytes.get(h).copied(), removed: true, ..Item::default() });
         }
@@ -383,24 +391,26 @@ pub(crate) fn run(scope: &Scope, dry_run: bool, now: i64, engine: &dyn EngineCle
             };
             let mut it = Item { kind: "seed", id: short(&s.hash), app: s.built_for.clone(), bytes: u64::try_from(s.size_bytes).ok(), ..Item::default() };
             match aside {
-                Ok(Some(path)) => {
-                    k2_core::deploy::seed::remove_detached(&path);
-                    it.removed = true;
+                Ok(store::Detach::Moved(path)) => {
+                    match k2_core::deploy::seed::remove_detached(&path) {
+                        Ok(()) => it.removed = true,
+                        Err(e) => it.error = Some(e),
+                    }
                     gone.push(s.hash.clone());
                 }
-                Ok(None) => it.error = Some("in use again since the pick: kept".into()),
+                Ok(store::Detach::Kept) => it.error = Some("in use again since the pick: kept".into()),
+                Ok(store::Detach::Failed(e)) => it.error = Some(e),
                 Err(e) => it.error = Some(e.to_string()),
             }
             items.push(it);
         }
         if can_gc && !gone.is_empty() {
-            match seeds_engine.gc(&gone) {
-                Ok(a) => {
-                    for h in a.removed {
-                        items.push(Item { kind: "engineSeed", id: short(&h), bytes: engine_bytes.get(&h).copied(), removed: true, ..Item::default() });
-                    }
-                }
-                Err(e) => items.push(Item { kind: "engineSeed", id: "seeds-gc".into(), error: Some(e), ..Item::default() }),
+            let (a, err) = super::disk_watch::gc_in_batches(seeds_engine, &gone);
+            for h in a.removed {
+                items.push(Item { kind: "engineSeed", id: short(&h), bytes: engine_bytes.get(&h).copied(), removed: true, ..Item::default() });
+            }
+            if let Some(e) = err {
+                items.push(Item { kind: "engineSeed", id: "seeds-gc".into(), error: Some(e), ..Item::default() });
             }
         }
     }

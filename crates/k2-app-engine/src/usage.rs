@@ -326,7 +326,9 @@ impl Engine {
     }
 
     /// The `seeds-gc` verb (§9.2): remove exactly `remove`, never a Seed a
-    /// run state or unit file names.
+    /// run state or unit file names. In use is read again for each hash,
+    /// right before its rename: a list can take minutes, and a deploy of the
+    /// same hash can start while it runs.
     pub(crate) fn seeds_gc(&self, remove: &[String]) -> R<Value> {
         if remove.len() > wire::MAX_SEEDS_GC {
             return Err((codes::TOO_LARGE, format!("at most {} Seeds per seeds-gc", wire::MAX_SEEDS_GC)));
@@ -334,23 +336,24 @@ impl Engine {
         if let Some(bad) = remove.iter().find(|h| !seed_hash_ok(h)) {
             return Err((codes::BAD_REQUEST, format!("seed hash: {}", bad.chars().take(80).collect::<String>())));
         }
-        let in_use = self.seeds_in_use();
         let mut a = SeedsGcAnswer::default();
         let mut done: HashSet<&str> = HashSet::new();
         for h in remove {
             if !done.insert(h.as_str()) {
                 continue;
             }
+            #[cfg(test)]
+            gc_test_hook::run(h);
             let dir = self.seeds().join(h);
-            if in_use.iter().any(|u| u.contains(h.as_str())) {
-                a.skipped.push(h.clone());
-                continue;
-            }
             if !dir.is_dir() {
                 a.absent.push(h.clone());
                 continue;
             }
             let bytes = tree_bytes(&dir, Instant::now() + Duration::from_secs(30)).unwrap_or_else(|b| b);
+            if self.seeds_in_use().iter().any(|u| u.contains(h.as_str())) {
+                a.skipped.push(h.clone());
+                continue;
+            }
             // Out of the store's name first (a Seed is whole or absent),
             // then delete. A leftover `.tmp-` is cleaned at the next start.
             let tmp = self.seeds().join(format!(".tmp-gc-{h}-{}", std::process::id()));
@@ -401,6 +404,30 @@ impl Engine {
             Some(v) => v.to_vec(),
             None => app_du_argv(secs),
         }
+    }
+}
+
+/// Runs at the start of each hash's turn in `seeds_gc`.
+#[cfg(test)]
+mod gc_test_hook {
+    use std::cell::RefCell;
+
+    type Hook = Box<dyn Fn(&str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    pub fn set(f: Hook) {
+        HOOK.with(|h| *h.borrow_mut() = Some(f));
+    }
+
+    pub fn run(hash: &str) {
+        HOOK.with(|h| {
+            if let Some(f) = &*h.borrow() {
+                f(hash);
+            }
+        });
     }
 }
 
@@ -502,6 +529,35 @@ mod tests {
 
     /// `seeds-gc` removes exactly what it is told, refuses a Seed a unit
     /// file still mounts, reports the absent, and refuses bad hashes.
+    /// 0.46.8: a deploy of a Seed further down the list starts while
+    /// seeds-gc runs: the Seed is read as in use at its own turn and stays.
+    #[test]
+    fn seeds_gc_reads_in_use_again_for_each_hash() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_path_buf();
+        for c in ['a', 'b'] {
+            let f = home.join("seeds").join(hash(c)).join("s.js");
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, vec![1u8; 8192]).unwrap();
+        }
+        let e = Engine::new(home.clone(), "/tmp".into());
+        let unit = e.quadlets().join("k2app-jobs-d1.container");
+        let text = format!("[Container]\nVolume={}:/app:ro\n", home.join("seeds").join(hash('b')).display());
+        let second = hash('b');
+        super::gc_test_hook::set(Box::new(move |h: &str| {
+            // The turn of the second hash: its deploy has just written its unit.
+            if h == second {
+                std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+                std::fs::write(&unit, &text).unwrap();
+            }
+        }));
+        let v = answer(&e, k2_root_proto::engine::Request::SeedsGc { remove: vec![hash('a'), hash('b')] });
+        let a: SeedsGcAnswer = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(a.removed, vec![hash('a')], "{v}");
+        assert_eq!(a.skipped, vec![hash('b')], "{v}");
+        assert!(home.join("seeds").join(hash('b')).join("s.js").is_file(), "the running App keeps its /app");
+    }
+
     #[test]
     fn seeds_gc_removes_only_the_named_and_unused() {
         let d = tempfile::tempdir().unwrap();

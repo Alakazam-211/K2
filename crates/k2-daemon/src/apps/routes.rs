@@ -2463,6 +2463,10 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         super::access::purge_confirm(who, &app.app_id, s(&v, "confirmToken"))?;
     }
     super::supervisor::stop_app(&app, &actor(who))?;
+    // Its guests' sign-ins end with it: `dropAccess` means what it says, and
+    // an App that's gone has no one left to be signed in to. Before the row
+    // goes, so a failure here leaves an uninstall the caller can run again.
+    k2_core::skin::revoke_sessions_for_app(&app.service_id).map_err(db_err)?;
     super::supervisor::forget(&app.app_id);
     super::egress_proxy::stop(&app.app_id);
     if cfg!(target_os = "linux") && k2_root_proto::apps::AppId::parse(&app.app_id).is_some() && std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {

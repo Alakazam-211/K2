@@ -1157,10 +1157,15 @@ const AUTHOR_AGENT: &str = "agent";
 /// owner's display name (`name`), the same name the agent hears in
 /// `[from <name>]` and an owner post shows in `from`. An agent session's
 /// own answer to an ordinary choice card is stamped with its name (§6.10:
-/// it used to carry none, so it read like nobody answered).
+/// it used to carry none, so it read like nobody answered). A guest's says who it
+/// is in `name` (`dana on App shop; login set up by sales's agent`), for whoever
+/// reads the card later; `login` stays the bare name. The agent's terminal already
+/// has that in the answer's `[guest …]` stamp ([`fire_card_callbacks`]).
 fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> Option<overlay::PostAuthor> {
     if let Some(pass) = request_skin() {
-        Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
+        let mut author = overlay::PostAuthor::guest(&skin_from_stamp(&pass));
+        author.name = Some(guest_stamp_label(&pass));
+        Some(author)
     } else if principal_is_bound(params) {
         let from = params.get("from").map(|s| s.trim()).unwrap_or("");
         (!from.is_empty()).then(|| overlay::PostAuthor { kind: AUTHOR_AGENT.to_string(), login: from.to_string(), name: None })

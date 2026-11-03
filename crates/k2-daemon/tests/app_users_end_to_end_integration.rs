@@ -647,6 +647,41 @@ async fn clearing_folder_limits_needs_the_app_users_switch() {
     assert_eq!(r.status, 200, "{}", r.body);
 }
 
+/// A card a released login answered says who set the login up, for whoever reads
+/// the card later, as the agent's terminal stamp does. The name stays bare.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_card_answer_says_who_set_up_the_login() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let t = tag();
+    let b = box2(&env, &t);
+    let role = format!("mine{t}");
+    let r = post(port, "/cli/skin/roles", &b.agent, json!({ "name": role, "app": b.shop, "roomAccess": [line(&b.sales)] })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let u = format!("u{t}");
+    let r = post(port, "/cli/skin/users", &b.agent, json!({ "username": u, "app": b.shop, "role": role, "password": TEMP })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    person_chooses(port, &u, TEMP, &b.shop, PW).await;
+    let s = session(port, &u, &b.shop).await;
+
+    let r = post(port, "/cli/thread/ask", &b.agent, json!({ "addr": b.sales.handle, "prompt": "Ship it?", "options": "Go,Stop", "from": b.sales.handle })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let id = r.json()["id"].as_str().expect("card id").to_string();
+    let r = post(port, "/cli/thread/answer", &s, json!({ "addr": b.sales.handle, "id": id, "answer": "Go" })).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let r = get(port, "/cli/thread", OWNER, &format!("addr={}&limit=50", b.sales.handle)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let items = r.json()["items"].as_array().cloned().expect("items");
+    let card = items.iter().find(|i| i["id"] == json!(id)).unwrap_or_else(|| panic!("card {id} in {items:?}"));
+    let by = &card["doc"]["choice"]["answeredBy"];
+    assert_eq!(by["kind"], json!("guest"), "{by}");
+    assert_eq!(by["login"], json!(u), "the name stays bare: {by}");
+    let name = by["name"].as_str().expect("says who");
+    assert!(name.contains(&format!("login set up by {}'s agent", b.sales.handle)), "{name}");
+}
+
 /// The App's own record of its people (`k2 app history <app> --users`), newest first.
 async fn people_record(port: u16, agent: &str, app_name: &str) -> Vec<Value> {
     let r = get(port, "/cli/app/history", agent, &format!("app={app_name}&users=1&limit=200")).await;

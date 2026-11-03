@@ -354,8 +354,10 @@ pub struct PostAuthor {
     pub login: String,
     /// The owner's display name, on a card the owner token answered or
     /// dismissed (`answeredBy`), when one is set: the same name an owner's
-    /// post carries in `from`, stamped at answer time. None otherwise (and
-    /// for every other kind), so viewers fall back to "the owner".
+    /// post carries in `from`, stamped at answer time. None otherwise, so viewers
+    /// fall back to "the owner". On a card a guest answered, what the guest's stamp
+    /// says (`dana on App shop; login set up by sales's agent`); a Thread shows the
+    /// `login`, and an App's own page has the bare name there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

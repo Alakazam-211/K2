@@ -8094,7 +8094,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         the person the App's reset link, to the email on the login, from the
                                         App's address (you never see the link). Sending it adds no limit;
                                         when they choose a password with it, anything waiting starts.
-                                        --revoke takes back that login's unused links on the App.
+                                        --revoke takes back that login's unused links on the App and sends nothing.
                                         The owner, or an admin for App-only users (box logins stay
                                         the owner's). A one-time reset link on K2's own page: when used,
                                         extra access waiting for the person's own password starts. --code: the link is printed for you to hand over. Mailing it needs --from
@@ -17297,7 +17297,8 @@ without the owner token.
                                        with a card for the owner (exit 2).
                                        --revoke stops the App's code handing out
                                        more; rooms already on a login or role
-                                       stay until they're changed.
+                                       stay until they're changed (off a role:
+                                       k2 app role room <role> <room> --clear).
   k2 app grant <app> --kind guests-rooms --revoke
                                        Take it back (an agent may, for its own
                                        App: it only narrows).

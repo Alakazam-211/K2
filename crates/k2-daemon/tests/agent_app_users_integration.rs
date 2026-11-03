@@ -1323,7 +1323,7 @@ async fn an_agent_starts_a_reset_takes_it_back_clears_a_lockout_and_reads_the_re
     let bad = json!({ "username": u, "password": "wrong-wrong-wrong", "app": shop });
     let mut locked = false;
     for _ in 0..20 {
-        if login(port, bad.clone()).await.status == 429 {
+        if login(port, bad.clone()).await.status == 423 {
             locked = true;
             break;
         }

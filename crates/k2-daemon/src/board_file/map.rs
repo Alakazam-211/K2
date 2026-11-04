@@ -834,6 +834,9 @@ mod tests {
     #[test]
     fn an_edit_of_one_field_changes_only_that_fields_bytes_on_every_pairs_objects() {
         for (name, v) in pairs() {
+            if v.get("file_refused").is_some() {
+                continue;
+            }
             let mut b = Board::from_json(v["file"].to_string().as_bytes(), &Limits::V1).expect("valid");
             b.people.entry(Id::new(ANN).expect("t")).or_default();
             for o in b.objects.clone() {

@@ -214,9 +214,26 @@ enum Which {
     Expired,
 }
 
+/// Walks so far and how long they took, for the night run (`live_access_fanout`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WalkStats {
+    pub walks: u64,
+    pub longest_ms: u64,
+    pub last_ms: u64,
+    /// How many passes the last walk compared.
+    pub last_size: u64,
+}
+
+static STATS: Mutex<WalkStats> = Mutex::new(WalkStats { walks: 0, longest_ms: 0, last_ms: 0, last_size: 0 });
+
+pub fn walk_stats() -> WalkStats {
+    *STATS.lock()
+}
+
 /// Compare the entries `which` names, one resolve at a time. Sockets narrow or close
 /// as the walk goes. The frames it owes are paced once it's done.
 fn walk(which: Which) {
+    let t0 = Instant::now();
     let now = chrono::Utc::now().timestamp();
     let entries: Vec<Arc<Entry>> = with_entries(|m| {
         m.values()
@@ -242,6 +259,7 @@ fn walk(which: Which) {
             return;
         }
     };
+    let size = entries.len() as u64;
     let mut owed: HashMap<DoorKey, Vec<Owed>> = HashMap::new();
     for e in entries {
         if compare(&e, &world) {
@@ -252,6 +270,12 @@ fn walk(which: Which) {
         }
     }
     pace(owed);
+    let ms = t0.elapsed().as_millis() as u64;
+    let mut stats = STATS.lock();
+    stats.walks += 1;
+    stats.last_ms = ms;
+    stats.longest_ms = stats.longest_ms.max(ms);
+    stats.last_size = size;
 }
 
 /// `true`: the answer changed, and the pass is still alive.

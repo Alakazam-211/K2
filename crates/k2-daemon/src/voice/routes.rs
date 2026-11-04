@@ -24,6 +24,15 @@
 //! | Member login | ✓ | route floor | route floor | ✓ | `moderator_only` |
 //! | agent or K2 terminal passport | ✓ | ✓ (read) | `owner_or_admin_only` | `agents_not_in_voice` | `agents_cannot_moderate` |
 //! | App pass, API key | `app_pass_not_allowed` | … | … | … | … |
+//! | an ended phone pairing | `device_session_ended` (403) on every route | | | | |
+//!
+//! A paired phone (K2 Companion) signs in with its device session, a login
+//! session of the same person: it is that person's Login row above, with the
+//! same answers (gap-voice-calls-mobile-v1 §11 row 4). `rooms` carries `me`
+//! for a login caller: where Sew's presence lists the person, `here` (this
+//! session's call) or `elsewhere` (another device or session), never claimed
+//! live (`mayBeLeaving`: presence trails a killed app by about 40 s).
+//! `session/leave` is idempotent for the session's own calls (`already`).
 //!
 //! Refusals: `{"ok": false, "error": {"code", "hint", "details"?}}` (K2's
 //! house shape, which `k2 voice` reads) with `code`, `hint` and `details`
@@ -161,6 +170,9 @@ pub enum Caller {
     Passport,
     /// An App pass or API key.
     App,
+    /// A paired phone's device session that ended (revoked, unpaired,
+    /// signed out, expired, or its login changed).
+    DeviceEnded,
     Invalid,
 }
 
@@ -176,6 +188,9 @@ impl Caller {
             Who::Login { username, role } => Caller::Login { username, role, token: presented },
             Who::Agent { .. } | Who::Shell { .. } => Caller::Passport,
             Who::Wrong => Caller::App,
+            Who::Invalid if k2_core::connect_users::token_state(&presented) == k2_core::connect_users::TokenState::DeviceEnded => {
+                Caller::DeviceEnded
+            }
             Who::Invalid => Caller::Invalid,
         }
     }
@@ -192,6 +207,7 @@ impl Caller {
 fn not_a_caller(c: &Caller) -> Option<CliResponse> {
     match c {
         Caller::App => Some(no(403, "app_pass_not_allowed", "voice rooms are for this server's own logins, never App passes or API keys")),
+        Caller::DeviceEnded => Some(refuse(&bff::device_session_ended())),
         Caller::Invalid => Some(no(401, "unauthenticated", "invalid or missing token")),
         _ => None,
     }
@@ -225,7 +241,7 @@ fn need_person(c: &Caller, owner_token: &str) -> Result<Person, CliResponse> {
         )),
         Caller::Passport => Err(no(403, "agents_not_in_voice", "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)")),
         Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token).map_err(|r| refuse(&r)),
-        Caller::App | Caller::Invalid => Err(no(401, "unauthenticated", "invalid or missing token")),
+        Caller::App | Caller::DeviceEnded | Caller::Invalid => Err(no(401, "unauthenticated", "invalid or missing token")),
     }
 }
 
@@ -335,7 +351,7 @@ fn shown(r: &RoomRow) -> bool {
     r.channel_id.is_some() && (r.state == admin_space::ROOM_ACTIVE || r.state == admin_space::ROOM_CLOSING)
 }
 
-fn rooms_view(c: &Caller) -> CliResponse {
+fn rooms_view(c: &Caller, owner_token: &str) -> CliResponse {
     let hosting = super::hosting_state();
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
@@ -353,11 +369,21 @@ fn rooms_view(c: &Caller) -> CliResponse {
             room_json(r, people, &hosting, closes.get(&r.slug).copied())
         })
         .collect();
+    // The caller's own voice state (logins only: the owner token and
+    // passports are nobody in a room).
+    let me = match c {
+        Caller::Login { username, role, token } => bff::person_of_login(token, username, *role, owner_token)
+            .ok()
+            .map(|p| bff::me_view(&p, &view.rooms, &bff::deps()))
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
     ok(json!({
         "ok": true,
         "server": label(),
         "hosting": hosting,
         "rooms": rooms,
+        "me": me,
         "rev": rev,
         "canManage": c.manages(),
         "lane": super::lane::state(),
@@ -521,11 +547,31 @@ fn close(c: &Caller, b: &Value) -> CliResponse {
 
 // ── the person's routes ──────────────────────────────────────────────
 
+/// Which client a login token is: a paired phone (with its name) or not.
+pub fn client_of(token: &str) -> bff::Client {
+    use k2_core::connect_users as cu;
+    if !cu::looks_like_session_token(token) {
+        return bff::Client::Login;
+    }
+    let Some((user, sid)) = cu::validate_device_session(token) else {
+        return bff::Client::Login;
+    };
+    let name = cu::device_sessions(Some(&user))
+        .ok()
+        .and_then(|v| v.into_iter().find(|d| d.id == sid))
+        .map(|d| d.name)
+        .unwrap_or_default();
+    bff::Client::Phone { name }
+}
+
 fn join(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
-    let p = match need_person(c, owner_token) {
+    let mut p = match need_person(c, owner_token) {
         Ok(p) => p,
         Err(r) => return r,
     };
+    if let Caller::Login { token, .. } = c {
+        p.client = client_of(token);
+    }
     let Some(room) = field(b, "room") else {
         return no(400, "usage", "send {\"room\": \"room-1\", \"join\"?: {Sew's join body}}");
     };
@@ -634,7 +680,7 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
             return r;
         }
         return match path {
-            ROOMS => rooms_view(&caller),
+            ROOMS => rooms_view(&caller, owner_token),
             _ => match &caller {
                 Caller::Login { role, .. } if *role < Role::Admin => no(403, "owner_or_admin_only", "k2 voice status is the owner's and Admins'; k2 voice rooms is everyone's"),
                 _ => status_view(),

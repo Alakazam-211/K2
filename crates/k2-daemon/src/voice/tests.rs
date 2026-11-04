@@ -15,7 +15,7 @@ use k2_core::tool_hook::sew_wire::{ExternalId, MgmtVoiceChange, MgmtVoiceState, 
 use k2_core::tool_hook::ConnectChatGate;
 use k2_core::voice_rooms::Hosting as Tier;
 
-use super::bff::{self, Deps, Forward, Person, SewAnswer, SewApi};
+use super::bff::{self, Client, Deps, Forward, Person, Presence, SewAnswer, SewApi};
 use super::lane::{self, Gate, LaneKind, LaneState};
 use super::occupancy::{person_name, Occupancy, Occupant};
 use super::routes::{self, Caller};
@@ -239,13 +239,50 @@ fn deps(sew: Arc<FakeSew>) -> Deps {
         level_pending: Arc::new(|_: &ExternalId| Ok::<_, String>(false)),
         lane_hold: Duration::from_millis(200),
         member_wait: Duration::from_millis(100),
+        // No feed: presence is unknown, so leaves always reach Sew.
+        presence: Arc::new(|_: &ExternalId| Presence { feed: "off".into(), listed: None }),
+    }
+}
+
+/// Deps whose presence comes from `who`: external id → (channel, member id).
+fn deps_with_presence(sew: Arc<FakeSew>, who: Arc<Mutex<BTreeMap<String, (String, String)>>>) -> Deps {
+    Deps {
+        presence: Arc::new(move |ext: &ExternalId| {
+            let listed = who.lock().unwrap().get(&ext.to_string()).map(|(ch, member)| {
+                (
+                    ch.clone(),
+                    Occupant {
+                        member_id: member.clone(),
+                        external_id: Some(ext.to_string()),
+                        person: "someone".into(),
+                        connection: "connected".into(),
+                        self_mute: false,
+                        self_deaf: false,
+                        server_mute: false,
+                        server_deaf: false,
+                        joined_at: "2026-11-04T00:00:00Z".into(),
+                    },
+                )
+            });
+            Presence { feed: bff::FEED_LIVE.into(), listed }
+        }),
+        ..deps(sew)
     }
 }
 
 fn person(login: &str, uuid: &str, role: Role, sid_token: &str) -> Person {
     let ident = crate::chat_pass::identity::connect_identity(login, role, uuid, sid_token, false);
     let ext = ExternalId::parse(&ident.sub).unwrap();
-    Person { ident, ext, login: login.into(), role }
+    Person { ident, ext, login: login.into(), role, client: Client::Login }
+}
+
+/// The same person on a paired phone: another login session of theirs.
+fn phone(login: &str, uuid: &str, role: Role, sid_token: &str, name: &str) -> Person {
+    Person { client: Client::Phone { name: name.into() }, ..person(login, uuid, role, sid_token) }
+}
+
+fn leaves(sew: &FakeSew) -> usize {
+    sew.calls().iter().filter(|c| c.1 == bff::paths::ME_VOICE_LEAVE).count()
 }
 
 fn room(n: u32, channel: &str, state: &str) -> RoomRow {
@@ -485,9 +522,113 @@ fn leave_and_the_call_routes_stay_on_the_persons_own_call() {
     let v = bff::leave(&ada, Some(&call), &d).expect("leave");
     assert_eq!(v["room"], "room-1");
     assert_eq!(v["channelId"], "901");
+    assert_eq!((v["left"].as_bool(), v["already"].as_bool()), (Some(true), Some(false)));
     assert_eq!(bff::counts().1, 0);
-    assert_eq!(bff::leave(&ada, Some(&call), &d).unwrap_err().code, "call_not_found");
-    bff::leave(&ada, None, &d).expect("leave without a call id leaves whatever call");
+    assert_eq!(leaves(&sew), 1);
+    // Leave twice: a success that says so, and Sew isn't asked again.
+    let v = bff::leave(&ada, Some(&call), &d).expect("a second leave is a success");
+    assert_eq!((v["left"].as_bool(), v["already"].as_bool(), v["why"].as_str()), (Some(true), Some(true), Some("already_left")));
+    assert_eq!((v["room"].as_str(), v["channelId"].as_str()), (Some("room-1"), Some("901")));
+    assert_eq!(leaves(&sew), 1, "an ended call never reaches Sew");
+    // Another login's call, ended or not, and an id nobody had: refused.
+    assert_eq!(bff::leave(&mo, Some(&call), &d).unwrap_err().code, "call_not_found", "someone else's ended call");
+    assert_eq!(bff::leave(&mo, Some("vc_never"), &d).unwrap_err().code, "call_not_found");
+    let call2 = bff::join(&ada, "room-1", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    let r = bff::leave(&mo, Some(&call2), &d).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (404, "call_not_found"), "someone else's live call");
+    assert_eq!(bff::counts().1, 1, "a refused leave ends nothing");
+    assert_eq!(leaves(&sew), 1);
+    let v = bff::leave(&ada, None, &d).expect("leave without a call id leaves whatever call");
+    assert_eq!((v["left"].as_bool(), v["already"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(leaves(&sew), 2);
+    assert_eq!(bff::leave(&ada, Some(&call2), &d).expect("ended by the plain leave")["why"], "already_left");
+    bff::forget_all();
+}
+
+/// The phone gap list §6.4: a phone and a desktop are two login sessions of
+/// one person, and Sew keeps one call per person.
+#[test]
+fn a_phone_and_a_desktop_share_one_call_and_leaves_stay_idempotent() {
+    let _l = lane::test_lock();
+    lane::publish(LaneState::not_applicable());
+    bff::forget_all();
+    let sew = Arc::new(FakeSew::default());
+    session_ok(&sew, "sews_s");
+    sew.answer(&bff::paths::channel_join("901"), 200, json!({"url": "wss://v", "token": "t", "call_credential": {"token": "sewcc_a.b"}}));
+    sew.answer(&bff::paths::channel_join("902"), 200, json!({"url": "wss://v", "token": "t", "call_credential": {"token": "sewcc_c.d"}}));
+    sew.answer(bff::paths::ME_VOICE_LEAVE, 200, json!({"ok": true}));
+    let who: Arc<Mutex<BTreeMap<String, (String, String)>>> = Arc::default();
+    let d = deps_with_presence(sew.clone(), who.clone());
+    let rooms = vec![room(1, "901", ROOM_ACTIVE), room(2, "902", ROOM_ACTIVE)];
+    let ada_ext = format!("k2:connect:{UUID_ADA}");
+    let desk = person("ada", UUID_ADA, Role::Member, "tok-ada-desk");
+    let ph = phone("ada", UUID_ADA, Role::Member, "tok-ada-phone", "Ada's iPhone");
+    assert_ne!(desk.ident.sid, ph.ident.sid, "two sessions");
+    assert_eq!(desk.ext, ph.ext, "one person");
+
+    // Not listed anywhere: not in a call.
+    let me = bff::me_view(&ph, &rooms, &d);
+    assert_eq!((me["inCall"].as_bool(), me["user"].as_str(), me["presence"].as_str()), (Some(false), Some("ada"), Some("live")));
+    assert!(me.get("elsewhere").is_none(), "{me}");
+
+    // The desktop joins room 1; Sew lists ada there.
+    let desk_call = bff::join(&desk, "room-1", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    who.lock().unwrap().insert(ada_ext.clone(), ("901".into(), "6".into()));
+    let me = bff::me_view(&ph, &rooms, &d);
+    assert_eq!((me["inCall"].as_bool(), me["elsewhere"].as_bool(), me["here"].as_bool()), (Some(true), Some(true), Some(false)), "{me}");
+    assert_eq!((me["room"]["id"].as_str(), me["room"]["name"].as_str()), (Some("room-1"), Some("Room 1")));
+    assert_eq!(me["on"], json!({"kind": "login"}));
+    assert_eq!(me["callId"], Value::Null, "another session's call id is never shown");
+    assert_eq!((me["mayBeLeaving"].as_bool(), me["presenceLagSecs"].as_u64()), (Some(true), Some(40)));
+    assert!(me["hint"].as_str().unwrap().contains("may still be leaving"), "{me}");
+    let me = bff::me_view(&desk, &rooms, &d);
+    assert_eq!((me["here"].as_bool(), me["elsewhere"].as_bool(), me["callId"].as_str()), (Some(true), Some(false), Some(desk_call.as_str())));
+
+    // The phone joins the same room: it takes the call over.
+    let phone_call = bff::join(&ph, "room-1", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    assert_eq!(bff::counts().1, 1, "one call per person");
+    let me = bff::me_view(&desk, &rooms, &d);
+    assert_eq!((me["elsewhere"].as_bool(), me["on"].clone()), (Some(true), json!({"kind": "phone", "name": "Ada's iPhone"})), "{me}");
+    assert_eq!(bff::me_view(&ph, &rooms, &d)["here"], true);
+    // The desktop's stale leave must not end the phone's call.
+    let v = bff::leave(&desk, Some(&desk_call), &d).expect("a leave of a call taken over is a success");
+    assert_eq!((v["already"].as_bool(), v["why"].as_str()), (Some(true), Some("joined_elsewhere")));
+    assert_eq!(leaves(&sew), 0, "never reaches Sew");
+    assert_eq!(bff::counts().1, 1, "the phone's call stays");
+    // The desktop can't leave the phone's call by its id (not its session's).
+    assert_eq!(bff::leave(&desk, Some(&phone_call), &d).unwrap_err().code, "call_not_found");
+
+    // The phone is killed: Sew drops ada (here: presence goes empty), then
+    // the relaunched phone leaves the old call.
+    who.lock().unwrap().clear();
+    let v = bff::leave(&ph, Some(&phone_call), &d).expect("leave after Sew dropped the member");
+    assert_eq!((v["left"].as_bool(), v["already"].as_bool(), v["why"].as_str()), (Some(true), Some(true), Some("sew_dropped")));
+    assert_eq!(leaves(&sew), 1, "Sew's leave is idempotent, so K2 still sends it");
+    assert_eq!(bff::leave(&ph, Some(&phone_call), &d).expect("and again")["why"], "already_left");
+    assert_eq!(leaves(&sew), 1);
+
+    // A call K2 still holds while Sew lists the person in another room (a
+    // join K2 didn't make, or a restart): the leave ends nothing there.
+    let c3 = bff::join(&ph, "room-1", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    who.lock().unwrap().insert(ada_ext.clone(), ("902".into(), "6".into()));
+    let v = bff::leave(&ph, Some(&c3), &d).expect("leave");
+    assert_eq!((v["already"].as_bool(), v["why"].as_str()), (Some(true), Some("in_another_room")));
+    assert_eq!(leaves(&sew), 1, "the room-2 call is untouched");
+    // Listed with no K2 record (after a daemon restart): elsewhere, client unknown.
+    let me = bff::me_view(&ph, &rooms, &d);
+    assert_eq!((me["inCall"].as_bool(), me["elsewhere"].as_bool(), me["on"].clone()), (Some(true), Some(true), Value::Null));
+    assert_eq!(me["room"]["id"], "room-2");
+
+    // A move from the same session: the old call id leaves as `moved`.
+    who.lock().unwrap().clear();
+    let a = bff::join(&ph, "room-1", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    let b = bff::join(&ph, "room-2", &json!({}), &rooms, &d).unwrap()["callId"].as_str().unwrap().to_string();
+    assert_eq!(bff::leave(&ph, Some(&a), &d).expect("old id")["why"], "moved");
+    assert_eq!(bff::forward(&ph, Forward::State, &a, &json!({}), &d).unwrap_err().code, "call_not_found", "an ended call has no session routes");
+    assert_eq!(leaves(&sew), 1);
+    let v = bff::leave(&ph, Some(&b), &d).expect("the live one");
+    assert_eq!(v["room"], "room-2");
+    assert_eq!(leaves(&sew), 2);
     bff::forget_all();
 }
 
@@ -570,6 +711,10 @@ fn routes_refuse_the_owner_token_agents_and_apps_where_the_prd_says() {
         (routes::ROOM_RENAME, Caller::Passport, true, "403 Forbidden", "owner_or_admin_only"),
         (routes::ROOMS, Caller::App, false, "403 Forbidden", "app_pass_not_allowed"),
         (routes::JOIN, Caller::Invalid, true, "401 Unauthorized", "unauthenticated"),
+        // An ended phone pairing: a named code on every route, never 401.
+        (routes::JOIN, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
+        (routes::LEAVE, Caller::DeviceEnded, true, "403 Forbidden", "device_session_ended"),
+        (routes::ROOMS, Caller::DeviceEnded, false, "403 Forbidden", "device_session_ended"),
     ];
     for (path, caller, post, status, code) in cases {
         let r = routes::handle(path, caller.clone(), "owner", post, br#"{"room":"room-1","count":1,"name":"x"}"#);

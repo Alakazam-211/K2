@@ -512,3 +512,206 @@ async fn another_default_carries_agents_access_over_and_agents_join_over_mgmt() 
     assert_eq!(k2_daemon::voice_admin::default_space_fixed(Some("k5-admin")).unwrap(), None);
     env.sew.assert_clean();
 }
+
+/// Phones (gap-voice-calls-mobile-v1 §11 row 4), through the real
+/// `/cli/voice/*` handler and the real login store: a paired phone's device
+/// session joins exactly like the same person's desktop login (same rules,
+/// the same answer shape for sew-call-client), "in a call elsewhere" comes
+/// from Sew's presence, leaves are idempotent, and an ended pairing is
+/// refused by name. Sew's client API is a recording fake (`bff::set_deps`);
+/// the presence is the real occupancy store fed from the fake Sew.
+///
+/// Linux only: voice rooms are hosted on Linux (`hosting_state` is
+/// `not_linux` anywhere else, by design).
+#[cfg(target_os = "linux")]
+mod phone {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use k2_core::connect_users::TokenState;
+    use k2_core::tool_hook::sew_wire::ExternalId;
+    use k2_core::tool_hook::ConnectChatGate;
+    use k2_daemon::sew_mgmt::MgmtClient;
+    use k2_daemon::voice::bff::{self, Deps, SewAnswer, SewApi};
+    use k2_daemon::voice::occupancy::{self, Feed};
+    use k2_daemon::voice::routes::{self, Caller};
+    use serde_json::{json, Value};
+
+    const OWNER_TOKEN: &str = "owner-token-voice-phone-test";
+
+    /// Sew's client API as the BFF sees it: every exchange, join and leave.
+    #[derive(Default)]
+    struct ClientSew {
+        calls: Mutex<Vec<(Option<String>, String, Value)>>,
+    }
+
+    impl ClientSew {
+        fn count(&self, path: &str) -> usize {
+            self.calls.lock().unwrap().iter().filter(|c| c.1 == path).count()
+        }
+        fn passes(&self) -> Vec<Value> {
+            self.calls.lock().unwrap().iter().filter(|c| c.1 == bff::paths::AUTH_K2).map(|c| c.2.clone()).collect()
+        }
+    }
+
+    impl SewApi for ClientSew {
+        fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
+            self.calls.lock().unwrap().push((bearer.map(str::to_string), path.to_string(), body.clone()));
+            let body = if path == bff::paths::AUTH_K2 {
+                let n = self.count(bff::paths::AUTH_K2);
+                json!({"token": format!("sews_{n}"), "expires_at": "2099-01-01T00:00:00Z"})
+            } else if path.starts_with("/api/v1/channels/") && path.ends_with("/voice/join") {
+                json!({"url": "wss://voice.lab.k2.dev", "token": "media", "media": {"relay_only": true},
+                       "call_credential": {"token": "sewcc_sel.secret", "expires_at": "2099-01-01T00:00:00Z", "join_id": "j1", "device_scope": "d"}})
+            } else if path == bff::paths::ME_VOICE_LEAVE {
+                json!({"ok": true})
+            } else {
+                return Err(format!("client sew fake: no answer for {path}"));
+            };
+            Ok(SewAnswer { status: 200, body })
+        }
+    }
+
+    fn call(token: &str, path: &str, post: bool, body: Value) -> (String, Value) {
+        let c = Caller::from_tcp("", Some(token), OWNER_TOKEN);
+        let raw = if post { body.to_string().into_bytes() } else { Vec::new() };
+        let r = routes::handle(path, c, OWNER_TOKEN, post, &raw);
+        let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: json {e}: {}", r.body));
+        (r.status.to_string(), v)
+    }
+
+    fn keys(v: &Value) -> Vec<String> {
+        let mut k: Vec<String> = v.as_object().unwrap_or_else(|| panic!("not an object: {v}")).keys().cloned().collect();
+        k.sort();
+        k
+    }
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            bff::set_deps(None);
+            bff::forget_all();
+            occupancy::clear();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_paired_phone_joins_like_the_desktop_sees_elsewhere_and_an_ended_pairing_is_refused() {
+        let env = setup(&SEW_070, true, Hosting::Ok).await;
+        let _reset = Reset;
+        let ada = login("ada", Role::Member);
+        settle(&env).await;
+        let sp = space(&env);
+        let hosting = k2_daemon::voice::hosting_state();
+        assert_eq!(hosting.state, "ok", "the box hosts rooms: {hosting:?}");
+
+        let sew = Arc::new(ClientSew::default());
+        bff::set_deps(Some(Arc::new(Deps {
+            sew: sew.clone(),
+            mint: Arc::new(|i: &k2_daemon::chat_pass::identity::PassIdentity| Ok::<_, String>(format!("pass-for-{}", i.sub))),
+            connect_gate: Arc::new(|_: &str, _: &str| Ok::<_, String>(ConnectChatGate::Ready)),
+            level_pending: Arc::new(|_: &ExternalId| Ok::<_, String>(false)),
+            lane_hold: Duration::from_millis(200),
+            member_wait: Duration::from_millis(100),
+            presence: Arc::new(bff::live_presence),
+        })));
+
+        // ada's desktop login and her paired phone.
+        let desk = connect_users::create_session("ada");
+        let epoch = connect_users::live_user_epoch("ada").expect("ada's epoch");
+        let phone = connect_users::create_device_session("ada", epoch, "ios-install-1", "Ada's iPhone", "user:ada").expect("pair the phone");
+        assert_eq!(connect_users::token_state(&phone), TokenState::Live);
+        for t in [&desk, &phone] {
+            match Caller::from_tcp("", Some(t), OWNER_TOKEN) {
+                Caller::Login { username, role, .. } => assert_eq!((username.as_str(), role), ("ada", Role::Member), "the same person and role"),
+                other => panic!("a login caller, got {other:?}"),
+            }
+        }
+
+        // Both join room 1 under the same rules and get the same answer shape.
+        let join = json!({"room": "room-1", "join": {"call_credential": true, "self_mute": false, "self_deaf": false}});
+        let (s, d1) = call(&desk, routes::JOIN, true, join.clone());
+        assert_eq!(s, "200 OK", "{d1}");
+        let (s, p1) = call(&phone, routes::JOIN, true, join.clone());
+        assert_eq!(s, "200 OK", "{p1}");
+        assert_eq!(keys(&p1), keys(&d1), "the phone's answer is the desktop's shape");
+        assert_eq!(p1["join"], d1["join"], "Sew's join answer as is, call credential included");
+        assert_eq!(p1["join"]["call_credential"]["token"], "sewcc_sel.secret");
+        assert_eq!((p1["room"]["id"].as_str(), p1["relayOnly"].as_bool()), (Some("room-1"), Some(true)));
+        let passes = sew.passes();
+        assert_eq!(passes.len(), 2, "one Sew session per login session: {passes:?}");
+        assert_eq!(passes[0], passes[1], "the same person: {passes:?}");
+        assert_eq!(passes[1]["pass"], format!("pass-for-{ada}"));
+
+        // ...and the same refusals: a Member doesn't moderate, read status or
+        // change rooms.
+        for t in [&desk, &phone] {
+            let (s, v) = call(t, routes::MODERATE, true, json!({"room": "room-1", "person": "ada", "action": "mute"}));
+            assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("moderator_only")), "{v}");
+            let (s, v) = call(t, routes::STATUS, false, json!({}));
+            assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("owner_or_admin_only")), "{v}");
+            let (s, v) = call(t, routes::SETTINGS, true, json!({"count": 2}));
+            assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("403 Forbidden", Some("owner_or_admin_only")), "{v}");
+        }
+
+        // Sew lists ada in room 1 (the phone's call; the desktop's ended when
+        // the phone joined): the real occupancy store, fed from the fake.
+        env.sew.voice_join(&sp, "room-1", &ada).expect("ada in room-1 on Sew");
+        let mgmt = MgmtClient::new(env.sew.socket.clone(), env.sew.token_file.clone());
+        let mut feed = Feed::default();
+        feed.step(&mgmt, &sp, 0).await.expect("voice/states");
+        let (s, rd) = call(&desk, routes::ROOMS, false, json!({}));
+        assert_eq!(s, "200 OK", "{rd}");
+        let me = &rd["me"];
+        assert_eq!((me["inCall"].as_bool(), me["elsewhere"].as_bool(), me["here"].as_bool()), (Some(true), Some(true), Some(false)), "{me}");
+        assert_eq!(me["on"], json!({"kind": "phone", "name": "Ada's iPhone"}));
+        assert_eq!((me["room"]["id"].as_str(), me["mayBeLeaving"].as_bool()), (Some("room-1"), Some(true)));
+        assert_eq!(me["callId"], Value::Null);
+        let (_, rp) = call(&phone, routes::ROOMS, false, json!({}));
+        assert_eq!((rp["me"]["here"].as_bool(), rp["me"]["callId"].as_str()), (Some(true), p1["callId"].as_str()), "{rp}");
+        // The owner token is nobody in a room.
+        let (_, ro) = call(OWNER_TOKEN, routes::ROOMS, false, json!({}));
+        assert_eq!(ro["me"], Value::Null);
+
+        // The desktop's stale leave ends nothing; the phone leaves twice.
+        let (s, v) = call(&desk, routes::LEAVE, true, json!({"callId": d1["callId"]}));
+        assert_eq!((s.as_str(), v["already"].as_bool(), v["why"].as_str()), ("200 OK", Some(true), Some("joined_elsewhere")), "{v}");
+        assert_eq!(sew.count(bff::paths::ME_VOICE_LEAVE), 0, "the phone's call is untouched");
+        let (s, v) = call(&desk, routes::LEAVE, true, json!({"callId": p1["callId"]}));
+        assert_eq!((s.as_str(), v["error"]["code"].as_str()), ("404 Not Found", Some("call_not_found")), "not the desktop's call: {v}");
+        let (s, v) = call(&phone, routes::LEAVE, true, json!({"callId": p1["callId"]}));
+        assert_eq!((s.as_str(), v["left"].as_bool(), v["already"].as_bool()), ("200 OK", Some(true), Some(false)), "{v}");
+        let (s, v) = call(&phone, routes::LEAVE, true, json!({"callId": p1["callId"]}));
+        assert_eq!((s.as_str(), v["already"].as_bool(), v["why"].as_str()), ("200 OK", Some(true), Some("already_left")), "{v}");
+        assert_eq!(sew.count(bff::paths::ME_VOICE_LEAVE), 1);
+
+        // Sew drops ada: not in a call any more.
+        env.sew.voice_leave(&ada);
+        feed.step(&mgmt, &sp, 0).await.expect("voice/changes");
+        let (_, rp) = call(&phone, routes::ROOMS, false, json!({}));
+        assert_eq!(rp["me"]["inCall"], false, "{rp}");
+
+        // The pairing is revoked: a named code on every route, never a 401,
+        // and nothing reaches Sew. The desktop is untouched.
+        let id = connect_users::device_sessions(Some("ada"))
+            .expect("devices")
+            .into_iter()
+            .find(|d| d.device_id == "ios-install-1")
+            .expect("the phone")
+            .id;
+        connect_users::revoke_device_session(&id, None).expect("revoke").expect("revoked one");
+        let before = sew.calls.lock().unwrap().len();
+        for (path, post) in [(routes::JOIN, true), (routes::LEAVE, true), (routes::ROOMS, false)] {
+            let (s, v) = call(&phone, path, post, join.clone());
+            assert_eq!(
+                (s.as_str(), v["error"]["code"].as_str(), v["code"].as_str()),
+                ("403 Forbidden", Some("device_session_ended"), Some("device_session_ended")),
+                "{path}: {v}"
+            );
+        }
+        assert_eq!(sew.calls.lock().unwrap().len(), before, "an ended pairing reaches nothing");
+        let (s, v) = call(&desk, routes::JOIN, true, join);
+        assert_eq!(s, "200 OK", "the desktop still joins: {v}");
+        env.sew.assert_clean();
+    }
+}

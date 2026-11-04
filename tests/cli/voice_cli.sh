@@ -82,7 +82,9 @@ work, scoped = sys.argv[1], sys.argv[2]
 ROOMS = {"ok": True, "server": "box", "hosting": {"state": "ok", "line": "Voice rooms are on."}, "rev": 3, "canManage": True,
          "rooms": [{"id": "room-1", "slug": "room-1", "name": "Standup", "limit": 25, "closing": False, "unavailable": None,
                     "occupants": [{"user": "ada", "muted": True, "deafened": False}, {"user": "owner", "muted": False, "deafened": False}]},
-                   {"id": "room-2", "slug": "room-2", "name": "Room 2", "limit": 25, "closing": True, "unavailable": None, "occupants": []}]}
+                   {"id": "room-2", "slug": "room-2", "name": "Room 2", "limit": 25, "closing": True, "unavailable": None, "occupants": []}],
+         "me": {"user": "ada", "inCall": True, "room": {"id": "room-1", "name": "Standup"}, "channelId": "901", "here": False, "elsewhere": True,
+                "on": {"kind": "phone", "name": "Ada's iPhone"}, "mayBeLeaving": True, "presenceLagSecs": 40, "presence": "live"}}
 
 class H(BaseHTTPRequestHandler):
     def _go(self, method):
@@ -113,6 +115,11 @@ class H(BaseHTTPRequestHandler):
                 status, out = 403, {"ok": False, "code": "agents_not_in_voice", "error": {"code": "agents_not_in_voice", "hint": "agents don't join voice rooms"}}
             else:
                 out = {"ok": True, "callId": "vc_1", "room": {"id": "room-1", "name": "Standup"}, "join": {"url": "wss://voice.box.k2.dev", "token": "m"}}
+        elif p == "/cli/voice/session/leave":
+            if b.get("callId") == "vc_old":
+                out = {"ok": True, "left": True, "already": True, "why": "joined_elsewhere", "room": "room-1", "channelId": "901"}
+            else:
+                out = {"ok": True, "left": True, "already": False, "room": "room-1", "channelId": "901"}
         elif p == "/cli/voice/moderate":
             out = {"ok": True, "action": b.get("action"), "person": b.get("person"), "room": {"name": "Standup"}}
         self.send_response(status)
@@ -172,6 +179,7 @@ assert_contains "rooms: hosting line" "$out" "Voice rooms on box: on"
 assert_contains "rooms: a room with its count" "$out" "Standup"
 assert_contains "rooms: a muted person" "$out" "ada (muted)"
 assert_contains "rooms: closing" "$out" "closing"
+assert_contains "rooms: in a call on another device (phones, §6.4)" "$out" "you: in Standup from another device or session (may still be leaving"
 assert_eq "rooms is a GET" "$(req_where /cli/voice/rooms method)" "GET"
 run owner voice rooms --json
 assert_eq "rooms --json is the raw body" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rev"])' "$out")" "3"
@@ -205,6 +213,10 @@ assert_contains "agent join: agents_not_in_voice" "$err" "agents_not_in_voice"
 assert_eq "agent sends its passport, never the owner token" "$(req_where /cli/voice/join token)" "$SCOPED"
 run owner voice leave --call vc_1
 assert_eq "leave body" "$(req_where /cli/voice/session/leave body)" '{"callId": "vc_1"}'
+assert_eq "leave says left" "$out" "left"
+run owner voice leave --call vc_old
+assert_eq "a leave of an ended call exits 0" "$rc" "0"
+assert_eq "an ended call: already left, and why" "$out" "already left (joined_elsewhere)"
 run owner voice kick room-1 ada
 assert_eq "kick body" "$(req_where /cli/voice/moderate body)" '{"action": "kick", "person": "ada", "room": "room-1"}'
 assert_contains "kick summary" "$out" "kick ada in Standup"

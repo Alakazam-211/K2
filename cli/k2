@@ -67806,6 +67806,10 @@ if verb == "rooms":
         for o in occ:
             flags = [f for f, on in (("muted", o.get("muted")), ("deafened", o.get("deafened"))) if on]
             print("      %s%s" % (o.get("user"), (" (" + ", ".join(flags) + ")") if flags else ""))
+    me = v.get("me") or {}
+    if me.get("inCall"):
+        where = "this login" if me.get("here") else "another device or session"
+        print("you: in %s from %s (may still be leaving: Sew keeps a closed app listed about %ss)" % ((me.get("room") or {}).get("name") or me.get("channelId"), where, me.get("presenceLagSecs")))
 elif verb == "status":
     print("hosting:    %s" % hosting_line())
     t = v.get("tier")
@@ -67841,7 +67845,7 @@ elif verb == "join":
     r = v.get("room") or {}
     print("joined %s (call %s). The CLI has no audio: a voice client connects with the answer (--json)." % (r.get("name"), v.get("callId")))
 elif verb == "leave":
-    print("left")
+    print("already left (%s)" % v.get("why") if v.get("already") else "left")
 else:
     print("%s %s in %s" % (v.get("action"), v.get("person"), (v.get("room") or {}).get("name")))
 '

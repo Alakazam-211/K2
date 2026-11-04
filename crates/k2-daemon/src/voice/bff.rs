@@ -28,6 +28,20 @@
 //! (`chat_pass::identity::classify`); a signed-out, kicked or removed login
 //! never reaches its cached Sew session again, and K2's existing revoke
 //! (`k2_sid`) ends it on Sew's side.
+//!
+//! **Phones** (gap-voice-calls-mobile-v1 §11 row 4). A paired phone's device
+//! session is a Connect login session of the same person, so it joins under
+//! exactly that person's rules (same room level, caps and refusals); it only
+//! has its own `sid`, so its own Sew session and call. An ended device
+//! session is refused `device_session_ended` (pair again).
+//!
+//! **One call per person.** Sew keeps one voice state per member: a join
+//! from any of the person's clients replaces their call on the others. K2
+//! keeps a short record of every call that ended ([`ENDED_KEEP`]), so a
+//! leave of a call that already ended (left before, moved, joined from
+//! another device, or dropped by Sew) answers `left: true, already: true`
+//! and never reaches Sew, where it would end the person's newer call.
+//! A call id that was never this login session's is still `call_not_found`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -40,7 +54,7 @@ use k2_core::tool_hook::admin_space::{self, RoomRow};
 use k2_core::tool_hook::sew_wire::{self, ExternalId};
 use k2_core::tool_hook::ConnectChatGate;
 
-use super::occupancy::Occupant;
+use super::occupancy::{self, Occupant};
 use crate::chat_pass::identity::{PassIdentity, Provenance, Refusal as IdRefusal};
 
 /// Sew's client routes the BFF calls (Sew 0.6.0 `sew-proto::routes`).
@@ -65,6 +79,32 @@ pub mod paths {
 
 /// Seconds a client waits before retrying a "pending" answer.
 pub const RETRY_SECS: u64 = 2;
+/// How long Sew's voice presence can still list a client that vanished (a
+/// killed app): about 20 s until the media room drops it, then Sew's 20 s
+/// reconnect window (Sew's answer to the phone gap list, row 13).
+pub const PRESENCE_LAG_SECS: u64 = 40;
+/// How long an ended call is remembered, so its leave stays a success.
+pub const ENDED_KEEP: Duration = Duration::from_secs(3600);
+/// Ended calls remembered at most (oldest dropped first).
+pub const ENDED_MAX: usize = 4096;
+/// The occupancy feed state that means presence is current.
+pub const FEED_LIVE: &str = "live";
+
+/// Why a call had already ended (`why` on an `already: true` leave).
+pub mod ended {
+    /// This login session left it before.
+    pub const LEFT: &str = "already_left";
+    /// This login session joined another room (a move).
+    pub const MOVED: &str = "moved";
+    /// The person joined from another device or session.
+    pub const JOINED_ELSEWHERE: &str = "joined_elsewhere";
+    /// The person left from another device or session.
+    pub const LEFT_ELSEWHERE: &str = "left_elsewhere";
+    /// Sew had already dropped the person (the app closed or lost its link).
+    pub const SEW_DROPPED: &str = "sew_dropped";
+    /// Sew lists the person in another room now.
+    pub const IN_ANOTHER_ROOM: &str = "in_another_room";
+}
 /// A cached Sew session is renewed this close to its expiry.
 const RENEW_BEFORE_SECS: i64 = 60;
 /// A session whose answer names no expiry is kept this long.
@@ -244,6 +284,30 @@ pub type ConnectGateFn = dyn Fn(&str, &str) -> Result<ConnectChatGate, String> +
 /// V13: is the person's Admin Space add or level sync still on its way?
 pub type LevelPendingFn = dyn Fn(&ExternalId) -> Result<bool, String> + Send + Sync;
 
+/// Where Sew's voice presence (the SW-3 feed, [`occupancy`]) lists one
+/// person. It can trail a vanished client by [`PRESENCE_LAG_SECS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Presence {
+    /// The feed's state: `live`, `retrying` (the last snapshot) or `off`.
+    pub feed: String,
+    /// The room's channel id and the person's entry, when listed.
+    pub listed: Option<(String, Occupant)>,
+}
+
+/// The person's presence by external id.
+pub type PresenceFn = dyn Fn(&ExternalId) -> Presence + Send + Sync;
+
+/// The live presence: the occupancy follower's snapshot.
+pub fn live_presence(ext: &ExternalId) -> Presence {
+    let feed = occupancy::feed_status().state;
+    let want = ext.to_string();
+    let listed = occupancy::snapshot()
+        .1
+        .into_iter()
+        .find_map(|(ch, people)| people.into_iter().find(|o| o.external_id.as_deref() == Some(want.as_str())).map(|o| (ch, o)));
+    Presence { feed, listed }
+}
+
 /// What the BFF talks to. Production: [`Deps::live`].
 pub struct Deps {
     pub sew: Arc<dyn SewApi>,
@@ -254,6 +318,8 @@ pub struct Deps {
     pub lane_hold: Duration,
     /// How long a join waits for a pending member or level sync.
     pub member_wait: Duration,
+    /// Where Sew lists a person now ([`live_presence`]).
+    pub presence: Arc<PresenceFn>,
 }
 
 fn live_mint(ident: &PassIdentity) -> Result<String, String> {
@@ -271,6 +337,7 @@ impl Deps {
             level_pending: Arc::new(k2_core::tool_hook::admin_level_pending),
             lane_hold: super::lane::HOLD_MAX,
             member_wait: Duration::from_secs(8),
+            presence: Arc::new(live_presence),
         }
     }
 }
@@ -297,6 +364,24 @@ pub fn set_deps(d: Option<Arc<Deps>>) {
 
 // ── the person ───────────────────────────────────────────────────────
 
+/// Which of the person's clients a login session is (never a secret).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Client {
+    /// A login session (the desktop app, a browser, the CLI).
+    Login,
+    /// A paired phone's device session, with the phone's name.
+    Phone { name: String },
+}
+
+impl Client {
+    pub fn json(&self) -> Value {
+        match self {
+            Client::Login => json!({ "kind": "login" }),
+            Client::Phone { name } => json!({ "kind": "phone", "name": name }),
+        }
+    }
+}
+
 /// A person on this server, from their own login session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Person {
@@ -304,6 +389,9 @@ pub struct Person {
     pub ext: ExternalId,
     pub login: String,
     pub role: Role,
+    /// Which client this session is (the join route sets it; it only labels
+    /// the call for the person's other clients).
+    pub client: Client,
 }
 
 impl Person {
@@ -321,13 +409,26 @@ pub fn person_of_login(token: &str, login: &str, role: Role, owner_token: &str) 
         Err(IdRefusal::Unavailable(e)) => {
             return Err(Refusal::new(503, "voice_unavailable", format!("K2's user store is unavailable: {e}")).retry(RETRY_SECS))
         }
+        Err(_) if k2_core::connect_users::token_state(token) == k2_core::connect_users::TokenState::DeviceEnded => {
+            return Err(device_session_ended())
+        }
         Err(_) => return Err(Refusal::new(401, "unauthenticated", "that login session is unknown, expired or revoked")),
     };
     if ident.provenance != Provenance::ConnectLogin {
         return Err(Refusal::new(403, "person_login_required", "join and moderate from a person's own login on this server"));
     }
     let ext = ExternalId::parse(&ident.sub).map_err(|e| Refusal::new(503, "voice_unavailable", format!("identity: {e}")))?;
-    Ok(Person { ident, ext, login: login.to_string(), role })
+    Ok(Person { ident, ext, login: login.to_string(), role, client: Client::Login })
+}
+
+/// A paired phone whose device session ended (revoked, unpaired, signed
+/// out, expired, or its login changed): the phone pairs again.
+pub fn device_session_ended() -> Refusal {
+    Refusal::new(
+        403,
+        "device_session_ended",
+        "this phone's pairing ended (revoked, signed out, unused for 30 days, 180 days old, or its login's password changed): pair it again with a new code",
+    )
 }
 
 // ── Sew sessions and calls ───────────────────────────────────────────
@@ -341,8 +442,22 @@ struct Sess {
 #[derive(Debug, Clone)]
 struct Call {
     sid: String,
+    /// The person's external id (one call per person in Sew).
+    person: String,
     channel_id: String,
     room: String,
+    client: Client,
+    at: Instant,
+}
+
+/// A call that ended, kept [`ENDED_KEEP`] so its leave stays a success.
+#[derive(Debug, Clone)]
+struct Ended {
+    sid: String,
+    channel_id: String,
+    room: String,
+    why: &'static str,
+    at: Instant,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Sess>> {
@@ -353,6 +468,32 @@ fn sessions() -> &'static Mutex<HashMap<String, Sess>> {
 fn calls() -> &'static Mutex<HashMap<String, Call>> {
     static C: OnceLock<Mutex<HashMap<String, Call>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ended_calls() -> &'static Mutex<HashMap<String, Ended>> {
+    static E: OnceLock<Mutex<HashMap<String, Ended>>> = OnceLock::new();
+    E.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Move the live calls `pick` names a reason for to the ended record.
+/// Lock order: the calls (held by the caller), then the ended record.
+fn end_calls(g: &mut HashMap<String, Call>, mut pick: impl FnMut(&Call) -> Option<&'static str>) {
+    let gone: Vec<(String, &'static str)> = g.iter().filter_map(|(id, c)| pick(c).map(|why| (id.clone(), why))).collect();
+    if gone.is_empty() {
+        return;
+    }
+    let mut e = ended_calls().lock().unwrap_or_else(|p| p.into_inner());
+    let now = Instant::now();
+    e.retain(|_, x| now.duration_since(x.at) < ENDED_KEEP);
+    for (id, why) in gone {
+        if let Some(c) = g.remove(&id) {
+            e.insert(id, Ended { sid: c.sid, channel_id: c.channel_id, room: c.room, why, at: now });
+        }
+    }
+    while e.len() > ENDED_MAX {
+        let Some(oldest) = e.iter().min_by_key(|(_, x)| x.at).map(|(k, _)| k.clone()) else { break };
+        e.remove(&oldest);
+    }
 }
 
 fn now_secs() -> i64 {
@@ -374,6 +515,7 @@ pub fn counts() -> (usize, usize) {
 pub fn forget_all() {
     sessions().lock().unwrap_or_else(|p| p.into_inner()).clear();
     calls().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    ended_calls().lock().unwrap_or_else(|p| p.into_inner()).clear();
 }
 
 /// Wait out a "pending" answer: `check` until it's false or `max` passes.
@@ -539,9 +681,30 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
     let call_id = new_call_id();
     {
         let mut g = calls().lock().unwrap_or_else(|e| e.into_inner());
-        // One call per person: a join elsewhere is a move.
-        g.retain(|_, c| c.sid != p.ident.sid);
-        g.insert(call_id.clone(), Call { sid: p.ident.sid.clone(), channel_id: channel.clone(), room: room.slug.clone() });
+        // One call per person (Sew keeps one voice state per member): a join
+        // from this session elsewhere is a move, and a join from another of
+        // the person's devices or sessions takes the call over from it.
+        let me = p.ext.to_string();
+        end_calls(&mut g, |c| {
+            if c.sid == p.ident.sid {
+                Some(ended::MOVED)
+            } else if c.person == me {
+                Some(ended::JOINED_ELSEWHERE)
+            } else {
+                None
+            }
+        });
+        g.insert(
+            call_id.clone(),
+            Call {
+                sid: p.ident.sid.clone(),
+                person: me,
+                channel_id: channel.clone(),
+                room: room.slug.clone(),
+                client: p.client.clone(),
+                at: Instant::now(),
+            },
+        );
     }
     let relay_only = a.body.pointer("/media/relay_only").and_then(Value::as_bool).unwrap_or(false);
     Ok(json!({
@@ -563,22 +726,136 @@ fn own_call(p: &Person, call_id: &str) -> Result<Call, Refusal> {
     }
 }
 
+/// What a call id is to this login session.
+enum Mine {
+    Live(Call),
+    Ended(Ended),
+    NotMine,
+}
+
+fn mine(p: &Person, call_id: &str) -> Mine {
+    if let Some(c) = calls().lock().unwrap_or_else(|e| e.into_inner()).get(call_id) {
+        return if c.sid == p.ident.sid { Mine::Live(c.clone()) } else { Mine::NotMine };
+    }
+    match ended_calls().lock().unwrap_or_else(|e| e.into_inner()).get(call_id) {
+        Some(e) if e.sid == p.ident.sid && e.at.elapsed() < ENDED_KEEP => Mine::Ended(e.clone()),
+        _ => Mine::NotMine,
+    }
+}
+
+fn left(room: Option<String>, channel: Option<String>, why: Option<&str>) -> Value {
+    let mut v = json!({ "ok": true, "left": true, "already": why.is_some(), "room": room, "channelId": channel });
+    if let Some(w) = why {
+        v["why"] = json!(w);
+    }
+    v
+}
+
 /// `POST /cli/voice/session/leave {callId?}`: leave the person's call.
 /// With no `callId` it leaves whatever call the person is in.
+///
+/// Idempotent: a call this login session had that already ended answers
+/// `left: true, already: true, why` ([`ended`]) and never reaches Sew,
+/// where a leave would end the person's newer call on another device. A
+/// call id that was never this session's is `404 call_not_found`.
 pub fn leave(p: &Person, call_id: Option<&str>, d: &Deps) -> Result<Value, Refusal> {
-    let (room, channel) = match call_id {
-        Some(id) => {
-            let c = own_call(p, id)?;
-            (Some(c.room), Some(c.channel_id))
+    let me = p.ext.to_string();
+    let Some(id) = call_id else {
+        let pr = (d.presence)(&p.ext);
+        let had = calls().lock().unwrap_or_else(|e| e.into_inner()).values().any(|c| c.sid == p.ident.sid);
+        let a = as_person(p, d, paths::ME_VOICE_LEAVE, &json!({}))?;
+        // Sew leaves the member wherever they are: every call of theirs ended.
+        end_calls(&mut calls().lock().unwrap_or_else(|e| e.into_inner()), |c| {
+            if c.sid == p.ident.sid {
+                Some(ended::LEFT)
+            } else if c.person == me {
+                Some(ended::LEFT_ELSEWHERE)
+            } else {
+                None
+            }
+        });
+        if !a.ok() {
+            return Err(sew_refusal(&a));
         }
-        None => (None, None),
+        let already = !had && pr.feed == FEED_LIVE && pr.listed.is_none();
+        return Ok(left(None, None, already.then_some(ended::SEW_DROPPED)));
     };
+    let c = match mine(p, id) {
+        Mine::Live(c) => c,
+        Mine::Ended(e) => return Ok(left(Some(e.room), Some(e.channel_id), Some(e.why))),
+        Mine::NotMine => return Err(Refusal::new(404, "call_not_found", "no call with that id for this login (join again)")),
+    };
+    let pr = (d.presence)(&p.ext);
+    let live = pr.feed == FEED_LIVE;
+    let end_this = || {
+        end_calls(&mut calls().lock().unwrap_or_else(|e| e.into_inner()), |x| (x.sid == p.ident.sid).then_some(ended::LEFT));
+    };
+    if live && pr.listed.as_ref().is_some_and(|(ch, _)| *ch != c.channel_id) {
+        // Sew has the person in another room: this call is over, and a
+        // leave now would end that one.
+        end_this();
+        return Ok(left(Some(c.room), Some(c.channel_id), Some(ended::IN_ANOTHER_ROOM)));
+    }
     let a = as_person(p, d, paths::ME_VOICE_LEAVE, &json!({}))?;
-    calls().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, c| c.sid != p.ident.sid);
+    end_this();
     if !a.ok() {
         return Err(sew_refusal(&a));
     }
-    Ok(json!({ "ok": true, "left": true, "room": room, "channelId": channel }))
+    // Sew's leave is idempotent (200 when not in voice); presence says
+    // whether Sew had already dropped the person.
+    let already = live && pr.listed.is_none();
+    Ok(left(Some(c.room), Some(c.channel_id), already.then_some(ended::SEW_DROPPED)))
+}
+
+/// The person's own voice state for the rooms list (`me`): where Sew's
+/// presence lists them, and whether that call is this login session's
+/// (`here`) or another device's or session's (`elsewhere`). Presence can
+/// trail a closed or killed app by [`PRESENCE_LAG_SECS`], so a listed call
+/// is never claimed live (`mayBeLeaving`).
+pub fn me_view(p: &Person, rooms: &[RoomRow], d: &Deps) -> Value {
+    let pr = (d.presence)(&p.ext);
+    let mut v = json!({
+        "user": p.login,
+        "presence": pr.feed,
+        "presenceLagSecs": PRESENCE_LAG_SECS,
+        "inCall": false,
+    });
+    let Some((channel, o)) = pr.listed else {
+        return v;
+    };
+    let me = p.ext.to_string();
+    let (here, on) = {
+        let g = calls().lock().unwrap_or_else(|e| e.into_inner());
+        let held: Vec<(&String, &Call)> = g.iter().filter(|(_, c)| c.person == me && c.channel_id == channel).collect();
+        let here = held.iter().find(|(_, c)| c.sid == p.ident.sid).map(|(id, _)| (*id).clone());
+        let on = held.iter().filter(|(_, c)| c.sid != p.ident.sid).max_by_key(|(_, c)| c.at).map(|(_, c)| c.client.json());
+        (here, on)
+    };
+    let room = rooms.iter().find(|r| r.channel_id.as_deref() == Some(channel.as_str()));
+    let name = room.map(|r| r.name.clone().unwrap_or_else(|| r.desired_name())).unwrap_or_else(|| "a room".into());
+    let hint = if here.is_some() {
+        format!(
+            "Sew lists you in {name} from this login. If this app isn't in the call any more, it may still be leaving (up to about {PRESENCE_LAG_SECS} s): offer to rejoin."
+        )
+    } else {
+        format!(
+            "Sew lists you in {name} from another device or session. A closed app stays listed for up to about {PRESENCE_LAG_SECS} s, so it may still be leaving. Joining here moves the call to this device."
+        )
+    };
+    v["inCall"] = json!(true);
+    v["room"] = room.map(room_json).unwrap_or(Value::Null);
+    v["channelId"] = json!(channel);
+    v["connection"] = json!(o.connection);
+    v["joinedAt"] = json!(o.joined_at);
+    v["here"] = json!(here.is_some());
+    v["elsewhere"] = json!(here.is_none());
+    v["callId"] = json!(here);
+    // The client holding it, when K2 made that join (null for this
+    // session's own call, and after a daemon restart).
+    v["on"] = on.unwrap_or(Value::Null);
+    v["mayBeLeaving"] = json!(true);
+    v["hint"] = json!(hint);
+    v
 }
 
 /// The call's own Sew routes the BFF forwards (§9.1 allowlist).

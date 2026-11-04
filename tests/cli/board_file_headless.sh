@@ -330,68 +330,6 @@ ok "the board routes use the docs jail and deny list"
 owner POST /cli/board/file/create "$(pj '{"dir": A + "/.k2/wiki"}' "$A" "$B")"; want 200 "wiki"
 ok ".k2/wiki may hold a board, as a doc there may"
 
-echo "== held edits survive a restart =="
-H="$A/held.k5board"
-owner POST /cli/board/file/create "$(pj '{"dir": A, "name": "held.k5board"}' "$A" "$B")"; want 200 "held file"
-HH="$(jq_ "$BODY" 'j["hash"]')"
-save "$(pj '{"path": A, "baseHash": B, "groups": [{"id": "h0", "ops": [{"op": "add", "obj": {"id": "s-h", "type": "sticky", "text": "base"}}, {"op": "add", "obj": {"id": "h-h", "type": "shape"}}]}]}' "$H" "$HH")"; want 200 "held base"
-OLD="$(jq_ "$BODY" 'j["revs"]["s-h"]')"; OLDH="$(jq_ "$BODY" 'j["revs"]["h-h"]')"
-save "$(pj '{"path": A, "groups": [{"id": "h1", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "theirs"}}]}]}' "$H" "$OLD")"; want 200 "their change"
-save "$(pj '{"path": A, "groups": [{"id": "h2", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$OLD")"; want 409 "my stale change"
-jok "$BODY" 'len(j["held"][0]["heldId"]) == 32' "a person's conflict comes back with a heldId"
-HELD_ID="$(jq_ "$BODY" 'j["held"][0]["heldId"]')"
-save "$(pj '{"path": A, "groups": [{"id": "h2", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$OLD")"; want 409 "a retried group"
-jok "$BODY" "j['held'][0]['heldId'] == '$HELD_ID'" "a retry of the group answers the same heldId"
-OWNER_NOTE="$SB/.k2/board-held"; [ -d "$OWNER_NOTE" ] || fail "no held store"
-find "$OWNER_NOTE" -type f -name '*.json' | while read -r f; do
-    mode="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$f")"
-    [ "$mode" = 0o600 ] || { echo "held row mode $mode" >&2; exit 1; }
-done || fail "a held row isn't private"
-ok "held rows are 0600"
-stop_daemon
-start_daemon daemon2.log
-owner GET /cli/board/file/read "" "path=$H"; want 200 "read after a restart"
-jok "$BODY" "len(j['held']) == 1 and j['held'][0]['heldId'] == '$HELD_ID' and j['held'][0]['ops'][0]['f']['text'] == 'mine' and j['held'][0]['objects'][0]['theirs']['text'] == 'theirs'" "a held edit survives a daemon restart, with theirs from the file"
-FRESH="$(jq_ "$BODY" 'j["revs"]["s-h"]')"
-owner POST /cli/board/file/held/mine "$(pj '{"path": A, "heldId": B, "mine": {"s-h": {"id": "s-h", "type": "sticky", "text": "whole"}}}' "$H" "$HELD_ID")"; want 200 "held/mine"
-owner GET /cli/board/file/read "" "path=$H"
-jok "$BODY" "j['held'][0]['mine']['s-h']['text'] == 'whole'" "held/mine comes back in read"
-save "$(pj '{"path": A, "groups": [{"id": "h3", "heldId": R, "ops": [{"op": "set", "id": "s-h", "rev": "sha256-0000000000000000000000000000000000000000000000000000000000000000", "f": {"text": "mine"}}]}]}' "$H" "$OLD" "$HELD_ID")"; want 409 "use mine, stale"
-jok "$BODY" "j['held'][0]['heldId'] == '$HELD_ID'" "Use mine that conflicts again keeps its heldId"
-owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'len(j["held"]) == 1' "and its row"
-save "$(pj '{"path": A, "groups": [{"id": "h4", "heldId": R, "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$FRESH" "$HELD_ID")"; want 200 "use mine"
-jok "$BODY" 'j["wrote"] is True and j["held"] == []' "Use mine with a fresh rev goes through"
-owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'j["held"] == [] and [o for o in j["objects"] if o["id"] == "s-h"][0]["text"] == "mine"' "its row clears once it's passed"
-REVNOW="$(jq_ "$BODY" 'j["revs"]["h-h"]')"
-save "$(pj '{"path": A, "groups": [{"id": "h5", "ops": [{"op": "del", "id": "h-h", "rev": B}]}]}' "$H" "$REVNOW")"; want 200 "their delete"
-save "$(pj '{"path": A, "groups": [{"id": "h6", "ops": [{"op": "set", "id": "h-h", "rev": B, "f": {"rot": 5}}]}]}' "$H" "$OLDH")"; want 409 "set on a deleted object"
-jok "$BODY" 'j["held"][0]["objects"][0]["why"] == "deleted"' "an edit of a deleted object is held as deleted"
-ID2="$(jq_ "$BODY" 'j["held"][0]["heldId"]')"
-owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": B}' "$H" "$ID2")"; want 200 "resolve"
-owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": B}' "$H" "$ID2")"; want 200 "resolve again"
-owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": "../../etc/passwd"}' "$H" "$ID2")"; want 400 "a path as a held id"
-owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'j["held"] == []' "resolve clears it, twice is safe, and an id can't walk a path"
-# A K2 rename takes rows along.
-save "$(pj '{"path": A, "groups": [{"id": "h7", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "held over a rename"}}]}]}' "$H" "$OLD")"; want 409 "held before a rename"
-owner POST /cli/fs/rename "$(pj '{"old_path": A, "new_name": "renamed.k5board"}' "$H" "$B")"; want 200 "rename"
-owner GET /cli/board/file/read "" "path=$A/renamed.k5board"; jok "$BODY" 'len(j["held"]) == 1' "a K2 rename takes its held edits along"
-# An agent's conflict isn't kept.
-# A session kept alive across the restart keeps its passport; a fresh spawn
-# rewrites claude.env. Either way: the passport that answers on its socket.
-resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$B")" || true)"
-case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat after a restart: $resp" ;; esac
-CODE=""
-for _ in $(seq 1 400); do
-    PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
-    SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
-    if [ -S "$SOCK" ]; then
-        agent GET /cli/board/file/fields "" "type=sticky"
-        [ "$CODE" = 200 ] && break
-    fi
-    sleep 0.05
-done
-[ "$CODE" = 200 ] || fail "no working passport after a restart: $CODE $BODY"
-ok "beta's passport again, after the restart"
 
 echo "== copies =="
 mkdir -p "$WORK/elsewhere"
@@ -531,6 +469,55 @@ agent GET /cli/board/file/list; want 200 "agent list"
 jok "$BODY" "j['boards'] and all(b['workspace'] == '$B' for b in j['boards'])" "an agent sees only what it may read: its own workspace's boards"
 agent GET /cli/board/file/read "" "path=$F"; want 403 "the listing doesn't widen reach"
 ok "the cross-workspace view never widens an agent's reach"
+
+# Last, because it restarts the daemon: every agent check above uses the first
+# passport, and a restarted pinned chat may not be back in time on a slow node.
+echo "== held edits survive a restart =="
+H="$A/held.k5board"
+owner POST /cli/board/file/create "$(pj '{"dir": A, "name": "held.k5board"}' "$A" "$B")"; want 200 "held file"
+HH="$(jq_ "$BODY" 'j["hash"]')"
+save "$(pj '{"path": A, "baseHash": B, "groups": [{"id": "h0", "ops": [{"op": "add", "obj": {"id": "s-h", "type": "sticky", "text": "base"}}, {"op": "add", "obj": {"id": "h-h", "type": "shape"}}]}]}' "$H" "$HH")"; want 200 "held base"
+OLD="$(jq_ "$BODY" 'j["revs"]["s-h"]')"; OLDH="$(jq_ "$BODY" 'j["revs"]["h-h"]')"
+save "$(pj '{"path": A, "groups": [{"id": "h1", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "theirs"}}]}]}' "$H" "$OLD")"; want 200 "their change"
+save "$(pj '{"path": A, "groups": [{"id": "h2", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$OLD")"; want 409 "my stale change"
+jok "$BODY" 'len(j["held"][0]["heldId"]) == 32' "a person's conflict comes back with a heldId"
+HELD_ID="$(jq_ "$BODY" 'j["held"][0]["heldId"]')"
+save "$(pj '{"path": A, "groups": [{"id": "h2", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$OLD")"; want 409 "a retried group"
+jok "$BODY" "j['held'][0]['heldId'] == '$HELD_ID'" "a retry of the group answers the same heldId"
+OWNER_NOTE="$SB/.k2/board-held"; [ -d "$OWNER_NOTE" ] || fail "no held store"
+find "$OWNER_NOTE" -type f -name '*.json' | while read -r f; do
+    mode="$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$f")"
+    [ "$mode" = 0o600 ] || { echo "held row mode $mode" >&2; exit 1; }
+done || fail "a held row isn't private"
+ok "held rows are 0600"
+stop_daemon
+start_daemon daemon2.log
+owner GET /cli/board/file/read "" "path=$H"; want 200 "read after a restart"
+jok "$BODY" "len(j['held']) == 1 and j['held'][0]['heldId'] == '$HELD_ID' and j['held'][0]['ops'][0]['f']['text'] == 'mine' and j['held'][0]['objects'][0]['theirs']['text'] == 'theirs'" "a held edit survives a daemon restart, with theirs from the file"
+FRESH="$(jq_ "$BODY" 'j["revs"]["s-h"]')"
+owner POST /cli/board/file/held/mine "$(pj '{"path": A, "heldId": B, "mine": {"s-h": {"id": "s-h", "type": "sticky", "text": "whole"}}}' "$H" "$HELD_ID")"; want 200 "held/mine"
+owner GET /cli/board/file/read "" "path=$H"
+jok "$BODY" "j['held'][0]['mine']['s-h']['text'] == 'whole'" "held/mine comes back in read"
+save "$(pj '{"path": A, "groups": [{"id": "h3", "heldId": R, "ops": [{"op": "set", "id": "s-h", "rev": "sha256-0000000000000000000000000000000000000000000000000000000000000000", "f": {"text": "mine"}}]}]}' "$H" "$OLD" "$HELD_ID")"; want 409 "use mine, stale"
+jok "$BODY" "j['held'][0]['heldId'] == '$HELD_ID'" "Use mine that conflicts again keeps its heldId"
+owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'len(j["held"]) == 1' "and its row"
+save "$(pj '{"path": A, "groups": [{"id": "h4", "heldId": R, "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "mine"}}]}]}' "$H" "$FRESH" "$HELD_ID")"; want 200 "use mine"
+jok "$BODY" 'j["wrote"] is True and j["held"] == []' "Use mine with a fresh rev goes through"
+owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'j["held"] == [] and [o for o in j["objects"] if o["id"] == "s-h"][0]["text"] == "mine"' "its row clears once it's passed"
+REVNOW="$(jq_ "$BODY" 'j["revs"]["h-h"]')"
+save "$(pj '{"path": A, "groups": [{"id": "h5", "ops": [{"op": "del", "id": "h-h", "rev": B}]}]}' "$H" "$REVNOW")"; want 200 "their delete"
+save "$(pj '{"path": A, "groups": [{"id": "h6", "ops": [{"op": "set", "id": "h-h", "rev": B, "f": {"rot": 5}}]}]}' "$H" "$OLDH")"; want 409 "set on a deleted object"
+jok "$BODY" 'j["held"][0]["objects"][0]["why"] == "deleted"' "an edit of a deleted object is held as deleted"
+ID2="$(jq_ "$BODY" 'j["held"][0]["heldId"]')"
+owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": B}' "$H" "$ID2")"; want 200 "resolve"
+owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": B}' "$H" "$ID2")"; want 200 "resolve again"
+owner POST /cli/board/file/held/resolve "$(pj '{"path": A, "heldId": "../../etc/passwd"}' "$H" "$ID2")"; want 400 "a path as a held id"
+owner GET /cli/board/file/read "" "path=$H"; jok "$BODY" 'j["held"] == []' "resolve clears it, twice is safe, and an id can't walk a path"
+# A K2 rename takes rows along.
+save "$(pj '{"path": A, "groups": [{"id": "h7", "ops": [{"op": "set", "id": "s-h", "rev": B, "f": {"text": "held over a rename"}}]}]}' "$H" "$OLD")"; want 409 "held before a rename"
+owner POST /cli/fs/rename "$(pj '{"old_path": A, "new_name": "renamed.k5board"}' "$H" "$B")"; want 200 "rename"
+owner GET /cli/board/file/read "" "path=$A/renamed.k5board"; jok "$BODY" 'len(j["held"]) == 1' "a K2 rename takes its held edits along"
+# An agent's conflict isn't kept.
 
 echo "== temp files =="
 

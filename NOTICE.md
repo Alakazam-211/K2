@@ -319,6 +319,19 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above); its tests use proptest (MIT OR Apache-2.0) |
 
+## Multiplayer kit: k2-mpc-board format-v1.0 (vendored)
+
+The `.k5board` file format (a strict zip reader and writer, canonical JSON,
+typed refusals, and edits with per-object revisions), vendored beside the kit.
+
+| | |
+|--|--|
+| **What** | `vendor/k2-mpc-board`, with its own `NOTICE.md`, `THIRD-PARTY-NOTICES.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-board`, tag `format-v1.0` (`42a73db`) |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
+| **Credit** | Its schema tables (types, fields, kinds, defaults) derive from Board, **Copyright (c) 2026 Baden Ballard, MIT**: see the vendored repo's `THIRD-PARTY-NOTICES.md` |
+| **Dependencies** | miniz_oxide (MIT OR Zlib OR Apache-2.0), sha2 (MIT OR Apache-2.0) |
+
 Update these sections on every kit bump.
 
 ## Third-party: Stalwart mail server (AGPL-3.0-only)

@@ -72,6 +72,8 @@ mod unix_impl {
         let target = head.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
         if target.starts_with(crate::docs::routes::PREFIX) {
             crate::docs::routes::max_body(target)
+        } else if target.starts_with(crate::board_file::routes::PREFIX) {
+            crate::board_file::routes::max_body(target)
         } else {
             MAX_BODY
         }
@@ -726,6 +728,12 @@ mod unix_impl {
             // (or, from a plain shell tab, its person "via terminal"); the
             // handler jails the path and checks rights per doc. Streaming
             // (`watch`, `tail -f`) comes with the CLI slice.
+            p if p.starts_with(crate::board_file::routes::PREFIX) => {
+                match crate::docs::caller::from_passport(this_session_id, principal) {
+                    Ok(caller) => from_cli(crate::board_file::routes::handle(method, p, params, body, &caller)),
+                    Err(r) => from_cli(r),
+                }
+            }
             p if p.starts_with(crate::docs::routes::PREFIX) => {
                 match crate::docs::caller::from_passport(this_session_id, principal) {
                     Ok(caller) => from_cli(crate::docs::routes::handle(method, p, params, body, &caller)),

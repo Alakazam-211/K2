@@ -475,7 +475,10 @@ impl ZenFiles {
 
     /// The live bundle, or 404 `unknown_widget` / 409 `widget_broken`.
     pub fn widget_bundle(&self, widget: &str) -> Result<WidgetStatus, ZenError> {
-        self.require_set_up()?;
+        // A built-in ships in the binary: no Garden needed to serve it.
+        if !widget.starts_with(builtin_widgets::BUILTIN_PREFIX) {
+            self.require_set_up()?;
+        }
         if let Err(m) = parse_widget_ref(widget) {
             return Err(ZenError::BadRequest(m));
         }

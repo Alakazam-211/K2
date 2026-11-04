@@ -566,7 +566,7 @@ pub(super) struct Call<'a> {
 
 /// K2's own rights check before the kit's (the kit re-asks on every call):
 /// it gives the refusal its teaching code.
-fn rights_or_refusal(
+pub(crate) fn rights_or_refusal(
     caller: &DocCaller,
     t: &Target,
     workspace_param: Option<&str>,

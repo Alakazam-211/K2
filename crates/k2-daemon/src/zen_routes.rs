@@ -1623,7 +1623,13 @@ pub fn handle(
         }
         "/cli/zen/widget/bundle" => {
             let f = files();
-            set_up(&f).and_then(|_| refresh_and_emit()).and_then(|_| handle_widget_bundle(params))
+            // A built-in's bundle needs no Garden: a Board tab opens on a box that has none.
+            let builtin = param(params, "widget").is_some_and(|w| w.starts_with(k2_core::zen::builtin_widgets::BUILTIN_PREFIX));
+            if builtin && !f.is_set_up() {
+                handle_widget_bundle(params)
+            } else {
+                set_up(&f).and_then(|_| refresh_and_emit()).and_then(|_| handle_widget_bundle(params))
+            }
         }
         "/cli/zen/widget/new" => handle_widget_new(body, caller, ingress),
         "/cli/zen/widget/run" => handle_widget_run(body),

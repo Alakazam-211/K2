@@ -228,6 +228,11 @@ pub(crate) fn is_noisy(path: &str) -> bool {
     let p = path.replace('\\', "/");
     let lower = p.to_ascii_lowercase();
 
+    // A save's temp file: the file it replaces gets its own event.
+    if p.rsplit('/').next().is_some_and(k2_mpc_base::session::is_write_temp) {
+        return true;
+    }
+
     // Workspace agent / K2 runtime state (heartbeats, mail, skills, DB).
     if p.contains("/.k2/")
         || p.ends_with("/.k2")

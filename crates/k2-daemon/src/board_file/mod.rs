@@ -7,3 +7,7 @@
 // The Garden's way out (`garden_board_to_file`, `People`) is M2's export.
 #[allow(dead_code)]
 pub mod map;
+pub mod held;
+pub mod routes;
+pub mod save;
+pub mod stage;

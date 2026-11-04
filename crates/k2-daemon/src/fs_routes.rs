@@ -2463,13 +2463,35 @@ struct MoveCopyBody {
     destination: String,
 }
 
+/// Runs `f` holding the writer lock of every board file named, in one order so
+/// two moves can't wait on each other. A moved folder can't take the locks of
+/// what's inside it: that's an outside change to a save in flight, which sees
+/// `not_found` and answers it.
+fn with_board_locks<T>(sources: &[String], f: impl FnOnce() -> T) -> T {
+    fn hold<T>(boards: &[&String], f: impl FnOnce() -> T) -> T {
+        match boards.split_first() {
+            Some((p, rest)) => crate::board_file::save::with_writer_lock(Path::new(p.as_str()), || hold(rest, f)),
+            None => f(),
+        }
+    }
+    let mut boards: Vec<&String> = sources.iter().filter(|s| crate::docs::target::is_board_file(s)).collect();
+    boards.sort();
+    boards.dedup();
+    hold(&boards, f)
+}
+
 pub fn handle_move(body: &[u8]) -> CliResponse {
     let parsed: MoveCopyBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    match fsc::move_files(&parsed.sources, &parsed.destination) {
+    match with_board_locks(&parsed.sources, || fsc::move_files(&parsed.sources, &parsed.destination)) {
         Ok(()) => {
+            for s in parsed.sources.iter().filter(|s| crate::docs::target::is_board_file(s)) {
+                if let Some(name) = Path::new(s).file_name() {
+                    crate::board_file::held::retarget(Path::new(s), &Path::new(&parsed.destination).join(name));
+                }
+            }
             let mut paths = parsed.sources;
             paths.push(parsed.destination);
             crate::session_events::emit_fs_changed_for_paths(paths);
@@ -2526,8 +2548,18 @@ pub fn handle_rename(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    match fsc::rename(&parsed.old_path, &parsed.new_name) {
+    let renamed = if crate::docs::target::is_board_file(&parsed.old_path) {
+        // A rename between a save's last compare and its replace would bring
+        // back the old name with stale bytes.
+        crate::board_file::save::with_writer_lock(Path::new(&parsed.old_path), || fsc::rename(&parsed.old_path, &parsed.new_name))
+    } else {
+        fsc::rename(&parsed.old_path, &parsed.new_name)
+    };
+    match renamed {
         Ok(new_path) => {
+            if crate::docs::target::is_board_file(&parsed.old_path) {
+                crate::board_file::held::retarget(Path::new(&parsed.old_path), Path::new(&new_path));
+            }
             crate::session_events::emit_fs_changed_for_paths([parsed.old_path, new_path.clone()]);
             CliResponse::ok_json(serde_json::json!({ "path": new_path }).to_string())
         }

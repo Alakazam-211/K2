@@ -436,6 +436,64 @@ pub fn share_rel(root: &str, raw: &str, must_exist: bool) -> Result<(String, boo
 /// allowed doc. `default_workspace` is the caller's own project id (agents),
 /// used when `workspace` is empty.
 pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&str>) -> Result<Target, Refusal> {
+    let t = resolve_any(workspace, path, default_workspace)?;
+    let meta = std::fs::metadata(&t.abs).map_err(|_| Refusal::not_found("file_not_found", format!("no file {path}")))?;
+    if is_board_file(&t.rel) {
+        return Err(Refusal::board_file(&t.rel));
+    }
+    size_cap(&t.rel, meta.len(), super::blob_max_bytes())?;
+    Ok(t)
+}
+
+/// A Board file, for the board routes: the same jail, deny list and workspace
+/// as a doc, and no size cap (the format allows 2 GiB, and its own limits apply).
+pub fn resolve_board(workspace: Option<&str>, path: &str, default_workspace: Option<&str>) -> Result<Target, Refusal> {
+    if !is_board_file(path.trim()) {
+        return Err(Refusal::bad("not_a_board_file", format!("{} isn't a .k5board file", path.trim())));
+    }
+    let t = resolve_any(workspace, path, default_workspace)?;
+    // A symlink named .k5board may point at anything: the file it reaches decides.
+    if !is_board_file(&t.rel) {
+        return Err(Refusal::bad("not_a_board_file", format!("{path} isn't a .k5board file")));
+    }
+    Ok(t)
+}
+
+/// The folder a new board goes in, as the `Target` of a file there (for the
+/// rights check): an existing folder in a registered workspace or one of its
+/// checkouts, and never one the deny list refuses.
+pub fn board_folder(workspace: Option<&str>, dir: &str, default_workspace: Option<&str>) -> Result<Target, Refusal> {
+    let dir = dir.trim();
+    if dir.contains('\0') {
+        return Err(Refusal::bad("bad_request", "dir contains a NUL byte"));
+    }
+    let not_workspace = || Refusal::not_found("not_a_workspace", format!("{dir} isn't a folder in a workspace on this server"));
+    let (project_id, root, abs_dir) = if Path::new(dir).is_absolute() {
+        let abs = Path::new(dir).canonicalize().map_err(|_| not_workspace())?;
+        let (id, root) = workspace_holding(&abs).map_err(|_| not_workspace())?;
+        (id, root, abs)
+    } else {
+        let (id, root_str) = match workspace.map(str::trim).filter(|w| !w.is_empty()) {
+            Some(ws) => workspace_by_token(ws)?,
+            None => match default_workspace {
+                Some(own) => workspace_by_id(own)?,
+                None => return Err(Refusal::bad("workspace_required", "name the workspace (workspace=<name>) or give an absolute path")),
+            },
+        };
+        let root = Path::new(&root_str).canonicalize().map_err(|_| not_workspace())?;
+        let abs = root.join(dir).canonicalize().map_err(|_| not_workspace())?;
+        (id, root, abs)
+    };
+    if !abs_dir.is_dir() || !abs_dir.starts_with(&root) {
+        return Err(not_workspace());
+    }
+    let abs = abs_dir.join("Untitled.k5board");
+    let rel = rel_string(&root, &abs)?;
+    deny(&rel, &abs, &abs)?;
+    Ok(Target { project_id, root, rel, abs, tier: Tier::Blob })
+}
+
+fn resolve_any(workspace: Option<&str>, path: &str, default_workspace: Option<&str>) -> Result<Target, Refusal> {
     let path = path.trim();
     if path.is_empty() {
         return Err(Refusal::bad("bad_request", "path is required"));
@@ -491,11 +549,7 @@ pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     }
     let rel = rel_string(&root, &abs)?;
     deny(&rel, &link, &abs)?;
-    if is_board_file(&rel) {
-        return Err(Refusal::board_file(&rel));
-    }
     let tier = Tier::of(&rel);
-    size_cap(&rel, meta.len(), super::blob_max_bytes())?;
     Ok(Target { project_id, root, rel, abs, tier })
 }
 

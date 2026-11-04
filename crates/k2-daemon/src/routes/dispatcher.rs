@@ -2394,7 +2394,8 @@ async fn handle_one_request(
             }
             return DispatchOutcome::Done;
         }
-        p if p.starts_with(crate::docs::routes::PREFIX) => {
+        p if p.starts_with(crate::docs::routes::PREFIX) || p.starts_with(crate::board_file::routes::PREFIX) => {
+            let is_board = p.starts_with(crate::board_file::routes::PREFIX);
             let presented = super::http::extract_token(&query);
             let passport = presented
                 .filter(|s| !s.is_empty())
@@ -2422,7 +2423,8 @@ async fn handle_one_request(
                 Err(crate::cli::CliResponse::forbidden())
             };
             let body = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::docs::routes::max_body(p)).await {
+                let cap = if is_board { crate::board_file::routes::max_body(p) } else { crate::docs::routes::max_body(p) };
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, cap).await {
                     Ok(b) => b,
                     Err(refused) => {
                         super::http::refuse_body_too_large(
@@ -2447,7 +2449,11 @@ async fn handle_one_request(
                     let p_owned = path.to_string();
                     let method_owned = method.clone();
                     tokio::task::spawn_blocking(move || {
-                        crate::docs::routes::handle(&method_owned, &p_owned, &params, &body, &caller)
+                        if is_board {
+                            crate::board_file::routes::handle(&method_owned, &p_owned, &params, &body, &caller)
+                        } else {
+                            crate::docs::routes::handle(&method_owned, &p_owned, &params, &body, &caller)
+                        }
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

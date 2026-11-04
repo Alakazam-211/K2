@@ -671,6 +671,14 @@ pub(crate) const ROWS: &[Row] = &[
         ],
         ..row(ask("docs.share", Floor::Admin), code(403, "doc_not_shared"), "/cli/docs/", ANY)
     },
+    // A board file in another workspace: the same share, the same refusal.
+    Row {
+        params: &[
+            ("from", &[ParamFrom::Response("/error/workspace")]),
+            ("path", &[ParamFrom::Response("/error/path")]),
+        ],
+        ..row(ask("docs.share", Floor::Admin), code(403, "doc_not_shared"), "/cli/board/file/", ANY)
+    },
     // ── mail ───────────────────────────────────────────────────────────
     // The mail-manage surfaces' refusal names the workspace it checked; the
     // owner-level mutations (server install/uninstall, domain remove) don't.

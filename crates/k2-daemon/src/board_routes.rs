@@ -400,7 +400,10 @@ fn run(who: &DataWho, body: &[u8]) -> Result<Value, Fail> {
             let id = resolve(&space, &acc, s(&b, "board"))?;
             let ty = if cmd == "frame" { "frame".to_string() } else { s(&b, "type").unwrap_or("sticky").to_string() };
             let mut obj = fields_of(&b);
-            obj.remove("id");
+            if obj.contains_key("id") {
+                // It used to be dropped without a word, and the object got another id.
+                return Err(Fail::Board(BoardError::bad_field("id", "add mints the id and prints it; to choose labels, use apply")));
+            }
             obj.insert("type".into(), json!(ty));
             write_cmd(who, &space, &acc, &id, |bd, ctx| {
                 let mut o = obj.clone();

@@ -183,7 +183,7 @@ fn numbered_name(dir: &Path, filename: &str, i: u32) -> PathBuf {
 /// replacing an existing entry. A hard link fails with `AlreadyExists`
 /// instead of overwriting; volumes without hard links fall back to a
 /// rename after an existence check.
-fn publish_no_replace(part: &Path, dir: &Path, filename: &str) -> Result<PathBuf, GuestChunkError> {
+pub fn publish_no_replace(part: &Path, dir: &Path, filename: &str) -> Result<PathBuf, GuestChunkError> {
     for i in 0..10_000u32 {
         let cand = numbered_name(dir, filename, i);
         match fs::hard_link(part, &cand) {

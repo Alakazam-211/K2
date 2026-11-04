@@ -741,6 +741,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::AppApprovalsChanged { .. } => None,
         // Multiplayer cores are box-wide switches (every client).
         SessionEvent::DocCoresChanged { .. } => None,
+        // Like FsChanged: a client with that file open matches workspace and rel.
+        SessionEvent::BoardFileChanged { .. } => None,
         // prd-app-tickets-websocket-v1 — APP-LEVEL like FeedbackChanged.
         // The desktop board ignores it (it refetches on feedback_changed);
         // the app activity socket maps it per room on projectId.
@@ -1170,6 +1172,7 @@ mod tests {
             SessionEvent::FeedbackChanged { reason: "created".into() },
             SessionEvent::AppApprovalsChanged { pending: 1 },
             SessionEvent::DocCoresChanged { cores: Default::default(), core: "markdown".into(), on: true, by: "Anna".into() },
+            SessionEvent::BoardFileChanged { workspace: "/x/foo".into(), rel: "a.k5board".into(), hash: "sha256-0".into(), by: "agent:x".into() },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),
                 id: "t".into(),

@@ -1315,6 +1315,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // every call (another workspace needs a connection and a share).
         // Identity is stamped from the session, never the body.
         "/cli/docs/",
+        // Board files (`k2 board --file`): the same door as docs. The handler
+        // resolves the passport, jails the path and checks rights per file.
+        "/cli/board/file/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in

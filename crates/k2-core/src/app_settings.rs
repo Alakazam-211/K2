@@ -497,6 +497,11 @@ pub struct AppSettings {
     /// created and nothing changes.
     #[serde(default)]
     pub voice_rooms_preview: bool,
+    /// Board files preview (prd-board-tab-v1): the `/cli/board/file/*` routes
+    /// and the `board-file-v1` feature. Owner only, off by default. Dogfood
+    /// only: it doesn't turn on for customers until held edits survive a restart.
+    #[serde(default)]
+    pub board_file_preview: bool,
     /// Voice through the tunnel preview (lane A): the `tunnel` TURN tier,
     /// `frpc-voice` and the cert `turn-tunnel` request. Persisted mirror of
     /// `K2_VOICE_TUNNEL` ([`crate::voice_rooms::tunnel_enabled`]).
@@ -1279,6 +1284,7 @@ impl Default for AppSettings {
             federation_enabled: false,
             compute_preview: false,
             voice_rooms_preview: false,
+            board_file_preview: false,
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),
             compute_placement: default_compute_placement(),

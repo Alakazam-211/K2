@@ -1036,6 +1036,10 @@ pub const FEATURE_DOCS_EXPORT: &str = "docs-export-v1";
 /// tab on a live text doc (`docs/live.rs`). Listed with `docs-md-v1`.
 pub const FEATURE_DOCS_LIVE: &str = "docs-live-v1";
 
+/// Board files in a tab (prd-board-tab-v1): `/cli/board/file/*`. Listed only
+/// while `board_file_preview` is on.
+pub const FEATURE_BOARD_FILE: &str = "board-file-v1";
+
 /// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
 /// `presence/summary` `agentActivity` entries carry the caller's `unread`,
 /// `waiting`, `muted` on that agent's Threads and the agent's
@@ -1165,6 +1169,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_PUBLISH_DEV);
     out.push(FEATURE_SITE_VISIBILITY);
     out.push(FEATURE_DOCS_CORES);
+    if k2_core::board_preview::enabled() {
+        out.push(FEATURE_BOARD_FILE);
+    }
     if crate::docs::live_ready() {
         out.push(FEATURE_DOCS_MD);
         out.push(FEATURE_DOCS_LIVE);

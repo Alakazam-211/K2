@@ -743,6 +743,11 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "doc_cores_changed", "cores": {id: bool}, "core":
     /// string, "on": bool, "by": string }`.
     DocCoresChanged { cores: std::collections::BTreeMap<String, bool>, core: String, on: bool, by: String },
+    /// A board file changed through K2 (a tab or an agent's `k2 board --file`).
+    /// Wire: `{ "kind": "board_file_changed", "workspace": "<absolute root>",
+    /// "rel": "<path in it>", "hash": "sha256-…", "by": "<pid>" }`. A client
+    /// with that file open re-reads with `ifHash`.
+    BoardFileChanged { workspace: String, rel: String, hash: String, by: String },
 
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
@@ -1168,6 +1173,7 @@ impl SessionEvent {
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
             SessionEvent::AppApprovalsChanged { .. } => "app_approvals_changed",
             SessionEvent::DocCoresChanged { .. } => "doc_cores_changed",
+            SessionEvent::BoardFileChanged { .. } => "board_file_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",

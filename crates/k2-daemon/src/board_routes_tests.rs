@@ -80,6 +80,16 @@ fn objects(who: &DataWho, board: &str) -> Vec<Value> {
 }
 
 #[test]
+fn add_refuses_an_id_it_wont_use() {
+    let _e = env();
+    let o = DataWho::Owner;
+    let b = ok(&o, json!({ "cmd": "board-new", "name": "Ids" }))["board"].as_str().expect("id").to_string();
+    let (code, why) = refused(&o, json!({ "cmd": "add", "board": b, "type": "sticky", "fields": { "id": "s-mine", "text": "x" } }));
+    assert_eq!((code, why.as_str()), (400, "bad_field"));
+    assert!(objects(&o, &b).is_empty(), "nothing was added");
+}
+
+#[test]
 fn the_board_core_closes_and_reopens_the_data_without_losing_it() {
     let _e = env();
     let o = DataWho::Owner;

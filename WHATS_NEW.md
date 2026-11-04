@@ -46,6 +46,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 app suspend` is for you, an Admin or the App's own agent, and its help now says so.** Members have been refused since 0.46.3, but the help still said anyone could, and the refusal printed only `role_required`. A `k2 app` or `k2 compute` command your login's role doesn't reach now says which role it needs.
 
 ### Chat and voice (Sew)
+- **`k2 hostchat enable` installs the PostgreSQL version Sew needs if it's missing,** with no second database cluster. Before, it refused and told you to run a command that couldn't work. If the install fails, enable says why.
 - **Handing a Space to your App now works.** After you approved `k2 hostchat app-space governance <app> <space> app`, K2's request to Sew was refused and the Space stayed as it was, while `k2 app chat` kept saying "sending to Sew". If one of your Spaces is stuck that way, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row after updating.
 - **K2 now installs and upgrades to Sew 0.7.2,** with chat connection and encrypted call fixes. Upgrade an existing chat server with `k2 hostchat upgrade`; a server still on Sew 0.3.1 can go straight to 0.7.2.
 - **Sew's App kit filters microphone noise by default.** Run `k2 app sdk add <app-folder> --sew` again to get it, then the `npm i` line it prints. It falls back to the browser's own filter if it can't load.

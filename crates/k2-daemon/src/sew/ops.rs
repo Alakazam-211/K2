@@ -1347,6 +1347,13 @@ pub mod fake {
                         }
                     }
                 }
+                a if a.starts_with("pg add-major ") => {
+                    let m: u32 = a.rsplit(' ').next().and_then(|m| m.parse().ok()).expect("a major");
+                    let mut pg = self.pg.lock().unwrap();
+                    pg.push(m);
+                    pg.sort_unstable();
+                    json!({"major": m, "result": "installed"})
+                }
                 "engine sew doctor" => {
                     // Sew's media checks: the engine matches the installed core.
                     let core = self.on_disk.lock().unwrap().clone().unwrap_or_default();

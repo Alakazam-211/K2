@@ -448,7 +448,23 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             format!("PostgreSQL {pg:?} binaries; this Sew install's own config names its major (sew-db)"),
             "",
         ));
+    } else if !installed && helper_adds_pg_majors(env) {
+        // The enable machine asks the helper for it, once every other check passed.
+        c.push(check(
+            "postgres",
+            "ok",
+            format!("PostgreSQL {want} binaries missing: K2 installs them through the root helper, with no second cluster"),
+            "",
+        ));
     } else {
+        // `pg add-major` answers only the daemon (caller_not_daemon, root too),
+        // so a person never runs it: the way on is a helper K2 can ask, or apt.
+        let by_hand = format!(
+            "Sew needs the postgresql-{want} package (/usr/lib/postgresql/{want}/bin/postgres, initdb, pg_dump, pg_restore) \
+             without a second cluster: as root, install postgresql-{want} and postgresql-client-{want} from \
+             apt.postgresql.org with create_main_cluster = false in /etc/postgresql-common/createcluster.conf, then run \
+             this again. Keep it installed while Sew is"
+        );
         c.push(check(
             "postgres",
             "fail",
@@ -457,12 +473,11 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             } else {
                 format!("PostgreSQL {pg:?} found, not {want}")
             },
-            format!(
-                "Sew needs the postgresql-{want} package (/usr/lib/postgresql/{want}/bin/postgres, initdb, pg_dump, \
-                 pg_restore) without a second cluster: as root, `k2-root-helper pg add-major {want}` uses K2's pinned \
-                 apt.postgresql.org source and never creates a cluster (older helpers: install postgresql-{want} from \
-                 apt.postgresql.org on Ubuntu 22.04 and Debian 12). Keep it installed while Sew is; the daemon never runs apt"
-            ),
+            if installed {
+                by_hand
+            } else {
+                format!("K2 installs it itself through a current root helper: k2 root-helper update, then run this again. {by_hand}")
+            },
         ));
     }
     let helper_ok = match helper_check(env) {
@@ -786,6 +801,29 @@ fn step(env: &Env, name: &'static str) {
     save_enable(env, |r| set_current(&mut r.enable_progress, Some(name)));
 }
 
+/// The helper serves `pg add-major`: protocol 9 AND `namespaces.pgmajor`.
+fn helper_adds_pg_majors(env: &Env) -> bool {
+    let st = env.ops.helper_state();
+    st.usable(k2_root_proto::version::PGMAJOR_MIN_PROTOCOL)
+        && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/pgmajor")).and_then(Value::as_bool) == Some(true)
+}
+
+/// A first install on a box without Sew's Postgres binaries: the helper installs
+/// the major (its pinned apt source; it never makes a cluster). Nothing is asked
+/// of a box that has them, and the binaries themselves are the answer.
+fn ensure_pg_major(env: &Env) -> Result<(), String> {
+    let want = pin::SEW_PG_MAJOR;
+    if env.ops.pg_majors().contains(&want) {
+        return Ok(());
+    }
+    let argv = ["pg".to_string(), "add-major".to_string(), want.to_string()];
+    let v = env.ops.helper(&argv, None).map_err(|e| format!("K2 could not install PostgreSQL {want} through the root helper: {e}"))?;
+    if !env.ops.pg_majors().contains(&want) {
+        return Err(format!("the root helper answered {} but the PostgreSQL {want} binaries are still missing", short(&v)));
+    }
+    Ok(())
+}
+
 fn done(env: &Env, name: &'static str) {
     let now = env.ops.now();
     save_enable(env, |r| mark(&mut r.enable_progress, name, now));
@@ -893,6 +931,11 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
     let pin_v = pinned().version;
     let row = store::load().ok_or(("row", "the sew_server row vanished".to_string()))?;
     let marked = |s: &str| step_done(&row.enable_progress, s);
+
+    if !marked("install") {
+        step(env, "postgres");
+        ensure_pg_major(env).map_err(|e| ("postgres", e))?;
+    }
 
     // 1. master-key (marked): keep the vault's, adopt a recovery key, or make one.
     step(env, "master-key");

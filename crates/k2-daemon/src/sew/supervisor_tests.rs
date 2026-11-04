@@ -2278,6 +2278,121 @@ fn preflight_needs_exactly_sews_pg_major_not_any_newer() {
     assert!(pg_check(&t)["detail"].as_str().unwrap().contains("no PostgreSQL server binaries"));
 }
 
+const ADD_16: &str = "pg add-major 16";
+
+fn helper_adds_majors(t: &T) {
+    let mut st = helper_ok(12, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["pgmajor"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+}
+
+/// K2 Web 11-04: `pg add-major` answers only the daemon, so the old hint left a
+/// box with no way on. Enable asks the helper itself, before anything else.
+#[test]
+fn enable_has_the_helper_install_sews_postgres_major_when_it_is_missing() {
+    for before in [vec![], vec![17]] {
+        let t = t();
+        helper_adds_majors(&t);
+        *t.ops.pg.lock().unwrap() = before.clone();
+        let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check");
+        assert_eq!(c["status"], "ok", "{c}");
+        assert!(t.ops.effects().is_empty(), "a preflight installs nothing: {:?}", t.ops.effects());
+        t.enable().unwrap_or_else(|e| panic!("{before:?}: {e}"));
+        let eff = t.ops.effects();
+        let add = eff.iter().position(|e| e == ADD_16).unwrap_or_else(|| panic!("{eff:?}"));
+        let install = eff.iter().position(|e| e.starts_with("engine sew install")).unwrap_or_else(|| panic!("{eff:?}"));
+        assert!(add < install, "{eff:?}");
+        assert!(t.ops.pg.lock().unwrap().contains(&16));
+        assert_eq!(t.row().status, "running");
+    }
+}
+
+/// A box that has the binaries is never asked about them, nor is an install that
+/// already runs on its own major.
+#[test]
+fn enable_asks_for_no_postgres_on_a_box_that_has_it() {
+    let t = t();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![16, 17];
+    t.enable().expect("enable");
+    assert!(!t.ops.effects().iter().any(|e| e.starts_with("pg ")), "{:?}", t.ops.effects());
+
+    let t = t2_running_on_17();
+    helper_adds_majors(&t);
+    t.enable().expect("resumed enable");
+    assert!(!t.ops.effects().iter().any(|e| e.starts_with("pg ")), "{:?}", t.ops.effects());
+}
+
+/// The helper's refusal comes through as what failed; nothing after it ran, and
+/// enabling again picks it back up. A helper that says yes with no binaries to
+/// show for it doesn't pass either.
+#[test]
+fn enable_says_what_failed_when_postgres_can_not_be_installed() {
+    let t = t();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![];
+    t.ops.queue(ADD_16, Err(format!("root helper {ADD_16}: exit 3: unsupported_distro: install postgresql-16 yourself")));
+    let e = t.enable().expect_err("refused");
+    assert!(e.starts_with("postgres: K2 could not install PostgreSQL 16") && e.contains("unsupported_distro"), "{e}");
+    assert_eq!((t.row().status.as_str(), t.row().last_error.as_deref()), ("error", Some(e.as_str())));
+    assert!(!t.ops.effects().iter().any(|a| a.starts_with("engine sew install")), "{:?}", t.ops.effects());
+    t.enable().expect("enabling again picks it back up");
+    assert_eq!(t.row().status, "running");
+
+    let t = fresh();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![];
+    t.ops.queue(ADD_16, Ok(json!({"major": 16, "result": "already_installed"})));
+    let e = t.enable().expect_err("no binaries");
+    assert!(e.starts_with("postgres:") && e.contains("still missing") && e.contains("already_installed"), "{e}");
+    assert!(!t.ops.effects().iter().any(|a| a.starts_with("engine sew install")), "{:?}", t.ops.effects());
+}
+
+/// Another failed check refuses before anything is installed. A helper that can't
+/// do it, and an install whose own major is gone, refuse with a way on a person
+/// can really take: never the verb that only answers the daemon.
+#[test]
+fn enable_installs_no_postgres_when_refused_and_the_hint_is_a_real_way_on() {
+    let t = t();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![];
+    *t.ops.mem.lock().unwrap() = Some(3 * GIB);
+    assert_eq!(t.enable().expect_err("low RAM").split(':').next(), Some("preflight_failed"));
+    assert!(!t.ops.effects().iter().any(|e| e.starts_with("pg ")), "{:?}", t.ops.effects());
+
+    let t = fresh();
+    *t.ops.pg.lock().unwrap() = vec![];
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check");
+    assert_eq!(c["status"], "fail", "{c}");
+    let h = c["hint"].as_str().unwrap();
+    assert!(h.contains("k2 root-helper update") && h.contains("postgresql-16") && !h.contains("add-major"), "{h}");
+
+    let t = fresh();
+    t.enabled();
+    helper_adds_majors(&t);
+    *t.ops.pg.lock().unwrap() = vec![];
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check");
+    assert_eq!(c["status"], "fail", "{c}");
+    let h = c["hint"].as_str().unwrap();
+    assert!(h.contains("postgresql-16") && !h.contains("root-helper") && !h.contains("add-major"), "{h}");
+    assert!(!t.ops.effects().iter().any(|e| e.starts_with("pg ")), "{:?}", t.ops.effects());
+}
+
+/// `t()` for a test whose own `t` already shadows it.
+fn fresh() -> T {
+    t()
+}
+
+/// An install K2 enabled that now runs on Postgres 17 alone, status `error`.
+fn t2_running_on_17() -> T {
+    let t = fresh();
+    t.enabled();
+    *t.ops.pg.lock().unwrap() = vec![17];
+    store::update(1, |r| r.status = "error".into()).expect("update").expect("row");
+    t.ops.clear();
+    t
+}
+
 /// Sew 2026-11-01: once Sew has written its install, enable never runs
 /// `sew install` again and `install --reconfigure` names no major, so the
 /// install's own sew.toml keeps its major. An install whose sew-db runs on

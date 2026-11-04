@@ -446,6 +446,123 @@ fn no_token_secret_name_url_or_header_reaches_a_phone() {
     assert!(!audit.contains(URL_MARK) && !audit.contains(SECRET_NAME), "{audit}");
 }
 
+// ── unmasked_read (GV47): which widget read a `shape` source? ───────
+
+fn shape_source(name: &str) {
+    let mut spec = plain(name);
+    spec["agentAccess"] = json!("shape");
+    add(spec);
+    seed(name, json!({ "version": "1" }));
+}
+
+/// `(actor, detail)` of every `unmasked_read` row for this source.
+fn unmasked(name: &str) -> Vec<(String, J)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let id = store::get_by_name(&conn, name).expect("db").expect("row").id;
+    let mut q = conn.prepare("SELECT actor, detail_json FROM source_audit WHERE action = 'unmasked_read' AND source_id = ?1 ORDER BY id").expect("prepare");
+    let rows = q
+        .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .expect("query")
+        .map(|x| x.expect("a row"))
+        .map(|(a, d)| (a, serde_json::from_str(&d).expect("detail is JSON")))
+        .collect();
+    rows
+}
+
+#[test]
+fn a_door_read_of_a_shape_source_names_the_widget() {
+    let fx = fx(CAPS);
+    shape_source("payroll");
+    write_page(&fx, &page("source = \"payroll\"", ""));
+    let v = call_ok(&fx, "sources.read", json!(["payroll"]));
+    assert_eq!(v["masked"], false, "the person sees values: {v}");
+    let rows = unmasked("payroll");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "login:rosphone");
+    assert_eq!(rows[0].1, json!({ "name": "payroll", "via": "phone", "garden": fx.d.garden, "placement": "b1" }));
+    // Once an hour for this person, source and placement, whichever row read it.
+    call_ok(&fx, "sources.read", json!(["payroll"]));
+    call_ok(&fx, "sources.list", json!([]));
+    call_ok(&fx, "sources.history", json!(["payroll", "health"]));
+    assert_eq!(unmasked("payroll").len(), 1, "{:?}", unmasked("payroll"));
+}
+
+/// Another placement is another answer to "which widget read it?".
+#[test]
+fn each_placement_gets_its_own_line() {
+    let fx = fx(CAPS);
+    shape_source("payroll");
+    let two = format!(
+        "{}[[widget]]\nid = \"b2\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n[widget.props.config]\nsource = \"payroll\"\n",
+        page("source = \"payroll\"", "")
+    );
+    write_page(&fx, &two);
+    call_ok(&fx, "sources.read", json!(["payroll"]));
+    let body = json!({ "garden": fx.d.garden, "placement": "b2", "hash": fx.d.hash(), "verb": "sources.read", "args": ["payroll"] });
+    ok_of(CALL, &fx.phone, &[], body);
+    let places: Vec<String> = unmasked("payroll").iter().map(|(_, d)| d["placement"].as_str().expect("placement").to_string()).collect();
+    assert_eq!(places, ["b1", "b2"]);
+}
+
+/// `sources-changes` carries values: a fresh actor is audited there too.
+#[test]
+fn sources_changes_audits_a_fresh_actor() {
+    let fx = fx(CAPS);
+    shape_source("payroll");
+    write_page(&fx, &page("source = \"payroll\"", ""));
+    assert_eq!(unmasked("payroll"), vec![], "nothing read yet");
+    let v = changes(&fx, "0");
+    assert_eq!(v["changed"][0]["fields"]["version"], "1", "{v}");
+    let rows = unmasked("payroll");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "login:rosphone");
+    assert_eq!(rows[0].1["via"], "phone");
+    assert_eq!(rows[0].1["placement"], "b1");
+    changes(&fx, "0");
+    assert_eq!(unmasked("payroll").len(), 1, "once an hour");
+}
+
+/// `sources.history` hands back the line's real values, on the phone and on the
+/// desktop's route alike. `health` has no values, so no line.
+#[test]
+fn history_with_values_is_audited() {
+    let fx = fx(CAPS);
+    let mut spec = json!({ "name": "payroll", "label": "Payroll", "everySecs": 60, "agentAccess": "shape", "fetch": { "targets": [{ "key": "a", "url": "https://a.example.com/status" }] },
+                           "extract": { "items": { "itemFields": { "version": "/version" } }, "aggregates": { "n": { "op": "count" } }, "trend": ["n"] } });
+    add(spec.take());
+    write_page(&fx, &page("source = \"payroll\"", ""));
+
+    // Health: no values on the wire, nothing to audit.
+    call_ok(&fx, "sources.history", json!(["payroll", "health"]));
+    assert_eq!(unmasked("payroll"), vec![], "health carries no values");
+
+    let name: HashMap<String, String> = [("name".to_string(), "payroll".to_string()), ("field".to_string(), "n".to_string())].into();
+    let health: HashMap<String, String> = [("name".to_string(), "payroll".to_string()), ("field".to_string(), "health".to_string())].into();
+    crate::sources_routes::history_route(&Who::Owner, &health).expect("health");
+    assert_eq!(unmasked("payroll"), vec![], "on the desktop's route either");
+
+    // The phone's read of a value field names its placement.
+    call_ok(&fx, "sources.history", json!(["payroll", "n"]));
+    let rows = unmasked("payroll");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].1["via"].as_str(), rows[0].1["placement"].as_str()), (Some("phone"), Some("b1")));
+
+    // The desktop's route is audited too, on its own line.
+    crate::sources_routes::history_route(&Who::Owner, &name).expect("history");
+    let rows = unmasked("payroll");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[1].0, "owner");
+    assert_eq!(rows[1].1, json!({ "name": "payroll", "via": "route" }));
+    crate::sources_routes::history_route(&Who::Owner, &name).expect("history");
+    assert_eq!(unmasked("payroll").len(), 2, "once an hour");
+
+    // An agent gets the line's shape, zeroed: nothing to audit.
+    let agent = Who::Agent { project_id: "p1".into(), session_id: "s1".into() };
+    crate::sources_routes::history_route(&agent, &name).expect("masked history");
+    assert_eq!(unmasked("payroll").len(), 2, "an agent's is masked");
+}
+
 // ── the audit log ───────────────────────────────────────────────────
 
 fn audit_text() -> String {

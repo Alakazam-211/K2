@@ -32,7 +32,7 @@ use super::call::{check_cap, needs_editor, resolve, CallBody, Placed};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::sources::SourceErr;
-use crate::sources_routes as routes;
+use crate::sources_routes::{self as routes, ReadVia};
 
 pub fn is_verb(verb: &str) -> bool {
     DOOR_ROW_VERBS.contains(&verb)
@@ -49,16 +49,17 @@ pub(crate) fn handle(b: &CallBody, who: &Who) -> CliResponse {
 fn run(b: &CallBody, who: &Who) -> Result<J, CliResponse> {
     let (w, bound) = place(b, &b.verb, Spend::Read)?;
     let refusal = |e: SourceErr| e.response();
+    let via = via_of(&w);
     match b.verb.as_str() {
         "sources.list" => list(&w, &bound, who),
         "sources.read" => {
             let s = local_source(b, &bound).map_err(refusal)?;
-            read_view(who, &s).map_err(refusal)
+            read_view(who, &s, via).map_err(refusal)
         }
         "sources.history" => {
             let s = local_source(b, &bound).map_err(refusal)?;
             let params = history_params(b, &s).map_err(refusal)?;
-            routes::history_route(who, &params).map_err(refusal)
+            routes::history_for(who, &params, Some(via)).map_err(refusal)
         }
         "sources.refresh" => {
             let s = local_source(b, &bound).map_err(refusal)?;
@@ -68,6 +69,11 @@ fn run(b: &CallBody, who: &Who) -> Result<J, CliResponse> {
         }
         other => Err(crate::garden_data::response(&crate::garden_data::refused("unknown_verb", 400, format!("no verb {other}")))),
     }
+}
+
+/// Who a `shape` source's audit line names (GV47): this door, this placement.
+fn via_of(w: &Placed) -> ReadVia<'_> {
+    ReadVia { via: "phone", garden: &w.garden, placement: &w.placement }
 }
 
 /// Everything a door row needs before it runs: the placement and live hash
@@ -163,9 +169,9 @@ fn history_params(b: &CallBody, s: &Bound) -> Result<HashMap<String, String>, So
     Ok(params)
 }
 
-fn read_view(who: &Who, s: &Bound) -> Result<J, SourceErr> {
+fn read_view(who: &Who, s: &Bound, via: ReadVia) -> Result<J, SourceErr> {
     let params: HashMap<String, String> = [("name".to_string(), s.name.clone())].into();
-    Ok(frame_view(&s.address, routes::read(who, &params)?))
+    Ok(frame_view(&s.address, routes::read_for(who, &params, Some(via))?))
 }
 
 /// The daemon's card view as a frame gets it (the renderer's `zenSourceView`):
@@ -206,7 +212,7 @@ fn list(w: &Placed, bound: &[Bound], who: &Who) -> Result<J, CliResponse> {
             if !s.local {
                 return unread("server_not_saved");
             }
-            match read_view(who, s) {
+            match read_view(who, s, via_of(w)) {
                 Ok(v) => json!({ "address": s.address, "label": v["label"], "health": v["health"], "phase": v["phase"], "display": v["display"], "reach": "ok" }),
                 Err(e) if e.code == "removed" || e.code == "cap_not_granted" => unread(e.code),
                 Err(_) => unread("unreachable"),
@@ -221,13 +227,13 @@ fn list(w: &Placed, bound: &[Bound], who: &Who) -> Result<J, CliResponse> {
 /// Same gate as a door row, but not a verb, so a widget can't call it. One call
 /// per `sources_changed` instead of one read per source.
 pub(crate) fn sources_changes(b: &CallBody, since: i64, who: &Who) -> CliResponse {
-    let (_, bound) = match place(b, "sources.read", Spend::Read) {
+    let (w, bound) = match place(b, "sources.read", Spend::Read) {
         Ok(p) => p,
         Err(r) => return r,
     };
     let locals: Vec<&Bound> = bound.iter().filter(|s| s.local).collect();
     let keep = |name: &str| locals.iter().any(|s| s.name == name);
-    let c = match routes::changes_for(who, since, &keep, true) {
+    let c = match routes::changes_for(who, since, &keep, Some(via_of(&w))) {
         Ok(c) => c,
         Err(e) => return e.response(),
     };

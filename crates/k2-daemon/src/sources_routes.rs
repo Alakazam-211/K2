@@ -384,17 +384,32 @@ fn view_of(conn: &Connection, who: &Who, row: &SourceRow) -> R<SourceResult> {
     Ok(view::build(row, &st, proj.as_ref(), viewer(who), now()))
 }
 
+/// Which widget a read is for, so "which widget read payroll?" has an answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReadVia<'a> {
+    /// The door it came through.
+    pub(crate) via: &'static str,
+    pub(crate) garden: &'a str,
+    pub(crate) placement: &'a str,
+}
+
 /// GV47: a `shape` source read with values by a person (or anything
-/// holding the owner token) is audited, at most once per actor per hour.
-fn audit_unmasked(conn: &Connection, who: &Who, row: &SourceRow, v: &SourceResult) {
-    if row.agent_access != AgentAccess::Shape || v.masked || row.keep == Keep::States {
+/// holding the owner token) is audited, at most once per actor, source and
+/// placement per hour. A read through no placement is `via: "route"`.
+fn audit_unmasked(conn: &Connection, who: &Who, row: &SourceRow, masked: bool, via: Option<ReadVia>) {
+    if row.agent_access != AgentAccess::Shape || masked || row.keep == Keep::States {
         return;
     }
     let (a, _) = actor(who);
-    if store::audited_since(conn, &a, "unmasked_read", &row.id, now() - 3600).unwrap_or(false) {
+    let place = via.map(|v| (v.garden, v.placement));
+    if store::audited_since_for(conn, &a, "unmasked_read", &row.id, now() - 3600, place).unwrap_or(false) {
         return;
     }
-    audit(conn, who, "unmasked_read", Some(&row.id), serde_json::json!({"name": row.name}));
+    let detail = match via {
+        Some(v) => serde_json::json!({"name": row.name, "via": v.via, "garden": v.garden, "placement": v.placement}),
+        None => serde_json::json!({"name": row.name, "via": "route"}),
+    };
+    audit(conn, who, "unmasked_read", Some(&row.id), detail);
 }
 
 /// The export shape (secret names only). For agents, query values that
@@ -505,21 +520,31 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let row = find(&conn, param(params, "name")?)?;
     can_read(who, &row)?;
     let view = view_of(&conn, who, &row)?;
-    audit_unmasked(&conn, who, &row, &view);
+    audit_unmasked(&conn, who, &row, view.masked, None);
     Ok(serde_json::json!({"source": def_of(who, &row)?, "view": view, "warnings": warnings_of(&row)}))
 }
 
 pub(crate) fn read(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    read_for(who, params, None)
+}
+
+/// [`read`] for a widget (`via`), so its audit line names the placement.
+pub(crate) fn read_for(who: &Who, params: &HashMap<String, String>, via: Option<ReadVia>) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = find(&conn, param(params, "name")?)?;
     can_read(who, &row)?;
     let view = view_of(&conn, who, &row)?;
-    audit_unmasked(&conn, who, &row, &view);
+    audit_unmasked(&conn, who, &row, view.masked, via);
     Ok(serde_json::to_value(view).unwrap_or(J::Null))
 }
 
 pub(crate) fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    history_for(who, params, None)
+}
+
+/// [`history_route`] for a widget (`via`), so its audit line names the placement.
+pub(crate) fn history_for(who: &Who, params: &HashMap<String, String>, via: Option<ReadVia>) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = find(&conn, param(params, "name")?)?;
@@ -564,6 +589,8 @@ pub(crate) fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J>
     let points: Vec<J> = pts.iter().map(|(t, v)| serde_json::json!({"t": t, "v": v})).collect();
     // Agents on a shape source see the line's shape, not its values.
     let masked = viewer(who) == Viewer::Agent && row.agent_access == AgentAccess::Shape;
+    // The line's real values: audited as a read of the card's are (GV47).
+    audit_unmasked(&conn, who, &row, masked, via);
     let points: Vec<J> = if masked {
         points.into_iter().map(|p| serde_json::json!({"t": p["t"], "v": if p["v"].is_null() { J::Null } else { 0.into() }})).collect()
     } else {
@@ -574,7 +601,7 @@ pub(crate) fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J>
 
 fn changes(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let since = params.get("since").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let c = changes_for(who, since, &|_| true, false)?;
+    let c = changes_for(who, since, &|_| true, None)?;
     Ok(serde_json::json!({"rev": c.rev, "full": c.full, "changed": c.changed, "removed": c.removed}))
 }
 
@@ -596,9 +623,9 @@ pub(crate) struct Changes {
 }
 
 /// The card views that changed since `since`, of the sources `keep` names, and
-/// which of them went. `audit_values`: a door row reads values as `read` does,
-/// so a `shape` source is audited as there (GV47).
-pub(crate) fn changes_for(who: &Who, since: i64, keep: &dyn Fn(&str) -> bool, audit_values: bool) -> R<Changes> {
+/// which of them went. With `via` (a widget's read through a door) a `shape`
+/// source is audited as `read` does (GV47).
+pub(crate) fn changes_for(who: &Who, since: i64, keep: &dyn Fn(&str) -> bool, via: Option<ReadVia>) -> R<Changes> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let rev = store::current_rev(&conn)?;
@@ -612,8 +639,8 @@ pub(crate) fn changes_for(who: &Who, since: i64, keep: &dyn Fn(&str) -> bool, au
     for row in rows {
         if keep(&row.name) && can_read(who, &row).is_ok() {
             let view = view_of(&conn, who, &row)?;
-            if audit_values {
-                audit_unmasked(&conn, who, &row, &view);
+            if via.is_some() {
+                audit_unmasked(&conn, who, &row, view.masked, via);
             }
             changed.push(view);
         }

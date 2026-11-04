@@ -1177,7 +1177,9 @@ them. `sources.subscribe` is `host`: on `sources_changed` the phone calls
   `export`: no token, secret name, fetch URL or header reaches a phone. K2 can't
   vet what a source's own extract keeps: that's its author's rule, on the desktop
   too. The person's view: a `shape` source's values are shown and audited
-  (`unmasked_read`), as on the desktop.
+  (`unmasked_read`), as on the desktop, once an hour per person, source and
+  placement, with `{via, garden, placement}` in its detail. `sources.history`
+  writes one too, for any field but `health`, on the desktop's route as well.
 - **Audit:** a read through the door writes one line per device, placement and
   verb per minute, its `n=` the requests it stands for; writes always log, and
   so does a refresh that queues. A verb the catalog doesn't know is `<unknown>`

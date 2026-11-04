@@ -823,6 +823,25 @@ pub fn audited_since(conn: &Connection, actor: &str, action: &str, source_id: &s
     .map(|n| n > 0)
 }
 
+/// [`audited_since`] for one placement (`None`: a read that came through no
+/// placement), from the `garden` and `placement` in the row's detail.
+pub fn audited_since_for(
+    conn: &Connection,
+    actor: &str,
+    action: &str,
+    source_id: &str,
+    since: i64,
+    place: Option<(&str, &str)>,
+) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM source_audit WHERE actor = ?1 AND action = ?2 AND source_id = ?3 AND at >= ?4 \
+         AND json_extract(detail_json, '$.garden') IS ?5 AND json_extract(detail_json, '$.placement') IS ?6",
+        params![actor, action, source_id, since, place.map(|p| p.0), place.map(|p| p.1)],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+}
+
 // ── changes ──────────────────────────────────────────────────────────
 
 /// Sources whose definition or state changed after `since` (live rows),

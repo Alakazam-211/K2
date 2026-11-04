@@ -347,10 +347,14 @@ fn plant_mail_if_needed(
     }
     store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem)?;
     crate::domains::status::reject_live_self_signed(hostname)?;
-    // K2's issuer just planted and loaded the certificate of an attached
-    // role-mail host: this is a K2-issuer box. Stalwart ACME → Manual
-    // (never fails the plant; retried at the next renew / boot).
-    crate::mail::cert_owner::after_k2_plant(hostname);
+    // K2's issuer just planted and loaded the certificate of the primary mail
+    // host: this is a K2-issuer box. Stalwart ACME → Manual (never fails the
+    // plant; retried at the next renew / boot). A second mail host doesn't
+    // decide who owns the mail certificate: under the same apex it would find
+    // the primary's Stalwart Domain and switch off the ACME that renews it.
+    if store::is_mail_primary(hostname) {
+        crate::mail::cert_owner::after_k2_plant(hostname);
+    }
     Ok(())
 }
 
@@ -1354,6 +1358,77 @@ mod tests {
         assert_eq!(kind, ChallengeKind::Dns01);
     }
 
+    fn set_primary(host: &str) {
+        let _ = k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+             VALUES (1, 'running', '0.16.25', ?1, 1)",
+            [host],
+        )
+        .expect("mail_server row");
+    }
+
+    /// The live bug, through the real issuer path: a second role-`mail` host
+    /// (same apex, the worst case for the owner switch) never moves the
+    /// default and never touches Stalwart ACME; the primary still does both.
+    #[test]
+    fn second_mail_host_leaves_the_default_and_the_certificate_owner_alone() {
+        use crate::domains::store::fake_tls::{cert, FakeTls, DAY};
+        use crate::mail::jmap::DefaultCertificate;
+        const PRIMARY: &str = "mail.owner-two.test";
+        const SECOND: &str = "mx2.owner-two.test";
+        let _home = crate::test_support::TempHome::new();
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        set_primary(PRIMARY);
+        attach_mail("owner-two.test", PRIMARY);
+        attach_mail("owner-two.test", SECOND);
+        let now = chrono::Utc::now().timestamp();
+        let fake = std::rc::Rc::new(std::cell::RefCell::new(FakeTls::holding(
+            vec![cert("primary-1", PRIMARY, now + 60 * DAY)],
+            Some("primary-1"),
+        )));
+        let _tls = store::set_test_mail_tls(fake.clone());
+        let _p = crate::domains::status::set_test_probe(Some(crate::domains::status::ProbeResult {
+            state: "issued".into(),
+            self_signed: false,
+            names: vec![SECOND.into()],
+            expires_at: Some(now + 86_400),
+            issuer: Some("CN=R11, O=Let's Encrypt".into()),
+        }));
+        let _ = crate::mail::cert_owner::take_test_after_plant();
+
+        // Issue, then renew (a re-plant through the same path).
+        let le = mint_le_like(SECOND);
+        store::install(SECOND, &le.chain_pem, &le.key_pem).expect("install");
+        fake.borrow_mut().planting = Some((SECOND.into(), now + 80 * DAY));
+        issue_attached(SECOND).expect("issue");
+        assert_eq!(fake.borrow().calls, vec!["add cert-101", "reload"]);
+        fake.borrow_mut().calls.clear();
+        fake.borrow_mut().planting = Some((SECOND.into(), now + 90 * DAY));
+        issue_attached(SECOND).expect("renew");
+        assert_eq!(fake.borrow().calls, vec!["add cert-102", "reload", "destroy cert-101"]);
+        assert_eq!(fake.borrow().state(), DefaultCertificate::Present("primary-1".into()));
+        assert!(
+            crate::mail::cert_owner::take_test_after_plant().is_empty(),
+            "a second mail host never switches Stalwart ACME"
+        );
+
+        // The primary's renewal still takes the default and the owner switch.
+        let le = mint_le_like(PRIMARY);
+        store::install(PRIMARY, &le.chain_pem, &le.key_pem).expect("install");
+        fake.borrow_mut().calls.clear();
+        fake.borrow_mut().planting = Some((PRIMARY.into(), now + 90 * DAY));
+        issue_attached(PRIMARY).expect("primary");
+        assert_eq!(fake.borrow().calls, vec!["plant-default cert-103", "reload"]);
+        assert_eq!(fake.borrow().state(), DefaultCertificate::Present("cert-103".into()));
+        assert_eq!(crate::mail::cert_owner::take_test_after_plant(), vec![PRIMARY.to_string()]);
+
+        detach("owner-two.test");
+    }
+
     /// K2-issuer boxes: a successful K2 plant+load of the mail certificate
     /// switches Stalwart ACME to Manual (cert_owner::after_k2_plant); a
     /// failed plant, a plant whose probe is still self-signed, or a
@@ -1361,6 +1436,9 @@ mod tests {
     #[test]
     fn mail_plant_switches_stalwart_acme_to_manual_only_after_success() {
         let _home = crate::test_support::TempHome::new();
+        let _mail = crate::mail::mail_server_test_lock();
+        let _row = crate::mail::MailServerRowCleanup;
+        set_primary("mail.manual-ok.test");
         let issued_probe = |host: &str| crate::domains::status::ProbeResult {
             state: "issued".into(),
             self_signed: false,

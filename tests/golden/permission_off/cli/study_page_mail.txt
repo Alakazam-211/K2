@@ -37,6 +37,9 @@ WHO OWNS THE MAIL CERTIFICATE
   certificate. autoconfig, autodiscover, mta-sts and ua-auto-config each
   get their OWN K2 certificate (`k2 hostmail cert names`), never Stalwart
   ACME. The apex and www are never on a mail certificate.
+  A second mail host, mail.<apex> on another domain: `k2 domain name add
+  mail.<apex> --role mail`, then `k2 cert issue mail.<apex>`. It gets its own
+  K2 certificate and never becomes the default.
   Doctor (`k2 hostmail doctor`):
     k2-cert-renewal   warn = under 14 days left, the last renewal failed
                       (the current certificate keeps serving), or the
@@ -54,6 +57,12 @@ WHO OWNS THE MAIL CERTIFICATE
     extra-name-certs  a name points here but Stalwart does not present
                       that name's own certificate yet.
     tls-cert          what :443 serves right now.
+    default-cert      what clients without SNI get, which is most of
+                      STARTTLS on 25. Should be the mail host's newest
+                      certificate; K2 points it back at boot and after each
+                      mail certificate plant. Warn = it couldn't (usually the
+                      mail host has no live certificate: nothing changes
+                      until it has one).
   Planted but not loaded: `k2 hostmail cert renew` succeeded but tls-cert
   still shows the old leaf → the hot reload did not land. Restart
   Stalwart: `sudo /usr/bin/systemctl restart stalwart` (boxes without the mail

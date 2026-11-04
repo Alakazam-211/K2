@@ -43250,7 +43250,7 @@ cmd_schema() {
     {
       "name": "hostmail cert names",
       "usage": "k2 hostmail cert names [list] [--json]",
-      "description": "Per extra mail name (autoconfig, autodiscover, mta-sts, ua-auto-config under each hosted domain): does it point here, and the state of its own certificate. GET /cli/mail/cert/names.",
+      "description": "Per extra mail name (autoconfig, autodiscover, mta-sts, ua-auto-config under each hosted domain): does it point here, and the state of its own certificate. GET /cli/mail/cert/names. A mail host on another domain is not an extra name: k2 domain name add mail.<apex> --role mail, then k2 cert issue mail.<apex>.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -43934,7 +43934,7 @@ cmd_schema() {
     {
       "name": "cert",
       "usage": "k2 cert <list|issue|renew> ...",
-      "description": "Certificates for hostnames attached on THIS server. list now; issue/renew in the certs slice. Not k2 hostmail cert. Locked dns tool.",
+      "description": "Certificates for hostnames attached on THIS server: list, issue, renew. A role-mail hostname goes into the mail server too; only the primary mail host is its default certificate. Not k2 hostmail cert. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -49039,6 +49039,9 @@ WHO OWNS THE MAIL CERTIFICATE
   certificate. autoconfig, autodiscover, mta-sts and ua-auto-config each
   get their OWN K2 certificate (`k2 hostmail cert names`), never Stalwart
   ACME. The apex and www are never on a mail certificate.
+  A second mail host, mail.<apex> on another domain: `k2 domain name add
+  mail.<apex> --role mail`, then `k2 cert issue mail.<apex>`. It gets its own
+  K2 certificate and never becomes the default.
   Doctor (`k2 hostmail doctor`):
     k2-cert-renewal   warn = under 14 days left, the last renewal failed
                       (the current certificate keeps serving), or the
@@ -49056,6 +49059,12 @@ WHO OWNS THE MAIL CERTIFICATE
     extra-name-certs  a name points here but Stalwart does not present
                       that name's own certificate yet.
     tls-cert          what :443 serves right now.
+    default-cert      what clients without SNI get, which is most of
+                      STARTTLS on 25. Should be the mail host's newest
+                      certificate; K2 points it back at boot and after each
+                      mail certificate plant. Warn = it couldn't (usually the
+                      mail host has no live certificate: nothing changes
+                      until it has one).
   Planted but not loaded: `k2 hostmail cert renew` succeeded but tls-cert
   still shows the old leaf → the hot reload did not land. Restart
   Stalwart: `sudo /usr/bin/systemctl restart stalwart` (boxes without the mail
@@ -73451,7 +73460,8 @@ COMMANDS
   cert names [issue|renew]    One certificate per extra name (autoconfig,
                               autodiscover, mta-sts, ua-auto-config) that
                               points here. K2-hosted zones only. Never
-                              touches the mail certificate.
+                              touches the mail certificate. A mail host on
+                              another domain: see cert names --help.
   cert owner [--stalwart-acme]
                               Who owns the mail certificate (k2 |
                               stalwart-acme). --stalwart-acme hands it back
@@ -73938,6 +73948,15 @@ www). Each name gets its OWN certificate — never a SAN on the mail
 certificate, never Stalwart's ACME — so one bad name cannot cost mail its
 certificate. The mail host's certificate stays Stalwart's default, so
 clients without SNI keep getting it.
+
+A MAIL HOST ON ANOTHER DOMAIN is not an extra name. For mail.<apex>, with its
+A record pointing at this server:
+  k2 domain name add mail.<apex> --role mail
+  k2 cert issue mail.<apex>
+It gets its own certificate, served to clients that ask for that name. K2
+loads and renews it. The default stays on the mail host in `k2 hostmail
+status`; `k2 hostmail doctor` checks that (default-cert). Receiving mail for
+the domain is separate: `k2 hostmail domain add <apex>`.
 
 USAGE
   k2 hostmail cert names [list] [--json]
@@ -76501,8 +76520,12 @@ cmd_help_cert() {
     cat <<'EOF'
 k2 cert — certificates for hostnames attached on THIS server
 
-This is box inventory (`k2 cert list`). Issue/renew land with the certs
-slice. Not `k2 hostmail cert renew` (that becomes an alias of this issuer).
+This is box inventory (`k2 cert list`) and the issuer. `k2 hostmail cert
+renew` uses this issuer for the mail host when it's attached here.
+
+A role-mail hostname goes into the mail server too. Only the mail host in
+`k2 hostmail status` is its default certificate, the one clients without SNI
+get; any other mail host is served to clients that ask for its name.
 
 USAGE
   k2 cert list [--json]
@@ -76520,7 +76543,9 @@ EOF
 
 cmd_help_cert_issue() {
     cat <<'EOF'
-Issue a Let's Encrypt cert for an attached hostname (on-box ACME).
+Issue a Let's Encrypt cert for an attached hostname (on-box ACME). Adding
+a second mail host (`k2 domain name add mail.<apex> --role mail` first)
+doesn't change the mail server's default certificate.
 
 USAGE
   k2 cert issue <hostname> [--json]

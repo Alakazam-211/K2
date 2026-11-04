@@ -1434,7 +1434,7 @@ exit: 0
     {
       "name": "hostmail cert names",
       "usage": "k2 hostmail cert names [list] [--json]",
-      "description": "Per extra mail name (autoconfig, autodiscover, mta-sts, ua-auto-config under each hosted domain): does it point here, and the state of its own certificate. GET /cli/mail/cert/names.",
+      "description": "Per extra mail name (autoconfig, autodiscover, mta-sts, ua-auto-config under each hosted domain): does it point here, and the state of its own certificate. GET /cli/mail/cert/names. A mail host on another domain is not an extra name: k2 domain name add mail.<apex> --role mail, then k2 cert issue mail.<apex>.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -2118,7 +2118,7 @@ exit: 0
     {
       "name": "cert",
       "usage": "k2 cert <list|issue|renew> ...",
-      "description": "Certificates for hostnames attached on THIS server. list now; issue/renew in the certs slice. Not k2 hostmail cert. Locked dns tool.",
+      "description": "Certificates for hostnames attached on THIS server: list, issue, renew. A role-mail hostname goes into the mail server too; only the primary mail host is its default certificate. Not k2 hostmail cert. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },

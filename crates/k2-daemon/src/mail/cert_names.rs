@@ -37,6 +37,10 @@
 //!   destroyed on a DNS answer, so a transient or wrong lookup can never
 //!   take a working name's certificate away.
 //!
+//! A mail host on another domain (`mail.<second apex>`) is not one of these:
+//! `k2 domain name add <host> --role mail`, then `k2 cert issue <host>`
+//! ([`crate::domains::store::plant_for_host`], also non-default).
+//!
 //! Renewal: the daemon's background renewer ([`crate::domains::renew`])
 //! re-runs this same run for names already in the state file whose
 //! certificate is inside [`RENEW_BEFORE_SECS`] of expiry (or never got

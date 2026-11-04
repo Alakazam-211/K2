@@ -19,6 +19,11 @@
 //! certificate and once per boot ([`spawn_startup_reconcile`]), and is
 //! idempotent. Never through hostmail disable/enable.
 //!
+//! "The mail host" is the primary one, `mail_server.hostname`. A second
+//! role-`mail` host has its own K2 certificate, but it never decides who owns
+//! the mail certificate and never switches Stalwart ACME: under the same apex
+//! its Domain lookup finds the primary's Domain.
+//!
 //! Never flipped back automatically. A box that stops being K2-issuer
 //! (mail host detached) keeps `Manual`; the doctor warns and names the
 //! owner command `k2 hostmail cert owner --stalwart-acme`
@@ -410,8 +415,8 @@ fn restore_stalwart_acme_refusal(host: &str) -> String {
 
 // ── Hooks ───────────────────────────────────────────────────────────────
 
-/// After K2's issuer planted AND loaded the mail certificate for an
-/// attached `role mail` host — by construction a K2-issuer box: switch
+/// After K2's issuer planted AND loaded the mail certificate for the primary
+/// mail host, attached with `role mail` — by construction a K2-issuer box: switch
 /// Stalwart ACME to Manual. Never fails the plant (the certificate is
 /// already serving); a failed write is logged and retried at the next
 /// renew or boot, and the doctor warns meanwhile.
@@ -483,11 +488,9 @@ fn run_startup_reconcile_live() {
         k2_core::log_debug!("{P} skipped because the mail server has no hostname");
         return;
     };
-    // Only a K2-issuer box is ever written: decide before touching Stalwart.
-    if mail_cert_owner(&host) != CertOwner::K2 {
-        k2_core::log_debug!("{}", reconcile_skip_line(&host));
-        return;
-    }
+    // Every box from here on, whoever owns the certificate: the default
+    // certificate check is for all of them. The Manual switch below only
+    // ever writes on a K2-issuer box (`reconcile` decides).
     let client = match supervisor::mgmt_client_from_row() {
         Ok(c) => c,
         Err(e) => {
@@ -526,16 +529,17 @@ fn run_startup_reconcile_live() {
         }
     }
     let _guard = EndEnable;
-    // Re-decide under the lock (a detach may have run meanwhile).
-    let owner = mail_cert_owner(&host);
-    k2_core::log_debug!("{}", reconcile(&client, &host, owner));
+    boot_checks(&host, client);
 }
 
-fn reconcile_skip_line(host: &str) -> String {
-    format!(
-        "[mail/cert-owner] {host}: owner {} — Stalwart's certificate settings left as they are",
-        mail_cert_owner(host).as_str()
-    )
+/// What the boot thread does once Stalwart answers and it holds the enable
+/// lock: who owns the certificate (read here, a detach may have run
+/// meanwhile), then the default certificate. A box an earlier K2 left with a
+/// second mail host as its default heals here.
+pub(crate) fn boot_checks(host: &str, client: StalwartClient) -> crate::domains::store::DefaultRepair {
+    let owner = mail_cert_owner(host);
+    k2_core::log_debug!("{}", reconcile(&client, host, owner));
+    crate::domains::store::repair_default_live(host, client)
 }
 
 #[cfg(test)]

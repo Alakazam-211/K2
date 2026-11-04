@@ -126,7 +126,7 @@ fn rank(p: &ProbeResult) -> u8 {
     }
 }
 
-fn looks_rcgen(issuer: &str, subject: &str) -> bool {
+pub(crate) fn looks_rcgen(issuer: &str, subject: &str) -> bool {
     let hay = format!("{issuer} {subject}").to_ascii_lowercase();
     hay.contains("rcgen") || hay.contains("self signed") || hay.contains("self-signed")
 }

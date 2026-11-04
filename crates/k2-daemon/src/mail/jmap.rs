@@ -474,16 +474,41 @@ impl StalwartClient {
             return Err("certificate_plant: empty chain or private key".to_string());
         }
         let id = self.certificate_add(chain_pem, key_pem)?;
+        self.default_certificate_set(&id)?;
+        Ok(id)
+    }
+
+    /// Point `SystemSettings.defaultCertificateId` at a Certificate that is
+    /// already stored. Not loaded until
+    /// [`Self::action_reload_tls_certificates`] (or a restart).
+    pub fn default_certificate_set(&self, id: &str) -> Result<(), String> {
         let resp = self.registry_call(
             "x:SystemSettings/set",
-            default_certificate_id_args(&id),
+            default_certificate_id_args(id),
         )?;
         parse_set_updated(
             "x:SystemSettings/set",
             SYSTEM_SETTINGS_SINGLETON_ID,
             &resp,
+        )
+    }
+
+    /// Every stored Certificate, without its key: the names it covers and
+    /// its dates, as Stalwart parsed them from the PEM.
+    pub fn certificate_list(&self) -> Result<Vec<CertificateInfo>, String> {
+        let resp = self.registry_call(
+            "x:Certificate/get",
+            serde_json::json!({
+                "ids": null,
+                "properties": [
+                    "subjectAlternativeNames",
+                    "notValidBefore",
+                    "notValidAfter",
+                    "issuer",
+                ],
+            }),
         )?;
-        Ok(id)
+        parse_certificate_list(&resp)
     }
 
     /// CAL44: plant a PEM chain + key as one more Stalwart `Certificate`
@@ -3674,6 +3699,53 @@ mod certificate_upkeep_tests {
         let err = parse_certificate_destroyed("c1", &serde_json::json!({})).expect_err("silent");
         assert!(err.contains("not in the destroyed list"), "{err}");
     }
+
+    #[test]
+    fn certificate_list_reads_both_shapes_and_refuses_half_an_answer() {
+        let reply = serde_json::json!({ "list": [
+            {
+                "id": "c1",
+                "subjectAlternativeNames": { "mail.example.com": true, "off.example.com": false },
+                "notValidBefore": "2026-09-18T00:00:00Z",
+                "notValidAfter": "2026-12-17T00:00:00Z",
+                "issuer": "Let's Encrypt",
+            },
+            {
+                "id": "c2",
+                "subjectAlternativeNames": ["mail.example.org"],
+                "notValidBefore": "2026-09-19T00:00:00Z",
+                "notValidAfter": "2026-12-18T00:00:00Z",
+            },
+        ] });
+        let list = parse_certificate_list(&reply).expect("parse");
+        assert_eq!(list[0].id, "c1");
+        assert_eq!(list[0].names, vec!["mail.example.com".to_string()]);
+        assert_eq!(
+            list[0].not_after,
+            chrono::DateTime::parse_from_rfc3339("2026-12-17T00:00:00Z").unwrap().timestamp()
+        );
+        assert_eq!(list[0].issuer, "Let's Encrypt");
+        assert_eq!(list[1].names, vec!["mail.example.org".to_string()]);
+        assert_eq!(list[1].issuer, "");
+
+        let no_list = parse_certificate_list(&serde_json::json!({})).expect_err("no list");
+        assert!(no_list.contains("no list"), "{no_list}");
+        let bad_date = serde_json::json!({ "list": [{
+            "id": "c1",
+            "subjectAlternativeNames": {},
+            "notValidBefore": "2026-09-18T00:00:00Z",
+            "notValidAfter": 12,
+        }] });
+        let err = parse_certificate_list(&bad_date).expect_err("bad date");
+        assert!(err.contains("'c1'") && err.contains("notValidAfter"), "{err}");
+        let no_names = serde_json::json!({ "list": [{
+            "id": "c1",
+            "notValidBefore": "2026-09-18T00:00:00Z",
+            "notValidAfter": "2026-12-17T00:00:00Z",
+        }] });
+        let err = parse_certificate_list(&no_names).expect_err("no names");
+        assert!(err.contains("subjectAlternativeNames"), "{err}");
+    }
 }
 
 // ── Registry wire layer (envelope + pure parsers) ───────────────────────
@@ -3862,6 +3934,70 @@ pub enum DefaultCertificate {
     /// `defaultCertificateId` names a Certificate that is gone (Stalwart
     /// deletes expired certificates; the id is then dangling).
     Missing(String),
+}
+
+/// One stored Certificate as [`StalwartClient::certificate_list`] reads it.
+/// Never carries the private key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateInfo {
+    pub id: String,
+    /// The certificate's names, as Stalwart parsed them from the PEM.
+    pub names: Vec<String>,
+    pub not_before: i64,
+    pub not_after: i64,
+    pub issuer: String,
+}
+
+/// Pure `x:Certificate/get` parser. A row K2 can't read is a loud Err: the
+/// caller decides what the default certificate should be from these, so it
+/// must never decide from half an answer.
+fn parse_certificate_list(args: &serde_json::Value) -> Result<Vec<CertificateInfo>, String> {
+    let list = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "x:Certificate/get: no list in the reply".to_string())?;
+    list.iter()
+        .map(|e| {
+            let id = e
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("x:Certificate/get: a row has no id: {e}"))?;
+            let date = |key: &str| {
+                e.get(key)
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|d| d.timestamp())
+                    .ok_or_else(|| {
+                        format!("x:Certificate/get: '{id}' has no readable {key}: {:?}", e.get(key))
+                    })
+            };
+            let names = match e.get("subjectAlternativeNames") {
+                Some(serde_json::Value::Object(m)) => m
+                    .iter()
+                    .filter(|(_, v)| v.as_bool() == Some(true))
+                    .map(|(k, _)| k.trim().to_string())
+                    .collect(),
+                Some(serde_json::Value::Array(a)) => a
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .collect(),
+                other => {
+                    return Err(format!(
+                        "x:Certificate/get: '{id}' subjectAlternativeNames has an unexpected \
+                         shape: {other:?}"
+                    ))
+                }
+            };
+            Ok(CertificateInfo {
+                id: id.to_string(),
+                names,
+                not_before: date("notValidBefore")?,
+                not_after: date("notValidAfter")?,
+                issuer: e.get("issuer").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            })
+        })
+        .collect()
 }
 
 /// Pure `x:SystemSettings/get` parser: the singleton's

@@ -59,7 +59,7 @@ use std::io::BufRead;
 
 use crate::mail::dns_verify::{self, DnsError, DnsResolver};
 use crate::mail::domains;
-use crate::mail::jmap::CertManagement;
+use crate::mail::jmap::{CertManagement, CertificateInfo, DefaultCertificate};
 
 // ── Check vocabulary ────────────────────────────────────────────────────
 
@@ -184,6 +184,13 @@ pub trait DoctorEnv {
     /// handshake = the cert covers the name). Returns the status and
     /// the `Location` header. Unauthenticated; never a body upload.
     fn http_probe(&self, url: &str, method: &str) -> Result<(u16, Option<String>), String>;
+    /// The default certificate and every stored Certificate, for the
+    /// `default-cert` check. Default: not read (fakes).
+    fn default_certificate_view(
+        &self,
+    ) -> Option<Result<(DefaultCertificate, Vec<CertificateInfo>), String>> {
+        None
+    }
     /// 0.45.1 A1: the `nameserver` lines of /etc/resolv.conf (what
     /// Stalwart's System resolver uses). Default: none (fakes).
     fn resolv_nameservers(&self) -> Vec<String> {
@@ -472,6 +479,12 @@ pub fn run_checks_with_ptr_resolver(
         env.mail_cert_management(&ctx.hostname),
     ));
 
+    // What clients without SNI get. The other TLS checks all send SNI, so a
+    // wrong default passes every one of them.
+    if let Some(view) = env.default_certificate_view() {
+        checks.push(default_cert_check(&ctx.hostname, view, now));
+    }
+
     // Calendars S2 (CAL27): CalDAV discovery on the mail host.
     checks.push(caldav_check(env, &ctx.hostname));
 
@@ -655,6 +668,49 @@ pub fn extra_name_certs_check(
         );
     }
     mk(ST_PASS, format!("verified TLS on {}", ok.join(", ")))
+}
+
+/// `default-cert`: the certificate Stalwart gives clients that send no SNI
+/// name or one it doesn't know, which is most of STARTTLS on 25. It should be
+/// the primary mail host's newest. K2 repairs a wrong one at boot and after
+/// every mail certificate plant, so a warn here means it couldn't.
+pub fn default_cert_check(
+    hostname: &str,
+    view: Result<(DefaultCertificate, Vec<CertificateInfo>), String>,
+    now: i64,
+) -> DoctorCheck {
+    use crate::domains::store::{decide_default, no_live_primary_warning, DefaultDecision};
+    let mk = |status: &'static str, detail: String| DoctorCheck {
+        id: "default-cert".into(),
+        label: "Clients without SNI get the mail host's certificate".into(),
+        status,
+        detail,
+        gates_direct: false,
+    };
+    let (current, certs) = match view {
+        Ok(v) => v,
+        Err(e) => {
+            return mk(ST_UNKNOWN, format!("could not read Stalwart's certificates: {e}"));
+        }
+    };
+    match decide_default(hostname, &current, &certs, now) {
+        DefaultDecision::Right { id } => {
+            mk(ST_PASS, format!("the default is {hostname}'s newest certificate ({id})"))
+        }
+        DefaultDecision::Wrong { from, to } => mk(
+            ST_WARN,
+            format!(
+                "the default certificate is {}, not {hostname}'s newest ({to}), so clients \
+                 without SNI and STARTTLS on 25 can get the wrong name. K2 repairs this at its \
+                 next boot or mail certificate renewal; on a K2-owned certificate `k2 hostmail \
+                 cert renew` does it now. Never `k2 hostmail disable/enable`",
+                from.as_deref().unwrap_or("unset"),
+            ),
+        ),
+        DefaultDecision::NoLivePrimary { current } => {
+            mk(ST_WARN, no_live_primary_warning(hostname, current.as_deref()))
+        }
+    }
 }
 
 const ACME_NAMES_ID: &str = "acme-cert-names";
@@ -1374,6 +1430,14 @@ fn smtp_send(stream: &mut std::net::TcpStream, cmd: &str) -> Result<(), String> 
 }
 
 impl DoctorEnv for RealDoctorEnv {
+    fn default_certificate_view(
+        &self,
+    ) -> Option<Result<(DefaultCertificate, Vec<CertificateInfo>), String>> {
+        Some(domains::engine_from_db().and_then(|(client, _)| {
+            Ok((client.default_certificate_state()?, client.certificate_list()?))
+        }))
+    }
+
     fn public_ip(&self) -> Option<String> {
         use crate::mail::preflight::{PreflightEnv, RealPreflightEnv};
         RealPreflightEnv.public_ip()
@@ -1976,6 +2040,44 @@ mod tests {
         }
     }
 
+    /// The other TLS checks send SNI, so only this one sees a wrong default.
+    #[test]
+    fn default_cert_check_says_what_clients_without_sni_get() {
+        use crate::domains::store::fake_tls::{cert, DAY};
+        let primary = |id: &str| cert(id, "mail.acme.dev", 1000 + 60 * DAY);
+        let second = cert("second-1", "mail.other.dev", 1000 + 61 * DAY);
+        let run = |view| {
+            let env = FakeEnv { default_view: Some(view), ..FakeEnv::default() };
+            let r = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
+            assert_eq!(r.grade, ST_PASS, "soft check must not grade: {:?}", r.checks);
+            check(&r, "default-cert").clone()
+        };
+
+        let c = run(Ok((DefaultCertificate::Present("p1".into()), vec![primary("p1"), second.clone()])));
+        assert_eq!(c.status, ST_PASS, "{c:?}");
+        assert!(c.detail.contains("mail.acme.dev") && c.detail.contains("p1"), "{}", c.detail);
+
+        let c = run(Ok((DefaultCertificate::Present("second-1".into()), vec![primary("p1"), second.clone()])));
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+        assert!(!c.gates_direct);
+        assert!(c.detail.contains("second-1") && c.detail.contains("p1"), "{}", c.detail);
+        assert!(c.detail.contains("K2 repairs this"), "{}", c.detail);
+        assert!(c.detail.contains("Never `k2 hostmail disable/enable`"), "{}", c.detail);
+
+        let c = run(Ok((DefaultCertificate::Present("second-1".into()), vec![second.clone()])));
+        assert_eq!(c.status, ST_WARN, "{c:?}");
+        assert!(c.detail.contains("no live certificate for mail.acme.dev"), "{}", c.detail);
+        assert!(c.detail.contains("k2 cert issue mail.acme.dev"), "{}", c.detail);
+
+        let c = run(Err("mgmt down".into()));
+        assert_eq!(c.status, ST_UNKNOWN, "{c:?}");
+        assert!(c.detail.contains("mgmt down"), "{}", c.detail);
+
+        // Not read (the default fake): no row at all.
+        let r = run_checks(&healthy_dns(), &FakeEnv::default(), &ctx(), None, 1000);
+        assert!(!r.checks.iter().any(|c| c.id == "default-cert"), "{:?}", r.checks);
+    }
+
     struct FakeEnv {
         ip: Option<&'static str>,
         outbound_25: Result<(), &'static str>,
@@ -1987,6 +2089,7 @@ mod tests {
         /// (url, method) → canned answer. Unlisted → transport error.
         http: Vec<((&'static str, &'static str), Result<(u16, Option<&'static str>), &'static str>)>,
         http_calls: std::sync::Mutex<Vec<(String, String)>>,
+        default_view: Option<Result<(DefaultCertificate, Vec<CertificateInfo>), String>>,
     }
 
     impl Default for FakeEnv {
@@ -2013,11 +2116,17 @@ mod tests {
                     (("https://mail.acme.dev/dav/cal", "PROPFIND"), Ok((401, None))),
                 ],
                 http_calls: std::sync::Mutex::new(Vec::new()),
+                default_view: None,
             }
         }
     }
 
     impl DoctorEnv for FakeEnv {
+        fn default_certificate_view(
+            &self,
+        ) -> Option<Result<(DefaultCertificate, Vec<CertificateInfo>), String>> {
+            self.default_view.clone()
+        }
         fn public_ip(&self) -> Option<String> {
             self.ip.map(str::to_string)
         }

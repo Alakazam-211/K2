@@ -613,7 +613,7 @@ mod tests {
                 out.push((name, serde_json::from_str(&real_forms(&text)).expect("json")));
             }
         }
-        assert_eq!(out.len(), 18, "the conversion pairs at format-v1.0");
+        assert_eq!(out.len(), 21, "the conversion pairs at v0.1.0");
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
     }
@@ -633,14 +633,19 @@ mod tests {
         garden_object_to_file(w, &mut people, &mut BTreeSet::new()).expect("maps")
     }
 
+    /// The direction a pair claims (`lossy_direction`): `both`, `widget_to_file`
+    /// or `file_to_widget`. Each pair runs only that way.
+    fn runs(v: &Value, way: &str) -> bool {
+        let d = v["lossy_direction"].as_str().expect("every pair names its direction");
+        d == "both" || d == way
+    }
+
     /// Runs a pair only in the direction it claims: `file_back` is what the way
-    /// back gives where it differs, and `widget_back_refused` means it refuses.
+    /// back gives where it differs.
     #[test]
     fn every_conversion_pair_widget_to_file_in_real_forms() {
         for (name, v) in pairs() {
-            // reaction-unknown's file holds a reaction its widget side can't: this pair
-            // claims the other direction.
-            if v.get("widget_back_refused").is_some() || !v["widget"].is_object() {
+            if !runs(&v, "widget_to_file") || v.get("file_refused").is_some() || !v["widget"].is_object() {
                 continue;
             }
             let got = file_object(&v, &v["widget"]);
@@ -675,7 +680,7 @@ mod tests {
     #[test]
     fn every_conversion_pair_file_to_widget_in_real_forms() {
         for (name, v) in pairs() {
-            if v.get("widget_back_refused").is_some() || !v["widget"].is_object() {
+            if !runs(&v, "file_to_widget") || v.get("file_refused").is_some() || !v["widget"].is_object() {
                 continue;
             }
             let known = known_tokens(&v);
@@ -710,6 +715,21 @@ mod tests {
             }
             matches_where_it_says(&want, &got, &name);
         }
+    }
+
+    /// The pairs a file refuses: what the widget's store takes and a file can't
+    /// hold. The codec refuses each, typed, with the code the pair names.
+    #[test]
+    fn what_a_file_refuses_is_refused_with_its_code() {
+        let mut n = 0;
+        for (name, v) in pairs() {
+            let Some(code) = v["file_refused"].as_str() else { continue };
+            n += 1;
+            let text = v["file_text"].as_str().expect("file_text");
+            let e = Board::from_json(text.as_bytes(), &Limits::V1).expect_err(&name);
+            assert_eq!(e.code.as_str(), code, "{name}");
+        }
+        assert_eq!(n, 3, "refused-per-zero, refused-per-half, refused-x-range");
     }
 
     #[test]

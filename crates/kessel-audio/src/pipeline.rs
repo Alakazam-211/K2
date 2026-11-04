@@ -12,10 +12,24 @@ use crate::jitter::{JitterBuffer, JitterConfig, Next};
 use crate::level::{LevelMeter, Vad};
 use crate::stats::{CaptureStats, Stats};
 use bytes::Bytes;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Release time of the speaking indicator.
 const SPEAKING_RELEASE_MS: u32 = 300;
+
+/// Why the capture path is paused. A pause ends when no reason is left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pause {
+    /// The caller suspended the call ([`crate::AudioEngine::suspend`]).
+    Caller = 1,
+    /// The phone backend has no device open (the OS's session is inactive,
+    /// or a route change is reopening it).
+    #[cfg_attr(
+        not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))),
+        allow(dead_code)
+    )]
+    Device = 2,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct CoreConfig {
@@ -96,6 +110,14 @@ pub(crate) struct Core {
     blocks_since_levels: u32,
     levels_seq: u64,
     levels_due: bool,
+    /// [`Pause`] reasons, as bits. Paused while any is set.
+    pause: u8,
+    paused_at: Option<Instant>,
+    /// A 20 ms frame has completed since the engine started.
+    captured_any: bool,
+    /// The last frame handed out was speech, so a pause should end it with
+    /// a frame of silence.
+    speech_open: bool,
     pub(crate) capture_stats: CaptureStats,
     pub(crate) recv_queue_drops: u64,
     unknown_frames: u64,
@@ -129,6 +151,10 @@ impl Core {
             blocks_since_levels: 0,
             levels_seq: 0,
             levels_due: false,
+            pause: 0,
+            paused_at: None,
+            captured_any: false,
+            speech_open: false,
             capture_stats: CaptureStats::default(),
             recv_queue_drops: 0,
             unknown_frames: 0,
@@ -180,6 +206,78 @@ impl Core {
         self.deafened = on;
     }
 
+    pub(crate) fn is_paused(&self) -> bool {
+        self.pause != 0
+    }
+
+    /// Pause or unpause the capture path for one reason.
+    ///
+    /// Paused, no frames are produced and capture blocks are ignored. A
+    /// [`Pause::Caller`] pause also plays silence (participants are still
+    /// decoded, so their levels, statistics and jitter buffers stay
+    /// current). The receiver must see the gap as a pause, not as loss:
+    ///
+    /// - when the pause starts after speech, one frame of encoded silence
+    ///   (marked `dtx`) closes the talkspurt, so the far end's decoder fades
+    ///   out instead of concealing;
+    /// - when it ends, `ts48k` jumps by the paused time (whole frames,
+    ///   rounded up). The device may have been stopped, so the capture clock
+    ///   can't measure it. The next frame's timestamp is then later than its
+    ///   sequence number accounts for, which a receiver reads as DTX.
+    ///
+    /// Returns the closing frame, if there is one.
+    pub(crate) fn set_paused(&mut self, why: Pause, on: bool, now: Instant) -> Option<EncodedFrame> {
+        let was = self.is_paused();
+        if on {
+            self.pause |= why as u8;
+        } else {
+            self.pause &= !(why as u8);
+        }
+        match (was, self.is_paused()) {
+            (false, true) => {
+                self.paused_at = Some(now);
+                let tail = self.close_talkspurt();
+                self.cap_len = 0;
+                self.local_meter.silence();
+                tail
+            }
+            (true, false) => {
+                if let Some(at) = self.paused_at.take() {
+                    if self.captured_any {
+                        self.ts48k = self.ts48k.wrapping_add(gap_ts48k(now.saturating_duration_since(at)));
+                    }
+                }
+                self.cap_len = 0;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// One frame of silence after speech, so the far end hears the talkspurt
+    /// end rather than concealment of the last frame.
+    fn close_talkspurt(&mut self) -> Option<EncodedFrame> {
+        if !self.capture_enabled || !self.speech_open {
+            return None;
+        }
+        self.speech_open = false;
+        let ts = self.ts48k;
+        self.ts48k = self.ts48k.wrapping_add(FRAME_SAMPLES as u32);
+        self.cap_frame.fill(0.0);
+        let dtx_on = self.enc.cfg().dtx;
+        match self.enc.encode(&self.cap_frame) {
+            Ok(e) if dtx_on && e.is_empty_dtx() => None,
+            Ok(e) => Some(EncodedFrame {
+                payload: Bytes::copy_from_slice(e.packet),
+                ts48k: ts,
+                dtx: true,
+                vad: false,
+                level_dbov: -127.0,
+            }),
+            Err(_) => None,
+        }
+    }
+
     /// Produce the next 10 ms of playback into `out` (480 samples) and feed
     /// it to the echo canceller as the reference.
     pub(crate) fn render_block(&mut self, now: Instant, out: &mut [f32]) {
@@ -200,7 +298,9 @@ impl Core {
         }
         self.render_phase ^= 1;
         soft_limit(&mut self.mix);
-        if self.deafened {
+        // A suspended call plays silence. A device pause doesn't: playback
+        // can run without a microphone.
+        if self.deafened || self.pause & Pause::Caller as u8 != 0 {
             out.fill(0.0);
         } else {
             out.copy_from_slice(&self.mix);
@@ -220,6 +320,9 @@ impl Core {
     /// unless capture is off or DTX has nothing to send.
     pub(crate) fn capture_block(&mut self, mic: &[f32]) -> Option<EncodedFrame> {
         debug_assert_eq!(mic.len(), BLOCK_SAMPLES);
+        if self.is_paused() {
+            return None;
+        }
         self.apm.capture(mic, &mut self.processed);
         self.cap_frame[self.cap_len..self.cap_len + BLOCK_SAMPLES].copy_from_slice(&self.processed);
         self.cap_len += BLOCK_SAMPLES;
@@ -230,9 +333,11 @@ impl Core {
             return None;
         }
         self.cap_len = 0;
+        self.captured_any = true;
         let ts = self.ts48k;
         self.ts48k = self.ts48k.wrapping_add(FRAME_SAMPLES as u32);
         if !self.capture_enabled {
+            self.speech_open = false;
             return None;
         }
         let level = dbov(&self.cap_frame);
@@ -242,6 +347,7 @@ impl Core {
             Ok(e) if dtx_on && e.is_empty_dtx() => {
                 self.capture_stats.frames_dtx_suppressed += 1;
                 self.suppressed_run += 1;
+                self.speech_open = false;
                 None
             }
             Ok(e) => {
@@ -249,6 +355,7 @@ impl Core {
                 // than the start of speech.
                 let dtx = !vad && (self.suppressed_run > 0 || e.in_dtx);
                 self.suppressed_run = 0;
+                self.speech_open = vad;
                 Some(EncodedFrame {
                     payload: Bytes::copy_from_slice(e.packet),
                     ts48k: ts,
@@ -269,7 +376,7 @@ impl Core {
     /// Fill `out` in place (no allocation while it has the capacity).
     pub(crate) fn fill_levels(&self, out: &mut Levels) {
         out.seq = self.levels_seq;
-        out.local = if self.capture_enabled {
+        out.local = if self.capture_enabled && !self.is_paused() {
             self.local_meter.level()
         } else {
             Level::default()
@@ -292,6 +399,15 @@ impl Core {
         out.recv_queue_drops = self.recv_queue_drops;
         out.unknown_participant_frames = self.unknown_frames;
     }
+}
+
+/// A paused time in 48 kHz units: whole 20 ms frames, rounded up, so any
+/// pause reads as a gap.
+pub(crate) fn gap_ts48k(d: Duration) -> u32 {
+    let frame = Duration::from_millis(crate::frame::FRAME_MS as u64);
+    let frames = d.as_nanos().div_ceil(frame.as_nanos());
+    // Wraps like the timestamp itself (a pause of more than a day).
+    (frames as u64).wrapping_mul(FRAME_SAMPLES as u64) as u32
 }
 
 /// Gentle limiter on the mix: unity below 0.9, a tanh knee above it, never

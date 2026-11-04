@@ -630,7 +630,7 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
   })
 
-  it('the stash bookmark\'s ink is as tall as the "+" (12px, edge to edge) and drawn with the same 2px line', () => {
+  it('the stash bookmark\'s ink is as tall as the "/" (14px, edge to edge) and drawn with the same 2px line', () => {
     renderThread()
     const svg = (sel: string): SVGSVGElement => {
       const found = document.querySelector(sel)
@@ -655,20 +655,20 @@ describe('chamfered corners in K2\'s square Style', () => {
     const stashYs = Array.from(stashPath.matchAll(/[ML]([\d.]+),([\d.]+)/g)).map((m) => Number(m[2]))
     expect(span(plusYs)).toEqual([0, 12])
     expect(span(slashYs)).toEqual([0, 14])
-    expect(span(stashYs)).toEqual([0, 12])
+    expect(span(stashYs)).toEqual([0, 14])
     // A filled shape like the "+" (no stroke to clip), its line 2px like the
     // "+"'s bars: the hole sits 2px in on the top and sides, and its bottom
     // edges run 2px inside the outline's.
     expect(stash.querySelector('path')?.getAttribute('fill-rule')).toBe('evenodd')
     expect(stash.querySelector('[stroke]')).toBeNull()
     expect(Number(plus.querySelector('rect')?.getAttribute('width'))).toBe(2)
-    const { w, outer, inner } = stashBookmarkShape(12)
+    const { w, outer, inner } = stashBookmarkShape(14)
     // Option D (Rosson 2026-11-01): both top corners cut 2px at 45°, exactly as the
     // options page drew it.
     expect(w).toBe(10)
-    expect(outer.map(([x, y]) => [x, y])).toEqual([[2, 0], [8, 0], [10, 2], [10, 12], [5, 8], [0, 12], [0, 2]])
+    expect(outer.map(([x, y]) => [x, y])).toEqual([[2, 0], [8, 0], [10, 2], [10, 14], [5, 10], [0, 14], [0, 2]])
     const r = (pts: Array<[number, number]>): number[][] => pts.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)])
-    expect(r(inner)).toEqual([[2.828, 2], [7.172, 2], [8, 2.828], [8, 7.839], [5, 5.439], [2, 7.839], [2, 2.828]])
+    expect(r(inner)).toEqual([[2.828, 2], [7.172, 2], [8, 2.828], [8, 9.839], [5, 7.439], [2, 9.839], [2, 2.828]])
     // the line is 2px everywhere: across a cut corner and across the notch
     const gap = (a: [number, number], b: [number, number], p: [number, number]): number =>
       Math.abs((b[1] - a[1]) * p[0] - (b[0] - a[0]) * p[1] + b[0] * a[1] - b[1] * a[0]) / Math.hypot(b[1] - a[1], b[0] - a[0])

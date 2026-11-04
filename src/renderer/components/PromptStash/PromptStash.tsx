@@ -144,8 +144,9 @@ export function StashBookmark({ count, ink = STASH_BOOKMARK_INK }: { count: numb
   )
 }
 
-/** The bookmark's ink height (px): the message box's "+" (12 tall). */
-export const STASH_BOOKMARK_INK = 12
+/** The bookmark's ink height (px): as tall as the message box's "/" (14),
+ *  Rosson 2026-11-04 ("a little bit short and stubby" at the "+"'s 12). */
+export const STASH_BOOKMARK_INK = 14
 /** Its line weight (px): the "+" and "/" bars are 2px. */
 export const STASH_BOOKMARK_WEIGHT = 2
 
@@ -161,7 +162,8 @@ export function stashBookmarkShape(ink: number = STASH_BOOKMARK_INK): {
   inner: Array<[number, number]>
 } {
   const h = ink
-  const w = Math.round(ink * (5 / 6))
+  // 10 wide at 14 tall: taller, not wider, than the 10×12 it was.
+  const w = Math.round(ink * (5 / 7))
   const t = STASH_BOOKMARK_WEIGHT
   const notch = Math.round(h * 0.3)
   // Both top corners cut at 45° (Rosson 2026-11-01, option D: the square Style's chamfer):

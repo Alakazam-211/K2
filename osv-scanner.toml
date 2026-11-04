@@ -395,6 +395,12 @@ id = "RUSTSEC-2017-0008"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Unmaintained (no known vulnerability); compiled in through portable-pty's serial support, which K2 never opens. Revisit with portable-pty."
 
+# smallstr 0.3.1
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0215"
+ignoreUntil = 2027-01-15T00:00:00Z
+reason = "unmaintained advisory only; reached through the vendored yrs fork, in maintenance mode and leaving text at the native switch"
+
 # source-map-js 1.2.1
 [[IgnoredVulns]]
 id = "GHSA-68fv-2mgg-jv7q"

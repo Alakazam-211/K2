@@ -250,7 +250,7 @@ pub async fn serve_session_events_connection(
                 let out = match hit {
                     None => None,
                     Some(inbox_stream::Hit::Thread { conversation }) => {
-                        let doc = if crate::overlay_ws::needs_blocking(&frame) {
+                        let doc = if crate::overlay_ws::needs_blocking(&frame, &seen) {
                             // A permission card: projected off the async worker.
                             let (f, s) = (frame.clone(), seen.clone());
                             match tokio::task::spawn_blocking(move || inbox_stream::doc_for_login(&f, &s)).await {

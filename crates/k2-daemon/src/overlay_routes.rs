@@ -611,6 +611,10 @@ fn thread_items_view(
     // source fix in `resolve_addr`).
     if pass.is_some() {
         crate::guest_paths::GuestScrub::for_room(&resolved.project_id).items(&mut v);
+    } else {
+        // thread-mine-v1: a person's posts say whether they are THIS
+        // reader's (never left to the client to guess).
+        crate::thread_mine::mark_items(&mut v, &seen.viewer);
     }
     v
 }
@@ -994,6 +998,9 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                         // 0.46.5 (item 14): no host path in a guest's preview.
                         if guest {
                             crate::guest_paths::GuestScrub::for_room(&resolved.project_id).doc(&mut row);
+                        } else {
+                            // thread-mine-v1: the preview says whether it is the reader's own.
+                            crate::thread_mine::mark_row(&mut row, &seen.viewer);
                         }
                         with_read(row, &resolved.conversation_id)
                     }
@@ -1818,6 +1825,18 @@ fn post_reply_json(
         // (only when it sent one).
         if let Some(id) = &item.doc.client_msg_id {
             map.insert("clientMsgId".into(), serde_json::json!(id));
+        }
+        // thread-mine-v1: a person's post is stamped from this very
+        // request's credential (a repeat's key is that person's too), so
+        // the poster always sees it as theirs. A guest's and an agent's
+        // answer carry no `mine`, as before.
+        let person_post = item
+            .doc
+            .author
+            .as_ref()
+            .is_some_and(|a| a.kind == overlay::doc::AUTHOR_OWNER || a.kind == overlay::doc::AUTHOR_USER);
+        if poster_pass.is_none() && person_post {
+            map.insert(crate::thread_mine::MINE_KEY.into(), serde_json::json!(true));
         }
     }
     body
@@ -5979,6 +5998,133 @@ mod tests {
         let lv = latest_of();
         assert_eq!(lv["items"][0]["preview"], "from-bob", "{lv}");
         assert_eq!(lv["items"][0]["author"], serde_json::json!({"kind": "user", "login": "bob"}), "{lv}");
+    }
+
+    /// thread-mine-v1 (Rosson 2026-11-04: "blue for a moment, then grey").
+    /// The owner's linked login on another computer posts; every door that
+    /// hands the post back says it is theirs, for that reader: the post's
+    /// own answer, `GET /cli/thread`, `thread/latest` and the socket frame.
+    /// The owner token is the same person; another login is not; an App
+    /// guest's and an agent's views carry no `mine` at all.
+    #[test]
+    fn a_persons_own_posts_say_mine_at_every_door() {
+        let _home_lock = crate::test_support::lock_home();
+        let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let linked = format!("mine{suffix}");
+        let other = format!("other{suffix}");
+        // The owner links `linked` as one of their own logins (Settings).
+        let before = k2_core::app_settings::load();
+        struct Restore(k2_core::app_settings::AppSettings);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                k2_core::app_settings::save(&self.0).expect("restore settings");
+            }
+        }
+        let _restore = Restore(before.clone());
+        let mut s = before;
+        s.owner_accounts.push(linked.clone());
+        k2_core::app_settings::save(&s).expect("link the login");
+
+        let handle = format!("ovlmine{suffix}");
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let compose = |text: &str| serde_json::json!({"addr": handle, "text": text, "via": "compose"}).to_string();
+
+        // The post's own answer: the poster's, always (the pending bubble's
+        // replacement).
+        let by_linked = dispatch_post_as("/cli/thread/post", &HashMap::new(), compose("from-linked").as_bytes(), &linked);
+        assert_eq!(by_linked.status, "200 OK", "{}", by_linked.body);
+        let answer = json_body(&by_linked);
+        assert_eq!(answer["author"], serde_json::json!({"kind": "user", "login": linked}), "{answer}");
+        assert_eq!(answer["mine"], serde_json::json!(true), "{answer}");
+        let by_owner = dispatch_post_as("/cli/thread/post", &HashMap::new(), compose("from-owner").as_bytes(), "owner");
+        assert_eq!(json_body(&by_owner)["mine"], serde_json::json!(true), "{}", by_owner.body);
+        let by_other = dispatch_post_as("/cli/thread/post", &HashMap::new(), compose("from-other").as_bytes(), &other);
+        assert_eq!(json_body(&by_other)["mine"], serde_json::json!(true), "{}", by_other.body);
+        let pass = skin_pass(&[project_id.clone()]);
+        let guest = with_request_skin(Some(pass), || {
+            dispatch_post("/cli/thread/post", &HashMap::new(), serde_json::json!({"addr": handle, "text": "from-guest"}).to_string().as_bytes())
+        });
+        assert_eq!(guest.status, "200 OK", "{}", guest.body);
+        assert!(json_body(&guest).get("mine").is_none(), "a guest's answer has no mine: {}", guest.body);
+        let agent = post_json(
+            "/cli/thread/post",
+            &passport_params(&project_id, &handle),
+            serde_json::json!({"addr": handle, "text": "from-agent", "via": "compose"}),
+        );
+        assert_eq!(agent.status, "200 OK", "{}", agent.body);
+        assert!(json_body(&agent).get("mine").is_none(), "an agent's answer has no mine: {}", agent.body);
+
+        // GET /cli/thread, read as each person (the dispatcher binds the login).
+        let read_as = |login: Option<&str>| -> serde_json::Value {
+            let r = crate::read_routes::with_read_login(login.map(str::to_string), || {
+                dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread")
+            });
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            json_body(&r)
+        };
+        let mine_in = |snap: &serde_json::Value, text: &str| -> Option<bool> {
+            let it = snap["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .find(|it| it["doc"]["body"] == text)
+                .unwrap_or_else(|| panic!("no doc {text}: {snap}"));
+            it["doc"].get("mine").map(|m| m.as_bool().unwrap_or_else(|| panic!("mine is a bool: {it}")))
+        };
+        for reader in [linked.as_str(), "owner"] {
+            let snap = read_as(Some(reader));
+            assert_eq!(mine_in(&snap, "from-linked"), Some(true), "{reader}: {snap}");
+            assert_eq!(mine_in(&snap, "from-owner"), Some(true), "{reader}: the owner token is the same person");
+            assert_eq!(mine_in(&snap, "from-other"), Some(false), "{reader}: {snap}");
+            assert_eq!(mine_in(&snap, "from-guest"), Some(false), "{reader}: a guest's post is never a person's");
+            assert_eq!(mine_in(&snap, "from-agent"), None, "{reader}: an agent post has no author");
+        }
+        let snap = read_as(Some(&other));
+        assert_eq!(mine_in(&snap, "from-other"), Some(true), "{snap}");
+        assert_eq!(mine_in(&snap, "from-linked"), Some(false), "{snap}");
+        assert_eq!(mine_in(&snap, "from-owner"), Some(false), "{snap}");
+        let agent_read = read_as(None);
+        assert_eq!(mine_in(&agent_read, "from-linked"), None, "no person reading: unmarked: {agent_read}");
+
+        // thread/latest (Zen previews): the newest post is the agent's, so
+        // post once more as the linked login.
+        dispatch_post_as("/cli/thread/post", &HashMap::new(), compose("from-linked-2").as_bytes(), &linked);
+        let latest_as = |login: &str| -> serde_json::Value {
+            let r = crate::read_routes::with_read_login(Some(login.to_string()), || {
+                dispatch("/cli/thread/latest", &params_of(&[("addrs", handle.as_str())])).expect("latest")
+            });
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            json_body(&r)["items"][0].clone()
+        };
+        assert_eq!(latest_as(&linked)["mine"], serde_json::json!(true), "{}", latest_as(&linked));
+        assert_eq!(latest_as("owner")["mine"], serde_json::json!(true));
+        assert_eq!(latest_as(&other)["mine"], serde_json::json!(false));
+
+        // The socket frame, for each socket's own viewer.
+        let id = answer["id"].as_str().expect("id").to_string();
+        let doc = overlay::store::get_doc(&id).expect("store").expect("the stored post");
+        let frame = OverlayFrame {
+            collection: "thread".into(),
+            seq: answer["seq"].as_i64().expect("seq"),
+            id,
+            doc: Some(doc),
+            activity: None,
+            conversation_id: Some(conv.clone()),
+            rev: 0,
+        };
+        let frame_mine = |login: &str| -> serde_json::Value {
+            let seen = crate::overlay_ws::socket_seen(&HashMap::new(), false, Some(login));
+            assert!(crate::overlay_ws::needs_blocking(&frame, &seen), "marking reads the people list: off the async worker");
+            let v: serde_json::Value = serde_json::from_str(&crate::overlay_ws::wire_json_for(&frame, None, &seen)).expect("json");
+            v["doc"]["mine"].clone()
+        };
+        assert_eq!(frame_mine(&linked), serde_json::json!(true));
+        assert_eq!(frame_mine("owner"), serde_json::json!(true));
+        assert_eq!(frame_mine(&other), serde_json::json!(false));
+        let guest_seen = crate::overlay_ws::socket_seen(&HashMap::new(), true, None);
+        assert!(!crate::overlay_ws::needs_blocking(&frame, &guest_seen));
     }
 
     #[test]

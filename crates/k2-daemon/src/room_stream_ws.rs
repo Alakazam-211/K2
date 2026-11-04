@@ -655,7 +655,7 @@ pub async fn serve_room_stream_connection(
                 }
                 let out = match (&viewer, frame.collection.as_str()) {
                     (Viewer::Login { .. }, "thread") => {
-                        let doc = if overlay_ws::needs_blocking(&frame) {
+                        let doc = if overlay_ws::needs_blocking(&frame, &seen) {
                             // A permission card: projected off the async worker.
                             let (f, s) = (frame.clone(), seen.clone());
                             match tokio::task::spawn_blocking(move || doc_for(&f, None, &s)).await {

@@ -286,6 +286,8 @@ pub mod inbox_stream;
 // hub-viewing-v1 (0.46.8): `viewing` on /cli/sessions/events.
 pub mod hub_viewing;
 pub mod session_author;
+// thread-mine-v1 (0.46.8): `mine` on a person's Thread docs, per reader.
+pub mod thread_mine;
 pub mod session_lookup;
 pub mod sessions_bytes_ws;
 pub mod sessions_grid_ws;

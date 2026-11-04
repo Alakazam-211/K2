@@ -14,7 +14,10 @@
 //!
 //! Set: normalize hostname (same as enable), refuse unless public A
 //! includes origin, Stalwart `set_server_hostname` + UPDATE
-//! `mail_server.hostname`, then CP `POST /api/dns/ptr` via
+//! `mail_server.hostname`, `ReloadSettings` (the running server keeps its
+//! old banner, EHLO and MTA-STS policy without it; one restart only if it's
+//! refused), the default-certificate check (the name just became the primary
+//! mail host), then CP `POST /api/dns/ptr` via
 //! `dns::proxy` Bearer k2c_. Do not call CP if HELO fails. Do not use
 //! raw `map_proxy_response` (it maps 501→502) — surface CP 501
 //! `ptr_provider` and 403 tunnel_only/unbound as-is.
@@ -440,6 +443,12 @@ pub fn handle_ptr_show_post(_body: &[u8]) -> CliResponse {
 pub(crate) trait PtrSetDeps: Send {
     fn set_helo(&mut self, hostname: &str) -> Result<(), String>;
     fn persist_hostname(&mut self, hostname: &str) -> Result<(), String>;
+    /// Make the running server use the new name → how it loaded (`action` |
+    /// `restart`). `Err` = it keeps the old name until its next restart.
+    fn reload_settings(&mut self) -> Result<&'static str, String>;
+    /// The name is now the primary mail host: its newest certificate takes
+    /// the default, if it has one.
+    fn check_default_certificate(&mut self, hostname: &str) -> crate::domains::store::DefaultRepair;
     fn call_cp(&mut self, hostname: &str) -> Result<DnsHttpResponse, String>;
 }
 
@@ -453,6 +462,26 @@ impl PtrSetDeps for LivePtrSetDeps {
 
     fn persist_hostname(&mut self, hostname: &str) -> Result<(), String> {
         persist_hostname(hostname)
+    }
+
+    fn reload_settings(&mut self) -> Result<&'static str, String> {
+        let (engine, _) = crate::mail::domains::engine_from_db()?;
+        match engine.action_reload_settings() {
+            Ok(()) => Ok("action"),
+            Err(refused) => crate::mail::supervisor::restart_stalwart_to_reload_tls()
+                .map(|()| "restart")
+                .map_err(|restart| format!("ReloadSettings refused ({refused}) and {restart}")),
+        }
+    }
+
+    fn check_default_certificate(&mut self, hostname: &str) -> crate::domains::store::DefaultRepair {
+        match crate::mail::domains::engine_from_db() {
+            Ok((client, _)) => crate::domains::store::repair_default_live(hostname, client),
+            Err(e) => crate::domains::store::DefaultRepair::LeftAlone {
+                primary: hostname.to_string(),
+                why: format!("could not reach the mail server to check the default certificate: {e}"),
+            },
+        }
     }
 
     fn call_cp(&mut self, hostname: &str) -> Result<DnsHttpResponse, String> {
@@ -624,8 +653,20 @@ pub(crate) fn handle_ptr_set_with(
             format!("persisted HELO failed after Stalwart update (CP not called): {e}"),
         );
     }
+    // Neither can stop the set: the name is already written. Both are in the
+    // answer, whatever k2.dev says about the PTR.
+    let settings = match deps.reload_settings() {
+        Ok(loaded_by) => serde_json::json!({ "loadedBy": loaded_by }),
+        Err(e) => serde_json::json!({
+            "warning": format!(
+                "the running mail server keeps its old name until it restarts: {e}. Restart it: \
+                 sudo /usr/bin/systemctl restart stalwart. Never `k2 hostmail disable/enable`"
+            ),
+        }),
+    };
+    let default_certificate = deps.check_default_certificate(&hostname).to_json();
 
-    match deps.call_cp(&hostname) {
+    let mut out = match deps.call_cp(&hostname) {
         Ok(resp) => {
             let mut mapped = map_ptr_cp_response(&resp);
             // On success, enrich with the alignment snapshot.
@@ -656,7 +697,15 @@ pub(crate) fn handle_ptr_set_with(
                 )
             }
         }
+    };
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&out.body) {
+        if v.is_object() {
+            v["settings"] = settings;
+            v["defaultCertificate"] = default_certificate;
+            out.body = v.to_string();
+        }
     }
+    out
 }
 
 #[cfg(test)]
@@ -736,23 +785,37 @@ mod tests {
         cp_resp: Option<DnsHttpResponse>,
         cp_err: Option<String>,
         last_helo: Arc<Mutex<Option<String>>>,
+        reload: Result<&'static str, String>,
+        default_cert: crate::domains::store::DefaultRepair,
+        events: Arc<Mutex<Vec<&'static str>>>,
     }
     impl PtrSetDeps for RecordingDeps {
         fn set_helo(&mut self, hostname: &str) -> Result<(), String> {
             self.helo_calls.fetch_add(1, Ordering::SeqCst);
             *self.last_helo.lock().unwrap() = Some(hostname.to_string());
+            self.events.lock().unwrap().push("helo");
             if self.helo_fail {
                 return Err("stalwart down".into());
             }
             Ok(())
         }
         fn persist_hostname(&mut self, _hostname: &str) -> Result<(), String> {
+            self.events.lock().unwrap().push("persist");
             if self.persist_fail {
                 return Err("db locked".into());
             }
             Ok(())
         }
+        fn reload_settings(&mut self) -> Result<&'static str, String> {
+            self.events.lock().unwrap().push("reload");
+            self.reload.clone()
+        }
+        fn check_default_certificate(&mut self, _hostname: &str) -> crate::domains::store::DefaultRepair {
+            self.events.lock().unwrap().push("default-cert");
+            self.default_cert.clone()
+        }
         fn call_cp(&mut self, _hostname: &str) -> Result<DnsHttpResponse, String> {
+            self.events.lock().unwrap().push("cp");
             self.cp_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(e) = &self.cp_err {
                 return Err(e.clone());
@@ -793,7 +856,96 @@ mod tests {
             cp_resp: None,
             cp_err: None,
             last_helo: Arc::new(Mutex::new(None)),
+            reload: Ok("action"),
+            default_cert: crate::domains::store::DefaultRepair::AlreadyRight { id: "c1".into() },
+            events: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn set_new_host(deps: &mut RecordingDeps) -> (CliResponse, serde_json::Value) {
+        let env = FakeEnv { ip: Some("203.0.113.7".into()) };
+        let mut dns = dns_with_relay();
+        dns.a.insert("mail.new.dev".into(), vec!["203.0.113.7".parse().unwrap()]);
+        let r = handle_ptr_set_with(br#"{"hostname":"mail.new.dev"}"#, &env, &dns, &relays(), deps);
+        let v = serde_json::from_str(&r.body).expect("json");
+        (r, v)
+    }
+
+    /// The running server only uses the new name after a settings reload, and
+    /// the default certificate follows the new primary, both before k2.dev is
+    /// asked to point the PTR at that name.
+    #[test]
+    fn set_reloads_settings_and_moves_the_default_before_the_ptr() {
+        let mut deps = deps_ok();
+        deps.default_cert = crate::domains::store::DefaultRepair::Repointed {
+            primary: "mail.new.dev".into(),
+            from: Some("old-1".into()),
+            to: "new-1".into(),
+            loaded_by: "action",
+            note: None,
+        };
+        let (r, v) = set_new_host(&mut deps);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(*deps.events.lock().unwrap(), vec!["helo", "persist", "reload", "default-cert", "cp"]);
+        assert_eq!(v["settings"]["loadedBy"], "action", "{v}");
+        assert_eq!(v["defaultCertificate"]["state"], "moved", "{v}");
+        assert_eq!(v["defaultCertificate"]["from"], "old-1", "{v}");
+        assert_eq!(v["defaultCertificate"]["certificateId"], "new-1", "{v}");
+    }
+
+    /// No certificate for the new name yet: the set still works and says so.
+    #[test]
+    fn set_with_no_certificate_for_the_name_succeeds_and_says_so() {
+        let mut deps = deps_ok();
+        deps.default_cert = crate::domains::store::DefaultRepair::LeftAlone {
+            primary: "mail.new.dev".into(),
+            why: crate::domains::store::no_live_primary_warning("mail.new.dev", Some("old-1")),
+        };
+        let (r, v) = set_new_host(&mut deps);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(v["defaultCertificate"]["state"], "left-alone", "{v}");
+        let w = v["defaultCertificate"]["warning"].as_str().expect("warning");
+        assert!(w.contains("k2 cert issue mail.new.dev") && w.contains("stays old-1"), "{w}");
+    }
+
+    /// A refused reload doesn't undo the set: the answer says what to do.
+    #[test]
+    fn set_with_a_refused_reload_warns_and_still_asks_for_the_ptr() {
+        let mut deps = deps_ok();
+        deps.reload = Err("ReloadSettings refused (validationFailed) and no door".into());
+        let (r, v) = set_new_host(&mut deps);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let w = v["settings"]["warning"].as_str().expect("warning");
+        assert!(w.contains("validationFailed") && w.contains("systemctl restart stalwart"), "{w}");
+        assert!(v["settings"].get("loadedBy").is_none(), "{v}");
+        assert_eq!(deps.cp_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// k2.dev failing still answers for what already changed here.
+    #[test]
+    fn a_failed_ptr_call_still_reports_the_reload_and_the_default() {
+        let mut deps = deps_ok();
+        deps.cp_err = Some("no tunnel token in ~/.k2/tunnel.json".into());
+        let (r, v) = set_new_host(&mut deps);
+        assert_eq!(r.status, "401 Unauthorized", "{}", r.body);
+        assert_eq!(v["settings"]["loadedBy"], "action", "{v}");
+        assert_eq!(v["defaultCertificate"]["state"], "already-right", "{v}");
+    }
+
+    /// Refused before anything was written: no reload, no default check.
+    #[test]
+    fn a_refused_set_neither_reloads_nor_touches_the_default() {
+        let mut deps = deps_ok();
+        let env = FakeEnv { ip: Some("203.0.113.7".into()) };
+        let r = handle_ptr_set_with(br#"{"hostname":"mail.new.dev"}"#, &env, &dns_with_relay(), &relays(), &mut deps);
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert!(deps.events.lock().unwrap().is_empty());
+
+        let mut deps = deps_ok();
+        deps.helo_fail = true;
+        let (r, _) = set_new_host(&mut deps);
+        assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
+        assert_eq!(*deps.events.lock().unwrap(), vec!["helo"]);
     }
 
     #[test]

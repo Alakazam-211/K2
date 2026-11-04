@@ -886,6 +886,132 @@ pub(crate) mod fake_tls {
     }
 }
 
+/// Driven by tests/mail/stalwart-default-cert-probe.py: K2's real plant and
+/// repair against a real, throwaway Stalwart, with real TLS handshakes.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::domains::acme::test_le_pem_until;
+    use crate::domains::status::{pem_leaf_sha256, served_leaf_at, Served};
+    use crate::mail::jmap::StalwartClient;
+
+    const DAY: i64 = 86_400;
+
+    #[test]
+    #[ignore = "live: tests/mail/stalwart-default-cert-probe.py runs this against a throwaway Stalwart"]
+    fn live_default_certificate_on_a_real_stalwart() {
+        const PRIMARY: &str = "mail.primary.test";
+        const SECOND: &str = "mail.second.test";
+        const NEW: &str = "mail.new.test";
+        const ABSENT: &str = "mail.absent.test";
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is unset"));
+        let (url, key) = (env("DC_LIVE_URL"), env("DC_LIVE_KEY"));
+        let port: u16 = env("DC_LIVE_TLS_PORT").parse().expect("port");
+        let _home = crate::test_support::TempHome::new();
+        let _ = k2_core::db::init_for_tests();
+        let client = || StalwartClient::new(url.clone(), key.clone());
+        let now = chrono::Utc::now().timestamp();
+
+        // An IP as the server name: rustls sends no SNI.
+        let served = |sni: &str| match served_leaf_at("127.0.0.1", sni, port) {
+            Served::Leaf(s) => s,
+            Served::Nothing => panic!("no TLS answer for {sni} on :{port}"),
+        };
+        let no_sni = || served("127.0.0.1");
+        let sha = |pem: &super::InstalledPem| pem_leaf_sha256(&pem.chain_pem).expect("leaf sha");
+        let plant = |host: &str, primary: &str, pem: &super::InstalledPem| {
+            let r = plant_for_host(host, Some(primary), &mut LiveMailTls { client: client() }, &pem.chain_pem, &pem.key_pem, now)
+                .unwrap_or_else(|e| panic!("plant {host}: {e}"));
+            assert_eq!(r.loaded_by, "action", "hot reload for {host}: {:?}", r.reload_note);
+            r
+        };
+        let repair = |primary: &str| {
+            repair_default_certificate(primary, &mut LiveMailTls { client: client() }, now)
+        };
+        let force_default = |id: &str| {
+            client().default_certificate_set(id).expect("set default");
+            client().action_reload_tls_certificates().expect("reload");
+        };
+
+        // Two certificates; the second host's expires later, the case that lost.
+        let p1 = test_le_pem_until(PRIMARY, now + 60 * DAY);
+        let r = plant(PRIMARY, PRIMARY, &p1);
+        assert!(r.is_default);
+        let p1_id = r.cert_id;
+        assert_eq!(no_sni(), sha(&p1), "primary plant: no SNI");
+
+        let s1 = test_le_pem_until(SECOND, now + 80 * DAY);
+        let r = plant(SECOND, PRIMARY, &s1);
+        assert!(!r.is_default);
+        assert_eq!(r.repair, Some(DefaultRepair::AlreadyRight { id: p1_id.clone() }));
+        assert_eq!(served(PRIMARY), sha(&p1), "SNI primary");
+        assert_eq!(served(SECOND), sha(&s1), "SNI second");
+        assert_eq!(no_sni(), sha(&p1), "no SNI stays on the primary");
+        assert_eq!(served("nobody.example.org"), sha(&p1), "an unknown SNI gets the primary");
+        println!("DC_LIVE step two-certificates ok");
+
+        // The second host renews: its old certificate goes, the default stays.
+        let s2 = test_le_pem_until(SECOND, now + 85 * DAY);
+        let r = plant(SECOND, PRIMARY, &s2);
+        assert_eq!(r.cleanup_error, None);
+        assert_eq!(r.removed.len(), 1, "{:?}", r.removed);
+        let s2_id = r.cert_id;
+        assert!(!client().certificate_list().expect("list").iter().any(|c| c.id == r.removed[0]));
+        assert_eq!(served(SECOND), sha(&s2), "SNI second after renew");
+        assert_eq!(no_sni(), sha(&p1), "no SNI after the second host's renew");
+        println!("DC_LIVE step second-renew ok");
+
+        // A box already wrong, as an earlier K2 left it.
+        force_default(&s2_id);
+        assert_eq!(no_sni(), sha(&s2), "fixture: the proof can see a wrong default");
+        let healed = repair(PRIMARY);
+        assert!(matches!(&healed, DefaultRepair::Repointed { to, loaded_by: "action", .. } if *to == p1_id), "{healed:?}");
+        assert_eq!(no_sni(), sha(&p1), "repair: no SNI back on the primary, no restart");
+        assert_eq!(repair(PRIMARY), DefaultRepair::AlreadyRight { id: p1_id.clone() }, "repair is once");
+        println!("DC_LIVE step repair ok");
+
+        // The boot path heals it too.
+        force_default(&s2_id);
+        let booted = crate::mail::cert_owner::boot_checks(PRIMARY, client());
+        assert!(matches!(&booted, DefaultRepair::Repointed { to, .. } if *to == p1_id), "{booted:?}");
+        assert_eq!(no_sni(), sha(&p1), "boot checks: no SNI back on the primary");
+        println!("DC_LIVE step boot-checks ok");
+
+        // No certificate for the primary, or only an expired one: nothing moves.
+        let before = client().default_certificate_state().expect("state");
+        assert!(matches!(repair(ABSENT), DefaultRepair::LeftAlone { .. }));
+        let expired = test_le_pem_until(ABSENT, now - 2 * DAY);
+        client().certificate_add(&expired.chain_pem, &expired.key_pem).expect("add expired");
+        client().action_reload_tls_certificates().expect("reload");
+        assert!(matches!(repair(ABSENT), DefaultRepair::LeftAlone { .. }));
+        assert_eq!(client().default_certificate_state().expect("state"), before, "default unchanged");
+        assert_eq!(no_sni(), sha(&p1), "no SNI unchanged");
+        println!("DC_LIVE step left-alone ok");
+
+        // A change of primary, the old name kept and renewing later than the new.
+        let n1 = test_le_pem_until(NEW, now + 70 * DAY);
+        let n1_id = plant(NEW, PRIMARY, &n1).cert_id;
+        assert_eq!(no_sni(), sha(&p1), "before the change");
+        assert!(matches!(repair(NEW), DefaultRepair::Repointed { .. }));
+        assert_eq!(no_sni(), sha(&n1), "the new primary takes the default");
+        let p2 = test_le_pem_until(PRIMARY, now + 90 * DAY);
+        let r = plant(PRIMARY, NEW, &p2);
+        assert!(!r.is_default);
+        assert_eq!(r.repair, Some(DefaultRepair::AlreadyRight { id: n1_id }));
+        assert_eq!(no_sni(), sha(&n1), "the old name's renewal doesn't take it back");
+        assert_eq!(served(PRIMARY), sha(&p2), "the old name still has its own");
+        println!("DC_LIVE step primary-change ok");
+
+        // Rollback: the old name is the primary again.
+        let p2_id = r.cert_id;
+        assert!(matches!(repair(PRIMARY), DefaultRepair::Repointed { to, .. } if to == p2_id));
+        assert_eq!(no_sni(), sha(&p2), "rollback");
+        println!("DC_LIVE step rollback ok");
+
+        println!("DC_LIVE sha:primary {}", sha(&p2));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::fake_tls::{cert, FakeTls, DAY};

@@ -64943,6 +64943,14 @@ elif verb == "ptr_set":
             print("live ptr: %s" % d.get("ptr"))
         if d.get("resolverNote"):
             print("note: %s" % d.get("resolverNote"))
+        settings = d.get("settings") or {}
+        if settings.get("warning"):
+            print("warning: %s" % settings.get("warning"))
+        dc = d.get("defaultCertificate") or {}
+        if dc.get("state") == "moved":
+            print("default certificate: moved to this name's newest (%s)" % dc.get("certificateId"))
+        elif dc.get("warning"):
+            print("warning: %s" % dc.get("warning"))
 
 elif verb == "bans_list":
     d = call("GET", "/cli/mail/bans")
@@ -74399,9 +74407,16 @@ EOF
 cmd_help_hostmail_ptr_set() {
     cat <<'EOF'
 Normalize hostname, require public A(hostname) includes origin IPv4,
-set Stalwart HELO + mail_server.hostname, then CP POST /api/dns/ptr
-{hostname, helo}. HELO failure skips CP. Unpaired k2c_ fails loud.
+set Stalwart HELO + mail_server.hostname, reload its settings so the running
+server uses the name (a restart only if the reload is refused), then CP POST
+/api/dns/ptr {hostname, helo}. HELO failure skips CP. Unpaired k2c_ fails loud.
 POST /cli/mail/ptr/set. mail_manage.
+
+The name becomes the primary mail host. If it has a live certificate that
+becomes the default one; if not, nothing changes and the output says how to
+get one. Do it first: `k2 domain name add <hostname> --role mail`, then
+`k2 cert issue <hostname>`. K2 doesn't change DNS: move each domain's MX
+yourself, and keep the old name's A record until no MX points at it.
 
 aligned uses k2.dev's authoritative PTR when k2.dev returns one; this
 box's own lookup is ptrLocal, and a note says when its cache is stale.

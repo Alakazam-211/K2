@@ -73,6 +73,20 @@ for l in sys.stdin:
     target="${CARGO_TARGET_DIR:-$(cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')}"
     FW_LIVE_TEST_BIN="$bin" K2_E2E_DAEMON="$target/debug/k2-daemon" STALWART_PROBE=stalwart-forward-volume-e2e.py \
       exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
+  # The default certificate and a change of primary on real Stalwart, both
+  # versions, with real TLS handshakes (tests/mail/stalwart-default-cert-probe.py).
+  default-cert)
+    bin="$(cargo test -p k2-daemon --lib --no-run --message-format json | python3 -I -c 'import json,sys
+for l in sys.stdin:
+    try:
+        m = json.loads(l)
+    except ValueError:
+        continue
+    if m.get("executable") and m.get("profile", {}).get("test"):
+        print(m["executable"])')"
+    [ -x "$bin" ] || { echo "no k2-daemon test binary: $bin" >&2; exit 1; }
+    K2_DC_TEST_BIN="$bin" STALWART_PROBE=stalwart-default-cert-probe.py \
+      exec bash tests/mail/stalwart-sandbox-forward-gap.sh 0.16.10 0.16.25 ;;
   # Every real-Stalwart proof the forward limit rests on, one after the other.
   proofs)
     rc=0
@@ -92,5 +106,5 @@ for l in sys.stdin:
     rm -f "$log"
     echo "== forward-cargo.sh $*: exit $rc =="
     exit $rc ;;
-  *) echo "usage: $0 check|test|targeted|contract|landing|e2e|many-probe|many-e2e|volume-e2e|proofs|logged <cmd> [cargo args…]" >&2; exit 2 ;;
+  *) echo "usage: $0 check|test|targeted|contract|landing|e2e|many-probe|many-e2e|volume-e2e|default-cert|proofs|logged <cmd> [cargo args…]" >&2; exit 2 ;;
 esac

@@ -384,6 +384,38 @@ pub(crate) fn test_le_pem(hostname: &str) -> InstalledPem {
     }
 }
 
+/// [`test_le_pem`] with real dates: valid for 90 days up to `not_after`.
+#[cfg(test)]
+pub(crate) fn test_le_pem_until(hostname: &str, not_after: i64) -> InstalledPem {
+    let ymd = |t: i64| {
+        use chrono::Datelike;
+        let d = chrono::DateTime::from_timestamp(t, 0).expect("ts").date_naive();
+        rcgen::date_time_ymd(d.year(), d.month() as u8, d.day() as u8)
+    };
+    let mut ca_params =
+        CertificateParams::new(vec!["Let's Encrypt R11".to_string()]).expect("ca params");
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::OrganizationName, "Let's Encrypt");
+    ca_dn.push(DnType::CommonName, "R11");
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().expect("ca key");
+    let ca = ca_params.self_signed(&ca_key).expect("ca");
+    let mut leaf = CertificateParams::new(vec![hostname.to_string()]).expect("leaf params");
+    leaf.not_before = ymd(not_after - 90 * 86_400);
+    leaf.not_after = ymd(not_after);
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, hostname.to_string());
+    leaf.distinguished_name = dn;
+    let leaf_key = KeyPair::generate().expect("leaf key");
+    let cert = leaf.signed_by(&leaf_key, &ca, &ca_key).expect("sign");
+    InstalledPem {
+        hostname: hostname.to_string(),
+        chain_pem: format!("{}{}", cert.pem(), ca.pem()),
+        key_pem: leaf_key.serialize_pem(),
+    }
+}
+
 fn lookup_attached(hostname: &str) -> Result<(DomainBinding, DomainName), String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -1559,7 +1591,7 @@ mod tests {
             }
             if mint.iter().any(|m| body.contains(m)) {
                 assert!(
-                    name == "mint_fake_le" || name == "test_le_pem",
+                    name == "mint_fake_le" || name == "test_le_pem" || name == "test_le_pem_until",
                     "acme.rs fn {name} mints a certificate"
                 );
             }
@@ -1573,6 +1605,10 @@ mod tests {
         assert!(
             acme.contains("#[cfg(test)]\npub(crate) fn test_le_pem"),
             "test_le_pem stays test-only"
+        );
+        assert!(
+            acme.contains("#[cfg(test)]\npub(crate) fn test_le_pem_until"),
+            "test_le_pem_until stays test-only"
         );
         let alpn_uses = acme.matches("alpn_challenge_pem(").count();
         assert_eq!(alpn_uses, 2, "alpn_challenge_pem: its definition and the one TLS-ALPN-01 arm");

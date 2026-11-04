@@ -345,7 +345,13 @@ fn set_state(row: &mut RecordRow, status: &str, live: Option<Vec<String>>, now: 
     row.checked_at = Some(now);
 }
 
-fn check_mx(resolver: &dyn DnsResolver, domain: &str, row: &mut RecordRow, now: i64) -> Result<bool, ()> {
+fn check_mx(
+    resolver: &dyn DnsResolver,
+    domain: &str,
+    row: &mut RecordRow,
+    now: i64,
+    other_mail_hosts: &[String],
+) -> Result<bool, ()> {
     let (expected_pref, expected_host) = parse_mx_expected(&row.expected);
     match resolver.mx(domain) {
         Ok(hosts) if hosts.is_empty() => {
@@ -359,7 +365,8 @@ fn check_mx(resolver: &dyn DnsResolver, domain: &str, row: &mut RecordRow, now: 
                 .collect();
             // C25: Valid iff name AND priority match expected.
             let hit = hosts.iter().any(|h| {
-                host_eq(&h.exchange, &expected_host)
+                (host_eq(&h.exchange, &expected_host)
+                    || same_box_mail_host(resolver, &h.exchange, &expected_host, other_mail_hosts))
                     && expected_pref.map(|p| h.preference == p).unwrap_or(true)
             });
             if hit {
@@ -378,6 +385,28 @@ fn check_mx(resolver: &dyn DnsResolver, domain: &str, row: &mut RecordRow, now: 
             set_state(row, ST_UNKNOWN, None, now);
             Err(())
         }
+    }
+}
+
+/// An MX on another role-`mail` host of this box still delivers here. That's
+/// the state during a change of primary (`k2 hostmail ptr set`), on either side
+/// of moving the MX, and it must not flip a working domain to `error` (that
+/// stops new mailboxes and its hosted senders). It has to resolve to the same
+/// place as the primary, so a name that moved away doesn't count. The doctor
+/// still compares against the primary and shows the difference.
+fn same_box_mail_host(
+    resolver: &dyn DnsResolver,
+    exchange: &str,
+    primary: &str,
+    other_mail_hosts: &[String],
+) -> bool {
+    if !other_mail_hosts.iter().any(|h| host_eq(h, exchange)) {
+        return false;
+    }
+    let bare = |h: &str| h.trim_end_matches('.').to_ascii_lowercase();
+    match (resolver.a(&bare(exchange)), resolver.a(&bare(primary))) {
+        (Ok(a), Ok(b)) => a.iter().any(|ip| b.contains(ip)),
+        _ => false,
     }
 }
 
@@ -449,13 +478,25 @@ pub fn verify_rows(
     rows: &mut [RecordRow],
     now: i64,
 ) -> CheckSummary {
+    verify_rows_with(resolver, domain, rows, now, &[])
+}
+
+/// [`verify_rows`] that also accepts an MX on `other_mail_hosts`, this box's
+/// role-`mail` hosts. The domain's status uses this one.
+pub fn verify_rows_with(
+    resolver: &dyn DnsResolver,
+    domain: &str,
+    rows: &mut [RecordRow],
+    now: i64,
+    other_mail_hosts: &[String],
+) -> CheckSummary {
     let mut summary = CheckSummary::default();
     for row in rows.iter_mut() {
         if row.category != CAT_REQUIRED {
             continue;
         }
         let outcome = if row.id == "mx" {
-            check_mx(resolver, domain, row, now)
+            check_mx(resolver, domain, row, now, other_mail_hosts)
         } else if row.id == "spf" {
             check_txt(resolver, TxtKind::Spf, row, now)
         } else if row.id.starts_with("dkim:") {
@@ -608,7 +649,7 @@ pub fn check_domain_now(
         k2_core::mail_domain::normalize_mail_domain(raw_domain).map_err(domains::OpError::Usage)?;
 
     // Snapshot under the lock…
-    let (row, mut rows, zone_file) = {
+    let (row, mut rows, zone_file, mail_hosts) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Some(row) = domains::load_domain(&conn, &domain) else {
@@ -618,13 +659,19 @@ pub fn check_domain_now(
         };
         let rows = domains::effective_rows(&conn, &row);
         let zone_file = domains::dns_status_of(&row).zone_file;
-        (row, rows, zone_file)
+        let mail_hosts: Vec<String> = k2_core::domains::list_names(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.role == k2_core::domains::ROLE_MAIL)
+            .map(|n| n.hostname)
+            .collect();
+        (row, rows, zone_file, mail_hosts)
     };
 
     // …resolve with the lock RELEASED (network under a shared DB mutex
     // would stall every route)…
     let now = now_secs();
-    let summary = verify_rows(resolver, &domain, &mut rows, now);
+    let summary = verify_rows_with(resolver, &domain, &mut rows, now, &mail_hosts);
     // 0.45.1 A3: the mail host's A row — graded, never in the summary.
     let box_addrs = super::cert_names::box_addrs_local(
         super::cert_names::cached_public_ipv4().as_deref(),
@@ -856,6 +903,45 @@ mod tests {
         assert!(!host_eq("mail.acme.dev", "mail2.acme.dev"));
         assert_eq!(parse_mx_expected("10 mail.acme.dev."), (Some(10), "mail.acme.dev.".to_string()));
         assert_eq!(parse_mx_expected("mail.acme.dev"), (None, "mail.acme.dev".to_string()));
+    }
+
+    /// A change of primary, with the MX still on the old name: same box, so
+    /// the domain stays Verified. A name that moved away, or isn't this box's
+    /// mail host, doesn't count, and neither does another preference.
+    #[test]
+    fn an_mx_on_another_mail_host_of_this_box_keeps_the_domain_verified() {
+        let ip: std::net::Ipv4Addr = "203.0.113.7".parse().unwrap();
+        let other: std::net::Ipv4Addr = "198.51.100.9".parse().unwrap();
+        let row = |expected: &str| RecordRow {
+            id: "mx".into(),
+            category: CAT_REQUIRED.into(),
+            rtype: "MX".into(),
+            name: "acme.dev".into(),
+            purpose: String::new(),
+            expected: expected.into(),
+            expected_display: expected.into(),
+            chunks: Vec::new(),
+            status: crate::mail::domains::ST_PENDING.into(),
+            live: None,
+            checked_at: None,
+        };
+        let check = |live_pref: u16, old_ip, attached: &[String]| {
+            let mut r = FakeResolver::default();
+            r.mx.insert(
+                "acme.dev".into(),
+                vec![MxHost { preference: live_pref, exchange: "mail.old.dev.".into() }],
+            );
+            r.a.insert("mail.old.dev".into(), vec![old_ip]);
+            r.a.insert("mail.new.dev".into(), vec![ip]);
+            let mut rows = vec![row("10 mail.new.dev.")];
+            let s = verify_rows_with(&r, "acme.dev", &mut rows, 1, attached);
+            (s.mx_valid, rows[0].status.clone())
+        };
+        let attached = vec!["mail.old.dev".to_string()];
+        assert_eq!(check(10, ip, &attached), (true, ST_VALID.to_string()));
+        assert_eq!(check(10, other, &attached), (false, ST_WRONG.to_string()), "moved away");
+        assert_eq!(check(10, ip, &[]), (false, ST_WRONG.to_string()), "not this box's mail host");
+        assert_eq!(check(20, ip, &attached), (false, ST_WRONG.to_string()), "C25 preference");
     }
 
     // ── verify_rows classification ──

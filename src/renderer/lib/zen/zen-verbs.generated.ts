@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 47
+export const ZEN_CATALOG_VERSION = 48
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -149,6 +149,8 @@ export const ZEN_CUSTOM_VERBS = {
   'boardFile.open': { cap: 'store:read', reach: 'local', kind: 'call' },
   'boardFile.key': { cap: 'store:read', reach: 'local', kind: 'call' },
   'boardFile.events': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
+  'boardFile.files': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
+  'boardFile.openTab': { cap: 'store:read', reach: 'local', kind: 'call' },
   'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.patch': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },

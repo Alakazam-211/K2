@@ -516,6 +516,9 @@ textarea.field { height: auto; padding: 8px 10px; resize: none; line-height: 1.4
 .pop.boards .trow.dropafter { box-shadow: inset 0 -2px 0 var(--accent); }
 .pop.boards .tfold.dragging { opacity: 0.45; }
 .pop.boards .tpath { font-size: 11px; }
+/* Board files (a preview): beside this Garden's boards, each with its workspace */
+.pop.boards .tfiles { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.pop.boards .wsbadge { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 
 /* Access editing (people panel and the tree's Access…) */
 .av.pic { padding: 0; overflow: hidden; background: none; }

@@ -1,6 +1,6 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 47,
+  "catalogVersion": 48,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
@@ -19,10 +19,12 @@
     {"cap":"store:read","feature":"garden-blobs-v1","phone":"door","verb":"blobs.list"},
     {"cap":"store:write","feature":"garden-blobs-v1","phone":"door","verb":"blobs.put"},
     {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.events"},
+    {"cap":"store:read","feature":"board-file-list-v1","phone":"later","verb":"boardFile.files"},
     {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.flush"},
     {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.hold"},
     {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.key"},
     {"cap":"store:read","feature":"board-file-v1","phone":"host","verb":"boardFile.open"},
+    {"cap":"store:read","feature":"board-file-list-v1","phone":"later","verb":"boardFile.openTab"},
     {"cap":"store:write","feature":"board-file-v1","phone":"host","verb":"boardFile.submit"},
     {"cap":null,"feature":"zen-widgets-v1","phone":"host","verb":"canvas.setHitRegions"},
     {"cap":"thread:post","feature":"zen-v1","phone":"later","verb":"compose.draft"},

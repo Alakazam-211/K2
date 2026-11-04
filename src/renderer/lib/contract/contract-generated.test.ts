@@ -182,6 +182,9 @@ describe('TUWA5: the generated tables', () => {
       'boardFile.flush': { cap: 'store:write', reach: 'local', kind: 'call' },
       'boardFile.key': { cap: 'store:read', reach: 'local', kind: 'call' },
       'boardFile.events': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
+      // K2's own Board in a Garden, while board files are a preview (catalog v48): the file list and its tabs.
+      'boardFile.files': { cap: 'store:read', reach: 'local', kind: 'subscribe' },
+      'boardFile.openTab': { cap: 'store:read', reach: 'local', kind: 'call' },
       // 0.46.5 (prd-garden-board-needs-v1): files and downloads.
       'blobs.put': { cap: 'store:write', reach: 'local', kind: 'call' },
       'blobs.get': { cap: 'store:read', reach: 'local', kind: 'call' },

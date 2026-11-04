@@ -1228,6 +1228,27 @@ export interface BoardFileOk {
   readonly ok: boolean
 }
 
+export interface BoardFileRow {
+  /** This file in this window's list: what boardFile.openTab takes. */
+  readonly id: string
+  /** The file's name, without .k5board. */
+  readonly name: string
+  /** Where it is in its workspace. */
+  readonly rel: string
+  /** What K2 calls that workspace. */
+  readonly workspaceName: string
+}
+
+export interface BoardFileList {
+  readonly boards: BoardFileRow[]
+  /** K2 stopped at 2,000 files. */
+  readonly truncated: boolean
+}
+
+export interface BoardFileTabOpened {
+  readonly opened: boolean
+}
+
 export interface StoreRev {
   readonly rev: number
 }
@@ -1804,6 +1825,8 @@ export interface K2Verbs {
   'boardFile.open': { args: []; value: BoardFileOpen }
   'boardFile.key': { args: [key: { code: string; ctrl: boolean; key: string; meta: boolean; shift: boolean }]; value: BoardFileOk }
   'boardFile.events': { args: []; value: unknown }
+  'boardFile.files': { args: []; value: BoardFileList }
+  'boardFile.openTab': { args: [id: string]; value: BoardFileTabOpened }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
   'store.patch': { args: [key: string, partial: unknown, opts?: { ifRev?: number }]; value: StorePatched }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
@@ -1837,8 +1860,8 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
-export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'boardFile.events' | 'thread.onActivity'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'boardFile.openTab' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
+export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'boardFile.events' | 'boardFile.files' | 'thread.onActivity'
 
 export interface K2 {
   readonly gardens: {
@@ -2106,6 +2129,12 @@ export interface K2 {
     events(cb: (value: unknown) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
     events(handlers: K2Handlers<unknown>): () => void
+    /** K2's own Board widget only, while board files are a preview. The .k5board files in every workspace the person may read, by name, now and again after each change. cap store:read · local · board-file-list-v1. e.g. `const stop = k2.boardFile.files((list) => draw(list.boards))` */
+    files(cb: (value: BoardFileList) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    files(handlers: K2Handlers<BoardFileList>): () => void
+    /** K2's own Board widget only, while board files are a preview. Leave the Garden for that file's Board tab in its workspace, within 5 s of a press in the widget. cap store:read · local · board-file-list-v1. e.g. `await k2.boardFile.openTab(row.id)` */
+    openTab(id: string): Promise<BoardFileTabOpened>
     /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. One gesture's ops, for the tab to queue and save. The tab answers before the save; events say what became of it. cap store:write · local · board-file-v1. e.g. `await k2.boardFile.submit({gesture, kind: 'edit', byAll: false, part: 0, last: true, text})` */
     submit(part: { byAll: boolean; gesture: string; kind: 'edit' | 'undo' | 'redo'; last: boolean; part: number; text: string }): Promise<BoardFileOk>
     /** K2's own .k5board tab only; a widget in a Garden gets verb_unavailable. Hold saves while the person is typing. cap store:write · local · board-file-v1. e.g. `await k2.boardFile.hold(true)` */

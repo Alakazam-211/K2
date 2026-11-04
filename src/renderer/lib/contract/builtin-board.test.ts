@@ -600,6 +600,76 @@ describe('k2:board@1 in the Garden', () => {
     expect(m.doc.querySelectorAll('#pop .wsbadge').length).toBe(1)
   })
 
+  // Board files (a preview): .k5board files from every workspace, beside the Garden's boards.
+  const FILE = (name: string, ws: string, wsName: string, rel?: string) => ({ id: 'bf:' + ws + '/' + (rel || name), rel: rel || name + '.k5board', name, workspaceName: wsName })
+  const fileRowsOf = (m: Mounted): string[] => [...m.doc.querySelectorAll('#pop .frow')].map((r: Any) => r.querySelector('.tname').textContent + ' · ' + r.querySelector('.wsbadge').textContent)
+  const openSwitcher = (m: Mounted): void => m.doc.querySelector('.boardname .name').click()
+
+  it('board files: none of it with the switch off (no verbs): the switcher is today’s', async () => {
+    const m = await started({ seed: BOARD() })
+    openSwitcher(m)
+    expect(m.doc.getElementById('pop').classList.contains('boards')).toBe(true)
+    expect(m.doc.querySelector('#pop .tfiles')).toBeNull()
+    expect(m.doc.querySelector('#pop .frow')).toBeNull()
+    expect(m.fake.log.fileSubs).toBe(0)
+    // The tab copy (boards off) never lists files, even when K2 offers them.
+    const tab = await started({ seed: BOARD(), boardFiles: { boards: [FILE('Plan', '/w/a', 'alpha')], truncated: false }, features: { boards: false, forAgents: false, chat: false } })
+    await sleep(20)
+    expect(tab.fake.log.fileSubs).toBe(0)
+  })
+
+  it('board files: listed with their workspace beside the Garden’s boards; a click opens the tab', async () => {
+    const m = await started({ seed: BOARD(), boardFiles: { boards: [FILE('Roadmap', '/w/b', 'beta'), FILE('Plan', '/w/a', 'alpha', 'docs/Plan.k5board')], truncated: false } })
+    await until('listed', () => m.fake.log.fileSubs === 1)
+    openSwitcher(m)
+    await until('files', () => fileRowsOf(m).length === 2)
+    expect(fileRowsOf(m)).toEqual(['Plan · alpha', 'Roadmap · beta'])
+    expect(m.doc.querySelector('#pop .frow').title).toBe('docs/Plan.k5board')
+    // The Garden's own board is still there, unchanged.
+    expect([...m.doc.querySelectorAll('#pop .brow:not(.frow) .tname')].map((r: Any) => r.textContent)).toEqual(['Plans'])
+    m.doc.querySelector('#pop .frow').click()
+    await until('opened', () => m.fake.log.openedFiles.length === 1)
+    expect(m.fake.log.openedFiles).toEqual(['bf:/w/a/docs/Plan.k5board'])
+    expect(m.doc.getElementById('pop').hidden).toBe(true)
+    expect(m.App.store.boardId).toBe('b0a0a0a')   // the Garden's board stays open behind
+    // No workspace in this window has it: said, not swallowed.
+    ;(m.win as Any).__noTab = true
+    openSwitcher(m)
+    m.doc.querySelector('#pop .frow').click()
+    await until('the toast', () => toast(m).includes('Couldn’t open “Plan”'))
+  })
+
+  it('board files: K2’s next list redraws the open switcher (board_file_changed re-lists in K2)', async () => {
+    const m = await started({ seed: BOARD(), boardFiles: { boards: [FILE('Plan', '/w/a', 'alpha')], truncated: false } })
+    await until('listed', () => m.fake.log.fileSubs === 1)
+    openSwitcher(m)
+    await until('files', () => fileRowsOf(m).length === 1)
+    m.fake.pushFiles({ boards: [FILE('Plan', '/w/a', 'alpha'), FILE('Sprint', '/w/a', 'alpha')], truncated: true })
+    expect(fileRowsOf(m)).toEqual(['Plan · alpha', 'Sprint · alpha'])
+    expect(m.doc.querySelector('#pop .tfiles').textContent).toContain('Showing the first 2,000 files')
+    // Found by name in a search, with the Garden's boards.
+    m.fake.pushFiles({ boards: Array.from({ length: 9 }, (_, j) => FILE('Sprint ' + j, '/w/a', 'alpha')), truncated: false })
+    openSwitcher(m)   // closes it
+    openSwitcher(m)   // more than 8 boards in all: the search field
+    const input = m.doc.querySelector('#pop input.search')
+    input.value = 'sprint 3'; input.dispatchEvent(new m.win.Event('input'))
+    expect(fileRowsOf(m)).toEqual(['Sprint 3 · alpha'])
+  })
+
+  it('board files: an empty list says so plainly; a refused one says why', async () => {
+    const m = await started({ seed: BOARD(), boardFiles: { boards: [], truncated: false } })
+    await until('listed', () => m.fake.log.fileSubs === 1)
+    await sleep(10)
+    openSwitcher(m)
+    expect(m.doc.querySelector('#pop .tfiles').textContent).toContain('No board files in your workspaces')
+    expect(m.doc.querySelector('#pop .frow')).toBeNull()
+    const r = await started({ seed: BOARD(), boardFiles: 'refuse' })
+    await until('listed', () => r.fake.log.fileSubs === 1)
+    await sleep(10)
+    openSwitcher(r)
+    expect(r.doc.querySelector('#pop .tfiles').textContent).toContain('Couldn’t list board files (not_enabled)')
+  })
+
   it('a board’s default agent (chat.defaultAgent) opens in the Conversation and leads the list', async () => {
     const m = await started({ seed: BOARD([['boards/b0b0b0b', { id: 'b0b0b0b', name: 'Second', project: null, format: 1 }]]) })
     expect(m.App.store.chat.defaultAgent('b0a0a0a')).toBeNull()

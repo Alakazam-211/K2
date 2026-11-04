@@ -59,6 +59,7 @@ import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
 import { downloadChunks } from '@/lib/fs-transfer'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
+import { BOARD_FILE_LIST_FEATURE, BOARD_FILE_LIST_WIDGET, boardFilesForFrame } from '@/lib/board-file/board-file-list'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
 import { ZenColumnsContext } from '@/lib/zen/zen-columns'
 import {
@@ -132,6 +133,17 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   // sheet-gated start / land / settle, git.note and agents.openTerminal.
   'workbench-v1',
 ]
+
+/** Does this placement list board files? K2's own Board widget, while this computer's daemon says `board-file-v1`
+ *  (`board_file_preview` / `K2_BOARD_FILE=1`). Off: nothing changes in the frame. */
+export function zenListsBoardFiles(widget: string, serverSupports: (feature: 'board-file-v1') => boolean): boolean {
+  return widget === BOARD_FILE_LIST_WIDGET && serverSupports('board-file-v1')
+}
+
+/** The hello's features: the fixed list, plus `board-file-list-v1` for a frame that lists board files. */
+export function zenFrameFeatures(listsBoardFiles: boolean): string[] {
+  return listsBoardFiles ? [...ZEN_FRAME_FEATURES, BOARD_FILE_LIST_FEATURE] : [...ZEN_FRAME_FEATURES]
+}
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
  *  variables and scheme (UW39), and reduced motion. */
@@ -274,7 +286,7 @@ export function ZenCustomFrame({
       k2: 'hello',
       v: 1,
       caps: [...w.caps],
-      features: [...ZEN_FRAME_FEATURES],
+      features: zenFrameFeatures(zenListsBoardFiles(w.widget, (f) => zenLocalScope().serverSupports(f))),
       widget: { id: w.id, name: label, garden: gardenId },
       config: { ...w.props.config },
       motion: { reduced: theme.reduced },
@@ -447,6 +459,10 @@ export function ZenCustomFrame({
             pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
             confirm: (change) => new Promise<boolean>((resolve) => setWorkAsk({ change, resolve })),
           }),
+          // The Boards Garden's file list (a preview): K2's own Board widget only, with board files on.
+          ...(zenListsBoardFiles(widgetRef.current.widget, (f) => zenLocalScope().serverSupports(f))
+            ? { boardFiles: boardFilesForFrame(zenLocalScope(), () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS)) }
+            : {}),
           terminal: {
             pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
             open: (address) => zenOpenAgentTerminal(zenCustomViewFor(gardenId, widgetRef.current), address),

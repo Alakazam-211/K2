@@ -64,7 +64,7 @@ describe('day-0: verb tables', () => {
         continue
       }
       // Catalog v21 (0.46.4): k2.open(url), answered by the custom layer only.
-      // A .k5board's tab only (prd-board-tab-v1): frame-only, on the store caps; a Garden frame has no implementation.
+      // A .k5board's tab (prd-board-tab-v1), and K2's own Board's file list (catalog v48): frame-only, on the store caps.
       if (verb.startsWith('boardFile.')) {
         expect(['store:read', 'store:write']).toContain(row.cap)
         continue

@@ -518,7 +518,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:box-disk@1", "544d39934b526377777dc1ec832bf77096df1b4dee123f7d25727ef7864c19ce"),
     ("k2:review@1", "dd1271c39589a392358e8e8a39ceadd025ceef55776e44015615d055609d6b34"),
     ("k2:work-inbox@1", "85deffe31c8a76db2410d7756e64193a2101d31c4518e7b1ebf57e8ab3a68143"),
-    ("k2:board@1", "6ac24f08f0c8f0edc987d0bf4313fbc6abc56cb14fc43c8a0f51d456153afe32"),
+    ("k2:board@1", "66ec65e385a4c95f08adbb54e476bbf08531116a84d8a193baaeb354999492cc"),
     ("k2:board-file@1", "310db4a193a9e0e347ce257cb3cfdd8f6e2a3bf91492ae32f173aba080ae057c"),
 ];
 

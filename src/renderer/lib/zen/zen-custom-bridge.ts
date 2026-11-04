@@ -227,6 +227,11 @@ export interface ZenCustomLayerDeps {
   /** A board file's tab. Without it (every Garden) `boardFile.*` answer
    *  `verb_unavailable`. */
   boardFile?: ZenCustomBoardFile
+  /** K2's own Board widget in a Garden, while board files are a preview
+   *  (`board_file_preview`): the `.k5board` files this person may read, and
+   *  their tabs. Without it `boardFile.files` / `boardFile.openTab` answer
+   *  `verb_unavailable` (any other widget, the switch off). */
+  boardFiles?: ZenCustomBoardFiles
   /** GS1–GS7: K2's own download path. Without it `downloads.*` answer
    *  `verb_unavailable` (the widget preview, a headless daemon). */
   downloads?: ZenCustomDownloads
@@ -264,6 +269,15 @@ export interface ZenCustomBoardFile {
   flush(): Promise<void>
   key(k: { key: string; code: string; meta: boolean; ctrl: boolean; shift: boolean }): void
   events(push: (e: unknown) => void): () => void
+}
+
+/** The board files listing (`lib/board-file/board-file-list`): the daemon's rows, again after each change. */
+export interface ZenCustomBoardFiles {
+  /** The list now, then again after each change; `fail` once when the daemon refuses it. */
+  files(push: (list: unknown) => void, fail: (err: unknown) => void): () => void
+  pressed(): boolean
+  /** Leave the Garden for the tab of the row with this id. False when no workspace here has it. */
+  openTab(id: string): Promise<boolean>
 }
 
 /** What the layer needs for `uploads.*` (`k2.pick`, `k2.onDrop`). */
@@ -879,7 +893,19 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     return deps.boardFile!
   }
 
+  const needBoardFiles = (verb: string): ZenCustomBoardFiles => {
+    if (!deps.boardFiles) refuse('verb_unavailable', `${verb} isn’t available here (K2’s own Board widget, with board files on).`)
+    return deps.boardFiles!
+  }
+
   const calls: Record<string, (args: unknown[], bytes?: ArrayBuffer) => unknown> = {
+    'boardFile.openTab': async (args) => {
+      const b = needBoardFiles('boardFile.openTab')
+      const id = args[0]
+      if (typeof id !== 'string' || !id.trim()) refuse('bad_args', 'boardFile.openTab takes a row’s id from boardFile.files')
+      if (!b.pressed()) refuse('failed', 'boardFile.openTab needs a click: it works only just after the person presses in the widget.')
+      return { opened: await b.openTab(id as string) }
+    },
     'boardFile.open': () => needBoardFile('boardFile.open').open(),
     'boardFile.submit': (args) => {
       const b = needBoardFile('boardFile.submit')
@@ -1304,6 +1330,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
     'boardFile.events': (_args, push) => needBoardFile('boardFile.events').events(push),
+    'boardFile.files': (_args, push, fail) =>
+      needBoardFiles('boardFile.files').files(push, (err) => fail(toRefusal(err).wire)),
     // GP4 (0.46.6): files dropped on this frame, already in its data (the
     // drop is the gesture). Only a frame that listens takes drops.
     'uploads.dropped': (_args, push) => {

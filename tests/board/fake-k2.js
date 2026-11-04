@@ -5,7 +5,8 @@
 //   window.makeFakeK2(opts) → { k2, space, log, saves, blobs, agentWrite, resync, putBytes, drop, ... }
 // opts: seed [[key, value]], saves [[key, value]], viewer (name), agents (rows), grantees (items | 'refuse'
 // | undefined = no verb), caps (verbs k2.can answers true for), denyStore (code), picks ([{files}]),
-// echoDelay (ms), quiet (no live echoes), urlOf(ref, px, bytes, mime) (an img src for a stored file).
+// echoDelay (ms), quiet (no live echoes), urlOf(ref, px, bytes, mime) (an img src for a stored file),
+// boardFiles ({boards, truncated} | 'refuse' | undefined = no board files: the switch off, the verbs absent).
 ;(function (g) {
   'use strict'
   g.makeFakeK2 = function makeFakeK2(opts) {
@@ -15,7 +16,7 @@
     const space = new Map(); const feed = new Map(); let head = 1; const subs = []
     const saves = new Map(opts.saves || [])
     const blobs = new Map()   // ref → {bytes, mime, name}
-    const log = { batches: [], txs: [], shown: [], contexts: [], drafts: [], opened: [], toggles: [], layoutSets: [], downloads: [], blobPuts: [], blobGets: [], urls: [], hits: [], links: [], ready: 0, grantees: 0 }
+    const log = { batches: [], txs: [], shown: [], contexts: [], drafts: [], opened: [], toggles: [], layoutSets: [], downloads: [], blobPuts: [], blobGets: [], urls: [], hits: [], links: [], ready: 0, grantees: 0, openedFiles: [], fileSubs: 0 }
     const ME = 'you via k2:board'
     for (const [k, v] of opts.seed || []) space.set(k, { key: k, rev: 1, value: clone(v), by: 'agent:helper', updatedAt: 0 })
     const deny = () => { if (opts.denyStore) throw K2E(opts.denyStore) }
@@ -106,7 +107,7 @@
     if (opts.grantees !== undefined) {
       store.grantees = async () => { log.grantees++; if (opts.grantees === 'refuse') throw K2E('not_granted'); return { items: clone(opts.grantees) } }
     }
-    const caps = opts.caps || ['store.get', 'store.list', 'store.batch', 'store.changes', 'blobs.put', 'blobs.get', 'downloads.save', 'uploads.pick', 'uploads.dropped', 'agents.list', 'agents.show', 'conversation.setContext', 'links.open'].concat(opts.grantees !== undefined ? ['store.grantees'] : [])
+    const caps = opts.caps || ['store.get', 'store.list', 'store.batch', 'store.changes', 'blobs.put', 'blobs.get', 'downloads.save', 'uploads.pick', 'uploads.dropped', 'agents.list', 'agents.show', 'conversation.setContext', 'links.open'].concat(opts.grantees !== undefined ? ['store.grantees'] : []).concat(opts.boardFiles !== undefined ? ['boardFile.files', 'boardFile.openTab'] : [])
     let dropCb = null
     const urlOf = opts.urlOf || ((ref, px) => 'blob:fake/' + ref.slice(-12) + (px ? '?px=' + px : ''))
     const agents = opts.agents || [
@@ -149,8 +150,23 @@
       async pick() { return (opts.picks && opts.picks.shift()) || { files: [] } },
       onDrop(cb) { dropCb = cb; return () => { dropCb = null } },
     }
+    // Board files (a preview): K2's list now, then whatever pushFiles sends; openTab says opened unless
+    // window.__noTab (no workspace in this window has it).
+    const fileSubs = []
+    if (opts.boardFiles !== undefined) {
+      k2.boardFile = {
+        files(cb, onErr) {
+          log.fileSubs++
+          const s = { cb, onErr }; fileSubs.push(s)
+          setTimeout(() => { if (opts.boardFiles === 'refuse') { if (onErr) onErr(K2E('not_enabled')) } else cb(clone(opts.boardFiles)) })
+          return () => { const i = fileSubs.indexOf(s); if (i >= 0) fileSubs.splice(i, 1) }
+        },
+        async openTab(id) { log.openedFiles.push(id); return { opened: !g.__noTab } },
+      }
+    }
     return {
       k2, space, log, saves, blobs,
+      pushFiles(list) { if (!fileSubs.length) throw new Error('the widget never listed board files'); for (const s of fileSubs) s.cb(clone(list)) },
       head: () => head,
       // An agent (or another window) writes: the widget hears it live.
       agentWrite(ops, handle) { return apply(ops.map((o) => Object.assign({ op: 'put' }, o)), 'agent:' + (handle || 'helper')) },

@@ -15,6 +15,11 @@
 //                              (data: a string, bytes, a Blob, or an async function that makes them)
 //   host.canPick() / host.pick({accept})   K2's file picker → {files: [{ref, name, mime, size}]}
 //   host.onDrop(cb)            cb({files, x, y}) for files dropped on the board (already stored)
+//   host.canListFiles()        → boolean: K2 lists .k5board files here (its own Board in a Garden, while board
+//                              files are a preview); false everywhere else, and the switcher shows no files
+//   host.listFiles(cb, onErr)  cb({boards: [{id, name, rel, workspaceName}], truncated}) now and
+//                              after each change → stop()
+//   host.openFile(id)          → Promise<boolean>: leave the Garden for that file's tab, right after a click
 (function (g) {
   'use strict'
   const k2 = g.k2
@@ -43,5 +48,8 @@
     canPick: () => !!k2 && typeof k2.pick === 'function' && may('uploads.pick'),
     pick: (opts) => k2.pick(opts),
     onDrop(cb) { if (k2 && typeof k2.onDrop === 'function' && may('uploads.dropped')) return k2.onDrop(cb); return () => {} },
+    canListFiles: () => may('boardFile.files') && may('boardFile.openTab'),
+    listFiles: (cb, onErr) => k2.boardFile.files(cb, onErr),
+    openFile: (id) => k2.boardFile.openTab(String(id)).then((r) => !!(r && r.opened)),
   }
 })(window)

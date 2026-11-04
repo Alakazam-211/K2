@@ -710,10 +710,11 @@ fn is_comment_line(line: &str) -> bool {
 // ── k2 zen guide api ─────────────────────────────────────────────────────
 
 /// The guide page text (no shell wrapping).
-/// A verb only K2's own tab frame answers (a `.k5board`): every widget gets `verb_unavailable`, so the guide an agent
-/// writes widgets from leaves it out.
+/// A verb only K2's own frames answer: a `.k5board` tab (`board-file-v1`), or K2's own Board widget listing board
+/// files while they're a preview (`board-file-list-v1`). Any other widget gets `verb_unavailable`, so the guide an
+/// agent writes widgets from leaves them out.
 fn tab_frame_only(v: &VerbRow) -> bool {
-    v.feature == "board-file-v1"
+    v.feature == "board-file-v1" || v.feature == "board-file-list-v1"
 }
 
 pub fn guide_api_page(c: &Catalog) -> String {
@@ -870,13 +871,13 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            105,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden)"
+            107,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self, plus Thread parity 0.46.3's thread.attachment, thread.open, thread.links, thread.pickFiles and thread.markRead, plus the 12 Garden person rows (catalog v17), plus app-room-stream's thread.inbox (0.46.3), plus catalog v20's layout.get/set/toggle/subscribe, agents.show and conversation.setContext, plus catalog v21's store.patch and links.open (0.46.4), plus box usage's app.resources (0.46.4), plus catalog v22's app.rooms and guests.list (0.46.4), plus catalog v29's thread.onActivity (the 0.46.5 activity SDK), plus catalog v30's Garden files rows blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v40's Workbench: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle and agents.openTerminal (0.46.7), plus catalog v43's store.grantees (the Board Garden), plus catalog v47's six boardFile.* tab rows, plus catalog v48's boardFile.files and boardFile.openTab (the Boards Garden's file list)"
         );
         assert_eq!(
             catalog().verbs_exposed_to(Exposure::Widget).len(),
-            51,
-            "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped; catalog v40's agents.openTerminal)"
+            53,
+            "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped; catalog v40's agents.openTerminal; catalog v47's six boardFile.* tab rows; catalog v48's boardFile.files and boardFile.openTab)"
         );
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]

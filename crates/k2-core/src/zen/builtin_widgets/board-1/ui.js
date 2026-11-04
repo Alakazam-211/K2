@@ -261,6 +261,24 @@
   const moveResult = (b, to, pr) => pr.then(() => App.toast('Moved “' + (b.name || 'Board') + '” to ' + (to ? projectNames()[to] || 'the project' : 'No project')))
     .catch((e) => App.toast((e && (e.code === 'busy' || e.code === 'not_saved')) ? 'Moving “' + (b.name || 'Board') + '”: it will finish once saving catches up.' : 'Couldn’t move “' + (b.name || 'Board') + '”: try again'))
 
+  // Board files (a preview): every .k5board the person may read, in any workspace on this computer, by name. K2
+  // lists them and says when they change; a click opens the file in its own Board tab. They sit beside this Garden's
+  // boards in the switcher, never mixed in: nothing is copied or moved.
+  const files = { on: false, rows: null, truncated: false, failed: null }
+  let filesShown = null   // the open switcher's {tree, draw}, while it shows
+  const fileRows = () => (files.rows || []).slice().sort((a, b) => a.workspaceName.localeCompare(b.workspaceName) || a.rel.localeCompare(b.rel))
+  // A new list redraws the open switcher, unless a name is being typed in it (the next open shows the list).
+  function filesChanged() {
+    const sw = filesShown
+    if (!sw || !sw.tree.isConnected || pop.hidden || popAnchor !== nameBtn || sw.tree.querySelector('input.rename')) return
+    sw.draw()
+  }
+  function openFile(f) {
+    host.openFile(f.id).then(
+      (ok) => { if (!ok) App.toast('Couldn’t open “' + f.name + '”: its workspace isn’t in this window') },
+      (e) => App.toast('Couldn’t open “' + f.name + '” (' + ((e && e.code) || 'error') + ')'))
+  }
+
   // The board list: one page, a file tree. Each project a folder (open unless closed on this computer), its
   // boards under it, "No project" last, the Trash at the bottom. Every row has the same menu, by right-click or
   // ⋯ (Rename, New board here, Delete); double-click renames; drag a board onto a folder to move it.
@@ -279,7 +297,7 @@
       np.addEventListener('click', () => { np.hidden = true; nameField(tree, '', 'Project name', (v) => { if (v) App.store.createProject(v); redraw() }, tree.firstChild) })
     }
     let input = null
-    if (list.length > 8) { input = mk('input', 'field search', p); input.placeholder = 'Find a board'; input.dataset.autofocus = '1' }
+    if (list.length + (files.on && files.rows ? files.rows.length : 0) > 8) { input = mk('input', 'field search', p); input.placeholder = 'Find a board'; input.dataset.autofocus = '1' }
     const tree = mk('div', 'blist tree', p); tree.setAttribute('role', 'tree')
     let menu = null
     const closeMenu = () => { if (menu) { menu.remove(); menu = null } }
@@ -404,7 +422,34 @@
       })
       return row
     }
+    // One board file's row: its name and workspace (its path on hover). A click opens its tab; no menu, no drag.
+    function fileRow(box, f) {
+      const row = mk('button', 'menuitem brow trow frow', box); row.type = 'button'; row.setAttribute('role', 'treeitem'); row.dataset.tkey = 'f:' + f.id
+      mk('span', 'tname', row, f.name || 'Untitled board')
+      const ws = mk('kbd', 'wsbadge', row, f.workspaceName); ws.title = 'In ' + f.workspaceName
+      row.title = f.rel
+      row.addEventListener('click', () => { closePop(); openFile(f) })
+      return row
+    }
+    // The Board files folder, after this Garden's own boards (closed and open like any folder).
+    function filesFolder() {
+      const fopen = !closed.has('files')
+      const ff = mk('div', 'tfolder tfiles' + (fopen ? ' open' : ''), tree); ff.setAttribute('role', 'none')
+      const fr = mk('div', 'trow tfold', ff); fr.setAttribute('role', 'treeitem'); fr.setAttribute('aria-expanded', String(fopen)); fr.setAttribute('aria-label', 'Board files'); fr.dataset.tkey = 'f:'
+      const ch = mk('button', 'tchev', fr); ch.type = 'button'; ch.appendChild(icon('chevron', 14)); ch.setAttribute('aria-label', (fopen ? 'Close' : 'Open') + ' Board files')
+      fr.appendChild(icon('folder', 16)); mk('span', 'tname', fr, 'Board files')
+      if (files.rows) mk('span', 'tcount', fr, String(files.rows.length))
+      fr.addEventListener('click', () => { if (closed.has('files')) closed.delete('files'); else closed.add('files'); App.store.setPref('treeClosed', [...closed]); draw() })
+      if (!fopen) return
+      const box = mk('div', 'tkids', ff); box.setAttribute('role', 'group')
+      if (files.failed) { mk('div', 'tempty', box, 'Couldn’t list board files (' + files.failed + ')'); return }
+      if (!files.rows) { mk('div', 'tempty', box, 'Looking for board files…'); return }
+      if (!files.rows.length) { mk('div', 'tempty', box, 'No board files in your workspaces'); return }
+      for (const f of fileRows()) fileRow(box, f)
+      if (files.truncated) mk('div', 'tempty', box, 'Showing the first 2,000 files')
+    }
     const draw = () => { const had = tree.contains(document.activeElement); draw0(); rove(had) }
+    filesShown = { tree, draw: () => draw() }
     // The tree is one Tab stop; arrow keys move in it (Up/Down rows, Right opens or goes in, Left closes or goes out,
     // Home/End, Enter opens, Shift+F10 or the menu key: the row's menu).
     let focusKey = null
@@ -442,9 +487,11 @@
       // Searching: the matching boards, flat, each with its folder path.
       if (q) {
         const hits = list.filter((b) => (b.name || '').toLowerCase().includes(q))
-        if (!hits.length) { mk('div', 'empty', tree, 'No board called that'); return }
+        const fhits = files.on ? fileRows().filter((f) => (f.name || '').toLowerCase().includes(q)) : []
+        if (!hits.length && !fhits.length) { mk('div', 'empty', tree, 'No board called that'); return }
         const path = (k) => { const out = []; let x = k; for (let n = 0; x && n < 64; n++) { out.unshift(names[x] || 'Linked project'); x = parentOf(x) } return out.join(' / ') }
         for (const b of hits) { const row = boardRow(tree, b); if (b.project) mk('kbd', 'tpath', row, path(b.project)) }
+        for (const f of fhits) fileRow(tree, f)
         return
       }
       const folder = (parent, k, depth) => {
@@ -503,6 +550,7 @@
       const linked = [...new Set(list.map((b) => b.project).filter((k) => k && !live(k) && !trashedP.has(k)))].sort((a, b) => (names[a] || '').localeCompare(names[b] || ''))
       for (const k of tops.concat(linked)) folder(tree, k, 0)
       folder(tree, '', 0)
+      if (files.on) filesFolder()
       // The Trash: what was deleted in the last 30 days, restorable (closed until opened).
       if (!own || q) return
       const tp = projAll.filter((x) => x.trashedAt && !x.trashedWith); const tb = all.filter((b) => b.trashedAt && !(b.trashedWith && trashedP.has(b.trashedWith)))
@@ -1703,6 +1751,14 @@
     App.reduced = App.reduced || host.reducedMotion()
     host.onScheme((s) => { hostScheme = s; themeNow() })
     shareHits()
+    if (F.boards && host.canListFiles()) {
+      files.on = true
+      host.listFiles((list) => {
+        if (!list || !Array.isArray(list.boards)) { files.failed = 'bad_answer'; filesChanged(); return }
+        files.rows = list.boards; files.truncated = list.truncated === true; files.failed = null
+        filesChanged()
+      }, (e) => { files.failed = (e && e.code) || 'failed'; filesChanged() })
+    }
     App.store.start((batch) => model.applyRemote(batch)).then(() => {
       // People: person:owner is the person at this computer; K2's names for them and the agents.
       model.isMe = App.store.isMe; model.nameOf = App.store.nameOf

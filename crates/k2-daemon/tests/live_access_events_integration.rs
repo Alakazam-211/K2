@@ -9,6 +9,8 @@
 mod app_fixture;
 #[path = "support/live_sockets.rs"]
 mod live_sockets;
+#[path = "support/fake_sew.rs"]
+mod fake_sew;
 
 use std::time::{Duration, Instant};
 
@@ -667,4 +669,83 @@ async fn one_socket_for_all_of_an_apps_guests() {
     closes(&mut a, 4003, "a suspended App's feed").await;
     gateway::close("mefeeda", None, true);
     gateway::close("mefeedb", None, true);
+}
+
+// ── Toward Sew ───────────────────────────────────────────────────────
+
+/// Sew refuses a step (a `blocked` row). K2's own answer doesn't wait for it: the
+/// frame fires, `me.get` is right both ways and K2's sockets carry on. Sew's answer
+/// is no news on K2's socket, and the owner's grant hooks list shows the blocked row
+/// (PRD §9, §14). How `k2 app chat` shows a Space's blocked step is
+/// `sew::governed`'s own test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_step_toward_sew_doesnt_hold_up_k2s_own_answer() {
+    use k2_core::tool_hook as hook;
+    use k2_daemon::tool_hook_worker::{self as worker, WorkerConfig};
+    let env = setup(&[]);
+    hook::allow_target_off_linux_for_tests(true);
+    let sew = fake_sew::FakeSew::start(&env.path().join("s")).await;
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "meblocked");
+    let conv = pin_chat(&ws);
+    hook::set_target(skin::CHAT_GRANT_KIND, true, Some(sew.socket.to_str().expect("path")), Some(sew.token_file.to_str().expect("path")), "owner-token").expect("enable chat");
+    let cfg = WorkerConfig {
+        tick: Duration::from_millis(50),
+        backoff_base: Duration::from_millis(20),
+        backoff_cap: Duration::from_millis(200),
+        reconcile_every: Duration::from_secs(3600),
+        reconcile_debounce: Duration::from_millis(10),
+        dep_wait: Duration::from_secs(3600),
+    };
+    async fn drain(cfg: &WorkerConfig) {
+        for _ in 0..40 {
+            hook::force_due_for_tests().expect("due");
+            worker::pass_once(cfg).await.expect("pass");
+            if hook::log(500, None).expect("log").iter().all(|r| r.state != "pending") {
+                return;
+            }
+        }
+        panic!("the outbox never drained: {:?}", hook::log(500, None).expect("log"));
+    }
+    drain(&cfg).await;
+
+    let (_, pass) = guest_in(port, &ws, "meblockedguest", &["thread:read"]).await;
+    let pid = pid_of(&pass);
+    let mut s = me_socket(port, &pass).await;
+    let mut o = open(port, &format!("/cli/overlay/events?conversation={conv}&token={}", enc(&pass))).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Chat given, and Sew refuses it.
+    sew.fail_next(1, 400, "validation_failed", "");
+    let chat = skin::create_grant(&skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: pid.clone(),
+        kind: skin::CHAT_GRANT_KIND.into(),
+        target_id: skin::CHAT_GRANT_TARGET.into(),
+        role: None,
+        scope: None,
+        created_by: Some("owner".into()),
+    })
+    .expect("chat grant");
+    hears(&mut s, "chat given, before Sew answered").await;
+    assert_eq!(me(port, &pass).await["chat"], true);
+    drain(&cfg).await;
+    let subject = format!("k2:principal:{pid}");
+    let rows = hook::log(500, None).expect("log");
+    let row = rows.iter().find(|r| r.subject_key == subject).unwrap_or_else(|| panic!("no row for the guest: {rows:?}"));
+    assert_eq!(row.state, "blocked", "rig: Sew refused it: {row:?}");
+    assert!(!hook::status().expect("status")["blocked"].as_array().expect("blocked").is_empty(), "the owner's list shows it");
+
+    // Sew's answer is no news here, and K2's own sockets are untouched.
+    silent(&mut s, 800, "a blocked row isn't an access change").await;
+    assert_eq!(me(port, &pass).await["chat"], true, "K2's answer is K2's, whatever Sew said");
+    say(port, &ws, "BLOCKED-THREAD").await;
+    let seen = watch(&mut o, 1_500).await;
+    assert!(seen.has("BLOCKED-THREAD") && !seen.ended, "{seen:?}");
+
+    // Chat taken while Sew's side is stuck: K2's answer and frame still follow.
+    assert!(skin::delete_grant_by_id(&chat.id).expect("delete"));
+    hears(&mut s, "chat taken, with Sew blocked").await;
+    assert_eq!(me(port, &pass).await["chat"], false);
 }

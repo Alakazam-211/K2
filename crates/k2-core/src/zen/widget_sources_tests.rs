@@ -142,6 +142,15 @@ fn manifest_sources_need_the_cap_and_keep_thread_post_with_a_note() {
     let v = f.validate_widget("both").expect("validate");
     assert_eq!(v["ok"], true, "{v}");
     assert!(v["warnings"].to_string().contains("sources_reach_thread"), "{v}");
+    assert!(v["warnings"].to_string().contains("k2.save"), "a version with a way out warns about saves too: {v}");
+    source_widget(&f, "ticketer", "[\"tickets:post\", \"sources:read\"]", "[\"fleet\"]");
+    let t = f.validate_widget("ticketer").expect("validate");
+    assert_eq!(t["ok"], true, "{t}");
+    assert!(t["warnings"].to_string().contains("sources_reach_tickets"), "{t}");
+    assert!(t["warnings"].to_string().contains("k2.save"), "{t}");
+    source_widget(&f, "reader", "[\"sources:read\"]", "[\"fleet\"]");
+    let r = f.validate_widget("reader").expect("validate");
+    assert!(!r["warnings"].to_string().contains("sources_reach"), "no way out, no note, though it may save: {r}");
     let st = f.widget_status("both");
     assert_eq!(st.manifest.as_ref().and_then(|m| m.sources.clone()), Some(json!(["fleet", "deploys"])));
     assert_eq!(

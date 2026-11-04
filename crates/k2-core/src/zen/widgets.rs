@@ -628,8 +628,9 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
             l,
             c,
             format!(
-                "{}: this widget reads data sources and may post to the Thread, so source values it shows can reach the agents it posts to; keep posts to what the person asked for",
-                super::widget_access::SOURCES_REACH_THREAD
+                "{}: this widget reads data sources and may post to the Thread, so source values it shows can reach the agents it posts to; keep posts to what the person asked for. {}",
+                super::widget_access::SOURCES_REACH_THREAD,
+                super::widget_access::SOURCES_REACH_SAVES
             ),
         ));
     }
@@ -639,8 +640,21 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
             l,
             c,
             format!(
-                "{}: this widget reads data sources and may save to its shared data, which agents granted that data can read; don't save values from sources that hide them from agents",
-                super::widget_access::SOURCES_REACH_STORE
+                "{}: this widget reads data sources and may save to its shared data, which agents granted that data can read; don't save values from sources that hide them from agents. {}",
+                super::widget_access::SOURCES_REACH_STORE,
+                super::widget_access::SOURCES_REACH_SAVES
+            ),
+        ));
+    }
+    if caps.iter().any(|c| c == sources_cap) && caps.iter().any(|c| c == super::widget_access::TICKETS_POST) {
+        let (l, c) = at("caps");
+        warnings.push(d(
+            l,
+            c,
+            format!(
+                "{}: this widget reads data sources and may file tickets, which agents and people on this server can read; don't put source values in a ticket. {}",
+                super::widget_access::SOURCES_REACH_TICKETS,
+                super::widget_access::SOURCES_REACH_SAVES
             ),
         ));
     }

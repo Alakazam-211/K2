@@ -109,6 +109,17 @@ pub const SOURCES_REACH_THREAD: &str = "sources_reach_thread";
 /// The `k2 zen validate` note for `sources:read` + `store:write`.
 pub const SOURCES_REACH_STORE: &str = "sources_reach_store";
 
+/// The ticket writing cap.
+pub const TICKETS_POST: &str = "tickets:post";
+
+/// The `k2 zen validate` note for `sources:read` + `tickets:post`.
+pub const SOURCES_REACH_TICKETS: &str = "sources_reach_tickets";
+
+/// Added to each reach note: `k2.save` has no cap, and any version of a widget
+/// reads what an earlier one kept. So the version that asks for a way out is the
+/// one to warn about, rather than every reader that might save.
+pub const SOURCES_REACH_SAVES: &str = "what it kept with k2.save, earlier versions' saves included, can go the same way";
+
 /// What a sources widget can do with the values it reads, for
 /// `widget show`: `None` when it reads no sources or asks for neither cap.
 pub fn sources_reach_note(caps: &[String]) -> Option<String> {
@@ -116,18 +127,26 @@ pub fn sources_reach_note(caps: &[String]) -> Option<String> {
     if !has(SOURCES_READ) {
         return None;
     }
-    match (has(THREAD_POST), has(STORE_WRITE)) {
+    let posts_or_saves: Option<&str> = match (has(THREAD_POST), has(STORE_WRITE)) {
         (true, true) => Some(
-            "reads data sources and may post to the Thread and save to its shared data: source values it shows can reach agents (it asked for thread:post and store:write)".into(),
+            "reads data sources and may post to the Thread and save to its shared data: source values it shows can reach agents (it asked for thread:post and store:write)",
         ),
         (true, false) => Some(
-            "reads data sources and may post to the Thread: source values it shows can reach the agents it posts to (it asked for thread:post)".into(),
+            "reads data sources and may post to the Thread: source values it shows can reach the agents it posts to (it asked for thread:post)",
         ),
         (false, true) => Some(
-            "reads data sources and may save to its shared data: agents granted that data can read what it saves (it asked for store:write)".into(),
+            "reads data sources and may save to its shared data: agents granted that data can read what it saves (it asked for store:write)",
         ),
         (false, false) => None,
-    }
+    };
+    let tickets = "may file tickets, which agents and people on this server can read (it asked for tickets:post)";
+    let note = match (posts_or_saves, has(TICKETS_POST)) {
+        (Some(n), true) => format!("{n}; it also {tickets}"),
+        (Some(n), false) => n.to_string(),
+        (None, true) => format!("reads data sources and {tickets}"),
+        (None, false) => return None,
+    };
+    Some(format!("{note}; {SOURCES_REACH_SAVES}"))
 }
 
 /// 403 code: the post names a placement this computer's Gardens don't
@@ -321,6 +340,18 @@ mod tests {
         assert!(w.contains("shared data") && !w.contains("Thread"), "{w}");
         let both = sources_reach_note(&s(&["sources:read", "thread:post", "store:write"])).expect("both");
         assert!(both.contains("Thread") && both.contains("shared data"), "{both}");
+        // Tickets are a way out too, alone or with the others.
+        let k = sources_reach_note(&s(&["sources:read", "tickets:post"])).expect("tickets note");
+        assert!(k.contains("file tickets") && k.contains("tickets:post") && !k.contains("Thread"), "{k}");
+        let all = sources_reach_note(&s(&["sources:read", "thread:post", "tickets:post"])).expect("thread and tickets");
+        assert!(all.contains("post to the Thread") && all.contains("file tickets"), "{all}");
+        assert_eq!(sources_reach_note(&s(&["tickets:post"])), None, "no sources, no note");
+        // Any way out says what it means for saves; no way out, no note, though
+        // the widget may save: `k2.save` alone goes nowhere.
+        for n in [&t, &w, &both, &k, &all] {
+            assert!(n.contains(SOURCES_REACH_SAVES), "{n}");
+        }
+        assert_eq!(sources_reach_note(&s(&["sources:read"])), None);
     }
 
     #[test]

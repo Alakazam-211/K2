@@ -665,7 +665,17 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   disk guard's lines, the biggest users and their agents, and what K2 clears on its own.\n\
   Read only (no caps, no buttons); it reads `k2.app.resources()` once a minute. Place it\n\
   with `widget = \"k2:box-disk@1\"`. The numbers are `k2 app resources`'s; to free space,\n\
-  `k2 app resources clean --dry-run` (only what K2 made and can make again).\n\n",
+  `k2 app resources clean --dry-run` (only what K2 made and can make again).\n\
+- **The Compute Garden** (`k2:canvas@1`, New Garden → Compute): K2's canvas, a page of tiles.\n\
+  Its tiles have ids: `compute` (**Compute load**: each of this server's compute nodes, read\n\
+  with `k2.compute.nodes()`, cap `compute:nodes`) and `agents` (**Agents**: every agent the\n\
+  Garden reaches; clicking one opens it in the Thread column beside the canvas). The Garden\n\
+  file picks which tiles it offers, and their order: `tiles = \"compute,agents\"` under\n\
+  `[widget.props.config]` (a tile left out isn't offered at all). Each person shows or hides\n\
+  the offered tiles (the Tiles menu, or a tile's ×), saved for them on this computer; that\n\
+  choice wins. `k2.compute.nodes()` gives the nodes `k2 compute status` lists, with the same\n\
+  counts: on a node several servers share, `running` and `queued` count every server's jobs\n\
+  (`queueFrom: \"node\"`); otherwise only this server's (`queueFrom: \"server\"`).\n\n",
     )
 }
 
@@ -1481,6 +1491,16 @@ mod tests {
             "`k2.store.grantees()`",
             "- `k2:board` (the Board, Beta)",
         ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v48 (0.46.8): the Compute Garden, its canvas and `compute.nodes`.
+    #[test]
+    fn skill_documents_the_compute_garden() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 48, "the Compute Garden needs a new skill version");
+        let s = generate_k2_zen_skill_for(false);
+        for needle in ["**The Compute Garden** (`k2:canvas@1`, New Garden → Compute)", "`k2.compute.nodes()`", "`compute:nodes`", "tiles = \"compute,agents\"", "`queueFrom: \"node\"`"] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }

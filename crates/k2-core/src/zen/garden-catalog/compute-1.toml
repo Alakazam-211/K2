@@ -1,0 +1,108 @@
+# Garden catalog entry `k2.compute@1` (Rosson 2026-11-03: "an official,
+# built-in Garden that ships with K2 … a canvas that holds tiles the person
+# can show or hide, so K2 can keep shipping new tiles for it"; "We'll
+# include it in the list of available canvases").
+#
+# The Compute Garden: K2's canvas (`k2:canvas@1`), a page of tiles the
+# person shows or hides (the canvas's Tiles menu, or a tile's ×; kept in
+# their private saves on this computer), beside K2's own Conversation in a
+# folded "Thread" column. Its tiles, in this order:
+#   compute  Compute load: jobs on each of this server's compute nodes,
+#            running against slots and queued (every server's on a shared
+#            node), free CPU and memory, whose jobs they are
+#            (`compute.nodes`, every 30 s while it's on screen)
+#   agents   Agents: every agent you can reach, with its picture, whether
+#            it's working, and your unread count; a pick shows it in the
+#            Thread (the Conversation follows the canvas, `agents =
+#            "canvas"`) and unfolds that column
+# A later K2 adds tiles as new entries in a newer canvas (and a newer page
+# here); a person's hidden tiles stay hidden, a new tile starts shown.
+# K2's own controls sit in one ⋯ menu, as on the Kanban.
+#
+# Offered in New Garden, never seeded. Released files never change (a
+# better page is compute-2.toml). The [catalog] table is metadata, not part
+# of the page.
+id = "k2.compute@1"
+schema = 1
+
+[catalog]
+short = "compute"
+label = "Compute"
+description = "Your compute nodes at a glance: jobs running and queued on each node, and free CPU and memory. Pick any agent to talk to in the Thread beside it. Show or hide each tile."
+order = 35
+new_users = false
+theme = "glass"
+
+[layout]
+kind = "columns"
+canvas = "full"
+
+[[layout.column]]
+widget = "canvas"
+size = 70
+min-width = 420
+
+[[layout.column]]
+widget = "thread"
+size = 30
+min-width = 320
+collapsible = true
+collapsed = true
+label = "Thread"
+
+[[widget]]
+id = "canvas"
+kind = "custom"
+widget = "k2:canvas@1"
+column = 0
+[widget.props.config]
+title = "Compute"
+tiles = "compute,agents"
+
+# K2's Thread, following the canvas's Agents tile; its header picks any agent.
+[[widget]]
+id = "thread"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "canvas"
+pick = "all"
+activity-drawer = true
+mute = true
+
+# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top left.
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "start"
+[widget.props]
+icon = "dots"
+label = "Compute"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+
+[[control]]
+kind = "garden-switcher"
+placement = "menu:more"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "menu:more"

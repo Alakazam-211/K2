@@ -839,9 +839,14 @@ fn gs51_news_catalog_updates_and_seen() {
     let news = f.news().expect("news");
     let ids: Vec<&str> = news["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str()).collect();
     // The Kanban is new catalog data in 0.45.7 (Rosson 2026-10-15), the
-    // Workbench in 0.46.7 (workbench-v1, Rosson 2026-10-29), the Board in
-    // 0.46.8 (plan-board-garden-v1, Rosson 2026-11-01). By catalog order.
-    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban", "catalog:board", "catalog:workbench"], "the first run lists the catalog: {news}");
+    // Workbench in 0.46.7 (workbench-v1, Rosson 2026-10-29), the Board and
+    // the Compute Garden in 0.46.8 (plan-board-garden-v1, Rosson 2026-11-01;
+    // Rosson 2026-11-03). By catalog order.
+    assert_eq!(
+        ids,
+        vec!["catalog:diary", "catalog:kanban", "catalog:board", "catalog:workbench", "catalog:compute"],
+        "the first run lists the catalog: {news}"
+    );
     assert_eq!(news["items"][0]["label"], "Diary");
     // The binary's newest Diary (k2.diary@2 since 0.45.2) is the one offered.
     assert_eq!(news["items"][0]["template"], zen::garden_catalog::DIARY_TEMPLATE_ID);
@@ -868,11 +873,21 @@ fn gs51_news_catalog_updates_and_seen() {
     let uid = update["id"].as_str().expect("id").to_string();
     f.news_seen(&[uid], false).expect("seen");
     let left: Vec<String> = f.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
-    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string(), "catalog:board".to_string(), "catalog:workbench".to_string()]);
+    assert_eq!(
+        left,
+        vec![
+            "catalog:diary".to_string(),
+            "catalog:kanban".to_string(),
+            "catalog:board".to_string(),
+            "catalog:workbench".to_string(),
+            "catalog:compute".to_string()
+        ]
+    );
     f.news_mark_template_seen("k2.diary@1").expect("made a Diary");
     f.news_mark_template_seen(zen::garden_catalog::KANBAN_TEMPLATE_ID).expect("made a Kanban");
     f.news_mark_template_seen(zen::garden_catalog::BOARD_TEMPLATE_ID).expect("made a Board");
     f.news_mark_template_seen(WORKBENCH_TEMPLATE_ID).expect("made a Workbench");
+    f.news_mark_template_seen(zen::garden_catalog::COMPUTE_TEMPLATE_ID).expect("made a Compute Garden");
     assert_eq!(f.news().expect("news")["items"], json!([]), "creating from the catalog marks it seen");
     assert!(f.news_seen(&["nonsense".into()], false).is_err(), "unknown id shapes are refused");
     assert!(f.news_seen(&[], false).is_err(), "ids or all");
@@ -899,17 +914,28 @@ fn strip_0468(s: &mut DefaultsSet) {
     assert!(s.templates.remove(zen::garden_catalog::BOARD_TEMPLATE_ID).is_some(), "this build ships the Board");
 }
 
-/// K2's catalog as 0.46.7 shipped it: this build's set without the Board.
+/// Take 0.46.8's Compute Garden out of a set: its catalog template.
+fn strip_compute(s: &mut DefaultsSet) {
+    assert!(s.templates.remove(zen::garden_catalog::COMPUTE_TEMPLATE_ID).is_some(), "this build ships the Compute Garden");
+}
+
+/// K2's catalog as 0.46.7 shipped it: this build's set without the Board
+/// or the Compute Garden.
 fn release_0467() -> Defaults {
-    fake_set(strip_0468)
+    fake_set(|s| {
+        strip_0468(s);
+        strip_compute(s);
+    })
 }
 
 /// K2's catalog as 0.46.6 (and every release from 0.45.7) shipped it: this
-/// build's set without the Board or the Workbench. Only the catalog differs;
-/// the release_* sets below model their releases' Garden 1, not the catalog.
+/// build's set without the Board, the Compute Garden or the Workbench. Only
+/// the catalog differs; the release_* sets below model their releases'
+/// Garden 1, not the catalog.
 fn release_0466() -> Defaults {
     fake_set(|s| {
         strip_0468(s);
+        strip_compute(s);
         strip_0467(s);
     })
 }
@@ -1019,7 +1045,9 @@ fn the_board_is_new_in_the_catalog_after_0467() {
         old.setup().expect("setup on 0.46.7");
         assert_eq!(old.news().expect("news on 0.46.7")["items"], json!([]), "0.46.7's catalog was seen at setup");
         assert!(old.read_news().catalog_seen.get("board").is_none(), "0.46.7 had no Board");
-        (t, ZenFiles::with_defaults(&z, fake_set(|_| {})))
+        // The Board's own step: a set with the Board and without the Compute
+        // Garden (that one's step is the_compute_garden_is_new_in_the_catalog).
+        (t, ZenFiles::with_defaults(&z, fake_set(strip_compute)))
     };
     let (_t, f) = on_0467("news-board");
     let news = f.news().expect("news after the upgrade");
@@ -1052,6 +1080,61 @@ fn the_board_is_new_in_the_catalog_after_0467() {
     assert_eq!(fresh.news().expect("news")["items"], json!([]));
     assert_eq!(fresh.read_news().catalog_seen.get("board"), Some(&1));
     assert!(fresh.find_garden("Board").is_none(), "never preinstalled");
+}
+
+/// 0.46.8 (Rosson 2026-11-03: "We'll include it in the list of available
+/// canvases"): a computer that saw the rest of the catalog gets the Compute
+/// Garden as one "New in the Garden catalog" item (never a Garden of its
+/// own), named Compute and saying what it shows; one on 0.46.7 gets the
+/// Board and it, in catalog order. Making a Compute Garden, or Seen, clears
+/// it. A fresh computer sees it as the catalog, not as new (GS38).
+#[test]
+fn the_compute_garden_is_new_in_the_catalog() {
+    let before = |tag: &str, set: Defaults| {
+        let (t, z) = temp_dir(tag);
+        let old = ZenFiles::with_defaults(&z, set);
+        old.setup().expect("setup before the Compute Garden");
+        assert_eq!(old.news().expect("news before")["items"], json!([]), "that catalog was seen at setup");
+        assert!(old.read_news().catalog_seen.get("compute").is_none(), "no Compute Garden yet");
+        (t, ZenFiles::with_defaults(&z, fake_set(|_| {})))
+    };
+    let (_t, f) = before("news-compute", fake_set(strip_compute));
+    let news = f.news().expect("news after the upgrade");
+    let items = news["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "only the Compute Garden is new, and no Garden moved: {news}");
+    let c = &items[0];
+    assert_eq!(c["kind"], "catalog");
+    assert_eq!(c["id"], "catalog:compute");
+    assert_eq!(c["short"], "compute");
+    assert_eq!(c["label"], "Compute");
+    assert_eq!(c["template"], zen::garden_catalog::COMPUTE_TEMPLATE_ID);
+    assert_eq!(c["version"], 1);
+    assert!(c["description"].as_str().is_some_and(|d| d.contains("compute nodes") && d.contains("Show or hide each tile")), "{c}");
+    assert!(f.find_garden("Compute").is_none(), "offered, never added for you");
+    // Making a Compute Garden marks it seen; its page is the canvas.
+    let g = f.new_garden("Compute", Some("compute"), None, None).expect("new Compute Garden");
+    assert_eq!(g.template, zen::garden_catalog::COMPUTE_TEMPLATE_ID);
+    assert_eq!(f.news().expect("news")["items"], json!([]), "made from the catalog: seen");
+    assert_eq!(f.read_news().catalog_seen.get("compute"), Some(&1));
+
+    // Seen clears it too.
+    let (_t2, f2) = before("news-compute-seen", fake_set(strip_compute));
+    f2.news_seen(&["catalog:compute".into()], false).expect("seen");
+    assert_eq!(f2.news().expect("news")["items"], json!([]));
+    assert_eq!(f2.read_news().catalog_seen.get("compute"), Some(&1));
+
+    // From 0.46.7: the Board and the Compute Garden, in catalog order.
+    let (_t3, f3) = before("news-compute-0467", release_0467());
+    let ids: Vec<String> = f3.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
+    assert_eq!(ids, ["catalog:board", "catalog:compute"]);
+
+    // A fresh computer: the Compute Garden is part of the catalog it starts with.
+    let (_t4, z4) = temp_dir("news-compute-fresh");
+    let fresh = ZenFiles::new(&z4);
+    fresh.setup().expect("setup");
+    assert_eq!(fresh.news().expect("news")["items"], json!([]));
+    assert_eq!(fresh.read_news().catalog_seen.get("compute"), Some(&1));
+    assert!(fresh.find_garden("Compute").is_none(), "never preinstalled");
 }
 
 /// 0.46.1 (Rosson 2026-10-18; GS21, GS45, never-revert): K2's default

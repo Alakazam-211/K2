@@ -73,6 +73,11 @@ pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@5";
 /// default); adding it turns that core on in the same step.
 pub const BOARD_TEMPLATE_ID: &str = "k2.board@1";
 
+/// The Compute Garden (Rosson 2026-11-03): K2's canvas (`k2:canvas@1`), a
+/// page of tiles the person shows or hides (Compute load, Agents), beside
+/// K2's Conversation in a folded "Thread" column. Offered, never seeded.
+pub const COMPUTE_TEMPLATE_ID: &str = "k2.compute@1";
+
 include!(concat!(env!("OUT_DIR"), "/zen_garden_catalog.rs"));
 
 /// The `[catalog]` table of one entry file.
@@ -429,7 +434,9 @@ kind = "columns"
                 // 0.46.8: the Board (a Beta that needs the Board core).
                 ("board", TemplateSection::Catalog),
                 // 0.46.7: the Workbench (offered, not preinstalled).
-                ("workbench", TemplateSection::Catalog)
+                ("workbench", TemplateSection::Catalog),
+                // 0.46.8: the Compute Garden (offered, not preinstalled).
+                ("compute", TemplateSection::Catalog)
             ]
         );
         let row = list.iter().find(|t| t.short == "kanban").expect("listed");
@@ -549,6 +556,72 @@ kind = "columns"
         assert_eq!(props.get("agents").and_then(toml::Value::as_str), Some("board"));
         assert_eq!(props.get("pick").and_then(toml::Value::as_str), Some("all"));
         // The Kanban's chrome and controls.
+        let kanban: toml::Value = toml::from_str(catalog_template(KANBAN_TEMPLATE_ID).expect("kanban")).expect("parses");
+        let chrome = |v: &toml::Value| -> Vec<toml::Value> {
+            let mut out: Vec<toml::Value> =
+                v["widget"].as_array().expect("widgets").iter().filter(|w| w.get("column").is_none()).cloned().collect();
+            for w in &mut out {
+                if let Some(p) = w.get_mut("props").and_then(toml::Value::as_table_mut) {
+                    p.remove("label");
+                }
+            }
+            out
+        };
+        assert_eq!(chrome(&v), chrome(&kanban), "the same ⋯ menu");
+        assert_eq!(v["control"], kanban["control"], "the same template controls");
+    }
+
+    /// The Compute Garden (Rosson 2026-11-03: "We'll include it in the list
+    /// of available canvases"): `compute-1.toml` is offered in New Garden
+    /// after the Workbench, never seeded, with a name and a description
+    /// that say what it shows; its page is K2's canvas (Compute load, then
+    /// Agents) beside K2's Conversation in a folded "Thread" column that
+    /// follows the canvas, and the Kanban's chrome.
+    #[test]
+    fn the_compute_garden_is_the_canvas_beside_k2s_thread() {
+        let e = garden_catalog().iter().find(|e| e.template_id == COMPUTE_TEMPLATE_ID).expect("compute-1.toml ships");
+        assert_eq!((e.file, e.version), ("compute-1.toml", 1));
+        assert_eq!(e.meta.label, "Compute");
+        for words in ["compute nodes", "running and queued", "free CPU and memory", "any agent", "Thread", "Show or hide each tile"] {
+            assert!(e.meta.description.contains(words), "the description says {words:?}: {}", e.meta.description);
+        }
+        assert!(!e.meta.new_users, "offered, not preinstalled");
+        assert_eq!(e.meta.core, None, "no core to turn on");
+        assert_eq!(template_theme(COMPUTE_TEMPLATE_ID), Some("glass"));
+        assert!(super::super::schema::is_template_id(COMPUTE_TEMPLATE_ID));
+        let list = template_list();
+        let at = list.iter().position(|t| t.short == "compute").expect("New Garden lists it");
+        assert_eq!(list[at].section, TemplateSection::Catalog);
+        assert_eq!(list[at - 1].short, "workbench", "after the Workbench");
+        assert_eq!((list[at].id.as_str(), list[at].label.as_str(), list[at].new_users), (COMPUTE_TEMPLATE_ID, "Compute", false));
+
+        let v: toml::Value = toml::from_str(e.toml).expect("parses");
+        assert_eq!(v["layout"]["canvas"].as_str(), Some("full"));
+        let cols = v["layout"]["column"].as_array().expect("columns");
+        assert_eq!(cols.len(), 2, "canvas + Thread");
+        assert_eq!(cols[0].get("collapsible"), None, "the canvas never folds");
+        assert_eq!(cols[1]["collapsible"].as_bool(), Some(true));
+        assert_eq!(cols[1]["collapsed"].as_bool(), Some(true), "folded until you pick an agent");
+        assert_eq!(cols[1]["label"].as_str(), Some("Thread"), "the label the Agents tile unfolds");
+        let widgets = v["widget"].as_array().expect("widgets");
+        let content: Vec<(&str, &str, i64)> = widgets
+            .iter()
+            .filter(|w| w.get("column").is_some())
+            .map(|w| (w["id"].as_str().expect("id"), w["kind"].as_str().expect("kind"), w["column"].as_integer().expect("column")))
+            .collect();
+        assert_eq!(content, [("canvas", "custom", 0), ("thread", "conversation", 1)]);
+        let canvas = widgets.iter().find(|w| w["id"].as_str() == Some("canvas")).expect("canvas");
+        assert_eq!(canvas["widget"].as_str(), Some(crate::zen::builtin_widgets::CANVAS_WIDGET));
+        let config = canvas["props"]["config"].as_table().expect("the canvas's config");
+        assert_eq!(config.get("tiles").and_then(toml::Value::as_str), Some("compute,agents"), "Compute load first, then Agents");
+        assert_eq!(config.get("title").and_then(toml::Value::as_str), Some("Compute"));
+        let thread = widgets.iter().find(|w| w["id"].as_str() == Some("thread")).expect("thread");
+        let props = thread["props"].as_table().expect("props");
+        assert_eq!(props.get("agents").and_then(toml::Value::as_str), Some("canvas"), "it follows the canvas: the Agents tile's pick");
+        assert_eq!(props.get("pick").and_then(toml::Value::as_str), Some("all"), "any agent from its header too");
+        for on in ["activity-drawer", "mute"] {
+            assert_eq!(props.get(on).and_then(toml::Value::as_bool), Some(true), "{on}: K2's full Thread");
+        }
         let kanban: toml::Value = toml::from_str(catalog_template(KANBAN_TEMPLATE_ID).expect("kanban")).expect("parses");
         let chrome = |v: &toml::Value| -> Vec<toml::Value> {
             let mut out: Vec<toml::Value> =

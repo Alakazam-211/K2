@@ -29,3 +29,7 @@ board beside K2's own Conversation widget in a second, collapsible
 board, so the board's Send board posts to the agent it shows). New Kanban
 Gardens show the Glass theme (K2 Companion's look); a synced Kanban Garden
 moves to this page and keeps its theme, an own copy keeps its board.
+compute-1.toml (template k2.compute@1, widget k2:canvas@1, 0.46.8) is the
+Compute Garden: K2's canvas of tiles the person shows or hides (Compute
+load, Agents) beside K2's Conversation in a folded "Thread" column.
+Offered in New Garden, never seeded.

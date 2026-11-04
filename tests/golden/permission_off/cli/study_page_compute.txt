@@ -414,7 +414,7 @@ WHY HASN'T IT STARTED? (0.46.7)
      unreserved: pass --cpus 2 (or fewer) so more fit"
         a job without --cpus holds the node's CPUs divided by its slots.
         Pass --cpus with what your command really uses. run says so when
-        you leave it off (note cpus_defaulted, 0.46.8), and k2 compute
+        you leave it off ("note: no --cpus: …", 0.46.8), and k2 compute
         status marks such a running job "[no --cpus: reserves 4 of 12 CPUs]".
     "asks 24 GB; 8 GB of 52 GB free"
         its --mem doesn't fit beside what runs yet.

@@ -19,7 +19,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **`k2 app user rooms --apply-tokens` is gone.** Changes apply without it.
 - **A secret saved "for this chat only" before 0.46.8 never reached the agent, and it doesn't move now.** Ask for it again.
 - **`k2 board` without naming a board still works, with a warning.** From the next release it's refused: pass `--board <id|name>`.
-- **Going back to an older Sew after upgrading to 0.7.2 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.2 changes Sew's data.
+- **Going back to Sew 0.7.1 or older after upgrading to 0.7.3 needs `k2 hostchat rollback --accept-data-loss`,** because 0.7.2 changed Sew's data. From 0.7.2, a plain `k2 hostchat rollback` works.
 - **Windows: the installer is back, unsigned.** SmartScreen warns when you run it: choose **More info → Run anyway**.
 
 ### Your agents run their Apps' people
@@ -79,8 +79,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **`k2 app suspend` is for you, an Admin or the App's own agent, and its help says so.** A `k2 app` or `k2 compute` command your role can't run says which role it needs.
 
 ### Chat and calls (Sew)
-- **K2 installs and upgrades to Sew 0.7.2,** with chat connection and encrypted-call fixes: `k2 hostchat upgrade`. [CONFIRM: with Sew that 0.3.1 → 0.7.2 was tested before saying a 0.3.1 server can go straight there; 0.3.1 → 0.7.1 was.]
-- [PENDING] **Chat moves to Sew 0.7.3,** with a security fix: Sew now checks the scope on its recording and notification routes. `k2 hostchat rollback` also rolls back the media engine and says so. (If it lands, say 0.7.3 above and in "When you update".)
+- **K2 installs and upgrades to Sew 0.7.3,** with chat connection and encrypted-call fixes and a security fix: Sew now checks the App's scope on its recording, notification-setting and consent routes. `k2 hostchat upgrade`. `k2 hostchat rollback` now puts the voice engine back too; if it can't, it prints the one command to run, and you don't run the rollback again. [CONFIRM: Sew tested upgrades to 0.7.3 from 0.7.2, 0.7.1 and 0.6.1; check a 0.3.1 server before saying it can go straight there.]
 - **`k2 hostchat enable` installs the PostgreSQL version Sew needs** if it's missing, from your distribution where it carries that version, otherwise from PostgreSQL's own repository, and says why if that fails. The setup wizard shows it as a step.
 - **Handing a Space to your App works now.** If one got stuck, run `k2 app grant hooks`, then `k2 app grant hooks retry <id>` on its blocked row.
 - **Renaming, archiving and bringing back channels in an App's Space work now.**

@@ -792,7 +792,8 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   margin: 0;
 }
 
-.chat-markdown .chat-md-copy {
+.chat-markdown .chat-md-copy,
+.chat-markdown .chat-md-link-copy {
   font-family: var(--font-ui);
   color: var(--color-text-secondary);
   background: var(--color-bg-elevated);
@@ -820,8 +821,28 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   opacity: 1;
 }
 
-.chat-markdown .chat-md-copy:hover {
+.chat-markdown .chat-md-copy:hover,
+.chat-markdown .chat-md-link-copy:hover {
   color: var(--color-text-primary);
+}
+
+/* A link's copy icon (only when Settings → General → "Show a copy button
+   beside links on hover" is on): hidden until the link is hovered or focused. */
+.chat-markdown .chat-md-link-copy {
+  display: none;
+  vertical-align: middle;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 3px;
+  padding: 0;
+}
+
+.chat-markdown .chat-md-link:hover .chat-md-link-copy,
+.chat-markdown .chat-md-link:focus-within .chat-md-link-copy,
+.chat-markdown .chat-md-link-copy[data-copied] {
+  display: inline-flex;
 }
 
 @media (hover: none) {

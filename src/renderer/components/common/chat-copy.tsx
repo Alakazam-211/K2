@@ -4,7 +4,9 @@
 //   - A fenced code block gets a Copy button at its top right (on hover; always
 //     on touch). It copies the block's raw text: no fence, and the one trailing
 //     newline markdown adds to every block trimmed.
-//   - A link's right-click menu has "Copy link" (no hover button).
+//   - A link's right-click menu has "Copy link". With Settings → General →
+//     "Show a copy button beside links on hover" on (off by default; this
+//     install only), a small copy icon also shows beside it on hover.
 // The clipboard write goes through the Tauri clipboard plugin (no
 // user-activation rule in WKWebView), with navigator.clipboard as the
 // fallback, as the terminal's copy does.
@@ -13,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type JSX, type MouseEvent, ty
 import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { useToastStore } from '@/stores/toast'
+import { useChatLinkCopyStore } from '@/stores/chat-link-copy'
 
 /** The text a code block's Copy puts on the clipboard: the code as written,
  *  minus the single trailing newline markdown ends every block with. */
@@ -105,18 +108,36 @@ export function ChatCodeBlock({
   )
 }
 
-/** `a` for react-markdown: the link. Right-click offers "Copy link" (Rosson
- *  2026-10-31: no button on hover; the app's own menu, since the webview's
- *  is off). It handles its own menu, so a link inside a Thread message opens
- *  this one, not the message's. */
+function CopyGlyph({ done }: { done: boolean }): JSX.Element {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden>
+      {done ? (
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 12.5l4.5 4.5L19 7.5" />
+      ) : (
+        <>
+          <rect x="8" y="8" width="12" height="12" rx="2" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/** `a` for react-markdown: the link. Right-click offers "Copy link" (the
+ *  app's own menu, since the webview's is off). It handles its own menu, so
+ *  a link inside a Thread message opens this one, not the message's. With
+ *  the "copy button beside links" setting on (Rosson 2026-11-04; off by
+ *  default), a copy icon also shows beside the link on hover, as in 0.46.7. */
 export function ChatLink({
   node: _node,
   children,
   ...props
 }: { node?: unknown; children?: ReactNode } & React.AnchorHTMLAttributes<HTMLAnchorElement>): JSX.Element {
+  const showCopyButton = useChatLinkCopyStore((s) => s.enabled)
+  const [copied, copy] = useCopied()
   const href = typeof props.href === 'string' ? props.href : ''
   if (!href) return <a {...props}>{children}</a>
-  return (
+  const link = (
     <a
       {...props}
       data-chat-link=""
@@ -130,6 +151,28 @@ export function ChatLink({
     >
       {children}
     </a>
+  )
+  if (!showCopyButton) return link
+  return (
+    <span className="chat-md-link">
+      {link}
+      <button
+        type="button"
+        className="chat-md-link-copy"
+        data-chat-copy="link"
+        data-copied={copied ? '' : undefined}
+        aria-label={copied ? 'Link copied' : 'Copy link'}
+        title={copied ? 'Copied' : 'Copy link'}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          stop(e)
+          copy(href)
+        }}
+      >
+        <CopyGlyph done={copied} />
+      </button>
+    </span>
   )
 }
 

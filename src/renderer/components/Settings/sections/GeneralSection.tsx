@@ -61,6 +61,7 @@ import type { GeneralSubTab } from '@/stores/settings'
 import { StartPageRow } from './StartPageRow'
 import { primaryScope } from '@/kessel/server-scope'
 import { AppFontRows } from '../shared/AppFontRows'
+import { ChatLinkCopyRow } from './ChatLinkCopyRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
@@ -73,6 +74,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
+  { id: 'general.link-copy-button', section: 'general', group: 'General', label: 'Show a copy button beside links on hover', description: 'A copy icon beside links in chats, Threads and tickets; off by default; this computer only. Right-click a link to copy it either way', keywords: ['copy', 'link', 'url', 'hover', 'button', 'icon', 'chat', 'thread', 'clipboard'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The Connect login you use on your phone or laptop counts as you (owner)', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
@@ -370,6 +372,10 @@ export function GeneralSection(): React.JSX.Element {
         <div className="border border-[var(--color-border)]" data-settings-id="general.font">
           <AppFontRows where="general" lastHasBorder={false} />
         </div>
+
+        {/* Hover copy icon beside chat links (Rosson 2026-11-04): next to
+            the font rows, off by default, this computer only. */}
+        <ChatLinkCopyRow />
 
         {/* Desktop only: open Chromium DevTools (prod + debug) for diagnosing
             remote freezes / network. Pref is thin-client localStorage. */}

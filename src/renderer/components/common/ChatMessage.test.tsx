@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { ChatMessageBody, chatHardBreaks } from './ChatMessage'
-import { codeBlockCopyText } from './chat-copy'
+import { ChatLink, codeBlockCopyText } from './chat-copy'
 import { useContextMenuStore } from '@/stores/context-menu'
+import { LS_CHAT_LINK_COPY_BUTTON, readChatLinkCopyButton, useChatLinkCopyStore } from '@/stores/chat-link-copy'
 
 const clip = vi.hoisted(() => ({ writes: [] as string[] }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
@@ -177,6 +178,13 @@ describe('copy buttons in chat markdown', () => {
     clip.writes.length = 0
   })
 
+  afterEach(() => {
+    act(() => {
+      useChatLinkCopyStore.getState().setEnabled(false)
+      useContextMenuStore.getState().close()
+    })
+  })
+
   it('codeBlockCopyText trims exactly one trailing newline', () => {
     expect(codeBlockCopyText('a\nb\n')).toBe('a\nb')
     expect(codeBlockCopyText('a\n\n')).toBe('a\n')
@@ -216,7 +224,75 @@ describe('copy buttons in chat markdown', () => {
     expect(clip.writes).toEqual(['second'])
   })
 
-  it('a link has no hover button; right-click offers "Copy link", which copies its URL', async () => {
+  it('the hover copy button beside links is off by default', () => {
+    localStorage.removeItem(LS_CHAT_LINK_COPY_BUTTON)
+    expect(readChatLinkCopyButton()).toBe(false)
+    expect(useChatLinkCopyStore.getState().enabled).toBe(false)
+  })
+
+  it('setting on: a link gets a copy icon that copies its URL', async () => {
+    act(() => useChatLinkCopyStore.getState().setEnabled(true))
+    const { container } = render(<ChatMessageBody text={'See [the docs](https://k2.dev/docs) and https://example.com/x'} />)
+    const btns = container.querySelectorAll('[data-chat-copy="link"]')
+    expect(btns.length).toBe(2)
+    for (const btn of Array.from(btns)) {
+      expect(btn.closest('.chat-md-link')).not.toBeNull()
+      expect(btn.getAttribute('aria-label')).toBe('Copy link')
+    }
+    await act(async () => {
+      fireEvent.click(btns[0])
+    })
+    await act(async () => {
+      fireEvent.click(btns[1])
+    })
+    expect(clip.writes).toEqual(['https://k2.dev/docs', 'https://example.com/x'])
+    expect(btns[0].getAttribute('aria-label')).toBe('Link copied')
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://k2.dev/docs')
+  })
+
+  it('setting on: pointer/mouse down on the icon stays on the icon; on the link it goes up', () => {
+    act(() => useChatLinkCopyStore.getState().setEnabled(true))
+    const outerDown = vi.fn()
+    const { container } = render(
+      <div onMouseDown={outerDown} onPointerDown={outerDown}>
+        <ChatLink href="https://k2.dev">x</ChatLink>
+      </div>,
+    )
+    const btn = container.querySelector('[data-chat-copy="link"]')
+    if (!(btn instanceof HTMLButtonElement)) throw new Error('link has no copy icon')
+    fireEvent.mouseDown(btn)
+    fireEvent.pointerDown(btn)
+    expect(outerDown).not.toHaveBeenCalled()
+    fireEvent.mouseDown(container.querySelector('a[data-chat-link]') as HTMLElement)
+    expect(outerDown).toHaveBeenCalledTimes(1)
+  })
+
+  it('setting on: right-click still offers "Copy link"', async () => {
+    act(() => useChatLinkCopyStore.getState().setEnabled(true))
+    const { container } = render(<ChatMessageBody text={'[x](https://k2.dev/on)'} />)
+    expect(container.querySelector('[data-chat-copy="link"]')).not.toBeNull()
+    const link = container.querySelector('a[data-chat-link]') as HTMLElement
+    act(() => {
+      fireEvent.contextMenu(link, { clientX: 1, clientY: 2 })
+    })
+    expect(useContextMenuStore.getState().items.map((i) => [i.id, i.label])).toEqual([['copy-link', 'Copy link']])
+    await act(async () => {
+      useContextMenuStore.getState().selectItem('copy-link')
+    })
+    expect(clip.writes).toEqual(['https://k2.dev/on'])
+  })
+
+  it('turning the setting off takes the icon away from links already shown', () => {
+    act(() => useChatLinkCopyStore.getState().setEnabled(true))
+    const { container } = render(<ChatMessageBody text={'[x](https://k2.dev)'} />)
+    expect(container.querySelector('[data-chat-copy="link"]')).not.toBeNull()
+    act(() => useChatLinkCopyStore.getState().setEnabled(false))
+    expect(container.querySelector('[data-chat-copy="link"]')).toBeNull()
+    expect(container.querySelector('a[data-chat-link]')).not.toBeNull()
+  })
+
+  it('setting off: a link has no hover button; right-click offers "Copy link", which copies its URL', async () => {
+    expect(useChatLinkCopyStore.getState().enabled).toBe(false)
     const { container } = render(<ChatMessageBody text={'See [the docs](https://k2.dev/docs) and https://example.com/x'} />)
     expect(container.querySelector('[data-chat-copy="link"], button')).toBeNull()
     const links = container.querySelectorAll('a[data-chat-link]')

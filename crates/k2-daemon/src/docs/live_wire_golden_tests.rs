@@ -104,7 +104,10 @@ impl Stable {
                 }
             }
             Value::List(items) => items.iter_mut().for_each(|i| self.rewrite(i)),
-            _ => {}
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::UInt(_) | Value::Float(_) | Value::Str(_) => {}
+            // `Value` is `#[non_exhaustive]` (kit v0.11.0): a variant this walk doesn't know
+            // could hold a client or claim id it would skip, so it fails here, by name.
+            other => panic!("Stable::rewrite: a kit errors::Value variant this test doesn't know: {other:?}"),
         }
     }
 }
@@ -379,7 +382,10 @@ fn members_by_handle(pretty: &str) -> String {
                 }
             }
             Value::List(items) => items.iter_mut().for_each(sort),
-            _ => {}
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::UInt(_) | Value::Float(_) | Value::Str(_) => {}
+            // `Value` is `#[non_exhaustive]` (kit v0.11.0): a variant this walk doesn't know
+            // could hold a `members` list it would leave unsorted, so it fails here, by name.
+            other => panic!("members_by_handle: a kit errors::Value variant this test doesn't know: {other:?}"),
         }
     }
     let InOrder(mut v) = serde_json::from_str(pretty).expect("roster file JSON");

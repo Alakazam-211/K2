@@ -237,7 +237,7 @@ want 200 "cores list"
 jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file", "board"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: four rows, all off; the owner may change them"
 agent GET /cli/docs/cores
 want 200 "agent cores list"
-jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 3' "an agent may read the cores, never change them"
+jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 4' "an agent may read the cores, never change them"
 for rp in "GET /cli/docs/read" "GET /cli/docs/who" "GET /cli/docs/log" "GET /cli/docs/status" "POST /cli/docs/edit" "POST /cli/docs/open" "POST /cli/docs/flush" "POST /cli/docs/export"; do
     m="${rp%% *}"; r="${rp#* }"
     if [ "$m" = GET ]; then owner GET "$r" "" "workspace=$A&path=notes/plan.md"
@@ -261,7 +261,7 @@ agent POST /cli/settings/update '{"multiplayerCores":{"markdown":true}}'
 owner GET /cli/docs/cores; jok "$BODY" 'not any(c["on"] for c in j["cores"])' "an agent can't turn a core on (its cell socket doesn't route settings/update)"
 owner POST /cli/settings/update '{"multiplayerCores":{"word":true}}'
 want 400 "unknown core"
-case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
+case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file, board)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
 ok "an unknown core is refused"
 rm -f "$A/notes/off.png"
 

@@ -28,6 +28,10 @@ class H(http.server.BaseHTTPRequestHandler):
         status, out = 200, {"ok": True}
         if cmd == "boards":
             out = {"ok": True, "boards": [{"id": "b1a2b3c", "name": "Launch", "project": None, "trashed": False}]}
+        elif cmd == "read" and body.get("id") == "h-stale00000":
+            status, out = 409, {"ok": False, "error": {"code": "conflict", "hint": "it changed since you read it"}}
+        elif cmd == "read" and body.get("id") == "h-newer00000":
+            status, out = 409, {"ok": False, "error": {"code": "newer_format", "hint": "a newer K2 made this board"}}
         elif cmd == "read" and body.get("id") == "h-locked0000":
             status, out = 409, {"ok": False, "error": {"code": "locked", "hint": "h-locked0000 is locked"}}
         elif cmd == "read":
@@ -89,6 +93,8 @@ PY
 # Refusals keep their documented exit codes.
 set +e
 bash "$K2" board read h-locked0000 2>/dev/null; [ $? -eq 5 ] || fail "locked is exit 5"
+bash "$K2" board read h-stale00000 2>/dev/null; [ $? -eq 1 ] || fail "a conflict is exit 1, as k2 doc"
+bash "$K2" board read h-newer00000 2>/dev/null; [ $? -eq 4 ] || fail "newer_format is exit 4"
 bash "$K2" board list --board Off 2>/dev/null; [ $? -eq 3 ] || fail "core_off is exit 3"
 err="$(bash "$K2" board update s-0123456789 --text x 2>&1 >/dev/null)"; code=$?
 [ $code -eq 2 ] || fail "too_long is exit 2 (got $code)"

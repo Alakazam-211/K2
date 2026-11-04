@@ -1,5 +1,6 @@
 import { K2Error } from './errors.ts';
 import { type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts';
+import { type AccessChange, type OnAccessChangedOptions, type OnGuestAccessChangedOptions } from './access.ts';
 import { type WebSocketCtor } from './socket.ts';
 import { type ActivityState, type WatchActivityOptions, type WatchActivityTarget } from './activity.ts';
 export interface K2Config {
@@ -50,7 +51,20 @@ export interface SubscribeOptions {
     onOpen?: () => void;
 }
 /** The surfaces plus `call` / `subscribe` by name, bound to one actor. */
-export interface K2Actor extends Omit<AppSurfaces, 'thread'> {
+export interface K2Actor extends Omit<AppSurfaces, 'thread' | 'me'> {
+    /** Who this pass is, plus `onAccessChanged` (0.46.8): what this person may do,
+     *  kept right with no sign-out and no refresh. `cb` runs after every open, the
+     *  first included, and after each change, always with a fresh `me.get`. `ended`
+     *  means the pass is dead: sign the person in again. */
+    readonly me: AppSurfaces['me'] & {
+        onAccessChanged(cb: (change: AccessChange) => void, opts?: OnAccessChangedOptions): () => void;
+        /** `k2.asApp()` only: one socket for all of this App's guests. `cb` names a
+         *  guest whose access changed or whose session ended: read `me.get` with that
+         *  guest's pass. Read again for everyone you show in `opts.onOpen`. */
+        onGuestAccessChanged(cb: (guest: {
+            principalId: string;
+        }) => void, opts?: OnGuestAccessChangedOptions): () => void;
+    };
     /** Every Thread verb, plus `watchActivity` (0.46.5): the live Thread
      *  turn of one agent (`{addr}`) or of rooms (`{rooms}`), kept right
      *  (snapshot on every open, frames, resets, a 60 s self-check). */

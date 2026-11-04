@@ -19,6 +19,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { K2Error, fromResponse } from "./errors.js";
 import { APP_VERBS } from "./generated/verbs.js";
 import { SecretFile } from "./pass.js";
+import { watchAccess, watchGuestAccess } from "./access.js";
 import { openSocket } from "./socket.js";
 import { watchThreadActivity } from "./activity.js";
 import { buildRequest, project } from "./wire.js";
@@ -222,6 +223,13 @@ export class K2App {
             const b = this.actor(bound);
             return watchThreadActivity(b, target, cb, opts);
         };
+        // 0.46.8 live access (access.ts). Same rule: a socket keeps its guest.
+        const me = out.me;
+        me.onAccessChanged = (cb, opts) => {
+            const bound = cred.kind === 'default' ? { kind: 'guest', pass: this.passFor(cred, 'me.events') } : cred;
+            return watchAccess(this.actor(bound), cb, opts);
+        };
+        me.onGuestAccessChanged = (cb, opts) => watchGuestAccess(a, cb, opts);
         return out;
     }
     row(verb) {

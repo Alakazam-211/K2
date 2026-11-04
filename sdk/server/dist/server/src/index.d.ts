@@ -1,5 +1,6 @@
 import { K2App, type K2Config } from './client.ts';
 export { K2App, type AppGuestMustChange, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts';
+export type { AccessChange, OnAccessChangedOptions, OnGuestAccessChangedOptions } from './access.ts';
 export type { ActivityState, Turn, WatchActivityOptions, WatchActivityTarget } from './activity.ts';
 export { coerceTurn, describe as describeTurn, reduceTurn } from '../../activity/src/core.ts';
 export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUsers, AppKeyWhoami } from './client.ts';

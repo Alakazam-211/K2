@@ -3448,6 +3448,90 @@ fn gateway_login_cookie(gport: u16, username: &str, password: &str) -> String {
     format!("Cookie: k2_skin_ui={sid}")
 }
 
+/// Live access (S4): the page recipe, through the real App helper. A page's socket
+/// hears `access_changed`, its cookie read shows the change, and close codes reach
+/// the page byte for byte: 4013 on a lost room, 4003 on a dead pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_me_events_page_recipe() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(start_old_skin_daemon());
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_anna_id, _conv, anna_path) = seed_files_workspace(&anna);
+        let (docs_id, docs_conv, _docs_path) = seed_files_workspace(&docs);
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+        let ok = |what: &str, r: Resp| assert_eq!(r.status, 200, "{what}: {}", r.body);
+        ok("role", http(dport, "POST", &format!("/cli/skin/roles?token={OWNER_TOKEN}"), Some(r#"{"name":"pager"}"#)));
+        let room = |handle: &str, caps: &str| format!(r#"{{"name":"pager","handle":"{handle}","caps":{caps}}}"#);
+        ok("anna", http(dport, "POST", &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"), Some(&room(&anna, r#"["thread:read"]"#))));
+        ok("docs", http(dport, "POST", &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"), Some(&room(&docs, r#"["thread:read"]"#))));
+        ok("assign", http(dport, "POST", &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"), Some(r#"{"username":"bob","role":"pager"}"#)));
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+        let cookie = gateway_login_cookie(gport, "bob", "s3cret-horse");
+        let cookie_value = cookie.trim_start_matches("Cookie: ").to_string();
+        let dial = |pq: String| {
+            let c = cookie_value.clone();
+            futures_block(async move {
+                let mut req = format!("ws://127.0.0.1:{gport}{pq}").into_client_request().expect("request");
+                req.headers_mut().insert("Cookie", c.parse().expect("header"));
+                tokio_tungstenite::connect_async(req).await.expect("through the helper").0
+            })
+        };
+        let mut me = dial("/cli/skin/me/events?scope=me".to_string());
+        let mut overlay = dial(format!("/cli/overlay/events?conversation={docs_conv}"));
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Lose one room: the event says re-read; the room's socket gets 4013.
+        let cut = http(dport, "POST", &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"), Some(&room(&docs, r#"["tickets:read"]"#)));
+        assert_eq!(cut.status, 200, "take docs' Thread: {}", cut.body);
+        let frame = futures_block(async {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(4), me.next()).await.expect("a frame in time") {
+                    Some(Ok(Message::Text(t))) => return t.to_string(),
+                    Some(Ok(_)) => {}
+                    other => panic!("me.events ended: {other:?}"),
+                }
+            }
+        });
+        assert_eq!(frame, r#"{"kind":"access_changed"}"#);
+        let close = futures_block(async {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(4), overlay.next()).await.expect("a close in time") {
+                    Some(Ok(Message::Close(c))) => return c.map(|c| u16::from(c.code)),
+                    Some(Ok(_)) => {}
+                    other => panic!("the overlay ended with no close frame: {other:?}"),
+                }
+            }
+        });
+        assert_eq!(close, Some(4013), "the close code reaches the page");
+        let read = http_ex(gport, "GET", "/cli/skin/me", None, &cookie);
+        assert_eq!(read.status, 200, "the page's read: {}", read.body);
+        let me_now: serde_json::Value = serde_json::from_str(&read.body).expect("json");
+        let docs_row = me_now["rooms"].as_array().expect("rooms").iter().find(|r| r["room"] == docs_id.as_str()).expect("docs");
+        assert_eq!(docs_row["caps"], serde_json::json!(["tickets:read"]), "the read shows the change");
+
+        // The session goes: 4003, and the page's read is a 401.
+        ok("remove", http(dport, "POST", &format!("/cli/skin/users/remove?token={OWNER_TOKEN}"), Some(r#"{"username":"bob"}"#)));
+        let close = futures_block(async {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(4), me.next()).await.expect("a close in time") {
+                    Some(Ok(Message::Close(c))) => return c.map(|c| u16::from(c.code)),
+                    Some(Ok(_)) => {}
+                    other => panic!("me.events ended with no close frame: {other:?}"),
+                }
+            }
+        });
+        assert_eq!(close, Some(4003), "the close code reaches the page");
+    });
+}
+
 /// GA3/GA4 (prd-gateway-activity-socket-workspace-v1): the helper forwards
 /// `/cli/activity/events?workspace=` to the daemon. Before the fix it wrote
 /// `400 missing conversation query parameter` itself and never dialled up.

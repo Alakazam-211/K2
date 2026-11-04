@@ -19,6 +19,7 @@ import { K2Error } from './errors.ts'
 export { K2App, type AppGuestMustChange, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
 // 0.46.5 activity SDK: thread.watchActivity's types, and @k2/activity's
 // words for drawing a turn the way K2 does.
+export type { AccessChange, OnAccessChangedOptions, OnGuestAccessChangedOptions } from './access.ts'
 export type { ActivityState, Turn, WatchActivityOptions, WatchActivityTarget } from './activity.ts'
 export { coerceTurn, describe as describeTurn, reduceTurn } from '../../activity/src/core.ts'
 export type { AppKeyOk, AppKeyRoomsSet, AppKeyUser, AppKeyUserCreated, AppKeyUsers, AppKeyWhoami } from './client.ts'

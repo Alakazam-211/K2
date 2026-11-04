@@ -1,0 +1,12 @@
+{"frames":["f-1"],"later":{"a":[1,{"b":null}],"c":"keep"},"objects":[
+{"id":"u-1","type":"hologram","depth":[[[1.5]]],"anything":{"x":null,"y":false}},
+{"id":"s-1","type":"sticky","color":"ultraviolet","align":"justify","soon":"keep","x":1},
+{"id":"h-1","type":"shape","shape":"hexagram-new","dash":"wavy","soon":{"blob":"sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}},
+{"id":"c-1","type":"connector","route":"zigzag","startCap":"fish","from":{"id":"s-1","anchor":"middle","pull":1},"to":{"x":1,"y":2,"bend":3}},
+{"id":"f-1","type":"frame","fill":"plaid","soon":1},
+{"id":"k-1","type":"card","checks":[{"id":"a","text":"t","done":true,"soon":1}]},
+{"id":"b-1","type":"table","columns":[{"id":"a","tint":"red"}],"rows":[{"id":"r","tall":true,"cells":{"a":"x"}}]},
+{"id":"q-1","type":"comment","replies":[{"id":"a","by":"p-1","at":"2026-11-03T10:00:00Z","text":"t","pin":true}]},
+{"id":"i-1","type":"image","src":{"blob":"sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"},"crop":{"x":0,"y":0,"w":1,"h":1,"soft":true}},
+{"id":"s-2","type":"sticky","created":{"by":"p-1","at":"2026-11-03T10:00:00Z","via":"import"}}
+],"people":{"p-1":{"name":"Ann","kind":"robot","pronouns":"keep"}},"settings":{"title":"T","voting":{"active":true,"mode":"dots"},"soon":{"keep":[1]}}}

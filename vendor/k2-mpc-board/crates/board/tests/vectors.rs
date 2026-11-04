@@ -100,6 +100,68 @@ fn planted(tag: &str, input: &[u8], case: &str) -> usize {
     report.failed.len()
 }
 
+fn planted_pair(tag: &str, pair: &str) -> usize {
+    let case = format!("{{\"input\":\"widget/x.json\",\"layer\":\"widget\",\"name\":\"{tag}\"}}");
+    let dir = std::env::temp_dir().join(format!("board-pair-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("widget")).expect("a folder");
+    std::fs::write(dir.join("widget/x.json"), pair).expect("a pair");
+    std::fs::write(
+        dir.join("index.json"),
+        format!("{{\"cases\":[{case}],\"format_version\":1}}"),
+    )
+    .expect("an index");
+    let report = conformance::run(&dir);
+    std::fs::remove_dir_all(&dir).expect("clean up");
+    report.failed.len()
+}
+
+const OK_BOARD: &str = r#"{\"frames\":[],\"objects\":[],\"people\":{},\"settings\":{}}"#;
+
+fn refused_pair(code: &str, file_text: &str) -> String {
+    format!(
+        "{{\"file_refused\":\"{code}\",\"file_text\":\"{file_text}\",\"lossy\":\"x\",\"lossy_direction\":\"widget_to_file\",\"people_map\":{{}},\"widget_text\":\"{{}}\"}}"
+    )
+}
+
+#[test]
+fn a_refused_pair_has_to_be_refused_with_its_code() {
+    let bad = r#"{\"frames\":[],\"objects\":[],\"people\":{},\"settings\":{\"voting\":{\"active\":true,\"perPerson\":0}}}"#;
+    assert_eq!(planted_pair("right", &refused_pair("field_value", bad)), 0);
+    assert_eq!(
+        planted_pair("accepted", &refused_pair("field_value", OK_BOARD)),
+        1,
+        "a file side that's accepted has to fail"
+    );
+    assert_eq!(
+        planted_pair("other-code", &refused_pair("field_kind", bad)),
+        1,
+        "another code has to fail"
+    );
+}
+
+#[test]
+fn a_pair_has_to_say_its_direction() {
+    let pair = |direction: &str| {
+        format!(
+            "{{\"file\":{{\"frames\":[],\"objects\":[],\"people\":{{}},\"settings\":{{}}}},\"lossy\":\"x\",{direction}\"people_map\":{{}},\"widget\":{{}}}}"
+        )
+    };
+    assert_eq!(
+        planted_pair("good", &pair("\"lossy_direction\":\"both\",")),
+        0
+    );
+    assert_eq!(
+        planted_pair("none", &pair("")),
+        1,
+        "no direction has to fail"
+    );
+    assert_eq!(
+        planted_pair("bad", &pair("\"lossy_direction\":\"sideways\",")),
+        1,
+        "an unknown direction has to fail"
+    );
+}
+
 #[test]
 fn the_runner_reports_a_wrong_expectation() {
     let ok = "\"canonical\":\"canon/a.out.json\"";

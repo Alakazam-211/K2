@@ -6,6 +6,8 @@ JSON, and images named by their hash. Anyone can read it from the spec alone.
 - **Spec:** `docs/FORMAT.md`.
 - **Schema:** `schema/board-schema.json`, generated from the Rust tables: types, fields, limits,
   defaults, refusal codes.
+- **Verbs:** `docs/VERBS.md`: what an agent can do with a file, with no live session. `docs/PARITY.md` lists
+  everything a person can do and how an agent does it.
 - **Vectors:** `vectors/`: inputs with their expected board or typed refusal, for a reader in any
   language. `vectors/check.mjs` runs the JavaScript side.
 - **Crate:** `crates/board` (`k2-mpc-board`): the model, a strict zip reader and writer, canonical
@@ -14,7 +16,7 @@ JSON, and images named by their hash. Anyone can read it from the spec alone.
 
 Run the checks with `scripts/check.sh`.
 
-Status: format v1 in progress.
+Status: format v1 is frozen as `format-v1.0`. The pack is at v0.1: one writer at a time, on files. Live comes later.
 
 ## Licence
 

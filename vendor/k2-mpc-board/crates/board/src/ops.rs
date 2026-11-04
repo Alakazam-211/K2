@@ -212,6 +212,30 @@ impl Report {
     }
 }
 
+/// Every refusal code [`apply_group`] can refuse a group with, as [`Conflict::Refused`]: its own
+/// checks, a revision's canonical JSON, and the check of the result. A host that maps a refusal by
+/// the call it came from reads this; `tests/group_refusals.rs` makes a group refuse with each one,
+/// and the raw-ops fuzz target holds every refusal it sees to it. A new raise site lists its code here.
+pub const GROUP_REFUSALS: &[RefusalCode] = &[
+    // here: a locked object, a frame move of what isn't one, an id or type set, the counts
+    RefusalCode::ObjectLocked,
+    RefusalCode::FramesMismatch,
+    RefusalCode::FieldValue,
+    RefusalCode::LimitObjects,
+    RefusalCode::LimitPeople,
+    // a revision's canonical JSON, and the check of the result (validate.rs)
+    RefusalCode::JsonNumberRange,
+    RefusalCode::LimitDepth,
+    RefusalCode::FieldKind,
+    RefusalCode::LimitField,
+    RefusalCode::FieldNameInvalid,
+    RefusalCode::PersonUnknown,
+    RefusalCode::IdDuplicate,
+    RefusalCode::CellColumnUnknown,
+    RefusalCode::TypeInvalid,
+    RefusalCode::IdInvalid,
+];
+
 /// Applies one group to a board, all or nothing: on a conflict the board is unchanged.
 ///
 /// Every op is judged against what's there before anything is written to the board, then the whole
@@ -267,6 +291,7 @@ fn is_locked(o: &Object) -> bool {
 }
 
 fn locked(id: &Id) -> Conflict {
+    // A code raised here is in GROUP_REFUSALS (tests/group_refusals.rs).
     refused(Refusal::at(
         RefusalCode::ObjectLocked,
         format!("/objects/{id}"),
@@ -312,6 +337,7 @@ impl<'b> Stage<'b> {
             return Ok(());
         }
         if let Some(start) = self.start(id) {
+            // A code raised here is in GROUP_REFUSALS (tests/group_refusals.rs).
             if start.rev().map_err(refused)? != *rev {
                 return Err(Conflict::Changed {
                     target: Target::Object(id.clone()),
@@ -348,6 +374,7 @@ impl<'b> Stage<'b> {
                     .current(id)
                     .ok_or_else(|| Conflict::Deleted { id: id.clone() })?;
                 if o.kind != ObjectType::Frame {
+                    // A code raised here is in GROUP_REFUSALS (tests/group_refusals.rs).
                     return Err(refused(Refusal::at(
                         RefusalCode::FramesMismatch,
                         format!("/objects/{id}"),
@@ -398,6 +425,7 @@ impl<'b> Stage<'b> {
         let names = set.keys().chain(unset.iter());
         for name in names {
             if name == "id" || name == "type" {
+                // A code raised here is in GROUP_REFUSALS (tests/group_refusals.rs).
                 return Err(refused(Refusal::at(
                     RefusalCode::FieldValue,
                     format!("/objects/{id}/{name}"),
@@ -444,6 +472,7 @@ impl<'b> Stage<'b> {
     }
 
     fn meta(&mut self, rev: &Sha256, set: &Fields, unset: &[String]) -> Result<(), Conflict> {
+        // A code raised here is in GROUP_REFUSALS (tests/group_refusals.rs).
         if self.board.settings_rev().map_err(refused)? != *rev {
             return Err(Conflict::Changed {
                 target: Target::Settings,
@@ -535,6 +564,9 @@ impl<'b> Stage<'b> {
     }
 
     /// The whole result, before anything is written to the board.
+    ///
+    /// A code raised here, or by the checks it calls, is in GROUP_REFUSALS
+    /// (tests/group_refusals.rs).
     fn check(&self) -> Result<(), Conflict> {
         let people = self.people.as_ref().unwrap_or(&self.board.people);
         let count = self.report.added.len() as i64 - self.report.deleted.len() as i64

@@ -14,9 +14,9 @@ use std::io::{Read, Seek, Write};
 pub(crate) const ROLE_BOARD: &str = "board";
 pub(crate) const ROLE_BLOB: &str = "blob";
 pub(crate) const ROLE_PREVIEW: &str = "preview";
-const NAME_MANIFEST: &str = "manifest.json";
-const NAME_BOARD: &str = "board.json";
-const NAME_PREVIEW: &str = "preview.png";
+pub(crate) const NAME_MANIFEST: &str = "manifest.json";
+pub(crate) const NAME_BOARD: &str = "board.json";
+pub(crate) const NAME_PREVIEW: &str = "preview.png";
 const MEDIA_MAX_BYTES: usize = 127;
 
 /// One part as the manifest lists it. The writer computes these; a host never sets them.
@@ -369,6 +369,41 @@ fn read_manifest<R: Read + Seek>(
     Ok((entries, manifest))
 }
 
+/// Everything an open checks before `board.json`: the central directory, the manifest, and the
+/// parts agreeing with both. It gives the entries by name and the manifest. An open and a header
+/// read share it, so they check the same things in the same order.
+pub(crate) fn open_index<R: Read + Seek>(
+    src: &mut R,
+    l: &Limits,
+) -> Result<(BTreeMap<String, Entry>, Manifest), Refusal> {
+    let (entries, manifest) = read_manifest(src, l)?;
+    check_parts(&manifest.parts)?;
+    let by_name: BTreeMap<String, Entry> =
+        entries.into_iter().map(|e| (e.name.clone(), e)).collect();
+    for p in &manifest.parts {
+        let e = by_name.get(&p.name).ok_or_else(|| {
+            Refusal::at(C::PartMissing, p.name.as_str(), "listed but not in the zip")
+        })?;
+        if e.usize_ != p.bytes {
+            return Err(Refusal::at(
+                C::PartDisagree,
+                p.name.as_str(),
+                format!("the manifest says {} bytes, the zip {}", p.bytes, e.usize_),
+            ));
+        }
+    }
+    for name in by_name.keys() {
+        if name != NAME_MANIFEST && !manifest.parts.iter().any(|p| &p.name == name) {
+            return Err(Refusal::at(
+                C::PartUnlisted,
+                name.as_str(),
+                "in the zip but not listed",
+            ));
+        }
+    }
+    Ok((by_name, manifest))
+}
+
 /// The save guard of a file, from its central directory and manifest only: sha256 of the canonical
 /// manifest. The manifest lists every part with its hash, so one compare covers any added, removed
 /// or changed part. See `docs/FORMAT.md` for what it doesn't cover.
@@ -405,31 +440,7 @@ impl<R: Read + Seek> Package<R> {
     /// when they're read, or all at once with [`Package::verify_parts`].
     pub fn open(mut src: R, l: &Limits) -> Result<Package<R>, Refusal> {
         l.check_ceiling()?;
-        let (entries, manifest) = read_manifest(&mut src, l)?;
-        check_parts(&manifest.parts)?;
-        let by_name: BTreeMap<String, Entry> =
-            entries.into_iter().map(|e| (e.name.clone(), e)).collect();
-        for p in &manifest.parts {
-            let e = by_name.get(&p.name).ok_or_else(|| {
-                Refusal::at(C::PartMissing, p.name.as_str(), "listed but not in the zip")
-            })?;
-            if e.usize_ != p.bytes {
-                return Err(Refusal::at(
-                    C::PartDisagree,
-                    p.name.as_str(),
-                    format!("the manifest says {} bytes, the zip {}", p.bytes, e.usize_),
-                ));
-            }
-        }
-        for name in by_name.keys() {
-            if name != NAME_MANIFEST && !manifest.parts.iter().any(|p| &p.name == name) {
-                return Err(Refusal::at(
-                    C::PartUnlisted,
-                    name.as_str(),
-                    "in the zip but not listed",
-                ));
-            }
-        }
+        let (by_name, manifest) = open_index(&mut src, l)?;
         let part = manifest
             .parts
             .iter()

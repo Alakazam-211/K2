@@ -1,5 +1,5 @@
 //! Writes everything generated in this repo: `schema/board-schema.json`, the tables in
-//! `docs/FORMAT.md`, and `vectors/`. Run it from the repo root; the tests check the tree matches.
+//! `docs/FORMAT.md`, `docs/PARITY.md`, and `vectors/`. Run it from the repo root; the tests check the tree matches.
 
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -20,6 +20,8 @@ fn main() -> std::io::Result<()> {
         "docs/FORMAT.md",
         format!("{head}{BEGIN}\n\n{tables}\n{END}{tail}"),
     )?;
+
+    fs::write("docs/PARITY.md", k2_mpc_board::parity::parity_markdown())?;
 
     let root = Path::new("vectors");
     for (path, bytes) in cases::files() {

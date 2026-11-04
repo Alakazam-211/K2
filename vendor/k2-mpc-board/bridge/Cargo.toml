@@ -1,0 +1,31 @@
+[package]
+name = "k2-mpc-board-bridge"
+version = "0.1.2"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.80"
+publish = false
+description = "The board file verbs on the multiplayer kit's verb features: stable error ids, explain, capabilities, JSON reports and dry runs."
+
+# Its own workspace: never a member of the repo's, so the board crate and the repo's lock stay
+# kit-free (scripts/check-no-kit.sh holds both).
+[workspace]
+
+[lib]
+name = "k2_mpc_board_bridge"
+path = "src/lib.rs"
+
+[dependencies]
+k2-mpc-board = { path = "../crates/board" }
+# The kit (k2-mpc-base), by path: its checkout sits beside this repo's, as for the other packs.
+# Pinned to the kit's v0.11.0 (386ccd77): a host vendors the kit at that tag beside this
+# repo (README). Run `cargo update -p k2-mpc-base` here and commit the lock when it moves.
+k2-mpc-base = { path = "../../k2-mpc-base/crates/base" }
+
+# This workspace's own dev and test builds, as in the repo's. A host that vendors the bridge
+# keeps its own profiles.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

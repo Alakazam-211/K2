@@ -547,8 +547,9 @@ Text limits below are in code points. Defaults are what a reader uses when a fie
 | `json` | A `board.json` | The board's canonical bytes, or a refusal |
 | `zip` | A `.k5board` | The board's canonical bytes and the `guard`, or a refusal. A case with `stable_guard` keeps its guard through an unchanged open and write. A case with `missing` opens and reports those hashes; a write refuses it with `blob_missing`; clearing them gives the board in `cleared`, which writes |
 | `rev` | A `board.json` | `revs`: each object's revision, and `settings_rev`. For any language |
-| `widget` | A pair: an object in Board's widget store, and the same in a file | For a host that converts between them. `file` is a valid `board.json`, `widget` the other side, with neutral forms where a host puts its own (`vectors/widget/README.md`), `people_map` the person keys and tokens, `lossy` what doesn't survive in words, and `widget_back` and `file_back` what the way back gives where it differs |
+| `fidelity` | A `board.json`, full of what's easy to lose: every field, unknown things, text in many scripts, number spellings, order, broken references, locks, every template | The board's canonical bytes. For any language |
+| `widget` | A pair: an object in Board's widget store, and the same in a file | For a host that converts between them. `file` is a valid `board.json`, `widget` the other side, with neutral forms where a host puts its own (`vectors/widget/README.md`), `people_map` the person keys and tokens, `lossy` what doesn't survive in words, and `widget_back` and `file_back` what the way back gives where it differs. `lossy_direction` says which way the conversion holds. A pair with `file_refused` has `file_text` in place of `file`, which a reader must refuse with that code. These members are test data for a converter, not part of the format |
 
 Each refusing case breaks one rule, so its code is exact. A reader that checks in another order may meet a different rule first only where one file breaks two, and these files don't.
 
-`node vectors/check.mjs` runs the `canon` and `rev` layers and every `bad_ids` case in JavaScript with no code from the Rust crate.
+`node vectors/check.mjs` runs the `canon`, `rev` and `fidelity` layers and every `bad_ids` case in JavaScript with no code from the Rust crate.

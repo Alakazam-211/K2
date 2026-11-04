@@ -23,6 +23,12 @@ use k2_mpc_board::{
     apply_group, json as fj, package_guard_of, write, Board, Conflict, Group, Id, Limits, Lineage, MemParts, Object, ObjectType, Op, Overlay,
     Package, PartSource, Person, Position, Refusal, RefusalCode, Sha256, Target, WriteMeta, Written,
 };
+use k2_mpc_board::verbs::{self, Ctx};
+use k2_mpc_board::{read_header, FileTarget, Mode, On, SaveError};
+use k2_mpc_board_bridge::kit::errors::Value as KValue;
+use k2_mpc_board_bridge::parse::{Call, CallKind};
+use k2_mpc_board_bridge::report::save_report;
+use k2_mpc_board_bridge::{dry_run, Answer, Refused, Why};
 use serde_json::{json, Map, Value};
 
 use super::map;
@@ -65,8 +71,6 @@ pub enum SaveFail {
     Busy,
     /// The temp file didn't read back as what was written.
     WriteFailed(String),
-    /// A verb's own refusal, or its args: a stable code.
-    Verb { code: &'static str, message: String },
     /// A merge met conflicts: nothing was written, and every side is kept here.
     Merge(Value),
 }
@@ -112,8 +116,6 @@ pub struct SaveAnswer {
     pub refused: Vec<Value>,
     /// How many groups applied.
     pub applied: usize,
-    /// A verb's own answer: new ids, what a delete took, what it left alone.
-    pub planned: Value,
 }
 
 impl SaveAnswer {
@@ -412,17 +414,17 @@ fn write_temp(target: &Path, meta: &WriteMeta, board: &Board, parts: &mut dyn Pa
 
 /// The temp file reads back as what was written. A full open checks
 /// `board.json`'s hash; above the size rule, the manifest alone.
-fn read_back(path: &Path, written: &Written, new_parts: &[Sha256], board_bytes: u64) -> Result<(), SaveFail> {
+fn read_back(path: &Path, written: &Sha256, new_parts: &[Sha256], board_bytes: u64) -> Result<(), SaveFail> {
     let f = File::open(path).map_err(io_fail)?;
     if board_bytes > FULL_READ_BACK_MAX_BOARD_BYTES {
         let g = package_guard_of(BufReader::new(f), &Limits::V1).map_err(|e| SaveFail::WriteFailed(e.to_string()))?;
-        if g != written.package_guard {
+        if g != *written {
             return Err(SaveFail::WriteFailed("the temp file's guard isn't what was written".into()));
         }
         return Ok(());
     }
     let mut pkg = Package::open(BufReader::new(f), &Limits::V1).map_err(|e| SaveFail::WriteFailed(e.to_string()))?;
-    if pkg.package_guard() != written.package_guard {
+    if pkg.package_guard() != *written {
         return Err(SaveFail::WriteFailed("the temp file's guard isn't what was written".into()));
     }
     for h in new_parts {
@@ -481,9 +483,6 @@ pub struct SaveInput<'a> {
     /// A blob this caller staged: `(media type, bytes)`. A save may name only
     /// these, or parts of this file.
     pub staged: &'a dyn Fn(&Sha256) -> Option<(String, Vec<u8>)>,
-    /// A friendly verb instead of `groups`: planned against the file as it is
-    /// under the lock, each try. Gives the group and what the caller should know.
-    pub plan: Option<&'a dyn Fn(&Board) -> Result<(Group, Value), SaveFail>>,
 }
 
 /// §5.3. Holds the writer lock for the whole of it.
@@ -511,28 +510,6 @@ fn try_save(path: &Path, input: &SaveInput) -> Result<Option<SaveAnswer>, SaveFa
     let mut fresh: Vec<Remembered> = Vec::new();
     let mut changed_ids: Vec<Id> = Vec::new();
     let mut touched = false;
-    if let Some(plan) = input.plan {
-        // A verb: no hold (an agent has its command), never remembered.
-        let (group, planned) = plan(&board)?;
-        a.planned = planned;
-        match apply_group(&mut board, &group) {
-            Ok(report) => {
-                a.applied += 1;
-                touched |= !report.is_noop();
-                changed_ids.extend(report.added.iter().cloned());
-                changed_ids.extend(report.changed.iter().cloned());
-                for m in &report.moved {
-                    a.moved.push(json!({ "id": m.id.as_str(), "exact": m.exact }));
-                }
-            }
-            Err(Conflict::Refused(r)) => a.refused.push(refused_entry(&group.id, &r)),
-            Err(c) => {
-                if let Some(h) = held_entry(&group.id, &c) {
-                    a.held.push(h);
-                }
-            }
-        }
-    }
     for g in input.groups {
         let gid = g.get("id").and_then(Value::as_str).unwrap_or("");
         // A retry gets its first answer. A daemon restart forgets, and the
@@ -626,7 +603,7 @@ fn try_save(path: &Path, input: &SaveInput) -> Result<Option<SaveAnswer>, SaveFa
     };
     let temp_path = temp.0.clone().ok_or_else(|| bad("no temp file"))?;
     hook(Step::AfterWrite, &temp_path);
-    read_back(&temp_path, &written, &new_hashes, board_bytes)?;
+    read_back(&temp_path, &written.package_guard, &new_hashes, board_bytes)?;
     drop(pkg);
     if !replace_if_current(path, temp, Some(&guard))? {
         return Ok(None);
@@ -659,6 +636,144 @@ fn remember(key: &Path, fresh: Vec<Remembered>) {
             d.pop_front();
         }
     }
+}
+
+// ---------- a board verb, through the pack's bridge ----------
+
+/// What a verb through the bridge came to: its answer, or its refusal (a row of
+/// the kit's), each naming the file it was about. K2's own failures around the
+/// run (no file, the disk) are a [`SaveFail`] instead.
+#[derive(Debug)]
+pub enum Ran {
+    Answer(Answer),
+    Refused(Box<Refused>),
+}
+
+/// The input to [`run_call`].
+pub struct CallInput<'a> {
+    /// The verb, as the bridge's parser made it.
+    pub call: &'a Call,
+    /// The path the answer names: K2 gives the full path.
+    pub target: &'a str,
+    /// Who acts, from the file as it is now; `None` if it can't be read, in
+    /// which case the bridge's open refuses with the file's own row.
+    pub me: &'a dyn Fn(&Path) -> Option<verbs::Me>,
+    /// The group's id.
+    pub group_id: &'a str,
+    /// The time a new object is made at.
+    pub at: &'a str,
+    /// Random bytes for new ids.
+    pub random: &'a mut dyn FnMut() -> [u8; 8],
+    /// Plan and apply it all, and write nothing.
+    pub dry_run: bool,
+}
+
+/// One try's end: done, or the file moved under it (with the guards, when K2
+/// saw them), so start again from the open.
+enum Tried {
+    Done(Ran),
+    Again(Option<(Sha256, Sha256)>),
+}
+
+fn is_busy(r: &Refused) -> bool {
+    matches!(&r.why, Why::Report(rep) if rep.id() == "MPC-E832")
+}
+
+/// A verb on a file. A read opens the file and answers, with no lock. A change
+/// runs the bridge's own run (`dry_run::run`: open, read the guard apart,
+/// plan, apply, write) inside K2's save, under the writer lock: the bridge
+/// writes to a temp file beside the target, K2 syncs it, reads it back,
+/// compares the guard of the file on disk with the one the try read, and
+/// renames. A file that moved starts again from the open, [`MAX_TRIES`] times,
+/// then answers MPC-E832 (`busy`) as it is. A dry run is the bridge's
+/// `dry_run::dry_run`, the same run with the save into nowhere: nothing is
+/// written, not even a temp file.
+///
+/// A verb is never held: the agent that ran it has its command, and a
+/// conflict is its row (MPC-E830 and the rest), with nothing written.
+pub fn run_call(path: &Path, input: &mut CallInput) -> Result<Ran, SaveFail> {
+    if input.call.kind() == CallKind::Read {
+        let target = FileTarget::new(input.target).ok_or_else(|| bad("no path"))?;
+        let file = BufReader::new(File::open(path).map_err(io_fail)?);
+        let on_disk = BufReader::new(File::open(path).map_err(io_fail)?);
+        let mut cx = Ctx { group_id: input.group_id.to_string(), by: None, at: Some(input.at.to_string()), random: &mut *input.random };
+        return Ok(match dry_run::run(input.call, target, file, on_disk, &mut std::io::sink(), &mut cx, &Limits::V1) {
+            Ok(a) => Ran::Answer(a),
+            Err(r) => Ran::Refused(r),
+        });
+    }
+    with_writer_lock(path, || {
+        let mut last = None;
+        for _ in 0..MAX_TRIES {
+            match try_call(path, input)? {
+                Tried::Done(Ran::Refused(r)) if is_busy(&r) => last = Some(Ran::Refused(r)),
+                Tried::Done(ran) => return Ok(ran),
+                Tried::Again(Some((read, on_disk))) => {
+                    let report = save_report(&SaveError::Stale { read, on_disk });
+                    let on = On { kind: k2_mpc_board::FORMAT, path: input.target.to_string(), version: Some(read.to_string()), mode: Mode::File };
+                    last = Some(Ran::Refused(Box::new(Refused { on, why: Why::from(report) })));
+                }
+                Tried::Again(None) => {}
+            }
+        }
+        last.ok_or(SaveFail::Busy)
+    })
+}
+
+fn try_call(path: &Path, input: &mut CallInput) -> Result<Tried, SaveFail> {
+    sweep_temps(path);
+    let target = FileTarget::new(input.target).ok_or_else(|| bad("no path"))?;
+    // The guard this try started from, and the board's size (the read-back's
+    // rule), from the zip's directory and manifest, before the bridge's own
+    // reads. A file it can't read is the bridge's to refuse, by its row.
+    let header = read_header(BufReader::new(File::open(path).map_err(io_fail)?), &Limits::V1).ok();
+    let read_guard = header.as_ref().map(|h| h.guard);
+    let board_bytes = header.as_ref().and_then(|h| h.parts.iter().find(|p| p.role == "board")).map_or(0, |p| p.bytes);
+    let by = (input.me)(path);
+    let file = BufReader::new(File::open(path).map_err(io_fail)?);
+    let on_disk = BufReader::new(File::open(path).map_err(io_fail)?);
+    let mut cx = Ctx { group_id: input.group_id.to_string(), by, at: Some(input.at.to_string()), random: &mut *input.random };
+    if input.dry_run {
+        return Ok(Tried::Done(match dry_run::dry_run(input.call, target, file, on_disk, &mut cx, &Limits::V1) {
+            Ok(a) => Ran::Answer(a),
+            Err(r) => Ran::Refused(r),
+        }));
+    }
+    let temp_path = temp_beside(path)?;
+    let temp = TempGuard(Some(temp_path.clone()));
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&temp_path).map_err(io_fail)?;
+    let ran = {
+        let mut out = std::io::BufWriter::new(&mut f);
+        let ran = dry_run::run(input.call, target, file, on_disk, &mut out, &mut cx, &Limits::V1);
+        out.flush().map_err(io_fail)?;
+        ran
+    };
+    let answer = match ran {
+        Ok(a) => a,
+        Err(r) => return Ok(Tried::Done(Ran::Refused(r))),
+    };
+    // Nothing changed: nothing was written, and the temp goes.
+    let Some(written) = saved_guard(&answer.value) else {
+        return Ok(Tried::Done(Ran::Answer(answer)));
+    };
+    f.sync_all().map_err(io_fail)?;
+    drop(f);
+    hook(Step::AfterWrite, &temp_path);
+    read_back(&temp_path, &written, &[], board_bytes)?;
+    let Some(read_guard) = read_guard else {
+        return Ok(Tried::Again(None));
+    };
+    if !replace_if_current(path, temp, Some(&read_guard))? {
+        let now = File::open(path).ok().and_then(|f| package_guard_of(BufReader::new(f), &Limits::V1).ok());
+        return Ok(Tried::Again(now.map(|n| (read_guard, n))));
+    }
+    Ok(Tried::Done(Ran::Answer(answer)))
+}
+
+/// The guard a run wrote: its value's `saved.guard`, or `None` when nothing
+/// changed (`saved` is null).
+fn saved_guard(v: &KValue) -> Option<Sha256> {
+    v.get("saved")?.get("guard")?.as_str().and_then(|g| Sha256::parse(g).ok())
 }
 
 // ---------- making files ----------
@@ -891,7 +1006,7 @@ pub fn merge_into(target: &Path, base: &Path, copy: &Path) -> Result<Value, Save
                 (temp, written, new_hashes)
             };
             let temp_path = temp.0.clone().ok_or_else(|| bad("no temp file"))?;
-            read_back(&temp_path, &written, &new_hashes, board_bytes)?;
+            read_back(&temp_path, &written.package_guard, &new_hashes, board_bytes)?;
             drop(pkg);
             if replace_if_current(target, temp, Some(&guard))? {
                 let mut a = answer;
@@ -997,7 +1112,7 @@ mod tests {
 
     fn run(p: &Path, base: Option<&str>, groups: Vec<Value>) -> Result<SaveAnswer, SaveFail> {
         let me = me();
-        save(p, &SaveInput { base_hash: base, groups: &groups, me: &me, at: AT, staged: &no_staged, plan: None })
+        save(p, &SaveInput { base_hash: base, groups: &groups, me: &me, at: AT, staged: &no_staged })
     }
 
     fn set_text(p: &Path, id: &str, text: &str, gid: &str) -> Value {
@@ -1340,7 +1455,7 @@ mod tests {
         let me = me();
         let groups = vec![json!({ "id": "g2", "ops": add["ops"].clone() })];
         let staged = |x: &Sha256| (*x == h).then(|| ("image/png".to_string(), bytes.clone()));
-        let a = save(&p, &SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &staged, plan: None }).expect("save");
+        let a = save(&p, &SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &staged }).expect("save");
         assert!(a.wrote);
         let mut pkg = Package::open(BufReader::new(File::open(&p).expect("open")), &Limits::V1).expect("package");
         assert_eq!(pkg.read_blob(&h).expect("blob").bytes, bytes);
@@ -1379,7 +1494,7 @@ mod tests {
         let p = file_with(&d, doc(), &[]);
         let me = me();
         let groups = vec![set_text(&p, "s-1", "in the copy", "c1")];
-        let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &no_staged, plan: None };
+        let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: AT, staged: &no_staged };
         let to = elsewhere.join("copy.k5board");
         let (out, c) = copy_to(&p, &to, &inp, false).expect("copy");
         assert_eq!(out, to);
@@ -1446,7 +1561,7 @@ mod tests {
         let p = file_with(&d, doc(), &[]);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).expect("chmod");
         let me = me();
-        let inp = SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged, plan: None };
+        let inp = SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged };
         let r = copy_to(&p, &locked.join("x.k5board"), &inp, false);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).expect("chmod back");
         match r {
@@ -1509,40 +1624,175 @@ mod tests {
         assert_eq!(temps(&d), Vec::<String>::new());
     }
 
-    fn run_verb(p: &Path, name: &str, args: Value) -> Result<SaveAnswer, SaveFail> {
+    fn run_verb_with(p: &Path, words: &[&str], dry_run: bool) -> Result<Ran, SaveFail> {
+        let argv: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+        let call = super::super::verbs::call_of(&argv).unwrap_or_else(|e| panic!("{words:?}: {e:?}"));
         let me = me();
-        let plan = |board: &Board| -> Result<(Group, Value), SaveFail> {
-            let v = super::super::verbs::verb_of(name, &args, board).map_err(|e| SaveFail::Verb { code: e.code, message: e.message })?;
-            let pack_me = k2_mpc_board::verbs::Me { token: me.token.clone(), new: (!board.people.contains_key(&me.token)).then(|| me.person.clone()) };
-            let mut rnd = || [5u8; 8];
-            let mut cx = k2_mpc_board::verbs::Ctx { group_id: "v1".into(), by: Some(pack_me), at: Some(AT.into()), random: &mut rnd };
-            let planned = k2_mpc_board::verbs::plan(board, &mut cx, &v).map_err(|e| {
-                let (code, message) = super::super::verbs::refusal_of(&e);
-                SaveFail::Verb { code, message }
-            })?;
-            Ok((planned.group, Value::Null))
+        let who = |path: &Path| -> Option<verbs::Me> {
+            let b = Package::open(BufReader::new(File::open(path).ok()?), &Limits::V1).ok()?.board().clone();
+            Some(verbs::Me { token: me.token.clone(), new: (!b.people.contains_key(&me.token)).then(|| me.person.clone()) })
         };
-        save(p, &SaveInput { base_hash: None, groups: &[], me: &me, at: AT, staged: &no_staged, plan: Some(&plan) })
+        let mut n = 0u64;
+        let mut rnd = || {
+            n += 1;
+            n.to_le_bytes()
+        };
+        let target = p.to_string_lossy().to_string();
+        run_call(p, &mut CallInput { call: &call, target: &target, me: &who, group_id: "v1", at: AT, random: &mut rnd, dry_run })
     }
 
-    /// A verb saves through the guard: an update lands, and the same rev again
-    /// is a conflict, never a quiet no-op.
+    fn run_verb(p: &Path, words: &[&str]) -> Result<Ran, SaveFail> {
+        run_verb_with(p, words, false)
+    }
+
+    fn answer(r: Result<Ran, SaveFail>) -> Answer {
+        match r {
+            Ok(Ran::Answer(a)) => a,
+            other => panic!("not an answer: {other:?}"),
+        }
+    }
+
+    fn row(r: Result<Ran, SaveFail>) -> (&'static str, u8, On) {
+        match r {
+            Ok(Ran::Refused(r)) => match &r.why {
+                Why::Report(rep) => (rep.id(), rep.exit(), r.on.clone()),
+                Why::HostBug(b) => panic!("a host bug: {b:?}"),
+            },
+            other => panic!("not a refusal: {other:?}"),
+        }
+    }
+
+    /// A verb saves through the guard: an update lands, the same rev again is
+    /// the kit's conflict row with nothing written (never held: an agent has
+    /// its command), and -0 is written and printed as 0.
     #[test]
     fn a_verb_update_lands_and_a_stale_rev_conflicts() {
         let d = dir();
         let p = file_with(&d, doc(), &[]);
         let r = rev(&p, "s-1");
-        let a = run_verb(&p, "update", json!({ "id": "s-1", "rev": r, "set": { "text": "Friday" } })).expect("update");
-        assert!(a.wrote, "{a:?}");
+        let a = answer(run_verb(&p, &["update", "s-1", "--rev", &r, "--text", "Friday"]));
+        assert!(!a.dry_run);
+        assert_eq!(a.on.version.as_deref(), Some(guard(&p).as_str()), "the echo is the guard written");
+        assert_eq!(a.value.get("saved").and_then(|s| s.get("guard")).and_then(KValue::as_str), Some(guard(&p).as_str()));
         assert_eq!(text_of(&p, "s-1"), json!("Friday"));
-        let a = run_verb(&p, "update", json!({ "id": "s-1", "rev": r, "set": { "text": "stale" } })).expect("answers");
-        assert!(!a.wrote && a.held.len() == 1, "a stale rev conflicts: {a:?}");
-        assert_eq!(text_of(&p, "s-1"), json!("Friday"));
-        let a = run_verb(&p, "add", json!({ "kind": "sticky", "fields": { "text": "new", "x": "-0" } })).expect("add");
-        assert!(a.wrote, "{a:?}");
+        let before = fs::read(&p).expect("read");
+        let (id, exit, on) = row(run_verb(&p, &["update", "s-1", "--rev", &r, "--text", "stale"]));
+        assert_eq!((id, exit), ("MPC-E830", 1), "a stale rev conflicts");
+        assert_eq!(on.version.as_deref(), Some(guard(&p).as_str()));
+        assert_eq!(fs::read(&p).expect("read"), before, "nothing was written");
+        let a = answer(run_verb(&p, &["add", "sticky", "--text", "new", "--x", "-0"]));
+        let added: Vec<String> = match a.value.get("report").and_then(|r| r.get("added")) {
+            Some(KValue::List(l)) => l.iter().filter_map(KValue::as_str).map(str::to_string).collect(),
+            other => panic!("report.added: {other:?}"),
+        };
         let b = read_board(&p);
-        let added = b.objects.iter().find(|o| o.fields.get("text") == Some(&fj::Value::Str("new".into()))).expect("added");
-        assert_eq!(String::from_utf8(fj::to_canonical(added.fields.get("x").expect("x")).expect("canon")).expect("utf8"), "0", "-0 is written as 0");
+        let o = b.objects.iter().find(|o| o.fields.get("text") == Some(&fj::Value::Str("new".into()))).expect("added");
+        assert_eq!(added, vec![o.id.to_string()]);
+        assert_eq!(String::from_utf8(fj::to_canonical(o.fields.get("x").expect("x")).expect("canon")).expect("utf8"), "0", "-0 is written as 0");
+        let read = answer(run_verb(&p, &["read", o.id.as_str()]));
+        let text = read.value.to_json();
+        assert!(text.contains("\"x\":0") && !text.contains("-0"), "-0 prints as 0: {text}");
+        assert_eq!(temps(&d), Vec::<String>::new());
+    }
+
+    /// A dry run is the same run with the save into nowhere: the same rows,
+    /// the file's bytes untouched, no temp file, and what it would write.
+    #[test]
+    fn a_dry_run_writes_nothing_and_says_what_it_would() {
+        let d = dir();
+        let p = file_with(&d, doc(), &[]);
+        let r = rev(&p, "s-1");
+        let before = fs::read(&p).expect("read");
+        let a = answer(run_verb_with(&p, &["update", "s-1", "--rev", &r, "--text", "Friday"], true));
+        assert!(a.dry_run);
+        assert_eq!(a.on.version.as_deref(), Some(guard(&p).as_str()), "its echo is the guard read");
+        let would = a.value.get("would_write").and_then(|w| w.get("guard")).and_then(KValue::as_str).expect("would_write").to_string();
+        assert_ne!(would, guard(&p));
+        assert_eq!(fs::read(&p).expect("read"), before);
+        assert_eq!(temps(&d), Vec::<String>::new());
+        // The real run writes what the dry run said it would.
+        let a = answer(run_verb(&p, &["update", "s-1", "--rev", &r, "--text", "Friday"]));
+        assert_eq!(a.on.version.as_deref(), Some(would.as_str()));
+        // A refusal shows the same row in a dry run.
+        let (id, exit, _) = row(run_verb_with(&p, &["update", "s-1", "--rev", &r, "--text", "x"], true));
+        assert_eq!((id, exit), ("MPC-E830", 1));
+        let (id, exit, _) = row(run_verb_with(&p, &["update", "h-1", "--rev", &rev(&p, "h-1"), "--text", "x"], true));
+        assert_eq!((id, exit), ("MPC-E835", 5), "a locked object");
+    }
+
+    /// A planted change between the bridge's write and K2's compare starts
+    /// again on the new file, and the planted change stays.
+    #[test]
+    fn a_verb_retries_over_a_planted_change_and_keeps_it() {
+        let d = dir();
+        let p = file_with(&d, doc(), &[]);
+        let pp = p.clone();
+        let mut done = false;
+        let planted = {
+            let mut other = doc();
+            other["objects"][2]["text"] = json!("an outside writer");
+            let board = Board::from_json(other.to_string().as_bytes(), &Limits::V1).expect("board");
+            let mut out = Vec::new();
+            write(&mut out, &WriteMeta::new(Lineage::from_bytes([3; 16])), &board, &mut MemParts::new(), &Limits::V1).expect("write");
+            out
+        };
+        set_hook(move |s, _| {
+            if s == Step::BeforeCompare && !done {
+                done = true;
+                fs::write(&pp, &planted).expect("plant");
+            }
+        });
+        let r = rev(&p, "s-1");
+        let a = run_verb(&p, &["update", "s-1", "--rev", &r, "--text", "mine"]);
+        clear_hook();
+        answer(a);
+        assert_eq!(text_of(&p, "s-1"), json!("mine"));
+        assert_eq!(text_of(&p, "s-2"), json!("an outside writer"), "the outside change stays");
+        assert_eq!(temps(&d), Vec::<String>::new());
+    }
+
+    /// A file that moves on every try answers MPC-E832 (busy, exit 1) after
+    /// K2's retries, and what's on disk is the last outside save.
+    #[test]
+    fn a_verb_on_a_file_that_keeps_moving_is_busy() {
+        let d = dir();
+        let p = file_with(&d, doc(), &[]);
+        let pp = p.clone();
+        let mut n = 0u8;
+        set_hook(move |s, _| {
+            if s == Step::BeforeCompare {
+                n += 1;
+                let mut other = doc();
+                other["objects"][2]["text"] = json!(format!("outside {n}"));
+                let board = Board::from_json(other.to_string().as_bytes(), &Limits::V1).expect("board");
+                let mut out = Vec::new();
+                write(&mut out, &WriteMeta::new(Lineage::from_bytes([3; 16])), &board, &mut MemParts::new(), &Limits::V1).expect("write");
+                fs::write(&pp, &out).expect("plant");
+            }
+        });
+        let r = rev(&p, "s-1");
+        let a = run_verb(&p, &["update", "s-1", "--rev", &r, "--text", "mine"]);
+        clear_hook();
+        let (id, exit, on) = row(a);
+        assert_eq!((id, exit), ("MPC-E832", 1));
+        assert!(on.version.is_some());
+        assert_eq!(text_of(&p, "s-1"), json!("one"));
+        assert_eq!(temps(&d), Vec::<String>::new());
+    }
+
+    /// A file K2 can't read is the bridge's row (the file's: exit 4), never
+    /// K2's own code, and it's never written over.
+    #[test]
+    fn a_verb_on_a_bad_file_is_the_files_row() {
+        let d = dir();
+        let p = d.join("bad.k5board");
+        fs::write(&p, b"half a file").expect("write");
+        let (id, exit, on) = row(run_verb(&p, &["add", "sticky"]));
+        assert_eq!((id, exit), ("MPC-E842", 4), "not a zip");
+        assert_eq!(on.version, None, "no guard was read");
+        assert_eq!(fs::read(&p).expect("read"), b"half a file");
+        assert!(matches!(run_verb(&d.join("gone.k5board"), &["add", "sticky"]), Err(SaveFail::NotFound)));
+        assert_eq!(temps(&d), Vec::<String>::new());
     }
 
     #[test]

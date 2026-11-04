@@ -1,385 +1,339 @@
-//! The friendly verbs on a board file, hand-wired for 0.46.8: `{verb, args}`
-//! to the pack's [`Verb`], with exactly the argument names of
-//! [`k2_mpc_board::verbs::ARGS`]. **Thin on purpose:** in 0.46.9 the kit bridge
-//! (k2-mpc-board v0.1.2) brings its own parser, built on that same table, and
-//! this module goes. `wired_args_match_the_pack` fails if a name drifts, and if
-//! the pack gains a verb this module neither wires nor lists as later.
+//! The board verbs on a `.k5board`, through the pack's bridge
+//! (`k2-mpc-board-bridge` v0.1.2): its parser makes the call from the command
+//! line, and every refusal is one of the kit's rows (`MPC-E120`, `MPC-E122`,
+//! `MPC-E830` to `MPC-E859`), whose exit the CLI gives as it is.
 //!
-//! The wire, as the CLI sends it: args by name, every value as the command line
-//! gave it (text), except where a list is natural (`ids`, `revs`, `unset`) or a
-//! pair (`point`). Field values go through the pack's own `verbs::flags` /
-//! `field_from_text`, so a number takes the format's number rule and nothing is
-//! rounded.
+//! **The names are the pack's** (`verbs::ARGS`): the parser reads them from that
+//! table, so a name can't drift. What K2 adds is data, in this file:
+//!
+//! - [`names`]: K2's own flags, `--fromAnchor` and `--toAnchor` on `connect`.
+//! - [`DEFAULTS`]: the values K2's command line has always filled in for an
+//!   argument the pack requires (`add --at front`, `delete --cascade true`,
+//!   `vote --delta 1`).
+//! - [`k2_argv`]: K2's spellings from before the bridge, which the bridge's
+//!   names can't say: `move <id>... --rev <rev>,<rev>` (one rev per id),
+//!   `order <id>... --to …`, and `comment <id> <words>…`.
+//!
+//! `old_command_lines_mean_what_they_did` holds every command line K2's help
+//! has shown to the call it made before the bridge, and
+//! `every_pack_verb_runs_through_the_bridge` fails when the pack gains a verb
+//! the bridge doesn't run.
 
-use k2_mpc_board::verbs::{self, End, Layer, ObjRev, Verb, VerbCode, VerbError};
-use k2_mpc_board::{json as fj, Board, Id, Limits, ObjectType, Position, Sha256};
-use serde_json::{Map, Value};
+use std::sync::OnceLock;
 
-/// The verbs wired here, with the argument names each takes from the pack's
-/// table (a name ending in `?` may be left out).
-pub const WIRED: &[(&str, &[&str])] = &[
-    ("add", &["kind", "fields", "at"]),
-    ("update", &["id", "rev", "set", "unset"]),
-    ("delete", &["id", "rev", "cascade"]),
-    ("connect", &["from", "to", "fields"]),
-    ("react", &["id", "emoji", "on?"]),
-    ("vote", &["id", "delta"]),
-    ("comment", &["target?", "text", "point?"]),
-    ("meta", &["rev", "set", "unset"]),
-    ("move", &["ids", "dx", "dy"]),
-    ("order", &["ids", "to"]),
-];
+use k2_mpc_board::{verbs, Limits};
+use k2_mpc_board_bridge::kit::errors::{lookup, ErrorReport, Value as KValue};
+use k2_mpc_board_bridge::parse::{self, Call, Names};
+use k2_mpc_board_bridge::{HostBug, Why};
 
-/// The pack's verbs that wait for the bridge's parser (0.46.9), and the ones K2
-/// answers on other routes (`list`, `read`, `search`, `fields`: `read`; `apply`:
-/// `save`). Every verb in `ARGS` is in `WIRED` or here.
-pub const LATER: &[&str] = &[
-    "put-back", "reply", "resolve", "lock", "check-add", "check-set", "check-remove", "table-cell", "table-add-row",
-    "table-remove-row", "table-add-column", "table-remove-column", "frame-order", "group", "ungroup", "align",
-    "distribute", "tidy", "copy-style", "duplicate", "paste", "connected-copy", "mind-child", "template", "clear-blob",
-    "list", "read", "search", "fields", "templates", "references", "apply", "inverse",
-];
+/// The verbs `k2 board` answers on K2's own routes, with K2's output: `list`,
+/// `read` and `search` (`/read`), `fields` (`/fields`) and `apply` (`/save`:
+/// your ids kept, groups, held edits). Through `/verb` the bridge answers them
+/// too, by the pack's rules; the CLI sends every other verb there.
+pub const K2_ROUTES: &[&str] = &["list", "read", "search", "fields", "apply"];
 
-/// Why the args don't make a verb. Typed, with the code the CLI maps to an exit.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArgError {
-    pub code: &'static str,
-    pub message: String,
-}
+/// Values K2's command line fills in when an argument the pack requires isn't
+/// given, by flag or by place: `(verb, argument, value)`.
+pub const DEFAULTS: &[(&str, &str, &str)] = &[("add", "at", "front"), ("delete", "cascade", "true"), ("vote", "delta", "1")];
 
-fn bad(code: &'static str, m: impl Into<String>) -> ArgError {
-    ArgError { code, message: m.into() }
-}
+/// Arguments that hold `--<field> <text>` pairs, never a value of their own.
+const FIELDS_ARGS: &[&str] = &["fields", "set", "unset"];
 
-fn usage(m: impl Into<String>) -> ArgError {
-    bad("bad_request", m)
-}
-
-fn text<'a>(a: &'a Map<String, Value>, k: &str) -> Result<&'a str, ArgError> {
-    a.get(k).and_then(Value::as_str).ok_or_else(|| usage(format!("{k} is required")))
-}
-
-fn opt_text<'a>(a: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
-    a.get(k).and_then(Value::as_str)
-}
-
-fn id_of(s: &str) -> Result<Id, ArgError> {
-    Id::new(s).map_err(|_| bad("id_invalid", format!("{s:?} isn't an id: 1 to 24 of a-z, 0-9, . _ -")))
-}
-
-fn rev_of(s: &str) -> Result<Sha256, ArgError> {
-    Sha256::parse(s).map_err(|_| usage(format!("{s:?} isn't a rev: read the object first, its rev is sha256-…")))
-}
-
-fn num(a: &Map<String, Value>, k: &str) -> Result<f64, ArgError> {
-    let t = text(a, k)?;
-    let v = fj::number_value(t).map_err(|_| bad("bad_value", format!("{k} must be a number")))?;
-    Ok(v)
-}
-
-fn list<'a>(a: &'a Map<String, Value>, k: &str) -> Result<Vec<&'a str>, ArgError> {
-    match a.get(k) {
-        Some(Value::Array(l)) => l.iter().map(|x| x.as_str().ok_or_else(|| usage(format!("{k} holds text")))).collect(),
-        Some(Value::String(s)) => Ok(s.split(',').map(str::trim).filter(|s| !s.is_empty()).collect()),
-        None => Ok(Vec::new()),
-        Some(_) => Err(usage(format!("{k} is a list"))),
-    }
-}
-
-fn pairs(a: &Map<String, Value>, k: &str) -> Result<Vec<(String, String)>, ArgError> {
-    match a.get(k) {
-        None => Ok(Vec::new()),
-        Some(Value::Object(m)) => m
-            .iter()
-            .map(|(n, v)| match v {
-                Value::String(s) => Ok((n.clone(), s.clone())),
-                other => Ok((n.clone(), other.to_string())),
-            })
-            .collect(),
-        Some(_) => Err(usage(format!("{k} is {{field: value}}"))),
-    }
-}
-
-fn from_verb(e: VerbError) -> ArgError {
-    let (code, message) = refusal_of(&e);
-    ArgError { code, message }
-}
-
-/// A verb's refusal as a wire code. Every `VerbError` the pack has, and a loud
-/// one for any it adds (`#[non_exhaustive]` from v0.1.2).
-#[allow(unreachable_patterns)]
-pub fn refusal_of(e: &VerbError) -> (&'static str, String) {
-    match e {
-        VerbError::Conflict(k2_mpc_board::Conflict::Refused(r)) => (r.code.as_str(), r.detail.clone()),
-        VerbError::Conflict(_) => ("board_conflict", "it changed since you read it: read it again, then use the new rev".to_string()),
-        VerbError::Refused { code, detail, .. } => (code_str(*code), detail.clone()),
-        other => ("verb_error_unknown", format!("this K2 doesn't know that answer from the board pack: {other:?}")),
-    }
-}
-
-#[allow(unreachable_patterns)]
-fn code_str(c: VerbCode) -> &'static str {
-    match c {
-        VerbCode::NeedsActor => "needs_actor",
-        VerbCode::VotingOff => "voting_off",
-        VerbCode::NoVotesLeft => "no_votes_left",
-        VerbCode::WrongType => "wrong_type",
-        VerbCode::TooFew => "too_few",
-        VerbCode::NoTemplate => "no_template",
-        VerbCode::UnknownField => "unknown_field",
-        VerbCode::UnknownType => "unknown_type",
-        VerbCode::NoSuchItem => "no_such_item",
-        VerbCode::NoFreeId => "no_free_id",
-        VerbCode::BadValue => "bad_value",
-        _ => "verb_code_unknown",
-    }
-}
-
-fn type_of(board: &Board, id: &Id) -> Result<String, ArgError> {
-    board
-        .objects
-        .iter()
-        .find(|o| o.id == *id)
-        .map(|o| o.kind.as_str().to_string())
-        .ok_or_else(|| bad("no_object", format!("no object {id} in this file")))
-}
-
-fn edits(type_name: &str, a: &Map<String, Value>, set_key: &str) -> Result<(k2_mpc_board::Fields, Vec<String>), ArgError> {
-    let ps = pairs(a, set_key)?;
-    let refs: Vec<(&str, &str)> = ps.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-    let mut e = verbs::flags(type_name, &refs, &Limits::V1).map_err(from_verb)?;
-    for u in list(a, "unset")? {
-        e.unset.push(u.to_string());
-    }
-    Ok((e.set, e.unset))
-}
-
-fn end_of(v: Option<&Value>, k: &str) -> Result<End, ArgError> {
-    match v {
-        Some(Value::String(s)) => Ok(End::Object { id: id_of(s)?, anchor: None }),
-        Some(Value::Object(m)) => {
-            if let Some(id) = m.get("id").and_then(Value::as_str) {
-                return Ok(End::Object { id: id_of(id)?, anchor: m.get("anchor").and_then(Value::as_str).map(str::to_string) });
-            }
-            let x = m.get("x").and_then(|x| x.as_str().map(str::to_string).or_else(|| Some(x.to_string()))).unwrap_or_default();
-            let y = m.get("y").and_then(|x| x.as_str().map(str::to_string).or_else(|| Some(x.to_string()))).unwrap_or_default();
-            let p = |t: &str| fj::number_value(t).map_err(|_| bad("bad_value", format!("{k} is an object id or x,y")));
-            Ok(End::Point { x: p(&x)?, y: p(&y)? })
-        }
-        _ => Err(usage(format!("{k} is an object id"))),
-    }
-}
-
-fn obj_revs(a: &Map<String, Value>) -> Result<Vec<ObjRev>, ArgError> {
-    let ids = list(a, "ids")?;
-    let revs = list(a, "revs")?;
-    if ids.is_empty() {
-        return Err(usage("ids is required: one or more object ids"));
-    }
-    if ids.len() != revs.len() {
-        return Err(usage("one rev for each id, in the same order (--rev a,b)"));
-    }
-    ids.iter().zip(revs).map(|(i, r)| Ok(ObjRev { id: id_of(i)?, rev: rev_of(r)? })).collect()
-}
-
-/// `{verb, args}` as the pack's [`Verb`]. `board` is the file as it is under the
-/// writer lock, for the types `update` and `connect` read fields by.
-pub fn verb_of(name: &str, args: &Value, board: &Board) -> Result<Verb, ArgError> {
-    let empty = Map::new();
-    let a = args.as_object().unwrap_or(&empty);
-    Ok(match name {
-        "add" => {
-            let kind = text(a, "kind")?;
-            let (fields, unset) = edits(kind, a, "fields")?;
-            if !unset.is_empty() {
-                return Err(usage("add sets fields; null removes nothing on a new object"));
-            }
-            let at = match opt_text(a, "at") {
-                None | Some("front") => Position::Front,
-                Some("back") => Position::Back,
-                Some(other) => return Err(usage(format!("at is front or back, not {other:?}"))),
-            };
-            Verb::Add { kind: ObjectType::parse(kind).map_err(|_| bad("unknown_type", format!("no type {kind}: k2 board fields")))?, fields, at }
-        }
-        "update" => {
-            let id = id_of(text(a, "id")?)?;
-            let (set, unset) = edits(&type_of(board, &id)?, a, "set")?;
-            if set.is_empty() && unset.is_empty() {
-                return Err(usage("update needs at least one --<field> <value> (null removes it)"));
-            }
-            Verb::Update { id, rev: rev_of(text(a, "rev")?)?, set, unset }
-        }
-        "delete" => Verb::Delete {
-            id: id_of(text(a, "id")?)?,
-            rev: rev_of(text(a, "rev")?)?,
-            cascade: !matches!(opt_text(a, "cascade"), Some("false")),
-        },
-        "connect" => {
-            let (fields, _) = edits("connector", a, "fields")?;
-            Verb::Connect { from: end_of(a.get("from"), "from")?, to: end_of(a.get("to"), "to")?, fields }
-        }
-        "react" => Verb::React {
-            id: id_of(text(a, "id")?)?,
-            emoji: text(a, "emoji")?.to_string(),
-            on: match opt_text(a, "on") {
-                None => None,
-                Some("true") => Some(true),
-                Some("false") => Some(false),
-                Some(o) => return Err(usage(format!("on is true or false, not {o:?}"))),
-            },
-        },
-        "vote" => {
-            let d = opt_text(a, "delta").unwrap_or("1");
-            Verb::Vote { id: id_of(text(a, "id")?)?, delta: d.parse().map_err(|_| bad("bad_value", "delta is a whole number, like 1 or -1"))? }
-        }
-        "comment" => {
-            let point = match opt_text(a, "point") {
-                None => None,
-                Some(p) => {
-                    let xy: Vec<&str> = p.split(',').map(str::trim).collect();
-                    let n = |t: &str| fj::number_value(t).map_err(|_| bad("bad_value", "point is x,y"));
-                    match xy.as_slice() {
-                        [x, y] => Some((n(x)?, n(y)?)),
-                        _ => return Err(usage("point is x,y")),
-                    }
-                }
-            };
-            let target = opt_text(a, "target").map(id_of).transpose()?;
-            if target.is_none() && point.is_none() {
-                return Err(usage("a comment is on an object (its id) or at a point (--point x,y)"));
-            }
-            Verb::Comment { target, text: text(a, "text")?.to_string(), point }
-        }
-        "meta" => {
-            let ps = pairs(a, "set")?;
-            let mut set = k2_mpc_board::Fields::new();
-            for (n, v) in &ps {
-                if n == "timer" {
-                    return Err(usage("timer: a board file doesn't run a timer"));
-                }
-                if v != "null" {
-                    set.insert(n.clone(), verbs::field_from_text("", n, v, &Limits::V1).map_err(|r| bad(r.code.as_str(), r.detail))?);
-                }
-            }
-            let mut unset: Vec<String> = ps.iter().filter(|(_, v)| v == "null").map(|(n, _)| n.clone()).collect();
-            unset.extend(list(a, "unset")?.into_iter().map(str::to_string));
-            Verb::Meta { rev: rev_of(text(a, "rev")?)?, set, unset }
-        }
-        "move" => Verb::Move { ids: obj_revs(a)?, dx: num(a, "dx")?, dy: num(a, "dy")? },
-        "order" => {
-            let ids = list(a, "ids")?.into_iter().map(id_of).collect::<Result<Vec<_>, _>>()?;
-            if ids.is_empty() {
-                return Err(usage("ids is required: one or more object ids"));
-            }
-            let to = match text(a, "to")? {
-                "front" => Layer::Front,
-                "back" => Layer::Back,
-                "forward" => Layer::Forward,
-                "backward" => Layer::Backward,
-                t => match t.strip_prefix("after:") {
-                    Some(rest) => Layer::After(rest.split(',').map(str::trim).map(id_of).collect::<Result<Vec<_>, _>>()?),
-                    None => return Err(usage("to is front, back, forward, backward or after:<id>")),
-                },
-            };
-            Verb::Order { ids, to }
-        }
-        other if LATER.contains(&other) => {
-            return Err(usage(format!("{other} isn't wired for files in this K2 yet: use apply with raw ops")));
-        }
-        other => return Err(usage(format!("no verb {other}"))),
+/// K2's names for the bridge's parser: the board's own, plus `connect`'s
+/// `--fromAnchor` and `--toAnchor`.
+pub fn names() -> &'static Names {
+    static N: OnceLock<Names> = OnceLock::new();
+    N.get_or_init(|| {
+        Names::default()
+            .anchor("connect", "fromAnchor", "from")
+            .and_then(|n| n.anchor("connect", "toAnchor", "to"))
+            .expect("K2's names for the board bridge hold")
     })
+}
+
+/// A command line, from the verb on, as the bridge's call. K2's flags (the
+/// file, `--json`, `--dry-run`) are already gone.
+pub fn call_of(argv: &[String]) -> Result<Call, Why> {
+    let argv = k2_argv(argv)?;
+    parse::parse(&argv, names(), &Limits::V1)
+}
+
+/// One word of a command line, read the bridge's way: a flag always takes the
+/// next word as its value, and after `--` every word is positional.
+#[derive(Debug, Clone, PartialEq)]
+enum Word {
+    Flag(String, Option<String>),
+    Pos(String),
+}
+
+fn words(rest: &[String]) -> Vec<Word> {
+    let mut out = Vec::new();
+    let mut it = rest.iter();
+    while let Some(tok) = it.next() {
+        if tok == "--" {
+            out.extend(it.by_ref().map(|t| Word::Pos(t.clone())));
+            break;
+        }
+        match tok.strip_prefix("--").filter(|f| !f.is_empty()) {
+            Some(flag) => match flag.split_once('=') {
+                Some((n, v)) => out.push(Word::Flag(n.to_string(), Some(v.to_string()))),
+                None => out.push(Word::Flag(flag.to_string(), it.next().cloned())),
+            },
+            None => out.push(Word::Pos(tok.clone())),
+        }
+    }
+    out
+}
+
+/// MPC-E122 in the bridge's shape: the verb, the argument, and the reason in
+/// the bridge's words; a value the caller gave is never in the message.
+fn usage(verb: &str, arg: &str, reason: &str) -> Why {
+    let Some(entry) = lookup("MPC-E122") else {
+        return Why::HostBug(HostBug::NoRow { id: "MPC-E122" });
+    };
+    let message = format!("{verb}: {reason}: {arg}");
+    Why::Report(
+        ErrorReport::new(entry, message.clone())
+            .with("reason", KValue::Str(message))
+            .with("verb", KValue::Str(verb.to_string()))
+            .with("arg", KValue::Str(arg.to_string())),
+    )
+}
+
+/// The pack's required arguments a word in place fills, in order.
+fn slots(verb: &str) -> Vec<&'static str> {
+    verbs::ARGS
+        .iter()
+        .find(|(n, _)| *n == verb)
+        .map(|(_, args)| args.iter().copied().filter(|a| !a.ends_with('?') && !FIELDS_ARGS.contains(a)).collect())
+        .unwrap_or_default()
+}
+
+/// K2's spellings to the bridge's: see the module's notes. Everything else
+/// passes as it came, for the bridge to read or refuse.
+pub fn k2_argv(argv: &[String]) -> Result<Vec<String>, Why> {
+    let Some((verb, rest)) = argv.split_first() else {
+        return Ok(argv.to_vec());
+    };
+    let mut flags: Vec<(String, Option<String>)> = Vec::new();
+    let mut pos: Vec<String> = Vec::new();
+    for w in words(rest) {
+        match w {
+            Word::Flag(n, v) => flags.push((n, v)),
+            Word::Pos(p) => pos.push(p),
+        }
+    }
+    let has = |flags: &[(String, Option<String>)], n: &str| flags.iter().any(|(f, _)| f == n);
+    match verb.as_str() {
+        // `move <id>... --rev <rev>[,<rev>...]`: one rev per id, in order.
+        "move" if has(&flags, "rev") && !has(&flags, "ids") => {
+            let revs: Vec<String> = flags
+                .iter()
+                .find(|(f, _)| f == "rev")
+                .and_then(|(_, v)| v.clone())
+                .map(|v| v.split(',').map(|r| r.trim().to_string()).collect())
+                .unwrap_or_default();
+            if pos.is_empty() {
+                return Err(usage("move", "ids", "name the objects to move"));
+            }
+            if revs.len() != pos.len() || revs.iter().any(String::is_empty) {
+                return Err(usage("move", "rev", "one rev for each id, in the same order"));
+            }
+            let ids: Vec<String> = pos.iter().zip(&revs).map(|(i, r)| format!("{i}@{r}")).collect();
+            flags.retain(|(f, _)| f != "rev");
+            flags.push(("ids".to_string(), Some(ids.join(","))));
+            pos.clear();
+        }
+        // `order <id>... --to …`: the ids, in one list.
+        "order" if pos.len() > 1 && has(&flags, "to") && !has(&flags, "ids") => {
+            let ids = pos.join(",");
+            pos = vec![ids];
+        }
+        // `comment <id> <words>…`, or `comment --point x,y <words>…`.
+        "comment" if !has(&flags, "text") && !pos.is_empty() => {
+            if !has(&flags, "point") && !has(&flags, "target") && pos.len() > 1 {
+                let target = pos.remove(0);
+                flags.push(("target".to_string(), Some(target)));
+            }
+            if has(&flags, "point") || has(&flags, "target") {
+                flags.push(("text".to_string(), Some(pos.join(" "))));
+                pos.clear();
+            }
+        }
+        // `comment <id> --text <words>`: the word in place is the target.
+        "comment" if has(&flags, "text") && !has(&flags, "target") && !has(&flags, "point") && pos.len() == 1 => {
+            flags.push(("target".to_string(), pos.pop()));
+        }
+        _ => {}
+    }
+    // K2's defaults, for a required argument neither a flag nor a word in place gives.
+    let free: Vec<&str> = slots(verb).into_iter().filter(|a| !has(&flags, a)).collect();
+    for (v, arg, value) in DEFAULTS {
+        if v == verb && free.iter().skip(pos.len()).any(|a| a == arg) {
+            flags.push((arg.to_string(), Some(value.to_string())));
+        }
+    }
+    let mut out = vec![verb.clone()];
+    for (n, v) in flags {
+        out.push(format!("--{n}"));
+        out.extend(v);
+    }
+    if !pos.is_empty() {
+        out.push("--".to_string());
+        out.extend(pos);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use k2_mpc_board::verbs::{End, Layer, ObjRev, Verb};
+    use k2_mpc_board::{json as fj, Board, Id, ObjectType, Position, Sha256};
+    use k2_mpc_board_bridge::parse::CallKind;
 
-    /// The drift check: every wired verb takes exactly the pack's argument names,
-    /// and every verb the pack has is wired or listed as later. A verb the pack
-    /// adds fails here until it's one or the other.
-    #[test]
-    fn wired_args_match_the_pack() {
-        for (name, names) in WIRED {
-            let theirs = verbs::ARGS.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("the pack has no verb {name}"));
-            assert_eq!(*names, theirs.1, "{name}'s arguments");
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn board() -> Board {
+        Board::from_json(br#"{"objects":[{"id":"s-1","type":"sticky"},{"id":"s-2","type":"sticky"}],"frames":[],"people":{},"settings":{}}"#, &Limits::V1).expect("board")
+    }
+
+    fn verb(words: &[&str]) -> Verb {
+        let call = call_of(&argv(words)).unwrap_or_else(|e| panic!("{words:?}: {e:?}"));
+        call.verb(&board()).unwrap_or_else(|e| panic!("{words:?}: {e:?}")).unwrap_or_else(|| panic!("{words:?}: no verb"))
+    }
+
+    fn id(s: &str) -> Id {
+        Id::new(s).expect("id")
+    }
+
+    fn refused(words: &[&str]) -> (&'static str, u8) {
+        match call_of(&argv(words)) {
+            Ok(c) => panic!("{words:?} parsed: {c:?}"),
+            Err(Why::Report(r)) => (r.id(), r.exit()),
+            Err(other) => panic!("{words:?}: {other:?}"),
         }
+    }
+
+    /// Every command line K2's help showed before the bridge still makes the
+    /// call it made then, by the names agents use: the guarantee the old
+    /// hand-wiring's drift test gave.
+    #[test]
+    fn old_command_lines_mean_what_they_did() {
+        let rev = Sha256::of(b"r").to_string();
+        let r = Sha256::parse(&rev).expect("rev");
+        let mut fields = fj::Fields::new();
+        fields.insert("text".into(), fj::Value::Str("Ship it".into()));
+        fields.insert("x".into(), fj::Value::Num(1.25));
+        assert_eq!(verb(&["add", "sticky", "--text", "Ship it", "--x", "1.25"]), Verb::Add { kind: ObjectType::parse("sticky").expect("t"), fields: fields.clone(), at: Position::Front });
+        assert_eq!(verb(&["add", "sticky", "--text", "Ship it", "--x", "1.25", "--at", "back"]), Verb::Add { kind: ObjectType::parse("sticky").expect("t"), fields, at: Position::Back });
+        let mut set = fj::Fields::new();
+        set.insert("text".into(), fj::Value::Str("new".into()));
+        assert_eq!(verb(&["update", "s-1", "--rev", &rev, "--text", "new"]), Verb::Update { id: id("s-1"), rev: r, set: set.clone(), unset: vec![] });
+        assert_eq!(verb(&["delete", "s-1", "--rev", &rev]), Verb::Delete { id: id("s-1"), rev: r, cascade: true });
+        assert_eq!(verb(&["delete", "s-1", "--rev", &rev, "--cascade", "false"]), Verb::Delete { id: id("s-1"), rev: r, cascade: false });
+        let mut label = fj::Fields::new();
+        label.insert("label".into(), fj::Value::Str("next".into()));
+        assert_eq!(
+            verb(&["connect", "s-1", "s-2", "--toAnchor", "left", "--label", "next"]),
+            Verb::Connect { from: End::Object { id: id("s-1"), anchor: None }, to: End::Object { id: id("s-2"), anchor: Some("left".into()) }, fields: label }
+        );
+        assert_eq!(
+            verb(&["connect", "s-1", "1.5,-2", "--fromAnchor", "top"]),
+            Verb::Connect { from: End::Object { id: id("s-1"), anchor: Some("top".into()) }, to: End::Point { x: 1.5, y: -2.0 }, fields: fj::Fields::new() }
+        );
+        assert_eq!(verb(&["react", "s-1", "👍"]), Verb::React { id: id("s-1"), emoji: "👍".into(), on: None });
+        assert_eq!(verb(&["react", "s-1", "👍", "--on", "false"]), Verb::React { id: id("s-1"), emoji: "👍".into(), on: Some(false) });
+        assert_eq!(verb(&["vote", "s-1"]), Verb::Vote { id: id("s-1"), delta: 1 });
+        assert_eq!(verb(&["vote", "s-1", "--delta", "-1"]), Verb::Vote { id: id("s-1"), delta: -1 });
+        assert_eq!(verb(&["comment", "s-1", "why", "this?"]), Verb::Comment { target: Some(id("s-1")), text: "why this?".into(), point: None });
+        assert_eq!(verb(&["comment", "s-1", "why this?"]), Verb::Comment { target: Some(id("s-1")), text: "why this?".into(), point: None });
+        assert_eq!(verb(&["comment", "--point", "5,5", "a", "note"]), Verb::Comment { target: None, text: "a note".into(), point: Some((5.0, 5.0)) });
+        assert_eq!(verb(&["comment", "s-1", "--text", "why"]), Verb::Comment { target: Some(id("s-1")), text: "why".into(), point: None });
+        let mut title = fj::Fields::new();
+        title.insert("title".into(), fj::Value::Str("Q4 plan".into()));
+        assert_eq!(verb(&["meta", "--rev", &rev, "--title", "Q4 plan"]), Verb::Meta { rev: r, set: title, unset: vec![] });
+        assert_eq!(
+            verb(&["move", "s-1", "s-2", "--rev", &format!("{rev},{rev}"), "--dx", "40", "--dy", "-0"]),
+            Verb::Move { ids: vec![ObjRev { id: id("s-1"), rev: r }, ObjRev { id: id("s-2"), rev: r }], dx: 40.0, dy: -0.0 }
+        );
+        assert_eq!(verb(&["order", "s-1", "s-2", "--to", "back"]), Verb::Order { ids: vec![id("s-1"), id("s-2")], to: Layer::Back });
+        assert_eq!(verb(&["order", "s-1", "--to", "after:s-2"]), Verb::Order { ids: vec![id("s-1")], to: Layer::After(vec![id("s-2")]) });
+        // The bridge's own forms work too.
+        assert_eq!(verb(&["move", &format!("s-1@{rev}"), "--dx", "1", "--dy", "2"]), Verb::Move { ids: vec![ObjRev { id: id("s-1"), rev: r }], dx: 1.0, dy: 2.0 });
+        assert_eq!(verb(&["add", "sticky", "back"]), Verb::Add { kind: ObjectType::parse("sticky").expect("t"), fields: fj::Fields::new(), at: Position::Back });
+        assert_eq!(verb(&["connect", "s-1:top", "s-2"]), Verb::Connect { from: End::Object { id: id("s-1"), anchor: Some("top".into()) }, to: End::Object { id: id("s-2"), anchor: None }, fields: fj::Fields::new() });
+    }
+
+    #[test]
+    fn k2_spellings_refuse_as_the_kits_rows() {
+        let rev = Sha256::of(b"r").to_string();
+        // one rev per id
+        assert_eq!(refused(&["move", "s-1", "--rev", &format!("{rev},{rev}"), "--dx", "1", "--dy", "1"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["move", "--rev", &rev, "--dx", "1", "--dy", "1"]), ("MPC-E122", 2));
+        // the bridge's own: an unknown verb, an unknown flag, a missing argument, a bad value
+        assert_eq!(refused(&["frobnicate"]), ("MPC-E120", 2));
+        assert_eq!(refused(&["delete", "s-1", "--rev", &rev, "--colour", "red"]), ("MPC-E120", 2));
+        assert_eq!(refused(&["update", "s-1", "--text", "x"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["update", "s-1", "--rev", "nope", "--text", "x"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["vote", "s-1", "--delta", "1.5"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["order", "s-1", "--to", "sideways"]), ("MPC-E122", 2));
+        assert_eq!(refused(&["add", "hologram"]), ("MPC-E122", 2));
+        assert_eq!(refused(&[]), ("MPC-E122", 2));
+    }
+
+    /// The exits K2 agreed with K2 Cores (11-04), as the kit's rows give them.
+    /// A row that moves fails here: the CLI gives each row's exit as it is.
+    #[test]
+    fn the_kits_rows_give_the_agreed_exits() {
+        let agreed: &[(u8, &[&str])] = &[
+            (1, &["MPC-E830", "MPC-E831", "MPC-E832", "MPC-E833", "MPC-E834", "MPC-E856", "MPC-E857", "MPC-E858", "MPC-E859"]),
+            (2, &["MPC-E120", "MPC-E122", "MPC-E847", "MPC-E848", "MPC-E849", "MPC-E850", "MPC-E851", "MPC-E852", "MPC-E853", "MPC-E854", "MPC-E855"]),
+            (4, &["MPC-E838", "MPC-E839", "MPC-E840", "MPC-E841", "MPC-E842", "MPC-E843", "MPC-E844", "MPC-E845", "MPC-E846"]),
+            (5, &["MPC-E835", "MPC-E836", "MPC-E837"]),
+        ];
+        let names = [("MPC-E830", "conflict"), ("MPC-E831", "exists"), ("MPC-E844", "newer_format"), ("MPC-E835", "locked"), ("MPC-E836", "voting_off"), ("MPC-E837", "no_votes_left")];
+        for (exit, ids) in agreed {
+            for id in *ids {
+                let e = lookup(id).unwrap_or_else(|| panic!("the kit has no row {id}"));
+                assert_eq!(e.exit, *exit, "{id} ({})", e.name);
+            }
+        }
+        for (id, name) in names {
+            assert_eq!(lookup(id).expect("row").name, name);
+        }
+        let listed: usize = agreed.iter().map(|(_, ids)| ids.len()).sum();
+        assert_eq!(listed, 30 + 2, "every board row (E830 to E859) and the two usage rows");
+    }
+
+    /// Every verb the pack lists parses through K2's names (by its own example
+    /// line), and is a read or a change as the bridge's registry says.
+    #[test]
+    fn every_pack_verb_runs_through_the_bridge() {
         for (name, _) in verbs::ARGS {
-            let wired = WIRED.iter().any(|(n, _)| n == name);
-            let later = LATER.contains(name);
-            assert!(wired ^ later, "{name}: wire it, or list it as later (not both)");
+            let ex = parse::example(name).unwrap_or_else(|| panic!("the bridge has no example for {name}"));
+            let call = call_of(&ex).unwrap_or_else(|e| panic!("{name}: {ex:?}: {e:?}"));
+            let edit = k2_mpc_board_bridge::registry::kind_of(name) == k2_mpc_board_bridge::kit::parity::VerbKind::Edit;
+            assert!(edit || call.kind() == CallKind::Read, "{name}");
         }
-        for n in LATER {
-            assert!(verbs::ARGS.iter().any(|(a, _)| a == n), "{n} is listed as later, and the pack has no such verb");
+        for v in K2_ROUTES {
+            assert!(verbs::ARGS.iter().any(|(n, _)| n == v), "{v} is the pack's verb");
         }
-        assert_eq!(WIRED.len() + LATER.len(), verbs::ARGS.len());
-    }
-
-    /// Every argument name a wired verb uses on the wire is one of the pack's,
-    /// and `revs` (the CLI's list of revs for `ids`) is the one addition.
-    #[test]
-    fn the_wire_uses_only_the_packs_names() {
-        let board = Board::from_json(br#"{"objects":[{"id":"s-1","type":"sticky"}],"frames":[],"people":{},"settings":{}}"#, &Limits::V1).expect("board");
-        let rev = board.objects[0].rev().expect("rev").to_string();
-        let calls = [
-            ("add", json!({ "kind": "sticky", "fields": { "text": "hi", "x": "1.25" }, "at": "front" })),
-            ("update", json!({ "id": "s-1", "rev": rev, "set": { "text": "new" }, "unset": [] })),
-            ("delete", json!({ "id": "s-1", "rev": rev, "cascade": "true" })),
-            ("connect", json!({ "from": "s-1", "to": { "x": "1", "y": "2" }, "fields": { "label": "l" } })),
-            ("react", json!({ "id": "s-1", "emoji": "👍", "on": "true" })),
-            ("vote", json!({ "id": "s-1", "delta": "1" })),
-            ("comment", json!({ "target": "s-1", "text": "why", "point": "1,2" })),
-            ("meta", json!({ "rev": rev, "set": { "title": "T" }, "unset": [] })),
-            ("move", json!({ "ids": ["s-1"], "revs": [rev], "dx": "10", "dy": "-0" })),
-            ("order", json!({ "ids": ["s-1"], "to": "back" })),
-        ];
-        assert_eq!(calls.len(), WIRED.len(), "a call for every wired verb");
-        for (name, args) in calls {
-            let names = WIRED.iter().find(|(n, _)| *n == name).expect("wired").1;
-            for k in args.as_object().expect("o").keys() {
-                assert!(names.iter().any(|n| n.trim_end_matches('?') == k) || (k == "revs" && names.contains(&"ids")), "{name}: {k} isn't the pack's name");
-            }
-            verb_of(name, &args, &board).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        for (v, arg, _) in DEFAULTS {
+            assert!(slots(v).contains(arg), "{v} {arg}: a default only for an argument the pack requires");
         }
+        names();
     }
 
     #[test]
-    fn a_number_is_never_rounded_and_null_removes() {
-        let board = Board::from_json(br#"{"objects":[{"id":"s-1","type":"sticky","link":"https://x.test"}],"frames":[],"people":{},"settings":{}}"#, &Limits::V1).expect("board");
-        let rev = board.objects[0].rev().expect("rev").to_string();
-        match verb_of("update", &json!({ "id": "s-1", "rev": rev, "set": { "x": "1.25", "link": "null" } }), &board).expect("verb") {
-            Verb::Update { set, unset, .. } => {
-                assert_eq!(set.get("x"), Some(&fj::Value::Num(1.25)));
-                assert_eq!(unset, ["link"]);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn bad_args_refuse_typed() {
-        let board = Board::from_json(br#"{"objects":[{"id":"s-1","type":"sticky"}],"frames":[],"people":{},"settings":{}}"#, &Limits::V1).expect("board");
-        let cases = [
-            ("update", json!({ "id": "s-1", "rev": "nope", "set": { "text": "x" } }), "bad_request"),
-            ("update", json!({ "id": "s-9", "rev": "nope", "set": { "text": "x" } }), "no_object"),
-            ("update", json!({ "id": "s-1", "rev": format!("sha256-{}", "0".repeat(64)), "set": { "colour": "x" } }), "unknown_field"),
-            ("add", json!({ "kind": "hologram" }), "unknown_type"),
-            ("move", json!({ "ids": ["s-1"], "revs": [], "dx": "1", "dy": "1" }), "bad_request"),
-            ("meta", json!({ "rev": format!("sha256-{}", "0".repeat(64)), "set": { "timer": "{}" } }), "bad_request"),
-            ("order", json!({ "ids": ["s-1"], "to": "sideways" }), "bad_request"),
-            ("tidy", json!({}), "bad_request"),
-            ("frobnicate", json!({}), "bad_request"),
-        ];
-        for (name, args, code) in cases {
-            let e = verb_of(name, &args, &board).expect_err(name);
-            assert_eq!(e.code, code, "{name}: {e:?}");
-        }
-    }
-
-    #[test]
-    fn every_verb_refusal_code_has_a_wire_name() {
-        for c in VerbCode::ALL {
-            assert_eq!(code_str(*c), c.as_str(), "K2's names follow the pack's");
-        }
+    fn k2_argv_rewrites_only_k2s_spellings() {
+        assert_eq!(k2_argv(&argv(&["templates"])).expect("argv"), argv(&["templates"]));
+        assert_eq!(k2_argv(&argv(&["meta"])).expect("argv"), argv(&["meta"]), "meta with nothing reads the settings");
+        assert_eq!(k2_argv(&argv(&["vote", "s-1"])).expect("argv"), argv(&["vote", "--delta", "1", "--", "s-1"]));
+        assert_eq!(k2_argv(&argv(&["vote", "s-1", "--delta=-1"])).expect("argv"), argv(&["vote", "--delta", "-1", "--", "s-1"]));
+        assert_eq!(k2_argv(&argv(&["add", "sticky", "back"])).expect("argv"), argv(&["add", "--", "sticky", "back"]), "a word in place fills at: no default");
+        assert_eq!(k2_argv(&argv(&["tidy", "--", "--x"])).expect("argv"), argv(&["tidy", "--", "--x"]));
     }
 }

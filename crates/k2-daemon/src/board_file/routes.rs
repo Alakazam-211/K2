@@ -11,7 +11,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use base64::Engine as _;
-use k2_mpc_board::{json as fj, package_guard_of, Blob, Board, Id, Limits, Package, Person, Refusal, RefusalCode, Sha256, MIN_READER};
+use k2_mpc_board::{json as fj, package_guard_of, Blob, Board, Id, Limits, Mode, On, Package, Person, Refusal, RefusalCode, Sha256, MIN_READER};
+use k2_mpc_board_bridge::json::{answer_json, refused_json};
+use k2_mpc_board_bridge::kit::errors::Value as KValue;
+use k2_mpc_board_bridge::parse::CallKind;
+use k2_mpc_board_bridge::{Answer, Refused, Why};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256 as ShaHasher};
 
@@ -104,8 +108,6 @@ fn failed(f: &SaveFail) -> CliResponse {
         SaveFail::Io { code, message } => refusal("503 Service Unavailable", code, message.clone()),
         SaveFail::Busy => refusal("409 Conflict", "busy", "the file kept changing; try again, your changes are kept"),
         SaveFail::WriteFailed(m) => refusal("500 Internal Server Error", "write_failed", m.clone()),
-        SaveFail::Verb { code: "board_conflict", message } => refusal("409 Conflict", "board_conflict", message.clone()),
-        SaveFail::Verb { code, message } => refusal("400 Bad Request", code, message.clone()),
         SaveFail::Merge(conflicts) => with_status(
             "409 Conflict",
             json!({ "ok": false, "error": { "code": "board_conflict", "hint": "the copy and the file both changed the same things: nothing was written" }, "conflicts": conflicts }),
@@ -515,7 +517,7 @@ fn save_route(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliRespo
     let staged = |h: &Sha256| stage::get(&owner, h);
     let at = now();
     let base = input.str("baseHash");
-    let a = save::save(&t.abs, &SaveInput { base_hash: base.as_deref(), groups: &groups, me: &me, at: &at, staged: &staged, plan: None }).map_err(|f| failed(&f))?;
+    let a = save::save(&t.abs, &SaveInput { base_hash: base.as_deref(), groups: &groups, me: &me, at: &at, staged: &staged }).map_err(|f| failed(&f))?;
     if a.wrote {
         emit_changed(&t, &a.hash, caller);
     }
@@ -610,62 +612,107 @@ fn named(path: &Path, hash: &str) -> Value {
     json!({ "kind": "file", "path": path.to_string_lossy(), "version": hash, "mode": "single-player" })
 }
 
-/// `POST verb {path, verb, args}`: one friendly verb (`board_file::verbs`),
-/// planned against the file under its writer lock and saved through the guard.
+/// Most words one verb's command line may carry.
+const MAX_ARGV: usize = 256;
+
+/// The echo of a call refused before the file was read: no version.
+fn unread(path: &str) -> On {
+    On { kind: k2_mpc_board::FORMAT, path: path.to_string(), version: None, mode: Mode::File }
+}
+
+/// A bridge answer, as the bridge's JSON (`{on, dry_run, value}`), byte for
+/// byte: its numbers print as `read` prints them, -0 as 0.
+fn kit_answer(a: &Answer) -> CliResponse {
+    CliResponse::ok_json(answer_json(a).to_json())
+}
+
+/// A bridge refusal, as the bridge's JSON: the kit's report with `code` and
+/// the echo `on`. Its `exit` is the row's, and the CLI exits with it; the HTTP
+/// status follows it. A host bug has no row (`exit` null): a 500.
+fn kit_refused(r: &Refused) -> CliResponse {
+    let status = match r.why.exit() {
+        Some(1) => "409 Conflict",
+        Some(2) => "400 Bad Request",
+        Some(3) => "403 Forbidden",
+        Some(4) => "422 Unprocessable Entity",
+        Some(5) => "423 Locked",
+        Some(_) | None => "500 Internal Server Error",
+    };
+    CliResponse { status, content_type: "application/json", body: refused_json(r).to_json() }
+}
+
+fn argv_of(input: &Input) -> Result<Vec<String>, CliResponse> {
+    match input.body.get("argv") {
+        Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_ARGV => {
+            a.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<Vec<_>>>().ok_or_else(|| bad("argv must be a list of strings"))
+        }
+        _ => Err(bad(format!("argv is required: the verb and its words, as a list (at most {MAX_ARGV})"))),
+    }
+}
+
+/// `explain` and `capabilities`: the kit's, with the board's file verbs as
+/// the file registry (`source: "file"`). `None` for any other verb.
+fn meta_verb(argv: &[String], json_out: bool, path: &str) -> Option<CliResponse> {
+    let out = k2_mpc_board_bridge::kit::errors::run_meta(argv, json_out, &[k2_mpc_board_bridge::registry::registry()], &k2_mpc_board_bridge::kit::session::Config::default())?;
+    Some(match out.refusal {
+        Some(report) => kit_refused(&Refused { on: unread(path), why: Why::Report(report) }),
+        None => ok(json!({ "exit": out.exit, "stdout": String::from_utf8_lossy(&out.stdout) })),
+    })
+}
+
+/// `POST verb {path, argv, dryRun?, json?}`: one board verb, as its command
+/// line from the verb on (K2's own flags gone), through the pack's bridge
+/// (`board_file::verbs`): its parser, its run inside K2's save
+/// (`save::run_call`), its rows. Rights by the call: a read needs read, a
+/// change edit too. The answer is the bridge's JSON, an answer or a refusal;
+/// `explain` and `capabilities` are the kit's.
 fn verb(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse> {
+    let argv = argv_of(input)?;
+    // The kit's own pages: they read no file, so the path needn't be one.
+    if let Some(out) = meta_verb(&argv, input.flag("json"), &input.str("path").unwrap_or_default()) {
+        return Ok(out);
+    }
     let t = input.target(caller)?;
-    need_edit(rights(caller, &t, input.str("workspace").as_deref())?)?;
-    let name = input.str("verb").ok_or_else(|| bad("verb is required"))?;
-    let args = input.body.get("args").cloned().unwrap_or_else(|| json!({}));
-    let me = me_for_write(&t.abs, caller)?;
-    let owner = stage::owner_of(&caller.pid());
-    let staged = |h: &Sha256| stage::get(&owner, h);
+    let r = rights(caller, &t, input.str("workspace").as_deref())?;
+    need_read(r)?;
+    let path = t.abs.to_string_lossy().to_string();
+    let call = match super::verbs::call_of(&argv) {
+        Ok(c) => c,
+        Err(why) => return Ok(kit_refused(&Refused { on: unread(&path), why })),
+    };
+    let change = call.kind() == CallKind::Change;
+    if change {
+        need_edit(r)?;
+    }
+    let bytes = fs::metadata(&t.abs).map_err(|e| io_refusal(&e))?.len();
+    let _spent = Spent::take(bytes);
+    let who = |p: &Path| -> Option<k2_mpc_board::verbs::Me> {
+        let pkg = Package::open(BufReader::new(File::open(p).ok()?), &Limits::V1).ok()?;
+        let me = me_of(caller, pkg.board(), &pkg.manifest().lineage.to_hex()).ok()?;
+        let new = (!pkg.board().people.contains_key(&me.token)).then(|| me.person.clone());
+        Some(k2_mpc_board::verbs::Me { token: me.token, new })
+    };
     let at = now();
     let group_id = format!("verb-{}", uuid::Uuid::new_v4().simple());
-    let plan = |board: &Board| -> Result<(k2_mpc_board::Group, Value), SaveFail> {
-        let v = super::verbs::verb_of(&name, &args, board).map_err(|e| SaveFail::Verb { code: e.code, message: e.message })?;
-        let pack_me = k2_mpc_board::verbs::Me { token: me.token.clone(), new: (!board.people.contains_key(&me.token)).then(|| me.person.clone()) };
-        let mut rnd = || {
-            let b = random16();
-            let mut out = [0u8; 8];
-            out.copy_from_slice(&b[..8]);
-            out
-        };
-        let mut cx = k2_mpc_board::verbs::Ctx { group_id: group_id.clone(), by: Some(pack_me), at: Some(at.clone()), random: &mut rnd };
-        let p = k2_mpc_board::verbs::plan(board, &mut cx, &v).map_err(|e| {
-            let (code, message) = super::verbs::refusal_of(&e);
-            SaveFail::Verb { code, message }
-        })?;
-        let extra = json!({
-            "ids": p.ids.iter().map(Id::as_str).collect::<Vec<_>>(),
-            "removedLocked": p.removed_locked.iter().map(Id::as_str).collect::<Vec<_>>(),
-            "removed": p.removed.iter().map(|r| r.object.id.as_str()).collect::<Vec<_>>(),
-            "orphans": p.orphans.len(),
-            "skipped": p.skipped.iter().map(Id::as_str).collect::<Vec<_>>(),
-        });
-        Ok((p.group, extra))
+    let mut rnd = || {
+        let b = random16();
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&b[..8]);
+        out
     };
-    let a = save::save(&t.abs, &SaveInput { base_hash: None, groups: &[], me: &me, at: &at, staged: &staged, plan: Some(&plan) }).map_err(|f| failed(&f))?;
-    if a.wrote {
-        emit_changed(&t, &a.hash, caller);
+    let mut ci = save::CallInput { call: &call, target: &path, me: &who, group_id: &group_id, at: &at, random: &mut rnd, dry_run: input.flag("dryRun") };
+    match save::run_call(&t.abs, &mut ci).map_err(|f| failed(&f))? {
+        save::Ran::Answer(a) => {
+            let wrote = matches!(a.value.get("saved"), Some(v) if *v != KValue::Null);
+            if change && !a.dry_run && wrote {
+                if let Some(v) = a.on.version.as_deref() {
+                    emit_changed(&t, v, caller);
+                }
+            }
+            Ok(kit_answer(&a))
+        }
+        save::Ran::Refused(r) => Ok(kit_refused(&r)),
     }
-    let mut body = named(&t.abs, &a.hash);
-    let ans = a.to_json(&me.token);
-    for (k, v) in ans.as_object().into_iter().flatten() {
-        body[k] = v.clone();
-    }
-    body["verb"] = json!(name);
-    body["planned"] = a.planned.clone();
-    if !a.held.is_empty() {
-        body["error"] = json!({ "code": "board_conflict", "hint": "it changed since you read it: read it again, then use the new rev" });
-        return Ok(with_status("409 Conflict", body));
-    }
-    if let Some(r) = a.refused.first() {
-        let code = r.get("code").and_then(Value::as_str).unwrap_or("refused").to_string();
-        body["error"] = json!({ "code": code, "hint": r.get("hint") });
-        return Ok(with_status("422 Unprocessable Entity", body));
-    }
-    Ok(ok(body))
 }
 
 /// `POST merge {path, base, copy}`: merge `copy` into `path` from `base`. Only
@@ -920,7 +967,7 @@ fn copy(input: &Input, caller: &DocCaller) -> Result<CliResponse, CliResponse> {
     let owner = stage::owner_of(&caller.pid());
     let staged = |h: &Sha256| stage::get(&owner, h);
     let at = now();
-    let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: &at, staged: &staged, plan: None };
+    let inp = SaveInput { base_hash: None, groups: &groups, me: &me, at: &at, staged: &staged };
     match save::copy_to(&t.abs, &to, &inp, input.flag("dropMissing")) {
         Ok((p, a)) => Ok(copied(&p, &a)),
         Err(save::CopyFail::Missing(list)) => Err(missing_answer(&list)),

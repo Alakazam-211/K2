@@ -228,6 +228,7 @@ export function isNotBuilt(e: unknown): boolean {
 
 /** The enable machine's steps, in `supervisor::enable_steps` order. */
 export const SEW_ENABLE_STEPS: { id: string; label: string }[] = [
+  { id: 'postgres', label: 'Install PostgreSQL' },
   { id: 'master-key', label: 'Create master key' },
   { id: 'stage', label: 'Download Sew (pinned release)' },
   { id: 'install-bin', label: 'Install binary' },

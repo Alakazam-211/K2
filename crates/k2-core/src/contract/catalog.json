@@ -189,6 +189,12 @@
       "sentence": "See the compute jobs the agents on this computer ran for their branches: node, state, exit code and commit (never their environment)."
     },
     {
+      "name": "compute:nodes",
+      "exposure": ["garden-local"],
+      "label": "See compute node load",
+      "sentence": "See this server's compute nodes: how many jobs each runs and queues, which agents sent them, and its free CPU and memory (never a job's command or environment)."
+    },
+    {
       "name": "agents:start",
       "exposure": ["garden-local"],
       "label": "Start, land and discard worktree agents",
@@ -26589,6 +26595,344 @@
       ],
       "doc": "Recent compute jobs (k2 compute run) for an agent's branch: jobs its session sent, or that ran one of its branch's commits. Newest first.",
       "example": "const jobs = await k2.compute.jobs({address: row.address})"
+    },
+    {
+      "verb": "compute.nodes",
+      "cap": "compute:nodes",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "app": "never",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "compute-nodes-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "ComputeNodes",
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "integer",
+            "description": "When K2 read the nodes, seconds since the epoch."
+          },
+          "controller": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This server's name, as its nodes know it."
+          },
+          "nodes": {
+            "type": "array",
+            "description": "Every compute node this server may use, online or not, sorted by name: the nodes k2 compute status lists.",
+            "items": {
+              "title": "ComputeNode",
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "os": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "linux, macos or windows."
+                },
+                "arch": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "x86_64 or arm64."
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The node's K2 version."
+                },
+                "online": {
+                  "type": "boolean"
+                },
+                "state": {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "draining",
+                    "stopped",
+                    "unavailable",
+                    "offline"
+                  ],
+                  "description": "active takes jobs; paused takes no new ones; draining finishes the jobs it has and takes no new ones; stopped is switched off on the node; unavailable is online but not taking jobs now; offline isn't connected. why says who or what."
+                },
+                "why": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "In words: why it isn't taking jobs, or what holds its queue while it is (a lock, low disk); null when nothing does."
+                },
+                "slots": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Jobs it runs at once; 0 until the node has told K2."
+                },
+                "running": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Jobs running there now: every server's when queueFrom is node, else this server's."
+                },
+                "queued": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Jobs waiting for it: every server's when queueFrom is node, else this server's."
+                },
+                "queueFrom": {
+                  "enum": [
+                    "node",
+                    "server"
+                  ],
+                  "description": "node: the node's own queue, every server sharing it; server: only this server's jobs (a node nobody shares, or one that didn't answer)."
+                },
+                "cpu": {
+                  "title": "ComputeNodeCpu",
+                  "type": "object",
+                  "properties": {
+                    "freeMillis": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "CPU no job has reserved (jobs reserve their --cpus), in thousandths of a core."
+                    },
+                    "totalMillis": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "The CPU K2 may use there, in thousandths of a core."
+                    },
+                    "idleMillis": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "CPU the node's OS sees idle now (cores minus the 1-minute load), in thousandths of a core; null when unknown. A node can be idle with nothing free."
+                    }
+                  },
+                  "required": [
+                    "freeMillis",
+                    "totalMillis",
+                    "idleMillis"
+                  ],
+                  "additionalProperties": false
+                },
+                "mem": {
+                  "title": "ComputeNodeMem",
+                  "type": "object",
+                  "properties": {
+                    "freeBytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Memory no job has reserved."
+                    },
+                    "totalBytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "The memory K2 may use there."
+                    }
+                  },
+                  "required": [
+                    "freeBytes",
+                    "totalBytes"
+                  ],
+                  "additionalProperties": false
+                },
+                "load": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "number"
+                  },
+                  "description": "The 1-, 5- and 15-minute load averages; null when this server doesn't get the node's health (a node another server owns)."
+                },
+                "lastSeenAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "When this server last heard from it, seconds since the epoch."
+                },
+                "shared": {
+                  "type": "boolean",
+                  "description": "More than one server uses it."
+                },
+                "servers": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "How many servers share it; null for a node nobody shares."
+                },
+                "who": {
+                  "type": "array",
+                  "description": "Whose jobs these are: running and queued per agent on this server, and per other server.",
+                  "items": {
+                    "title": "ComputeNodeWho",
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "description": "kind workspace: an agent's handle on this server; kind server: another server's name (\"another server\" when the node doesn't say)."
+                      },
+                      "kind": {
+                        "enum": [
+                          "workspace",
+                          "server"
+                        ]
+                      },
+                      "running": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "queued": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "label",
+                      "kind",
+                      "running",
+                      "queued"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "jobs": {
+                  "type": "array",
+                  "description": "Its running jobs, then its queue in order, at most 12 in all (so a busy node may list only running ones; running and queued count them all). Never a command or a job id.",
+                  "items": {
+                    "title": "ComputeNodeJob",
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "running",
+                          "queued"
+                        ]
+                      },
+                      "workspace": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The handle of the agent on this server that sent it; null for another server's job."
+                      },
+                      "server": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Another server's name (only the server that owns the node sees it); null for this server's jobs."
+                      },
+                      "tier": {
+                        "type": "string",
+                        "description": "ci, priority, normal or batch."
+                      },
+                      "elapsedSecs": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "description": "Running: how long it has run; queued: how long it has waited (seconds, a duration)."
+                      },
+                      "blockedBy": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Why a queued job waits, as a code (waiting_for_room, exclusive, foreign_lock, ...)."
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "workspace",
+                      "server",
+                      "tier",
+                      "elapsedSecs",
+                      "blockedBy"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "queueError": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null, unless the node's own queue couldn't be read just now: then why, with queueFrom server and this server's counts."
+                }
+              },
+              "required": [
+                "name",
+                "os",
+                "arch",
+                "version",
+                "online",
+                "state",
+                "why",
+                "slots",
+                "running",
+                "queued",
+                "queueFrom",
+                "cpu",
+                "mem",
+                "load",
+                "lastSeenAt",
+                "shared",
+                "servers",
+                "who",
+                "jobs",
+                "queueError"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "at",
+          "controller",
+          "nodes"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "This server's compute nodes, for a load tile: each node's state, how many jobs run there (of its slots) and wait for it, free CPU and memory, and whose jobs they are (agent handles, never commands). On a node several servers share, the counts are every server's. Read only.",
+      "example": "const {nodes} = await k2.compute.nodes()"
     },
     {
       "verb": "agents.start",

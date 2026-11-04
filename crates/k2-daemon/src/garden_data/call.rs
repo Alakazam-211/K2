@@ -313,6 +313,12 @@ fn run(b: &CallBody, device: Device) -> Result<J, DataError> {
             budget::spend(&key, Spend::Read)?;
             Ok(crate::apps::resources::garden_card())
         }
+        // The Compute Garden's load tile (catalog v49): this server's compute
+        // nodes, read only, as an agent sees them (handles, never commands).
+        "compute.nodes" => {
+            budget::spend(&key, Spend::Read)?;
+            Ok(crate::compute_garden::answer())
+        }
         v if v.starts_with("save.") => {
             let spend = if row.effect == Effect::Write { Spend::Save } else { Spend::Read };
             budget::spend(&key, spend)?;

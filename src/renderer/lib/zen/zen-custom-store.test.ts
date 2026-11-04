@@ -245,8 +245,8 @@ describe('the custom layer: Garden data verbs', () => {
       return { verb }
     })
     // garden-person-rows-v1 (0.46.3): the person rows ride the same door
-    // under their own caps.
-    const caps: ZenCustomWidgetPayload['caps'] = ['store:read', 'store:write', 'room:members', 'thread:read', 'files:read', 'tickets:read', 'tickets:post', 'activity:read']
+    // under their own caps; catalog v49's compute.nodes under compute:nodes.
+    const caps: ZenCustomWidgetPayload['caps'] = ['store:read', 'store:write', 'room:members', 'thread:read', 'files:read', 'tickets:read', 'tickets:post', 'activity:read', 'compute:nodes']
     const { layer } = layerWith(createZenCustomStore(f.deps), payload({ caps, requested: caps }))
     for (const verb of ZEN_STORE_VERBS) {
       const r = await ask(layer, verb, 'k', 1)

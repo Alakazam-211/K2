@@ -290,6 +290,8 @@ describe('TUWA5: the generated tables', () => {
       'git.log': { cap: 'git:read', reach: 'local', kind: 'call' },
       'git.note': { cap: 'git:notes', reach: 'local', kind: 'call' },
       'compute.jobs': { cap: 'compute:read', reach: 'local', kind: 'call' },
+      // Catalog v47 (the Compute Garden): this server's compute nodes' load.
+      'compute.nodes': { cap: 'compute:nodes', reach: 'local', kind: 'call' },
       'agents.start': { cap: 'agents:start', reach: 'local', kind: 'call' },
       'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
       'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
@@ -321,6 +323,8 @@ describe('TUWA5: the generated tables', () => {
       'git:read',
       'git:notes',
       'compute:read',
+      // Catalog v47 (the Compute Garden).
+      'compute:nodes',
       'agents:start',
       'agents:stop',
     ]
@@ -345,6 +349,7 @@ describe('TUWA5: the generated tables', () => {
       'git:read',
       'git:notes',
       'compute:read',
+      'compute:nodes',
       'agents:start',
       'agents:stop',
     ])

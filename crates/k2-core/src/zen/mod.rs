@@ -320,6 +320,9 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     "git:read",
     "git:notes",
     "compute:read",
+    // The Compute Garden (catalog v49, compute-nodes-v1): this server's
+    // compute nodes' load (`compute.nodes`), garden-local, read only.
+    "compute:nodes",
     "agents:start",
     "agents:stop",
 ];

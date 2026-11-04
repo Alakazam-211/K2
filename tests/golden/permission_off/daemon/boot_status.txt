@@ -76,6 +76,7 @@ features:
   widget-activity-v1
   thread-context-v1
   app-resources-v1
+  compute-nodes-v1
   llm-account-for-v1
   companion-pairing-v1
   files-download-v1

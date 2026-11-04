@@ -513,6 +513,39 @@ fn the_box_disk_card_reads_app_resources_without_paths() {
     assert_eq!((code, v["error"]["code"].as_str()), (409, Some("stale_widget")));
 }
 
+/// The Compute Garden's load tile (catalog v49): `compute.nodes` needs
+/// `compute:nodes`, lists the nodes this server may use (a confirmed node,
+/// never one still pending its code), and refuses a stale frame first.
+#[test]
+fn compute_nodes_needs_its_cap_and_lists_confirmed_nodes_only() {
+    use k2_core::compute::store;
+    let d = door(&["store:read"]);
+    d.stamp(MadeBy::Owner);
+    assert_eq!(d.refuse("compute.nodes", json!([])), "cap_not_granted");
+    set_caps(&d.f, &["compute:nodes"]);
+    d.stamp(MadeBy::Owner);
+    assert_eq!(d.call("compute.nodes", json!([]))["nodes"], json!([]), "no nodes yet");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let labels: std::collections::BTreeMap<String, String> =
+            [("os".to_string(), "linux".to_string()), ("arch".to_string(), "x86_64".to_string())].into_iter().collect();
+        store::insert_pending_node(&conn, "n-ok", "k2n-test", "fp1", "pem", &labels, "owner", "sas", 1).expect("node");
+        store::confirm_node(&conn, "n-ok", "owner", 2).expect("confirm");
+        store::insert_pending_node(&conn, "n-pend", "k2n-pending", "fp2", "pem", &labels, "owner", "sas", 1).expect("pending node");
+    }
+    let v = d.call("compute.nodes", json!([]));
+    let names: Vec<&str> = v["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["name"].as_str()).collect();
+    assert_eq!(names, ["k2n-test"], "never a pending node: {v}");
+    let n = &v["nodes"][0];
+    assert_eq!((n["state"].as_str(), n["online"].as_bool(), n["os"].as_str()), (Some("offline"), Some(false), Some("linux")), "{v}");
+    assert_eq!((n["slots"].as_u64(), n["running"].as_u64(), n["queued"].as_u64()), (Some(0), Some(0), Some(0)), "{v}");
+    assert!(v["at"].is_i64(), "{v}");
+    assert!(!v.to_string().contains("n-ok"), "no node id: {v}");
+    let (code, v) = d.raw(&"0".repeat(64), "compute.nodes", json!([]));
+    assert_eq!((code, v["error"]["code"].as_str()), (409, Some("stale_widget")));
+}
+
 /// Gap 5 (0.46.1): with `"reads": ["lists"]` in its manifest, `board` reads
 /// the `lists` widget's data on the same Garden through `{from}`, read-only;
 /// undeclared or unplaced neighbours answer `not_bound`, and an agent-made

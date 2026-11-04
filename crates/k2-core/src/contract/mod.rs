@@ -522,8 +522,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            54,
-            "store.* ×15 (store.patch since catalog v21, 0.46.4; store.history, store.restore and store.snapshot since catalog v32, 0.46.6; store.grantees since catalog v43, the Board Garden), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), tickets.attachment (catalog v31, 0.46.6), and the Workbench's 10 (catalog v40, 0.46.7: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle)"
+            55,
+            "store.* ×15 (store.patch since catalog v21, 0.46.4; store.history, store.restore and store.snapshot since catalog v32, 0.46.6; store.grantees since catalog v43, the Board Garden), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), tickets.attachment (catalog v31, 0.46.6), and the Workbench's 10 (catalog v40, 0.46.7: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle), and the Compute Garden's compute.nodes (catalog v49)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -600,6 +600,8 @@ mod tests {
             let board_needs = [crate::garden_data::blobs::FEATURE, "garden-history-v1"].contains(&v.feature.as_str());
             // 0.46.7 Workbench (catalog v40): its own feature key.
             let board_needs = board_needs || v.feature == "workbench-v1";
+            // Catalog v49 (the Compute Garden): its own feature key.
+            let board_needs = board_needs || (v.verb == "compute.nodes" && v.feature == "compute-nodes-v1");
             assert!(room_scope || box_card || board_needs || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
@@ -848,6 +850,8 @@ mod tests {
                 "git:read",
                 "git:notes",
                 "compute:read",
+                // Catalog v49 (the Compute Garden): garden-local only.
+                "compute:nodes",
                 "agents:start",
                 "agents:stop"
             ]
@@ -882,6 +886,8 @@ mod tests {
             "git:read",
             "git:notes",
             "compute:read",
+            // The Compute Garden: this server's compute nodes.
+            "compute:nodes",
             "agents:start",
             "agents:stop",
         ];

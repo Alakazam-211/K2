@@ -74,6 +74,9 @@ pub const FRAME_FEATURES: &[&str] = &[
     // 0.46.7 Workbench (catalog v40): the preview has no agents or git, so
     // its rows answer verb_unavailable.
     "workbench-v1",
+    // The Compute Garden (catalog v49): compute.nodes (the preview has no
+    // compute nodes: verb_unavailable).
+    "compute-nodes-v1",
 ];
 
 /// The shot's size limits (CSS pixels).

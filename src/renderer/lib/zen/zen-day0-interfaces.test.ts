@@ -115,6 +115,15 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // Catalog v49 (the Compute Garden): this server's compute nodes' load,
+      // garden-local and read only, answered by this computer's daemon.
+      if (verb === 'compute.nodes') {
+        expect(row).toEqual({ cap: 'compute:nodes', reach: 'local', kind: 'call' })
+        expect(ZEN_STORE_VERBS.has(verb), verb).toBe(true)
+        expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       // Catalog v40 (0.46.7 Workbench): garden-local rows the daemon answers
       // (zen-custom-work), plus agents.openTerminal, which the custom layer
       // answers (K2's desktop only).

@@ -449,7 +449,8 @@
         "guests-rooms-v1",
         "garden-blobs-v1",
         "garden-history-v1",
-        "workbench-v1"
+        "workbench-v1",
+        "compute-nodes-v1"
       ],
       "widgets": [
         {

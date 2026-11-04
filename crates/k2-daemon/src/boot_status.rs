@@ -1220,6 +1220,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_WIDGET_ACTIVITY);
     out.push(FEATURE_THREAD_CONTEXT);
     out.push(FEATURE_APP_RESOURCES);
+    // The Compute Garden (catalog v49): the garden-local `compute.nodes`.
+    out.push(crate::compute_garden::FEATURE);
     out.push(FEATURE_LLM_ACCOUNT_FOR);
     out.push(FEATURE_COMPANION_PAIRING);
     out.push(FEATURE_FILES_DOWNLOAD);
@@ -1384,6 +1386,7 @@ mod tests {
                 "widget-activity-v1",
                 "thread-context-v1",
                 "app-resources-v1",
+                "compute-nodes-v1",
                 "llm-account-for-v1",
                 "companion-pairing-v1",
                 "files-download-v1",

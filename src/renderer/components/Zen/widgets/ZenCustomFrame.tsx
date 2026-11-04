@@ -132,6 +132,9 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   // 0.46.7 Workbench (catalog v40): work.list, git.*, compute.jobs, the
   // sheet-gated start / land / settle, git.note and agents.openTerminal.
   'workbench-v1',
+  // The Compute Garden (catalog v49): compute.nodes, this server’s compute
+  // nodes and their load (the daemon answers it).
+  'compute-nodes-v1',
 ]
 
 /** Does this placement list board files? K2's own Board widget, while this computer's daemon says `board-file-v1`

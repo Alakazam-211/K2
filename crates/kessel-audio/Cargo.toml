@@ -20,13 +20,18 @@ publish = false
 exclude = ["tests/data/", "tests/scrub.rs"]
 
 [features]
-default = ["cpal"]
+default = ["cpal", "os-voice"]
 # System audio devices through cpal (CoreAudio, WASAPI, ALSA). Without it only
 # the null device backend is available, which needs no audio hardware or
 # system libraries. cpal's `realtime` feature stays off: it pulls an MPL-2.0
 # crate. objc2 and block2 reach macOS's microphone permission calls; cpal
 # already uses objc2, and the permission check is why block2 is here.
 cpal = ["dep:cpal", "dep:objc2", "dep:block2"]
+# On iOS and Android, `Backend::OsVoiceProcessing`: the OS's own echo
+# cancellation, noise suppression and gain control (iOS's VoiceProcessingIO
+# audio unit through coreaudio-rs; Android's AAudio through ndk, API 28 or
+# later). Does nothing on other targets.
+os-voice = ["dep:coreaudio-rs", "dep:objc2-audio-toolbox", "dep:objc2-avf-audio", "dep:ndk"]
 # cpal's PulseAudio host (a pure-Rust protocol client; works on PipeWire
 # through pipewire-pulse).
 pulseaudio = ["cpal", "cpal/pulseaudio"]
@@ -57,12 +62,23 @@ cpal = { version = "0.18.2", optional = true, default-features = false }
 objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
 
+# The same versions and features cpal uses on iOS, so nothing new is built.
+[target.'cfg(target_os = "ios")'.dependencies]
+coreaudio-rs = { version = "0.14.2", optional = true, default-features = false, features = ["core_audio", "audio_toolbox"] }
+objc2-audio-toolbox = { version = "0.3", optional = true, default-features = false, features = ["std", "AUComponent", "AudioUnitProperties"] }
+objc2-avf-audio = { version = "0.3", optional = true, default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9", optional = true, default-features = false, features = ["audio", "api-level-28"] }
+
 [dev-dependencies]
 rustfft = "6"
 serde_json = "1"
 
 [package.metadata.docs.rs]
 features = ["pulseaudio"]
+# The phone backend's API is only on iOS and Android.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-ios", "aarch64-linux-android"]
 
 [lints.rust]
 missing_docs = "warn"

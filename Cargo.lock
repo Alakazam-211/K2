@@ -4830,9 +4830,13 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "bytes",
+ "coreaudio-rs",
  "cpal",
  "crossbeam-queue",
+ "ndk",
  "objc2",
+ "objc2-audio-toolbox",
+ "objc2-avf-audio",
  "ropus",
  "rtrb",
  "rubato",

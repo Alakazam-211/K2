@@ -5,6 +5,7 @@
 #![cfg_attr(not(feature = "speech-tests"), allow(dead_code))]
 
 mod alloc;
+mod pause;
 #[cfg(feature = "speech-tests")]
 mod metrics;
 #[cfg(feature = "speech-tests")]

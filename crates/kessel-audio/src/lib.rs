@@ -6,7 +6,8 @@
 //!
 //! - **devices:** capture and playback through cpal (CoreAudio, WASAPI,
 //!   ALSA), device lists, hot-plug, switching, and a null device for
-//!   headless use;
+//!   headless use; on iOS and Android, the OS's own voice processing
+//!   (`Backend::OsVoiceProcessing`);
 //! - **resampling** between the device rate and 48 kHz (rubato);
 //! - **echo cancellation, noise suppression and gain control** (sonora, a
 //!   port of WebRTC's audio processing), with the playback mix as the echo
@@ -53,13 +54,17 @@
 //! the engine is bounded and lock-free, and the audio side never blocks on
 //! one: a full queue drops (and counts) instead.
 
-// macOS's microphone permission calls (`mic::macos`) are the only `unsafe`
+// macOS's microphone permission calls (`mic::macos`) and the phone
+// backends' OS calls (`phone::ios`, `phone::android`) are the only `unsafe`
 // outside tests.
 #![cfg_attr(
-    not(any(test, all(feature = "cpal", target_os = "macos"))),
+    not(any(test, all(feature = "cpal", target_os = "macos"), all(feature = "os-voice", any(target_os = "ios", target_os = "android")))),
     forbid(unsafe_code)
 )]
-#![cfg_attr(any(test, all(feature = "cpal", target_os = "macos")), deny(unsafe_code))]
+#![cfg_attr(
+    any(test, all(feature = "cpal", target_os = "macos"), all(feature = "os-voice", any(target_os = "ios", target_os = "android"))),
+    deny(unsafe_code)
+)]
 
 mod apm;
 mod codec;
@@ -74,6 +79,8 @@ mod level;
 #[cfg(feature = "cpal")]
 mod mic;
 mod null;
+#[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+mod phone;
 mod pipeline;
 mod resample;
 mod stats;
@@ -107,4 +114,6 @@ pub use frame::{
     SAMPLE_RATE,
 };
 pub use jitter::JitterConfig;
+#[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
+pub use phone::{OsEffects, OsVoiceConfig};
 pub use stats::{CaptureStats, ParticipantStats, Stats};

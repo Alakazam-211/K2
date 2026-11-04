@@ -1,6 +1,6 @@
 //! A cargo-deny-style licence check of this crate's dependency tree
 //! (normal and build dependencies, default features), for each desktop
-//! target. Every package must carry an SPDX expression satisfiable with
+//! and phone target. Every package must carry an SPDX expression satisfiable with
 //! the allowlist below, and cpal's MPL-2.0 real-time helper must not be in
 //! the tree.
 
@@ -24,6 +24,8 @@ const TARGETS: &[&str] = &[
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
+    "aarch64-apple-ios",
+    "aarch64-linux-android",
 ];
 
 /// SPDX expression: `a OR b`, `a AND b`, `(...)`, `id WITH exception`, and

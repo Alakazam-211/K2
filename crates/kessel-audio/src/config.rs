@@ -23,6 +23,25 @@ pub enum Backend {
     },
     /// No hardware: see [`NullDevice`].
     Null(NullDevice),
+    /// The phone's own voice processing (echo cancellation, noise
+    /// suppression and gain control tuned for the device). iOS: the
+    /// VoiceProcessingIO audio unit. Android: AAudio with the
+    /// voice-communication input preset and usage (API 28 or later).
+    ///
+    /// The app owns the OS's audio session; the engine never configures or
+    /// activates it. With CallKit, start with
+    /// [`crate::AudioEngine::start_when_session_active`] and report
+    /// `didActivate` / `didDeactivate` to
+    /// [`crate::AudioEngine::session_activated`] /
+    /// [`crate::AudioEngine::session_deactivated`], and route changes to
+    /// [`crate::AudioEngine::route_changed`]. sonora runs only what
+    /// [`crate::OsEffects`] says the OS doesn't do.
+    #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
+    OsVoiceProcessing(crate::OsVoiceConfig),
+    /// The phone backend's state machine on a fake device (tests).
+    #[cfg(test)]
+    #[allow(private_interfaces)]
+    TestPhone(crate::phone::tests::FakeIo),
 }
 
 impl Default for Backend {
@@ -45,10 +64,29 @@ impl Default for Backend {
 
 impl Backend {
     fn null_device(&self) -> Option<&NullDevice> {
+        // With only the null backend compiled in, the last arm can't match.
+        #[allow(unreachable_patterns)]
         match self {
             Backend::Null(d) => Some(d),
-            #[cfg(feature = "cpal")]
-            Backend::System { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// A phone backend (the only kind with a deferred start).
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub(crate) fn is_phone(&self) -> bool {
+        self.os_effects().is_some()
+    }
+
+    /// What the OS's voice processing covers, for a phone backend.
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub(crate) fn os_effects(&self) -> Option<crate::phone::OsEffects> {
+        match self {
+            #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
+            Backend::OsVoiceProcessing(c) => Some(c.os_effects),
+            #[cfg(test)]
+            Backend::TestPhone(f) => Some(f.1),
+            _ => None,
         }
     }
 }
@@ -117,6 +155,15 @@ impl EngineConfig {
         }
     }
 
+    /// With a phone backend, sonora runs only what the OS doesn't.
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub(crate) fn with_os_effects(mut self) -> Self {
+        if let Some(fx) = self.backend.os_effects() {
+            self.processing = fx.remaining(&self.processing);
+        }
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<(), AudioError> {
         let bad = |what: &str| Err(AudioError::new(ErrorCode::InvalidConfig, what.to_string()));
         if !(10..=200).contains(&self.playout_buffer_ms) {
@@ -136,6 +183,10 @@ impl EngineConfig {
         }
         if self.processing_poll.is_zero() || self.processing_poll >= Duration::from_millis(10) {
             return bad("processing_poll must be between 0 and 10 ms");
+        }
+        #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
+        if let Backend::OsVoiceProcessing(c) = &self.backend {
+            c.validate()?;
         }
         if let Some(d) = self.backend.null_device() {
             if d.sample_rate < 8_000 || d.sample_rate > 384_000 || !d.sample_rate.is_multiple_of(100) {

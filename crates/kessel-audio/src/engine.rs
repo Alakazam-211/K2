@@ -11,7 +11,7 @@
 //!   watches for hot-plug, turns snapshots into events, and frees memory the
 //!   processing thread hands back.
 
-use crate::pipeline::{Core, CoreConfig, Participant};
+use crate::pipeline::{Core, CoreConfig, Participant, Pause};
 use crate::device::{CaptureIo, IoCounters, PlayIo};
 use crate::error::{AudioError, ErrorCode};
 use crate::events::{
@@ -35,6 +35,22 @@ pub(crate) enum Ctrl {
     Remove(u64),
     CaptureIo(Option<Box<CaptureIo>>),
     PlayIo(Option<Box<PlayIo>>),
+    Pause { why: Pause, on: bool },
+}
+
+/// From the caller to the phone backend (on the control thread). Other
+/// backends ignore them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PhoneCmd {
+    /// The OS's audio session became active (`true`) or inactive.
+    #[cfg_attr(not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))), allow(dead_code))]
+    Session(bool),
+    /// The call was suspended (`true`) or resumed.
+    #[cfg_attr(not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))), allow(dead_code))]
+    Suspend(bool),
+    /// The OS's audio route changed.
+    #[cfg_attr(not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))), allow(dead_code))]
+    RouteChanged,
 }
 
 pub(crate) enum RecvItem {
@@ -74,6 +90,7 @@ pub(crate) struct Shared {
     pub(crate) stop: AtomicBool,
     pub(crate) recv_drops: AtomicU64,
     pub(crate) dev_req: ArrayQueue<DevRequest>,
+    pub(crate) phone_cmd: ArrayQueue<PhoneCmd>,
     pub(crate) core_cfg: CoreConfig,
     pub(crate) playout_buffer_ms: u32,
     #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
@@ -113,6 +130,7 @@ impl Shared {
             stop: AtomicBool::new(false),
             recv_drops: AtomicU64::new(0),
             dev_req: ArrayQueue::new(16),
+            phone_cmd: ArrayQueue::new(64),
             core_cfg,
             playout_buffer_ms: cfg.playout_buffer_ms,
             device_poll: cfg.device_poll_interval,
@@ -183,7 +201,36 @@ impl AudioEngine {
     /// OS would kill the app for asking, so the engine raises
     /// [`crate::ErrorCode::NoPermission`] instead.
     pub fn start(cfg: EngineConfig) -> Result<AudioEngine, AudioError> {
+        Self::start_inner(cfg, true)
+    }
+
+    /// Like [`AudioEngine::start`], but the device opens only once
+    /// [`AudioEngine::session_activated`] says the OS's audio session is live.
+    /// For iOS with CallKit: start the engine when the call starts, and call
+    /// `session_activated` from `provider(_:didActivate:)`.
+    ///
+    /// Until then the engine runs without a device: no frames, and received
+    /// frames are decoded on the wall clock so the jitter buffers are current
+    /// when the device opens. Only `Backend::OsVoiceProcessing` defers; any
+    /// other backend is [`ErrorCode::InvalidConfig`].
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub fn start_when_session_active(cfg: EngineConfig) -> Result<AudioEngine, AudioError> {
+        if !cfg.backend.is_phone() {
+            return Err(AudioError::new(
+                ErrorCode::InvalidConfig,
+                "start_when_session_active needs Backend::OsVoiceProcessing",
+            ));
+        }
+        Self::start_inner(cfg, false)
+    }
+
+    fn start_inner(cfg: EngineConfig, session_active: bool) -> Result<AudioEngine, AudioError> {
         cfg.validate()?;
+        // The OS's voice processing replaces sonora's where it can.
+        #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+        let cfg = cfg.with_os_effects();
+        #[cfg(not(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android")))))]
+        let _ = session_active;
         let shared = Shared::new(&cfg);
         let core_cfg = shared.core_cfg.clone();
         let engine = AudioEngine {
@@ -227,6 +274,16 @@ impl AudioEngine {
             }
             #[cfg(feature = "cpal")]
             Backend::System { input, output } => CtlBackend::System { input, output },
+            #[cfg(all(feature = "os-voice", any(target_os = "ios", target_os = "android")))]
+            Backend::OsVoiceProcessing(c) => CtlBackend::Phone {
+                io: crate::phone::system_io(&c),
+                session_active,
+            },
+            #[cfg(test)]
+            Backend::TestPhone(f) => CtlBackend::Phone {
+                io: f.0,
+                session_active,
+            },
         };
         let s = shared.clone();
         let ctl = std::thread::Builder::new()
@@ -302,6 +359,77 @@ impl AudioEngine {
     /// levels and stats stay live.
     pub fn set_deafened(&self, on: bool) {
         self.shared.send_ctrl(Ctrl::Deafen(on));
+    }
+
+    /// Suspend the call: for hold (a cellular call), an interruption, or
+    /// lost audio focus. No frames are produced and playback is silent until
+    /// [`AudioEngine::resume`]; the phone backend also stops its device.
+    /// Participants are still decoded, so the jitter buffers stay current.
+    ///
+    /// The far end sees a pause, not loss: if you were speaking, one frame of
+    /// encoded silence (marked [`crate::EncodedFrame::dtx`]) ends the
+    /// talkspurt, and the first frame after `resume` has a `ts48k` advanced
+    /// by the suspended time (whole frames), like the end of a DTX gap. Keep
+    /// the transport's sequence numbers running as usual.
+    ///
+    /// Works with every backend. Suspending twice is the same as once.
+    pub fn suspend(&self) {
+        self.set_suspended(true);
+    }
+
+    /// End a [`AudioEngine::suspend`].
+    pub fn resume(&self) {
+        self.set_suspended(false);
+    }
+
+    fn set_suspended(&self, on: bool) {
+        self.shared.send_ctrl(Ctrl::Pause {
+            why: Pause::Caller,
+            on,
+        });
+        self.phone(PhoneCmd::Suspend(on));
+    }
+
+    fn phone(&self, cmd: PhoneCmd) {
+        // The control thread drains this every 10 ms; it only fills up if
+        // that thread has stopped.
+        if self.shared.phone_cmd.push(cmd).is_err() {
+            self.shared.emit(Event::Error(AudioError::new(
+                ErrorCode::Backend,
+                "the control thread is not taking commands",
+            )));
+        }
+    }
+
+    /// The OS's audio session is live: open the device. Call it from
+    /// CallKit's `provider(_:didActivate:)` (iOS). Never blocks; the device
+    /// opens on the control thread a few milliseconds later
+    /// ([`Event::DevicesInUse`]).
+    ///
+    /// The engine never configures or activates the session itself. Only the
+    /// phone backend uses this; others ignore it.
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub fn session_activated(&self) {
+        self.phone(PhoneCmd::Session(true));
+    }
+
+    /// The OS's audio session is no longer live: close the device. Call it
+    /// from CallKit's `provider(_:didDeactivate:)`. Until the session is
+    /// active again no frames are produced, and the gap shows in `ts48k` as
+    /// for [`AudioEngine::suspend`].
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub fn session_deactivated(&self) {
+        self.phone(PhoneCmd::Session(false));
+    }
+
+    /// The OS's audio route changed (on iOS, from
+    /// `AVAudioSession.routeChangeNotification`). If the device rate changed
+    /// (Bluetooth hands-free runs at 16 kHz), the device reopens at the new
+    /// rate without ending the call; the pipeline stays at 48 kHz. On Android
+    /// the streams are always reopened on the new route.
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    pub fn route_changed(&self) {
+        self.phone(PhoneCmd::RouteChanged);
     }
 
     /// The latest levels (updated about every 50 ms). [`Event::Levels`]
@@ -416,6 +544,15 @@ fn dsp_main(shared: Arc<Shared>, mut core: Core, poll: Duration) {
                         let _ = shared.garbage.push(Garbage::Play(old));
                     }
                 }
+                Ctrl::Pause { why, on } => {
+                    if let Some(f) = core.set_paused(why, on, Instant::now()) {
+                        if shared.frames.push(f).is_ok() {
+                            core.capture_stats.frames_sent += 1;
+                        } else {
+                            core.capture_stats.frames_dropped += 1;
+                        }
+                    }
+                }
             }
         }
         while let Some(item) = shared.recv.pop() {
@@ -503,6 +640,11 @@ pub(crate) enum CtlBackend {
         input: DeviceChoice,
         output: DeviceChoice,
     },
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    Phone {
+        io: Box<dyn crate::phone::PhoneIo>,
+        session_active: bool,
+    },
 }
 
 #[cfg(feature = "cpal")]
@@ -523,11 +665,18 @@ impl SystemBackend {
 }
 
 fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    let mut phone: Option<crate::phone::Phone> = None;
     let mut system: Option<SystemBackend> = match backend {
         CtlBackend::Null => None,
         #[cfg(feature = "cpal")]
         CtlBackend::System { input, output } => {
             Some(crate::system::System::start(&shared, input, output))
+        }
+        #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+        CtlBackend::Phone { io, session_active } => {
+            phone = Some(crate::phone::Phone::start(&shared, io, session_active));
+            None
         }
     };
 
@@ -536,6 +685,11 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
         while shared.garbage.pop().is_some() {}
 
         while let Some(req) = shared.dev_req.pop() {
+            #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+            if phone.is_some() {
+                let _ = req.reply.send(crate::phone::check_selection(&req.sel));
+                continue;
+            }
             let r = match system.as_mut() {
                 Some(sys) => sys.set_device(&shared, req.sel),
                 None => crate::null::check_selection(&req.sel),
@@ -543,8 +697,20 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
             let _ = req.reply.send(r);
         }
 
+        // Other backends have nothing to do with these.
+        while let Some(_cmd) = shared.phone_cmd.pop() {
+            #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+            if let Some(p) = phone.as_mut() {
+                p.command(&shared, _cmd);
+            }
+        }
+
         if let Some(sys) = system.as_mut() {
             sys.tick(&shared);
+        }
+        #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+        if let Some(p) = phone.as_mut() {
+            p.tick(&shared);
         }
 
         let levels = {
@@ -562,6 +728,8 @@ fn ctl_main(shared: Arc<Shared>, backend: CtlBackend) {
     // Close devices before the rings go away.
     #[allow(clippy::drop_non_drop)]
     drop(system);
+    #[cfg(any(test, all(feature = "os-voice", any(target_os = "ios", target_os = "android"))))]
+    drop(phone);
     while shared.garbage.pop().is_some() {}
 }
 

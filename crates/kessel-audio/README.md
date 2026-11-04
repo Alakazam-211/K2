@@ -18,7 +18,7 @@ for the family. Licensed MIT OR Apache-2.0.
 
 | Piece | How |
 |---|---|
-| Devices | cpal: CoreAudio, WASAPI, ALSA (and PulseAudio with the `pulseaudio` feature). Device lists, hot-plug polling, switching, fallback to the default when a chosen device goes away. A **null device** runs the whole pipeline without hardware. |
+| Devices | cpal: CoreAudio, WASAPI, ALSA (and PulseAudio with the `pulseaudio` feature). Device lists, hot-plug polling, switching, fallback to the default when a chosen device goes away. A **null device** runs the whole pipeline without hardware. On iOS and Android, the **phone's own voice processing** (see [Phones](#phones)). |
 | Resampling | rubato (FFT, synchronous), device rate ↔ 48 kHz in 10 ms blocks. Skipped when the device runs at 48 kHz. |
 | Echo, noise, gain | sonora 0.2.0 (a pure-Rust port of WebRTC's audio processing): AEC3, noise suppression, AGC2, high-pass filter. The playback mix is the echo reference. |
 | Opus | ropus (a pure-Rust port of the reference codec, bit-exact): 48 kHz mono, 20 ms frames; bitrate, in-band FEC, DTX and complexity from the caller, changeable mid-call. |
@@ -128,6 +128,8 @@ the engine keeps running with whatever devices it could open:
 frame, wrapping at 2^32 like an RTP timestamp. During DTX the frames with
 nothing to send are not pushed, so the next frame's `ts48k` has advanced
 across the gap. Muting stops frames; time keeps advancing.
+A suspend (below) stops frames too, and the first frame after it has a
+`ts48k` advanced by the suspended time, like the end of a DTX gap.
 
 ### Threads
 
@@ -149,6 +151,69 @@ processing thread. The device callbacks are insulated from that by the rings
 replaces the sound card with a clock thread that pulls 10 ms of capture from
 your `input` closure and hands 10 ms of the mix to your `output` closure. It
 runs the full pipeline headless: tests, servers, bots.
+
+### Suspend and resume
+
+`AudioEngine::suspend()` and `resume()` pause a call without ending it: for
+hold (a cellular call), an interruption, or lost audio focus. They work with
+every backend. While suspended:
+
+- no frames are produced, and playback is silent;
+- participants are still decoded, so their jitter buffers are current on
+  resume;
+- the phone backend also stops its device.
+
+The far end must hear a pause, not loss. So if you were speaking, one frame
+of encoded silence (marked `dtx`) ends the talkspurt. After `resume`, the
+next frame's `ts48k` has jumped by the suspended time, in whole frames. With
+the transport's sequence numbers running on as usual, a receiver reads the
+gap as DTX; this crate's jitter buffer does (tested).
+
+## Phones
+
+`Backend::OsVoiceProcessing(OsVoiceConfig)` uses the OS's own echo
+cancellation, noise suppression and gain control, which are tuned per device
+model:
+
+- **iOS:** the VoiceProcessingIO audio unit (the FaceTime path), through
+  coreaudio-rs;
+- **Android:** AAudio with the voice-communication input preset and usage,
+  through the `ndk` crate. Needs Android 9 (API 28).
+
+sonora runs only what `OsVoiceConfig::os_effects` says the OS doesn't do. On
+iOS that is nothing: the unit always cancels echo and suppresses noise, and
+its gain control can be turned off. On Android, set the flags from
+`AcousticEchoCanceler.isAvailable()` and friends, and sonora fills the gaps.
+
+**The app owns the OS's audio session.** kessel-audio never configures or
+activates it. On iOS, set the category (`.playAndRecord`, mode `.voiceChat`)
+yourself, and let CallKit activate it:
+
+| CallKit / AVAudioSession | Call |
+|---|---|
+| The call starts | `AudioEngine::start_when_session_active(config)` (the device waits) |
+| `provider(_:didActivate:)` | `engine.session_activated()` |
+| `provider(_:didDeactivate:)` | `engine.session_deactivated()` |
+| `CXSetHeldCallAction`, or an interruption begins / ends | `engine.suspend()` / `engine.resume()` |
+| `routeChangeNotification` | `engine.route_changed()` |
+| `CXSetMutedCallAction` | `engine.set_capture(!muted)` |
+
+None of these block: the device opens and closes on the engine's control
+thread a few milliseconds later (`Event::DevicesInUse`). The device is open
+exactly while the session is active and the call isn't suspended. A route
+change at a new rate (Bluetooth hands-free runs at 16 kHz) reopens it at that
+rate without ending the call; the pipeline stays at 48 kHz.
+
+On Android, start with `AudioEngine::start` (there is no session to wait
+for), call `suspend` / `resume` on audio focus loss and gain, and
+`route_changed` when the communication device changes. A stream the system
+disconnects is reopened on its own. The app sets `MODE_IN_COMMUNICATION`,
+holds audio focus and the `RECORD_AUDIO` permission.
+
+The OS picks the route: the backend lists one input and one output, and
+`set_device` takes only the defaults. If the person refused the microphone,
+playback still runs and an error is raised (`no_permission` on iOS). Ask for
+the permission before the call.
 
 ## Measured quality
 
@@ -210,6 +275,10 @@ None of them need audio hardware.
   the engine raises `no_permission` rather than capture silence.
 - cpal's `realtime` feature is deliberately not enabled (it pulls an
   MPL-2.0 crate); the device threads run at the priority the OS gives them.
+- The `os-voice` feature (on by default) is the phone backend. It does
+  nothing on other targets. On Android it links AAudio's API 28 calls, so
+  the app's `minSdk` must be 28 or later; turn the feature off for older
+  devices.
 - `deny.toml` lists the licence allowlist; `tests/licences.rs` checks the
   same rules without needing cargo-deny.
 

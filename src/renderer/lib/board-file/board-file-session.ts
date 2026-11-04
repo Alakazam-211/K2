@@ -903,7 +903,10 @@ export function createBoardFileSession(deps: BoardFileDeps): BoardFileSession {
         })
         return { ok: true, path: r.path, name: r.name, missing: r.missing ?? [] }
       } catch (err) {
-        if (statusOf(err) === 409 && Array.isArray(errorBody(err).missing)) return { ok: false, missing: errorBody(err).missing as string[] }
+        // The contract has the list beside the error; an older shape had it inside: either is read.
+        const body = errorBody(err)
+        const list = Array.isArray(body.missing) ? body.missing : Array.isArray((body.error as Json | undefined)?.missing) ? (body.error as Json).missing : null
+        if (statusOf(err) === 409 && list) return { ok: false, missing: list as string[] }
         throw err
       }
     }

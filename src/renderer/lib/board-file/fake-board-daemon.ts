@@ -294,7 +294,8 @@ export function createFakeBoardDaemon(opts: FakeFileOpts = {}): FakeBoardDaemon 
         const refs = (b.blobs as string[]) ?? []
         const gone = refs.filter((h) => !staged.has(h))
         if (gone.length && !b.dropMissing) {
-          throw new DaemonHttpError('missing', 409, 'missing', { code: 'missing' }, { error: { code: 'missing' }, missing: gone })
+          // As the daemon answers (missing_answer in board_file/routes.rs): the list beside the error.
+          throw new DaemonHttpError('missing', 409, 'missing', { code: 'missing' }, { ok: false, error: { code: 'missing' }, missing: gone })
         }
         copies.push({ to, body: clone(b), kind: 'rescue' })
         return { path: to, name: to.split('/').pop(), hash: 'sha256-copy', missing: gone } as T

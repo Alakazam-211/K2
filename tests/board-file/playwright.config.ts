@@ -6,6 +6,8 @@ import * as path from 'path'
 export default defineConfig({
   testDir: __dirname,
   testMatch: /\.spec\.ts$/,
+  // real/ needs a built daemon: its own config.
+  testIgnore: /\/real\//,
   outputDir: path.join(__dirname, 'test-results'),
   fullyParallel: false,
   workers: 1,

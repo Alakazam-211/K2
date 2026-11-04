@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/board"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.80"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# This repo's own dev and test builds. Cargo applies a workspace's profiles only when that
+# workspace is the one being built, so a host that vendors the crate keeps its own. Line tables
+# only: backtraces keep file:line. Arithmetic checks stay on.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

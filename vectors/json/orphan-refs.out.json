@@ -1,0 +1,1 @@
+{"frames":[],"objects":[{"from":{"hint":{"x":1,"y":2},"id":"gone"},"id":"c-1","type":"connector"},{"id":"q-1","target":"gone","type":"comment"},{"id":"m-1","parent":"gone","type":"mind"},{"frame":"gone","id":"s-1","type":"sticky"}],"people":{},"settings":{}}

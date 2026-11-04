@@ -25,12 +25,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Forwarding a lot?** You, the owner, can raise how much each mailbox may forward: `k2 hostmail config --forward-copies-per-day <n>` (500 unless you change it, up to 24,000) and `--forward-copies-per-hour <n>` (100 unless you change it, up to 1,000, the most the server sends in an hour as a whole). The same numbers apply to every mailbox, and agents can't change them. A mailbox that reaches the daily limit tells you which setting to change. A mailbox that forwards more also reaches the limits on refused mail sooner.
 - **Forwarding a whole team?** You, the owner, can raise the 20 a day, up to 1,000, with `k2 hostmail config --forward-new-per-day <n>`. Agents can't. Everything above still applies. So those emails don't hurt your server's mail reputation, K2 sends up to 60 in an hour right away and after that 2 a minute, turning each forward on after its email: 300 at once take about 2 hours.
 
-### Voice rooms (preview)
-- **You can talk in a voice room from the K2 desktop app.** Join a room from the headset in the top bar and the call runs inside the app, encrypted end to end, on macOS, Windows and Linux. Mute, deafen and pick your microphone and speakers while you're in the call. The call keeps going if you open or close another K2 window.
-- **The first call asks for your microphone.** If K2 can't use it, the join says so and opens your system's privacy settings. On Windows, "Let desktop apps access your microphone" has to be on.
-- **Updating K2 during a call asks first,** because the update ends the call.
-- **If you lose access during a call, K2 says why.** Losing access to a room, being removed or timed out each end the call with their own line. If only speaking is taken away, you stay in the call and can still listen, and K2 tells you when you can speak again.
-
 ### Signing in
 - **A login someone else makes now starts with a temporary password.** When an owner or Admin adds a person who signs in to K2 itself, or resets their password, that person chooses their own at first sign-in. To keep the password you set, untick **Temporary password** in Settings or pass `--keep-password` to `k2 users add` or the new `k2 users set-password`.
 - **The agent list no longer comes up empty after a temporary password.** Signing in with one and choosing a new password left the list of agents empty until you relaunched K2.

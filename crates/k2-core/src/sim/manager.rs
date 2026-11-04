@@ -399,8 +399,9 @@ impl Manager {
             }
         }
         let lane = self.pick_lane(req.platform.as_deref())?;
+        let setup = self.setup.lock().clone();
         let mut probe = lane.probe();
-        self.fold_setup(&mut probe);
+        Self::fold_setup(&setup, &mut probe);
         if !probe.ready {
             let detail = probe.detail.as_deref().map(|d| format!(" ({d})")).unwrap_or_default();
             let setup = probe.setup.as_ref();
@@ -1185,12 +1186,17 @@ impl Manager {
     /// failure, as `setup` and `detail`; and any licence that setup failed
     /// on (not accepted since) as a need, so the tab, the CLI and the next
     /// Start ask the owner for it.
-    fn fold_setup(&self, p: &mut LaneProbe) {
+    ///
+    /// `setup` must be read before the probe: a setup refreshes the probes
+    /// before it reads as finished, so a setup that reads as finished is in
+    /// any probe taken after that. The other order can pair a finished setup
+    /// with the probe from before it, which reads as not ready and not
+    /// installing.
+    fn fold_setup(setup: &HashMap<LaneKind, SetupState>, p: &mut LaneProbe) {
         let accepted = super::licence::accepted_ids(p.lane);
         p.needs.retain(|n| !matches!(n, LaneNeed::Licence { id, .. } if accepted.contains(id)));
         let licences_accepted = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
-        let s = self.setup.lock();
-        let Some(st) = s.get(&p.lane) else { return };
+        let Some(st) = setup.get(&p.lane) else { return };
         if st.running {
             p.ready = false;
             // The download is under way, so it is no longer a step to take.
@@ -1221,9 +1227,10 @@ impl Manager {
 
     /// Probes with the owner's setup folded in ([`Self::fold_setup`]).
     pub fn probes_with_setup(&self, refresh: bool) -> Vec<LaneProbe> {
+        let setup = self.setup.lock().clone();
         let mut v = if refresh { self.refresh_probes() } else { self.probes() };
         for p in &mut v {
-            self.fold_setup(p);
+            Self::fold_setup(&setup, p);
         }
         v
     }

@@ -58,9 +58,11 @@ export const OVERLAY_PAGE_SIZE = 25
  *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
  *  never drew from a loaded Thread, and a files-only post was an empty
  *  bubble). */
-type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId'>
+type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId'>
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
+  // thread-mine-v1: the server's answer for whoever read this doc.
+  if (typeof src.mine === 'boolean') out.mine = src.mine
   // post-idempotency-v1: the sender's own id (a pending bubble matches it).
   if (typeof src.clientMsgId === 'string' && src.clientMsgId) out.clientMsgId = src.clientMsgId
   const w = src.widget
@@ -349,6 +351,12 @@ export interface OverlayDoc {
    *  (`owner` / `user` / `guest`). Absent on agent posts and older docs;
    *  `isOwnThreadPost` (lib/thread-viewer) decides "You". */
   author?: ThreadAuthor | null
+  /** thread-mine-v1 (0.46.8): the daemon's answer to "is this the reader's
+   *  own post?", for the credential that read it (every read page, frame
+   *  and post answer, on a person's post). It wins over the client's own
+   *  viewer lookup (`isOwnThreadPost`). Absent on agent posts, docs read
+   *  by an agent or an App guest, and older servers. */
+  mine?: boolean | null
   /** Chatter only: the `m_…` id of this live message's `msg_deliveries`
    *  receipt (`k2 msg who <id>`). Absent on unrecorded sends and older docs. */
   deliveryId?: string | null

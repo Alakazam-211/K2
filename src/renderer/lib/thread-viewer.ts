@@ -5,7 +5,10 @@
 // same posts. The daemon stamps a person's post with `author: {kind, login}`
 // from the request's credential (overlay_routes.rs `handle_post`; never the
 // body): `owner` (the owner token), `user` (a Connect login, its username),
-// `guest` (an app pass, its username). Agent posts carry none.
+// `guest` (an app pass, its username). Agent posts carry none. Since
+// thread-mine-v1 (0.46.8) the daemon also says `mine` on each person's post
+// for whoever read it (crates/k2-daemon/src/thread_mine.rs); that answer
+// wins, and the viewer below is the fallback for older servers.
 //
 // The viewer comes from the server, not a new store: `GET /cli/notify/prefs`
 // (`principal` + the owner's linked logins, on a server with
@@ -73,14 +76,18 @@ export function isViewerAuthor(author: ThreadAuthor, viewer: ThreadViewer | null
   return viewer.aliases.some((a) => fold(a) === login)
 }
 
-/** Is this Thread post the viewer's own? A post with `author` is theirs
- *  only when that person is the viewer. A post without one (a doc from
- *  before the field, or an older server) keeps the old rule: every
- *  `via=compose` post reads as yours, since nothing on it says who sent it. */
+/** Is this Thread post the viewer's own? The daemon's `mine` decides when
+ *  it sent one (thread-mine-v1: computed for the credential that read the
+ *  doc, so a viewer lookup that missed on a remote server can't turn your
+ *  own post into someone else's). Else a post with `author` is theirs only
+ *  when that person is the viewer. A post without one (a doc from before
+ *  the field, or an older server) keeps the old rule: every `via=compose`
+ *  post reads as yours, since nothing on it says who sent it. */
 export function isOwnThreadPost(
-  doc: { via?: string | null; author?: unknown },
+  doc: { via?: string | null; author?: unknown; mine?: unknown },
   viewer: ThreadViewer | null,
 ): boolean {
+  if (typeof doc.mine === 'boolean') return doc.mine
   const author = parseThreadAuthor(doc.author)
   if (author) return isViewerAuthor(author, viewer)
   return doc.via === 'compose'

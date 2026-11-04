@@ -594,6 +594,8 @@ export interface ThreadLatestItem {
   via: string | null
   /** The newest post's `author` (a person's post on a server that stamps it). */
   author?: unknown
+  /** thread-mine-v1: the server's "is it the reader's own?" for that post. */
+  mine?: boolean
   kind: string | null
   preview: string | null
   error: string | null
@@ -621,6 +623,7 @@ export function parseThreadLatest(raw: unknown): ThreadLatestItem[] {
       from: str(it.from),
       via: str(it.via),
       ...(it.author !== undefined && it.author !== null ? { author: it.author } : {}),
+      ...(typeof it.mine === 'boolean' ? { mine: it.mine } : {}),
       kind: str(it.kind),
       preview: str(it.preview),
       error: err,
@@ -1460,7 +1463,7 @@ async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promis
           text: it.preview,
           at: it.at,
           from: it.from ?? '',
-          mine: isOwnThreadPost({ via: it.via, author: it.author }, viewer),
+          mine: isOwnThreadPost({ via: it.via, author: it.author, mine: it.mine }, viewer),
           seq: it.seq,
           conversationId: it.conversationId,
           ...(it.unread !== undefined ? { unread: it.unread } : {}),

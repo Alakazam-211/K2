@@ -356,6 +356,65 @@ describe('Thread overlay choice chips + secret field', () => {
       expect(authorText()).toBe('You')
     })
 
+    // thread-mine-v1 (Rosson 2026-11-04, a desktop on another Mac signed in
+    // to rosson.k2.dev as the owner's linked login `z3thon`): "The bubbles
+    // are blue for a moment, and then they turn grey." The pending bubble
+    // is always mine; the server's copy was decided by the client's own
+    // viewer lookup, which on that remote missed. The daemon now says
+    // `mine` for the reader, and that wins.
+    describe('the server says which posts are the reader\'s (thread-mine-v1)', () => {
+      const z3thon = { kind: 'user', login: 'z3thon' }
+      /** What the window sees on that remote when its lookup missed. */
+      const missedViewers: Array<[string, ThreadViewer | null]> = [
+        ['no answer yet on a remote', null],
+        ['the owner with no linked logins', { principal: 'owner', aliases: [] }],
+        ['another login', { principal: 'rosson', aliases: [] }],
+      ]
+
+      it.each(missedViewers)('a sent message stays mine after the server copy replaces the pending bubble (%s)', (_why, viewer) => {
+        const pending: OverlayThreadItem = {
+          ...post('pending:abc', 'You', undefined),
+          pending: { clientMsgId: 'abc', state: 'sending' },
+        }
+        const { rerender } = renderInRoom(overlayRoom, <ThreadItemRow item={pending} viewer={viewer} />)
+        expect(screen.getByTestId('thread-item').hasAttribute('data-mine')).toBe(true)
+        // The post's own answer (POST /cli/thread/post) is what replaces it.
+        const echo = overlayItemFromThreadPost(
+          {
+            ok: true,
+            id: 'srv-1',
+            seq: 8607,
+            from: 'z3thon',
+            to: 'k2',
+            kind: 'text',
+            body: 'The bubbles are blue for a moment, and then they turn grey.',
+            via: 'compose',
+            author: z3thon,
+            created_at: Math.floor(Date.now() / 1000),
+            clientMsgId: 'abc',
+            mine: true,
+          },
+          'fallback',
+        )
+        if (!echo) throw new Error('the post answer made no item')
+        rerender(<ThreadItemRow item={echo} viewer={viewer} />)
+        expect(authorText()).toBe('You')
+      })
+
+      it.each(missedViewers)('a read page and a socket frame keep the server\'s mine (%s)', (_why, viewer) => {
+        renderInRoom(overlayRoom, <ThreadItemRow item={post('read-own', 'z3thon', z3thon, { mine: true })} viewer={viewer} />)
+        expect(authorText()).toBe('You')
+        cleanup()
+        // Someone else's post stays theirs even for a viewer that would
+        // have matched it.
+        renderInRoom(
+          overlayRoom,
+          <ThreadItemRow item={post('read-theirs', 'z3thon', z3thon, { mine: false })} viewer={{ principal: 'z3thon', aliases: [] }} />,
+        )
+        expect(authorText()).toBe('z3thon')
+      })
+    })
+
     it('the pane paints with the room server\'s viewer', () => {
       setThreadViewerForTests(overlayRoom.scope, aliceViewer)
       threadHook.items = [

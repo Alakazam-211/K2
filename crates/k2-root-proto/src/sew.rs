@@ -2402,6 +2402,21 @@ mod tests {
         );
     }
 
+    /// A rollback has the old core reinstall its own voice engine, so every real
+    /// release a box can go back to pins that engine for both arches, under a
+    /// path the helper can keep it at (Sew's 0.6.0 → 0.7.2 note, 11-04).
+    #[test]
+    fn every_rollback_target_pins_its_voice_engine() {
+        for r in &SEW_RELEASES[1..] {
+            let m = r.media.as_ref().unwrap_or_else(|| panic!("Sew {} pins no sew-media", r.version));
+            for arch in ["x86_64", "aarch64"] {
+                let a = m.artifacts.iter().find(|a| a.arch == arch).unwrap_or_else(|| panic!("Sew {} sew-media on {arch}", r.version));
+                assert!(hex64(a.tarball_sha256), "{}: {a:?}", r.version);
+            }
+            assert!(kept_media_path(m.version).is_some(), "{}", r.version);
+        }
+    }
+
     /// The 0.7.2 pin is exactly the published SHA256SUMS (vendored from the
     /// v0.7.2 release, sha256 8717a934…59b7): every core and sidecar
     /// tarball and binary member line, plus the App kit's.

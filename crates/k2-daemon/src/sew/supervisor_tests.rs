@@ -1989,6 +1989,105 @@ fn rollback_with_voice_surfaces_doctor_disagreement_and_engine_failure() {
     assert!(e.contains("voice engine was not put back") && e.contains("exit 3") && e.contains("media_unpinned_build"), "{e}");
 }
 
+// ── the emergency rollback with voice (Sew's 0.6.0 → 0.7.2 note, 11-04) ──
+//
+// The schema always changes on that path, so this is the only rollback that
+// can run there, and `sew upgrade --rollback` leaves the new engine in place:
+// `sew doctor` fails media.binary until the old core reinstalls its own.
+
+const PRE_BUNDLE: &str = "20251231T120000Z";
+
+fn upgraded_with_voice_and_rbloss() -> T {
+    let t = upgraded_with_voice();
+    helper_with_rbloss(&t);
+    t
+}
+
+/// Engine kept before anything moves, backup, core, the OLD core's engine, then
+/// doctor. Tarball named here; [`the_emergency_rollback_uses_the_kept_engine`]
+/// covers the one the helper already keeps.
+#[test]
+fn the_emergency_rollback_puts_the_old_voice_engine_back_before_doctor() {
+    let t = upgraded_with_voice_and_rbloss();
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("rolled_back"), Some(true)), "{r}");
+    assert_eq!((r["media"]["result"].as_str(), r["media"]["to"].as_str()), (Some("done"), Some("0.0.1")), "{r}");
+    assert_eq!(r["doctor"]["mediaBinary"]["status"], "ok", "{r}");
+    assert_eq!(r["doctor"]["mediaVersion"]["detail"], "sew-media 0.0.1", "{r}");
+    let eff = t.ops.effects();
+    let pos = |e: &str| eff.iter().position(|x| x == e).unwrap_or_else(|| panic!("{e} missing: {eff:?}"));
+    let core = format!("engine sew rollback accept-data-loss {PRE_BUNDLE}");
+    assert!(pos("engine sew stage-media") < pos(&core), "the old engine is kept before the core moves: {eff:?}");
+    assert!(pos(&core) < pos("engine sew media rollback"), "core first: {eff:?}");
+    assert!(pos("engine sew media rollback") < pos("engine sew doctor"), "doctor last: {eff:?}");
+    assert!(!eff.iter().any(|e| e == "engine sew media upgrade"), "never the new core's verb: {eff:?}");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")));
+}
+
+/// A box the helper already keeps the old engine on needs no tarball.
+#[test]
+fn the_emergency_rollback_uses_the_kept_engine() {
+    let t = upgraded_with_voice_and_rbloss();
+    t.ops.kept_media.lock().unwrap().push("0.0.1".into());
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(None), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["media"]["result"].as_str()), (Some("rolled_back"), Some("done")), "{r}");
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew stage-media"), "{:?}", t.ops.effects());
+}
+
+/// No old engine to be had: refused before the backup and before the core moves.
+#[test]
+fn the_emergency_rollback_refuses_before_anything_moves_without_the_old_engine() {
+    let t = upgraded_with_voice_and_rbloss();
+    let backups = t.ops.mgmt_backups.lock().unwrap().len();
+    let f = rollback_accept_data_loss(&t.env(), &rollback_req(None), PRE_BUNDLE).unwrap_err();
+    assert_eq!(f.code, "previous_media_tarball_needed", "{}", f.hint);
+    assert!(f.hint.contains("nothing was changed"), "{}", f.hint);
+    assert_eq!(t.ops.mgmt_backups.lock().unwrap().len(), backups, "no backup either");
+    assert!(t.ops.effects().iter().all(|e| !e.contains("accept-data-loss")), "{:?}", t.ops.effects());
+    assert_eq!(t.row().installed_version.as_deref(), Some(pinned().version));
+}
+
+/// The engine didn't go back, or doctor still fails media.binary: never reported
+/// as a clean rollback, and the failing check is named.
+#[test]
+fn the_emergency_rollback_never_calls_a_failed_engine_step_clean() {
+    let t = upgraded_with_voice_and_rbloss();
+    let failing = json!({"sewExit": 1, "sew": {"ok": false, "checks": [
+        {"id": "media.binary", "status": "fail", "detail": "the binary's sha256 differs from the pin baked into sew", "hint": ""},
+        {"id": "media.version", "status": "warn", "detail": "sew-media 0.0.2, sew 0.0.1: upgrade pending", "hint": ""},
+    ]}});
+    t.ops.queue("engine sew doctor", Ok(failing.clone()));
+    t.ops.queue("engine sew doctor", Ok(failing));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("rolled_back_unhealthy"), Some(false)), "{r}");
+    assert_eq!(r["doctorFails"], json!(["media.binary"]), "{r}");
+    assert!(r["message"].as_str().unwrap().contains("media.binary"), "{r}");
+
+    let t = upgraded_with_voice_and_rbloss();
+    t.ops.queue("engine sew media rollback", Ok(json!({"sewExit": 3, "sew": null, "reason": "media_unpinned_build"})));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["media"]["result"].as_str()), (Some("rolled_back_unhealthy"), Some("failed")), "{r}");
+    assert_eq!(r["ok"], false, "{r}");
+}
+
+/// A restore leaves `restore.leftovers` as a warning (Sew's note): that is not a
+/// failure, so the rollback is still clean.
+#[test]
+fn the_emergency_rollback_is_clean_with_sews_restore_leftovers_warning() {
+    let t = upgraded_with_voice_and_rbloss();
+    let checks = json!({"sewExit": 0, "sew": {"ok": true, "checks": [
+        {"id": "media.binary", "status": "ok", "detail": "matches the pin", "hint": ""},
+        {"id": "media.version", "status": "ok", "detail": "sew-media 0.0.1", "hint": ""},
+        {"id": "restore.leftovers", "status": "warn", "detail": "blobs.pre-restore-20251231", "hint": ""},
+    ]}});
+    t.ops.queue("engine sew doctor", Ok(checks.clone()));
+    t.ops.queue("engine sew doctor", Ok(checks));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("rolled_back"), Some(true)), "{r}");
+    assert_eq!(r["doctorFails"], json!([]), "{r}");
+}
+
 // ── boot: JWKS URL drift + install id (S29 §19, 0.46.3) ──────────────────
 
 const OLD_JWKS: &str = "http://127.0.0.1:41111/v1/chat/jwks";

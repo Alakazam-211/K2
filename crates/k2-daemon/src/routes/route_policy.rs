@@ -1315,6 +1315,12 @@ pub const ROUTES: &[Route] = &[
     // Person names (0.46.0): same floors as colours (any login reads them
     // and sets its own; Admin+ others; Owner for the owner person).
     both("/cli/people/name", Member),
+    // Person pictures (0.46.8): any login reads them and sets its own; the
+    // handler lets an Admin+ change someone else's (Owner for the owner),
+    // the names' rule. Agent passports read only (the handler refuses a
+    // write with `person_only`).
+    both("/cli/people/picture", Member),
+    post("/cli/people/picture/clear", Member),
     // Permission cards (Beta, prd-agent-settings-cards-v1 §3.2, §6.7,
     // §11): absent from every wire decision while the global switch is off
     // ([`live_row`], vs-live C1). The agent verbs take a passport only (no

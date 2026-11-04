@@ -695,6 +695,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::ProjectsChanged {} => None,
         // Thread push prefs: app-level, payload-free refetch (TP21).
         SessionEvent::NotifyPrefsChanged {} => None,
+        // 0.46.8 person pictures: app-level, every client shows every person.
+        SessionEvent::PersonPictureChanged { .. } => None,
         // 0.40.38 — chat-history refetch signal: app-level, all subscribers.
         SessionEvent::ChatHistoryChanged {} => None,
         // 0.40.150 — token-usage ledger grew: app-level refetch signal
@@ -1147,6 +1149,7 @@ mod tests {
             },
             SessionEvent::ProjectsChanged {},
             SessionEvent::NotifyPrefsChanged {},
+            SessionEvent::PersonPictureChanged { person: "anna".into(), image_hash: None },
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },

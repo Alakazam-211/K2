@@ -190,6 +190,8 @@ pub mod publish_runtime;
 pub mod push_routes;
 // Thread push prefs routes (prd-thread-push-notifications-v1 S2).
 pub mod notify_routes;
+/// 0.46.8: `/cli/people/picture*`, profile pictures for K2's own people.
+pub mod people_picture_routes;
 /// homes-sync-v1 (0.46.1): `/cli/me/homes*`, a person's Homes between devices.
 pub mod homes_routes;
 /// stash-sync-v1 (0.46.7): `/cli/me/stash*`, a person's prompt stash between devices.

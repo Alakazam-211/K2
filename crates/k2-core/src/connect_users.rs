@@ -915,6 +915,10 @@ pub fn remove_user(username: &str) -> Result<(), String> {
         if let Err(e) = crate::notify_prefs::cleanup_removed_user(&db.lock(), &username) {
             crate::log_debug!("[connect_users] notify cleanup for '{username}' failed: {e}");
         }
+        // 0.46.8: the login's profile picture goes with it.
+        if let Err(e) = crate::person_picture::remove_for_user_id(&db.lock(), &gone_id) {
+            crate::log_debug!("[connect_users] picture cleanup for '{username}' failed: {e}");
+        }
     }
     // Sew S27: removing the owner's linked login changes the `k2:owner`
     // chat username (next linked login, else `owner`).

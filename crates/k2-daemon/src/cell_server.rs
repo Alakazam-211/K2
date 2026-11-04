@@ -740,6 +740,15 @@ mod unix_impl {
                     Err(r) => from_cli(r),
                 }
             }
+            // 0.46.8 people's pictures: an agent reads them; a write is the
+            // handler's named `person_only` (as on TCP).
+            p if crate::people_picture_routes::is_route(p) => from_cli(crate::people_picture_routes::handle(
+                is_post,
+                p,
+                body,
+                &crate::people_picture_routes::Caller::Agent,
+                params,
+            )),
             crate::agent_identity_routes::IDENTITY_PATH => {
                 if body.len() > crate::agent_identity_routes::MAX_BODY {
                     return (

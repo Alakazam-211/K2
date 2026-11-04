@@ -10303,6 +10303,59 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // 0.46.8 — `/cli/people/picture*`, K2 people's profile pictures.
+        // The PERSON comes from the token (owner token → `owner`, a live
+        // Connect session → its login), never the body. An agent passport
+        // may read (GET) and gets a named 403 `person_only` on a write. A
+        // GET to the POST-only `/clear` was answered 405 before auth
+        // (`get_refused`).
+        p if crate::people_picture_routes::is_route(p) => {
+            use crate::people_picture_routes::{Caller, MAX_BODY};
+            let caller = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some(Caller::Person(crate::notify_routes::Actor::owner_token()))
+            } else if let Some(u) = super::http::extract_token(&query)
+                .filter(|t| !t.is_empty())
+                .and_then(k2_core::connect_users::validate_session)
+            {
+                Some(Caller::Person(crate::notify_routes::Actor::login(&u)))
+            } else if scoped_hook_auth(p, &query, bearer_token.as_deref()).0 {
+                Some(Caller::Agent)
+            } else {
+                None
+            };
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"a picture upload is at most 2 MiB"}}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let Some(caller) = caller else {
+                let r = crate::people_picture_routes::not_signed_in();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let p_owned = p.to_string();
+            let params = super::http::parse_params(p, &query);
+            let result = tokio::task::spawn_blocking(move || {
+                crate::people_picture_routes::handle(is_post, &p_owned, &body_bytes, &caller, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body).await;
+        }
         // prd-thread-push-notifications-v1 §5 — `/cli/notify/*` and the
         // owner-linked accounts (`/cli/owner/accounts`). GET + POST. The
         // acting PERSON comes from the token here (owner token → "owner",

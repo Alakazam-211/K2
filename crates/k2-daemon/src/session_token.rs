@@ -611,6 +611,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // is never an agent verb.
         "/cli/notify/email",
         "/cli/notify/email/off",
+        // 0.46.8: people's profile pictures. An agent reads them (Thread
+        // icons); the handler refuses its writes with `person_only`, so
+        // both paths are here only to name that refusal.
+        "/cli/people/picture",
+        "/cli/people/picture/clear",
         "/cli/git/diff-file",
         "/cli/git/discard",
         // C5: review notes (list + resolve only) and `k2 changes open`.

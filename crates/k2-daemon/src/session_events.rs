@@ -519,6 +519,20 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "notify_prefs_changed" }`.
     NotifyPrefsChanged {},
 
+    /// 0.46.8 — a person's profile picture on THIS server was set,
+    /// replaced or removed (`POST /cli/people/picture[/clear]`).
+    /// APP-LEVEL: every client shows every person. `person` is the person
+    /// key (`owner`, or a Connect username); `imageHash` the new picture's
+    /// hash, `null` when it was removed. Clients re-read
+    /// `GET /cli/people/picture` (which logins show it, and the bytes).
+    /// Wire: `{ "kind": "person_picture_changed", "person": "anna",
+    /// "imageHash": "…" | null }`.
+    PersonPictureChanged {
+        person: String,
+        #[serde(rename = "imageHash")]
+        image_hash: Option<String>,
+    },
+
     /// 0.40.38 — chat-history list mutated (session rename/pin/refresh).
     /// APP-LEVEL refetch signal (no payload — ProjectsChanged convention).
     /// Mirrored from HookEvent::SyncChatHistory / ChatRefreshed in
@@ -1156,6 +1170,7 @@ impl SessionEvent {
             SessionEvent::HeartbeatRosterChanged { .. } => "heartbeat_roster_changed",
             SessionEvent::ProjectsChanged {} => "projects_changed",
             SessionEvent::NotifyPrefsChanged {} => "notify_prefs_changed",
+            SessionEvent::PersonPictureChanged { .. } => "person_picture_changed",
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",

@@ -10,7 +10,11 @@
 //!   Components ride on the same token, joined with `+` (a comma would
 //!   split the needs list): `rust@stable+clippy+rustfmt`,
 //!   `rust@nightly+llvm-tools` ([`RUST_COMPONENTS`]; nodes offering
-//!   [`FEATURE_RUST_COMPONENTS`] only).
+//!   [`FEATURE_RUST_COMPONENTS`] only). Compile targets ride the same way
+//!   as `+target:<triple>`, repeatable and mixed with components:
+//!   `rust@1.95.0+target:wasm32-unknown-unknown`,
+//!   `rust@stable+clippy+target:wasm32-wasip1+target:aarch64-unknown-linux-gnu`
+//!   (nodes offering [`FEATURE_RUST_TARGETS`] only; rustup adds them).
 //! - `cargo-nextest` (or `nextest`) — the prebuilt nextest binary.
 //! - `sys:<package>` — a system package by its Debian name (`libssl-dev`,
 //!   `pkg-config`), mapped per distro ([`crate::pkgmap`]); or a native
@@ -76,7 +80,7 @@ pub fn expected_bins(tool: &str) -> &'static [&'static str] {
 /// What `--needs` takes, for help text and refusals.
 pub fn supported_list() -> String {
     let mut v: Vec<String> = SUPPORTED_TOOLS.iter().map(|(t, _)| format!("{t}@<v>")).collect();
-    v.extend(["rust@<channel>[+<component>…]", "cargo-nextest", "sys:<package>", "sys:<apt|pacman|dnf|zypper>:<package>", "profile:<name>"].map(String::from));
+    v.extend(["rust@<channel>[+<component>…][+target:<triple>…]", "cargo-nextest", "sys:<package>", "sys:<apt|pacman|dnf|zypper>:<package>", "profile:<name>"].map(String::from));
     v.join(", ")
 }
 
@@ -155,6 +159,46 @@ pub const DEFAULT_RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt"];
 /// `rust@stable+minimal`: no default components (a size-sensitive node).
 pub const RUST_MINIMAL: &str = "minimal";
 
+/// Offer feature (k2-node 0.46.13): the node adds the Rust compile targets
+/// a `rust@<channel>+target:<triple>` need names (`rustup target add`),
+/// and lists each toolchain's installed targets in `offer.tools`
+/// (`rust-targets:<toolchain>`). Version skew: an older node reads
+/// `target:wasm32-unknown-unknown` as a component name and refuses the
+/// need (`need_invalid`) at the job's start, so the controller places a
+/// need with targets only on a node offering this, and refuses a job
+/// pinned to an older one (`node_upgrade_required`).
+pub const FEATURE_RUST_TARGETS: &str = "rust-targets";
+
+/// Refusal code: a Rust target was asked of a node whose Rust is a system
+/// package with no rustup (the offer's [`TOOLS_RUST_INSTALLER`] is
+/// `system`): nothing there can add a target. Placement goes elsewhere; a
+/// job pinned there is refused with this code.
+pub const RUST_TARGET_UNSUPPORTED: &str = "rust_target_unsupported";
+
+/// The offer `tools` key saying how the node gets Rust: `rustup` (its own
+/// rustup in the node home) or `system` (a distro `rustc` on the job PATH
+/// and no rustup: no targets can be added). Absent = neither yet (the node
+/// installs rustup on the first Rust need).
+pub const TOOLS_RUST_INSTALLER: &str = "rust-installer";
+
+/// Most compile targets on one Rust need.
+pub const MAX_RUST_TARGETS: usize = 8;
+
+/// The prefix a target takes on a Rust need (`+target:wasm32-unknown-unknown`).
+pub const TARGET_PREFIX: &str = "target:";
+
+/// A Rust target triple: 3–64 of `a-z 0-9 _ - .`, starting with a letter
+/// or digit, with at least one `-` (`wasm32-unknown-unknown`,
+/// `thumbv8m.main-none-eabi`, `aarch64-apple-ios-sim`). Never an option,
+/// a path or a shell word.
+pub fn valid_target(t: &str) -> bool {
+    (3..=64).contains(&t.len())
+        && t.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && t.contains('-')
+        && !t.contains("..")
+        && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-' | '.'))
+}
+
 /// Rust components a need may name (`rust@stable+clippy`). `llvm-tools`
 /// is rustup's `llvm-tools-preview` on older toolchains (rustup renames
 /// it); with it the job's PATH gains the toolchain's LLVM bin dir.
@@ -183,11 +227,16 @@ pub enum Need {
     Tool { tool: String, version: String },
     /// Rust through rustup; `channel` is `stable`, `1.99`, `nightly-…`.
     /// `components` (sorted, unique, [`RUST_COMPONENTS`]) from the `+`
-    /// form; empty (and absent on the wire) otherwise.
+    /// form; empty (and absent on the wire) otherwise. `targets` (sorted,
+    /// unique, [`valid_target`]) from `+target:<triple>`; empty (and
+    /// absent on the wire) otherwise, so a need without targets is the
+    /// same bytes as before targets existed.
     Rust {
         channel: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         components: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<String>,
     },
     /// The prebuilt `cargo-nextest`.
     Nextest,
@@ -208,8 +257,19 @@ impl Need {
     pub fn token(&self) -> String {
         match self {
             Need::Tool { tool, version } => format!("{tool}@{version}"),
-            Need::Rust { channel, components } if components.is_empty() => format!("rust@{channel}"),
-            Need::Rust { channel, components } => format!("rust@{channel}+{}", components.join("+")),
+            Need::Rust { channel, components, targets } => {
+                let mut t = format!("rust@{channel}");
+                for c in components {
+                    t.push('+');
+                    t.push_str(c);
+                }
+                for x in targets {
+                    t.push('+');
+                    t.push_str(TARGET_PREFIX);
+                    t.push_str(x);
+                }
+                t
+            }
             Need::Nextest => "cargo-nextest".into(),
             Need::System { package } => format!("sys:{package}"),
             Need::Profile { name, version: None } => format!("profile:{name}"),
@@ -303,29 +363,45 @@ pub fn parse(token: &str) -> Result<Need, String> {
         return Err(format!("{t:?}: a tool is <name>@<version> (e.g. node@22, python@3.12, rust@stable)"));
     }
     let version = version.trim_start_matches('v');
-    if !valid_version(version) {
-        return Err(format!("{t:?}: versions use a-z A-Z 0-9 . _ + - (e.g. 22, 3.12.1, lts, stable)"));
-    }
+    // Rust checks its own parts (`+target:<triple>` has a `:`).
     if tool == "rust" || tool == "rustup" {
         return parse_rust(t, version);
+    }
+    if !valid_version(version) {
+        return Err(format!("{t:?}: versions use a-z A-Z 0-9 . _ + - (e.g. 22, 3.12.1, lts, stable)"));
     }
     Ok(Need::Tool { tool: tool.to_string(), version: version.to_string() })
 }
 
-/// `stable`, `1.99+clippy+rustfmt`, `nightly-2026-09-01+llvm-tools`.
+/// `stable`, `1.99+clippy+rustfmt`, `nightly-2026-09-01+llvm-tools`,
+/// `1.95.0+target:wasm32-unknown-unknown`.
 fn parse_rust(t: &str, version: &str) -> Result<Need, String> {
     let mut parts = version.split('+');
     let channel = parts.next().unwrap_or("");
-    if channel.is_empty() {
-        return Err(format!("{t:?}: a Rust need is rust@<channel>[+<component>…] (e.g. rust@stable+clippy+rustfmt)"));
+    if channel.is_empty() || !valid_version(channel) {
+        return Err(format!(
+            "{t:?}: a Rust need is rust@<channel>[+<component>…][+target:<triple>…] (e.g. rust@stable+clippy, rust@1.95.0+target:wasm32-unknown-unknown)"
+        ));
     }
     let channel = if channel == "latest" { "stable" } else { channel };
     let mut components: Vec<String> = Vec::new();
+    let mut targets: Vec<String> = Vec::new();
     for c in parts {
+        if let Some(x) = c.strip_prefix(TARGET_PREFIX) {
+            if !valid_target(x) {
+                return Err(format!(
+                    "{t:?}: {x:?} isn't a Rust target triple (a-z 0-9 _ - ., e.g. +target:wasm32-unknown-unknown; see rustup target list)"
+                ));
+            }
+            if !targets.iter().any(|y| y == x) {
+                targets.push(x.to_string());
+            }
+            continue;
+        }
         let c = canonical_component(c);
         if !RUST_COMPONENTS.contains(&c) && c != RUST_MINIMAL {
             return Err(format!(
-                "{t:?}: {c:?} isn't a Rust component K2 installs (one of {}, or minimal for none; join them with +, e.g. rust@stable+clippy+rustfmt)",
+                "{t:?}: {c:?} isn't a Rust component K2 installs (one of {}, or minimal for none; join them with +, e.g. rust@stable+clippy+rustfmt; a compile target is +target:<triple>)",
                 RUST_COMPONENTS.join(", ")
             ));
         }
@@ -336,8 +412,12 @@ fn parse_rust(t: &str, version: &str) -> Result<Need, String> {
     if components.len() > MAX_RUST_COMPONENTS {
         return Err(format!("{t:?}: at most {MAX_RUST_COMPONENTS} components"));
     }
+    if targets.len() > MAX_RUST_TARGETS {
+        return Err(format!("{t:?}: at most {MAX_RUST_TARGETS} targets"));
+    }
     components.sort();
-    Ok(Need::Rust { channel: channel.to_string(), components })
+    targets.sort();
+    Ok(Need::Rust { channel: channel.to_string(), components, targets })
 }
 
 /// Parse an explicit list (the CLI's comma list arrives split already):
@@ -377,7 +457,7 @@ mod tests {
         assert_eq!(parse("nodejs@v20.1.0").unwrap().token(), "node@20.1.0");
         assert_eq!(parse("python").unwrap().token(), "python@latest");
         assert_eq!(parse("golang@1.23").unwrap().token(), "go@1.23");
-        assert_eq!(parse("rust").unwrap(), Need::Rust { channel: "stable".into(), components: vec![] });
+        assert_eq!(parse("rust").unwrap(), Need::Rust { channel: "stable".into(), components: vec![], targets: vec![] });
         assert_eq!(parse("rust@1.99").unwrap().token(), "rust@1.99");
         assert_eq!(parse("rust@nightly-2026-09-01").unwrap().token(), "rust@nightly-2026-09-01");
         assert_eq!(parse("nextest").unwrap(), Need::Nextest);
@@ -392,7 +472,7 @@ mod tests {
     #[test]
     fn rust_components_parse() {
         let n = parse("rust@stable+rustfmt+clippy").unwrap();
-        assert_eq!(n, Need::Rust { channel: "stable".into(), components: vec!["clippy".into(), "rustfmt".into()] });
+        assert_eq!(n, Need::Rust { channel: "stable".into(), components: vec!["clippy".into(), "rustfmt".into()], targets: vec![] });
         assert_eq!(n.token(), "rust@stable+clippy+rustfmt");
         assert_eq!(n.key(), "rust");
         assert_eq!(parse("rust@nightly-2026-09-01+llvm-tools-preview").unwrap().token(), "rust@nightly-2026-09-01+llvm-tools");
@@ -408,9 +488,64 @@ mod tests {
         let plain = serde_json::to_string(&parse("rust@stable").unwrap()).unwrap();
         assert_eq!(plain, r#"{"kind":"rust","channel":"stable"}"#);
         let old: Need = serde_json::from_str(r#"{"kind":"rust","channel":"1.99"}"#).unwrap();
-        assert_eq!(old, Need::Rust { channel: "1.99".into(), components: vec![] });
+        assert_eq!(old, Need::Rust { channel: "1.99".into(), components: vec![], targets: vec![] });
         assert_eq!(canonical_component("llvm-tools-preview"), "llvm-tools");
-        assert!(supported_list().contains("rust@<channel>[+<component>…]"));
+        assert!(supported_list().contains("rust@<channel>[+<component>…][+target:<triple>…]"));
+    }
+
+    /// Compile targets ride on the Rust need as `+target:<triple>`,
+    /// repeatable and mixed with components, sorted and unique, at most
+    /// [`MAX_RUST_TARGETS`]; a need without targets keeps its old token
+    /// and wire bytes.
+    #[test]
+    fn rust_targets_parse() {
+        let n = parse("rust@1.95.0+target:wasm32-unknown-unknown").unwrap();
+        assert_eq!(n, Need::Rust { channel: "1.95.0".into(), components: vec![], targets: vec!["wasm32-unknown-unknown".into()] });
+        assert_eq!(n.token(), "rust@1.95.0+target:wasm32-unknown-unknown");
+        assert_eq!(n.key(), "rust");
+        let m = parse("rust@stable+target:wasm32-wasip1+clippy+target:aarch64-unknown-linux-gnu+target:wasm32-wasip1+rustfmt").unwrap();
+        assert_eq!(
+            m,
+            Need::Rust {
+                channel: "stable".into(),
+                components: vec!["clippy".into(), "rustfmt".into()],
+                targets: vec!["aarch64-unknown-linux-gnu".into(), "wasm32-wasip1".into()],
+            }
+        );
+        // Components first, then targets, each sorted: one canonical token,
+        // which parses back to the same need.
+        assert_eq!(m.token(), "rust@stable+clippy+rustfmt+target:aarch64-unknown-linux-gnu+target:wasm32-wasip1");
+        assert_eq!(parse(&m.token()).unwrap(), m);
+        assert_eq!(parse("rust@nightly+target:thumbv8m.main-none-eabi").unwrap().token(), "rust@nightly+target:thumbv8m.main-none-eabi");
+        assert_eq!(parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown", "cmake@3"]).unwrap().len(), 2);
+        for bad in [
+            "rust@stable+target:",
+            "rust@stable+target:-x",
+            "rust@stable+target:Wasm32-unknown-unknown",
+            "rust@stable+target:wasm32",
+            "rust@stable+target:../x-y",
+            "rust@stable+target:a/b-c",
+            "rust@stable+target:a b-c",
+            "rust@stable+target:wasm32-unknown-unknown;x",
+            "rust@stable+targets:wasm32-unknown-unknown",
+            "rust@+target:wasm32-unknown-unknown",
+            "rust@sta:ble",
+            "node@22+target:wasm32-unknown-unknown",
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?} must be refused");
+        }
+        let e = parse_all(&["rust@stable+target:wasm32"]).unwrap_err();
+        assert_eq!(e.code, NEED_INVALID);
+        assert!(e.message.contains("isn't a Rust target triple") && e.message.contains("+target:wasm32-unknown-unknown"), "{e}");
+        let nine: String = (0..9).map(|i| format!("+target:t{i}-unknown-none")).collect();
+        assert!(parse(&format!("rust@stable{nine}")).unwrap_err().contains("at most 8 targets"));
+        let eight: String = (0..8).map(|i| format!("+target:t{i}-unknown-none")).collect();
+        assert!(parse(&format!("rust@stable{eight}")).is_ok());
+        // Wire: `targets` only when there are some; an older plan reads.
+        assert_eq!(serde_json::to_string(&parse("rust@stable+clippy").unwrap()).unwrap(), r#"{"kind":"rust","channel":"stable","components":["clippy"]}"#);
+        assert_eq!(serde_json::to_string(&n).unwrap(), r#"{"kind":"rust","channel":"1.95.0","targets":["wasm32-unknown-unknown"]}"#);
+        assert!(valid_target("wasm32-unknown-unknown") && valid_target("x86_64-pc-windows-msvc") && !valid_target("x"));
+        assert!(supported_list().contains("+target:<triple>"));
     }
 
     /// prd-compute-self-serve-environments §5.1, §7.1, §8.

@@ -2037,3 +2037,66 @@ async fn an_avoided_node_that_becomes_yours_later_is_still_never_picked() {
         compute_ws::test_detach(n);
     }
 }
+
+/// `--needs rust@<ver>+target:<triple>`. Auto placement goes only
+/// to a node whose k2-node adds targets and that has rustup (an older
+/// k2-node and a system-Rust node are skipped and counted); a job pinned
+/// to either is refused by name; `--plan` shows the target's state and
+/// the tools line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rust_targets_place_only_where_rustup_can_add_them() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "wasm");
+    for n in ["t-new", "t-old", "t-sys"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let tc = "1.95.0-x86_64-unknown-linux-gnu";
+    let mut new = tooled(1, 30, &[("rust-toolchains", tc), ("rust-installer", "rustup"), ("rust-targets:1.95.0-x86_64-unknown-linux-gnu", "wasm32-unknown-unknown,x86_64-unknown-linux-gnu")]);
+    new.features.push("rust-targets".into());
+    let old = tooled(1, 30, &[("rust-toolchains", tc)]);
+    let mut sys = tooled(1, 30, &[("rust-installer", "system"), ("rustc", "1.95.0")]);
+    sys.features.push("rust-targets".into());
+    let _a = compute_ws::test_attach("t-new", new);
+    let _b = compute_ws::test_attach("t-old", old);
+    let _c = compute_ws::test_attach("t-sys", sys);
+    let agent = passport(&me);
+    let wasm = json!(["rust@1.95.0+target:wasm32-unknown-unknown"]);
+
+    // Auto: only t-new; the other two are counted as skipped.
+    let r = run(d.port, &agent, &me, json!({"needs": wasm, "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r);
+    assert_eq!(p["node"], "t-new", "{p}");
+    assert_eq!(p["needs"], json!([{"need": "rust@1.95.0+target:wasm32-unknown-unknown", "state": "ready", "have": tc}]), "{p}");
+    assert_eq!(p["toolsLine"], "tools ready", "{p}");
+    let text = p.to_string();
+    assert!(text.contains("1 with a k2-node too old for this job") && text.contains("1 that can't provide a --needs (system Rust: no Rust targets)"), "{p}");
+    let r = run(d.port, &agent, &me, json!({"needs": wasm})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "t-new");
+    let job = row(j(&r)["job"]["id"].as_str().unwrap());
+    let plan: Value = serde_json::from_str(&job.plan_json).unwrap();
+    assert_eq!(plan["needs"], json!(["rust@1.95.0+target:wasm32-unknown-unknown"]), "the canonical token rides on the plan");
+
+    // Pinned: a named refusal each.
+    let r = run(d.port, &agent, &me, json!({"needs": wasm, "node": "t-sys"})).await;
+    assert_eq!((r.status, code(&r)), (409, "rust_target_unsupported".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("rust@1.95.0+target:wasm32-unknown-unknown") && hint.contains("system package with no rustup") && hint.contains("without a node name"), "{hint}");
+    let r = run(d.port, &agent, &me, json!({"needs": wasm, "node": "t-old"})).await;
+    assert_eq!((r.status, code(&r)), (409, "node_upgrade_required".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("older than 0.46.13, which can't add Rust targets"), "{}", r.body);
+    // A plain Rust need still goes to either.
+    let r = run(d.port, &agent, &me, json!({"needs": ["rust@1.95.0"], "node": "t-sys", "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // A bad triple is need_invalid before anything queues.
+    let before = job_count();
+    let r = run(d.port, &agent, &me, json!({"needs": ["rust@1.95.0+target:wasm32"]})).await;
+    assert_eq!((r.status, code(&r)), (400, "need_invalid".to_string()), "{}", r.body);
+    assert_eq!(job_count(), before);
+    for n in ["t-new", "t-old", "t-sys"] {
+        compute_ws::test_detach(n);
+    }
+}

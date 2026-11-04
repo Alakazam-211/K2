@@ -1409,6 +1409,45 @@ fn node_features(n: &store::NodeRow) -> Vec<String> {
     live.or_else(|| n.last_offer.clone()).map(|o| o.features).unwrap_or_default()
 }
 
+/// A job pinned to `node` whose needs name a Rust target: refused
+/// when its k2-node predates targets (`node_upgrade_required`) or its Rust
+/// is a system package with no rustup (`rust_target_unsupported`).
+fn target_refusal(node: &store::NodeRow, needs: &[String]) -> Option<Refusal> {
+    if !crate::compute_place::wants_targets(needs) {
+        return None;
+    }
+    let offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+    target_refusal_for(&node.name, offer.as_ref(), needs)
+}
+
+pub(crate) fn target_refusal_for(name: &str, offer: Option<&k2_core::compute::proto::frames::Offer>, needs: &[String]) -> Option<Refusal> {
+    if !crate::compute_place::wants_targets(needs) {
+        return None;
+    }
+    let feats = offer.map(|o| o.features.as_slice()).unwrap_or_default();
+    if !feats.iter().any(|f| f == needs::FEATURE_RUST_TARGETS) {
+        return Some(no(
+            "node_upgrade_required",
+            409,
+            format!(
+                "'{name}' runs a k2-node older than 0.46.13, which can't add Rust targets (rust@<channel>+target:<triple>); update it (k2 compute node update {name}), pick another node, or send the job without a node name"
+            ),
+        ));
+    }
+    if offer.is_some_and(crate::compute_place::system_rust) {
+        let which: Vec<String> = needs.iter().filter(|t| !crate::compute_place::need_targets(t).is_empty()).cloned().collect();
+        return Some(no(
+            needs::RUST_TARGET_UNSUPPORTED,
+            409,
+            format!(
+                "{}: '{name}' gets Rust from a system package with no rustup, so it can't add Rust targets. Send the job without a node name (K2 places it on a node with rustup), or name another node",
+                which.join(", ")
+            ),
+        ));
+    }
+    None
+}
+
 fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_credential(who)?;
     // The workspace switch (`compute_off`) for passports.
@@ -1597,6 +1636,13 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         if !never.is_empty() || states.iter().any(|x| x.state == place::NeedState::UnsupportedOnOs) {
             row["state"] = "cant_install".into();
             row["note"] = format!("can't install {} there (no name for its distro, K2's deny list, or a Mac)", [never, states.iter().filter(|x| x.state == place::NeedState::UnsupportedOnOs).map(|x| x.need.clone()).collect()].concat().join(", ")).into();
+            rows.push(row);
+            continue;
+        }
+        let cannot: Vec<&str> = states.iter().filter(|x| x.state == place::NeedState::Unsupported).map(|x| x.need.as_str()).collect();
+        if !cannot.is_empty() {
+            row["state"] = "cant_install".into();
+            row["note"] = format!("can't add {} there: its Rust is a system package with no rustup (no Rust targets)", cannot.join(", ")).into();
             rows.push(row);
             continue;
         }
@@ -2063,6 +2109,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                     node.name, node.name
                 ),
             ));
+        }
+        // `rust@<channel>+target:<triple>`.
+        if let Some(r) = target_refusal(&node, &needs) {
+            return Err(r);
         }
         let wants_sys = needs.iter().any(|n| n.starts_with("sys:") || n.starts_with("profile:"));
         if wants_sys && !feats.iter().any(|f| f == needs::FEATURE_SYSTEM_PACKAGES) {

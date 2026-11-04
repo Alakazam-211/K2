@@ -615,19 +615,40 @@ pub fn fold_component(c: &str) -> &str {
 /// `llvm-tools-preview` reads as `llvm-tools`; a component named twice
 /// counts once. Only a Rust need takes components (`+` stays part of any
 /// other token, e.g. `sys:g++`). A comma would split the needs list, hence
-/// `+`.
+/// `+`. Targets (`+target:<triple>`) are checked and left out here: see
+/// [`split_rust_parts`].
 pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), String> {
+    split_rust_parts(token).map(|(b, c, _)| (b, c))
+}
+
+/// [`split_rust_components`] plus the Rust compile targets:
+/// `rust@1.95.0+clippy+target:wasm32-unknown-unknown` → (`rust@1.95.0`,
+/// [clippy], [wasm32-unknown-unknown]); each list sorted and unique, at
+/// most `needs::MAX_RUST_TARGETS` targets.
+pub fn split_rust_parts(token: &str) -> Result<(String, Vec<String>, Vec<String>), String> {
     let t = token.trim();
-    let Some((head, tail)) = t.split_once('+') else { return Ok((t.to_string(), Vec::new())) };
+    let Some((head, tail)) = t.split_once('+') else { return Ok((t.to_string(), Vec::new(), Vec::new())) };
     if !matches!(needs::parse(head), Ok(needs::Need::Rust { .. })) {
-        return Ok((t.to_string(), Vec::new()));
+        return Ok((t.to_string(), Vec::new(), Vec::new()));
     }
     let mut comps: Vec<String> = Vec::new();
+    let mut targets: Vec<String> = Vec::new();
     for c in tail.split('+') {
+        if let Some(x) = c.strip_prefix(needs::TARGET_PREFIX) {
+            if !needs::valid_target(x) {
+                return Err(format!(
+                    "{t:?}: {x:?} isn't a Rust target triple (a-z 0-9 _ - ., e.g. rust@1.95.0+target:wasm32-unknown-unknown; see rustup target list)"
+                ));
+            }
+            if !targets.iter().any(|y| y == x) {
+                targets.push(x.to_string());
+            }
+            continue;
+        }
         let c = fold_component(c);
         if !RUST_COMPONENTS.contains(&c) && c != needs::RUST_MINIMAL {
             return Err(format!(
-                "{t:?}: Rust components are {} joined to the channel with + (e.g. rust@stable+clippy+rustfmt); {c:?} isn't one",
+                "{t:?}: Rust components are {} joined to the channel with + (e.g. rust@stable+clippy+rustfmt; a compile target is +target:<triple>); {c:?} isn't one",
                 RUST_COMPONENTS.join(", ")
             ));
         }
@@ -635,9 +656,13 @@ pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), Strin
             comps.push(c.to_string());
         }
     }
+    if targets.len() > needs::MAX_RUST_TARGETS {
+        return Err(format!("{t:?}: at most {} targets", needs::MAX_RUST_TARGETS));
+    }
     // Sorted, as k2-node's `Need::token()` writes them: one canonical token.
     comps.sort();
-    Ok((head.to_string(), comps))
+    targets.sort();
+    Ok((head.to_string(), comps, targets))
 }
 
 /// Check a needs list as the node will (`needs::parse_all`: supported,
@@ -646,14 +671,41 @@ pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), Strin
 /// `rust+clippy` → `rust@stable+clippy`).
 pub fn check_needs<S: AsRef<str>>(raw: &[S]) -> Result<Vec<String>, needs::NeedError> {
     let mut bases = Vec::with_capacity(raw.len());
-    let mut comps = Vec::with_capacity(raw.len());
+    let mut extras = Vec::with_capacity(raw.len());
     for t in raw {
-        let (b, c) = split_rust_components(t.as_ref()).map_err(|message| needs::NeedError { code: needs::NEED_INVALID, message })?;
+        let (b, c, x) = split_rust_parts(t.as_ref()).map_err(|message| needs::NeedError { code: needs::NEED_INVALID, message })?;
         bases.push(b);
-        comps.push(c);
+        extras.push((c, x));
     }
     let parsed = needs::parse_all(&bases)?;
-    Ok(parsed.iter().zip(comps).map(|(n, c)| if c.is_empty() { n.token() } else { format!("{}+{}", n.token(), c.join("+")) }).collect())
+    // Only a Rust need has extras: its token is k2-node's own (components,
+    // then `target:` entries).
+    Ok(parsed
+        .into_iter()
+        .zip(extras)
+        .map(|(n, (components, targets))| match n {
+            needs::Need::Rust { channel, .. } => needs::Need::Rust { channel, components, targets }.token(),
+            other => other.token(),
+        })
+        .collect())
+}
+
+/// The Rust compile targets a (canonical) need token names; empty for any
+/// other.
+pub fn need_targets(token: &str) -> Vec<String> {
+    split_rust_parts(token).map(|(_, _, t)| t).unwrap_or_default()
+}
+
+/// Any need names a Rust target (the node must offer
+/// `needs::FEATURE_RUST_TARGETS`, and have rustup).
+pub fn wants_targets(needs: &[String]) -> bool {
+    needs.iter().any(|t| !need_targets(t).is_empty())
+}
+
+/// The node gets Rust from a system package with no rustup (its offer's
+/// `rust-installer` is `system`): no target can be added.
+pub fn system_rust(offer: &Offer) -> bool {
+    offer.tools.get(needs::TOOLS_RUST_INSTALLER).is_some_and(|v| v == "system")
 }
 
 /// The Rust components a (canonical) need token names; empty for any other.
@@ -751,6 +803,11 @@ pub enum NeedState {
     NoMapping,
     /// Protocol 7: on K2's deny list (never installed by K2).
     Denied,
+    /// The node can't provide it at all (a Rust target on a node
+    /// whose Rust is a system package with no rustup). Auto placement
+    /// leaves the node out; a job pinned there is refused
+    /// (`rust_target_unsupported`).
+    Unsupported,
 }
 
 impl NeedState {
@@ -762,6 +819,7 @@ impl NeedState {
             NeedState::Ask => "ask",
             NeedState::NoMapping => "no_mapping",
             NeedState::Denied => "denied",
+            NeedState::Unsupported => "unsupported",
         }
     }
 }
@@ -855,7 +913,7 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
         .iter()
         .map(|token| {
             let st = |state: NeedState, have: Option<String>| NeedStatus { need: token.clone(), state, have, native: None };
-            let Ok((base, comps)) = split_rust_components(token) else { return st(NeedState::Install, None) };
+            let Ok((base, comps, targets)) = split_rust_parts(token) else { return st(NeedState::Install, None) };
             match needs::parse(&base) {
                 Ok(needs::Need::System { .. }) if mac => st(NeedState::UnsupportedOnOs, None),
                 Ok(needs::Need::System { package }) => sys_state(offer, token, &package),
@@ -864,6 +922,7 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
                     Some(v) => st(NeedState::Ready, Some(v.clone())),
                     None => st(NeedState::Install, None),
                 },
+                Ok(needs::Need::Rust { .. }) if !targets.is_empty() && system_rust(offer) => st(NeedState::Unsupported, None),
                 Ok(needs::Need::Rust { channel, .. }) => {
                     let Some(tc) = list("rust-toolchains").into_iter().find(|e| toolchain_is(e, &channel)) else { return st(NeedState::Install, None) };
                     let have_comps: Vec<String> = offer
@@ -882,7 +941,14 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
                             }
                         }
                     }
-                    if comps.iter().all(|c| have_comps.contains(c)) {
+                    // Each target it names, from `rust-targets:<tc>`.
+                    let have_targets: Vec<String> = offer
+                        .tools
+                        .iter()
+                        .find(|(k, _)| k.strip_prefix("rust-targets:").is_some_and(|x| x == tc || toolchain_is(x, &channel)))
+                        .map(|(_, v)| v.split(',').map(|x| x.trim().to_string()).collect())
+                        .unwrap_or_default();
+                    if comps.iter().all(|c| have_comps.contains(c)) && targets.iter().all(|x| have_targets.contains(x)) {
                         st(NeedState::Ready, Some(tc))
                     } else {
                         st(NeedState::Install, None)
@@ -913,8 +979,9 @@ pub fn tools_words(states: &[NeedStatus]) -> Option<String> {
     let of = |s: NeedState| states.iter().filter(|x| x.state == s).map(|x| x.need.as_str()).collect::<Vec<_>>();
     let (install, unsupported) = (of(NeedState::Install), of(NeedState::UnsupportedOnOs));
     let (ask, never) = (of(NeedState::Ask), [of(NeedState::NoMapping), of(NeedState::Denied)].concat());
+    let cannot = of(NeedState::Unsupported);
     let mut parts = Vec::new();
-    if install.is_empty() && unsupported.is_empty() && ask.is_empty() && never.is_empty() {
+    if install.is_empty() && unsupported.is_empty() && ask.is_empty() && never.is_empty() && cannot.is_empty() {
         parts.push("tools ready".to_string());
     }
     if !ask.is_empty() {
@@ -922,6 +989,9 @@ pub fn tools_words(states: &[NeedStatus]) -> Option<String> {
     }
     if !never.is_empty() {
         parts.push(format!("{}: not installable there", never.join(", ")));
+    }
+    if !cannot.is_empty() {
+        parts.push(format!("{}: this node's Rust is a system package with no rustup (no Rust targets here)", cannot.join(", ")));
     }
     if !install.is_empty() {
         parts.push(format!("installs {} first (~minutes)", install.join(", ")));
@@ -946,6 +1016,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     }
     if wants_pkg_map(&w.needs) {
         f.push(k2_core::compute::proto::pkgmap::FEATURE_PKG_MAP);
+    }
+    if wants_targets(&w.needs) {
+        f.push(needs::FEATURE_RUST_TARGETS);
     }
     if w.artifacts {
         f.push(results::FEATURE_ARTIFACTS);
@@ -1033,6 +1106,9 @@ pub mod skip {
     /// GPU jobs S6: `--gpu-mem` on a GPU node whose k2-node doesn't offer
     /// `gpu-mem` (older than 0.46.11, or its executor is).
     pub const GPU_MEM_NEEDS_UPDATE: &str = k2_core::compute::proto::gpu::codes::GPU_MEM_NEEDS_UPDATE;
+    /// A need it can't provide at all (a Rust target where Rust is
+    /// a system package with no rustup).
+    pub const TOOLS_UNSUPPORTED: &str = "tools_unsupported";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1235,6 +1311,12 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         }
         if !share_fits(w, grant.as_ref(), &offer) {
             skipped(&mut out, skip::SHARE_LIMIT);
+            continue;
+        }
+        // A need it can never provide (a Rust target on system
+        // Rust): never placed there.
+        if need_states(&offer, &w.needs).iter().any(|s| s.state == NeedState::Unsupported) {
+            skipped(&mut out, skip::TOOLS_UNSUPPORTED);
             continue;
         }
         let pending = pending_for(&n.id, online.then_some(offer.revision), now);
@@ -1691,6 +1773,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::NO_GPU => "with no GPU jobs for you (--gpu)".to_string(),
         skip::GPU_NEEDS_GRANT => "with a GPU, but your grant there doesn't say --gpu".to_string(),
         skip::GPU_MEM_NEEDS_UPDATE => "with GPU jobs, but a k2-node too old for --gpu-mem".to_string(),
+        skip::TOOLS_UNSUPPORTED => "that can't provide a --needs (system Rust: no Rust targets)".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -3572,6 +3655,61 @@ mod tests {
         assert!(!required_features(&w).contains(&FEATURE_RUST_COMPONENTS));
         w.needs = vec!["rust@stable+clippy".into()];
         assert!(required_features(&w).contains(&FEATURE_RUST_COMPONENTS), "only nodes that install components");
+    }
+
+    /// `+target:<triple>` rides on the Rust need beside components
+    /// (repeatable, sorted, unique, checked), needs a node offering
+    /// `rust-targets`, is ready only when the node lists each target for
+    /// that toolchain, and is `unsupported` where Rust is a system package
+    /// with no rustup (the tools line says so).
+    #[test]
+    fn rust_targets_ride_on_the_rust_need() {
+        assert_eq!(
+            check_needs(&["rust@1.95.0+target:wasm32-unknown-unknown", "cmake@3"]).unwrap(),
+            vec!["rust@1.95.0+target:wasm32-unknown-unknown", "cmake@3"]
+        );
+        assert_eq!(
+            check_needs(&["rust@stable+target:wasm32-wasip1+clippy+target:aarch64-unknown-linux-gnu+target:wasm32-wasip1"]).unwrap(),
+            vec!["rust@stable+clippy+target:aarch64-unknown-linux-gnu+target:wasm32-wasip1"],
+            "components first, then targets, each sorted and unique, as k2-node writes it"
+        );
+        let e = check_needs(&["rust@stable+target:wasm32"]).unwrap_err();
+        assert_eq!(e.code, needs::NEED_INVALID);
+        assert!(e.message.contains("isn't a Rust target triple") && e.message.contains("rust@1.95.0+target:wasm32-unknown-unknown"), "{}", e.message);
+        assert_eq!(check_needs(&["rust@stable+target:"]).unwrap_err().code, needs::NEED_INVALID);
+        let nine: String = (0..9).map(|i| format!("+target:t{i}-unknown-none")).collect();
+        assert!(check_needs(&[format!("rust@stable{nine}")]).unwrap_err().message.contains("at most 8 targets"));
+        assert_eq!(need_targets("rust@stable+clippy+target:wasm32-unknown-unknown"), vec!["wasm32-unknown-unknown"]);
+        assert_eq!(need_components("rust@stable+clippy+target:wasm32-unknown-unknown"), vec!["clippy"]);
+        assert!(need_targets("rust@stable+clippy").is_empty() && need_targets("sys:g++").is_empty());
+        // Features: targets alone need rust-targets, not rust-components.
+        let mut w = want(2);
+        w.needs = vec!["rust@1.95.0+target:wasm32-unknown-unknown".into()];
+        let f = required_features(&w);
+        assert!(f.contains(&needs::FEATURE_RUST_TARGETS) && !f.contains(&FEATURE_RUST_COMPONENTS), "{f:?}");
+        w.needs = vec!["rust@1.95.0+clippy".into()];
+        assert!(!required_features(&w).contains(&needs::FEATURE_RUST_TARGETS));
+        // States.
+        let c = with_tools(cand("n", 32, 32, 0, 4), &[("rust-toolchains", "1.95.0-x86_64-unknown-linux-gnu"), ("rust-installer", "rustup")]);
+        let tok = vec!["rust@1.95.0+target:wasm32-unknown-unknown".to_string()];
+        assert_eq!(need_states(&c.offer, &tok)[0].state, NeedState::Install, "no rust-targets report yet");
+        let mut d = c.clone();
+        d.offer.tools.insert("rust-targets:1.95.0-x86_64-unknown-linux-gnu".into(), "wasm32-unknown-unknown,x86_64-unknown-linux-gnu".into());
+        let st = &need_states(&d.offer, &tok)[0];
+        assert_eq!((st.state, st.have.as_deref()), (NeedState::Ready, Some("1.95.0-x86_64-unknown-linux-gnu")));
+        assert_eq!(need_states(&d.offer, &["rust@1.95.0+target:wasm32-wasip1".to_string()])[0].state, NeedState::Install);
+        let mut sys = with_tools(cand("arch", 32, 32, 0, 4), &[("rust-installer", "system")]);
+        assert!(system_rust(&sys.offer) && !system_rust(&d.offer));
+        let s = &need_states(&sys.offer, &tok)[0];
+        assert_eq!((s.state, s.state.as_str()), (NeedState::Unsupported, "unsupported"));
+        assert_eq!(need_states(&sys.offer, &["rust@1.95.0".to_string()])[0].state, NeedState::Install, "a plain Rust need is still fine there");
+        assert_eq!(
+            tools_words(&need_states(&sys.offer, &tok)).unwrap(),
+            "rust@1.95.0+target:wasm32-unknown-unknown: this node's Rust is a system package with no rustup (no Rust targets here)"
+        );
+        sys.offer.tools.remove("rust-installer");
+        assert_eq!(need_states(&sys.offer, &tok)[0].state, NeedState::Install, "no report (older node): not ruled out by this");
+        assert_eq!(skip_words(skip::TOOLS_UNSUPPORTED, 1, &w), "1 that can't provide a --needs (system Rust: no Rust targets)");
     }
 
     #[test]

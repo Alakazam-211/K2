@@ -57,6 +57,7 @@ pub mod codes {
     pub const PACKAGE_NOT_APPROVED: &str = "package_not_approved";
     pub const PACKAGE_INSTALL_FAILED: &str = "package_install_failed";
     pub const PACKAGE_MISSING: &str = "package_missing";
+    pub const RUST_TARGET_UNSUPPORTED: &str = k2_node_proto::needs::RUST_TARGET_UNSUPPORTED;
 }
 
 pub type Fail = (&'static str, String);
@@ -357,6 +358,24 @@ impl Toolchains {
         self.cargo_home().join("bin/rustup")
     }
 
+    /// How this node gets Rust (offer `tools`
+    /// [`needs::TOOLS_RUST_INSTALLER`]): `rustup` when its own rustup is
+    /// there (or a rustup is on the job PATH); `system` when the job PATH
+    /// has a `rustc` from outside the node's toolchains (a distro
+    /// package) and no rustup anywhere: then no compile target can be
+    /// added here (`rust_target_unsupported`). `None`: no Rust yet (the
+    /// first Rust need installs rustup).
+    pub fn rust_installer(&self) -> Option<&'static str> {
+        if self.rustup().is_file() || crate::sysinfo::which("rustup", &self.base_env).is_some() {
+            return Some("rustup");
+        }
+        let rustc = crate::sysinfo::which("rustc", &self.base_env)?;
+        if Path::new(&rustc).starts_with(&self.root) {
+            return None;
+        }
+        Some("system")
+    }
+
     /// rustup itself (no toolchain), via the official rustup-init script.
     pub async fn ensure_rustup(&self, log: &mut (dyn FnMut(&str) + Send)) -> Result<(), String> {
         if self.rustup().is_file() {
@@ -589,7 +608,17 @@ impl Toolchains {
                     }
                     Err(e) => Err(e),
                 },
-                Need::Rust { channel, components } => {
+                Need::Rust { channel, components, targets } => {
+                    // A distro Rust with no rustup can't add a target: a
+                    // named refusal, never a half-made install.
+                    if !targets.is_empty() && self.rust_installer() == Some("system") {
+                        let why = system_rust_refusal(&n.token());
+                        if required {
+                            return Err((codes::RUST_TARGET_UNSUPPORTED, why));
+                        }
+                        out.notes.push(format!("warning: {why} (from {})", src.clone().unwrap_or_default()));
+                        continue;
+                    }
                     // Protocol 7 (§8): clippy and rustfmt come by default;
                     // `+minimal` opts out.
                     let mut comps: Vec<String> = components.iter().filter(|c| *c != needs::RUST_MINIMAL).cloned().collect();
@@ -600,7 +629,7 @@ impl Toolchains {
                             }
                         }
                     }
-                    let rt = RustToolchain { channel: channel.clone(), components: comps, targets: vec![] };
+                    let rt = RustToolchain { channel: channel.clone(), components: comps, targets: targets.clone() };
                     let r = self.ensure_rust(&rt, log).await;
                     if r.is_ok() && required {
                         rust_env = Some(channel.clone());
@@ -804,6 +833,9 @@ impl Toolchains {
                 }
             }
         }
+        if let Some(how) = self.rust_installer() {
+            out.insert(needs::TOOLS_RUST_INSTALLER.into(), how.into());
+        }
         if let Ok(rd) = std::fs::read_dir(self.rustup_home().join("toolchains")) {
             let mut tcs: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
             tcs.sort();
@@ -818,6 +850,11 @@ impl Toolchains {
                 let comps = toolchain_components(&dir);
                 if !comps.is_empty() {
                     out.insert(format!("rust-components:{tc}"), comps.join(","));
+                }
+                // Its compile targets (the host's included).
+                let targets = toolchain_targets(&dir);
+                if !targets.is_empty() {
+                    out.insert(format!("rust-targets:{tc}"), targets.join(","));
                 }
                 if let Some(v) = toolchain_rustc_version(&dir) {
                     out.insert(format!("rustc:{tc}"), v);
@@ -845,6 +882,31 @@ pub fn rustup_component_name(c: &str) -> &str {
 pub fn toolchain_components(dir: &Path) -> Vec<String> {
     let Some(text) = small_read(&dir.join("lib/rustlib/components")) else { return Vec::new() };
     components_from_list(&text)
+}
+
+/// The compile targets a toolchain has (sorted): each `rust-std-<triple>`
+/// in its `lib/rustlib/components` list, the host's included
+/// (`rust-std-wasm32-unknown-unknown` → `wasm32-unknown-unknown`).
+pub fn toolchain_targets(dir: &Path) -> Vec<String> {
+    let Some(text) = small_read(&dir.join("lib/rustlib/components")) else { return Vec::new() };
+    targets_from_list(&text)
+}
+
+/// [`toolchain_targets`] on the file's text.
+pub fn targets_from_list(text: &str) -> Vec<String> {
+    let mut out: Vec<String> =
+        text.lines().filter_map(|l| l.trim().strip_prefix("rust-std-")).filter(|t| needs::valid_target(t)).map(str::to_string).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The refusal for a Rust target on a node whose Rust is a system package.
+pub fn system_rust_refusal(token: &str) -> String {
+    format!(
+        "{token}: this node's Rust is a system package with no rustup, so k2-node can't add compile targets here. \
+         Send the job without a node name (K2 places it on a node with rustup), or name another node"
+    )
 }
 
 /// [`toolchain_components`] on the file's text.
@@ -960,6 +1022,10 @@ pub async fn tools_used(env: &[(String, String)], cwd: &Path, explicit: &[Need])
                     if !comps.is_empty() {
                         out.insert("rust-components".into(), comps.join(","));
                     }
+                    let targets = toolchain_targets(&home.join("toolchains").join(tc));
+                    if !targets.is_empty() {
+                        out.insert("rust-targets".into(), targets.join(","));
+                    }
                 }
             }
         }
@@ -981,7 +1047,7 @@ pub fn tool_version(s: &str) -> Option<String> {
 
 /// One line for the job log: `tools: rustc 1.99.0, cargo 1.99.0, …`.
 pub fn tools_line(t: &BTreeMap<String, String>) -> String {
-    let order = ["rustc", "cargo", "cargo-nextest", "rust-toolchain", "rust-components"];
+    let order = ["rustc", "cargo", "cargo-nextest", "rust-toolchain", "rust-components", "rust-targets"];
     let mut parts: Vec<String> = order.iter().filter_map(|k| t.get(*k).map(|v| format!("{k} {v}"))).collect();
     parts.extend(t.iter().filter(|(k, _)| !order.contains(&k.as_str())).map(|(k, v)| format!("{k} {v}")));
     if parts.is_empty() {
@@ -1453,6 +1519,91 @@ mod tests {
         assert!(check_sha256(&p, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824").is_ok());
         let e = check_sha256(&p, &"0".repeat(64)).unwrap_err();
         assert!(e.contains("refusing"), "{e}");
+    }
+
+    /// `rust@<channel>+target:<triple>` with a fake `rustup`: a
+    /// toolchain that's there gets only its missing targets (`rustup
+    /// target add`, never a reinstall); a new one installs with
+    /// `--target`; the offer lists each toolchain's targets and how the
+    /// node gets Rust. No network.
+    #[tokio::test]
+    async fn rust_targets_install_with_a_fake_rustup() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = crate::util::temp_dir("tc-targets");
+        let tc = Toolchains::new(&home, vec![("PATH".into(), "/usr/bin:/bin".into()), ("HOME".into(), home.display().to_string())]);
+        let rustup = tc.cargo_home().join("bin/rustup");
+        std::fs::create_dir_all(rustup.parent().unwrap()).unwrap();
+        let script = r#"#!/bin/sh
+R="$RUSTUP_HOME"; H=x86_64-unknown-linux-gnu
+echo "$*" >> "$R/calls.log"
+case "$1 $2" in
+  "toolchain list") ls "$R/toolchains" 2>/dev/null ;;
+  "target add") [ "$3" = --toolchain ] || exit 8; d="$R/toolchains/$4-$H"; shift 4
+     for t in "$@"; do mkdir -p "$d/lib/rustlib/$t/lib"; echo "rust-std-$t" >> "$d/lib/rustlib/components"; done ;;
+  "toolchain install") d="$R/toolchains/$3-$H"; mkdir -p "$d/lib/rustlib/$H/lib"; printf 'rustc-%s\nrust-std-%s\n' $H $H > "$d/lib/rustlib/components"
+     shift 3; while [ $# -gt 0 ]; do [ "$1" = --target ] && { mkdir -p "$d/lib/rustlib/$2/lib"; echo "rust-std-$2" >> "$d/lib/rustlib/components"; }; shift; done ;;
+  *) exit 9 ;;
+esac
+"#;
+        std::fs::write(&rustup, script).unwrap();
+        std::fs::set_permissions(&rustup, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(tc.rustup_home()).unwrap();
+        assert_eq!(tc.rust_installer(), Some("rustup"));
+        let calls = || std::fs::read_to_string(tc.rustup_home().join("calls.log")).unwrap_or_default();
+        // A new toolchain: installed with its target in one go.
+        let need = needs::parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown"]).unwrap();
+        let r = tc.resolve(&need, &[], None, &mut |_| {}).await.unwrap();
+        assert!(r.installed_any);
+        assert!(calls().contains("toolchain install 1.95.0 --profile minimal --no-self-update --target wasm32-unknown-unknown"), "{}", calls());
+        assert!(r.env.contains(&("RUSTUP_TOOLCHAIN".to_string(), "1.95.0".to_string())));
+        // Installed: nothing more happens.
+        let before = calls();
+        let r = tc.resolve(&need, &[], None, &mut |_| {}).await.unwrap();
+        assert!(!r.installed_any, "{}", calls());
+        assert_eq!(calls().lines().filter(|l| !l.starts_with("toolchain list")).count(), before.lines().filter(|l| !l.starts_with("toolchain list")).count());
+        // A second target on the same toolchain: `target add` for it only.
+        let two = needs::parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown+target:wasm32-wasip1"]).unwrap();
+        let r = tc.resolve(&two, &[], None, &mut |_| {}).await.unwrap();
+        assert!(r.installed_any);
+        assert!(calls().lines().any(|l| l == "target add --toolchain 1.95.0 wasm32-wasip1"), "{}", calls());
+        assert!(!calls().contains("toolchain install 1.95.0 --profile minimal --no-self-update --target wasm32-unknown-unknown --target"), "never a reinstall");
+        let tools = tc.installed_tools();
+        assert_eq!(tools.get("rust-targets:1.95.0-x86_64-unknown-linux-gnu").map(String::as_str), Some("wasm32-unknown-unknown,wasm32-wasip1,x86_64-unknown-linux-gnu"), "{tools:?}");
+        assert_eq!(tools.get(needs::TOOLS_RUST_INSTALLER).map(String::as_str), Some("rustup"));
+        assert_eq!(targets_from_list("rustc-x86_64-unknown-linux-gnu\nrust-std-x86_64-unknown-linux-gnu\nclippy-preview-x86_64-unknown-linux-gnu\nrust-std-wasm32-unknown-unknown\nrust-std-../x\n"), vec!["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]);
+        let mut used = BTreeMap::new();
+        used.insert("rust-targets".to_string(), "wasm32-unknown-unknown".to_string());
+        used.insert("rustc".to_string(), "1.95.0".to_string());
+        assert_eq!(tools_line(&used), "tools: rustc 1.95.0, rust-targets wasm32-unknown-unknown");
+    }
+
+    /// A node whose Rust is a distro package (a `rustc` on the job
+    /// PATH outside the node's toolchains, no rustup) says so in its offer
+    /// and refuses a target with `rust_target_unsupported`, naming why and
+    /// what to do; it never tries to install rustup for it.
+    #[tokio::test]
+    async fn a_system_rust_node_refuses_targets_by_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = crate::util::temp_dir("tc-sysrust");
+        let sys = home.join("usr-bin");
+        std::fs::create_dir_all(&sys).unwrap();
+        let rustc = sys.join("rustc");
+        std::fs::write(&rustc, "#!/bin/sh\necho 'rustc 1.95.0 (arch)'\n").unwrap();
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tc = Toolchains::new(&home, vec![("PATH".into(), format!("{}:/nonexistent", sys.display())), ("HOME".into(), home.display().to_string())]);
+        assert_eq!(tc.rust_installer(), Some("system"));
+        assert_eq!(tc.installed_tools().get(needs::TOOLS_RUST_INSTALLER).map(String::as_str), Some("system"));
+        let need = needs::parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown"]).unwrap();
+        let e = tc.resolve(&need, &[], None, &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, codes::RUST_TARGET_UNSUPPORTED);
+        assert!(e.1.contains("rust@1.95.0+target:wasm32-unknown-unknown") && e.1.contains("system package with no rustup") && e.1.contains("without a node name"), "{}", e.1);
+        assert!(!tc.cargo_home().join("bin/rustup").exists(), "no rustup install was tried");
+        // A repo-declared one is only a warning.
+        let ok = tc.resolve(&[], &[(need[0].clone(), ".k2/compute.toml".into())], None, &mut |_| {}).await.unwrap();
+        assert!(ok.notes.iter().any(|n| n.contains("warning") && n.contains("no rustup")), "{:?}", ok.notes);
+        // Nothing on the PATH: no Rust yet (the first need installs rustup).
+        let bare = Toolchains::new(&home, vec![("PATH".into(), "/nonexistent".into())]);
+        assert_eq!(bare.rust_installer(), None);
     }
 
     /// A fake `mise` (shell) stands in for the pinned binary: `resolve`

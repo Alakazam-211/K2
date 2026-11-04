@@ -64,7 +64,8 @@ use crate::crypto::{self, SigningKey};
 /// range in the job's env, the CPU-aware stall rule, `Outputs` on every
 /// end with `tools_used` / `resources` / `host`, `Receipt.tools_used`, the
 /// new `[k2-node]` log lines) and offers its features (`tools-used`,
-/// `job-resources`, `stall-cpu`, `rust-components`, `toolchain-budget`,
+/// `job-resources`, `stall-cpu`, `rust-components`, `rust-targets`
+/// (0.46.13), `toolchain-budget`,
 /// `cpu-hints`, `job-ports`) only for a server that said protocol ≥ 6
 /// ([`PROTOCOL_EASY`]). An older server sees its own release's frames.
 ///

@@ -153,6 +153,7 @@ async fn a_silent_busy_job_is_not_stalled() {
         results::FEATURE_TOOLS_USED,
         results::FEATURE_JOB_RESOURCES,
         k2_node_proto::needs::FEATURE_RUST_COMPONENTS,
+        k2_node_proto::needs::FEATURE_RUST_TARGETS,
         k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET,
         k2_node_proto::env::FEATURE_CPU_HINTS,
         k2_node_proto::env::FEATURE_JOB_PORTS,

@@ -551,6 +551,8 @@ pub const EASY_FEATURES: &[&str] = &[
     results::FEATURE_JOB_RESOURCES,
     k2_node_proto::frames::FEATURE_STALL_CPU,
     k2_node_proto::needs::FEATURE_RUST_COMPONENTS,
+    // `rust@<channel>+target:<triple>` (0.46.13).
+    k2_node_proto::needs::FEATURE_RUST_TARGETS,
     k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET,
     k2_node_proto::env::FEATURE_CPU_HINTS,
     k2_node_proto::env::FEATURE_JOB_PORTS,

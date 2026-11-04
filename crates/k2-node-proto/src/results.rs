@@ -154,7 +154,8 @@ pub struct Outputs {
     /// `cargo-nextest` (the version, e.g. `1.99.0`), `rust-toolchain`
     /// (the active toolchain, e.g. `1.99.0-x86_64-unknown-linux-gnu`),
     /// `rust-components` (comma list of [`crate::needs::RUST_COMPONENTS`]
-    /// installed in it), and one key per mise need (`node` → `22.23.4`,
+    /// installed in it), `rust-targets` (comma list of its compile targets,
+    /// k2-node 0.46.13), and one key per mise need (`node` → `22.23.4`,
     /// the tool name as the need names it). A tool not on PATH is absent.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tools_used: std::collections::BTreeMap<String, String>,

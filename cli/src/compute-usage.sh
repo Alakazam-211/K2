@@ -230,7 +230,11 @@ Agents:
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch> (clippy and rustfmt come with it on a 0.46.9 node;
                   rust@stable+minimal leaves them out; more with +:
-                  rust@stable+rust-src+llvm-tools; rust-analyzer miri),
+                  rust@stable+rust-src+llvm-tools; rust-analyzer miri;
+                  compile targets with +target:<triple>, as many as you need:
+                  rust@1.95.0+target:wasm32-unknown-unknown, or with components
+                  rust@stable+clippy+target:wasm32-wasip1; k2-node 0.46.13+
+                  nodes with rustup only),
                   cargo-nextest, or aqua:owner/repo@v;
                   system packages (Linux): sys:<debian-name> (sys:libssl-dev; K2
                   maps it to each distro's own name), sys:<apt|pacman|dnf|zypper>:<name>

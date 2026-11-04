@@ -27,6 +27,7 @@ import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import PresenceAvatar, { useSelfPresenceUser } from './PresenceAvatar'
 import { PresenceMoreChip } from './PresenceChip'
 import PresenceModal from './PresenceModal'
+import { PictureScopeContext } from '@/contexts/PictureScopeContext'
 
 /** Read when no room is followed (a hook can't be skipped). */
 const NO_ROOM_PRESENCE: PresenceViewStore = createStore<PresenceView>(() => ({ roster: [], supported: false }))
@@ -55,7 +56,8 @@ export default function PresenceRoster({
   const { visible, overflow } = rosterDisplay(roster)
 
   return (
-    <>
+    // Pictures come from the server whose roster this is (0.46.8).
+    <PictureScopeContext.Provider value={target.scope}>
       <button
         onClick={() => setModalOpen(true)}
         data-testid="presence-roster"
@@ -90,6 +92,6 @@ export default function PresenceRoster({
         ) : (
           <PresenceModal onClose={() => setModalOpen(false)} />
         ))}
-    </>
+    </PictureScopeContext.Provider>
   )
 }

@@ -115,6 +115,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/MergeDialog/MergeDialog.tsx',
   // 0.46.0: the "Your account" setup prompt is about the window's own server.
   'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',
+  // 0.46.8 people's pictures: a chip outside any room (Settings, the top
+  // bar on the window's server) reads the window's server, like the
+  // window's presence roster it draws. In a room, RoomProvider's scope wins.
+  'components/Presence/PresenceChip.tsx',
   'components/Presence/PresenceKickButton.tsx',
   'components/Projects/ProjectChatPanel.tsx',
   'components/Projects/ProjectDashboard.tsx',

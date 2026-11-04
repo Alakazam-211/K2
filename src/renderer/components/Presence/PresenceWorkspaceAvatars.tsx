@@ -13,6 +13,7 @@ import { useMemo } from 'react'
 import { useSelfPresenceUser } from './PresenceAvatar'
 import { personDisplayName, type PersonNames } from '@/lib/person-name'
 import { PresenceChip, PresenceMoreChip } from './PresenceChip'
+import type { ServerScope } from '@/kessel/server-scope'
 import {
   usePresenceStore,
   usersForWorkspace,
@@ -44,8 +45,12 @@ export default function PresenceWorkspaceAvatars({
  *  already leaves you out). Renders nothing for an empty list. */
 export function PresenceAvatarCluster({
   users,
+  pictureScope,
 }: {
   users: ({ user: string; role: RosterUser['role']; color?: string | null } & PersonNames)[]
+  /** The server these people are on: their pictures come from it (0.46.8,
+   *  per-server pictures). Absent: the enclosing room's, else the window's. */
+  pictureScope?: ServerScope | null
 }): React.JSX.Element | null {
   if (users.length === 0) return null
 
@@ -60,7 +65,7 @@ export function PresenceAvatarCluster({
     <span className="flex flex-none items-center" style={{ gap: 'var(--clu-gap)' }} title={title} data-presence-grid="">
       {visible.map((u, i) => (
         <span key={u.user} className="flex flex-none" style={i === count - 1 ? lastGap : undefined}>
-          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} color={u.color} names={u} />
+          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} color={u.color} names={u} pictureScope={pictureScope} />
         </span>
       ))}
       {overflow > 0 && (

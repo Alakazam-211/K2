@@ -16,6 +16,12 @@
 //     Initials (first + last name when set; one letter below 20px, two at
 //     20px and up) in white or near-black, whichever reads better on the
 //     fill (`chipInk`); or the photo when one exists.
+//   - Picture (0.46.8): the person's profile picture, read by the chip
+//     itself from the daemon (`lib/person-pictures.ts`, `name` is the
+//     login) on the server that owns where the chip sits: `pictureScope`
+//     when the caller passes one, else the enclosing room's server
+//     (`RoomProvider`), else the window's own server. Pictures are per
+//     server (Rosson 2026-11-04). `imageUrl` (even null) overrides it.
 //   - Role: a small corner mark, never colour: filled = owner, hollow =
 //     admin, none = member. Amber is gone from presence.
 //   - You: a 1.5px ring (top bar and modal only; rows never show you).
@@ -24,6 +30,9 @@
 
 import type { CSSProperties } from 'react'
 import { nameInitials, personTooltip, type PersonNames } from '@/lib/person-name'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { usePictureScopeContext } from '@/contexts/PictureScopeContext'
+import { usePersonPicture } from '@/lib/person-pictures'
 
 export type PresenceRole = 'owner' | 'admin' | 'member'
 
@@ -124,8 +133,12 @@ export interface PresenceChipProps {
   /** This is you (a ring; top bar and modal only). */
   you?: boolean
   away?: boolean
-  /** A photo (Connect Cloud), drawn over the person colour. */
+  /** A picture drawn over the person colour. Absent: the person's profile
+   *  picture on `pictureScope`'s server (0.46.8); null: none. */
   imageUrl?: string | null
+  /** The server whose picture of `name` to show (0.46.8). Absent: the
+   *  enclosing room's server, else the window's. Null: show none. */
+  pictureScope?: ServerScope | null
   /** Tooltip; default "<name> · <role>". Pass '' for none (a parent titles). */
   title?: string
   /** The daemon's effective colour for this person; absent → the hash. */
@@ -134,7 +147,17 @@ export interface PresenceChipProps {
   names?: PersonNames | null
 }
 
-export function PresenceChip({ name, role, size = 20, you = false, away = false, imageUrl, title, color: serverColor, names }: PresenceChipProps): React.JSX.Element {
+/** The picture a chip shows: `imageUrl` when given, else `name`'s profile
+ *  picture on the right server (see the header). */
+export function useChipPicture(name: string, imageUrl: string | null | undefined, pictureScope: ServerScope | null | undefined): string | null {
+  const fromRoom = usePictureScopeContext()
+  const scope = imageUrl !== undefined ? null : pictureScope !== undefined ? pictureScope : (fromRoom ?? primaryScope())
+  const picture = usePersonPicture(scope, name)
+  return imageUrl !== undefined ? imageUrl : picture
+}
+
+export function PresenceChip({ name, role, size = 20, you = false, away = false, imageUrl: given, pictureScope, title, color: serverColor, names }: PresenceChipProps): React.JSX.Element {
+  const imageUrl = useChipPicture(name, given, pictureScope)
   const color = resolvePersonColor(name, serverColor)
   const mark = role === 'owner' || role === 'admin' ? markPx(size) : 0
   const tip = title ?? personTooltip(name, role, names, `${you ? ' (you)' : ''}`) + (away ? ' · away' : '')
@@ -162,6 +185,7 @@ export function PresenceChip({ name, role, size = 20, you = false, away = false,
       className="relative inline-flex flex-none select-none"
       data-presence-chip={role}
       data-person-color={color}
+      data-person-picture={imageUrl ? '' : undefined}
       data-you={you ? '' : undefined}
       title={tip || undefined}
       style={{ width: size, height: size, boxSizing: 'border-box', padding: you ? 1.5 : 0 }}

@@ -27,6 +27,9 @@ vi.mock('@/kessel/server-scope', async (orig) => {
   }
   return { ...real, primaryScope: () => scope }
 })
+// The prompt draws no person pictures (it imports PresenceChip's colour
+// helpers only); keep the picture store's event graph out of this test.
+vi.mock('@/lib/person-pictures', () => ({ usePersonPicture: () => null }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
     h.gets.push(route)

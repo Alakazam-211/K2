@@ -164,8 +164,11 @@ vi.mock('@/stores/presence', async () => {
   return { ...real, usePresenceStore: h.presence }
 })
 vi.mock('@/stores/session-events', () => ({
-  onAppHello: vi.fn(),
-  onPresenceChanged: vi.fn(),
+  // Subscriptions answer their unsubscribe, as the real ones do.
+  onAppHello: vi.fn(() => () => undefined),
+  onPresenceChanged: vi.fn(() => () => undefined),
+  // 0.46.8: person chips follow their server's picture changes.
+  onPersonPictureChanged: vi.fn(() => () => undefined),
 }))
 
 import AgentsShell from '@/components/Layout/AgentsShell'

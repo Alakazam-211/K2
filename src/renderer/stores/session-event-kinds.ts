@@ -181,6 +181,10 @@ export const SESSION_EVENT_ROUTES = {
   // phone switch refetch (`onNotifyPrefsChanged`). Not carried: Settings
   // reads the window's own server.
   notify_prefs_changed: { class: 'app', app: true },
+  // 0.46.8: someone's profile picture on this server changed. Person chips
+  // re-read that server's pictures (`lib/person-pictures.ts`). Carried: a
+  // pinned room shows its own server's pictures.
+  person_picture_changed: { class: 'app', app: true, carried: true },
   // Room-scope R9/R16 (0.46.1): refetch signals for room.members and
   // app.self. Gardens read them through the bridge per call; no desktop
   // surface subscribes yet.

@@ -14,6 +14,7 @@ import type { TabsState } from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { roomHidden, roomShown } from '@/stores/window-room'
 import { useServerSupports, type FeatureKey } from '@/lib/server-capabilities'
+import { PictureScopeContext } from '@/contexts/PictureScopeContext'
 
 const RoomContext = createContext<Room | null>(null)
 
@@ -43,7 +44,12 @@ export function RoomProvider({
     roomShown(room)
     return () => roomHidden(room)
   }, [room, shown])
-  return <RoomContext.Provider value={room}>{children}</RoomContext.Provider>
+  // Person chips below read pictures from this room's server (0.46.8).
+  return (
+    <RoomContext.Provider value={room}>
+      <PictureScopeContext.Provider value={room.scope}>{children}</PictureScopeContext.Provider>
+    </RoomContext.Provider>
+  )
 }
 
 /** This component's room. Throws with no provider (MS2). */

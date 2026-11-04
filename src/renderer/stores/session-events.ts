@@ -330,6 +330,16 @@ export interface NotifyPrefsChangedEvent {
   kind: 'notify_prefs_changed'
 }
 
+/** APP-LEVEL (0.46.8) — a person's profile picture on THIS server was set,
+ *  replaced or removed. `person` is `owner` or a Connect username;
+ *  `imageHash` is null when it was removed. `lib/person-pictures.ts`
+ *  re-reads that server's list. */
+export interface PersonPictureChangedEvent {
+  kind: 'person_picture_changed'
+  person: string
+  imageHash: string | null
+}
+
 /** APP-LEVEL (thread-read-v1, 0.46.1) — one conversation's read state for
  *  THIS person changed: they read or muted it on any device, someone else
  *  posted, a card was answered / voided / expired, or a Thread moved. The
@@ -976,6 +986,7 @@ export type SessionEventMessage =
   | DomainsChangedEvent
   | FederationPeersChangedEvent
   | NotifyPrefsChangedEvent
+  | PersonPictureChangedEvent
   | ThreadReadEvent
   | ProjectReadEvent
   | HomesChangedEvent
@@ -1477,6 +1488,8 @@ type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
 // Thread push §5.5 — Settings → Notifications' refetch signal.
 type NotifyPrefsChangedHandler = () => void
+// 0.46.8 — people's pictures (`lib/person-pictures.ts`).
+type PersonPictureChangedHandler = (e: PersonPictureChangedEvent) => void
 // thread-read-v1 — the unread store's live state (`thread_read` /
 // `project_read`, the whole frame).
 export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
@@ -1540,6 +1553,7 @@ interface AppBusHandlers {
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
+  personPictureChanged: Set<PersonPictureChangedHandler>
   readStateChanged: Set<ReadStateChangedHandler>
   homesChanged: Set<HomesChangedHandler>
   homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
@@ -1602,6 +1616,7 @@ function createBusState(scopeId: string): BusState {
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
       notifyPrefsChanged: new Set(),
+      personPictureChanged: new Set(),
       readStateChanged: new Set(),
       homesChanged: new Set(),
       homesDeviceRemoved: new Set(),
@@ -1976,6 +1991,12 @@ export function onNotifyPrefsChanged(scope: ServerScope, fn: NotifyPrefsChangedH
   return addHandler(busFor(scope).handlers.notifyPrefsChanged, fn)
 }
 
+/** 0.46.8 — subscribe to APP-LEVEL `person_picture_changed` on `scope`'s
+ *  server (someone's profile picture there changed). */
+export function onPersonPictureChanged(scope: ServerScope, fn: PersonPictureChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.personPictureChanged, fn)
+}
+
 /** thread-read-v1 — subscribe to APP-LEVEL `thread_read` / `project_read`
  *  on `scope`'s server: this person's read state for one conversation (the
  *  whole frame, with the person's totals). `stores/unread.ts` is the
@@ -2192,6 +2213,14 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   notify_prefs_changed: (h) => {
     for (const fn of h.notifyPrefsChanged) fn()
+  },
+  person_picture_changed: (h, m) => {
+    const e: PersonPictureChangedEvent = {
+      kind: 'person_picture_changed',
+      person: typeof m.person === 'string' ? m.person : '',
+      imageHash: typeof m.imageHash === 'string' ? m.imageHash : null,
+    }
+    for (const fn of h.personPictureChanged) fn(e)
   },
   thread_read: (h, m) => {
     for (const fn of h.readStateChanged) fn(m)

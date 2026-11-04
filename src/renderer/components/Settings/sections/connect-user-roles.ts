@@ -44,6 +44,9 @@ export interface K2User {
   firstName?: string | null
   lastName?: string | null
   displayName?: string
+  /** 0.46.0: the colour this login chose (`#rrggbb`), absent for
+   *  Automatic or from an older daemon. */
+  color?: string | null
   /** 0.46.8: the password is temporary (someone else set it; K2 asks the
    *  person to choose their own at the next sign-in). Absent from an
    *  older daemon. */

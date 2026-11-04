@@ -75,6 +75,8 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { primaryScope } from '@/kessel/server-scope'
+import { PresenceChip } from '@/components/Presence/PresenceChip'
+import { PersonPictureControl } from '@/components/Presence/PersonPictureControl'
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
@@ -2085,6 +2087,19 @@ export function K2ConnectSection({
                   <div key={u.username} className="py-2 space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="flex items-center gap-2 min-w-0">
+                        {/* 0.46.8: the person's picture on this server
+                            (initials until they have one). */}
+                        <span data-testid={`user-chip-${u.username}`} className="flex flex-none">
+                          <PresenceChip
+                            name={u.username}
+                            role={parseK2Role(u.role) ?? 'member'}
+                            size={20}
+                            color={u.color ?? null}
+                            names={u}
+                            pictureScope={primaryScope()}
+                            title=""
+                          />
+                        </span>
                         {realName(u) ? (
                           <span className="text-xs text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
                             {realName(u)}
@@ -2173,6 +2188,16 @@ export function K2ConnectSection({
                         >
                           Edit name
                         </button>
+                        {/* 0.46.8: set or remove their picture; the daemon
+                            applies the names' rule (Admin+ on a Member or
+                            an Admin, Owner on an Owner). */}
+                        <PersonPictureControl
+                          scope={primaryScope()}
+                          login={u.username}
+                          person={u.username}
+                          look="links"
+                          testId={`user-picture-${u.username}`}
+                        />
                         <button
                           onClick={() => {
                             setResetFor((cur) => (cur === u.username ? null : u.username))

@@ -26,6 +26,10 @@ const h = vi.hoisted(() => ({
   phoneCalls: [] as Array<{ mine: boolean; scope?: unknown }>,
   pairCalls: [] as Array<Record<string, unknown>>,
   phones: null as unknown,
+  // 0.46.8 pictures: login → {hash, url} on the daemon, and the
+  // `person_picture_changed` handlers.
+  pictures: {} as Record<string, { hash: string; url: string }>,
+  pictureHandlers: new Set<(e: unknown) => void>(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -70,11 +74,13 @@ vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub=
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
 vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
 vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
+  daemonCliGet: vi.fn(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {
     h.calls.push(route)
     if (!(route in h.routes)) throw new Error(`unexpected route ${route}`)
     const v = h.routes[route]
     if (v instanceof Error) throw v
+    // A route that answers by its params (people/picture?person=).
+    if (typeof v === 'function') return (v as (p?: Record<string, unknown>) => unknown)(params)
     return v
   }),
   daemonCliPost: vi.fn(async (_scope: unknown, route: string, body: Record<string, unknown>) => {
@@ -84,6 +90,14 @@ vi.mock('@/lib/daemon-cli', () => ({
     return fn(body)
   }),
 }))
+// 0.46.8: the picture change event, captured so a test can fire it.
+vi.mock('@/stores/session-events', async (orig) => ({
+  ...(await orig<typeof import('@/stores/session-events')>()),
+  onPersonPictureChanged: (_scope: unknown, fn: (e: unknown) => void) => {
+    h.pictureHandlers.add(fn)
+    return () => void h.pictureHandlers.delete(fn)
+  },
+}))
 vi.mock('@/stores/connect-host', async (orig) => {
   const real = await orig<typeof import('@/stores/connect-host')>()
   return { ...real, loginToHost: h.login, saveRememberedPassword: h.remember }
@@ -91,6 +105,8 @@ vi.mock('@/stores/connect-host', async (orig) => {
 vi.mock('@/kessel/server-scope', async (orig) => {
   const real = await orig<typeof import('@/kessel/server-scope')>()
   const scope = {
+    id: 'primary',
+    hostKey: 'local',
     get label() {
       return h.scope.label
     },
@@ -111,6 +127,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { PASSWORD_CHANGED_NOTICE, ownerPasswordChangedNotice } from './AdminProfileButton'
 import { COLOR_NEEDS_NEWER_SERVER, HEX_FORMAT_HINT } from '@/components/Presence/PersonColorPicker'
+import { resetPersonPicturesForTests } from '@/lib/person-pictures'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -141,7 +158,18 @@ function ownerRoutes(): Record<string, unknown> {
     'tunnel/status': { running: true, public_url: 'https://rosson.k2.dev', frpc_installed: true },
     'people/color': colorView('owner', null, '#8c62c4'),
     'people/name': nameView('owner', 'Rosson', 'Long'),
+    'people/picture': pictureRoute,
   }
+}
+
+/** `GET people/picture[?person=]` over `h.pictures`. */
+function pictureRoute(params?: Record<string, unknown>): unknown {
+  const who = params?.person
+  if (typeof who === 'string') {
+    const p = h.pictures[who]
+    return { ok: true, person: who, imageHash: p?.hash ?? null, imageUrl: p?.url ?? null }
+  }
+  return { ok: true, people: Object.entries(h.pictures).map(([login, p]) => ({ person: login, logins: [login], imageHash: p.hash })) }
 }
 
 function nameView(person: string, firstName: string | null, lastName: string | null): Record<string, unknown> {
@@ -191,6 +219,9 @@ beforeEach(() => {
   h.phones = { ok: true, devices: [], pairAs: { user: 'rosson-phone', source: 'owner-linked', needsPassword: false, choices: ['rosson-phone', 'sam'] } }
   h.routes = ownerRoutes()
   h.scope = { label: 'This computer', isRemote: false, host: null }
+  h.pictures = {}
+  h.pictureHandlers.clear()
+  resetPersonPicturesForTests()
   useSettingsStore.setState({ settingsOpen: false, ownerDisplayName: 'Rosson Long' })
 })
 
@@ -401,7 +432,7 @@ describe('the Admin profile modal: who you are', () => {
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['Colour', 'First name', 'Last name', 'Your account'])
+    expect(labels).toEqual(['Picture', 'Colour', 'First name', 'Last name', 'Your account'])
     // One avatar in the whole modal: the header chip (the picker has none).
     expect(dialog().querySelectorAll('[data-presence-chip]').length).toBe(1)
     expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson')
@@ -443,7 +474,7 @@ describe('the Admin profile modal: who you are', () => {
     for (const r of grid.querySelectorAll('[data-testid="admin-profile-sign-in"]')) {
       expect(r.querySelectorAll('[role="cell"]').length).toBe(6)
     }
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'people/name', 'tunnel/status', 'users', 'users/audit'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'people/name', 'people/picture', 'tunnel/status', 'users', 'users/audit'])
   })
 
   it('the owner with no account picked: the owner name and role, Your account on None, no password, no hint', async () => {
@@ -484,7 +515,7 @@ describe('the Admin profile modal: who you are', () => {
     expect(h.calls).not.toContain('users/audit')
   })
 
-  it('a Connect member sees only their own editable fields: names, Colour, Password; only whoami, tunnel, colour and names are read', async () => {
+  it('a Connect member sees only their own editable fields: names, Colour, Password; only whoami, tunnel, colour, names and pictures are read', async () => {
     h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
@@ -500,7 +531,7 @@ describe('the Admin profile modal: who you are', () => {
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['Colour', 'First name', 'Last name'])
+    expect(labels).toEqual(['Picture', 'Colour', 'First name', 'Last name'])
     expect(document.querySelector('[data-testid="admin-profile-owners-account"]')).toBeNull()
     expect(screen.queryByLabelText('Your name')).toBeNull()
     expect((screen.getByLabelText('First name') as HTMLInputElement).disabled).toBe(false)
@@ -508,7 +539,7 @@ describe('the Admin profile modal: who you are', () => {
     expect(text('admin-profile-password')).toContain('Change password')
     // No "only an admin can see this" filler.
     expect(dialog().textContent).not.toMatch(/can see this/)
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'people/name', 'tunnel/status'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'people/name', 'people/picture', 'tunnel/status'])
   })
 
   it('whoami failing shows the error, not a guess', async () => {
@@ -880,6 +911,92 @@ describe('the Admin profile modal: colour', () => {
     }
     expect(h.posts).toEqual([])
     expect(text('admin-profile-username')).toBe('rosson-phone')
+  })
+})
+
+describe('the Admin profile modal: your picture (0.46.8)', () => {
+  const jpeg = (tag: string): string => `data:image/jpeg;base64,${btoa(tag)}`
+
+  function headerChip(): HTMLElement {
+    const el = screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')
+    if (!(el instanceof HTMLElement)) throw new Error('no header chip')
+    return el
+  }
+
+  function headerPicture(): string | null {
+    const painted = (Array.from(headerChip().querySelectorAll('span')) as HTMLElement[]).find((s) => s.style.backgroundImage)
+    return painted ? painted.style.backgroundImage : null
+  }
+
+  function pick(file: File): void {
+    act(() => void fireEvent.change(screen.getByTestId('profile-picture-file'), { target: { files: [file] } }))
+  }
+
+  const png = (): File => new File([Uint8Array.from(atob('iVBORw0KGgo='), (c) => c.charCodeAt(0))], 'me.png', { type: 'image/png' })
+
+  it('the owner uploads their own picture (no person sent); the header chip shows the daemon\'s re-encode', async () => {
+    h.postRoutes['people/picture'] = () => {
+      h.pictures.owner = { hash: 'h-1', url: jpeg('owner-1') }
+      return { ok: true, person: 'owner', imageHash: 'h-1', imageUrl: jpeg('owner-1') }
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    expect(text('admin-profile-picture')).toContain('Upload picture')
+    expect(headerPicture()).toBeNull()
+    pick(png())
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/picture', body: { image: 'data:image/png;base64,iVBORw0KGgo=' } }]))
+    await waitFor(() => expect(headerPicture()).toContain(jpeg('owner-1')))
+    expect(headerChip().hasAttribute('data-person-picture')).toBe(true)
+    expect(screen.getByTestId('profile-picture-choose').textContent).toBe('Change picture')
+  })
+
+  it('Remove picture clears it and the header goes back to initials', async () => {
+    h.pictures.owner = { hash: 'h-0', url: jpeg('owner-0') }
+    h.postRoutes['people/picture/clear'] = () => {
+      delete h.pictures.owner
+      return { ok: true, person: 'owner', imageHash: null, imageUrl: null }
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect(headerPicture()).toContain(jpeg('owner-0')))
+    act(() => void fireEvent.click(screen.getByTestId('profile-picture-remove')))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/picture/clear', body: {} }]))
+    await waitFor(() => expect(headerPicture()).toBeNull())
+    expect(headerChip().textContent).toBe('RL')
+  })
+
+  it('a Connect login shows its own picture, read by its username', async () => {
+    connectAdmin()
+    h.pictures['rosson-phone'] = { hash: 'h-p', url: jpeg('phone') }
+    h.pictures.owner = { hash: 'h-o', url: jpeg('owner') }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect(headerPicture()).toContain(jpeg('phone')))
+  })
+
+  it('a refusal shows the daemon\'s reason under the row', async () => {
+    h.postRoutes['people/picture'] = () => {
+      throw new Error('too many picture changes lately: wait, then try again')
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    pick(png())
+    expect((await screen.findByTestId('profile-picture-error')).textContent).toBe(
+      'too many picture changes lately: wait, then try again',
+    )
+    expect(headerPicture()).toBeNull()
+  })
+
+  it('a picture set elsewhere (another window, an Admin) shows live on person_picture_changed', async () => {
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect(h.pictureHandlers.size).toBeGreaterThan(0))
+    expect(headerPicture()).toBeNull()
+    h.pictures.owner = { hash: 'h-9', url: jpeg('owner-9') }
+    act(() => {
+      for (const fn of h.pictureHandlers) fn({ kind: 'person_picture_changed', person: 'owner', imageHash: 'h-9' })
+    })
+    await waitFor(() => expect(headerPicture()).toContain(jpeg('owner-9')))
   })
 })
 

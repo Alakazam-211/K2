@@ -11,7 +11,8 @@
 //     the role tag (and "Owner's account" on an owner-linked login), with
 //     how and where you are signed in as one muted line;
 //   - labelled rows (one label column, one control column, the Settings
-//     row and type scale): Colour, First name, Last name, Your account
+//     row and type scale): Picture (0.46.8, this server's picture of you,
+//     `/cli/people/picture`), Colour, First name, Last name, Your account
 //     (the owner key);
 //   - Password, then a Security section (collapsed, like the nav's
 //     sections) with recent sign-ins for the owner key.
@@ -57,6 +58,8 @@ import { SettingRow } from '@/components/Settings/controls/SettingControls'
 import { COLOR_NEEDS_NEWER_SERVER, PersonColorPicker } from '@/components/Presence/PersonColorPicker'
 import type { PersonColorView } from '@/components/Presence/person-color-api'
 import { PresenceChip, type PresenceRole } from '@/components/Presence/PresenceChip'
+import { PersonPictureControl } from '@/components/Presence/PersonPictureControl'
+import { usePersonPicture } from '@/lib/person-pictures'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
@@ -332,6 +335,10 @@ function LoadedProfile({
       ? profile.accounts.value[0]?.createdAt ?? null
       : null
   const isOwnersAccount = !profile.ownerToken && me !== null && linkedRead.kind === 'ok' && linkedRead.value.includes(me)
+  // 0.46.8: your picture on this server (the owner key's is the owner's,
+  // which its linked logins show too).
+  const pictureLogin = profile.ownerToken ? 'owner' : profile.username
+  const picture = usePersonPicture(scope, pictureLogin)
 
   const signIns = useMemo((): AuthAuditEvent[] => {
     if (profile.ownerToken) return profile.audit.kind === 'ok' ? signInsFor(profile.audit.value, linked) : []
@@ -380,6 +387,7 @@ function LoadedProfile({
         size={36}
         color={colorView?.color ?? null}
         names={nameView}
+        imageUrl={picture}
         title=""
       />
       <div className="flex-1 min-w-0">
@@ -452,6 +460,12 @@ function LoadedProfile({
           </p>
         ) : null}
         <div data-testid="admin-profile-fields">
+          {/* 0.46.8: your picture; the header chip is its preview. */}
+          {pictureLogin ? (
+            <SettingRow columns label="Picture" testId="admin-profile-picture">
+              <PersonPictureControl scope={scope} login={pictureLogin} testId="profile-picture" />
+            </SettingRow>
+          ) : null}
           {/* Colour first (Rosson): the header chip is its preview, so the
               row is just the picker. */}
           <SettingRow columns label="Colour" testId="admin-profile-color">

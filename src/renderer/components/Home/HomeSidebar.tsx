@@ -265,6 +265,13 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
   const title = status.note ? `${base} (${status.note})` : base
   // The agent's picture from this computer's cache (data URL), or null.
   const avatarUrl = useHomeRowAvatar(row.address)
+  // The people on this row are that server's: their pictures are the ones
+  // that server keeps (0.46.8, per-server pictures), read with its login.
+  const peopleScope = useMemo((): ServerScope | null => {
+    if (onConnected) return primaryScope()
+    if (!rowHost || isWebClient()) return null
+    return scopeForHost(rowHost)
+  }, [onConnected, rowHost])
   // Its own color (a validated `#rrggbb` from that server's listing), else muted.
   const color = useHomeRowColor(row.address) ?? OTHER_SERVER_AVATAR_COLOR
 
@@ -303,6 +310,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
             </span>
           )}
           <PresenceAvatarCluster
+            pictureScope={peopleScope}
             users={status.people.map((p) => ({
               user: p.user,
               role: asRole(p.role),

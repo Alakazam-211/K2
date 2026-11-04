@@ -8,6 +8,7 @@
 import { useConnectHostStore } from '@/stores/connect-host'
 import { PresenceChip, type PresenceRole } from './PresenceChip'
 import type { PersonNames } from '@/lib/person-name'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export interface PresenceAvatarProps {
   /** Username, or the wire literal `"owner"` (displayed as "Owner"). */
@@ -18,8 +19,11 @@ export interface PresenceAvatarProps {
   /** This is you: a ring (top bar and modal only; rows never show you). */
   you?: boolean
   away?: boolean
-  /** A profile photo (K2 Connect Cloud), drawn over the person colour. */
+  /** A picture over the person colour; absent: their profile picture
+   *  (`PresenceChip`, 0.46.8). */
   imageUrl?: string | null
+  /** The server whose picture to show (`PresenceChip`). */
+  pictureScope?: ServerScope | null
   title?: string
   /** The daemon's effective person colour (roster `color`). */
   color?: string | null
@@ -38,6 +42,19 @@ export function useSelfPresenceUser(): string {
   return useConnectHostStore((s) => (s.activeHost === 'local' ? 'owner' : s.activeHost.username || 'owner'))
 }
 
-export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title, color, names }: PresenceAvatarProps): React.JSX.Element {
-  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} color={color} names={names} />
+export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, pictureScope, title, color, names }: PresenceAvatarProps): React.JSX.Element {
+  return (
+    <PresenceChip
+      name={name}
+      role={role}
+      size={size}
+      you={you}
+      away={away}
+      imageUrl={imageUrl}
+      pictureScope={pictureScope}
+      title={title}
+      color={color}
+      names={names}
+    />
+  )
 }

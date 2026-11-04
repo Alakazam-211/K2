@@ -175,7 +175,10 @@ fn exposure_counts_are_pinned() {
     // Catalog v44 (0.46.8, app-chat-space-v1): + chat.space (app).
     // Catalog v45 (0.46.8): Gardens on phones; no new row.
     // Catalog v46 (0.46.8, live-access-v1): + me.events (app).
-    assert_eq!((widget, app, garden_local), (45, 134, 54), "per-exposure verb counts (widget, app, garden-local)");
+    // Catalog v47 (Board files): + the six boardFile.* rows (widget), which only
+    // K2's own Board tab frame answers; every Garden widget gets verb_unavailable.
+    // Catalog v48 (the Boards Garden): + boardFile.files and boardFile.openTab (widget).
+    assert_eq!((widget, app, garden_local), (53, 134, 54), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()
@@ -230,10 +233,12 @@ fn exposure_counts_are_pinned() {
     // + chat.space (app).
     // Catalog v45 (0.46.8): Gardens on phones; no new row.
     // Catalog v46 (0.46.8, live-access-v1): + me.events (app).
-    assert_eq!(c.catalog_version, 46);
+    // Catalog v47 (Board files): + the six boardFile.* rows, K2's Board tab frame only.
+    // Catalog v48 (the Boards Garden): + boardFile.files and boardFile.openTab.
+    assert_eq!(c.catalog_version, 48);
     assert_eq!(
         c.verbs.len(),
-        243,
+        251,
         "today's 38 bridge verbs (thread.inbox joined in 0.46.3) plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self, plus Thread parity 0.46.3's 4 widget and 5 app rows, plus thread.mute, plus App project chat's 5 app rows, plus App mobile access's 7 app rows, plus app-room-stream's thread.stream app row, plus the nine wallet.* app rows (0.46.3), plus the counts-only ear's thread.activity app row (0.46.3), plus permission cards' 9 unexposed permission.* rows (7 + A2's note and undo person routes; 0.46.3, no catalog bump), plus catalog v20's Garden columns and agent list rows (layout.get/set/toggle/subscribe, agents.show, conversation.setContext; 0.46.3 r10), plus catalog v21's store.patch and links.open (0.46.4), plus box usage's garden-local app.resources (0.46.4, no catalog bump), plus catalog v22's app.rooms, guests.list, files.downloads and files.download (0.46.4), plus catalog v23's App push rows push.register/unregister/device/prefs and the link's push.send/status/devices (0.46.4), plus catalog v24's App phone pairing rows pairing.start/status/cancel/check/redeem (0.46.5), plus catalog v25's App user profile rows profile.get/update/setImage/clearImage/sessions/revokeSession/signOutOthers (0.46.5), plus catalog v26's email.send/status/log (0.46.5), plus catalog v27's thread.markAllRead (0.46.5), plus catalog v29's thread.onActivity (widget) and thread.activityRooms (app) (0.46.5), plus catalog v30's blobs.put/get/info/list and downloads.begin/save (0.46.5), plus catalog v31's tickets.attachment (0.46.6), plus catalog v32's uploads.pick, uploads.dropped and store.history/restore/snapshot (0.46.6), plus catalog v33's guests.chat, guests.setChat, chat.member and chat.whois (0.46.6, Sew for Apps), plus catalog v35's chat.createChannel (0.46.6, Sew for Apps A9), plus catalog v40's 11 Workbench rows (0.46.7: work.list, git.snapshot/diffFile/log/land/note, compute.jobs, agents.start/stop/settle/openTerminal), plus catalog v41's push.viewing (0.46.7), plus catalog v42's chat.channels and chat.setChannels (0.46.7), plus catalog v43's store.grantees (the Board Garden)"
     );
     // Permission cards (0.46.3 Beta): K2's own verbs, never a widget's or
@@ -269,6 +274,8 @@ fn every_feature_is_a_boot_status_key() {
     // Listed only while the "Permission cards" switch is on (lane B's
     // dynamic key); this test leaves the switch off.
     known.insert(k2_core::permission::FEATURE_KEY);
+    // Listed only while the Board files preview is on; this test leaves it off.
+    known.insert(k2_daemon::boot_status::FEATURE_BOARD_FILE);
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }
@@ -476,6 +483,11 @@ fn guide_api_works_without_a_daemon() {
     assert!(page.lines().count() <= gen::GUIDE_MAX_LINES, "guide api is {} lines", page.lines().count());
     let c = catalog();
     for (cap, rows) in gen::widget_groups(c) {
+        // boardFile.* answer only in K2's Board tab: the widget guide leaves them out.
+        let rows: Vec<_> = rows.into_iter().filter(|v| v.feature != k2_daemon::boot_status::FEATURE_BOARD_FILE).collect();
+        if rows.is_empty() {
+            continue;
+        }
         let head = cap.unwrap_or("no cap");
         let at = page.find(&format!("\n{head}")).unwrap_or_else(|| panic!("no group {head}"));
         for v in rows {

@@ -1,0 +1,84 @@
+/* k2:canvas@1: a page of tiles. The Garden theme's colours (--zen-*), with
+   K2's light theme as the fallback; light and dark follow the Garden's
+   scheme, never the computer's. */
+:root {
+  --cv-bg: var(--zen-surface, #ffffff);
+  --cv-raised: var(--zen-surface-raised, #f6f8fa);
+  --cv-text: var(--zen-text, #1f2328);
+  --cv-muted: var(--zen-text-muted, #59636e);
+  --cv-border: var(--zen-border, #d0d7de);
+  --cv-accent: var(--zen-accent, #0969da);
+  --cv-ok: #1a7f37;
+  --cv-warn: #9a6700;
+  --cv-needs: #bc4c00;
+  --cv-run: #0969da;
+  --cv-track: rgba(31, 35, 40, 0.08);
+  --cv-tint: color-mix(in srgb, var(--cv-text) 6%, transparent);
+  --cv-radius: var(--zen-radius, 10px);
+  --cv-font: var(--zen-font, var(--zen-family, -apple-system, BlinkMacSystemFont, system-ui, sans-serif));
+  --cv-mono: var(--zen-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+:root[data-zen-scheme="dark"] {
+  --cv-bg: var(--zen-surface, #0d1117);
+  --cv-raised: var(--zen-surface-raised, #161b22);
+  --cv-text: var(--zen-text, #c9d1d9);
+  --cv-muted: var(--zen-text-muted, #8b949e);
+  --cv-border: var(--zen-border, #30363d);
+  --cv-accent: var(--zen-accent, #58a6ff);
+  --cv-ok: #3fb950;
+  --cv-warn: #d29922;
+  --cv-needs: #f0883e;
+  --cv-run: #58a6ff;
+  --cv-track: rgba(240, 246, 252, 0.08);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--cv-bg); color: var(--cv-text); font: 13px/1.4 var(--cv-font); display: flex; flex-direction: column; overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--cv-accent); outline-offset: 1px; }
+
+/* The bar: the canvas's name and the Tiles menu, centred in K2's top band
+   (about 52 px on a full-canvas Garden), clear of K2's ⋯ menu (left) and
+   any window buttons (right). The Tiles button is a hole in K2's drag
+   strip (canvas.js shareBar); the rest of the band still drags the window. */
+.cv-bar { flex: 0 0 auto; height: 52px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 72px; border-bottom: 1px solid var(--cv-border); }
+.cv-title { min-width: 0; margin: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-btn { background: var(--cv-tint); border: 1px solid var(--cv-border); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+.cv-btn:hover, .cv-btn[aria-expanded="true"] { border-color: var(--cv-accent); }
+.cv-menu-wrap { position: relative; }
+.cv-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; width: min(320px, 90vw);
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: var(--cv-raised); border: 1px solid var(--cv-border); border-radius: var(--cv-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.cv-item { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; padding: 6px 8px; border: 0; border-radius: 8px; background: none; cursor: pointer; }
+.cv-item:hover { background: var(--cv-tint); }
+.cv-check { flex: 0 0 16px; height: 16px; margin-top: 1px; border-radius: 4px; border: 1px solid var(--cv-border); text-align: center; line-height: 14px; font-size: 12px; color: var(--cv-accent); }
+.cv-item[aria-checked="true"] .cv-check { border-color: var(--cv-accent); }
+.cv-item-words { display: flex; flex-direction: column; min-width: 0; }
+.cv-item-name { font-weight: 600; }
+.cv-item-desc { color: var(--cv-muted); font-size: 12px; }
+
+/* The tiles: a full tile is a row of its own; two half tiles share one. */
+.cv-grid { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 12px; padding: 12px; }
+.cv-tile { display: flex; flex-direction: column; min-width: 0; background: var(--cv-raised); border: 1px solid var(--cv-border); border-radius: var(--cv-radius); overflow: hidden; }
+.cv-full { grid-column: 1 / -1; }
+.cv-half { grid-column: span 1; max-height: 70vh; }
+@media (max-width: 720px) { .cv-grid { grid-template-columns: minmax(0, 1fr); } .cv-half { grid-column: 1 / -1; } }
+.cv-tile-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 8px 6px 12px; border-bottom: 1px solid var(--cv-border); }
+.cv-tile-name { margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.cv-tile-meta { flex: 1; min-width: 0; color: var(--cv-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cv-x { flex: 0 0 auto; width: 22px; height: 22px; border: 0; border-radius: 6px; background: none; color: var(--cv-muted); cursor: pointer; font-size: 15px; line-height: 20px; }
+.cv-x:hover { background: var(--cv-tint); color: var(--cv-text); }
+.cv-tile-note { margin: 8px 12px 0; padding: 5px 8px; border: 1px dashed var(--cv-warn); border-radius: 6px; color: var(--cv-warn); font-size: 12px; }
+.cv-tile-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 12px 10px; }
+.cv-empty { color: var(--cv-muted); margin: 6px 0; }
+.cv-all-hidden { margin: 24px; text-align: center; }
+.cv-toast { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 90vw; padding: 6px 12px; border-radius: 999px; background: var(--cv-text); color: var(--cv-bg); font-size: 12px; opacity: 0; pointer-events: none; }
+.cv-toast.cv-on { opacity: 0.92; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .cv-toast { transition: opacity 0.2s ease; }
+}

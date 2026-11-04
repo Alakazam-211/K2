@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Canvas</title>
+  <link rel="stylesheet" href="canvas.css">
+  <link rel="stylesheet" href="tile-compute.css">
+</head>
+<body>
+  <!-- Static markup only: every value is drawn later with textContent. -->
+  <header class="cv-bar">
+    <h1 id="title" class="cv-title">Canvas</h1>
+    <div class="cv-menu-wrap">
+      <button id="tiles-btn" type="button" class="cv-btn" aria-haspopup="true" aria-expanded="false" aria-controls="tiles-menu" title="Show or hide tiles">Tiles</button>
+      <div id="tiles-menu" class="cv-menu" role="menu" aria-label="Show or hide tiles" hidden></div>
+    </div>
+  </header>
+  <main id="grid" class="cv-grid"></main>
+  <p id="empty" class="cv-empty cv-all-hidden" hidden>Every tile is hidden. Choose Tiles to show one.</p>
+  <div id="toast" class="cv-toast" role="status" aria-live="polite"></div>
+  <script src="canvas.js"></script>
+  <script src="tile-compute.js"></script>
+  <script src="start.js"></script>
+</body>
+</html>

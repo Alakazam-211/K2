@@ -87,6 +87,13 @@ pub fn tab_only_refusal(widget: &str) -> Option<String> {
         .then(|| format!("'{widget}' runs only in a board file's tab; a Garden places Board as {BOARD_WIDGET}"))
 }
 
+/// The canvas (the Compute Garden, Rosson 2026-11-03): a page of tiles the
+/// person shows or hides, kept in their private saves. Its first tile is
+/// Compute load (`compute.nodes`). Later tiles drop in as new registry
+/// entries (`canvas-1/canvas.js`), in a new version. `compute-1.toml`
+/// places it beside K2's Conversation.
+pub const CANVAS_WIDGET: &str = "k2:canvas@1";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 
@@ -475,6 +482,22 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("ui.js", include_str!("board-file-1/ui.js")),
         ],
     },
+    // The canvas (the Compute Garden, Rosson 2026-11-03): the host and its
+    // registry (canvas.js), then one script and style per tile, then
+    // start.js, in index.html's order.
+    BuiltinWidget {
+        name: "canvas",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("canvas-1/manifest.json")),
+            ("index.html", include_str!("canvas-1/index.html")),
+            ("canvas.css", include_str!("canvas-1/canvas.css")),
+            ("tile-compute.css", include_str!("canvas-1/tile-compute.css")),
+            ("canvas.js", include_str!("canvas-1/canvas.js")),
+            ("tile-compute.js", include_str!("canvas-1/tile-compute.js")),
+            ("start.js", include_str!("canvas-1/start.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
@@ -520,6 +543,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:work-inbox@1", "85deffe31c8a76db2410d7756e64193a2101d31c4518e7b1ebf57e8ab3a68143"),
     ("k2:board@1", "66ec65e385a4c95f08adbb54e476bbf08531116a84d8a193baaeb354999492cc"),
     ("k2:board-file@1", "310db4a193a9e0e347ce257cb3cfdd8f6e2a3bf91492ae32f173aba080ae057c"),
+    ("k2:canvas@1", "f3a069cc6e194bc0980793d11073b9e3ddaf47e800e35b15f0e2d35e74cf85ca"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1543,6 +1567,83 @@ mod tests {
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
         assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {code} bytes of code");
     }
+
+    /// The canvas (the Compute Garden): a clean widget in readable source,
+    /// its scripts in registry order (host, tiles, start); caps exactly its
+    /// tiles' and each one a garden-local or widget cap with a reason; only
+    /// catalog verbs, runtime members or verb groups behind `k2.`; no
+    /// markup sinks, network or storage of its own; and every tile it
+    /// registers needs only verbs its caps reach.
+    #[test]
+    fn the_canvas_is_a_clean_widget_of_tiles() {
+        let w = builtin_widget(&parse_widget_ref(CANVAS_WIDGET).expect("parses")).expect("k2:canvas@1 ships");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:canvas").expect("parses")).map(|w| w.id()).as_deref(), Some(CANVAS_WIDGET));
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+        let c = crate::zen::widgets::check_files("k2", "canvas-1", &files);
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.bundle.is_some(), "it bundles");
+        assert!(!c.warnings.iter().any(|d| d.message.starts_with("this widget is large")), "{:?}", c.warnings);
+        let m = c.manifest.as_ref().expect("a manifest");
+        assert_eq!(m.caps, CANVAS_CAPS);
+        let cat = crate::contract::catalog();
+        for cap in &m.caps {
+            assert!(crate::zen::USER_WIDGET_CAPS.contains(&cap.as_str()), "{cap}");
+            assert!(m.reasons.get(cap).is_some_and(|r| !r.is_empty()), "{cap} has a reason");
+        }
+        let html = file(w, "index.html");
+        let scripts: Vec<&str> = w.files.iter().map(|(n, _)| *n).filter(|n| n.ends_with(".js")).collect();
+        assert_eq!(scripts.first(), Some(&"canvas.js"), "the host first");
+        assert_eq!(scripts.last(), Some(&"start.js"), "start last");
+        let mut at = 0;
+        for s in &scripts {
+            let tag = format!("<script src=\"{s}\"></script>");
+            let i = html[at..].find(&tag).unwrap_or_else(|| panic!("index.html loads {s} after the one before it"));
+            at += i + tag.len();
+        }
+        for (name, _) in w.files.iter().filter(|(n, _)| n.ends_with(".css")) {
+            assert!(html.contains(&format!("<link rel=\"stylesheet\" href=\"{name}\">")), "index.html loads {name}");
+        }
+        for bad in [" onclick=", " onload=", " onerror=", "<iframe", "<object", "<embed", "<base", "http-equiv", "src=\"http", "href=\"http", "//cdn"] {
+            assert!(!html.contains(bad), "index.html has {bad}");
+        }
+        let verbs: Vec<&str> = cat.widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
+        for name in &scripts {
+            let js = file(w, name);
+            for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "localStorage", "sessionStorage", "indexedDB", "eval(", "new Function", "import "] {
+                assert!(!js.contains(bad), "{name} uses {bad}");
+            }
+            for (i, _) in js.match_indices("k2.") {
+                if js[..i].chars().last().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                    continue;
+                }
+                let call: String = js[i + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+                let call = call.trim_end_matches('.');
+                if call.is_empty() {
+                    continue;
+                }
+                let head = call.split('.').next().unwrap_or(call);
+                let ok = verbs.contains(&call)
+                    || crate::contract::gen::RUNTIME_MEMBERS.contains(&head)
+                    || verbs.iter().any(|v| v.starts_with(&format!("{call}.")));
+                assert!(ok, "{name} calls k2.{call}, which isn't a widget verb or runtime member");
+            }
+            // Every verb a tile says it needs is a widget verb its caps reach.
+            for (i, _) in js.match_indices("needs: [") {
+                let list = &js[i + "needs: [".len()..];
+                let list = &list[..list.find(']').expect("a closed needs list")];
+                for v in list.split(',').map(|v| v.trim().trim_matches('\'')).filter(|v| !v.is_empty()) {
+                    let row = cat.verb(v).unwrap_or_else(|| panic!("{name} needs {v}, which isn't a verb"));
+                    assert!(row.cap.as_deref().is_none_or(|cap| m.caps.iter().any(|c| c == cap)), "{name} needs {v}, whose cap the canvas doesn't ask for");
+                }
+            }
+        }
+        let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
+        assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {code} bytes of code");
+    }
+
+    /// The canvas's caps: its tiles' (Compute load reads compute.nodes).
+    const CANVAS_CAPS: &[&str] = &["compute:nodes"];
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks
     /// for resolves against the checked-in `zen-lib.json`, and is bundled,

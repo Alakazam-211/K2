@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "Canvas",
+  "description": "A page of tiles you show or hide. Compute load: jobs on each compute node, free CPU and memory.",
+  "entry": "index.html",
+  "caps": ["compute:nodes"],
+  "reasons": {
+    "compute:nodes": "to show how busy each of this server's compute nodes is: jobs running and queued, free CPU and memory, and whose jobs they are"
+  }
+}

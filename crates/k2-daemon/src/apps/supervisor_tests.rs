@@ -782,7 +782,11 @@ fn a_rollback_past_what_is_kept_names_what_is_left_and_history_marks_it() {
 fn second_seed(f: &Fx) -> String {
     let dir = f._home.path().join("src").join("app2");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("server.js"), "require('http').createServer((q,s)=>s.end('two')).listen(process.env.PORT)").unwrap();
+    // Seeds are named by their content and these tests share one DB, so each
+    // call needs its own content: one test deleting "the second Seed" must
+    // never be another's.
+    let source = format!("// {}\nrequire('http').createServer((q,s)=>s.end('two')).listen(process.env.PORT)", uuid::Uuid::new_v4());
+    std::fs::write(dir.join("server.js"), source).unwrap();
     let h = k2_core::db::shared();
     let c = h.lock();
     let base = store::get_seed(&c, &f.seed).unwrap().unwrap();

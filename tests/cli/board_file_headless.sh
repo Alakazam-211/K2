@@ -377,14 +377,16 @@ agent POST /cli/board/file/save "$(pj '{"path": "Untitled.k5board", "groups": [{
 jok "$BODY" '"heldId" not in j["held"][0]' "an agent's conflict isn't kept: it has its command"
 
 echo "== k2 board --file =="
-cli() {
+# k2 <command> as the agent, from its workspace.
+k2_as_agent() {
     set +e
-    OUT="$(cd "$B" && printf '%s' "${CLI_IN:-}" | env HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT" K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$B" "$K2_CLI" board "$@" 2>"$WORK/cli.err")"
+    OUT="$(cd "$B" && printf '%s' "${CLI_IN:-}" | env HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT" K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$B" "$K2_CLI" "$@" 2>"$WORK/cli.err")"
     RC=$?
     set -e
     ERR="$(cat "$WORK/cli.err")"
     CLI_IN=""
 }
+cli() { k2_as_agent board "$@"; }
 want_rc() { [ "$RC" = "$1" ] || fail "$2: exit $RC (want $1)
 stdout: $OUT
 stderr: $ERR"; }
@@ -428,7 +430,7 @@ printf 'junk' > "$B/junk.k5board"
 cli --file junk.k5board list; want_rc 4 "a corrupt file"
 cli --file plan.txt list; want_rc 2 "not a board"
 cli --file plan.k5board frobnicate; want_rc 2 "an unknown verb"; has "$ERR" "add, update, delete" "an unknown verb lists the verbs"
-cli --file plan.k5board tidy s-1; want_rc 2 "a verb that waits for the next K2"; has "$ERR" "use apply" "a verb not there yet for files points at apply"
+cli --file plan.k5board tidy s-1; want_rc 2 "tidy names each object with its rev"; has "$ERR" "MPC-E122" "a bad value is the kit's usage row, by id"
 cli --file plan.k5board fields sticky; want_rc 0 "fields"; has "$OUT" '"fontSize"' "fields sticky"
 cli --file plan.k5board fields nope; want_rc 4 "fields of no such type"
 cli --file plan.k5board --board b1 list; want_rc 2 "two targets"; has "$ERR" "two_targets" "two targets"
@@ -514,8 +516,10 @@ cli delete "$H1" --rev "$(revof "$H1")" "$VF"; want_rc 0 "delete"
 has "$OUT" "$C1" "the delete names the connector it took"
 has "$OUT" "$Q1" "and the comment pinned to it"
 cli read "$C1" "$VF"; want_rc 4 "the connector went with it"
-cli tidy "$S1" "$VF"; want_rc 2 "a verb that waits for the next K2"; has "$ERR" "use apply" "it says what to use"
-ok "add, update, delete (cascade), connect, comment, react, vote, meta, move, order: names and exits as agreed"
+cli tidy "$S1" "$VF"; want_rc 2 "tidy without revs"; has "$ERR" "MPC-E122" "it names the kit's row"
+cli lock "$S1@$(revof "$S1")" --locked true "$VF"; want_rc 0 "lock, a verb the bridge brought"
+cli update "$S1" --rev "$(revof "$S1")" --text "locked?" "$VF"; want_rc 5 "a locked object refuses"; has "$ERR" "MPC-E835" "locked is E835"
+ok "add, update, delete (cascade), connect, comment, react, vote, meta, move, order, lock: names and exits as agreed"
 
 M0=base.k5board
 cli new "$M0"; want_rc 0 "merge base"
@@ -541,6 +545,105 @@ for f in "$M0:$BASE_SUM" "copy.k5board:$COPY_SUM" "target.k5board:$TGT_SUM"; do
     [ "$got" = "$want" ] || fail "$n changed on a merge conflict"
 done
 ok "merge: the copy's changes come in, a conflict writes nothing, and base and copy are never written"
+
+echo "== k2 doc and k2 board: the same calls, the same answers =="
+# One board, copied fresh before every call: each call runs once through
+# k2 board and once through k2 doc on the same bytes, and the output (a read's
+# fence nonce aside), the exit and the file's bytes after must be identical.
+P0=parity0.k5board
+cli new "$P0"; want_rc 0 "parity base"
+CLI_IN='{"ops":[{"op":"add","object":{"id":"s-a","type":"sticky","text":"A"}},{"op":"add","object":{"id":"s-b","type":"sticky","text":"B"}},{"op":"add","object":{"id":"h-a","type":"shape","text":"H"}},{"op":"add","object":{"id":"c-a","type":"connector","from":{"id":"s-a"},"to":{"id":"h-a"}}}]}'
+cli apply - "$P0"; want_rc 0 "parity objects"
+VF="$P0"; PA="$(revof s-a)"; PB="$(revof s-b)"; PH="$(revof h-a)"
+cli list "$P0" --json; PS="$(jq_ "$OUT" 'j["settingsRev"]')"
+sumof() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+unfence() { printf '%s' "$1" | sed -E 's/fence [0-9a-f]{16}/fence N/g'; }
+P0_SUM="$(sumof "$B/$P0")"
+same() {
+    local want="$1"; shift
+    cp "$B/$P0" "$B/px.k5board"
+    k2_as_agent board "$@" px.k5board
+    local o1 e1 r1 s1
+    o1="$(unfence "$OUT")"; e1="$(unfence "$ERR")"; r1="$RC"; s1="$(sumof "$B/px.k5board")"
+    cp "$B/$P0" "$B/px.k5board"
+    k2_as_agent doc "$@" px.k5board
+    [ "$RC" = "$r1" ] || fail "$*: k2 board exit $r1, k2 doc exit $RC
+board: $o1 $e1
+doc: $OUT $ERR"
+    [ "$(unfence "$OUT")" = "$o1" ] || fail "$*: the output differs
+board: $o1
+doc:   $OUT"
+    [ "$(unfence "$ERR")" = "$e1" ] || fail "$*: stderr differs
+board: $e1
+doc:   $ERR"
+    [ "$(sumof "$B/px.k5board")" = "$s1" ] || fail "$*: the file's bytes differ"
+    [ "$r1" = "$want" ] || fail "$*: exit $r1 (want $want)
+stdout: $o1
+stderr: $e1"
+    case "$want" in
+        0) ;;
+        *) [ "$s1" = "$P0_SUM" ] || fail "$*: refused (exit $want), and the file changed" ;;
+    esac
+    ok "same answer, exit $want and bytes: $*"
+}
+same 0 update s-a --rev "$PA" --text "from both"
+same 0 update s-a --rev "$PA" --text "as JSON" --json
+same 1 update s-a --rev "$PB" --text "a stale rev"
+same 1 update s-a --rev "$PB" --text "a stale rev" --json
+same 4 update nope --rev "$PA" --text x
+same 2 update s-a --rev "$PA" --colour red
+same 2 update s-a --text "no rev"
+same 0 update s-a --rev "$PA" --text "a dry run" --dry-run
+same 0 delete h-a --rev "$PH"
+same 0 delete h-a --rev "$PH" --cascade false --json
+same 0 move s-a s-b --rev "$PA,$PB" --dx 10 --dy -0
+same 2 move s-a --rev "$PA,$PB" --dx 1 --dy 1
+same 0 order s-b s-a --to back
+same 5 vote s-a
+same 0 react s-a 👍
+same 0 meta
+same 0 meta --rev "$PS" --title "Parity"
+same 1 meta --rev "$PA" --title "a stale settings rev"
+same 0 lock "s-a@$PA,s-b@$PB" --locked true
+same 2 tidy s-a
+same 2 frobnicate
+same 2 delete s-a --rev "$PA" --colour red
+same 0 templates
+same 0 references --id s-a
+same 0 capabilities
+same 0 capabilities --json
+same 0 explain MPC-E830
+same 0 list
+same 0 read s-a --json
+cp "$B/$P0" "$B/px.k5board"
+k2_as_agent doc add sticky --text "through k2 doc" px.k5board; want_rc 0 "k2 doc add"
+NEW="$(printf '%s\n' "$OUT" | sed -n 's/^Added //p')"; [ -n "$NEW" ] || fail "k2 doc add printed no id: $OUT"
+k2_as_agent board read "$NEW" px.k5board --json; jok "$OUT" 'j["object"]["text"] == "through k2 doc"' "what k2 doc added, k2 board reads"
+k2_as_agent doc add sticky --text "a dry run" --dry-run px.k5board; want_rc 0 "k2 doc add --dry-run"
+has "$OUT" "Dry run, nothing written" "a dry run says so"
+k2_as_agent board list px.k5board --json; jok "$OUT" 'len(j["objects"]) == 5' "a dry run added nothing"
+k2_as_agent doc list -w "$B" px.k5board; want_rc 0 "k2 doc -w"; has "$OUT" "5 objects" "-w: a path inside the workspace"
+k2_as_agent doc capabilities --json px.k5board; want_rc 0 "capabilities --json"
+CAPS="$OUT"
+jok "$CAPS" 'len(j["verbs"]) == 45 and all(v["source"] == "file" for v in j["verbs"])' "capabilities: the board's 45 verbs, each source file"
+jok "$CAPS" '{0, 2, 4, 5} <= set([v["exits"] for v in j["verbs"] if v["name"] == "vote"][0])' "vote's exits, from the kit's rows"
+python3 - "$CAPS" "$K2_CLI" <<'PY' || fail "k2 doc doesn't route every board verb"
+import json, re, sys
+caps = json.loads(sys.argv[1])
+line = re.search(r'^_DOC_BOARD_VERBS="([^"]*)"', open(sys.argv[2], encoding="utf-8").read(), re.M).group(1).split()
+missing = [v["name"] for v in caps["verbs"] if v["name"] not in line]
+assert not missing, missing
+PY
+ok "k2 doc routes every verb capabilities lists"
+k2_as_agent doc explain MPC-E999 px.k5board; [ "$RC" != 0 ] || fail "explain of no such id passed"
+# B0 stays: write --base, restore and the text verbs never reach a board's bytes.
+cp "$B/$P0" "$B/px.k5board"
+k2_as_agent doc write --base live --text "over the top" px.k5board; want_rc 4 "k2 doc write on a board"; has "$ERR" "board_file" "write --base is refused board_file"
+k2_as_agent doc restore --version 1 px.k5board; want_rc 4 "k2 doc restore on a board"; has "$ERR" "board_file" "restore is refused board_file"
+k2_as_agent doc cat px.k5board; want_rc 4 "k2 doc cat on a board"; has "$ERR" "board_file" "cat is refused board_file"
+[ "$(sumof "$B/px.k5board")" = "$P0_SUM" ] || fail "a refused k2 doc verb changed the board's bytes"
+ok "B0: k2 doc write --base, restore and cat still refuse a .k5board, and its bytes stay"
+rm -f "$B/px.k5board"
 
 # Last, because it restarts the daemon: every agent check above uses the first
 # passport, and a restarted pinned chat may not be back in time on a slow node.

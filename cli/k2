@@ -67809,7 +67809,7 @@ if verb == "rooms":
     me = v.get("me") or {}
     if me.get("inCall"):
         where = "this login" if me.get("here") else "another device or session"
-        print("you: in %s from %s (may still be leaving: Sew keeps a closed app listed about %ss)" % ((me.get("room") or {}).get("name") or me.get("channelId"), where, me.get("presenceLagSecs")))
+        print("you: in %s from %s (if that app was closed, this can lag up to %s s)" % ((me.get("room") or {}).get("name") or me.get("channelId"), where, me.get("presenceLagSecs")))
 elif verb == "status":
     print("hosting:    %s" % hosting_line())
     t = v.get("tier")
@@ -67845,7 +67845,13 @@ elif verb == "join":
     r = v.get("room") or {}
     print("joined %s (call %s). The CLI has no audio: a voice client connects with the answer (--json)." % (r.get("name"), v.get("callId")))
 elif verb == "leave":
-    print("already left (%s)" % v.get("why") if v.get("already") else "left")
+    why = {"already_left": "you left it before", "moved": "you joined another room from here",
+           "joined_elsewhere": "you joined from another device or session; that call goes on",
+           "left_elsewhere": "you left from another device or session",
+           "sew_dropped": "the voice server had already dropped you",
+           "in_another_room": "you are in another room now; that call goes on"}
+    w = v.get("why") or ""
+    print("nothing to leave: that call already ended (%s) [%s]" % (why.get(w, w), w) if v.get("already") else "left")
 else:
     print("%s %s in %s" % (v.get("action"), v.get("person"), (v.get("room") or {}).get("name")))
 '

@@ -179,7 +179,7 @@ assert_contains "rooms: hosting line" "$out" "Voice rooms on box: on"
 assert_contains "rooms: a room with its count" "$out" "Standup"
 assert_contains "rooms: a muted person" "$out" "ada (muted)"
 assert_contains "rooms: closing" "$out" "closing"
-assert_contains "rooms: in a call on another device (phones, §6.4)" "$out" "you: in Standup from another device or session (may still be leaving"
+assert_contains "rooms: in a call on another device (phones, §6.4)" "$out" "you: in Standup from another device or session (if that app was closed, this can lag up to 40 s)"
 assert_eq "rooms is a GET" "$(req_where /cli/voice/rooms method)" "GET"
 run owner voice rooms --json
 assert_eq "rooms --json is the raw body" "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rev"])' "$out")" "3"
@@ -216,7 +216,7 @@ assert_eq "leave body" "$(req_where /cli/voice/session/leave body)" '{"callId": 
 assert_eq "leave says left" "$out" "left"
 run owner voice leave --call vc_old
 assert_eq "a leave of an ended call exits 0" "$rc" "0"
-assert_eq "an ended call: already left, and why" "$out" "already left (joined_elsewhere)"
+assert_eq "an ended call: already left, and why" "$out" "nothing to leave: that call already ended (you joined from another device or session; that call goes on) [joined_elsewhere]"
 run owner voice kick room-1 ada
 assert_eq "kick body" "$(req_where /cli/voice/moderate body)" '{"action": "kick", "person": "ada", "room": "room-1"}'
 assert_contains "kick summary" "$out" "kick ada in Standup"

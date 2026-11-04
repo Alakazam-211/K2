@@ -640,7 +640,7 @@ k2_as_owner board list px.k5board --json; jok "$OUT" 'len(j["objects"]) == 5' "a
 k2_as_owner doc list -w "$B" px.k5board; want_rc 0 "k2 doc -w"; has "$OUT" "5 objects" "-w: a path inside the workspace"
 k2_as_owner doc capabilities --json px.k5board; want_rc 0 "capabilities --json"
 CAPS="$OUT"
-jok "$CAPS" 'len(j["verbs"]) == 45 and all(v["source"] == "file" for v in j["verbs"])' "capabilities: the board's 45 verbs, each source file"
+jok "$CAPS" 'len(j["verbs"]) == 43 and all(v["source"] == "file" for v in j["verbs"])' "capabilities: the board's 43 verbs (verbs::ARGS), each source file"
 jok "$CAPS" '{0, 2, 4, 5} <= set([v["exits"] for v in j["verbs"] if v["name"] == "vote"][0])' "vote's exits, from the kit's rows"
 python3 - "$CAPS" "$K2_CLI" <<'PY' || fail "k2 doc doesn't route every board verb"
 import json, re, sys

@@ -276,6 +276,8 @@ fn every_feature_is_a_boot_status_key() {
     known.insert(k2_core::permission::FEATURE_KEY);
     // Listed only while the Board files preview is on; this test leaves it off.
     known.insert(k2_daemon::boot_status::FEATURE_BOARD_FILE);
+    // The Boards Garden's file rows: a frame-hello feature, never a /boot-status key.
+    known.insert("board-file-list-v1");
     for v in &catalog().verbs {
         assert!(known.contains(v.feature.as_str()), "{}: feature {} isn't a /boot-status key", v.verb, v.feature);
     }
@@ -484,7 +486,7 @@ fn guide_api_works_without_a_daemon() {
     let c = catalog();
     for (cap, rows) in gen::widget_groups(c) {
         // boardFile.* answer only in K2's Board tab: the widget guide leaves them out.
-        let rows: Vec<_> = rows.into_iter().filter(|v| v.feature != k2_daemon::boot_status::FEATURE_BOARD_FILE).collect();
+        let rows: Vec<_> = rows.into_iter().filter(|v| v.feature != k2_daemon::boot_status::FEATURE_BOARD_FILE && v.feature != "board-file-list-v1").collect();
         if rows.is_empty() {
             continue;
         }

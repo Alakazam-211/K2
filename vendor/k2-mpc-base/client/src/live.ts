@@ -221,6 +221,16 @@ interface Entry {
   doomed?: Rejection;
 }
 
+/** An undo or redo held in the queue behind the edits typed before it: `flush` sends it in its
+ * place, once every edit before it has gone (one socket keeps the order: no ack is awaited). */
+interface Held {
+  held: "undo" | "redo";
+  op: number;
+}
+
+const isHeld = (q: Entry | Held): q is Held => "held" in q;
+const entries = (q: Array<Entry | Held>): Entry[] => q.filter((e): e is Entry => !isHeld(e));
+
 type Listener<T> = (v: T) => void;
 
 /** A snapshot listener (`onParticipants`, `onMarks`) and the snapshot it last had (JSON). */
@@ -262,7 +272,7 @@ export class LiveText {
   private _version: number;
   private _text: Rope;
   private inflight: Entry | null = null;
-  private queue: Entry[] = [];
+  private queue: Array<Entry | Held> = [];
   private nextOp = 1;
   private nextWire = 1;
   private nextRejection = 1;
@@ -381,7 +391,7 @@ export class LiveText {
   }
   /** Local changes not yet acknowledged (in flight plus queued). */
   get pending(): number {
-    return (this.inflight ? 1 : 0) + this.queue.length;
+    return (this.inflight ? 1 : 0) + entries(this.queue).length;
   }
   /** Rejected changes not yet dismissed or re-applied. */
   get rejected(): readonly Rejection[] {
@@ -412,7 +422,7 @@ export class LiveText {
     this.moveRejected(hs);
     this.emit("change", { hunks: hs, by: null, local: true });
     const last = this.queue[this.queue.length - 1];
-    if (last && last.group === opts.group) {
+    if (last && !isHeld(last) && last.group === opts.group) {
       last.hunks = composeLen(last.before.length8, last.hunks, hs);
       last.carried = Carried.of(last.hunks);
       last.made = { hunks: last.hunks, base: this._version };
@@ -466,9 +476,15 @@ export class LiveText {
 
   private undoRedo(kind: "undo" | "redo"): number {
     const op = this.nextWire++;
+    // behind the queued edits typed before it, and before those typed after (`flush`)
+    if (this.queue.length > 0) this.queue.push({ held: kind, op });
+    else this.sendUndo(kind, op);
+    return op;
+  }
+
+  private sendUndo(kind: "undo" | "redo", op: number): void {
     this.undoOps.set(op, kind);
     this.t.send({ type: kind, op });
-    return op;
   }
 
   /** Whether this connection's view is in front (the host's `set_visible`); re-sent after a
@@ -665,7 +681,7 @@ export class LiveText {
     const placed = rebaseOurs(sent.hunks, since.map((h) => h.hunks));
     if ("conflict" in placed) return { refused: "conflict" };
     let c = Carried.of(placed.ok);
-    for (const e of [...(this.inflight && !this.inflight.doomed ? [this.inflight] : []), ...this.queue]) {
+    for (const e of [...(this.inflight && !this.inflight.doomed ? [this.inflight] : []), ...entries(this.queue)]) {
       const t = c.through(e.hunks, 0);
       if ("conflict" in t) return { refused: "conflict" };
       c = t.ok;
@@ -1394,11 +1410,15 @@ export class LiveText {
   ): void {
     const oldText = this._text;
     let base = newBase;
-    const chain: Entry[] = [];
+    const chain: Array<Entry | Held> = [];
     if (this.inflight && !this.inflight.doomed) chain.push(this.inflight);
     chain.push(...this.queue);
-    const keep: Entry[] = [];
+    const keep: Array<Entry | Held> = [];
     for (const e of chain) {
+      if (isHeld(e)) {
+        keep.push(e); // an undo or redo keeps its place
+        continue;
+      }
       // ours through x as the server carries it (as sent: r2.3); x through ours' gap form
       const r = e.carried.through(x, 0);
       if ("ok" in r) {
@@ -1455,8 +1475,15 @@ export class LiveText {
 
   /** Send the next queued entry when nothing is in flight. */
   private flush(): void {
-    while (!this.offline && !this.inflight && this.queue.length) {
-      const e = this.queue.shift()!;
+    while (!this.offline && this.queue.length) {
+      const next = this.queue[0];
+      if (isHeld(next)) {
+        this.queue.shift(); // every edit before it has gone
+        this.sendUndo(next.held, next.op);
+        continue;
+      }
+      if (this.inflight) break;
+      const e = this.queue.shift() as Entry;
       if (e.hunks.length === 0) {
         this.emit("ack", { ops: e.ops, version: this._version });
         continue;
@@ -1562,7 +1589,8 @@ export class LiveText {
   }
 
   private rejectAll(error: ErrorReport | null): void {
-    const all = [...(this.inflight && !this.inflight.doomed ? [this.inflight] : []), ...this.queue];
+    const all = [...(this.inflight && !this.inflight.doomed ? [this.inflight] : []), ...entries(this.queue)];
+    const held = this.queue.filter(isHeld);
     if (this.inflight?.doomed) {
       this.reloaded.add(this.inflight.doomed.id);
       this._rejected.push(this.inflight.doomed);
@@ -1570,6 +1598,11 @@ export class LiveText {
     }
     this.inflight = null;
     this.queue = [];
+    // an undo or redo held behind them goes now, in their place (offline: on the reconnect)
+    for (const q of held) {
+      if (this.offline) this.queue.push(q);
+      else this.sendUndo(q.held, q.op);
+    }
     if (all.length === 0) return;
     const old = this._text.toString();
     for (const e of all) {
@@ -1664,7 +1697,7 @@ export class LiveText {
       for (const h of this.history.slice(i)) pos = transform(pos, h.hunks, bias);
     }
     if (this.inflight && !this.inflight.doomed) pos = transform(pos, this.inflight.hunks, Bias.Before);
-    for (const e of this.queue) pos = transform(pos, e.hunks, Bias.Before);
+    for (const e of entries(this.queue)) pos = transform(pos, e.hunks, Bias.Before);
     return pos;
   }
 

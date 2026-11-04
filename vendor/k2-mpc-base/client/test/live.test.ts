@@ -188,6 +188,59 @@ describe("LiveText", () => {
     expect(errors).toEqual(["MPC-E203"]);
   });
 
+  it("an undo goes after edits typed before it, and before edits typed after (undo_order_undo)", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t, { client: 1 });
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const u = l.undo();
+    expect(w.sent.map((f) => f.type)).toEqual(["edit"]);
+    w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(2, 2, "c")] });
+    l.applyLocal([h(4, 4, "e")], { group: "g2" });
+    expect(w.sent.map((f) => f.type)).toEqual(["edit", "edit", "undo"]);
+    expect(w.sent[2]).toEqual({ type: "undo", op: u });
+  });
+
+  it("a redo goes after edits typed before it, and before edits typed after (undo_order_redo)", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t, { client: 1 });
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const u = l.redo();
+    expect(w.sent.map((f) => f.type)).toEqual(["edit"]);
+    w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(2, 2, "c")] });
+    l.applyLocal([h(4, 4, "e")], { group: "g2" });
+    expect(w.sent.map((f) => f.type)).toEqual(["edit", "edit", "redo"]);
+    expect(w.sent[2]).toEqual({ type: "redo", op: u });
+  });
+
+  it("typing after a held undo never composes into the edit before it (undo_order_seal)", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t, { client: 1 });
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const u = l.undo();
+    l.applyLocal([h(4, 4, "e")], { group: "g2" }); // the same group as "d", but after the undo
+    w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(2, 2, "c")] });
+    expect(w.sent.slice(1)).toEqual([
+      { type: "edit", op: 3, root: "source", base: 2, hunks: [h(3, 3, "d")], group: "g2" },
+      { type: "undo", op: u },
+    ]);
+  });
+
+  it("a held undo or redo is no pending change (undo_order_pending)", () => {
+    const w = wire();
+    const l = new LiveText({ text: "ab", version: 1 }, w.t, { client: 1 });
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    l.undo();
+    l.redo();
+    expect(l.pending).toBe(2); // "c" in flight, "d" queued
+    w.deliver({ type: "ack", op: 1, version: 2, hunks: [h(2, 2, "c")] });
+    expect(w.sent.map((f) => f.type)).toEqual(["edit", "edit", "undo", "redo"]);
+    expect(l.pending).toBe(1);
+  });
+
   it("refuses invalid local hunks", () => {
     const l = new LiveText({ text: "é", version: 1 }, wire().t);
     expect(() => l.applyLocal([h(1, 1, "x")])).toThrow(/invalid/);

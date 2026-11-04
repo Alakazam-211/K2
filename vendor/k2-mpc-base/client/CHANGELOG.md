@@ -3,6 +3,26 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.12.1 (unreleased; kit tag v0.10.2.1)
+
+A fix to the order of undo and redo, client-side only: no wire change, no new dependency.
+
+- **An undo or redo goes in order with the edits.** The server undoes the top of the
+  participant's stack when the request arrives, and `LiveText.undo()` / `redo()` sent theirs at
+  once, ahead of edits still queued behind the one in flight. Typing "c", then "d", then undo
+  sent c, undo, d: the server undid "c", and "d" then cleared the redo stack, so the person lost
+  the wrong step and could not redo it. Now a request made while edits are queued is held in the
+  queue after them and sent once every edit before it has gone (no ack is awaited: one socket
+  keeps the order); typing after it starts a new entry, never composed into the edit before it.
+  With nothing queued it goes at once. Held while disconnected, it goes on the new connection
+  in the same place. A held request is no pending change (`pending`). Hosts change nothing.
+- **Tests:** unit tests for undo and redo held behind the queue, typing after a held undo, and
+  `pending`; end-to-end over the fake host: "c", "d", undo ("d" undone, then redone); "c", undo,
+  "d", redo ("d" cleared the redo: nothing redone); held while disconnected, sent in its place on
+  the new connection. The fake host keeps undo and redo stacks per participant as the kit does
+  (an edit or redo onto the undo stack, an undo onto the redo stack, an edit clears the redo
+  stack); its `redo` answered `steps: 0` always.
+
 ## 0.12.0 (kit tag v0.10.2)
 
 The client for kit v0.10.2.

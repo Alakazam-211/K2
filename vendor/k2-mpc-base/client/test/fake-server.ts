@@ -1,6 +1,7 @@
 // A fake host for tests: one doc with one text root, applying the E-LIVE rules as the kit's
 // `Session::edit_at_base` does (rebase through every change since the base, server first at a
-// tie, refusal on competing text, nothing applied when refused), and an undo per participant.
+// tie, refusal on competing text, nothing applied when refused), and undo and redo stacks per
+// participant, as the kit's (`Session::push_batch` and `undo_redo`).
 // Frames travel over links with per-frame latency, in order per direction (as a WebSocket).
 //
 // It follows WIRE.md's host rules exactly:
@@ -198,6 +199,13 @@ export class FakeServer {
   private handles = new Map<number, string>();
   /** Change events carry `kind` (a kit v0.10.1 host); `false`: none, as an older kit. */
   emitKind = true;
+  /**
+   * Each participant's undo and redo stacks, as the kit's per-pid history (`session/live.rs`,
+   * `push_batch` and `undo_redo`): an edit or a redo goes on the undo stack, an undo on the redo
+   * stack, and an edit clears the redo stack; an undo or redo takes its stack's top, and one
+   * refused leaves it there. One step per change (the fake has no undo groups).
+   */
+  private stacks = new Map<string, { undo: Applied[]; redo: Applied[] }>();
   /**
    * Opt-in (`null`: off, as every test before it): route `cursor` frames to roster events as a
    * real host does, with a real host's quirk planted. A frame is accepted only when its
@@ -501,6 +509,12 @@ export class FakeServer {
       kind,
     };
     this.log.push(a);
+    if (by) {
+      const st = this.stacks.get(a.pid) ?? { undo: [], redo: [] };
+      this.stacks.set(a.pid, st);
+      if (kind === "edit") st.redo = [];
+      (kind === "undo" ? st.redo : st.undo).push(a);
+    }
     const ev = this.event(a);
     for (const [k, c] of this.conns) {
       c.queue.push(ev);
@@ -598,10 +612,12 @@ export class FakeServer {
         }
         // queued events at or before its version may follow it: the client ignores them
         return this.send(conn, { type: "snapshot", op: f.op, text: this.text, version: this.version });
-      case "undo": {
-        // the participant's last change (any of their connections: undo is per participant), if
-        // the text it inserted is still where it put it
-        const last = [...this.log].reverse().find((a) => a.pid === c.handle);
+      case "undo":
+      case "redo": {
+        // the top of the participant's stack (any of their connections: undo is per
+        // participant), if the text it inserted is still where it put it
+        const stack = this.stacks.get(c.handle)?.[f.type] ?? [];
+        const last = stack[stack.length - 1];
         if (!last) {
           this.drain(conn);
           return this.send(conn, { type: "undone", op: f.op, steps: 0, version: this.version });
@@ -613,14 +629,12 @@ export class FakeServer {
           this.drain(conn);
           return this.send(conn, { type: "refused", op: f.op, error: { id: "MPC-E201", message: "can't undo" } });
         }
+        stack.pop();
         // the undo comes back to the undoer as a `change` too: never filtered by client ID
-        const v = this.commit(conn, r.ok, null, "undo");
+        const v = this.commit(conn, r.ok, null, f.type);
         this.drain(conn);
         return this.send(conn, { type: "undone", op: f.op, steps: 1, version: v });
       }
-      case "redo":
-        this.drain(conn);
-        return this.send(conn, { type: "undone", op: f.op, steps: 0, version: this.version });
       case "cursor":
       case "visible":
       case "view":

@@ -386,7 +386,8 @@ pub struct Summary {
     pub room_ops: usize,
     pub closings: usize,
     /// Rooms aren't hosted: `not_pro` (the Pro gate) or `sew_too_old` (no
-    /// `voice_channel_closing`).
+    /// `voice_channel_closing`). `tier_unknown`: no plan reading yet, so the
+    /// rooms were left as they are.
     pub rooms_dormant: Option<String>,
 }
 
@@ -599,6 +600,12 @@ fn plan_rooms(
         Hosting::NotPro => {
             s.rooms_dormant = Some("not_pro".into());
             0
+        }
+        // voicetest-pub 11-04: a restart planned before the tier was read and
+        // closed every room. Not knowing changes nothing.
+        Hosting::Unknown => {
+            s.rooms_dormant = Some("tier_unknown".into());
+            return Ok(());
         }
     };
     let have: BTreeMap<u32, RoomRow> = rooms(conn)?.into_iter().map(|r| (r.n, r)).collect();

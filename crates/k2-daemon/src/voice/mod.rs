@@ -98,7 +98,7 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         _ => return h("starting", "Turning on voice rooms…", Some("the K2 Admin Space is being made".into())),
     }
     match f.tier {
-        Tier::NotPro => return h("not_pro", "Voice rooms need the Pro plan.", f.not_pro_reason.clone()),
+        Tier::NotPro | Tier::Unknown => return h("not_pro", "Voice rooms need the Pro plan.", f.not_pro_reason.clone()),
         Tier::Ok => {}
     }
     if !f.flags.voice_channel_closing {

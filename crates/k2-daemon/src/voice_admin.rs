@@ -24,18 +24,23 @@ use k2_core::tool_hook::{self as hook, sew_wire};
 use k2_core::voice_rooms::{self, Hosting};
 use serde_json::json;
 
-/// This box's hosting state, from the daemon's Pro gate (lane E's
-/// `sew::pro_gate::hosting`: the cached plan tier, fresh 5 min, a stale
-/// reading counts up to 1 h, then not Pro). Never reaches the network.
+/// This box's hosting state, from the daemon's cached plan tier (fresh 5 min,
+/// a stale reading counts up to 1 h). No reading at all is `Unknown`, never
+/// not Pro: a daemon plans before its first fetch. Never reaches the network.
 fn hosting_now() -> Hosting {
     if let Some(h) = voice_rooms::hosting_override() {
         return h;
     }
     let env = crate::sew::supervisor::live();
-    if crate::sew::pro_gate::require_pro(&env).is_ok() {
-        Hosting::Ok
-    } else {
-        Hosting::NotPro
+    hosting_of(&env.ops.plan_tier())
+}
+
+/// [`hosting_now`]'s rule (pure).
+pub fn hosting_of(view: &k2_core::tunnel::subdomains::TierView) -> Hosting {
+    match view.reading() {
+        None => Hosting::Unknown,
+        Some(_) if view.is_pro() => Hosting::Ok,
+        Some(_) => Hosting::NotPro,
     }
 }
 
@@ -172,4 +177,25 @@ pub fn sweep() -> Result<(), String> {
         log_debug!("[voice-rooms] {}", serde_json::to_value(&s).unwrap_or_default());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod hosting_tests {
+    use super::*;
+    use k2_core::tunnel::subdomains::{TierReading, TierView};
+
+    fn reading(tier: Option<&str>) -> TierReading {
+        TierReading { primary: "box".into(), tier: tier.map(str::to_string), fetched_at: 1 }
+    }
+
+    /// No reading is Unknown (rooms left as they are), never not Pro; a reading
+    /// decides, stale or fresh.
+    #[test]
+    fn no_reading_is_unknown_and_a_reading_decides() {
+        assert_eq!(hosting_of(&TierView::Unknown), Hosting::Unknown);
+        assert_eq!(hosting_of(&TierView::Fresh(reading(Some("pro")))), Hosting::Ok);
+        assert_eq!(hosting_of(&TierView::Stale(reading(Some("pro")))), Hosting::Ok);
+        assert_eq!(hosting_of(&TierView::Fresh(reading(Some("single")))), Hosting::NotPro);
+        assert_eq!(hosting_of(&TierView::Fresh(reading(None))), Hosting::NotPro, "the control plane named no tier");
+    }
 }

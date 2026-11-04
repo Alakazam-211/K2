@@ -349,6 +349,48 @@ async fn below_pro_rooms_are_dormant_and_losing_pro_closes_them() {
     env.sew.assert_clean();
 }
 
+/// voicetest-pub 11-04: a restart on a Pro box planned before the tier was
+/// read and closed every room. Unknown now changes nothing; the reading's
+/// sync restores rooms an earlier build closed, same ids, slugs and names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unknown_tier_closes_nothing_and_pro_reopens_what_was_closed() {
+    let env = setup(&SEW_070, true, Hosting::Ok).await;
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 3})).expect("count 3");
+    settle(&env).await;
+    let sp = space(&env);
+    let ids = |env: &Env| -> Vec<(String, u64, String, bool)> {
+        let mut v: Vec<_> = env.sew.channels(&sp).iter().map(|(slug, c)| (slug.clone(), c.id, c.name.clone(), c.archived)).collect();
+        v.sort();
+        v
+    };
+    let before = ids(&env);
+    assert_eq!(before.len(), 3, "{before:?}");
+    assert!(before.iter().all(|r| !r.3));
+    env.sew.voice_join(&sp, "room-1", "k2:owner").expect("join");
+
+    // The restart: the sweep runs before the tier is read.
+    voice_rooms::set_hosting_for_tests(Some(Hosting::Unknown));
+    settle(&env).await;
+    assert_eq!(ids(&env), before, "nothing closed or archived");
+    assert!(env.sew.channels(&sp).values().all(|c| !c.closing), "nothing closing");
+    assert_eq!(hook::admin_space_last_summary().and_then(|s| s.rooms_dormant).as_deref(), Some("tier_unknown"));
+
+    // An earlier build closed them all; the tier then says Pro.
+    env.sew.voice_leave("k2:owner");
+    voice_rooms::set_hosting_for_tests(Some(Hosting::NotPro));
+    settle(&env).await;
+    assert!(env.sew.channels(&sp).values().all(|c| c.archived), "a real not-Pro reading still applies the rule");
+    voice_rooms::set_hosting_for_tests(Some(Hosting::Ok));
+    hook::kick_reconcile();
+    settle(&env).await;
+    let after = ids(&env);
+    assert_eq!(after.iter().map(|r| (r.0.clone(), r.1, r.2.clone())).collect::<Vec<_>>(),
+        before.iter().map(|r| (r.0.clone(), r.1, r.2.clone())).collect::<Vec<_>>(), "the same rooms come back");
+    assert!(after.iter().all(|r| !r.3), "reopened: {after:?}");
+    env.sew.assert_clean();
+    k2_core::app_settings::update(serde_json::json!({"voiceRoomsCount": 1})).expect("count back");
+}
+
 /// SW-1: `409 server_space_exists` → K2 reads `details.space_id` back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_existing_server_space_is_read_back() {

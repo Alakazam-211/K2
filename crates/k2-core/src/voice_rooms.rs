@@ -77,11 +77,16 @@ pub fn valid_room_name(name: &str) -> Result<String, String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hosting {
-    /// Not Pro (or the tier isn't known): rooms are dormant (count kept;
-    /// live rooms go `closing`, §3.4 "Losing Pro").
+    /// A plan reading says not Pro: rooms are dormant (count kept; empty
+    /// rooms archive, live ones go `closing` and keep their call, §3.4
+    /// "Losing Pro").
     NotPro,
     /// Pro: the stored count of rooms is hosted.
     Ok,
+    /// No plan reading yet (a daemon that just started, or none for an hour):
+    /// the rooms are left exactly as they are. Never a reason to close one;
+    /// the sync runs again when a reading arrives.
+    Unknown,
 }
 
 /// Tests: a hosting state that stands in for the Pro gate (`None`: the

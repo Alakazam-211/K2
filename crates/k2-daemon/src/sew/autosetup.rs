@@ -405,6 +405,9 @@ pub fn on_tier_change(r: &k2_core::tunnel::subdomains::TierReading, prev: Option
     }
     k2_core::log_debug!("[sew] plan tier {:?} → {:?} ({})", prev, r.tier, r.primary);
     sup::changed("tier");
+    // The voice-rooms sync runs now, not at the next 10-minute sweep: rooms
+    // left alone while the tier was unknown are planned against it.
+    k2_core::tool_hook::kick_reconcile();
 }
 
 // Server-only (Linux boxes): drives Sew hosting through the fake box.

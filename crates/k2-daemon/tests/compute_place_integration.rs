@@ -1237,3 +1237,299 @@ async fn a_node_list_holds_on_moves_retries_and_narrowing() {
         compute_ws::test_detach(n);
     }
 }
+
+// ── k2 compute move and --avoid (0.46.8) ─────────────────────────────
+
+const MOVE: &str = "/cli/compute/jobs/move";
+
+/// A node with one slot, held by a running job (as far as its offer says).
+fn one_slot_full(rev: u64) -> Offer {
+    let mut o = offer(rev, 30, 32, 1);
+    o.parallel_max = 1;
+    o
+}
+
+/// Fill a one-slot node's slot with a pinned job of `ws` (this server's
+/// scheduler counts its own jobs, not the offer's `running`): the node's
+/// offer at `rev` has the slot free, at `rev + 1` full. The holder's id.
+async fn hold_one_slot(port: u16, node: &str, ws: &Ws, rev: u64) -> String {
+    let mut free = offer(rev, 30, 32, 0);
+    free.parallel_max = 1;
+    compute_ws::test_frame(node, Frame::Offer(free));
+    let r = run(port, OWNER, ws, json!({"node": node, "memBytes": GB, "cpus": 1})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let id = id_of(&r);
+    assert_eq!(row(&id).state, "assigned", "the holder took {node}'s slot");
+    compute_ws::test_frame(node, Frame::Offer(one_slot_full(rev + 1)));
+    id
+}
+
+fn id_of(r: &Resp) -> String {
+    j(r)["job"]["id"].as_str().unwrap_or_else(|| panic!("no job id: {}", r.body)).to_string()
+}
+
+fn pinned_in(jobs: &Value, id: &str) -> bool {
+    let row = jobs["jobs"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap_or_else(|| panic!("{id} not listed: {jobs}"));
+    row["pinned"].as_bool().unwrap_or_else(|| panic!("no pinned field: {row}"))
+}
+
+/// A job pinned to a full node stays put until released; `move --auto`
+/// makes it auto (keeping its node's OS), records it, and the next sweep
+/// moves it to the node that can start it now. Views mark pinned vs auto;
+/// the submit hint names the free node; a started job is never moved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pinned_job_released_to_auto_moves_on_the_next_sweep() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "rel");
+    let other = seed_ws(&env, "relother");
+    for n in ["ra", "rb"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let mut a = compute_ws::test_attach("ra", one_slot_full(1));
+    let mut b = compute_ws::test_attach("rb", offer(1, 30, 32, 0));
+    let agent = passport(&me);
+    hold_one_slot(d.port, "ra", &me, 2).await;
+
+    // No --cpus on a node with 4 slots: a note says what it reserves (8
+    // CPUs ÷ 4); with --cpus, or on ra (one job at a time), none.
+    let cpu_notes = |r: &Resp| -> Vec<String> {
+        j(r)["warnings"].as_array().expect("warnings").iter().map(|w| w.as_str().unwrap().to_string()).filter(|w| w.starts_with("no --cpus")).collect()
+    };
+    let r = run(d.port, &agent, &me, json!({"node": "rb", "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        cpu_notes(&r),
+        vec!["no --cpus: this job reserves 2 of the 8 CPUs on rb (8 CPUs ÷ 4 job slots) while it runs, used or not; a job waits for unreserved CPUs even when they sit idle. Pass --cpus N with what it really uses so more jobs fit there".to_string()]
+    );
+    let r = run(d.port, &agent, &me, json!({"node": "rb", "plan": true, "cpus": 2})).await;
+    assert!(cpu_notes(&r).is_empty(), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"node": "ra", "plan": true})).await;
+    assert!(cpu_notes(&r).is_empty(), "one slot: the whole node is the slot: {}", r.body);
+
+    // Pinned to the full ra: queued there, with a hint naming rb.
+    let r = run(d.port, &agent, &me, json!({"node": "ra", "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = id_of(&r);
+    let short = &job[..8];
+    assert_eq!(row(&job).state, "queued");
+    let warns: Vec<String> = j(&r)["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect();
+    let hint = warns.iter().find(|w| w.starts_with("hint:")).unwrap_or_else(|| panic!("no hint: {warns:?}"));
+    assert!(hint.contains("ra can't start this job now") && hint.contains("but rb could"), "{hint}");
+    assert!(hint.contains(&format!("k2 compute move {short} --auto")), "{hint}");
+    let g = get(d.port, "/cli/compute/jobs", &agent, "state=queued").await;
+    assert_eq!(g.status, 200, "{}", g.body);
+    assert!(pinned_in(&j(&g), &job), "jobs marks it pinned");
+    let st = get(d.port, "/cli/compute/nodes", &agent, "detail=1").await;
+    let ra = j(&st)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "ra").cloned().unwrap();
+    assert_eq!(ra["status"]["queued"][0]["pinned"], true, "status marks it pinned: {ra}");
+
+    // The sweeper never moves a pinned job.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&job).node_id, "ra", "pinned stays");
+    assert!(assigns(&mut b).is_empty());
+
+    // Who: another workspace's agent never sees it; GET is 405.
+    let r = post(d.port, MOVE, &passport(&other), json!({"job": job, "auto": true})).await;
+    assert_eq!((r.status, code(&r)), (404, "job_not_found".to_string()), "{}", r.body);
+    let r = get(d.port, MOVE, &agent, &format!("job={job}&auto=true")).await;
+    assert_eq!(r.status, 405, "{}", r.body);
+
+    // Released: auto with its node's OS, a released_auto record, an event;
+    // it still waits on ra until the sweep.
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "auto": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["mode"].as_str(), v["node"].as_str(), v["moved"].as_bool()), (Some("auto"), Some("ra"), Some(false)), "{v}");
+    assert_eq!(v["filter"]["os"], "linux", "keeps its node's OS: {v}");
+    let released = row(&job);
+    assert_eq!(released.node_id, "ra");
+    assert_eq!(released.ctl.any.as_ref().and_then(|f| f.os.as_deref()), Some("linux"));
+    let p = released.ctl.placement.clone().expect("a placement record");
+    assert_eq!((p.mode.as_str(), p.code.as_str()), ("auto", "released_auto"), "{p:?}");
+    let events: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM compute_events WHERE kind = 'job_release' AND job_id = ?1", params![job], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(events, 1, "the release is audited");
+    let g = get(d.port, "/cli/compute/jobs", &agent, "state=queued").await;
+    assert!(!pinned_in(&j(&g), &job), "jobs marks it auto now");
+
+    // A second release with nothing new: already_auto (exit 3).
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "auto": true})).await;
+    assert_eq!((r.status, code(&r)), (409, "already_auto".to_string()), "{}", r.body);
+
+    // The next sweep moves it to rb, which starts it.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    let moved = row(&job);
+    assert_eq!(moved.node_id, "rb", "{moved:?}");
+    assert_eq!(moved.ctl.placement.as_ref().map(|p| p.code.as_str()), Some("moved_node_busy"));
+    assert!(assigns(&mut b).contains(&job), "rb runs it");
+
+    // Started: never moved.
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "ra"})).await;
+    assert_eq!((r.status, code(&r)), (409, "job_started".to_string()), "{}", r.body);
+
+    // No hint when no other node could start it now.
+    compute_ws::test_frame("rb", Frame::Offer(one_slot_full(2)));
+    let r = run(d.port, &agent, &me, json!({"node": "ra", "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(j(&r)["warnings"].as_array().unwrap().iter().all(|w| !w.as_str().unwrap().starts_with("hint:")), "{}", r.body);
+    let _ = assigns(&mut a);
+    for n in ["ra", "rb"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// `move --to` pins a queued job to another node with the submit checks;
+/// the refusals are named; `--all-mine --node N --auto` releases a batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn move_to_pins_and_refuses_by_name_and_all_mine_releases_a_batch() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "mvto");
+    let other = seed_ws(&env, "mvtoother");
+    for n in ["ta", "tb", "tsmall", "tx"] {
+        active_node(n);
+    }
+    for n in ["ta", "tb", "tsmall"] {
+        grant(n, &me, None, 2);
+    }
+    grant("tx", &other, None, 2);
+    let _a = compute_ws::test_attach("ta", one_slot_full(1));
+    let mut b = compute_ws::test_attach("tb", one_slot_full(1));
+    let _s = compute_ws::test_attach("tsmall", offer(1, 4, 4, 0));
+    let _x = compute_ws::test_attach("tx", offer(1, 30, 32, 0));
+    let agent = passport(&me);
+    let ta_holder = hold_one_slot(d.port, "ta", &me, 2).await;
+    hold_one_slot(d.port, "tb", &me, 2).await;
+    let r = run(d.port, &agent, &me, json!({"node": "ta", "memBytes": 8 * GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = id_of(&r);
+
+    // Usage: say where; --avoid only with --auto (exit 2).
+    let r = post(d.port, MOVE, &agent, json!({"job": job})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "auto": true, "to": "tb"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "tb", "avoid": ["ta"]})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    // Refusals, each named; the job stays where it is.
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "ta"})).await;
+    assert_eq!((r.status, code(&r)), (409, "already_on_node".to_string()), "{}", r.body);
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "tx"})).await;
+    assert_eq!((r.status, code(&r)), (403, "not_granted".to_string()), "{}", r.body);
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "tsmall"})).await;
+    assert_eq!((r.status, code(&r)), (409, "node_cant_take".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("too small for --mem 8G"), "{}", r.body);
+    assert_eq!(row(&job).node_id, "ta", "nothing moved");
+
+    // --to tb: moved and pinned there, recorded; the sweeper leaves it.
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "to": "tb"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["mode"].as_str(), j(&r)["node"].as_str(), j(&r)["moved"].as_bool()), (Some("pinned"), Some("tb"), Some(true)), "{}", r.body);
+    let m = row(&job);
+    assert_eq!((m.node_id.as_str(), m.ctl.any.is_none()), ("tb", true), "{m:?}");
+    assert_eq!(m.ctl.placement.as_ref().map(|p| (p.mode.as_str(), p.code.as_str())), Some(("pinned", "moved_to")));
+    assert_eq!(m.plan().unwrap().node_id, "tb", "the plan was rebuilt for tb");
+    compute_ws::test_frame("ta", Frame::Offer(offer(10, 30, 32, 0)));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&job).node_id, "tb", "pinned again: never moved by the sweeper");
+    let _ = assigns(&mut b);
+    compute_ws::test_frame("ta", Frame::Offer(one_slot_full(11)));
+    assert_eq!(row(&ta_holder).state, "assigned", "ta stays held");
+
+    // --all-mine --node tb --auto: every queued job this session sent there.
+    let mut sent = vec![job.clone()];
+    for _ in 0..2 {
+        let r = run(d.port, &agent, &me, json!({"node": "tb", "memBytes": GB})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        sent.push(id_of(&r));
+    }
+    let r = run(d.port, OWNER, &me, json!({"node": "tb", "memBytes": GB})).await;
+    let owners = id_of(&r);
+    let r = post(d.port, MOVE, &agent, json!({"filter": {"scope": "session", "node": "tb"}, "auto": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["matched"].as_u64(), v["count"].as_u64()), (Some(3), Some(3)), "{v}");
+    for id in &sent {
+        assert!(row(id).ctl.any.is_some(), "{id} released");
+    }
+    assert!(row(&owners).ctl.any.is_none(), "another session's job (the owner's) is left pinned");
+    for n in ["ta", "tb", "tsmall", "tx"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// `--avoid`: submit never picks the node, the sweeper never moves a job
+/// there, a named node with --avoid is exit 2, an avoid list that leaves
+/// nothing is exit 3; a release that avoids its own node moves it at once
+/// or changes nothing; a release of an auto job keeps its record (CE-6).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avoid_keeps_jobs_off_a_node_at_submit_on_moves_and_on_release() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "avd");
+    for n in ["q2n11-vin", "q2n12-vin", "q2n13-vin"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let mut eleven = compute_ws::test_attach("q2n11-vin", offer(1, 30, 32, 0));
+    let _twelve = compute_ws::test_attach("q2n12-vin", one_slot_full(1));
+    let _thirteen = compute_ws::test_attach("q2n13-vin", one_slot_full(1));
+    let agent = passport(&me);
+    hold_one_slot(d.port, "q2n12-vin", &me, 2).await;
+    hold_one_slot(d.port, "q2n13-vin", &me, 2).await;
+
+    // Refusals first: nothing stored.
+    let before = job_count();
+    let r = run(d.port, &agent, &me, json!({"node": "q2n12-vin", "avoid": ["q2n11"]})).await;
+    assert_eq!((r.status, code(&r)), (400, "avoid_with_pinned_node".to_string()), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q2n1"]})).await;
+    assert_eq!((r.status, code(&r)), (400, "node_ambiguous".to_string()), "same resolution as a named node: {}", r.body);
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q2n11", "q2n12", "q2n13"]})).await;
+    assert_eq!((r.status, code(&r)), (409, "avoid_leaves_no_node".to_string()), "{}", r.body);
+    assert_eq!(job_count(), before, "nothing queued");
+
+    // Auto with q2n11 (the only free node) avoided: queued on a busy one.
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q2n11"], "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = id_of(&r);
+    assert_ne!(node_of(&r), "q2n11-vin");
+    let held = row(&job);
+    assert_eq!(held.ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec!["q2n11-vin".to_string()]), "stored by id");
+    assert_eq!(held.ctl.placement.as_ref().map(|p| p.skipped.get("avoided").copied()), Some(Some(1)), "the record counts it");
+    // The sweeper never moves it to the free, avoided q2n11.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&job).node_id, held.node_id, "never to the avoided node");
+    assert!(assigns(&mut eleven).is_empty());
+    // Releasing it again with one more avoid keeps its placement record.
+    let third = if held.node_id == "q2n12-vin" { "q2n13-vin" } else { "q2n12-vin" };
+    let r = post(d.port, MOVE, &agent, json!({"job": job, "auto": true, "avoid": [third]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let again = row(&job);
+    assert_eq!(again.ctl.any.as_ref().map(|f| f.avoid.len()), Some(2));
+    assert_eq!(again.ctl.placement, held.ctl.placement, "an auto job's record (and a cache wait) is kept");
+
+    // A pinned job released with --avoid of its own node moves now.
+    let r = run(d.port, &agent, &me, json!({"node": "q2n12-vin", "memBytes": GB})).await;
+    let pinned = id_of(&r);
+    let r = post(d.port, MOVE, &agent, json!({"job": pinned, "auto": true, "avoid": ["q2n12"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["moved"].as_bool(), j(&r)["node"].as_str()), (Some(true), Some("q2n11-vin")), "{}", r.body);
+    assert_eq!(row(&pinned).node_id, "q2n11-vin");
+    assert!(assigns(&mut eleven).contains(&pinned));
+
+    // Same, but every other node is offline: no_other_node, nothing changed.
+    compute_ws::test_detach("q2n11-vin");
+    compute_ws::test_detach("q2n13-vin");
+    let r = run(d.port, &agent, &me, json!({"node": "q2n12-vin", "memBytes": GB})).await;
+    let stuck = id_of(&r);
+    let r = post(d.port, MOVE, &agent, json!({"job": stuck, "auto": true, "avoid": ["q2n12-vin"]})).await;
+    assert_eq!((r.status, code(&r)), (409, "no_other_node".to_string()), "{}", r.body);
+    let s = row(&stuck);
+    assert_eq!((s.node_id.as_str(), s.ctl.any.is_none()), ("q2n12-vin", true), "{s:?}");
+    compute_ws::test_detach("q2n12-vin");
+}

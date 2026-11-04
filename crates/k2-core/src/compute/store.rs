@@ -721,7 +721,8 @@ pub struct Placement {
     pub node: String,
     /// `starts_now_warm` | `starts_now_idle` | `starts_now_least_loaded` |
     /// `starts_now_spread` | `queued_quoted_eta` | `queued_least_busy` |
-    /// `queued_offline_only` | `moved_<why>` | `pinned`.
+    /// `queued_offline_only` | `moved_<why>` | `pinned` | `released_auto`
+    /// (`k2 compute move --auto`) | `moved_to` (`move --to`, pinned).
     pub code: String,
     /// One line: why this node.
     pub why: String,
@@ -774,6 +775,11 @@ pub struct AnyFilter {
     pub arch: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// `--avoid NODE` (0.46.8): node ids auto-placement never picks for
+    /// this job: not at submit, not in the sweeper's moves, not for a
+    /// retry on another node. Ids, so a rename keeps it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoid: Vec<String>,
 }
 
 /// One attempt that ended in an infrastructure failure.
@@ -1239,6 +1245,22 @@ pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, r
             "UPDATE compute_jobs SET node_id = ?2, plan_json = ?3, plan_digest = ?4, reason = ?5, detail = NULL \
              WHERE id = ?1 AND state = 'queued'",
             params![id, plan.node_id, plan_json_with(plan, ctl)?, plan.digest()?, reason],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n == 1)
+}
+
+/// Replace a waiting job's controller options (`k2 compute move --auto`,
+/// 0.46.8): only while it is still queued here or in a shared node's queue
+/// (`assigned` + `node_queued`) under the same generation. `Ok(false)` when
+/// it started, ended or was requeued since it was read.
+pub fn set_waiting_job_ctl(conn: &Connection, id: &str, generation: i64, ctl: &JobCtl) -> Result<bool, String> {
+    let Some(j) = job_by_id(conn, id) else { return Ok(false) };
+    let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
+    let n = conn
+        .execute(
+            &format!("UPDATE compute_jobs SET plan_json = ?2 WHERE id = ?1 AND generation = ?3 AND {QUEUED_SQL}"),
+            params![id, plan_json_with(&plan, ctl)?, generation],
         )
         .map_err(|e| e.to_string())?;
     Ok(n == 1)
@@ -2032,6 +2054,17 @@ mod tests {
         set_job_ctl(&c, &j.id, &more).unwrap();
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
         assert_eq!(r.ctl, more);
+        // A release (move --auto) rewrites the options only while waiting,
+        // under the same generation; the digest stays (ctl isn't the plan).
+        let mut auto = more.clone();
+        auto.any = Some(AnyFilter { os: Some("linux".into()), avoid: vec!["n9".into()], ..Default::default() });
+        let before = job_by_id(&c, &j.id).unwrap();
+        assert!(!set_waiting_job_ctl(&c, &j.id, before.generation + 1, &auto).unwrap(), "another generation: refused");
+        assert!(set_waiting_job_ctl(&c, &j.id, before.generation, &auto).unwrap());
+        let after = job_by_id(&c, &j.id).unwrap();
+        assert_eq!((after.ctl.clone(), after.plan_digest.clone()), (auto.clone(), before.plan_digest.clone()));
+        assert!(plan_json_with(&p, &auto).unwrap().contains("\"avoid\":[\"n9\"]"), "avoid rides in k2ctl");
+        set_job_ctl(&c, &j.id, &more).unwrap();
         // A move rewrites node, plan and digest, only while queued.
         let mut q = p.clone();
         q.node_id = "n2".into();

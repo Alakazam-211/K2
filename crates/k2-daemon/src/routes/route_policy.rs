@@ -624,6 +624,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/jobs/cancel", Member),
     get("/cli/compute/jobs/get", Member),
     get("/cli/compute/jobs/logs", Member),
+    post("/cli/compute/jobs/move", Member),
     get("/cli/compute/jobs/receipt", Member),
     post("/cli/compute/jobs/retry", Member),
     post("/cli/compute/jobs/tier", Member),

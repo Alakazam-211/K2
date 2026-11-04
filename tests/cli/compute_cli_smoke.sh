@@ -358,6 +358,40 @@ expect_has "status has the controller row" "$st" "controller "
 expect_has "status says what needs node reporting" "$st" "not yet: hand-run lock files"
 expect_has "status --json carries the controller machine" "$(k2 compute status --json)" '"controllerMachine"'
 expect_has "status <job> is still get" "$(k2 compute status "$JOB2")" "job $JOB2 on mini"
+echo "== move: pinned vs auto, release, refusals (0.46.8) =="
+expect_has "status marks the named-node job pinned" "$(k2 compute status)" "pinned"
+expect_has "jobs marks it (pin)" "$(k2 compute jobs --state queued)" "queued (pin)"
+set +e
+k2 compute move "$JOB2" --to mini >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "move --to its own node exits 3" "$rc" "3"
+expect_has "already_on_node" "$(cat "$SANDBOX/err")" "already_on_node"
+set +e
+k2 compute move "$JOB2" >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "move without --auto or --to is usage (exit 2)" "$rc" "2"
+set +e
+k2 compute move "$JOB2" --to mini --avoid mini >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "--avoid with --to is a bad request (exit 2)" "$rc" "2"
+expect_has "move --auto releases it" "$(k2 compute move "$JOB2" --auto)" "job $JOB2: auto-placed now"
+expect_has "jobs marks it (auto)" "$(k2 compute jobs --state queued)" "queued (auto)"
+set +e
+k2 compute move "$JOB2" --auto >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a second release exits 3" "$rc" "3"
+expect_has "already_auto" "$(cat "$SANDBOX/err")" "already_auto"
+set +e
+k2 compute move "$JOB2" --auto --avoid mini >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "avoiding the only node exits 3" "$rc" "3"
+expect_has "avoid_leaves_no_node" "$(cat "$SANDBOX/err")" "avoid_leaves_no_node"
+set +e
+k2 compute run mini --avoid mini --detach -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "run --avoid with a named node exits 2" "$rc" "2"
+expect_has "avoid_with_pinned_node" "$(cat "$SANDBOX/err")" "avoid_with_pinned_node"
+expect_has "k2 compute --help lists move" "$(k2 compute --help)" "k2 compute move <job>... --auto"
 JOB3="$(k2 compute run mini --detach -- echo never-runs 2>/dev/null)"
 expect_eq "cancel of a queued job needs no --force" "$(k2 compute cancel "$JOB3")" "cancelled $JOB3 (was queued on mini)"
 expect_has "get names who cancelled" "$(k2 compute get "$JOB3")" "cancel asked by owner"

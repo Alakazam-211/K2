@@ -432,6 +432,9 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     }
     // CE-9: the job's own tag, who sent it, and an owner-token mark.
     v["tag"] = j.ctl.tag.clone().into();
+    // 0.46.8: pinned (a node named: it never moves on its own; k2 compute
+    // move <id> --auto releases it) or auto (K2 may move it while queued).
+    v["pinned"] = (j.ctl.any.is_none() && j.ctl.shards.is_empty()).into();
     v["submittedBy"] = compute::result::submitted_by(j).into();
     v["via"] = compute::result::via(j).into();
     // CE-9: the commit chosen at submit, so a sourced job never shows a
@@ -635,12 +638,18 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
         e["workspace"] = ws_handle(&r.workspace_id).into();
         e["mine"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
         e["argv"] = argv.into();
+        e["pinned"] = r.ctl.any.is_none().into();
     } else {
         e["workspace"] = serde_json::Value::Null;
         e["mine"] = false.into();
     }
     if let Some(t) = r.assigned_at.or(r.started_at) {
         e["elapsedSecs"] = (now - t).max(0).into();
+    }
+    // 0.46.8: its CPU ask (size only, like the node's queue shows): none
+    // = it reserves the node's CPUs ÷ its slots (`status` says so).
+    if let Some(p) = r.plan() {
+        e["cpuMillis"] = p.limits.cpu_millis.into();
     }
     if let Some((p, w)) = decision.waiting.get(&r.id) {
         e["reason"] = w.code.clone().into();
@@ -808,6 +817,7 @@ pub(crate) fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json
             e["workspace"] = ws_handle(&r.workspace_id).into();
             e["argv"] = argv.into();
             e["mySession"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
+            e["pinned"] = r.ctl.any.is_none().into();
         } else {
             // Another workspace on this server: state and size only.
             e["otherWorkspace"] = true.into();

@@ -29,6 +29,45 @@ WHERE IT RUNS (0.46.6)
   No node fits: no_node_fits (exit 3) with the counts (2 too small for
   --mem 24G, 1 offline, …). You only ever see nodes granted to you.
 
+PINNED OR AUTO (0.46.8)
+  A job with a node named is PINNED: it waits for that node however long,
+  even while other nodes sit idle. A job with no node named is AUTO: while
+  it waits, K2 moves it (every 5 s) to a node that can start it now.
+  k2 compute status and queue mark each queued job pinned or auto, jobs
+  shows "queued (pin)" or "queued (auto)"; JSON: "pinned": true|false.
+  When the node you named can't start the job now and another could, run
+  prints one hint line naming that node. It is advice: the job is still
+  queued where you named it, and the exit code doesn't change.
+  Release a pinned job without cancelling it (same job id, same place in
+  your history):
+    k2 compute move ab12cd34 --auto
+    k2 compute move --all-mine --node k2n12 --auto     every queued job this
+                                                       session sent to k2n12
+  It becomes auto, as if you had named no node: --needs, --mem, --cpus,
+  the tier, --cache, --exclusive and your grants still apply. It keeps the
+  OS and arch of the node it waited on unless you say otherwise (--os
+  macos, --os any). If no node can start it now, it waits where it is and
+  moves later. An auto job takes move --auto again to add --avoid, --os
+  or --label (the same ask twice: already_auto). Pin a queued job to
+  another node instead:
+    k2 compute move ab12cd34 --to k2n11
+  --to takes no --avoid/--os/--label (bad_request, exit 2). Node names
+  in --to and --avoid work as in run: the full name or a start that
+  fits one node (else node_ambiguous, exit 2).
+  Only queued jobs move. A started job is never moved (job_started,
+  exit 3). Every move refusal leaves the job where it was and exits 3.
+  Your workspace's jobs only; the owner or an Admin: any job.
+
+AVOID A NODE (0.46.8)
+  --avoid <node> (repeatable) on run, test or move --auto: K2 never picks
+  that node for the job, not at submit, not when it moves it, not for a
+  retry. Use it when someone keeps a node for their own work by agreement:
+    k2 compute run --avoid k2n11 --mem 24G -- cargo nextest run
+  It works with --any and --shards (both auto). With a node named it is
+  refused (avoid_with_pinned_node, exit 2). When every node that could
+  take the job is avoided, nothing is queued (avoid_leaves_no_node,
+  exit 3).
+
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
   Nothing listed: your owner turns on "Allow compute nodes" for you in
@@ -312,7 +351,34 @@ CODES (0.46.7)
                            is no such file); the error says which (exit 2).
     tag_invalid            --tag isn't 1 to 64 of A-Z a-z 0-9 . _ : / -
                            (exit 2).
+    avoid_with_pinned_node --avoid with a node named; leave the node off
+                           or drop --avoid (exit 2).
+    avoid_leaves_no_node   every node that can take the job is on your
+                           --avoid list (exit 3).
+  k2 compute move refusals (the job stays where it is; 0.46.8):
+    job_started            it already started: never moved (exit 3).
+    already_auto           move --auto on a job that is already auto with
+                           the same filter (exit 3).
+    already_on_node        move --to the node it is already pinned to
+                           (exit 3).
+    node_cant_take         move --to a node that can't take it (offline is
+                           fine; paused, too small, off your node list or
+                           without CI it isn't); the error says why (exit 3).
+    no_other_node          move --auto that rules out the node the job waits
+                           on (--avoid that node, or another --os) must move
+                           it at once, and no other node can take it now:
+                           nothing changed (exit 3). Without ruling its node
+                           out, the job just waits there until one frees.
+    in_node_queue          the job waits inside a shared node's own queue;
+                           K2 can't pull it out at once. A plain move --auto
+                           works (K2 asks the node for it back when another
+                           node can start it); --to, or --auto --avoid <that
+                           node>, is refused: cancel and run it again (exit 3).
+    not_granted            move --to a node not granted to you (exit 3).
   Placement codes (get's "placed on …" line, placement.code in JSON):
+    released_auto          a pinned job you released with move --auto; it
+                           waits here until another node can start it now.
+    moved_to               you moved it with move --to (pinned there).
     starts_now_cache       it starts now on the node where its --cache was.
     queued_for_cache       it waits on the busy node that holds its --cache,
                            because that wait is estimated under 15 min, rather
@@ -347,7 +413,9 @@ WHY HASN'T IT STARTED? (0.46.7)
     "jobs without --cpus reserve 4 of 12 CPUs each and 0 of 12 CPUs
      unreserved: pass --cpus 2 (or fewer) so more fit"
         a job without --cpus holds the node's CPUs divided by its slots.
-        Pass --cpus with what your command really uses.
+        Pass --cpus with what your command really uses. run says so when
+        you leave it off (note cpus_defaulted, 0.46.8), and k2 compute
+        status marks such a running job "[no --cpus: reserves 4 of 12 CPUs]".
     "asks 24 GB; 8 GB of 52 GB free"
         its --mem doesn't fit beside what runs yet.
     "your workspace runs 3 of 3 here (its grant)"

@@ -67,6 +67,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/jobs/cancel",
     "/cli/compute/jobs/get",
     "/cli/compute/jobs/logs",
+    crate::compute_move::MOVE,
     "/cli/compute/jobs/receipt",
     "/cli/compute/jobs/retry",
     "/cli/compute/jobs/tier",
@@ -119,6 +120,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
     "/cli/compute/jobs/cancel",
+    crate::compute_move::MOVE,
     "/cli/compute/jobs/retry",
     "/cli/compute/jobs/tier",
     "/cli/compute/local/disable",
@@ -624,6 +626,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/jobs/cancel" => views::job_cancel(&who, body),
         "/cli/compute/jobs/retry" => job_retry(&who, body),
         "/cli/compute/jobs/tier" => job_retier(&who, body),
+        // `k2 compute move` (0.46.8): a queued job to auto or a named node.
+        crate::compute_move::MOVE => crate::compute_move::handle(&who, body),
         "/cli/compute/usage" => usage(&who, params),
         "/cli/compute/events" => events(&who, params),
         "/cli/compute/local/status" => local_status(&who),
@@ -1374,6 +1378,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             .and_then(|l| l.as_object())
             .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default(),
+        ..Default::default()
     };
     // `--node N` (repeatable): only these (full name or a unique prefix).
     let named: Option<Vec<String>> = match v.get("nodes").and_then(|n| n.as_array()) {
@@ -1627,6 +1632,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if b(&v, "now") == Some(true) && tier_ask == Tier::Batch {
         return Err(no(codes::BAD_REQUEST, 400, "--now and --tier batch don't mix: a Batch job waits for an idle node"));
     }
+    // `--avoid NODE` (0.46.8): nodes auto-placement never picks for it.
+    let avoid = crate::compute_move::avoid_from(who, v, &ws.id)?;
+    if !avoid.is_empty() && !any {
+        return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
+    }
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
         arch: s(&v, "arch").map(str::to_string),
@@ -1635,6 +1645,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             .and_then(|l| l.as_object())
             .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default(),
+        avoid,
     };
     let want = crate::compute_place::Want {
         ws_id: ws.id.clone(),
@@ -1885,6 +1896,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             ),
         ));
     }
+    // 0.46.8 (advisory): no --cpus reserves the node's CPUs ÷ its slots,
+    // used or not; the next job waits for unreserved CPUs even while they
+    // sit idle (11-03: k2n10 at 0/12 unreserved, ~12 idle).
+    // A warning line, not a coded notice: notices are the tier/memory
+    // record scripts read exactly.
+    if cpu_millis.is_none() {
+        if let Some(m) = crate::compute_move::cpus_hint(&node.name, live_offer.as_ref()) {
+            warnings.push(m);
+        }
+    }
     let tier = if tier_ask == Tier::Priority && share::priority_counts(live_offer.as_ref()) == Some(false) {
         notices.push(notice(
             tiers::codes::PRIORITY_DOWNGRADED,
@@ -2125,6 +2146,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         let conn = db.lock();
         store::job_by_id(&conn, &job.id).unwrap_or(job)
     };
+    // A named node that can't start it while another could (0.46.8):
+    // advisory only, the job stays where it was named.
+    if s(&v, "node").is_some() {
+        if let Some(h) = crate::compute_move::pinned_hint(&job, &want) {
+            warnings.push(h);
+        }
+    }
     Ok(Submitted { job: Some(job), warnings, source: source.as_ref().map(SourceInfo::json), preview: None, notices, replaced })
 }
 
@@ -2792,6 +2820,11 @@ fn pick_node(
         return Ok((n, rec));
     }
     let report = place::candidates_report(want, &[], now);
+    // `--avoid` (0.46.8): the avoid list alone leaving nothing is its own
+    // refusal (never queued on a node it avoids, never queued forever).
+    if report.cands.is_empty() && !want.filter.avoid.is_empty() {
+        crate::compute_move::avoid_leaves_none(ws, want, now)?;
+    }
     // `--tier ci`: candidates keep only nodes where this workspace may
     // send CI; refused only when that rules out every one (T12).
     if report.cands.is_empty() && want.tier == tiers::Tier::Ci {
@@ -2990,7 +3023,7 @@ fn same_node_as(ws: &Ws, v: &serde_json::Value) -> R<Option<(store::NodeRow, Str
 
 /// `no_node_fits`: why no granted node can take the job, by count
 /// (granted nodes only: an agent never learns of another).
-fn no_fit_hint(ws: &Ws, want: &crate::compute_place::Want, report: &crate::compute_place::CandReport) -> String {
+pub(crate) fn no_fit_hint(ws: &Ws, want: &crate::compute_place::Want, report: &crate::compute_place::CandReport) -> String {
     use crate::compute_place as place;
     if report.visible == 0 {
         return format!(

@@ -291,6 +291,12 @@ pub struct Cand {
     /// Solo node: this server's estimate of the wait there (P2,
     /// [`solo_eta`]); `None` on a shared node (it quotes) or offline.
     pub est_wait: Option<u64>,
+    /// Shared node (0.46.8): this server's jobs still waiting HERE for it
+    /// (the `any_hold` minute, not yet in the node's queue, so not in its
+    /// quote), as seconds of work per slot ([`SoloWaits::held_eta`]). Added
+    /// to the quote, so a burst stops piling onto the node with the lowest
+    /// quote (11-03: 15 jobs on k2n10 while others had room soon).
+    pub held_wait: u64,
 }
 
 impl Cand {
@@ -308,7 +314,7 @@ impl Cand {
     /// The wait for this ask and its basis: the node's quote (`quote`),
     /// else this server's estimate on a solo node (`estimate`, P2).
     pub fn wait_eta(&self, w: &Want) -> Option<(u64, &'static str)> {
-        self.eta(w).map(|e| (e, "quote")).or_else(|| self.est_wait.map(|e| (e, "estimate")))
+        self.eta(w).map(|e| (e + self.held_wait, "quote")).or_else(|| self.est_wait.map(|e| (e, "estimate")))
     }
 
     /// Each need's state here (CE-1).
@@ -695,6 +701,8 @@ pub mod skip {
     /// Granted, but off the workspace's node list (0.46.8,
     /// `crate::compute_allow`).
     pub const NOT_ALLOWED: &str = crate::compute_allow::SKIP;
+    /// Granted, but the job says `--avoid` it (0.46.8).
+    pub const AVOIDED: &str = "avoided";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -767,6 +775,11 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
             continue;
         }
         out.visible += 1;
+        // `--avoid` (0.46.8): never this node, for this job, in any move.
+        if w.auto && w.filter.avoid.contains(&n.id) {
+            skipped(&mut out, skip::AVOIDED);
+            continue;
+        }
         if !permit.allows(&n.id) {
             skipped(&mut out, skip::NOT_ALLOWED);
             continue;
@@ -835,7 +848,8 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
         let recent = recent_for(&n.id, now);
         let holds_cache = cache_at.as_deref() == Some(n.id.as_str());
         let est_wait = (online && !share::is_shared(&offer)).then(|| waits.eta(&n.id, offer.parallel_max));
-        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait });
+        let held_wait = if share::is_shared(&offer) { waits.held_eta(&n.id, offer.parallel_max) } else { 0 };
+        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait });
     }
     out
 }
@@ -887,6 +901,8 @@ pub fn solo_eta(ahead: &[Option<u64>], running_left: &[Option<u64>], parallel_ma
 pub struct SoloWaits {
     ahead: HashMap<String, Vec<Option<u64>>>,
     left: HashMap<String, Vec<Option<u64>>>,
+    /// Only the jobs still queued on this server (not in a node's queue).
+    held: HashMap<String, Vec<Option<u64>>>,
 }
 
 impl SoloWaits {
@@ -895,6 +911,7 @@ impl SoloWaits {
         let mut w = SoloWaits::default();
         for j in store::queued_jobs(conn) {
             w.ahead.entry(j.node_id.clone()).or_default().push(est(&j));
+            w.held.entry(j.node_id.clone()).or_default().push(est(&j));
         }
         for j in store::active_jobs(conn) {
             if j.node_queued {
@@ -909,6 +926,13 @@ impl SoloWaits {
             w.left.entry(j.node_id.clone()).or_default().push(left);
         }
         w
+    }
+
+    /// A shared node: this server's jobs held here for `node_id` (not in
+    /// its quote yet), their estimates (15 min each unknown) per slot.
+    pub fn held_eta(&self, node_id: &str, parallel_max: u32) -> u64 {
+        let sum: u64 = self.held.get(node_id).map(|v| v.iter().map(|e| e.unwrap_or(UNKNOWN_EST_SECS)).sum()).unwrap_or(0);
+        sum / u64::from(parallel_max.max(1))
     }
 
     /// The estimated wait for a new job on `node_id`.
@@ -1167,6 +1191,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::EXCLUSIVE_NEEDS_GRANT => "without CI (which --exclusive needs) for you".to_string(),
         skip::UNAVAILABLE => "unavailable now (paused, draining, window, disk or lock)".to_string(),
         skip::NOT_ALLOWED => "off this workspace's node list".to_string(),
+        skip::AVOIDED => "you avoid (--avoid)".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -1474,6 +1499,11 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     }
     if node.controller_pause.is_some() {
         return Some((scheduler::CONTROLLER_PAUSED, true));
+    }
+    // `--avoid` names the node it waits on (never placed there; only a
+    // release that races a placement can leave it so): leave for any.
+    if j.ctl.any.as_ref().is_some_and(|f| f.avoid.contains(&node.id)) {
+        return Some(("node_avoided", true));
     }
     if !compute_ws::is_online(&node.id) {
         return (now - offline_since(node, now) >= t.replace_after_secs).then_some(("node_offline", true));
@@ -2041,7 +2071,7 @@ mod tests {
         if running > 0 {
             load.running_by_workspace.insert("ws-other-secret".into(), running);
         }
-        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None }
+        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None, held_wait: 0 }
     }
 
     /// Make `c` a node shared with another server (this server a tenant):
@@ -2268,6 +2298,48 @@ mod tests {
         }
         assert_eq!(order(V2, &all, &w), vec!["c-fast", "b-slow", "a-solo-full"]);
         assert_eq!(pick(V1, &all, &w).0, "c-fast", "v1 also takes the lowest quote");
+    }
+
+    /// 0.46.8 (K2 Cores, 17789afd): a node that can't start the job now
+    /// never outranks one that can, however warm (this commit), however
+    /// short its quoted or estimated wait. Warmth only orders within a tier.
+    #[test]
+    fn a_node_that_starts_now_always_outranks_a_warm_busy_one() {
+        let w = want(2);
+        // Warm for this commit, quoted 30 s, but no free slot or CPU now.
+        let mut warm_busy = warm(shared(cand("a-warm-busy", 30, 32, 2, 2), Some((false, Some(30)))), "c1");
+        warm_busy.offer.free.cpu_millis = 0;
+        let warm_solo_busy = warm(cand("b-warm-solo-busy", 30, 32, 2, 2), "c1");
+        let cold_free = cand("c-cold-free", 30, 32, 0, 3);
+        for (c, t) in [(&warm_busy, Tier::Busy), (&warm_solo_busy, Tier::Busy), (&cold_free, Tier::Now)] {
+            assert_eq!(c.tier(&w), Some(t), "{}", c.node.id);
+        }
+        assert!(warmth_v2(&warm_busy, &w, Some("pk"), Some("c1")) >= 2, "the busy ones really are warm");
+        let all = [warm_busy, warm_solo_busy, cold_free];
+        for policy in [V1, V2] {
+            assert_eq!(order(policy, &all, &w)[0], "c-cold-free", "{policy:?}");
+        }
+    }
+
+    /// 0.46.8: a burst while every node is busy spreads across shared nodes:
+    /// this server's jobs still held here for a node count on top of its
+    /// quote (the node's quote doesn't know them yet).
+    #[test]
+    fn a_burst_spreads_when_held_jobs_lengthen_the_lowest_quote() {
+        let w = want(2);
+        let mut low = shared(cand("a-low-quote", 30, 32, 2, 2), Some((false, Some(60))));
+        let high = shared(cand("b-higher-quote", 30, 32, 2, 2), Some((false, Some(240))));
+        assert_eq!(order(V2, &[low.clone(), high.clone()], &w), vec!["a-low-quote", "b-higher-quote"], "nothing held: the lowest quote");
+        // One unsized job held for a-low-quote: 900 s of work on 2 slots.
+        let waits = SoloWaits { held: [("a-low-quote".to_string(), vec![None])].into(), ..Default::default() };
+        low.held_wait = waits.held_eta("a-low-quote", low.offer.parallel_max);
+        assert_eq!(low.held_wait, 450);
+        assert_eq!(low.wait_eta(&w), Some((510, "quote")));
+        assert_eq!(order(V2, &[low.clone(), high.clone()], &w), vec!["b-higher-quote", "a-low-quote"], "the next job goes elsewhere");
+        // A known estimate counts as itself.
+        let waits = SoloWaits { held: [("a-low-quote".to_string(), vec![Some(100)])].into(), ..Default::default() };
+        assert_eq!(waits.held_eta("a-low-quote", 2), 50);
+        assert_eq!(waits.held_eta("nowhere", 2), 0);
     }
 
     /// §10 unit 10: the v1 switch keeps the 0.46.5 order exactly (a golden

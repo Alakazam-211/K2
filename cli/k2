@@ -24495,6 +24495,16 @@ Agents:
                  a start that fits two or more: node_ambiguous, exit 2).
                  It prefers a node that already has the --needs tools.
                  --label k=v picks nodes by a label the node has.
+                 A pinned job never moves, even when other nodes are idle:
+                 leave the node off unless the job needs that machine. When
+                 the named node can't start it now and another could, run
+                 prints a hint (k2 compute move <id> --auto releases it).
+                 [--avoid <node>]...  K2 never picks that node for this job: not
+                                at submit, not when it moves, not for a retry.
+                                Repeatable; a name or a start of one. Not with a
+                                named node (avoid_with_pinned_node, exit 2). When
+                                every node that fits is avoided: avoid_leaves_no_node,
+                                exit 3, nothing queued
                  [--preset NAME] settings from .k2/compute.toml, a TOML file in
                                 the folder or git worktree you run from (else the
                                 --repo folder, else the workspace folder; .k2/ isn't
@@ -24699,6 +24709,20 @@ Agents:
   k2 compute retier <job> --tier standard|priority|batch|ci [--why "…"] [--json]
                  move a QUEUED job to another line (--priority needs --why);
                  your workspace's jobs, or any job for the owner / an Admin
+  k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v] [--json]
+                 let K2 move a QUEUED job that was pinned to a named node: it
+                 becomes auto-placed (as if no node had been named) and moves
+                 within ~5 s to a node that can start it now; if none can, it
+                 waits where it is. It keeps the OS and arch of its node
+                 unless --os/--arch say otherwise (any = either). --avoid
+                 keeps it off a node. No cancel, no new job id
+  k2 compute move <job>... --to <node> [--json]
+                 move a QUEUED job to that node and pin it there (the same
+                 checks as naming the node in run)
+  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] (--auto … | --to <node>)
+                 every QUEUED job this session (or the workspace) sent that
+                 matches; e.g. move --all-mine --node k2n12 --auto.
+                 A started job is never moved (job_started, exit 3)
   k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals, except where
@@ -25202,7 +25226,12 @@ elif verb == "jobs":
         who = j.get("submitter") or j.get("submittedBy") or "-"
         if j.get("via") == "owner_token":
             who += " (owner token)"
-        print("%s  %-2s %-12s %-11s exit %-4s %-22s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
+        # 0.46.8: a queued job says pinned (a node named; k2 compute move
+        # <id> --auto releases it) or auto.
+        state = j["state"]
+        if state == "queued" and "pinned" in j:
+            state += " (pin)" if j["pinned"] else " (auto)"
+        print("%s  %-2s %-12s %-15s exit %-4s %-22s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
@@ -25350,7 +25379,11 @@ elif verb == "queue":
         print("%-3s %-34s %-4s %-12s %-8s %-5s %-10s %s" % ("#", "who", "tier", "class", "state", "cpus", "eta", "why"))
     for e in rows:
         if e.get("mine") and e.get("short"):
-            who = "you: %s %s" % (e["short"], e.get("argv") or "")
+            # 0.46.8: a queued job of yours says pin (a node named) or auto.
+            pin = ""
+            if e.get("state") == "queued" and "pinned" in e:
+                pin = "[pin] " if e["pinned"] else "[auto] "
+            who = "you: %s%s %s" % (pin, e["short"], e.get("argv") or "")
             if e.get("workspace"):
                 who += " (ws %s)" % e["workspace"]
         elif e.get("mine"):
@@ -25596,10 +25629,14 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 tag="" same_node=""
-    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=()
+    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
+            # --avoid NODE (0.46.8, repeatable): K2 never picks that node for
+            # this job (submit, moves, retries). Not with a named node.
+            --avoid) avoids+=("${2:-}"); shift 2
+                [ -n "${avoids[${#avoids[@]}-1]}" ] || { echo "usage: --avoid <node> (a node K2 must not pick; repeatable)" >&2; exit 2; } ;;
             # --preset NAME: [presets.NAME] from .k2/compute.toml (0.46.7;
             # the daemon reads the file, flags still win).
             --preset) preset="${2:-}"; shift 2
@@ -25822,10 +25859,14 @@ for a in sys.argv[1:]:
     out.append(o)
 print(json.dumps(out))' "${withs[@]}")" || exit 2
     fi
+    local avoid_json=""
+    if [ "${#avoids[@]}" -gt 0 ]; then
+        avoid_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${avoids[@]}")"
+    fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
     local body
-    body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
+    body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
@@ -25861,6 +25902,8 @@ if v.get("warmSlot"): line += " · " + v["warmSlot"].split(" ")[0]
 line += (" · ~%s (p90 %s, %d runs: %s)" % (d(e["medianSecs"]), d(e["p90Secs"]), e["samples"], e["basis"])) if e else " · no estimate yet"
 for w in v.get("warnings") or []:
     sys.stderr.write("[k2 compute] note: %s\n" % w)
+for n in v.get("notices") or []:
+    sys.stderr.write("[k2 compute] note: %s\n" % (n.get("message") or n.get("code")))
 sys.stderr.write(line + "\n")
 p = v.get("placement") or {}
 if p.get("mode") == "auto":
@@ -25934,8 +25977,9 @@ else:
     if c: line += " · commit " + c
     line += " · " + j["state"]
     if q: line += " (position %s: %s)" % (q.get("position"), q.get("reason"))
+# 0.46.8: the pinned-node hint is its own line ("[k2 compute] hint: …").
 for w in v.get("warnings") or []:
-    sys.stderr.write("[k2 compute] note: %s\n" % w)
+    sys.stderr.write("[k2 compute] %s\n" % (w if w.startswith("hint: ") else "note: " + w))
 # Tiers (0.46.5): courtesy notes (the job is submitted) and --supersede.
 for n in v.get("notices") or []:
     sys.stderr.write("note: %s\n" % (n.get("message") or n.get("code")))
@@ -26166,7 +26210,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
@@ -26762,11 +26806,22 @@ for n in rows:
     # 0.46.6: the line tag (CI, P, B) and the --why of a Priority job.
     tag = lambda j: ({"ci": "CI ", "priority": "P  ", "batch": "B  "}.get(j.get("tier") or "", ""))
     pwhy = lambda j: ("\n      why: %s%s" % (j["tierWhy"], (" (%s)" % j["submitter"]) if j.get("submitter") else "")) if j.get("tierWhy") else ""
+    # 0.46.8: a running job with no --cpus holds the node CPUs ÷ its slots.
+    capc, parm = (st.get("caps") or {}).get("cpuMillis") or 0, st.get("parallelMax") or 0
+    def held(j):
+        if "cpuMillis" not in j or j["cpuMillis"] is not None or not capc or parm < 2:
+            return ""
+        return "  [no --cpus: reserves %s of %s CPUs]" % (cores(capc // parm), cores(capc))
     for j in st.get("running") or []:
-        print("    running %s%-9s %-8s %-12s %s%s" % (tag(j), j.get("short") or "-", mmss(j.get("elapsedSecs")), j.get("workspace") or "(other)", j.get("argv") or "", pwhy(j)))
+        print("    running %s%-9s %-8s %-12s %s%s%s" % (tag(j), j.get("short") or "-", mmss(j.get("elapsedSecs")), j.get("workspace") or "(other)", j.get("argv") or "", held(j), pwhy(j)))
+    # 0.46.8: pinned (a node was named: it never moves; k2 compute move
+    # <id> --auto releases it) or auto (K2 moves it if another node frees).
+    pin = lambda j: ("pinned" if j["pinned"] else "auto") if "pinned" in j else ""
     for j in st.get("queued") or []:
-        print("    queued  %s%-9s #%-3s %-8s %-12s %s%s%s" % (tag(j), j.get("short") or "-", j.get("position") or "?", mmss(j.get("ageSecs")), j.get("workspace") or "(other)",
+        print("    queued  %s%-9s #%-3s %-8s %-6s %-12s %s%s%s" % (tag(j), j.get("short") or "-", j.get("position") or "?", mmss(j.get("ageSecs")), pin(j), j.get("workspace") or "(other)",
             j.get("argv") or "", "  (" + j["reason"] + ")" if j.get("reason") else "", pwhy(j)))
+    if any(j.get("pinned") for j in st.get("queued") or []):
+        print("      pinned jobs wait for this node only: k2 compute move <id> --auto lets K2 move them")
 m = v.get("controllerMachine") or {}
 if m:
     s = "controller %s: disk %s free of %s" % (m.get("name"), gb(m.get("diskFreeBytes")), gb(m.get("diskTotalBytes")))
@@ -27534,6 +27589,111 @@ print(line)
 print("  " + v["note"])'
 }
 
+# k2 compute move <job>... --auto [--avoid N]... [--os O|any] [--arch A|any]
+#   [--label k=v]... | --to <node>   (0.46.8): a QUEUED job to auto-placement
+# (K2 moves it to a node that can start it) or to one named node, without a
+# cancel. --all-mine / --workspace-all [--tag T] [--node N] pick the jobs as
+# cancel does. The daemon checks everything; this only builds the body.
+cmd_compute_move() {
+    local to="" auto=0 os="" arch="" scope="" mtag="" mnode="" mws="" as_json=0
+    local -a jobs=() avoids=() labels=()
+    local musage="usage: k2 compute move <job>... --auto [--avoid <node>]... [--os O|any] [--arch A|any] [--label k=v]  |  k2 compute move <job>... --to <node>  |  k2 compute move --all-mine|--workspace-all [--tag T] [--node N] (--auto … | --to <node>)"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto) auto=1; shift ;;
+            --to) to="${2:-}"; shift 2
+                [ -n "$to" ] || { echo "$musage (--to needs a node)" >&2; exit 2; } ;;
+            --avoid) avoids+=("${2:-}"); shift 2
+                [ -n "${avoids[${#avoids[@]}-1]}" ] || { echo "$musage (--avoid needs a node)" >&2; exit 2; } ;;
+            --os) os="${2:-}"; shift 2 ;;
+            --arch) arch="${2:-}"; shift 2 ;;
+            --label) labels+=("${2:-}"); shift 2 ;;
+            --all-mine) scope="session"; shift ;;
+            --workspace-all) scope="workspace"; shift ;;
+            --tag) mtag="${2:-}"; shift 2 ;;
+            --node) mnode="${2:-}"; shift 2 ;;
+            --workspace) mws="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            -*) echo "$musage (unknown flag '$1')" >&2; exit 2 ;;
+            *) jobs+=("$1"); shift ;;
+        esac
+    done
+    if [ "$auto" = "1" ] && [ -n "$to" ]; then echo "$musage (--auto or --to, not both)" >&2; exit 2; fi
+    if [ "$auto" = "0" ] && [ -z "$to" ]; then echo "$musage (say where: --auto or --to <node>)" >&2; exit 2; fi
+    if [ -n "$scope" ] && [ "${#jobs[@]}" -gt 0 ]; then echo "$musage (job ids or --all-mine, not both)" >&2; exit 2; fi
+    if [ -z "$scope" ] && [ "${#jobs[@]}" -eq 0 ]; then echo "$musage (name a job, or --all-mine)" >&2; exit 2; fi
+    if [ -z "$scope" ] && { [ -n "$mtag" ] || [ -n "$mnode" ]; }; then echo "$musage (--tag and --node pick jobs with --all-mine or --workspace-all)" >&2; exit 2; fi
+    local avoid_json="" labels_json=""
+    if [ "${#avoids[@]}" -gt 0 ]; then
+        avoid_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${avoids[@]}")"
+    fi
+    if [ "${#labels[@]}" -gt 0 ]; then
+        labels_json="$(python3 -c '
+import json, sys
+out = {}
+for l in sys.argv[1:]:
+    if "=" not in l:
+        sys.stderr.write("usage: --label key=value\n"); sys.exit(2)
+    k, v = l.split("=", 1); out[k] = v
+print(json.dumps(out))' "${labels[@]}")" || exit 2
+    fi
+    local ab=""
+    [ "$auto" = "1" ] && ab=1
+    local render='
+import json, sys
+v = json.load(sys.stdin)
+def one(r):
+    f = r.get("filter") or {}
+    extra = []
+    if f.get("os") or f.get("arch"):
+        extra.append("%s-%s" % (f.get("os") or "any", f.get("arch") or "any"))
+    if f.get("avoid"):
+        extra.append("avoids " + ", ".join(f["avoid"]))
+    tail = (" (" + "; ".join(extra) + ")") if extra else ""
+    if r.get("moved"):
+        return "job %s: moved %s -> %s (%s)%s. %s" % (r["job"], r["from"], r["node"], r["mode"], tail, r.get("note") or "")
+    if r.get("mode") == "auto":
+        return "job %s: auto-placed now%s. %s" % (r["job"], tail, r.get("note") or "")
+    return "job %s: %s" % (r["job"], r.get("note") or "pinned to " + str(r.get("node")))
+if "matched" in v:
+    m = v.get("moved") or []
+    print("moved %d of %d matching queued job(s)" % (len(m), v.get("matched", 0)))
+    for r in m:
+        print("  " + one(r))
+    for s in v.get("skipped") or []:
+        print("  skipped %s: %s (%s)" % (s.get("job"), s.get("code"), s.get("hint")))
+else:
+    print(one(v))'
+    if [ -n "$scope" ]; then
+        local filt
+        filt="$(K2_CF_SCOPE="$scope" K2_CF_TAG="$mtag" K2_CF_NODE="$mnode" K2_CF_WS="$(_compute_ws "$mws")" python3 -c '
+import json, os
+f = {"scope": os.environ["K2_CF_SCOPE"]}
+for k, e in (("tag", "K2_CF_TAG"), ("node", "K2_CF_NODE"), ("workspace", "K2_CF_WS")):
+    if os.environ.get(e):
+        f[k] = os.environ[e]
+print(json.dumps(f))')"
+        _compute_call POST /cli/compute/jobs/move "$(_compute_json K2_CJ_filter_j="$filt" K2_CJ_auto_b="$ab" K2_CJ_to="$to" \
+            K2_CJ_avoid_j="$avoid_json" K2_CJ_os="$os" K2_CJ_arch="$arch" K2_CJ_labels_j="$labels_json")"
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c "$render"
+        exit 0
+    fi
+    # One job: refusals exit as for every compute verb (2 usage, 3 refused).
+    # Several: each is tried; the worst exit wins, every refusal is printed.
+    local j rc worst=0
+    for j in "${jobs[@]}"; do
+        (
+            _compute_call POST /cli/compute/jobs/move "$(_compute_json K2_CJ_job="$j" K2_CJ_auto_b="$ab" K2_CJ_to="$to" \
+                K2_CJ_avoid_j="$avoid_json" K2_CJ_os="$os" K2_CJ_arch="$arch" K2_CJ_labels_j="$labels_json")"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | python3 -c "$render"; fi
+        )
+        rc=$?
+        [ "$rc" -gt "$worst" ] && worst="$rc"
+    done
+    exit "$worst"
+}
+
 cmd_compute_local() {
     local sub="${1:-status}"
     shift 2>/dev/null || true
@@ -27710,6 +27870,7 @@ cmd_compute() {
             ;;
         run) cmd_compute_run "$@" ;;
         retier|tier) cmd_compute_retier "$@" ;;
+        move) cmd_compute_move "$@" ;;
         allow-nodes) cmd_compute_allow_nodes "$@" ;;
         cache) cmd_compute_cache "$@" ;;
         queue)
@@ -51491,6 +51652,45 @@ WHERE IT RUNS (0.46.6)
   No node fits: no_node_fits (exit 3) with the counts (2 too small for
   --mem 24G, 1 offline, …). You only ever see nodes granted to you.
 
+PINNED OR AUTO (0.46.8)
+  A job with a node named is PINNED: it waits for that node however long,
+  even while other nodes sit idle. A job with no node named is AUTO: while
+  it waits, K2 moves it (every 5 s) to a node that can start it now.
+  k2 compute status and queue mark each queued job pinned or auto, jobs
+  shows "queued (pin)" or "queued (auto)"; JSON: "pinned": true|false.
+  When the node you named can't start the job now and another could, run
+  prints one hint line naming that node. It is advice: the job is still
+  queued where you named it, and the exit code doesn't change.
+  Release a pinned job without cancelling it (same job id, same place in
+  your history):
+    k2 compute move ab12cd34 --auto
+    k2 compute move --all-mine --node k2n12 --auto     every queued job this
+                                                       session sent to k2n12
+  It becomes auto, as if you had named no node: --needs, --mem, --cpus,
+  the tier, --cache, --exclusive and your grants still apply. It keeps the
+  OS and arch of the node it waited on unless you say otherwise (--os
+  macos, --os any). If no node can start it now, it waits where it is and
+  moves later. An auto job takes move --auto again to add --avoid, --os
+  or --label (the same ask twice: already_auto). Pin a queued job to
+  another node instead:
+    k2 compute move ab12cd34 --to k2n11
+  --to takes no --avoid/--os/--label (bad_request, exit 2). Node names
+  in --to and --avoid work as in run: the full name or a start that
+  fits one node (else node_ambiguous, exit 2).
+  Only queued jobs move. A started job is never moved (job_started,
+  exit 3). Every move refusal leaves the job where it was and exits 3.
+  Your workspace's jobs only; the owner or an Admin: any job.
+
+AVOID A NODE (0.46.8)
+  --avoid <node> (repeatable) on run, test or move --auto: K2 never picks
+  that node for the job, not at submit, not when it moves it, not for a
+  retry. Use it when someone keeps a node for their own work by agreement:
+    k2 compute run --avoid k2n11 --mem 24G -- cargo nextest run
+  It works with --any and --shards (both auto). With a node named it is
+  refused (avoid_with_pinned_node, exit 2). When every node that could
+  take the job is avoided, nothing is queued (avoid_leaves_no_node,
+  exit 3).
+
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
   Nothing listed: your owner turns on "Allow compute nodes" for you in
@@ -51774,7 +51974,34 @@ CODES (0.46.7)
                            is no such file); the error says which (exit 2).
     tag_invalid            --tag isn't 1 to 64 of A-Z a-z 0-9 . _ : / -
                            (exit 2).
+    avoid_with_pinned_node --avoid with a node named; leave the node off
+                           or drop --avoid (exit 2).
+    avoid_leaves_no_node   every node that can take the job is on your
+                           --avoid list (exit 3).
+  k2 compute move refusals (the job stays where it is; 0.46.8):
+    job_started            it already started: never moved (exit 3).
+    already_auto           move --auto on a job that is already auto with
+                           the same filter (exit 3).
+    already_on_node        move --to the node it is already pinned to
+                           (exit 3).
+    node_cant_take         move --to a node that can't take it (offline is
+                           fine; paused, too small, off your node list or
+                           without CI it isn't); the error says why (exit 3).
+    no_other_node          move --auto that rules out the node the job waits
+                           on (--avoid that node, or another --os) must move
+                           it at once, and no other node can take it now:
+                           nothing changed (exit 3). Without ruling its node
+                           out, the job just waits there until one frees.
+    in_node_queue          the job waits inside a shared node's own queue;
+                           K2 can't pull it out at once. A plain move --auto
+                           works (K2 asks the node for it back when another
+                           node can start it); --to, or --auto --avoid <that
+                           node>, is refused: cancel and run it again (exit 3).
+    not_granted            move --to a node not granted to you (exit 3).
   Placement codes (get's "placed on …" line, placement.code in JSON):
+    released_auto          a pinned job you released with move --auto; it
+                           waits here until another node can start it now.
+    moved_to               you moved it with move --to (pinned there).
     starts_now_cache       it starts now on the node where its --cache was.
     queued_for_cache       it waits on the busy node that holds its --cache,
                            because that wait is estimated under 15 min, rather
@@ -51809,7 +52036,9 @@ WHY HASN'T IT STARTED? (0.46.7)
     "jobs without --cpus reserve 4 of 12 CPUs each and 0 of 12 CPUs
      unreserved: pass --cpus 2 (or fewer) so more fit"
         a job without --cpus holds the node's CPUs divided by its slots.
-        Pass --cpus with what your command really uses.
+        Pass --cpus with what your command really uses. run says so when
+        you leave it off ("note: no --cpus: …", 0.46.8), and k2 compute
+        status marks such a running job "[no --cpus: reserves 4 of 12 CPUs]".
     "asks 24 GB; 8 GB of 52 GB free"
         its --mem doesn't fit beside what runs yet.
     "your workspace runs 3 of 3 here (its grant)"

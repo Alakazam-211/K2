@@ -265,7 +265,10 @@ async fn files_download_is_person_only_to_grant() {
     assert!(!mine.to_string().contains("files:download"), "{mine}");
     let r = post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": flagged })).await;
     assert_eq!(r.status, 200, "the owner grants files:download: {}", r.body);
-    // An agent handing that role to a guest would spread it.
+    // Handing that role to a login of the agent's own App, inside its own
+    // room, is the agent's (Rosson 2026-11-03, af28bebf7: the agent that owns
+    // an App runs its roles, person-only caps included); it could write an App
+    // role carrying files:download itself, so this spreads nothing.
     let app = {
         let dir = ws.path.join("dlapp");
         std::fs::create_dir_all(&dir).unwrap();
@@ -276,7 +279,7 @@ async fn files_download_is_person_only_to_grant() {
     let r = post(port, "/cli/skin/users", &hook, json!({ "username": format!("g{tag}"), "app": app })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/roles/assign", &hook, json!({ "username": format!("g{tag}"), "role": role })).await;
-    owner_only(&r, "agent hands out a role holding files:download");
+    assert_eq!(r.status, 200, "agent hands its own App's login a role in its own room: {}", r.body);
     // Tightening stays open to the agent.
     let r = post(port, "/cli/skin/roles/room", &hook, json!({ "name": role, "handle": ws.handle, "caps": ["thread:read"] })).await;
     assert_eq!(r.status, 200, "agent removes files:download: {}", r.body);

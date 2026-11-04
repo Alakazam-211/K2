@@ -4530,6 +4530,7 @@ dependencies = [
  "k2-export",
  "k2-mpc-base",
  "k2-mpc-board",
+ "k2-mpc-board-bridge",
  "k2-mpc-markdown",
  "k2-mpc-text",
  "k2-node",
@@ -4615,6 +4616,14 @@ version = "0.1.2"
 dependencies = [
  "miniz_oxide",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "k2-mpc-board-bridge"
+version = "0.1.2"
+dependencies = [
+ "k2-mpc-base",
+ "k2-mpc-board",
 ]
 
 [[package]]

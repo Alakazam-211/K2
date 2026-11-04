@@ -1,0 +1,65 @@
+[package]
+name = "k2-mpc-board-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for the .k5board decoders. A violated property is a finding."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repo's, so a normal build doesn't pull libFuzzer.
+[workspace]
+
+[lib]
+name = "k2_mpc_board_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped. scripts/check-licences.sh
+# allows NCSA for this one crate in this one lock.
+libfuzzer-sys = "0.4"
+k2-mpc-board = { path = "../crates/board" }
+
+[[bin]]
+name = "json_value"
+path = "fuzz_targets/json_value.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "board_json"
+path = "fuzz_targets/board_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "package_open"
+path = "fuzz_targets/package_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_ops"
+path = "fuzz_targets/raw_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verbs"
+path = "fuzz_targets/verbs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false

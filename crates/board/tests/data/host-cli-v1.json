@@ -1,0 +1,233 @@
+{
+  "about": "A host's whiteboard command list that the pack's verbs match: names, args, flags and refusal meanings, written as a host gives them, with no host code. tests/host_cli.rs holds the pack to it. Every difference says why beside it.",
+  "as_of": "2026-11-03",
+  "verdicts": {
+    "same": "The pack has it under the host's name, in the host's form.",
+    "rename": "The host's name is another name for the pack verb named here.",
+    "ruling": "Kept different on purpose, for the reason given.",
+    "not_file": "It can't be on a file: it's the host's alone.",
+    "no_op": "A flag a file takes and that changes nothing there.",
+    "host": "A check or a code that is the host's own: target, access, usage or a rate guard."
+  },
+  "verbs": [
+    {
+      "name": "boards",
+      "flags": {"all": "bool"},
+      "pack": {"verdict": "not_file", "why": "It lists a store's boards. A file is one board, and what sits beside it is the host's."}
+    },
+    {
+      "name": "list",
+      "flags": {"type": "text", "full": "bool"},
+      "pack": {"verb": "list", "verdict": "same", "as": {"type": "kind"}},
+      "flag_verdicts": {"full": {"verdict": "no_op", "why": "It shows inline images and batch ids in full. A file has neither, so the flag is taken and changes nothing."}}
+    },
+    {
+      "name": "read",
+      "args": ["id"],
+      "flags": {"full": "bool"},
+      "refusals": ["no_object"],
+      "pack": {"verb": "read", "verdict": "same"},
+      "flag_verdicts": {"full": {"verdict": "no_op", "why": "A file has no inline images or batch ids to shorten, so the flag is taken and changes nothing."}}
+    },
+    {
+      "name": "search",
+      "args": ["text"],
+      "pack": {"verb": "search", "verdict": "same"},
+      "forms": [{"what": "Check items' text is searched too.", "test": "tests/verbs.rs::search_finds_check_items"}]
+    },
+    {
+      "name": "log",
+      "flags": {"limit": "number"},
+      "pack": {"verdict": "not_file", "why": "A file holds no history: version control or the live session holds it."}
+    },
+    {
+      "name": "fields",
+      "args": ["type?"],
+      "refusals": ["unknown_type"],
+      "pack": {"verb": "fields", "verdict": "same"}
+    },
+    {
+      "name": "templates",
+      "pack": {"verb": "templates", "verdict": "same"},
+      "forms": [{"what": "A read verb that names every template, with its title.", "test": "tests/verbs.rs::templates_lists_every_template_by_name_and_title"}]
+    },
+    {
+      "name": "add",
+      "args": ["type?"],
+      "flags": {"<field>": "fields"},
+      "refusals": ["unknown_type", "unknown_field", "bad_field", "too_long", "too_many", "value_too_large"],
+      "pack": {"verb": "add", "verdict": "same", "as": {"type": "kind"}, "host_sets": {"at": "The host adds on top, as a canvas does: front."}},
+      "field_verdicts": {
+        "id": {"verdict": "ruling", "why": "Refused on both sides, never dropped: the verb mints the id."},
+        "z": {"verdict": "ruling", "why": "Order is a list in a file, not a number: at says where a new object goes, and order moves it."}
+      },
+      "notes": "The host gives the type as sticky when none is named. A picture's src takes the format's blob form.",
+      "forms": [
+        {"what": "An unknown field name or type refuses, by its own code.", "test": "tests/verbs.rs::a_friendly_add_refuses_an_unknown_field_or_type"},
+        {"what": "id is refused as a field.", "test": "tests/verbs.rs::add_refuses_an_id_or_type_field"}
+      ]
+    },
+    {
+      "name": "frame",
+      "flags": {"<field>": "fields"},
+      "refusals": ["unknown_field", "bad_field", "too_long", "too_many", "value_too_large"],
+      "pack": {"verb": "add", "verdict": "rename", "why": "An alias of add with the type frame.", "host_sets": {"kind": "frame.", "at": "front, as for add."}}
+    },
+    {
+      "name": "update",
+      "args": ["id"],
+      "flags": {"<field>": "fields", "rev": "rev"},
+      "refusals": ["no_object", "locked", "unknown_field", "unknown_type", "bad_field", "too_long", "too_many"],
+      "pack": {"verb": "update", "verdict": "ruling", "why": "--rev is required: the caller names the revision it read, so a file is never last-writer-wins."},
+      "notes": "A field given the text null is removed. verbs::flags turns the host's --<field> <text> pairs into set and unset.",
+      "forms": [
+        {"what": "An unknown field name or type refuses, by its own code.", "test": "tests/verbs.rs::a_friendly_update_refuses_an_unknown_field_or_type"},
+        {"what": "The text null unsets a field.", "test": "tests/verbs.rs::flags_turn_text_into_set_and_null_into_unset"}
+      ]
+    },
+    {
+      "name": "delete",
+      "args": ["id"],
+      "flags": {"rev": "rev"},
+      "refusals": ["no_object", "locked"],
+      "pack": {"verb": "delete", "verdict": "ruling", "why": "--rev is required, as for update. A locked object hanging off it goes too, and removed_locked names each one.", "host_sets": {"cascade": "true: the host's delete always takes what hangs off the object."}},
+      "forms": [
+        {"what": "Deleting an object that isn't there refuses, by type, naming that it's gone.", "test": "tests/verbs.rs::a_friendly_delete_of_what_is_gone_refuses"},
+        {"what": "A raw del of an object that isn't there changes nothing, and the report says so.", "test": "tests/verbs.rs::a_raw_del_of_what_is_gone_is_a_noop_the_report_names"}
+      ]
+    },
+    {
+      "name": "connect",
+      "args": ["from", "to"],
+      "flags": {"<field>": "fields", "fromAnchor": "text", "toAnchor": "text"},
+      "refusals": ["no_object"],
+      "pack": {"verb": "connect", "verdict": "same", "as": {"fromAnchor": "from", "toAnchor": "to"}},
+      "notes": "An anchor fills its end's anchor, auto when none is given. The pack also takes a free point for an end."
+    },
+    {
+      "name": "template",
+      "args": ["name"],
+      "flags": {"x": "number", "y": "number"},
+      "refusals": ["no_template"],
+      "pack": {"verb": "template", "verdict": "same"},
+      "notes": "The host gives x and y as 0 when they're left out."
+    },
+    {
+      "name": "react",
+      "args": ["id", "emoji"],
+      "refusals": ["no_object", "bad_field"],
+      "pack": {"verb": "react", "verdict": "same"},
+      "refusal_as": {"bad_field": {"verdict": "host", "why": "The host's list of eleven reactions is its own: a file's reaction keys are open text of 1 to 32 bytes, which stamps use."}},
+      "forms": [{"what": "With no on or off it toggles the caller's reaction.", "test": "tests/verbs.rs::react_with_no_on_toggles"}]
+    },
+    {
+      "name": "vote",
+      "args": ["id"],
+      "refusals": ["voting_off", "no_votes_left"],
+      "pack": {"verb": "vote", "verdict": "same", "host_sets": {"delta": "1: one vote each time."}},
+      "notes": "A host reading perPerson 0 as no limit leaves it out of the file: the format refuses 0."
+    },
+    {
+      "name": "comment",
+      "args": ["id", "text"],
+      "refusals": ["no_object"],
+      "pack": {"verb": "comment", "verdict": "same", "as": {"id": "target"}},
+      "notes": "Placed the same way: x + w - 12, y - 20. The pack also takes a free comment."
+    },
+    {
+      "name": "meta",
+      "flags": {"<field>": "settings", "rev": "rev"},
+      "refusals": ["unknown_field", "bad_field"],
+      "pack": {"verb": "meta", "verdict": "ruling", "why": "--rev is required to change the settings. With no flags it reads them, with the rev a change names."},
+      "field_verdicts": {"timer": {"verdict": "not_file", "why": "A timer isn't kept in a file: its end time is stale once sent. The host refuses it on a file as usage."}},
+      "forms": [{"what": "A read giving the settings and their revision.", "test": "tests/verbs.rs::meta_reads_the_settings_and_their_revision"}]
+    },
+    {
+      "name": "apply",
+      "args": ["ops"],
+      "refusals": ["bad_ops", "too_many"],
+      "pack": {"verb": "apply", "verdict": "ruling", "why": "set, del and meta name a rev: a file is never last-writer-wins."},
+      "refusal_as": {"too_many": {"verdict": "host", "why": "At most 2,000 ops in one call is the host's rate guard, for files and stores alike. The pack keeps the format's limits."}},
+      "forms": [{"what": "The op names update and delete, and a bare list of ops.", "test": "tests/verbs.rs::apply_takes_update_and_delete_and_a_bare_list"}]
+    },
+    {
+      "name": "board-new",
+      "flags": {"name": "text", "project": "text"},
+      "pack": {"verdict": "not_file", "why": "Making a file is the host's. The pack's save writes its bytes."}
+    },
+    {
+      "name": "board-rename",
+      "flags": {"name": "text"},
+      "pack": {"verdict": "not_file", "why": "A file's name is its path, which is the host's. Its title is meta's title."}
+    },
+    {
+      "name": "export",
+      "flags": {"out": "text"},
+      "pack": {"verdict": "not_file", "why": "The file is the export."}
+    },
+    {
+      "name": "mv",
+      "pack": {"verdict": "ruling", "why": "No mv in the pack: move takes an offset and brings groups and frames along, and order takes a layer. A host maps its mv to one of them, or drops it."},
+      "notes": "Named in the host's plan, not in its command list."
+    }
+  ],
+  "aliases": {"ls": "list", "rm": "delete", "del": "delete", "set": "update", "new": "board-new", "rename": "board-rename"},
+  "refusals": [
+    {"code": "no_object", "pack": "conflict:deleted", "verdict": "ruling", "why": "A gone object is the board's own conflict, Conflict::Deleted. read gives none."},
+    {"code": "exists", "pack": "conflict:exists", "verdict": "ruling", "why": "An id in use is the board's own conflict, Conflict::Exists."},
+    {"code": "voting_off", "pack": "voting_off", "verdict": "same"},
+    {"code": "blob_missing", "pack": "blob_missing", "verdict": "same"},
+    {"code": "no_votes_left", "pack": "no_votes_left", "verdict": "same"},
+    {"code": "no_template", "pack": "no_template", "verdict": "same"},
+    {"code": "unknown_field", "pack": "unknown_field", "verdict": "same"},
+    {"code": "unknown_type", "pack": "unknown_type", "verdict": "same"},
+    {"code": "locked", "pack": "object_locked", "verdict": "ruling", "why": "A format code. The host maps it."},
+    {"code": "bad_field", "pack": ["field_value", "field_kind"], "verdict": "ruling", "why": "Format codes: the value's kind, or the value itself."},
+    {"code": "too_long", "pack": ["limit_field"], "verdict": "ruling", "why": "A format code: a value over its limit."},
+    {"code": "too_many", "pack": ["limit_field"], "verdict": "ruling", "why": "A format code: a list over its limit."},
+    {"code": "bad_ops", "pack": ["json_syntax", "json_duplicate_key", "field_value", "board_shape"], "verdict": "ruling", "why": "Format codes: the JSON, or an op's members."},
+    {"code": "newer_format", "pack": ["min_reader_too_high", "manifest_format"], "verdict": "ruling", "why": "Format codes for a file from a newer writer."},
+    {"code": "conflict", "pack": "conflict:changed", "verdict": "ruling", "why": "A stale rev is never retried: the caller reads again. A host retrying its own writes keeps that to itself."},
+    {"code": "value_too_large", "verdict": "not_file", "why": "A store's limit on one value. A file's limits are the format's."},
+    {"code": "no_board", "verdict": "host", "why": "The target is the host's."},
+    {"code": "board_required", "verdict": "host", "why": "The target is the host's."},
+    {"code": "board_trashed", "verdict": "host", "why": "The target is the host's."},
+    {"code": "no_project", "verdict": "host", "why": "Places are the host's."},
+    {"code": "not_granted", "verdict": "host", "why": "Access is the host's."},
+    {"code": "core_off", "verdict": "host", "why": "Access is the host's."},
+    {"code": "person_only", "verdict": "host", "why": "Access is the host's."},
+    {"code": "owner_only", "verdict": "host", "why": "Access is the host's."},
+    {"code": "author_unknown", "verdict": "host", "why": "Who's acting is the host's to say: it brings it in Ctx."},
+    {"code": "bad_request", "verdict": "host", "why": "Usage is the host's."}
+  ],
+  "pack_only": [
+    {"verb": "put-back", "why": "Undo a delete: no host verb yet."},
+    {"verb": "reply", "why": "A person action with no host verb yet."},
+    {"verb": "resolve", "why": "A person action with no host verb yet."},
+    {"verb": "lock", "why": "The host does it through update with a whole value. The verb adds the rules update can't: one already that way is left alone."},
+    {"verb": "check-add", "why": "The host does it through update with a whole list. The verb changes one item, and keeps what it doesn't know."},
+    {"verb": "check-set", "why": "The host does it through update with a whole list. The verb changes one item, and keeps what it doesn't know."},
+    {"verb": "check-remove", "why": "The host does it through update with a whole list. The verb changes one item, and keeps what it doesn't know."},
+    {"verb": "table-cell", "why": "The host does it through update with whole rows. The verb changes one cell."},
+    {"verb": "table-add-row", "why": "A person action with no host verb yet."},
+    {"verb": "table-remove-row", "why": "A person action with no host verb yet."},
+    {"verb": "table-add-column", "why": "A person action with no host verb yet."},
+    {"verb": "table-remove-column", "why": "A person action with no host verb yet."},
+    {"verb": "move", "why": "A person action with no host verb yet. It's what a host's mv can map to."},
+    {"verb": "order", "why": "A person action with no host verb yet."},
+    {"verb": "frame-order", "why": "A person action with no host verb yet."},
+    {"verb": "group", "why": "The host does it through update with a group id. The verb names a revision for each object."},
+    {"verb": "ungroup", "why": "The host does it through update. The verb names a revision for each object."},
+    {"verb": "align", "why": "A person action with no host verb yet."},
+    {"verb": "distribute", "why": "A person action with no host verb yet."},
+    {"verb": "tidy", "why": "A person action with no host verb yet."},
+    {"verb": "copy-style", "why": "A person action with no host verb yet."},
+    {"verb": "duplicate", "why": "A person action with no host verb yet."},
+    {"verb": "paste", "why": "A person action with no host verb yet."},
+    {"verb": "connected-copy", "why": "A person action with no host verb yet."},
+    {"verb": "mind-child", "why": "A person action with no host verb yet."},
+    {"verb": "clear-blob", "why": "How a file with a missing picture becomes saveable: the host's store has no such state."},
+    {"verb": "references", "why": "Every reference and its state. read gives one object's."},
+    {"verb": "inverse", "why": "Undo and redo. The crate keeps no stack: a host or an agent keeps what it wants."}
+  ]
+}

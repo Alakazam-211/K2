@@ -8,4 +8,4 @@ The code it builds on keeps its own licence:
 
 All dependencies are checked transitively by `scripts/check-licences.sh`.
 
-Parts of the schema tables come from Board: see `THIRD-PARTY-NOTICES.md`.
+Parts of this crate come from Board, Copyright (c) 2026 Baden Ballard, MIT: the schema tables, the templates, the verbs' rules, the parity list, and the shapes the widget conversion pairs describe. See `THIRD-PARTY-NOTICES.md` for which files, and the licence.

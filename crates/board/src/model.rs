@@ -172,6 +172,10 @@ pub struct Object {
 
 impl Object {
     /// The object as JSON, with its id and type, and without its position.
+    ///
+    /// The tree keeps a number as it is in memory, so a -0.0 stays -0.0 here, and
+    /// [`crate::json::to_canonical`] writes it as `0`, as the file does. A host printing this tree
+    /// with its own JSON printer normalises -0.0 to 0, or prints through `to_canonical`.
     pub fn to_value(&self) -> Value {
         let mut f = self.fields.clone();
         f.insert("id".into(), Value::Str(self.id.as_str().to_string()));

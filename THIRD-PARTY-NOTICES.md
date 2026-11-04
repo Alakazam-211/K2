@@ -8,6 +8,13 @@ The object types, field names, field limits, known values and defaults in
 `crates/board/src/schema.rs` (and what is generated from it: `schema/board-schema.json` and the
 field tables in `docs/FORMAT.md`) are derived from Board's `widget/schema.js`, ported to Rust.
 
+The templates in `crates/board/src/verbs/templates.rs` are ported from the same file. The rules of the
+verbs in `crates/board/src/verbs/edit.rs`, `arrange.rs` and `clone.rs` are derived from Board's `bin/board`
+and `widget/app.js` and `widget/ui.js`, and the list of actions in `crates/board/src/parity.rs` from its
+`PARITY.md`, all ported to Rust; `docs/PARITY.md` is generated from that list. The conversion pairs in
+`vectors/widget/`, written by `crates/board/tests/support/cases.rs`, describe Board's widget store
+shapes.
+
 MIT License
 
 Copyright (c) 2026 Baden Ballard

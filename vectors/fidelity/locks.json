@@ -1,0 +1,1 @@
+{"frames":["f-1"],"objects":[{"id":"f-1","locked":true,"type":"frame"},{"id":"s-1","locked":true,"text":"t","type":"sticky"},{"from":{"id":"s-1"},"id":"c-1","locked":true,"to":{"id":"s-2"},"type":"connector"},{"id":"s-2","locked":false,"type":"sticky"}],"people":{},"settings":{}}

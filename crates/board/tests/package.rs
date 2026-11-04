@@ -215,7 +215,12 @@ fn overlay_changes_only_what_it_is_told() {
     overlay.set_preview(b"new preview".to_vec());
     overlay.remove("extra/data.bin");
     let mut out = Vec::new();
-    write(&mut out, &meta, &board, &mut overlay, &Limits::V1).expect("write");
+    let wrote = write(&mut out, &meta, &board, &mut overlay, &Limits::V1).map(|_| ());
+    assert_eq!(
+        wrote,
+        Ok(()),
+        "a part the overlay set is read from the overlay, not the source"
+    );
     let mut again = open(&out);
     assert_eq!(
         again.read_part("preview.png").expect("read"),
@@ -606,8 +611,12 @@ fn very_compressible_boards_still_read_back() {
         &Limits::V1,
     )
     .expect("write");
-    let pkg = open(&out);
-    assert_eq!(pkg.board(), &board);
+    let read = Package::open(Cursor::new(out), &Limits::V1).map(|p| p.board().clone());
+    assert_eq!(
+        read,
+        Ok(board),
+        "a board deflate would take past the ratio is stored, so it reads back"
+    );
 }
 
 #[test]
@@ -897,7 +906,8 @@ fn an_overlay_can_put_back_what_it_removed() {
     overlay.add_blob("image/png", b"image bytes".to_vec());
     overlay.set_preview(b"a preview".to_vec());
     let mut out = Vec::new();
-    write(&mut out, &meta, &board, &mut overlay, &Limits::V1).expect("write");
+    let wrote = write(&mut out, &meta, &board, &mut overlay, &Limits::V1).map(|_| ());
+    assert_eq!(wrote, Ok(()), "what an overlay put back is there to write");
     assert!(out == first, "putting the same parts back changed the file");
 }
 
@@ -1096,16 +1106,12 @@ fn a_write_never_lowers_the_versions() {
         &Limits::V1,
     )
     .expect("write");
-    let pkg = open(&out);
+    let read = Package::open(Cursor::new(out), &Limits::V1)
+        .map(|p| (p.manifest().version, p.manifest().min_reader));
     assert_eq!(
-        pkg.manifest().version,
-        VERSION,
-        "below this crate's own version"
-    );
-    assert_eq!(
-        pkg.manifest().min_reader,
-        MIN_READER,
-        "below this crate's own reader"
+        read,
+        Ok((VERSION, MIN_READER)),
+        "below this crate's own version and reader, the file is written at them"
     );
 }
 
@@ -1235,9 +1241,12 @@ fn a_write_keeps_a_higher_min_reader() {
     .expect("write");
     let r = Package::open(Cursor::new(out), &Limits::V1)
         .err()
-        .expect("this reader is too old for it");
-    assert_eq!(r.code, RefusalCode::MinReaderTooHigh);
-    assert_eq!(r.needs_reader, Some(5), "the file's min_reader came down");
+        .map(|r| (r.code, r.needs_reader));
+    assert_eq!(
+        r,
+        Some((RefusalCode::MinReaderTooHigh, Some(5))),
+        "the file keeps its higher min_reader, so this reader is too old for it"
+    );
 }
 
 fn many_bad(count: usize) -> String {

@@ -1015,7 +1015,7 @@ fn a_locked_object_can_be_unlocked_voted_on_and_reacted_to() {
     ] {
         let mut t = b.clone();
         let op = set(&t, "l-1", &pairs);
-        apply_by(&mut t, P1, vec![op]).expect("the lock doesn't cover these");
+        apply_by(&mut t, P1, vec![op]).expect("check: the lock doesn't cover these");
     }
     let mut t = b.clone();
     let op = Op::Set {
@@ -1049,7 +1049,7 @@ fn locks_are_tracked_through_the_group() {
             },
         ],
     )
-    .expect("unlock, then edit, in one group");
+    .expect("check: unlock, then edit, in one group");
     assert_eq!(obj(&b, "l-1").fields.get("text"), Some(&text("edited")));
 
     let mut b = base();
@@ -1389,7 +1389,7 @@ fn an_object_deleted_and_added_back_has_no_old_revision() {
             },
         ],
     )
-    .expect("the added object has nothing to compare with");
+    .expect("check: the added object has nothing to compare with");
     assert_eq!(obj(&b, "s-1").fields.get("text"), Some(&text("again")));
 }
 

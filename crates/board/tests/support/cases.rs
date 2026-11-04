@@ -1,8 +1,11 @@
 //! Every conformance vector, as data. `examples/gen.rs` writes them to `vectors/`, and
-//! `tests/vectors.rs` checks the tree still matches.
+//! `tests/vectors.rs` checks the tree still matches. The widget conversion pairs describe Board's
+//! widget store shapes: portions derived from Board, Copyright (c) 2026 Baden Ballard, MIT (see
+//! `THIRD-PARTY-NOTICES.md`).
 #![allow(dead_code, clippy::vec_init_then_push)]
 
 use crate::support::forge::*;
+use k2_mpc_board::{apply_group, schema, verbs, Board, Limits};
 
 pub struct Case {
     pub layer: &'static str,
@@ -1612,6 +1615,19 @@ fn zip_cases() -> Vec<Case> {
         Forge::new(package(bad, Vec::new()).0).build(),
         "id_invalid",
     ));
+
+    // One board's own manifest on another board.json of the same size: everything the manifest
+    // and the directory say agrees, so only the board's hash tells them apart. A header read
+    // accepts it, since it reads the manifest alone; a summary or an open refuses it.
+    let other = SMALL.replace("\"title\":\"A\"", "\"title\":\"B\"");
+    assert_eq!(other.len(), SMALL.len());
+    let mut entries = package(&other, Vec::new()).0;
+    entries[0] = base_entries().swap_remove(0);
+    v.push(zip_no(
+        "manifest-other-board",
+        Forge::new(entries).build(),
+        "part_hash",
+    ));
     v
 }
 
@@ -1713,7 +1729,7 @@ fn fboard(objects: &str, frames: &str) -> String {
     format!("{{\"frames\":[{frames}],\"objects\":[{objects}],\"people\":{{\"{P1}\":{{\"kind\":\"person\",\"name\":\"Ann\"}},\"{P2}\":{{\"kind\":\"agent\",\"name\":\"Bot\"}}}},\"settings\":{{}}}}")
 }
 
-const WIDGET_README: &str = "# Conversion pairs\n\nEach file here is one shape as Board's widget stores it and as this format holds it, for a host that\nconverts between them. This crate has no converter; it checks that each `file` side is a valid board.\n\nThe host's own forms are neutral here: `key-ann` and `key-bot` stand for however a host keys its\npeople, and `hostblob:` for its blob scheme. A host swaps in its own, and tests those on its side.\n\n- `widget` and `file`: the two sides. `people_map` maps the host's person keys to the file's tokens.\n- `lossy`: what doesn't survive, in words.\n- `widget_back`, `file_back`: what the way back gives, where it differs.\n- `widget_when_absent`: what the widget should show for a field the file leaves out.\n- `widget_back_refused`: why the way back can't hold it.\n";
+const WIDGET_README: &str = "# Conversion pairs\n\nEach file here is one shape as Board's widget stores it and as this format holds it, for a host that\nconverts between them. This crate has no converter; it checks that each `file` side is a valid board,\nand that each `file_refused` pair is refused with its code.\n\nThe host's own forms are neutral here: `key-ann` and `key-bot` stand for however a host keys its\npeople, and `hostblob:` for its blob scheme. A host swaps in its own, and tests those on its side.\n\n- `widget` and `file`: the two sides. `people_map` maps the host's person keys to the file's tokens.\n- `lossy`: what doesn't survive, in words.\n- `lossy_direction`: which way the conversion and its `lossy` line hold. `widget_to_file`: converting `widget` gives `file`, or `file` with `file_back` over it. `file_to_widget`: converting `file` gives `widget`, or `widget` with `widget_back` over it. `both`: both of those. A test runs a pair only the way it names. This is test data: no file carries it.\n- `widget_back`, `file_back`: what the way back gives, where it differs. They hold the members that differ, at the level those members sit: `table-sparse`'s `file_back` is a member of the row `rw-0`, not of the object.\n- `widget_when_absent`: what the widget should show for a field the file leaves out.\n- `widget_back_refused`: why the way back can't hold it.\n- `file_refused`, with `file_text` and `widget_text`: a value the widget's store takes and this format refuses. `file_text` is the `board.json` a direct conversion would write, as text, and reading it gives the refusal code in `file_refused`. Both sides are text because the value can be one a strict JSON reader won't parse. These pairs have no `file` or `widget` member.\n\nThe shapes are Board's: portions derived from Board, Copyright (c) 2026 Baden Ballard, MIT. See\n`THIRD-PARTY-NOTICES.md`.\n";
 
 /// One conversion pair between Board's widget shape and the file. `back` holds what the way back
 /// gives where it differs, as extra members. `lossy` says what doesn't survive, in words.
@@ -1723,9 +1739,31 @@ fn pair(name: &str, widget: &str, file: &str, frames: &str, more: &str, lossy: &
     } else {
         format!(",{more}")
     };
+    let direction = pair_direction(name);
     let text = format!(
-        "{{\"file\":{},\"lossy\":\"{lossy}\",\"people_map\":{{\"key-ann\":\"{P1}\",\"key-bot\":\"{P2}\"}},\"widget\":{widget}{extra}}}\n",
+        "{{\"file\":{},\"lossy\":\"{lossy}\",\"lossy_direction\":\"{direction}\",\"people_map\":{{\"key-ann\":\"{P1}\",\"key-bot\":\"{P2}\"}},\"widget\":{widget}{extra}}}\n",
         fboard(file, frames)
+    );
+    Case::new("widget", name, text.into_bytes())
+}
+
+/// Which way a pair's conversion holds. Most hold both ways: see `vectors/widget/README.md`.
+fn pair_direction(name: &str) -> &'static str {
+    match name {
+        "reaction-unknown" => "file_to_widget",
+        "none-is-absent" => "widget_to_file",
+        _ => "both",
+    }
+}
+
+/// A value the widget's store takes and this format refuses. Both sides are text: the widget's
+/// number can be one a strict reader won't parse at all.
+fn refused_pair(name: &str, widget: &str, file: &str, code: &str, lossy: &str) -> Case {
+    let quote = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+    let text = format!(
+        "{{\"file_refused\":\"{code}\",\"file_text\":\"{}\",\"lossy\":\"{lossy}\",\"lossy_direction\":\"widget_to_file\",\"people_map\":{{}},\"widget_text\":\"{}\"}}\n",
+        quote(file),
+        quote(widget)
     );
     Case::new("widget", name, text.into_bytes())
 }
@@ -1880,6 +1918,27 @@ fn widget_cases() -> Vec<Case> {
             r#""widget_when_absent":{"id":"t-0123456789","type":"text","text":""}"#,
             "Nothing, if the way back uses the file's default for an absent field. The widget's own default for new objects is a placeholder word, and the file's is empty.",
         ),
+        refused_pair(
+            "refused-per-zero",
+            r#"{"meta":{"voting":{"active":true,"perPerson":0}}}"#,
+            r#"{"frames":[],"objects":[],"people":{},"settings":{"voting":{"active":true,"perPerson":0}}}"#,
+            "field_value",
+            "The widget's store takes a limit of 0. The file's limit is a whole number from 1, so a host refuses it or asks.",
+        ),
+        refused_pair(
+            "refused-per-half",
+            r#"{"meta":{"voting":{"active":true,"perPerson":2.5}}}"#,
+            r#"{"frames":[],"objects":[],"people":{},"settings":{"voting":{"active":true,"perPerson":2.5}}}"#,
+            "field_value",
+            "The widget's store takes a limit of 2.5. The file's limit is a whole number from 1, so a host refuses it or asks.",
+        ),
+        refused_pair(
+            "refused-x-range",
+            r#"{"id":"s-0123456789","type":"sticky","x":9007199254740994}"#,
+            r#"{"frames":[],"objects":[{"id":"s-0123456789","type":"sticky","x":9007199254740994}],"people":{},"settings":{}}"#,
+            "json_number_range",
+            "The widget's store takes an x past 2^53, as a double. The file judges the literal, and holds nothing past 2^53.",
+        ),
     ]
 }
 
@@ -1890,6 +1949,188 @@ pub fn all() -> Vec<Case> {
     v.extend(rev_cases());
     v.extend(widget_cases());
     v.extend(bad_id_cases());
+    v.extend(fidelity_cases());
+    v
+}
+
+/// A corpus case: its canonical form is its expected board, and `tests/fidelity.rs` runs each through
+/// a file, field by field and verb by verb.
+fn fidelity(name: &str, input: &str) -> Case {
+    let board = Board::from_json(input.as_bytes(), &Limits::V1)
+        .unwrap_or_else(|r| panic!("the corpus case {name}: {r}"));
+    let mut c = Case::new("fidelity", name, input.as_bytes().to_vec());
+    c.canonical = Some(board.to_canonical_json().expect("canonical"));
+    c
+}
+
+/// A value of each kind that a field of that kind takes.
+fn fidelity_sample(kind: &schema::Kind) -> String {
+    use schema::Kind as K;
+    let sample = match kind {
+        K::Num => "12.5",
+        K::Bool => "true",
+        K::Str(_) => "\"words\"",
+        K::Open(values) | K::Color(values) => return format!("\"{}\"", values[0]),
+        K::ObjectRef => "\"s-0\"",
+        K::GroupId => "\"g-0\"",
+        K::Tags => "[\"a\",\"b\"]",
+        K::Points => "[[1,2],[3.5,4]]",
+        K::End => "{\"x\":1,\"y\":2}",
+        K::Checks => "[{\"done\":false,\"id\":\"i\",\"text\":\"t\"}]",
+        K::Columns => "[{\"id\":\"a\",\"width\":40}]",
+        K::Rows => "[{\"cells\":{\"a\":\"x\"},\"id\":\"r\"}]",
+        K::Reactions => "{\"y\":[\"p-1\"]}",
+        K::Votes => "{\"p-1\":2}",
+        K::Replies => {
+            "[{\"at\":\"2026-11-03T10:00:00Z\",\"by\":\"p-1\",\"id\":\"i\",\"text\":\"t\"}]"
+        }
+        K::Crop => "{\"h\":0.5,\"w\":0.5,\"x\":0,\"y\":0}",
+        K::Link => "\"https://example.com/a\"",
+        K::Blob => {
+            "{\"blob\":\"sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"}"
+        }
+        K::Created => "{\"at\":\"2026-11-03T10:00:00Z\",\"by\":\"p-1\"}",
+        K::Voting => "{\"active\":true,\"perPerson\":2}",
+    };
+    sample.to_string()
+}
+
+/// Every field of every type, set. Built from the tables, so a new field joins it.
+fn every_field() -> String {
+    let mut objects = vec!["{\"id\":\"s-0\",\"type\":\"sticky\"}".to_string()];
+    let mut frames = Vec::new();
+    for (i, (type_name, own)) in schema::TYPES.iter().enumerate() {
+        let id = format!("x-{i}");
+        if *type_name == "frame" {
+            frames.push(format!("\"{id}\""));
+        }
+        let mut members = vec![
+            format!("\"id\":\"{id}\""),
+            format!("\"type\":\"{type_name}\""),
+        ];
+        for field in own.iter().chain(schema::COMMON) {
+            if field.name == "locked" {
+                continue; // a lock would stop the field-by-field edits, and has its own case
+            }
+            let value = if field.name == "frame" {
+                "\"s-0\"".to_string()
+            } else {
+                fidelity_sample(&field.kind)
+            };
+            members.push(format!("\"{}\":{value}", field.name));
+        }
+        objects.push(format!("{{{}}}", members.join(",")));
+    }
+    let settings: Vec<String> = schema::SETTINGS
+        .iter()
+        .map(|f| format!("\"{}\":{}", f.name, fidelity_sample(&f.kind)))
+        .collect();
+    format!(
+        "{{\"frames\":[{}],\"objects\":[{}],\"people\":{{\"p-1\":{{\"kind\":\"person\",\"name\":\"Ann\"}}}},\"settings\":{{{}}}}}",
+        frames.join(","),
+        objects.join(","),
+        settings.join(",")
+    )
+}
+
+fn fidelity_template(name: &str) -> Case {
+    let mut n = 0u64;
+    let mut random = move || {
+        n += 1;
+        n.to_le_bytes()
+    };
+    let mut cx = verbs::Ctx {
+        group_id: "t".into(),
+        by: None,
+        at: None,
+        random: &mut random,
+    };
+    let verb = verbs::Verb::Template {
+        name: name.to_string(),
+        x: 0.0,
+        y: 0.0,
+    };
+    let mut board = Board::empty();
+    let planned = verbs::plan(&board, &mut cx, &verb).expect("a template");
+    apply_group(&mut board, &planned.group).expect("it applies");
+    let text = String::from_utf8(board.to_canonical_json().expect("canonical")).expect("utf-8");
+    fidelity(&format!("template-{name}"), &text)
+}
+
+fn fidelity_cases() -> Vec<Case> {
+    let hash = "sha256-9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+    let mut v = vec![
+        fidelity("every-field", &every_field()),
+        fidelity("empty", "{\"frames\":[],\"objects\":[],\"people\":{},\"settings\":{}}"),
+        fidelity(
+            "unknowns",
+            &format!(
+                r#"{{"frames":["f-1"],"later":{{"a":[1,{{"b":null}}],"c":"keep"}},"objects":[
+{{"id":"u-1","type":"hologram","depth":[[[1.5]]],"anything":{{"x":null,"y":false}}}},
+{{"id":"s-1","type":"sticky","color":"ultraviolet","align":"justify","soon":"keep","x":1}},
+{{"id":"h-1","type":"shape","shape":"hexagram-new","dash":"wavy","soon":{{"blob":"{hash}"}}}},
+{{"id":"c-1","type":"connector","route":"zigzag","startCap":"fish","from":{{"id":"s-1","anchor":"middle","pull":1}},"to":{{"x":1,"y":2,"bend":3}}}},
+{{"id":"f-1","type":"frame","fill":"plaid","soon":1}},
+{{"id":"k-1","type":"card","checks":[{{"id":"a","text":"t","done":true,"soon":1}}]}},
+{{"id":"b-1","type":"table","columns":[{{"id":"a","tint":"red"}}],"rows":[{{"id":"r","tall":true,"cells":{{"a":"x"}}}}]}},
+{{"id":"q-1","type":"comment","replies":[{{"id":"a","by":"p-1","at":"2026-11-03T10:00:00Z","text":"t","pin":true}}]}},
+{{"id":"i-1","type":"image","src":{{"blob":"{hash}"}},"crop":{{"x":0,"y":0,"w":1,"h":1,"soft":true}}}},
+{{"id":"s-2","type":"sticky","created":{{"by":"p-1","at":"2026-11-03T10:00:00Z","via":"import"}}}}
+],"people":{{"p-1":{{"name":"Ann","kind":"robot","pronouns":"keep"}}}},"settings":{{"title":"T","voting":{{"active":true,"mode":"dots"}},"soon":{{"keep":[1]}}}}}}"#
+            ),
+        ),
+        fidelity(
+            "text",
+            "{\"frames\":[],\"objects\":[\
+{\"id\":\"a\",\"text\":\"caf\\u00e9 cafe\u{301} \u{4f60}\u{597d} \u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{1F469}\u{200D}\u{1F4BB} \u{1F1E6}\u{1F1FA}\",\"type\":\"sticky\"},\
+{\"id\":\"b\",\"text\":\"quote \\\" slash \\\\ solidus \\/ line\\nbreak tab\\t nul\\u0000 del\\u007f bom\u{FEFF} sep\u{2028}\",\"type\":\"text\"},\
+{\"id\":\"c\",\"tags\":[\"\u{1F525}\",\"a b\",\"\"],\"text\":\"\",\"type\":\"sticky\"},\
+{\"id\":\"d\",\"reactions\":{\"\u{2764}\u{FE0F}\":[\"p-1\"],\"party-parrot\":[\"p-1\"],\"a b\":[\"p-1\"]},\"type\":\"sticky\"},\
+{\"id\":\"e\",\"\u{7a7a}\u{6c17} field\":\"a name in any language\",\"type\":\"sticky\"}\
+],\"people\":{\"p-1\":{\"name\":\"\u{e9}\u{6c49}\u{1F600}\"}},\"settings\":{\"title\":\"\u{1F4CB} Plan\"}}",
+        ),
+        fidelity(
+            "numbers",
+            "{\"frames\":[],\"objects\":[\
+{\"id\":\"a\",\"type\":\"sticky\",\"x\":1.0,\"y\":-0,\"w\":1e2,\"h\":1.5E+1,\"rot\":0.10000000000000001},\
+{\"id\":\"b\",\"type\":\"sticky\",\"x\":9007199254740992,\"y\":-9007199254740992,\"w\":0.000001,\"h\":1e-7,\"rot\":5e-324},\
+{\"id\":\"c\",\"type\":\"sticky\",\"x\":1234567890123456,\"y\":0.1,\"keep\":[1.0,2.50,3e0]},\
+{\"id\":\"p\",\"points\":[[0.1,0.2],[1e1,-1e1],[3.141592653589793,2.718281828459045]],\"type\":\"pen\"}\
+],\"people\":{},\"settings\":{}}",
+        ),
+        fidelity(
+            "order",
+            "{\"frames\":[\"f-b\",\"f-c\",\"f-a\"],\"objects\":[\
+{\"id\":\"z\",\"type\":\"sticky\"},{\"id\":\"f-c\",\"type\":\"frame\"},{\"id\":\"a\",\"type\":\"sticky\"},\
+{\"id\":\"f-a\",\"type\":\"frame\"},{\"id\":\"m\",\"type\":\"sticky\"},{\"id\":\"f-b\",\"type\":\"frame\"},\
+{\"id\":\"0\",\"type\":\"sticky\"}],\"people\":{},\"settings\":{}}",
+        ),
+        fidelity(
+            "references",
+            "{\"frames\":[\"f-1\"],\"objects\":[\
+{\"id\":\"f-1\",\"type\":\"frame\",\"frame\":\"f-1\"},\
+{\"id\":\"s-1\",\"type\":\"sticky\",\"frame\":\"s-2\"},\
+{\"id\":\"s-2\",\"type\":\"sticky\",\"frame\":\"gone\"},\
+{\"from\":{\"hint\":{\"x\":1,\"y\":2},\"id\":\"gone\"},\"id\":\"c-1\",\"to\":{\"id\":\"s-1\"},\"type\":\"connector\"},\
+{\"id\":\"m-1\",\"parent\":\"m-2\",\"type\":\"mind\"},{\"id\":\"m-2\",\"parent\":\"m-1\",\"type\":\"mind\"},\
+{\"id\":\"q-1\",\"target\":\"gone\",\"type\":\"comment\"}],\"people\":{},\"settings\":{}}",
+        ),
+        fidelity(
+            "locks",
+            "{\"frames\":[\"f-1\"],\"objects\":[\
+{\"id\":\"f-1\",\"locked\":true,\"type\":\"frame\"},\
+{\"id\":\"s-1\",\"locked\":true,\"text\":\"t\",\"type\":\"sticky\"},\
+{\"from\":{\"id\":\"s-1\"},\"id\":\"c-1\",\"locked\":true,\"to\":{\"id\":\"s-2\"},\"type\":\"connector\"},\
+{\"id\":\"s-2\",\"locked\":false,\"type\":\"sticky\"}],\"people\":{},\"settings\":{}}",
+        ),
+        fidelity(
+            "spelling",
+            " {\n  \"settings\" : { } ,\r\n\t\"people\":{ \"p-1\" : { } },\"objects\" : [ { \"type\" : \"sticky\" , \"\\u0074ext\" : \"a\\u00e9\\ud83d\\ude00\" , \"id\" : \"s-1\" } ] , \"frames\" : [ ] } \n",
+        ),
+    ];
+    for (name, _) in verbs::TEMPLATES {
+        v.push(fidelity_template(name));
+    }
     v
 }
 

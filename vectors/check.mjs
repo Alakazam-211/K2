@@ -209,6 +209,7 @@ function badIds(board) {
 }
 
 const index = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8'))
+let corpus = 0
 let passed = 0
 const failed = []
 let skipped = 0
@@ -220,7 +221,8 @@ for (const c of index.cases) {
     else failed.push(`${c.name}: bad ids differ: ${JSON.stringify(got).slice(0, 300)}`)
     continue
   }
-  if (c.layer !== 'canon' && c.layer !== 'rev') { skipped++; continue }
+  if (c.layer !== 'canon' && c.layer !== 'rev' && c.layer !== 'fidelity') { skipped++; continue }
+  if (c.layer === 'fidelity') corpus++
   const input = readFileSync(join(dir, c.input))
   if (c.layer === 'rev') {
     const problem = checkRevs(c, input)
@@ -243,6 +245,7 @@ for (const c of index.cases) {
     else failed.push(`${c.name}: refused ${e.code}, wanted ${c.refusal ?? 'acceptance'}`)
   }
 }
+if (corpus === 0) failed.push('fidelity: the layer did not run')
 for (const f of failed) console.log('FAILED ' + f)
 console.log(`check.mjs: passed=${passed} failed=${failed.length} other-layers=${skipped}`)
 process.exit(failed.length ? 1 : 0)

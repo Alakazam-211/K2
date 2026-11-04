@@ -152,16 +152,46 @@ fn check_widget_pair(input: &[u8], l: &Limits) -> Result<(), String> {
     let Ok(Value::Obj(pair)) = json::parse(input, l) else {
         return Err("not a JSON object".to_string());
     };
+    if !matches!(pair.get("lossy"), Some(Value::Str(s)) if !s.is_empty()) {
+        return Err("no lossy statement".to_string());
+    }
+    if !matches!(pair.get("lossy_direction"), Some(Value::Str(s))
+        if ["both", "widget_to_file", "file_to_widget"].contains(&s.as_str()))
+    {
+        return Err("no lossy_direction: both, widget_to_file or file_to_widget".to_string());
+    }
+    if let Some(code) = pair.get("file_refused") {
+        return check_refused_pair(&pair, code, l);
+    }
     let file = pair.get("file").ok_or("no file side")?;
     if !pair.contains_key("widget") {
         return Err("no widget side".to_string());
     }
-    if !matches!(pair.get("lossy"), Some(Value::Str(s)) if !s.is_empty()) {
-        return Err("no lossy statement".to_string());
-    }
     let bytes = json::to_canonical(file).map_err(|r| r.to_string())?;
     Board::from_json(&bytes, l).map_err(|r| format!("the file side: {r}"))?;
     Ok(())
+}
+
+/// A value the widget's store takes and this format refuses: the file side has to be refused, with
+/// exactly this code.
+fn check_refused_pair(pair: &json::Fields, code: &Value, l: &Limits) -> Result<(), String> {
+    let Value::Str(code) = code else {
+        return Err("file_refused must be a code".to_string());
+    };
+    if pair.contains_key("file") || pair.contains_key("widget") {
+        return Err("a refused pair has file_text and widget_text only".to_string());
+    }
+    if !matches!(pair.get("widget_text"), Some(Value::Str(_))) {
+        return Err("no widget_text".to_string());
+    }
+    let Some(Value::Str(file)) = pair.get("file_text") else {
+        return Err("no file_text".to_string());
+    };
+    match Board::from_json(file.as_bytes(), l) {
+        Ok(_) => Err(format!("wanted refusal {code}, but it was accepted")),
+        Err(r) if r.code.as_str() == code => Ok(()),
+        Err(r) => Err(format!("wanted refusal {code}, got {r}")),
+    }
 }
 
 /// A file with a dangling reference opens and reports it; a write refuses it; the clearing op then
@@ -222,7 +252,7 @@ fn check_case(case: &json::Fields, dir: &Path, report: &mut Report) -> Result<()
     }
     let got = match layer {
         "canon" => run_canon(&input, &l),
-        "json" => run_json(&input, &l),
+        "json" | "fidelity" => run_json(&input, &l),
         "zip" => run_zip(&input, &l),
         other => return Err(format!("unknown layer {other}")),
     };

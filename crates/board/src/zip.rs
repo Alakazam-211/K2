@@ -441,44 +441,77 @@ fn check_layout(entries: &[Central], central_at: u64) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Where an entry's bytes go as they stream, a chunk at a time.
+pub(crate) type Sink<'s> = dyn FnMut(&[u8]) -> Result<(), Refusal> + 's;
+
 /// Reads one entry's bytes, holding it to its declared size, the ratio limit and its CRC.
 pub(crate) fn read_entry<R: Read + Seek>(
     src: &mut R,
     e: &Entry,
     l: &Limits,
 ) -> Result<Vec<u8>, Refusal> {
+    let mut out = Vec::with_capacity((e.usize_ as usize).min(1 << 20));
+    stream_entry(src, e, l, &mut |chunk| {
+        out.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// Streams one entry's bytes to `sink` in chunks of at most 64 KiB, held to its declared size and
+/// the ratio limit as it inflates, so the sink is never given a byte past the declared size. The
+/// CRC is checked at the end: a caller acts on what it was given only once this answers `Ok`.
+pub(crate) fn stream_entry<R: Read + Seek>(
+    src: &mut R,
+    e: &Entry,
+    l: &Limits,
+    sink: &mut Sink<'_>,
+) -> Result<(), Refusal> {
     src.seek(SeekFrom::Start(e.data_offset)).map_err(read_err)?;
-    let out = if e.method == METHOD_STORE {
-        let mut out = vec![0u8; e.csize as usize];
-        src.read_exact(&mut out).map_err(read_err)?;
-        out
-    } else {
-        inflate_entry(src, e, l)?
-    };
-    if crc32(&out) != e.crc {
+    let mut crc = !0u32;
+    {
+        let mut out = |chunk: &[u8]| -> Result<(), Refusal> {
+            crc = crc32_update(crc, chunk);
+            sink(chunk)
+        };
+        if e.method == METHOD_STORE {
+            let mut buf = vec![0u8; (e.csize as usize).min(CHUNK)];
+            let mut left = e.csize;
+            while left > 0 {
+                let n = left.min(buf.len() as u64) as usize;
+                src.read_exact(&mut buf[..n]).map_err(read_err)?;
+                out(&buf[..n])?;
+                left -= n as u64;
+            }
+        } else {
+            inflate_entry(src, e, l, &mut out)?;
+        }
+    }
+    if !crc != e.crc {
         return Err(Refusal::at(
             C::ZipCrc,
             e.name.as_str(),
             "the CRC doesn't match",
         ));
     }
-    Ok(out)
+    Ok(())
 }
 
-fn inflate_entry<R: Read>(src: &mut R, e: &Entry, l: &Limits) -> Result<Vec<u8>, Refusal> {
+fn inflate_entry<R: Read>(
+    src: &mut R,
+    e: &Entry,
+    l: &Limits,
+    sink: &mut Sink<'_>,
+) -> Result<(), Refusal> {
     let mut input = vec![0u8; CHUNK];
     let mut remaining = e.csize;
-    let mut sink = Vec::with_capacity((e.usize_ as usize).min(1 << 20));
     let mut feed = |buf: &mut [u8]| -> Result<usize, Refusal> {
         let n = remaining.min(buf.len() as u64) as usize;
         src.read_exact(&mut buf[..n]).map_err(read_err)?;
         remaining -= n as u64;
         Ok(n)
     };
-    inflate_checked(
-        &mut feed, &mut input, e.csize, e.usize_, &mut sink, &e.name, l,
-    )?;
-    Ok(sink)
+    inflate_checked(&mut feed, &mut input, e.csize, e.usize_, sink, &e.name, l)
 }
 
 /// The inflate loop, shared by the reader and by the writer's check of its own output.
@@ -487,7 +520,7 @@ fn inflate_checked(
     input: &mut [u8],
     csize: u64,
     declared: u64,
-    out: &mut Vec<u8>,
+    out: &mut Sink<'_>,
     name: &str,
     l: &Limits,
 ) -> Result<(), Refusal> {
@@ -504,6 +537,8 @@ fn inflate_checked(
     let (mut pos, mut have) = (0usize, 0usize);
     let mut consumed = 0u64;
     let mut read_total = 0u64;
+    // Bytes given to `out` so far.
+    let mut written = 0u64;
     loop {
         if pos == have && read_total < csize {
             have = feed(input)?;
@@ -513,17 +548,18 @@ fn inflate_checked(
         let r = inflate(&mut state, &input[pos..have], &mut output, MZFlush::None);
         pos += r.bytes_consumed;
         consumed += r.bytes_consumed as u64;
-        if out.len() as u64 + r.bytes_written as u64 > declared {
+        if written + r.bytes_written as u64 > declared {
             return Err(mismatch());
         }
-        out.extend_from_slice(&output[..r.bytes_written]);
-        if !ratio_ok(out.len() as u64, consumed, l) {
+        written += r.bytes_written as u64;
+        if !ratio_ok(written, consumed, l) {
             return Err(Refusal::at(
                 C::LimitRatio,
                 name,
                 format!("inflates past {}:1", l.ratio),
             ));
         }
+        out(&output[..r.bytes_written])?;
         match r.status {
             Ok(MZStatus::StreamEnd) => break,
             Ok(_) | Err(MZError::Buf) => {
@@ -535,7 +571,7 @@ fn inflate_checked(
             Err(_) => return Err(invalid()),
         }
     }
-    if out.len() as u64 != declared || consumed != csize {
+    if written != declared || consumed != csize {
         return Err(mismatch());
     }
     Ok(())
@@ -557,13 +593,12 @@ pub(crate) fn deflate_for_write(data: &[u8], l: &Limits) -> Option<Vec<u8>> {
             Ok(n)
         };
         let mut input = vec![0u8; CHUNK];
-        let mut sink = Vec::with_capacity(data.len());
         let check = inflate_checked(
             &mut feed,
             &mut input,
             packed.len() as u64,
             data.len() as u64,
-            &mut sink,
+            &mut |_| Ok(()),
             "board.json",
             l,
         );
@@ -691,7 +726,13 @@ const fn crc_tables() -> [[u32; 256]; 8] {
 
 /// CRC-32 (IEEE), slicing by eight.
 pub(crate) fn crc32(data: &[u8]) -> u32 {
-    let mut c = !0u32;
+    !crc32_update(!0u32, data)
+}
+
+/// The CRC's running state after `data`, from the state before it: `!0` to start, and the CRC is
+/// the state inverted at the end.
+fn crc32_update(state: u32, data: &[u8]) -> u32 {
+    let mut c = state;
     let mut chunks = data.chunks_exact(8);
     for w in &mut chunks {
         let lo = u32::from_le_bytes([w[0], w[1], w[2], w[3]]) ^ c;
@@ -708,7 +749,7 @@ pub(crate) fn crc32(data: &[u8]) -> u32 {
     for &b in chunks.remainder() {
         c = (c >> 8) ^ CRC_TABLES[0][((c ^ u32::from(b)) & 0xFF) as usize];
     }
-    !c
+    c
 }
 
 #[cfg(test)]
@@ -728,23 +769,89 @@ mod tests {
             Ok(n)
         };
         let mut input = vec![0u8; CHUNK];
-        let mut sink = Vec::new();
+        let mut kept = 0u64;
         let r = inflate_checked(
             &mut feed,
             &mut input,
             packed.len() as u64,
             declared,
-            &mut sink,
+            &mut |chunk| {
+                kept += chunk.len() as u64;
+                Ok(())
+            },
             "x",
             &Limits::V1,
-        )
-        .expect_err("refused");
-        assert_eq!(r.code, C::ZipSizeMismatch);
-        assert!(
-            sink.len() as u64 <= declared,
-            "kept {} bytes past the declared size",
-            sink.len()
         );
+        assert!(
+            matches!(&r, Err(e) if e.code == C::ZipSizeMismatch),
+            "{r:?}"
+        );
+        assert!(
+            kept <= declared,
+            "gave {kept} bytes, past the declared {declared}"
+        );
+    }
+
+    fn entry(method: u16, data: &[u8], body: &[u8], declared: u64) -> Entry {
+        Entry {
+            name: "x".into(),
+            method,
+            crc: crc32(data),
+            csize: body.len() as u64,
+            usize_: declared,
+            data_offset: 0,
+        }
+    }
+
+    /// Streams an entry and gives the result, the bytes and the largest chunk.
+    fn streamed(e: &Entry, body: &[u8]) -> (Result<(), Refusal>, Vec<u8>, usize) {
+        let mut got = Vec::new();
+        let mut largest = 0;
+        let r = stream_entry(
+            &mut std::io::Cursor::new(body),
+            e,
+            &Limits::V1,
+            &mut |chunk| {
+                largest = largest.max(chunk.len());
+                got.extend_from_slice(chunk);
+                Ok(())
+            },
+        );
+        (r, got, largest)
+    }
+
+    #[test]
+    fn a_streamed_entry_never_passes_more_than_its_declared_size() {
+        let plain = vec![b' '; 1024 * 1024];
+        let packed = compress_to_vec(&plain, 6);
+        let (r, got, _) = streamed(&entry(METHOD_DEFLATE, &plain, &packed, 1000), &packed);
+        assert!(
+            matches!(&r, Err(e) if e.code == C::ZipSizeMismatch),
+            "{r:?}"
+        );
+        assert!(
+            got.len() <= 1000,
+            "the sink was given {} bytes, past the declared 1000",
+            got.len()
+        );
+
+        let declared = plain.len() as u64;
+        let (r, got, largest) =
+            streamed(&entry(METHOD_DEFLATE, &plain, &packed, declared), &packed);
+        assert!(r.is_ok(), "{r:?}");
+        assert!(got == plain, "the bytes as they were");
+        assert!(largest <= CHUNK, "a chunk of {largest} bytes");
+
+        let stored: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let e = entry(METHOD_STORE, &stored, &stored, stored.len() as u64);
+        let (r, got, largest) = streamed(&e, &stored);
+        assert!(r.is_ok(), "{r:?}");
+        assert!(got == stored, "stored bytes as they were");
+        assert!(largest <= CHUNK, "a chunk of {largest} bytes");
+
+        let wrong = Entry { crc: 1, ..e };
+        let (r, _, _) = streamed(&wrong, &stored);
+        assert!(matches!(&r, Err(e) if e.code == C::ZipCrc), "{r:?}");
     }
 
     #[test]

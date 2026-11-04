@@ -35,7 +35,7 @@ export async function withoutPresenceCheck<T>(f: () => Promise<T>): Promise<T> {
  * no sent form). Independent of the replica's own history.
  */
 export function serverPlacement(live: LiveText, server: FakeServer, id: number): Hunk[] | null {
-  type I = { sentOf: Map<number, { hunks: Hunk[]; base: number }>; inflight: { hunks: Hunk[]; doomed?: unknown } | null; queue: Array<{ hunks: Hunk[] }> };
+  type I = { sentOf: Map<number, { hunks: Hunk[]; base: number }>; inflight: { hunks: Hunk[]; doomed?: unknown } | null; queue: Array<{ hunks: Hunk[] } | { held: string }> };
   const x = live as unknown as I;
   const sent = x.sentOf.get(id);
   if (!sent) return null;
@@ -43,7 +43,9 @@ export function serverPlacement(live: LiveText, server: FakeServer, id: number):
   const r = rebaseOurs(sent.hunks, log);
   if ("conflict" in r) return null;
   let c = Carried.of(r.ok);
-  for (const e of [...(x.inflight && !x.inflight.doomed ? [x.inflight] : []), ...x.queue]) {
+  // the replica's pending edits (an undo or redo held among them is no edit)
+  const queued = x.queue.filter((e): e is { hunks: Hunk[] } => !("held" in e));
+  for (const e of [...(x.inflight && !x.inflight.doomed ? [x.inflight] : []), ...queued]) {
     const t = c.through(e.hunks, 0);
     if ("conflict" in t) return null;
     c = t.ok;

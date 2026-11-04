@@ -6,6 +6,19 @@
 #   PATH IDENT   the word IDENT in the file PATH
 # A line's `#` starts a comment.
 
+# v0.10.2.1 (client 0.12.1): an undo or redo goes in order with the edits typed around it
+client/test/live.test.ts undo_order_undo
+client/test/live.test.ts undo_order_redo
+client/test/live.test.ts undo_order_seal
+client/test/live.test.ts undo_order_pending
+client/test/wire.test.ts undo_order_e2e_undo
+client/test/wire.test.ts undo_order_e2e_redo
+client/test/wire.test.ts undo_order_reconnect
+# the fake host's per-participant undo and redo stacks, as the kit's
+client/test/wire.test.ts fake_stacks_undo
+client/test/wire.test.ts fake_stacks_redo
+client/test/wire.test.ts fake_stacks_clear
+
 # v0.10.0.3 (b11f00cc): K-AUD-1 after a restart, the disk replica's write-back (5effd640..57c3562b)
 an_outside_save_then_a_restart_keeps_the_replica_the_docs_text
 a_stale_replica_after_a_restart_is_reported_and_repaired

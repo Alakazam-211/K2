@@ -28,7 +28,7 @@ with `utf8Len`, `byteToIndex` and `indexToByte`.
 | `noteReapplied(id)` | After re-applying a lost-reply rejection: if it lands late after all, `onDuplicateRisk` fires. |
 | `dismiss(id)` | The person dismissed it. |
 | `insertHerePreview(id)` / `insertHere(id)` | "Insert my text here" for a single-hunk rejection: show where its typed text would go, then insert it as its own edit (`PRESENCE.md`). Not the server's rule; never deletes. |
-| `undo()` / `redo()` | Requests to the server. Their text arrives as a `change`; then `onUndo` (`steps: 0`: nothing to undo), or `onError` (`MPC-E201`-`E203`). |
+| `undo()` / `redo()` | Requests to the server, sent in order behind the edits typed before them. Their text arrives as a `change`; then `onUndo` (`steps: 0`: nothing to undo), or `onError` (`MPC-E201`-`E203`). |
 | `onAck`, `onLanded`, `onReload`, `onError`, `onClosed` | Pending state; a lost change that landed after all; a reload (call `reload()`, which asks for a snapshot and resets); errors to show. |
 | `disconnected()` / `reconnected(welcome)` | Around every reconnect (below). |
 | `setVisible(v)`, `resync()`, `close()` | The view is (not) in front; the host suspects lost frames; the tab closed. |

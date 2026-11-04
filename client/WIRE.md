@@ -180,6 +180,11 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
   (`details.conflicts`); `onError`. The live wire offers neither `--partial` nor `--drop`.
 - `LiveText.undo()` / `redo()` return the op; a reply that never comes (the socket dropped) is
   forgotten on `reconnected`.
+- The server undoes the top of the participant's stack when the request arrives, so
+  `LiveText` sends an `undo` or `redo` in order with the edits: behind every edit typed before
+  it (queued edits first, without waiting for their acks), never composed with one typed after
+  it. With nothing queued it goes at once. Held while disconnected, it goes on the new
+  connection in the same place.
 - An undo's or redo's `change` says `kind: "undo"` / `"redo"` (kit v0.10.1). An undo still
   unanswered when a connection drops can land late under that connection's client ID, as can
   an edit whose reply was lost: the client tells them apart by `kind` (`HOST.md`,

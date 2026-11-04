@@ -88,8 +88,8 @@ describe("reconnect (G4, G5)", () => {
     const c = await open(server, "ada");
     c.live.applyLocal([h(2, 2, "!")]);
     c.link.drop(); // the edit was still on the wire: lost
+    c.live.undo(); // sent while down (nothing queued: it goes at once): dropped
     c.live.applyLocal([h(0, 0, ">")], { group: "other" }); // queued behind it
-    c.live.undo(); // sent while down: dropped
     c.live.setVisible(false); // dropped too, but re-sent on reconnect
     expect(c.link.dropped.map((f) => f.type)).toEqual(["undo", "visible"]);
     const w = await c.link.connect({ resume: c.live.version, signal: new AbortController().signal });
@@ -230,6 +230,130 @@ describe("the own-edit filter (G3) and undo (G9)", () => {
     run(net);
     expect(errors).toEqual(["MPC-E201"]);
     expect(l.text).toBe(server.text);
+  });
+});
+
+describe("the fake host's undo and redo, per participant as the kit's (session/live.rs: undo_redo, push_batch)", () => {
+  /** One replica on the fake host, every frame answered before the next step. */
+  function one(text: string) {
+    const net = new Net();
+    const server = new FakeServer(net, text);
+    const l = new LiveText(server.snapshot(), server.connect(1, () => 5), { client: 1 });
+    const undos: UndoResult[] = [];
+    l.onUndo((u) => undos.push(u));
+    const step = (f: () => unknown) => {
+      f();
+      run(net);
+    };
+    return { server, l, undos, step };
+  }
+
+  it("a second undo takes the step before (an undo isn't itself undone) (fake_stacks_undo)", () => {
+    const { server, l, step } = one("ab");
+    step(() => l.applyLocal([h(2, 2, "c")], { group: "g1" }));
+    step(() => l.applyLocal([h(3, 3, "d")], { group: "g2" }));
+    step(() => l.undo());
+    expect(server.text).toBe("abc");
+    step(() => l.undo());
+    expect(server.text).toBe("ab");
+    expect(l.text).toBe("ab");
+  });
+
+  it("a redo puts the undone step back, with its steps (fake_stacks_redo)", () => {
+    const { server, l, undos, step } = one("ab");
+    step(() => l.applyLocal([h(2, 2, "c")], { group: "g1" }));
+    step(() => l.undo());
+    expect(server.text).toBe("ab");
+    const r = l.redo();
+    step(() => {});
+    expect(undos[1]).toEqual({ op: r, kind: "redo", steps: 1, version: 3, notice: null });
+    expect(server.text).toBe("abc");
+    expect(l.text).toBe("abc");
+  });
+
+  it("an edit clears the redo stack (fake_stacks_clear)", () => {
+    const { server, l, undos, step } = one("ab");
+    step(() => l.applyLocal([h(2, 2, "c")], { group: "g1" }));
+    step(() => l.undo());
+    // with no edit since, the undone step is there to redo
+    const r1 = l.redo();
+    step(() => {});
+    expect(undos[1]).toEqual({ op: r1, kind: "redo", steps: 1, version: 3, notice: null });
+    step(() => l.undo());
+    expect(server.text).toBe("ab");
+    // an edit since: it is gone
+    step(() => l.applyLocal([h(2, 2, "x")], { group: "g2" }));
+    const r2 = l.redo();
+    step(() => {});
+    expect(undos[3]).toEqual({ op: r2, kind: "redo", steps: 0, version: 5, notice: null });
+    expect(server.text).toBe("abx");
+  });
+});
+
+describe("undo and redo in order with the edits (the server takes the top of the participant's stack)", () => {
+  it("\"c\", then \"d\", then undo before any ack: \"d\" is undone, and a redo brings it back (undo_order_e2e_undo)", () => {
+    const net = new Net();
+    const server = new FakeServer(net, "ab");
+    const l = new LiveText(server.snapshot(), server.connect(1, () => 5), { client: 1 });
+    const undos: UndoResult[] = [];
+    l.onUndo((u) => undos.push(u));
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const u = l.undo();
+    run(net);
+    expect(server.text).toBe("abc");
+    expect(server.log.map((a) => [a.kind, a.hunks])).toEqual([
+      ["edit", [h(2, 2, "c")]],
+      ["edit", [h(3, 3, "d")]],
+      ["undo", [h(3, 4)]],
+    ]);
+    expect(l.text).toBe("abc");
+    expect(undos).toEqual([{ op: u, kind: "undo", steps: 1, version: 3, notice: null }]);
+    const r = l.redo();
+    run(net);
+    expect(server.text).toBe("abcd");
+    expect(l.text).toBe("abcd");
+    expect(undos[1]).toEqual({ op: r, kind: "redo", steps: 1, version: 4, notice: null });
+  });
+
+  it("\"c\", undo, \"d\", then redo before any ack: \"d\" went first and cleared the redo, so nothing is redone (undo_order_e2e_redo)", () => {
+    const net = new Net();
+    const server = new FakeServer(net, "ab");
+    const l = new LiveText(server.snapshot(), server.connect(1, () => 5), { client: 1 });
+    const undos: UndoResult[] = [];
+    l.onUndo((u) => undos.push(u));
+    l.applyLocal([h(2, 2, "c")], { group: "g1" });
+    l.undo(); // nothing queued ("c" is in flight): it goes at once
+    l.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const r = l.redo();
+    run(net);
+    expect(server.text).toBe("abd");
+    expect(server.log.map((a) => a.kind)).toEqual(["edit", "undo", "edit"]);
+    expect(l.text).toBe("abd");
+    expect(undos[1]).toEqual({ op: r, kind: "redo", steps: 0, version: 3, notice: null });
+  });
+
+  it("held while disconnected: on the new connection it goes in its place, after the edits typed before it and before those after (undo_order_reconnect)", async () => {
+    const net = new Net();
+    const server = new FakeServer(net, "ab");
+    const c = await open(server, "ada");
+    c.live.applyLocal([h(2, 2, "c")], { group: "g1" });
+    run(net);
+    expect(server.text).toBe("abc");
+    c.link.drop();
+    run(net);
+    c.live.disconnected();
+    c.live.applyLocal([h(3, 3, "d")], { group: "g2" });
+    const u = c.live.undo();
+    c.live.applyLocal([h(4, 4, "e")], { group: "g3" });
+    const w = await c.link.connect({ resume: c.live.version, signal: new AbortController().signal });
+    c.live.reconnected(w);
+    run(net);
+    expect(server.log.map((a) => a.kind)).toEqual(["edit", "edit", "undo", "edit"]);
+    expect(server.text).toBe("abce");
+    expect(c.live.text).toBe("abce");
+    expect(c.undos.map((x) => [x.op, x.kind, x.steps])).toEqual([[u, "undo", 1]]);
+    expect(c.rej).toEqual([]);
   });
 });
 

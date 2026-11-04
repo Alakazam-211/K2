@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.2.1 (unreleased)
+
+v0.10.2 plus the JS client 0.12.1: an undo or redo made while edits are queued goes after them,
+in order, so the server undoes the step the person meant (`client/CHANGELOG.md`, 0.12.1).
+Client only: no change to the kit's Rust library, store, merge or wire. The crate version stays
+`0.10.2`; the client is `0.12.1`.
+
 ## v0.10.2 (2026-11-02)
 
 The first host release after v0.10.0.3: the v0.10.0.3 disk-replica fix (K-AUD-1, kept, not

@@ -652,6 +652,17 @@ export interface FsChangedEvent {
   paths: string[]
 }
 
+/** APP-LEVEL: a `.k5board` file changed through K2 (a tab or an agent's
+ *  `k2 board --file`). A client with that file open re-reads with `ifHash`.
+ *  `workspace` is the absolute root, `rel` the path in it, `by` the pid. */
+export interface BoardFileChangedEvent {
+  kind: 'board_file_changed'
+  workspace: string
+  rel: string
+  hash: string
+  by: string
+}
+
 /** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a
  *  workspace's Changes view may have moved (index / HEAD / refs, or a
  *  non-ignored working-tree edit). Debounced 300 ms (1 s max) per workspace
@@ -944,6 +955,7 @@ export type SessionEventMessage =
   | SubscriptionUsageChangedEvent
   | LlmAccountsChangedEvent
   | FsChangedEvent
+  | BoardFileChangedEvent
   | GitChangedEvent
   | GitNotesChangedEvent
   | OpenChangesEvent

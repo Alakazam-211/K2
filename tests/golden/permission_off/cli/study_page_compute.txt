@@ -704,9 +704,13 @@ TOOLCHAINS (what the job needs installed)
   target add inside the job: the toolchain is the node's, read-only to
   jobs). Targets need k2-node 0.46.13+ with rustup: K2 places the job on
   such a node, never on an older k2-node or one whose Rust is a system
-  package; naming one of those refuses the job (node_upgrade_required /
-  rust_target_unsupported, exit 3). --plan shows each need ready or to
-  install on the node it would pick.
+  package. Naming one refuses the job, exit 3: an older k2-node with
+  node_upgrade_required, a system-Rust node with rust_target_unsupported
+  (leave the node out and K2 picks one that can). --plan shows each need
+  ready or to install on the node it would pick. A target is Rust's std
+  for that platform only: linking for iOS (aarch64-apple-ios, -ios-sim)
+  needs a full Xcode on the node, Android (aarch64-/x86_64-linux-android)
+  the NDK; K2 doesn't install or check either yet.
   The repo's own files count too (best effort; unsupported tools there
   are skipped with a note in the log):
   mise.toml, .tool-versions, .nvmrc, .node-version, .python-version,

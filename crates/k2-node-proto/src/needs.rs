@@ -518,6 +518,17 @@ mod tests {
         assert_eq!(parse(&m.token()).unwrap(), m);
         assert_eq!(parse("rust@nightly+target:thumbv8m.main-none-eabi").unwrap().token(), "rust@nightly+target:thumbv8m.main-none-eabi");
         assert_eq!(parse_all(&["rust@1.95.0+target:wasm32-unknown-unknown", "cmake@3"]).unwrap().len(), 2);
+        // A phone build's four targets on a pinned toolchain: one need.
+        let phone = parse("rust@1.95.0+target:aarch64-apple-ios+target:aarch64-apple-ios-sim+target:aarch64-linux-android+target:x86_64-linux-android").unwrap();
+        assert_eq!(
+            phone,
+            Need::Rust {
+                channel: "1.95.0".into(),
+                components: vec![],
+                targets: vec!["aarch64-apple-ios".into(), "aarch64-apple-ios-sim".into(), "aarch64-linux-android".into(), "x86_64-linux-android".into()],
+            }
+        );
+        assert_eq!(parse(&phone.token()).unwrap(), phone);
         for bad in [
             "rust@stable+target:",
             "rust@stable+target:-x",

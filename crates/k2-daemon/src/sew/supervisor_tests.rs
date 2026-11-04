@@ -2714,3 +2714,229 @@ fn k2_managed_warnings_never_fail_a_run_and_a_hint_is_the_reason() {
     let e = sew_run(&env, &["rollback"], None).expect_err("exit 3");
     assert_eq!(e, "sew rollback: exit 3: this box's chat is run by K2: use k2 hostchat", "Sew's hint is the reason");
 }
+
+// ── Sew 0.7.3 (MRB1): the rollback puts the voice engine back itself ─────
+//
+// `sew upgrade --rollback` answers `media: {state, …}`; K2 passes it through
+// as `media`, runs no engine step of its own, shows Sew's command for
+// `manual` and `failed`, and never runs the rollback again.
+
+const MEDIA_CMD: &str = "sew media upgrade --tarball sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz";
+
+/// Sew 0.7.3's `sew upgrade --rollback --json` answer, as the helper wraps it.
+fn sew_073_rollback(exit: i64, media: &Value) -> Value {
+    let from = pinned().version;
+    let mut sew = json!({
+        "state": "rolled_back", "from": from, "to": "0.0.1", "restored_bundle": null,
+        "sew": {"from": from, "to": "0.0.1"}, "media": media,
+    });
+    if matches!(media["state"].as_str(), Some("manual" | "failed")) {
+        sew["warnings"] = json!(["media_not_rolled_back"]);
+    }
+    json!({"sewExit": exit, "sew": sew, "stderrTail": ""})
+}
+
+fn manual_media() -> Value {
+    json!({"state": "manual", "from": "0.0.2", "to": "0.0.1",
+        "reason": "the media engine 0.0.1 that sew 0.0.1 goes with is not on this box", "command": MEDIA_CMD})
+}
+
+fn failed_media() -> Value {
+    json!({"state": "failed", "from": "0.0.2", "to": "0.0.1",
+        "error": "the engine reports 0.0.2 after the restart, not 0.0.1", "command": MEDIA_CMD})
+}
+
+/// The plain rollback ran exactly once, and K2's own engine step never ran.
+fn one_rollback_and_no_engine_step(t: &T, what: &str) {
+    let eff = t.ops.effects();
+    assert_eq!(eff.iter().filter(|e| *e == "engine sew rollback").count(), 1, "{what}: never rerun: {eff:?}");
+    assert!(!eff.iter().any(|e| e == "engine sew media rollback" || e == "engine sew media upgrade"), "{what}: Sew did the engine: {eff:?}");
+}
+
+/// rolled_back, unchanged, not_installed and left are done: Sew's `media`
+/// passes through whole, nothing to run, no K2 engine step, no lastError.
+#[test]
+fn sew_0_7_3_rollback_done_media_states_pass_through() {
+    for media in [
+        json!({"state": "rolled_back", "from": "0.0.2", "to": "0.0.1", "source": "/usr/local/lib/sew-media/sew-media.pre-upgrade", "restarted": true}),
+        json!({"state": "unchanged", "version": "0.0.1"}),
+        json!({"state": "not_installed"}),
+        json!({"state": "left", "version": "0.0.2", "reason": "/usr/local/lib/sew/sew.prev has no media pin (an unpinned build)"}),
+    ] {
+        let state = media["state"].as_str().unwrap().to_string();
+        let t = upgraded_with_voice();
+        t.ops.queue("engine sew rollback", Ok(sew_073_rollback(0, &media)));
+        *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+        let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+        assert_eq!((r["ok"].as_bool(), r["state"].as_str(), r["version"].as_str()), (Some(true), Some("running"), Some("0.0.1")), "{state}: {r}");
+        assert_eq!(r["media"], media, "{state}: Sew's media whole");
+        for k in ["code", "mediaCommand", "mediaNote", "warnings", "doctor"] {
+            assert!(r.get(k).is_none(), "{state}: no {k}: {r}");
+        }
+        one_rollback_and_no_engine_step(&t, &state);
+        let row = t.row();
+        assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")), "{state}");
+        assert!(row.last_error.is_none(), "{state}: {:?}", row.last_error);
+    }
+    // No voice on K2's side: Sew's answer still passes through.
+    let t = t();
+    t.enabled();
+    t.ops.queue("engine sew rollback", Ok(sew_073_rollback(0, &json!({"state": "not_installed"}))));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback(&t.env()).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["media"]["state"].as_str()), (Some(true), Some("not_installed")), "{r}");
+}
+
+/// manual: Sew exits 0 and the rollback is done (ok stays true), but its
+/// engine is not: Sew's exact command line in `mediaCommand`, the words in
+/// `mediaNote` and lastError, Sew's warning passed on, never a rerun.
+#[test]
+fn sew_0_7_3_manual_shows_sews_command_and_never_reruns_the_rollback() {
+    let t = upgraded_with_voice();
+    let media = manual_media();
+    t.ops.queue("engine sew rollback", Ok(sew_073_rollback(0, &media)));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["state"].as_str()), (Some(true), Some("running")), "{r}");
+    assert_eq!(r["media"], media);
+    assert_eq!(r["mediaCommand"], MEDIA_CMD);
+    assert_eq!(r["warnings"], json!([MEDIA_NOT_ROLLED_BACK]));
+    assert!(r.get("code").is_none(), "manual is not a failure: {r}");
+    let note = r["mediaNote"].as_str().unwrap();
+    assert!(note.contains(&format!("as root: {MEDIA_CMD}")), "{note}");
+    assert!(note.contains("rolled back to 0.0.1") && note.contains(media["reason"].as_str().unwrap()), "{note}");
+    assert!(note.contains("don't run k2 hostchat rollback again"), "{note}");
+    one_rollback_and_no_engine_step(&t, "manual");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")));
+    assert_eq!(row.last_error.as_deref(), Some(note), "k2 hostchat status keeps the line");
+}
+
+/// failed: Sew exits 1 with Sew itself rolled back and running. K2 records
+/// the rollback (never "rollback failed"), answers ok false with the named
+/// code media_rollback_failed, Sew's error and command, and never reruns.
+#[test]
+fn sew_0_7_3_failed_is_named_and_says_sew_itself_is_rolled_back() {
+    let t = upgraded_with_voice();
+    let media = failed_media();
+    let mut a = sew_073_rollback(1, &media);
+    a["reason"] = json!("media rollback 0.0.2 -> 0.0.1 FAILED");
+    t.ops.queue("engine sew rollback", Ok(a));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["code"].as_str()), (Some(false), Some(MEDIA_ROLLBACK_FAILED)), "{r}");
+    assert_eq!((r["state"].as_str(), r["version"].as_str()), (Some("running"), Some("0.0.1")), "{r}");
+    assert_eq!(r["media"], media);
+    assert_eq!(r["mediaCommand"], MEDIA_CMD);
+    assert_eq!(r["warnings"], json!([MEDIA_NOT_ROLLED_BACK]));
+    let e = r["error"].as_str().unwrap();
+    assert!(e.contains("Sew itself is rolled back to 0.0.1 and running"), "{e}");
+    assert!(e.contains("the engine reports 0.0.2 after the restart") && e.contains(MEDIA_CMD), "{e}");
+    assert!(e.contains("don't run k2 hostchat rollback again"), "{e}");
+    one_rollback_and_no_engine_step(&t, "failed");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref(), row.previous_version.as_deref()), ("running", Some("0.0.1"), None));
+    assert_eq!(row.last_error.as_deref(), Some(e));
+
+    // An exit 1 that is not 0.7.3's engine failure (Sew put the install
+    // back) stays a failed rollback, as before.
+    let t = upgraded_with_voice();
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 1, "sew": {"ok": false, "error": {"message": "no sew.prev"}}})));
+    let f = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap_err();
+    assert_eq!(f.code, "rollback_failed", "{}", f.hint);
+    assert_eq!(t.row().status, "error");
+}
+
+/// A media.state this K2 doesn't know (a later Sew) is never read as done.
+#[test]
+fn sew_rollback_unknown_media_state_is_never_done() {
+    let t = upgraded_with_voice();
+    t.ops.queue("engine sew rollback", Ok(sew_073_rollback(0, &json!({"state": "sideways"}))));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["code"].as_str()), (Some(false), Some(MEDIA_STATE_UNKNOWN)), "{r}");
+    assert!(r["error"].as_str().unwrap().contains("media.state 'sideways'"), "{r}");
+    one_rollback_and_no_engine_step(&t, "unknown");
+}
+
+/// An older Sew answers no media.state: K2's own engine step runs as
+/// before, and K2 never invents a state.
+#[test]
+fn an_older_sews_rollback_keeps_k2s_own_engine_step() {
+    let t = upgraded_with_voice();
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["media"]["result"].as_str()), (Some(true), Some("done")), "{r}");
+    assert!(r["media"].get("state").is_none() && r.get("mediaNote").is_none() && r.get("code").is_none(), "{r}");
+    assert!(t.ops.effects().iter().any(|e| e == "engine sew media rollback"), "{:?}", t.ops.effects());
+}
+
+/// The emergency rollback: manual is done (doctor's media.* fails until
+/// Sew's line runs don't make it unclean) and names the command; failed
+/// (exit 1) is Sew rolled back, never "put back", named, the point spent.
+#[test]
+fn the_emergency_rollback_reads_sews_media_state() {
+    let argv = format!("engine sew rollback accept-data-loss {PRE_BUNDLE}");
+    let media_doctor = json!({"sewExit": 1, "sew": {"ok": false, "checks": [
+        {"id": "media.binary", "status": "fail", "detail": "the binary's sha256 differs from the pin baked into sew", "hint": ""},
+    ]}});
+
+    let t = upgraded_with_voice_and_rbloss();
+    t.ops.queue(&argv, Ok(sew_073_rollback(0, &manual_media())));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    t.ops.queue("engine sew doctor", Ok(media_doctor.clone()));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("rolled_back"), Some(true)), "{r}");
+    assert_eq!(r["media"]["state"], "manual");
+    assert_eq!(r["mediaCommand"], MEDIA_CMD);
+    assert_eq!(r["doctorFails"], json!(["media.binary"]));
+    let m = r["message"].as_str().unwrap();
+    assert!(m.contains(MEDIA_CMD) && m.contains("don't run k2 hostchat rollback again"), "{m}");
+    assert!(t.ops.record_load(ROLLBACK_POINT_RECORD).is_none(), "the point is spent");
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew media rollback"), "{:?}", t.ops.effects());
+    // Another doctor failure still makes it unhealthy.
+    let t = upgraded_with_voice_and_rbloss();
+    t.ops.queue(&argv, Ok(sew_073_rollback(0, &manual_media())));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    t.ops.queue("engine sew doctor", Ok(json!({"sewExit": 1, "sew": {"ok": false, "checks": [
+        {"id": "media.binary", "status": "fail", "detail": "x", "hint": ""},
+        {"id": "db.reachable", "status": "fail", "detail": "y", "hint": ""},
+    ]}})));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("rolled_back_unhealthy"), Some(false)), "{r}");
+
+    let t = upgraded_with_voice_and_rbloss();
+    t.ops.queue(&argv, Ok(sew_073_rollback(1, &failed_media())));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    t.ops.queue("engine sew doctor", Ok(media_doctor));
+    let r = rollback_accept_data_loss(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL)), PRE_BUNDLE).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some(MEDIA_ROLLBACK_FAILED), Some(false)), "{r}");
+    let m = r["message"].as_str().unwrap();
+    assert!(m.contains("Sew itself is rolled back to 0.0.1 and running") && m.contains(MEDIA_CMD), "{m}");
+    assert!(!m.contains("put Sew"), "never 'put back': {m}");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")));
+    assert!(t.ops.record_load(ROLLBACK_POINT_RECORD).is_none(), "the point is spent");
+}
+
+/// The upgrade's automatic rollback: Sew 0.7.3's exit 1 (engine failed) is
+/// a rollback, recorded with Sew's command, never rollback_failed.
+#[test]
+fn the_automatic_rollback_takes_sews_failed_engine_as_rolled_back() {
+    let t = t();
+    on_old_release(&t);
+    *t.ops.mgmt_health_ok.lock().unwrap() = false;
+    t.ops.queue("engine sew rollback", Ok(sew_073_rollback(1, &failed_media())));
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
+    let p = upgrade_machine_with_flip(&env, &req, &from, &t.ops);
+    drop(l);
+    assert_eq!(p["result"], "rolled_back", "{p}");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")));
+    let e = row.last_error.unwrap();
+    assert!(e.contains("rolled back to 0.0.1") && e.contains(MEDIA_CMD), "{e}");
+    assert_eq!(t.ops.effects().iter().filter(|e| *e == "engine sew rollback").count(), 1);
+}

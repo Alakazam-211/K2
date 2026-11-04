@@ -25,6 +25,9 @@
 #   9. media uninstall (0.46.3) asks on a terminal ([y/N]; n sends nothing),
 #      refuses with confirm_required naming --yes when there is no
 #      terminal, and --yes / -y send {"confirm": true}.
+#  10. Sew 0.7.3 rollback: --json passes .media.state through; manual exits
+#      0 and prints Sew's one command; failed exits 3 media_rollback_failed
+#      saying Sew itself is rolled back; one request each, never a rerun.
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -153,6 +156,23 @@ class H(BaseHTTPRequestHandler):
             out = {"ok": True, "supported": True, "state": "upgrading" if busy else "running", "lastError": why,
                    "upgradeProgress": {"from": "0.1.2", "to": "0.2.0", "current": "upgrade" if busy else None, "steps": steps,
                                        "result": None if busy else mode, "lastError": None if busy else why}}
+        elif p == "/cli/sew/server/rollback" and os.path.exists(os.path.join(work, "rollback073")):
+            # Sew 0.7.3: the daemon's answer with Sew's own media.state.
+            mode = open(os.path.join(work, "rollback073")).read().strip()
+            cmd = "sew media upgrade --tarball sew-media-0.1.2-x86_64-unknown-linux-gnu.tar.gz"
+            media = {"state": mode, "from": "0.2.0", "to": "0.1.2"}
+            out = {"ok": True, "state": "running", "version": "0.1.2", "media": media}
+            if mode in ("manual", "failed"):
+                media["command"] = cmd
+                out["warnings"] = ["media_not_rolled_back"]
+                out["mediaCommand"] = cmd
+                out["mediaNote"] = ("Sew is rolled back to 0.1.2, but its voice engine is not. Run this once on the box, as root: "
+                                    + cmd + ". The rollback itself is done: don't run k2 hostchat rollback again")
+            if mode == "failed":
+                out.update(ok=False, code="media_rollback_failed",
+                           error="Sew itself is rolled back to 0.1.2 and running, but putting its voice engine back failed: "
+                                 "restart. Run this once on the box, as root: " + cmd
+                                 + ". The rollback itself is done: don't run k2 hostchat rollback again")
         elif p == "/cli/sew/server/rollback":
             if b.get("mediaTarballPath"):
                 out = {"ok": True, "state": "running", "version": "0.1.2", "media": {"result": "done", "to": "0.1.2"},
@@ -538,6 +558,46 @@ assert_contains "rollback: doctor shown" "$out" "sew-media 0.1.2"
 run owner hostchat rollback
 assert_eq "rollback not ok → exit 3" "$rc" "3"
 assert_contains "rollback not ok: the reason on stderr" "$err" "voice engine was not put back"
+
+echo "== Sew 0.7.3 rollback: media.state passes through; manual shows the line; failed is named =="
+CMD073="sew media upgrade --tarball sew-media-0.1.2-x86_64-unknown-linux-gnu.tar.gz"
+jq_state() { printf '%s' "$1" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["media"]["state"], v.get("mediaCommand") or "-")'; }
+for st in rolled_back unchanged not_installed left; do
+    echo "$st" > "$WORK/rollback073"
+    run owner hostchat rollback --json
+    assert_eq "rollback $st --json → exit 0" "$rc" "0"
+    assert_eq "rollback $st --json: .media.state" "$(jq_state "$out")" "$st -"
+done
+echo rolled_back > "$WORK/rollback073"
+run owner hostchat rollback
+assert_contains "rollback rolled_back: the engine's state shown" "$out" "rolled_back (0.2.0 -> 0.1.2)"
+assert_absent "rollback rolled_back: no command" "$out" "as root"
+
+echo manual > "$WORK/rollback073"
+before="$(nreq)"
+run owner hostchat rollback
+assert_eq "rollback manual → exit 0 (the rollback is done)" "$rc" "0"
+assert_contains "rollback manual: Sew's exact command" "$out" "  $CMD073"
+assert_contains "rollback manual: never again" "$out" "do not run k2 hostchat rollback again"
+assert_contains "rollback manual: Sew's warning" "$out" "media_not_rolled_back"
+assert_eq "rollback manual: one request, never a rerun" "$(nreq)" "$((before + 1))"
+run owner hostchat rollback --json
+assert_eq "rollback manual --json → exit 0" "$rc" "0"
+assert_eq "rollback manual --json: .media.state + .mediaCommand" "$(jq_state "$out")" "manual $CMD073"
+
+echo failed > "$WORK/rollback073"
+before="$(nreq)"
+run owner hostchat rollback --json
+assert_eq "rollback failed → exit 3" "$rc" "3"
+assert_eq "rollback failed --json: .media.state still on stdout" "$(jq_state "$out")" "failed $CMD073"
+assert_contains "rollback failed: named error" "$err" '"error": "media_rollback_failed"'
+assert_contains "rollback failed: Sew itself is rolled back" "$err" "Sew itself is rolled back to 0.1.2 and running"
+assert_contains "rollback failed: the command on stderr" "$err" "\"command\": \"$CMD073\""
+assert_eq "rollback failed: one request, never a rerun" "$(nreq)" "$((before + 1))"
+run owner hostchat rollback
+assert_eq "rollback failed (text) → exit 3" "$rc" "3"
+assert_contains "rollback failed (text): the command shown" "$out" "  $CMD073"
+rm -f "$WORK/rollback073"
 
 echo "== upgrade --accept-binary (0.46.5 item 12): checked here, a person's =="
 before="$(nreq)"

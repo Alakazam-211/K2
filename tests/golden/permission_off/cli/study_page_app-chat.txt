@@ -128,7 +128,7 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
-CALLS WORK ON EVERY LIVE HOST with Sew 0.7.2 ("every App origin" in k2
+CALLS WORK ON EVERY LIVE HOST from Sew 0.7.2 ("every App origin" in k2
 hostchat home). K2 tells Sew all your live hosts on its sweep, up to 10
 minutes after a bind. Your server names the person's host: behindK2Front:
 true in Sew's kit BFF config does it for joins, from the host the browser

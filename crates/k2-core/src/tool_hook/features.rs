@@ -16,7 +16,7 @@
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //!
-//! The pin (Sew 0.7.2) reports twenty-nine flags. Up to 0.6.1 they are 0.5.0's
+//! The pin (Sew 0.7.3) reports twenty-nine flags, the same as 0.7.2. Up to 0.6.1 they are 0.5.0's
 //! twelve, 0.5.1's `app_session_member_role`, `app_voice_channel_create`,
 //! `home_client_owner_approval` and `k2_managed_guard`, and 0.6.0's
 //! `app_controls`, `app_governed_spaces`, `app_member_channels` and
@@ -213,7 +213,8 @@ mod tests {
     /// The pin, Sew 0.7.2: exactly `sew_proto::mgmt::FEATURES` at the v0.7.2 tag
     /// (`e49e088d…`, its `features_072.rs`): 0.6.1's twenty, 0.7.0's six, 0.7.1's
     /// two, 0.7.2's `app_origins`. Every voice gate opens (only the preview keeps
-    /// them dark), and K2 sends every origin of an App.
+    /// them dark), and K2 sends every origin of an App. The pin, Sew 0.7.3,
+    /// reports exactly these twenty-nine (its release note: no new features).
     #[test]
     fn sew_0_7_2_flags_open_the_voice_gates_and_take_every_origin() {
         let conn = Connection::open_in_memory().unwrap();

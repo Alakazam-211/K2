@@ -11046,7 +11046,7 @@ before it shows. Then: the owner turns voice on (k2 hostchat media
 install), you add voice:join (voice:video) to the manifest and the role,
 and requires {voice: true}. K2 tells Sew your App's own wss:// origin
 itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
-CALLS WORK ON EVERY LIVE HOST with Sew 0.7.2 ("every App origin" in k2
+CALLS WORK ON EVERY LIVE HOST from Sew 0.7.2 ("every App origin" in k2
 hostchat home). K2 tells Sew all your live hosts on its sweep, up to 10
 minutes after a bind. Your server names the person's host: behindK2Front:
 true in Sew's kit BFF config does it for joins, from the host the browser
@@ -11149,7 +11149,7 @@ _study_page_chat_voice() {
 k2 study chat-voice — Voice rooms and channels in your App: the setup
 
 Chat / Voice Hosting is this box's chat and voice core (core id sew),
-powered by Sew; this K2 pins Sew 0.7.2. Your App gets ONE Space, bound to
+powered by Sew; this K2 pins Sew 0.7.3. Your App gets ONE Space, bound to
 it. There your server keeps static rooms (say, two voice meeting rooms)
 and makes a text and a voice channel per project; calls are end-to-end
 encrypted. Hearth (Sew's own client) is optional: nothing here needs it;
@@ -11341,7 +11341,7 @@ LIMITS (Sew 0.5.0). 5,000 channels per Space, archived included (about
 default channels · 100 members per create or add · names 1–100 characters
 · no delete, no public↔private, no type change. K2 sets no App quotas.
 K2's door: request heads over 64 KiB → 431; 120 writes a minute per
-visitor per App (the Owner: k2 firewall guard). Sew 0.7.2, this K2's
+visitor per App (the Owner: k2 firewall guard). Sew 0.7.3, this K2's
 pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
 DM calls, upload and message-rate quotas) and the unbound-Space gaps.
 
@@ -67519,7 +67519,12 @@ Server:
   k2 hostchat rollback [--media-tarball FILE] [--json]
                                             (with voice: the previous release's sew-media tarball when the
                                              box doesn't keep it; the old Sew puts that engine back, then
-                                             sew doctor's media checks are shown; exit 3 unless all is well)
+                                             sew doctor's media checks are shown; exit 3 unless all is well.
+                                             From Sew 0.7.3 Sew puts its voice engine back itself: --json
+                                             .media.state is rolled_back, unchanged, not_installed or left
+                                             (done); manual (exit 0: run the one sew media upgrade line it
+                                             prints, .mediaCommand); failed (exit 3, media_rollback_failed:
+                                             Sew itself is rolled back and running). Never run it again)
   k2 hostchat rollback --accept-data-loss [--media-tarball FILE] [--json]
                                             (after an upgrade that changed how Sew stores chat, the plain
                                              rollback refuses. This one goes back anyway: chat written since the
@@ -67836,6 +67841,27 @@ elif verb == "app-space-governance":
     print("Space %s: governed by %s (%s)" % (v.get("spaceId"), v.get("governance"), "changed" if v.get("changed") else "no change"))
     if v.get("hint"):
         print(v["hint"])
+elif verb == "rollback":
+    line("Chat / Voice Hosting", v.get("state"))
+    line("version", v.get("version"))
+    m = v.get("media") or {}
+    if m.get("state"):
+        # Sew 0.7.3+: Sew put its voice engine back itself (media.state).
+        line("voice engine", m.get("state") + ((" (%s -> %s)" % (m.get("from"), m.get("to"))) if m.get("from") and m.get("to") else ""))
+    elif m.get("result"):
+        line("voice engine", "%s (sew-media %s)" % (m.get("result"), m.get("to")))
+    if v.get("mediaCommand"):
+        print("Voice engine NOT rolled back. Run this once on the box, as root:")
+        print("  " + v["mediaCommand"])
+        print("The rollback itself is done: do not run k2 hostchat rollback again.")
+    elif v.get("mediaNote"):
+        print(v["mediaNote"])
+    for w in v.get("warnings") or []:
+        line("warning", w)
+    d = v.get("doctor") or {}
+    if d:
+        line("sew doctor", "voice engine ok" if d.get("ok") else "voice engine checks fail (see --json)")
+    line("error", v.get("error"))
 elif verb == "recovery-key":
     print(v.get("recoveryKey") or v.get("key") or "")
     if v.get("warning"):
@@ -68147,11 +68173,17 @@ cmd_hostchat() {
             fi
             _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_mediaTarballPath="$(abs "$media_tarball")")"
             _hostchat_print rollback "$as_json"
+            # Sew 0.7.3: media.state passes through (.media.state); manual is
+            # done (exit 0, Sew's command printed above), failed exits 3 with
+            # code media_rollback_failed. Never rerun the rollback either way.
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
 if v.get("ok") is False:
-    print(json.dumps({"error": "rollback_incomplete", "hint": v.get("error") or "see the answer above"}), file=sys.stderr)
+    out = {"error": v.get("code") or "rollback_incomplete", "hint": v.get("error") or "see the answer above"}
+    if v.get("mediaCommand"):
+        out["command"] = v["mediaCommand"]
+    print(json.dumps(out), file=sys.stderr)
     sys.exit(3)
 ' || return $? ;;
         doctor) _hostchat_call POST /cli/sew/server/doctor "{}"; _hostchat_print doctor "$as_json" ;;

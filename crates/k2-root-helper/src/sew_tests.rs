@@ -423,6 +423,16 @@ fn notices_follow_the_binary_through_upgrade_and_rollback() {
     ok(&o);
     assert!(json(&o).get("notices").is_none());
     assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v2"));
+    // Sew 0.7.3's exit 1 with Sew rolled back (only its voice engine failed):
+    // the binary moved, so the notices follow it.
+    sew_answers(&t, 1, r#"{"state":"rolled_back","from":"v2","to":"v1","media":{"state":"failed","error":"restart","command":"sew media upgrade --tarball x"},"warnings":["media_not_rolled_back"]}"#);
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!((v["sewExit"].as_i64(), v["sew"]["media"]["state"].as_str()), (Some(1), Some("failed")), "{v}");
+    assert_eq!(v["notices"]["files"], serde_json::json!(NOTICE_MEMBERS), "{v}");
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v1"));
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v2"));
     // Purge takes both sets.
     let r = crate::sew::remove_all_notices(&t.ctx).unwrap();
     assert_eq!(r["sew"], serde_json::json!(NOTICE_MEMBERS));

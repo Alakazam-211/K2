@@ -102,7 +102,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             let mut out = run_sew(ctx, &["upgrade", "--rollback"], None)?;
             out["resetFailed"] = reset;
             // Sew swapped sew and sew.prev: the notices follow the binary.
-            if out["sewExit"] == 0 {
+            if core_rolled_back(&out) {
                 out["notices"] = notices_or_error(rollback_notices(ctx));
             }
             Ok(out)
@@ -550,11 +550,19 @@ fn rollback_accept_data_loss(ctx: &Ctx, bundle: &str) -> HResult<J> {
     let mut out = run_sew(ctx, &["upgrade", "--rollback", &flag], None)?;
     out["resetFailed"] = reset;
     out["bundle"] = json!(bundle);
-    if out["sewExit"] == 0 {
+    if core_rolled_back(&out) {
         out["notices"] = notices_or_error(rollback_notices(ctx));
     }
     out["upgradeState"] = upgrade_state(ctx);
     Ok(out)
+}
+
+/// Did `sew upgrade --rollback` swap `sew` and `sew.prev`? Exit 0, or Sew
+/// 0.7.3's exit 1 whose answer says `state: rolled_back`: Sew is back and
+/// running and only its voice engine failed to go back (`media.state`
+/// failed). Any other exit 1 is a rollback that put the install back.
+pub(crate) fn core_rolled_back(out: &J) -> bool {
+    out["sewExit"] == 0 || (out["sewExit"] == 1 && out.pointer("/sew/state").and_then(J::as_str) == Some("rolled_back"))
 }
 
 /// Sew's `/usr/local/lib/sew/upgrade-state.json`, parsed (`null` when it

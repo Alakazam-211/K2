@@ -2792,10 +2792,19 @@ fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
         });
         return "rollback_skipped";
     }
-    let rb = sew_ok(env, &["rollback"], None);
+    let rb = helper(env, &["rollback"], None).and_then(|v| match sew_exit(&v) {
+        Some(0) | None => Ok(v),
+        // Sew 0.7.3: the core is back and running; only its engine isn't.
+        Some(1) if sew_rolled_back_engine_failed(&v) => Ok(v),
+        Some(n) => Err(format!("sew rollback: exit {n}: {}", sew_message(&v))),
+    });
+    let engine = rb.as_ref().ok().and_then(|v| sew_rollback_media(v).and_then(|m| media_note(m, from)));
     let healthy = rb.is_ok() && health_check(env, from).is_ok();
     if healthy {
-        let m = format!("upgrade to {to} failed K2's health check ({why}); rolled back to {from}");
+        let mut m = format!("upgrade to {to} failed K2's health check ({why}); rolled back to {from}");
+        if let Some((_, note)) = &engine {
+            m = format!("{m}. {note}");
+        }
         save_enable(env, |r| {
             r.status = "running".into();
             r.installed_version = Some(from.into());
@@ -2977,6 +2986,9 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
     let v = helper(env, &["rollback"], None).map_err(|e| no("helper_error", 500, e))?;
     match sew_exit(&v).unwrap_or(0) {
         0 => {}
+        // Sew 0.7.3: Sew itself is rolled back and running; its engine is
+        // not (`media.state` failed). The answer says so; never a retry.
+        1 if sew_rolled_back_engine_failed(&v) => {}
         3 => return Err(no("rollback_refused", 409, format!("{}. {ROLLBACK_ACROSS_SCHEMA_HINT}", sew_message(&v)))),
         n => {
             let m = format!("rollback: exit {n}: {}", sew_message(&v));
@@ -3012,6 +3024,11 @@ fn after_rollback(env: &Env, previous: Option<String>, v: &Value, media_to: Opti
         r.last_error = health_err.clone().map(|e| format!("rolled back, but Sew is unhealthy: {e}"));
     });
     let mut body = json!({"ok": ok, "state": if ok { "running" } else { "error" }, "version": to, "sew": v["sew"], "error": health_err});
+    // Sew 0.7.3 (MRB1): Sew put the engine back itself, or says what to run.
+    // Its `media` passes through as is, and K2 runs no engine step of its own.
+    if let Some(m) = sew_rollback_media(v) {
+        return with_sew_media(env, body, v, m, &want);
+    }
     let Some(mv) = media_to else { return body };
     if !ok {
         // The old core is not healthy: its engine is not touched.
@@ -3050,6 +3067,114 @@ fn after_rollback(env: &Env, previous: Option<String>, v: &Value, media_to: Opti
         body["error"] = json!(e);
         save_enable(env, |r| r.last_error = Some(e));
     }
+    body
+}
+
+// ── Sew 0.7.3 (MRB1): the rollback puts the voice engine back itself ─────
+//
+// `sew upgrade --rollback` answers `media: {state, …}`. `rolled_back`,
+// `unchanged`, `not_installed` and `left` are done. `manual` (exit 0): the
+// engine the old core goes with isn't on the box; Sew names one `sew media
+// upgrade --tarball …` line (`media.command`) and warns
+// `media_not_rolled_back`. `failed` (exit 1): Sew itself is rolled back and
+// running; putting the engine back failed (`media.error`, `media.command`).
+// The rollback is done either way and can't run again, so K2 shows the line
+// and never retries. An older Sew answers no `media`: K2's own engine step
+// (`media rollback` through the old core) runs as before.
+
+/// `media.state` values that mean the engine needs nothing more.
+pub const SEW_MEDIA_DONE: [&str; 4] = ["rolled_back", "unchanged", "not_installed", "left"];
+/// `media.state`: the previous engine isn't on the box; `media.command` puts it back.
+pub const SEW_MEDIA_MANUAL: &str = "manual";
+/// `media.state`: Sew is rolled back and running, its engine is not.
+pub const SEW_MEDIA_FAILED: &str = "failed";
+/// Sew's warning on `manual` and `failed`, and K2's code for `manual`.
+pub const MEDIA_NOT_ROLLED_BACK: &str = "media_not_rolled_back";
+/// K2's code for `failed`: Sew is rolled back, its voice engine is not.
+pub const MEDIA_ROLLBACK_FAILED: &str = "media_rollback_failed";
+/// K2's code for a `media.state` this K2 doesn't know (a later Sew).
+pub const MEDIA_STATE_UNKNOWN: &str = "media_state_unknown";
+
+/// Sew's own `media` of a rollback answer (Sew 0.7.3+), when it has a state.
+fn sew_rollback_media(v: &Value) -> Option<&Value> {
+    v.pointer("/sew/media").filter(|m| m.get("state").and_then(Value::as_str).is_some())
+}
+
+/// Sew 0.7.3's exit 1 that is a rollback: Sew is back and running, only its
+/// voice engine isn't (`state` rolled_back, `media.state` failed).
+fn sew_rolled_back_engine_failed(v: &Value) -> bool {
+    sew_exit(v) == Some(1)
+        && v.pointer("/sew/state").and_then(Value::as_str) == Some("rolled_back")
+        && v.pointer("/sew/media/state").and_then(Value::as_str) == Some(SEW_MEDIA_FAILED)
+}
+
+/// What is left to do for Sew's `media` (`None`: the engine is done):
+/// K2's code and the words, with Sew's own command line in them.
+fn media_note(m: &Value, want: &str) -> Option<(&'static str, String)> {
+    let state = m["state"].as_str().unwrap_or_default();
+    if SEW_MEDIA_DONE.contains(&state) {
+        return None;
+    }
+    let field = |k: &str| m[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let run = match field("command") {
+        Some(c) => format!("Run this once on the box, as root: {c}"),
+        None => "Sew named no command to run: check the voice engine with k2 hostchat doctor".to_string(),
+    };
+    const ONCE: &str = "The rollback itself is done: don't run k2 hostchat rollback again";
+    Some(match state {
+        SEW_MEDIA_MANUAL => (
+            MEDIA_NOT_ROLLED_BACK,
+            format!(
+                "Sew is rolled back to {want}, but its voice engine is not ({}). {run}. {ONCE}",
+                field("reason").unwrap_or("the engine that version goes with isn't on this box")
+            ),
+        ),
+        SEW_MEDIA_FAILED => (
+            MEDIA_ROLLBACK_FAILED,
+            format!(
+                "Sew itself is rolled back to {want} and running, but putting its voice engine back failed: {}. {run}. {ONCE}",
+                field("error").unwrap_or("Sew gave no reason")
+            ),
+        ),
+        other => (
+            MEDIA_STATE_UNKNOWN,
+            format!(
+                "Sew is rolled back to {want}, but it answered media.state '{other}', which this K2 doesn't know: check the \
+                 voice engine with k2 hostchat doctor. {ONCE}"
+            ),
+        ),
+    })
+}
+
+/// [`after_rollback`] for a Sew that reported `media` (0.7.3+): Sew's object
+/// as `media`, its warnings, and for `manual` / `failed` / an unknown state
+/// the command (`mediaCommand`) and the words (`mediaNote`, lastError). Only
+/// `manual` keeps `ok`; `failed` and an unknown state answer `ok: false`
+/// with `code`.
+fn with_sew_media(env: &Env, mut body: Value, v: &Value, m: &Value, want: &str) -> Value {
+    body["media"] = m.clone();
+    let w = sew_warnings(v);
+    if !w.is_empty() {
+        body["warnings"] = json!(w);
+    }
+    let Some((code, note)) = media_note(m, want) else { return body };
+    body["mediaNote"] = json!(note);
+    if let Some(c) = m["command"].as_str().filter(|c| !c.trim().is_empty()) {
+        body["mediaCommand"] = json!(c);
+    }
+    let err = match body["error"].as_str() {
+        Some(e) => format!("{e}. {note}"),
+        None => note.clone(),
+    };
+    if code != MEDIA_NOT_ROLLED_BACK {
+        body["ok"] = json!(false);
+        body["code"] = json!(code);
+    }
+    if body["ok"] == false {
+        body["error"] = json!(err);
+    }
+    k2_core::log_debug!("[sew] rollback: {err}");
+    save_enable(env, |r| r.last_error = Some(err.clone()));
     body
 }
 
@@ -3206,24 +3331,41 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
         b
     };
     match sew_exit(&v) {
-        Some(0) => {
+        // Sew 0.7.3's exit 1 with Sew back and running (its engine isn't) is
+        // a rollback too: never "put back".
+        Some(n) if n == 0 || sew_rolled_back_engine_failed(&v) => {
             // 4. K2's check of the old core, the row, voice; then doctor.
             let mut body = merge(after_rollback(env, Some(to.clone()), &v, media_to));
             let (fails, doc) = doctor_fails(env);
             body["doctorFails"] = json!(fails);
             body["doctorRun"] = doc;
             let healthy = body["ok"] == true;
-            let clean = fails.as_ref().is_some_and(Vec::is_empty);
-            if healthy {
+            // Sew's `manual`: doctor fails media.* until its line runs, and the
+            // answer names that line; only the other checks count here.
+            let engine_pending = body["mediaNote"].is_string();
+            let clean = fails.as_ref().is_some_and(|f| f.iter().all(|c| engine_pending && c.starts_with("media.")));
+            let engine_failed = body["code"].as_str().filter(|c| *c != MEDIA_NOT_ROLLED_BACK).map(str::to_string);
+            // Spent once the old core runs (Sew's `failed` engine included).
+            if healthy || (engine_failed.is_some() && body["state"] == "running") {
                 let _ = env.ops.record_save(ROLLBACK_POINT_RECORD, None);
             }
-            body["result"] = json!(if healthy && clean { "rolled_back" } else { "rolled_back_unhealthy" });
-            body["message"] = json!(if healthy && clean {
-                format!(
+            body["result"] = json!(match &engine_failed {
+                Some(c) => c.as_str(),
+                None if healthy && clean => "rolled_back",
+                None => "rolled_back_unhealthy",
+            });
+            body["message"] = json!(if engine_failed.is_some() {
+                format!("{} Backups {kept_id} (Sew {from}) and {bundle} are kept.", body["error"].as_str().unwrap_or_default())
+            } else if healthy && clean {
+                let done = format!(
                     "Sew is back on {to} with its chat from {}. The chat from Sew {from} is kept in backup {kept_id}; to bring it back \
                      later: k2 hostchat upgrade, then k2 hostchat restore {kept_id} --confirm.",
                     bundle_time_text(bundle)
-                )
+                );
+                match body["mediaNote"].as_str() {
+                    Some(n) => format!("{done} {n}."),
+                    None => done,
+                }
             } else {
                 let why = match &fails {
                     Some(f) if !f.is_empty() => format!("sew doctor reports failures: {}", f.join(", ")),

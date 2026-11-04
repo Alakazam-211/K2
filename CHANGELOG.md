@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.14 (2026-11-04): pairs with kit v0.11.0
+
+**Requires `k2-mpc-base` v0.11.0** (the tag at its public cut 386ccd77; release commit
+49e94018). This pack's code and tests are unchanged from v0.2.13.
+
+- `Cargo.lock`: k2-mpc-base 0.11.0 (only the kit's crate version moves; no `mpce` entry); the
+  crate version. The kit's new pack-facing items (position units for pack verbs, `VerbSpec` as
+  `#[non_exhaustive]`) need nothing here: this pack has no verbs of its own and builds no
+  `VerbSpec`.
+
 ## v0.2.13 (2026-11-03): pairs with kit v0.10.2
 
 **Requires `k2-mpc-base` v0.10.2** (unchanged from v0.2.12).

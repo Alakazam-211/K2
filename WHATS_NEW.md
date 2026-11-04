@@ -130,6 +130,7 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Board tab (Beta):** turn on **Open .k5board files in a Board tab (Beta)** in Settings → Multiplayer, and a `.k5board` file in a workspace opens in its own tab, where you edit and save it, or **Save a copy**. If someone changed the same thing, your edit is held, even across a restart, until you pick **Use mine** or **Use theirs**.
 - **Agents work on board files too:** `k2 board <verb> <file>` (path last, as with `k2 doc`, or `--file`) to read, search, add, update, delete, connect, react, vote, comment and move objects, and `k2 board merge <base> <copy> <target>`. Exits: 1 a conflict, 2 bad input, 4 a bad file or a newer format, 5 locks and voting. `k2 study board` explains it.
 - **Board files in the Board Garden:** with the same switch on, its list of boards gains a Board files folder: the `.k5board` files in the workspaces you can read, by name and workspace, found by search too. A click opens the file's tab.
+- **Compute Garden:** your compute nodes at a glance (jobs running and queued on each node, free CPU and memory, and whose jobs they are) beside an Agents list that opens any agent in the Thread. Add it from New Garden. Each part is a tile you show or hide from **Tiles**, and K2 will add more tiles. A widget reads the same numbers with `k2.compute.nodes()` (the `compute:nodes` cap).
 
 ### Live docs
 - **See your own carets from your other tabs and devices,** marked "You · other tab".

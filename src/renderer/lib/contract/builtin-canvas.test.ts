@@ -7,6 +7,9 @@
 //   - a tile whose verb this K2 doesn't offer says so instead of breaking;
 //   - Compute load: the nodes from compute.nodes, busiest first or by name (saved), room and
 //     held nodes, offline nodes folded, a failed read said in the tile's note, text never markup;
+//   - Agents: every row from agents.subscribe in K2's order, picture or initials, working / needs
+//     you, unread from thread.unread (this computer's agents), and a pick opens that agent in the
+//     Thread column (unfolding it right after the click);
 //   - the shipped files' hygiene (no markup sinks, no network, only K2 verbs).
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -41,6 +44,17 @@ function node(name: string, f: Any = {}): Any {
       who: [{ label: 'k2', kind: 'workspace', running: 1, queued: 0 }],
       jobs: [{ state: 'running', workspace: 'k2', server: null, tier: 'normal', elapsedSecs: 60, blockedBy: null }],
       queueError: null,
+    },
+    f,
+  )
+}
+
+function agent(handle: string, i: number, f: Any = {}): Any {
+  return Object.assign(
+    {
+      address: handle + '::local', label: handle, index: i, server: null, state: 'ok', stateLabel: null, detail: null,
+      working: false, needsYou: false, activity: 'idle', counts: null, openable: true, selected: false, avatar: null,
+      color: '#336699', image: null, preview: { text: 'hi', at: NOW, from: handle, mine: false, seq: 1 },
     },
     f,
   )
@@ -121,12 +135,12 @@ const text = (e: Any): string => (e ? e.textContent : '')
 
 describe('k2:canvas@1 shipped files', () => {
   it('loads the host, then each tile, then start.js', () => {
-    expect(ORDER).toEqual(['canvas.js', 'tile-compute.js', 'start.js'])
+    expect(ORDER).toEqual(['canvas.js', 'tile-compute.js', 'tile-agents.js', 'start.js'])
   })
 
   it('declares exactly the caps its tiles use, each with a reason, all widget caps in the catalog', () => {
     const m = JSON.parse(read('manifest.json'))
-    expect(m.caps).toEqual(['compute:nodes'])
+    expect(m.caps).toEqual(['compute:nodes', 'agents:read', 'thread:read'])
     expect(Object.keys(m.reasons).sort()).toEqual([...m.caps].sort())
     // K2's manifest check: each reason is one line of at most 140 characters.
     for (const r of Object.values(m.reasons) as string[]) expect(r.length, r).toBeLessThanOrEqual(140)
@@ -284,5 +298,64 @@ describe('k2:canvas@1 Compute load', () => {
   it('a server with no nodes says so', async () => {
     const m = await started({ nodes: [] })
     await until('empty', () => text(tileEl(m, 'compute')).includes('No compute nodes'))
+  })
+})
+
+describe('k2:canvas@1 Agents', () => {
+  const agents = [
+    agent('sew', 2, { working: true, activity: 'working' }),
+    agent('k2', 0, { image: 'data:image/png;base64,iVBORw0KGgo=' }),
+    agent('k2-dev-web', 1, { needsYou: true, activity: 'needs-you', selected: true }),
+    agent('far', 3, { address: 'far::nsi.k2.dev', server: 'nsi.k2.dev' }),
+    agent('off', 4, { state: 'offline', stateLabel: 'Offline', openable: false }),
+  ]
+  const unread = { ok: true, total: 5, byConversation: [
+    { id: 'c1', addr: 'k2', lastReadSeq: 1, lastSeq: 4, unread: 3 },
+    { id: 'c2', addr: 'sew', lastReadSeq: 1, lastSeq: 2, unread: 1, waiting: 1 },
+    { id: 'c3', addr: 'far', lastReadSeq: 0, lastSeq: 9, unread: 9 },
+    { id: 'c4', addr: 'k2-dev-web', lastReadSeq: 0, lastSeq: 2, unread: 2, muted: true },
+  ] }
+
+  it('lists every agent in K2’s order with its picture or initials, its state and your unread', async () => {
+    const m = await started({ agents, unread })
+    await until('listed', () => m.doc.querySelectorAll('.ag-row').length === 5 && m.fake.log.unread > 0 && !!m.doc.querySelector('.ag-badge'))
+    const rows = [...m.doc.querySelectorAll('.ag-row')]
+    expect(rows.map((r: Any) => text(r.querySelector('.ag-name')))).toEqual(['k2', 'k2-dev-web', 'sew', 'far', 'off'])
+    expect(rows[0].querySelector('img').getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(text(rows[2].querySelector('.ag-face'))).toBe('S')
+    expect(text(rows[0].querySelector('.ag-badge'))).toBe('3')
+    expect(text(rows[2].querySelector('.ag-badge'))).toBe('2')
+    expect(rows[1].querySelector('.ag-badge')).toBeNull()
+    expect(rows[3].querySelector('.ag-badge')).toBeNull()
+    expect(text(rows[1].querySelector('.ag-sub'))).toBe('needs you')
+    expect(text(rows[2].querySelector('.ag-sub'))).toBe('working')
+    expect(text(rows[3].querySelector('.ag-sub'))).toBe('nsi.k2.dev')
+    expect(rows[1].classList.contains('ag-sel')).toBe(true)
+    expect(rows[4].disabled).toBe(true)
+    expect(text(m.doc.querySelector('[data-tile="agents"] .cv-tile-meta'))).toBe('5 agents · 1 working · 1 needs you · 5 unread')
+  })
+
+  it('a pick opens that agent in the Thread, unfolding a folded Thread column', async () => {
+    const layout = { columns: [{ index: 0, label: null, collapsible: false, collapsed: false }, { index: 1, label: 'Thread', collapsible: true, collapsed: true }] }
+    const m = await started({ agents, unread, layout })
+    await until('listed', () => m.doc.querySelectorAll('.ag-row').length === 5)
+    await sleep(10)
+    m.doc.querySelectorAll('.ag-row')[3].click()
+    await until('opened', () => m.fake.log.opened.length === 1)
+    expect(m.fake.log.opened).toEqual(['far::nsi.k2.dev'])
+    expect(m.fake.log.layoutSet).toEqual([{ column: 1, collapsed: false }])
+  })
+
+  it('finds an agent by name once the list is long, and stops its subscription when hidden', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => agent('agent-' + i, i))
+    const m = await started({ agents: many })
+    await until('listed', () => m.doc.querySelectorAll('.ag-row').length === 10)
+    const search = m.doc.querySelector('.ag-search')
+    expect(search.hidden).toBe(false)
+    search.value = 'agent-7'
+    search.dispatchEvent(new m.win.Event('input'))
+    expect([...m.doc.querySelectorAll('.ag-name')].map(text)).toEqual(['agent-7'])
+    tileEl(m, 'agents').querySelector('.cv-x').click()
+    expect(m.fake.log.agentsOff).toBe(1)
   })
 })

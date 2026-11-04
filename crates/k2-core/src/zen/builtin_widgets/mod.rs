@@ -88,10 +88,11 @@ pub fn tab_only_refusal(widget: &str) -> Option<String> {
 }
 
 /// The canvas (the Compute Garden, Rosson 2026-11-03): a page of tiles the
-/// person shows or hides, kept in their private saves. Its first tile is
-/// Compute load (`compute.nodes`). Later tiles drop in as new registry
-/// entries (`canvas-1/canvas.js`), in a new version. `compute-1.toml`
-/// places it beside K2's Conversation.
+/// person shows or hides, kept in their private saves. Its tiles: Compute
+/// load (`compute.nodes`) and Agents (every agent the Garden reaches, a
+/// pick opening in the Thread beside it). Later tiles drop in as new
+/// registry entries (`canvas-1/canvas.js`), in a new version.
+/// `compute-1.toml` places it beside K2's Conversation.
 pub const CANVAS_WIDGET: &str = "k2:canvas@1";
 
 /// The prefix every built-in widget name starts with.
@@ -493,8 +494,10 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("index.html", include_str!("canvas-1/index.html")),
             ("canvas.css", include_str!("canvas-1/canvas.css")),
             ("tile-compute.css", include_str!("canvas-1/tile-compute.css")),
+            ("tile-agents.css", include_str!("canvas-1/tile-agents.css")),
             ("canvas.js", include_str!("canvas-1/canvas.js")),
             ("tile-compute.js", include_str!("canvas-1/tile-compute.js")),
+            ("tile-agents.js", include_str!("canvas-1/tile-agents.js")),
             ("start.js", include_str!("canvas-1/start.js")),
         ],
     },
@@ -543,7 +546,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:work-inbox@1", "85deffe31c8a76db2410d7756e64193a2101d31c4518e7b1ebf57e8ab3a68143"),
     ("k2:board@1", "66ec65e385a4c95f08adbb54e476bbf08531116a84d8a193baaeb354999492cc"),
     ("k2:board-file@1", "310db4a193a9e0e347ce257cb3cfdd8f6e2a3bf91492ae32f173aba080ae057c"),
-    ("k2:canvas@1", "f3a069cc6e194bc0980793d11073b9e3ddaf47e800e35b15f0e2d35e74cf85ca"),
+    ("k2:canvas@1", "32e8a13b33965aa7fa93e4b590c5591a48d0b804d5401b5f195495328bb52aaa"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1642,8 +1645,9 @@ mod tests {
         assert!(code <= crate::zen::bundle::WARN_CODE_BYTES, "WS8: {code} bytes of code");
     }
 
-    /// The canvas's caps: its tiles' (Compute load reads compute.nodes).
-    const CANVAS_CAPS: &[&str] = &["compute:nodes"];
+    /// The canvas's caps: its tiles' (Compute load reads compute.nodes;
+    /// Agents lists agents and opens one, and reads unread counts).
+    const CANVAS_CAPS: &[&str] = &["compute:nodes", "agents:read", "thread:read"];
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks
     /// for resolves against the checked-in `zen-lib.json`, and is bundled,

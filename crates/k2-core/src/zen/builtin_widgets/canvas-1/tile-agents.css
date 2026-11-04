@@ -1,0 +1,27 @@
+/* k2:canvas@1, the Agents tile (canvas.css has the colours). */
+.ag { display: flex; flex-direction: column; gap: 6px; }
+.ag-search { width: 100%; padding: 5px 9px; border: 1px solid var(--cv-border); border-radius: 8px; background: var(--cv-bg); }
+.ag-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ag-li { margin: 0; }
+.ag-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; }
+.ag-row:hover:not(:disabled) { background: var(--cv-tint); }
+.ag-row.ag-sel { border-color: var(--cv-accent); background: color-mix(in srgb, var(--cv-accent) 10%, transparent); }
+.ag-row:disabled { opacity: 0.55; cursor: default; }
+.ag-face { position: relative; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%; background: #1f6f3a; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px; }
+.ag-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.ag-dot { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--cv-raised); background: transparent; }
+.ag-dot.ag-working { background: var(--cv-run); }
+.ag-dot.ag-needs { background: var(--cv-needs); }
+.ag-dot.ag-off { background: var(--cv-muted); }
+.ag-words { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ag-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-sub { color: var(--cv-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-sub.ag-working { color: var(--cv-run); }
+.ag-sub.ag-needs { color: var(--cv-needs); }
+.ag-badge { flex: 0 0 auto; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--cv-accent); color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.ag-empty { color: var(--cv-muted); padding: 6px 2px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ag-dot.ag-working { animation: ag-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes ag-pulse { 50% { opacity: 0.45; } }

@@ -1,10 +1,12 @@
 {
   "schema": 1,
   "name": "Canvas",
-  "description": "A page of tiles you show or hide. Compute load: jobs on each compute node, free CPU and memory.",
+  "description": "A page of tiles you show or hide: Compute load (jobs on each compute node, free CPU and memory) and Agents (pick any agent to talk to in the Thread).",
   "entry": "index.html",
-  "caps": ["compute:nodes"],
+  "caps": ["compute:nodes", "agents:read", "thread:read"],
   "reasons": {
-    "compute:nodes": "to show how busy each of this server's compute nodes is: jobs running and queued, free CPU and memory, and whose jobs they are"
+    "compute:nodes": "to show how busy each of this server's compute nodes is: jobs running and queued, free CPU and memory, and whose jobs they are",
+    "agents:read": "to list the agents you can reach, with their pictures and who's working, and show the one you pick in the Thread",
+    "thread:read": "to show how many messages from each agent you haven't read"
   }
 }

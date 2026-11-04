@@ -55,6 +55,8 @@ An agent can now look after its App's people from start to finish, and App scree
 - **Settings and `k2 mail sending` say plainly what sending `on` means:** an agent that reads a malicious email can be talked into sending mail and files onward. Use **approval** for any agent that reads outside mail.
 - **An agent can ask on a card for its workspace's sending to be turned off.**
 
+- **Link your Microsoft 365 or Outlook.com mailbox** as a linked inbox for an agent: `k2 mail link add you@company.com --provider microsoft --workspace <ws>` signs you in with a code on Microsoft's page, then the agent reads and drafts as it does for a linked Gmail. [CONFIRM: the release build carries K2's Microsoft app ID]
+
 ### Mail: safety and your mail server
 - **Sender checks come only from your own mail server's verdict.** Under sending `on`, an agent's reply is refused unless the message passed DMARC, its domain has no DMARC policy, or it came from a mailbox on this server.
 - **Forwards keep back mail whose sender doesn't check out,** such as a failed DMARC check or several From addresses. It stays in the mailbox.

@@ -47,6 +47,7 @@ features:
   email-notifications-v1
   app-chat-v1
   app-chat-space-v1
+  live-access-v1
   activity-live-busy
   publish-dev-v1
   site-visibility-v1

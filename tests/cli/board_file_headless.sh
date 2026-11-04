@@ -155,12 +155,14 @@ done
 resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' \
     --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$B")" || true)"
 case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
-for _ in $(seq 1 400); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+# A busy node can take a while to start the pinned chat: a minute, then fail.
+# Until the shim's env dump holds the socket line: a read mid-write saw none.
+for _ in $(seq 1 1200); do grep -q '^K2_HOOK_SOCK=.' "$SB/claude.env" 2>/dev/null && break; sleep 0.05; done
 [ -s "$SB/claude.env" ] || fail "the pinned chat's harness never started"
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
 SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
-for _ in $(seq 1 200); do [ -S "$SOCK" ] && break; sleep 0.05; done
-[ -S "$SOCK" ] || fail "no cell socket"
+for _ in $(seq 1 1200); do [ -S "$SOCK" ] && break; sleep 0.05; done
+[ -S "$SOCK" ] || fail "no cell socket at '$SOCK' after a minute"
 ok "workspaces registered, beta's passport + cell socket"
 
 body() { python3 -c 'import json,sys; print(json.dumps(eval(sys.argv[1])))' "$1"; }

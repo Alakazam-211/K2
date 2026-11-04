@@ -1,6 +1,6 @@
 {
   "generatedBy": "contract-gen",
-  "catalogVersion": 48,
+  "catalogVersion": 49,
   "verbs": [
     {"cap":"activity:read","feature":"app-api-v1","phone":"door","verb":"activity.snapshot"},
     {"cap":"agents:read","feature":"zen-v1","phone":"later","verb":"agents.list"},
@@ -29,6 +29,7 @@
     {"cap":null,"feature":"zen-widgets-v1","phone":"host","verb":"canvas.setHitRegions"},
     {"cap":"thread:post","feature":"zen-v1","phone":"later","verb":"compose.draft"},
     {"cap":"compute:read","feature":"workbench-v1","phone":"door","verb":"compute.jobs"},
+    {"cap":"compute:nodes","feature":"compute-nodes-v1","phone":"door","verb":"compute.nodes"},
     {"cap":"agents:read","feature":"zen-v1","phone":"host","verb":"conversation.close"},
     {"cap":"agents:read","feature":"zen-v1","phone":"host","verb":"conversation.open"},
     {"cap":"thread:post","feature":"thread-context-v1","phone":"later","verb":"conversation.setContext"},

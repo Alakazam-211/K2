@@ -237,8 +237,8 @@ fn exposure_counts_are_pinned() {
     // Catalog v47 (Board files): + the six boardFile.* rows, K2's Board tab frame only.
     // Catalog v48 (the Boards Garden): + boardFile.files and boardFile.openTab.
     // Catalog v49 (the Compute Garden, Rosson 2026-11-03): + compute.nodes
-    // (garden-local) and its cap compute:nodes (the next commit sets the number).
-    assert_eq!(c.catalog_version, 48);
+    // (garden-local) and its cap compute:nodes.
+    assert_eq!(c.catalog_version, 49);
     assert_eq!(
         c.verbs.len(),
         252,

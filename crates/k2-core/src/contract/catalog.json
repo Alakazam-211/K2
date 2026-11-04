@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 48,
+  "catalogVersion": 49,
   "caps": [
     {
       "name": "agents:read",

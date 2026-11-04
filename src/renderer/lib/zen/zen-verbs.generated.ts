@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 48
+export const ZEN_CATALOG_VERSION = 49
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -61,9 +61,9 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'compute:nodes' | 'agents:start' | 'agents:stop' | null
   /** More caps the verb also needs (0.46.5); absent = `cap` alone. */
-  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop')[]
+  readonly also?: readonly ('agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'compute:nodes' | 'agents:start' | 'agents:stop')[]
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -177,6 +177,7 @@ export const ZEN_CUSTOM_VERBS = {
   'git.log': { cap: 'git:read', reach: 'local', kind: 'call' },
   'git.note': { cap: 'git:notes', reach: 'local', kind: 'call' },
   'compute.jobs': { cap: 'compute:read', reach: 'local', kind: 'call' },
+  'compute.nodes': { cap: 'compute:nodes', reach: 'local', kind: 'call' },
   'agents.start': { cap: 'agents:start', reach: 'local', kind: 'call' },
   'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
   'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },

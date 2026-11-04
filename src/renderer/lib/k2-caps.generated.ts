@@ -136,6 +136,11 @@ export const K2_CAPS = {
     sentence: 'See the compute jobs the agents on this computer ran for their branches: node, state, exit code and commit (never their environment).',
     exposure: ['garden-local'],
   },
+  'compute:nodes': {
+    label: 'See compute node load',
+    sentence: "See this server's compute nodes: how many jobs each runs and queues, which agents sent them, and its free CPU and memory (never a job's command or environment).",
+    exposure: ['garden-local'],
+  },
   'agents:start': {
     label: 'Start, land and discard worktree agents',
     sentence: "Start an agent in a new git worktree, and ask to land or discard one. Each one asks you first, on K2's own sheet outside the widget.",
@@ -151,6 +156,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'uploads:pick', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members', 'git:read', 'git:notes', 'compute:read', 'agents:start', 'agents:stop'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'uploads:pick', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members', 'git:read', 'git:notes', 'compute:read', 'compute:nodes', 'agents:start', 'agents:stop'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

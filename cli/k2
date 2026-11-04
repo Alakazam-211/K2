@@ -47056,7 +47056,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 48.
+From K2's verb catalog, version 49.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -81923,7 +81923,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 48.
+for at once (no review). From K2's verb catalog, version 49.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -82054,6 +82054,8 @@ git:notes (Ask an agent for changes)
   k2.git.note({address, notes, send})                                                                              local    workbench-v1           await k2.git.note({address: row.address, notes: [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}]})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined]
 compute:read (See test runs on compute)
   k2.compute.jobs({address, limit})                                                                                local    workbench-v1           const jobs = await k2.compute.jobs({address: row.address})  [not_bound not_a_repo author_unknown needs_editor stale_widget rate_limited]
+compute:nodes (See compute node load)
+  k2.compute.nodes()                                                                                               local    compute-nodes-v1       const {nodes} = await k2.compute.nodes()  [needs_editor stale_widget rate_limited]
 agents:start (Start, land and discard worktree agents)
   k2.agents.start({base, brief, harness, name, workspace})                                                         local    workbench-v1           const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined confirm_required]
   k2.git.land({address})                                                                                           local    workbench-v1           const r = await k2.git.land({address: row.address})  +git:read  [not_bound bad_args author_unknown needs_editor stale_widget rate_limited paused declined conflict confirm_required]

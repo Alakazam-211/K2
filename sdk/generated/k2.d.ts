@@ -1635,6 +1635,92 @@ export interface WorkJob {
   readonly tag: string | null
 }
 
+export interface ComputeNodeCpu {
+  /** CPU no job has reserved (jobs reserve their --cpus), in thousandths of a core. */
+  readonly freeMillis: number | null
+  /** CPU the node's OS sees idle now (cores minus the 1-minute load), in thousandths of a core; null when unknown. A node can be idle with nothing free. */
+  readonly idleMillis: number | null
+  /** The CPU K2 may use there, in thousandths of a core. */
+  readonly totalMillis: number | null
+}
+
+export interface ComputeNodeJob {
+  /** Why a queued job waits, as a code (waiting_for_room, exclusive, foreign_lock, ...). */
+  readonly blockedBy: string | null
+  /** Running: how long it has run; queued: how long it has waited (seconds, a duration). */
+  readonly elapsedSecs: number | null
+  /** Another server's name (only the server that owns the node sees it); null for this server's jobs. */
+  readonly server: string | null
+  readonly state: 'running' | 'queued'
+  /** ci, priority, normal or batch. */
+  readonly tier: string
+  /** The handle of the agent on this server that sent it; null for another server's job. */
+  readonly workspace: string | null
+}
+
+export interface ComputeNodeMem {
+  /** Memory no job has reserved. */
+  readonly freeBytes: number | null
+  /** The memory K2 may use there. */
+  readonly totalBytes: number | null
+}
+
+export interface ComputeNodeWho {
+  readonly kind: 'workspace' | 'server'
+  /** kind workspace: an agent's handle on this server; kind server: another server's name ("another server" when the node doesn't say). */
+  readonly label: string
+  readonly queued: number
+  readonly running: number
+}
+
+export interface ComputeNode {
+  /** x86_64 or arm64. */
+  readonly arch: string | null
+  readonly cpu: ComputeNodeCpu
+  /** Its running jobs, then its queue in order, at most 12 in all (so a busy node may list only running ones; running and queued count them all). Never a command or a job id. */
+  readonly jobs: ComputeNodeJob[]
+  /** When this server last heard from it, seconds since the epoch. */
+  readonly lastSeenAt: number | null
+  /** The 1-, 5- and 15-minute load averages; null when this server doesn't get the node's health (a node another server owns). */
+  readonly load: number[] | null
+  readonly mem: ComputeNodeMem
+  readonly name: string
+  readonly online: boolean
+  /** linux, macos or windows. */
+  readonly os: string | null
+  /** Null, unless the node's own queue couldn't be read just now: then why, with queueFrom server and this server's counts. */
+  readonly queueError: string | null
+  /** node: the node's own queue, every server sharing it; server: only this server's jobs (a node nobody shares, or one that didn't answer). */
+  readonly queueFrom: 'node' | 'server'
+  /** Jobs waiting for it: every server's when queueFrom is node, else this server's. */
+  readonly queued: number
+  /** Jobs running there now: every server's when queueFrom is node, else this server's. */
+  readonly running: number
+  /** How many servers share it; null for a node nobody shares. */
+  readonly servers: number | null
+  /** More than one server uses it. */
+  readonly shared: boolean
+  /** Jobs it runs at once; 0 until the node has told K2. */
+  readonly slots: number
+  /** active takes jobs; paused takes no new ones; draining finishes the jobs it has and takes no new ones; stopped is switched off on the node; unavailable is online but not taking jobs now; offline isn't connected. why says who or what. */
+  readonly state: 'active' | 'paused' | 'draining' | 'stopped' | 'unavailable' | 'offline'
+  /** The node's K2 version. */
+  readonly version: string | null
+  /** Whose jobs these are: running and queued per agent on this server, and per other server. */
+  readonly who: ComputeNodeWho[]
+  /** In words: why it isn't taking jobs, or what holds its queue while it is (a lock, low disk); null when nothing does. */
+  readonly why: string | null
+}
+
+export interface ComputeNodes {
+  /** When K2 read the nodes, seconds since the epoch. */
+  readonly at: number
+  /** This server's name, as its nodes know it. */
+  readonly controller: string | null
+  /** Every compute node this server may use, online or not, sorted by name: the nodes k2 compute status lists. */
+  readonly nodes: ComputeNode[]
+}
+
 export interface WorkStarted {
   readonly address: string
   readonly branch: string | null
@@ -1664,7 +1750,7 @@ export interface WorkStopped {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'agents:start' | 'agents:stop'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members' | 'git:read' | 'git:notes' | 'compute:read' | 'compute:nodes' | 'agents:start' | 'agents:stop'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1853,6 +1939,7 @@ export interface K2Verbs {
   'git.log': { args: [args: { address: string; base?: string; limit?: number }]; value: GitLog }
   'git.note': { args: [args: { address: string; notes: GitNoteIn[]; send?: boolean }]; value: WorkNoted }
   'compute.jobs': { args: [args: { address: string; limit?: number }]; value: WorkJob[] }
+  'compute.nodes': { args: []; value: ComputeNodes }
   'agents.start': { args: [args: { base?: string; brief: string; harness?: string; name: string; workspace: string }]; value: WorkStarted }
   'git.land': { args: [args: { address: string }]; value: WorkLanded }
   'agents.settle': { args: [args: { address: string; discard?: boolean }]; value: WorkSettled }
@@ -1860,7 +1947,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'boardFile.openTab' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'agents.openTerminal' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.grantees' | 'boardFile.open' | 'boardFile.key' | 'boardFile.openTab' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'boardFile.submit' | 'boardFile.hold' | 'boardFile.flush' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members' | 'work.list' | 'git.snapshot' | 'git.diffFile' | 'git.log' | 'git.note' | 'compute.jobs' | 'compute.nodes' | 'agents.start' | 'git.land' | 'agents.settle' | 'agents.stop'
 export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'boardFile.events' | 'boardFile.files' | 'thread.onActivity'
 
 export interface K2 {
@@ -2177,6 +2264,8 @@ export interface K2 {
   readonly compute: {
     /** Recent compute jobs (k2 compute run) for an agent's branch: jobs its session sent, or that ran one of its branch's commits. Newest first. This computer only. cap compute:read · local · workbench-v1. e.g. `const jobs = await k2.compute.jobs({address: row.address})` */
     jobs(args: { address: string; limit?: number }): Promise<WorkJob[]>
+    /** This server's compute nodes, for a load tile: each node's state, how many jobs run there (of its slots) and wait for it, free CPU and memory, and whose jobs they are (agent handles, never commands). On a node several servers share, the counts are every server's. Read only. This computer only. cap compute:nodes · local · compute-nodes-v1. e.g. `const {nodes} = await k2.compute.nodes()` */
+    nodes(): Promise<ComputeNodes>
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>

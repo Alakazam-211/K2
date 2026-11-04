@@ -17,6 +17,7 @@
 //! text at any level). Texts are compared with runs of whitespace collapsed. A setext
 //! heading answers to its level, so `## Part` names `Part` underlined by `---`.
 
+use k2_mpc_base::parity::positions::{PositionForm, Unit};
 use k2_mpc_base::parity::PersonAction;
 use k2_mpc_base::tools::{exit, EditOutput, PackEdit, PackVerb, ToolError};
 
@@ -333,13 +334,38 @@ pub fn replace_section(text: &str, req: &SectionRequest, body: &str) -> SectionO
 }
 
 /// The `replace-section` verb (P13), for [`crate::MarkdownPack`].
+///
+/// `--nth K` is a position: the Kth section that matches, counted in the version the edit
+/// applies to. The verb declares it (its unit, and where to find it in a call), so an agent's
+/// `--nth` edit without `--if-version` gets the kit's positional rule, as the kit's own
+/// verbs by line do.
 pub const REPLACE_SECTION: PackVerb = PackVerb::edit(
     "replace-section",
     "replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V] (new body on stdin)",
     &[PersonAction::Paste],
     &[exit::OK, exit::NO],
     parse_replace_section,
-);
+)
+.positions(&[PositionForm::new("--nth", Unit::PackNth)])
+.positional(nth_address);
+
+/// `replace-section`'s positional address: its `--nth` flag and value, as the caller wrote
+/// them (`--nth 2` or `--nth=2`), or `None`. Walks the arguments as
+/// [`parse_replace_section`] does, so a `--heading` value spelled `--nth` is not one.
+fn nth_address(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--nth" => return it.next().map(|v| format!("--nth {v}")),
+            "--heading" => {
+                it.next();
+            }
+            _ if a.starts_with("--nth=") => return Some(a.clone()),
+            _ => {}
+        }
+    }
+    None
+}
 
 const USAGE: &str =
     "replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]";

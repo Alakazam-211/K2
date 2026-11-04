@@ -6,12 +6,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use k2_mpc_base::parity::positions::{self, PositionForm, Unit};
 use k2_mpc_base::parity::{
     self, edit_summary, Agent, Case, Failure, Output, ParityRow, Person, PersonAction, Registry,
     RowStatus, Step, VerbValue, DOC,
 };
 use k2_mpc_base::session::Pack;
 use k2_mpc_markdown::parity::{parity, parity_row};
+use k2_mpc_markdown::section::REPLACE_SECTION;
 use k2_mpc_markdown::PACK;
 
 type R = Result<Step, String>;
@@ -257,6 +259,89 @@ fn registry_covers_actions() {
             assert!(r.serving(*a).count() > 0, "{a}");
         }
     }
+}
+
+/// K-ADDR-4: every verb of the pack states its position units (`parity::positions::check`),
+/// and `replace-section`'s is `--nth K`, the Kth of the pack's own sections.
+#[test]
+fn replace_section_declares_its_positions() {
+    let r = Registry::for_pack(&PACK).unwrap();
+    positions::check(&r).unwrap_or_else(|e| panic!("{e}"));
+    let v = r.get(VERB).expect("replace-section is registered");
+    assert_eq!(
+        v.positions,
+        Some(&[PositionForm::new("--nth", Unit::PackNth)][..])
+    );
+}
+
+/// K-ADDR-3: `replace-section` finds its positional address in a call, as the caller wrote
+/// it, and only `--nth` is one (a `--heading` value spelled `--nth` isn't).
+#[test]
+fn replace_section_finds_its_nth() {
+    let find = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        REPLACE_SECTION.positional_in(&args)
+    };
+    assert_eq!(
+        find(&["--heading", "## Notes", "--nth", "2"]).as_deref(),
+        Some("--nth 2")
+    );
+    assert_eq!(
+        find(&["--nth=3", "--heading", "Notes"]).as_deref(),
+        Some("--nth=3")
+    );
+    assert_eq!(find(&["--heading", "## Notes", "--include-heading"]), None);
+    assert_eq!(find(&["--heading", "--nth"]), None);
+}
+
+/// R-2 through the agent's path: an agent's `replace-section --nth 2` with no `--if-version`
+/// applies (this release's warn mode) with one warning that names the address and
+/// `positional_needs_version`; the same edit without `--nth` gets none.
+#[test]
+fn an_agents_nth_without_a_version_is_warned() {
+    fn nth_warned(a: &mut Agent<'_>) -> R {
+        let out = a.verb(&[VERB, "--heading", "## Notes", "--nth", "2"], b"updated\n")?;
+        let VerbValue::Tool(t) = &out.value else {
+            return Err(format!("{VERB} gave {:?}", out.value));
+        };
+        let w = t.warnings.lines();
+        if !(w.len() == 1
+            && w[0].starts_with("note: --nth 2 is a position")
+            && w[0].contains("positional_needs_version, MPC-E171"))
+        {
+            return Err(format!("warnings: {w:?}"));
+        }
+        Ok(Step::exit(
+            out.exit,
+            Output::Value(t.changed.as_ref().map_or("no change".into(), edit_summary)),
+        ))
+    }
+    fn no_nth_unwarned(a: &mut Agent<'_>) -> R {
+        let out = a.verb(&[VERB, "--heading", "## Goals"], b"- one\n- two\n")?;
+        let VerbValue::Tool(t) = &out.value else {
+            return Err(format!("{VERB} gave {:?}", out.value));
+        };
+        if !t.warnings.is_empty() {
+            return Err(format!("warnings: {:?}", t.warnings.lines()));
+        }
+        Ok(Step::exit(
+            out.exit,
+            Output::Value(t.changed.as_ref().map_or("no change".into(), edit_summary)),
+        ))
+    }
+    let registry = Registry::for_pack(&PACK).unwrap();
+    let warned = Case::new(P13, VERB, "--nth: warned", nth_person, nth_warned).initial(FENCED);
+    let f = parity::run_case(&pack(), &registry, &warned);
+    assert!(f.is_empty(), "{}", parity::render(&f));
+    let plain = Case::new(
+        P13,
+        VERB,
+        "no --nth: no warning",
+        atx_person,
+        no_nth_unwarned,
+    );
+    let f = parity::run_case(&pack(), &registry, &plain);
+    assert!(f.is_empty(), "{}", parity::render(&f));
 }
 
 /// Negative control: with `replace-section` taken out of the registry, the harness reports

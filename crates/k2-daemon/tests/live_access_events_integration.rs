@@ -534,3 +534,137 @@ async fn over_an_apps_link() {
     eprintln!("[me.events] suspend closed the link's sockets within {:?}", t0.elapsed());
     gateway::close("melinkapp", None, true);
 }
+
+// ── scope=guests: one socket per App ─────────────────────────────────
+
+async fn named(s: &mut Sock, want: &str, what: &str) {
+    match next_frame(s, HEARS_WITHIN_MS).await {
+        Ok(Some(f)) => {
+            let v: Value = serde_json::from_str(&f).expect("json");
+            assert_eq!(v, json!({ "kind": "access_changed", "principalId": want }), "{what}: names that guest and nothing else");
+        }
+        other => panic!("{what}: {other:?}"),
+    }
+}
+
+/// One socket for all of an App's guests. It only ever names that App's own guests,
+/// and only its own pass opens it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_socket_for_all_of_an_apps_guests() {
+    use k2_daemon::apps::gateway::{self, LinkSpec};
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "mefeed");
+    let (svc_a, svc_b) = (new_app(&ws, "mefeeda"), new_app(&ws, "mefeedb"));
+    let (role1, _) = guest_in(port, &ws, "mefeedr1", &["thread:read"]).await;
+    let (role2, _) = guest_in(port, &ws, "mefeedr2", &["thread:read"]).await;
+    let (role3, _) = guest_in(port, &ws, "mefeedr3", &["thread:read"]).await;
+    let (role4, _) = guest_in(port, &ws, "mefeedr4", &["thread:read"]).await;
+    let (ga, gb) = (app_guest("mefeedga", &svc_a, &role1), app_guest("mefeedgb", &svc_a, &role2));
+    let gc = app_guest("mefeedgc", &svc_b, &role3);
+    // A person on both Apps, on the App A role and a role only App B's grant uses.
+    let both_a = app_guest("mefeedboth", &svc_a, &role1);
+    let both_pid = pid_of(&both_a);
+    skin::create_grant(&skin::SkinGrantWrite { subject_kind: "principal".into(), subject_id: both_pid.clone(), kind: "app".into(), target_id: svc_b.clone(), role: Some(role4.clone()), scope: None, created_by: Some("owner".into()) }).expect("grant on B");
+
+    let spec = |app: &str, svc: &str| LinkSpec { app_id: app.into(), service_id: svc.to_string(), workspace_id: ws.id.clone(), port: 0, caps: vec!["thread:read".into()], rooms: vec![ws.id.clone()] };
+    let own_a = gateway::open(spec("mefeeda", &svc_a), None).expect("link a");
+    let own_b = gateway::open(spec("mefeedb", &svc_b), None).expect("link b");
+    let (link_a, link_b) = (gateway::port_of("mefeeda").expect("a"), gateway::port_of("mefeedb").expect("b"));
+
+    let dial = |link: u16, pass: String| async move {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = format!("ws://127.0.0.1:{link}/cli/skin/me/events?scope=guests").into_client_request().expect("request");
+        req.headers_mut().insert("Authorization", format!("Bearer {pass}").parse().expect("header"));
+        tokio_tungstenite::connect_async(req).await
+    };
+    // Only the App's own pass.
+    match dial(link_a, ga.clone()).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 403, "a guest's pass"),
+        other => panic!("a guest's pass: {:?}", other.map(|_| "opened")),
+    }
+    match dial(link_a, own_b.clone()).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 403, "another App's pass"),
+        other => panic!("another App's pass: {:?}", other.map(|_| "opened")),
+    }
+    match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/cli/skin/me/events?scope=guests&token={}", enc(&ga))).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 403, "a guest's pass, main port"),
+        other => panic!("a guest's pass, main port: {:?}", other.map(|_| "opened")),
+    }
+    owner_ok(port, "/cli/skin/users", json!({ "username": "mefeedplat" })).await;
+    let plat = owner_ok(port, "/cli/skin-tokens", json!({ "name": "mefeedplat", "caps": ["thread:read"], "rooms": [ws.handle] })).await;
+    match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/cli/skin/me/events?scope=guests&token={}", enc(plat["token"].as_str().expect("token")))).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 403, "a platform pass"),
+        other => panic!("a platform pass: {:?}", other.map(|_| "opened")),
+    }
+
+    let (mut a, _) = dial(link_a, own_a.clone()).await.expect("App A's feed");
+    let (mut b, _) = dial(link_b, own_b.clone()).await.expect("App B's feed");
+    // A bound of its own, and another App's feed is outside it.
+    let mut more = Vec::new();
+    for _ in 0..15 {
+        more.push(dial(link_b, own_b.clone()).await.expect("up to 16 feeds"));
+    }
+    match dial(link_b, own_b.clone()).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status().as_u16(), 429, "the 17th"),
+        other => panic!("the 17th feed: {:?}", other.map(|_| "opened")),
+    }
+    drop(more);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (pa, pb, pc) = (pid_of(&ga), pid_of(&gb), pid_of(&gc));
+
+    // A's guest changes: A hears that guest. B hears nothing.
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role2, "handle": ws.handle, "caps": ["thread:read", "files:read"] })).await;
+    named(&mut a, &pb, "App A's guest").await;
+    silent(&mut b, 800, "App B: not its guest").await;
+    silent(&mut a, 300, "once").await;
+
+    // B's guest changes: B hears; A learns nothing about a guest of another App.
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role3, "handle": ws.handle, "caps": ["thread:read", "files:read"] })).await;
+    named(&mut b, &pc, "App B's guest").await;
+    silent(&mut a, 800, "App A: not its guest").await;
+
+    // A person on both: what changed under B's grant is B's to hear.
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role4, "handle": ws.handle, "caps": ["thread:read", "files:read"] })).await;
+    named(&mut b, &both_pid, "the person on both, under B's grant").await;
+    silent(&mut a, 800, "App A: its own grant for them didn't change").await;
+
+    // A no-op.
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role2, "handle": ws.handle, "caps": ["thread:read", "files:read"] })).await;
+    silent(&mut a, 800, "the same caps again").await;
+
+    // A session ended: the App holding that pass has to hear.
+    let id = skin::resolve_skin_token(&ga).expect("live").id;
+    assert!(skin::revoke_token(&id).expect("revoke"));
+    named(&mut a, &pa, "a session ended").await;
+    silent(&mut b, 500, "not B's").await;
+    assert_eq!(get(port, "/cli/skin/me", &ga, "x=1").await.status, 401, "me.get then says so");
+
+    // A session ended beside an unrelated write in the same moment, and a new sign-in
+    // (no news) right after: the ended one is still named, once.
+    let second = skin::create_app_session_token("mefeedgb", &svc_a).expect("App session").raw;
+    let second_id = skin::resolve_skin_token(&second).expect("live").id;
+    silent(&mut a, 600, "a new session is not news").await;
+    assert!(skin::revoke_token(&second_id).expect("revoke"));
+    skin::set_principal_full_name("mefeedplatnot", None).expect_err("an unrelated write that fails");
+    skin::set_principal_full_name("mefeedr1", Some("Someone")).expect("an unrelated write");
+    named(&mut a, &pb, "a session ended beside another write").await;
+    silent(&mut a, 600, "once").await;
+
+    // A grant switched off: gone from the App's list, and named once more.
+    let g = skin::list_grants().expect("grants").into_iter().find(|g| g.target_id == svc_a && g.subject_id == pb).expect("grant");
+    skin::set_grant_enabled(&g.id, false).expect("disable");
+    named(&mut a, &pb, "a guest switched off").await;
+
+    // A new guest of this App.
+    let gnew = app_guest("mefeednew", &svc_a, &role1);
+    named(&mut a, &pid_of(&gnew), "a new guest").await;
+
+    // The App's pass goes: 4003.
+    let out = post(port, "/cli/app/suspend", OWNER, json!({ "app": "mefeeda", "reason": "test" })).await;
+    assert_eq!(out.status, 200, "suspend: {}", out.body);
+    closes(&mut a, 4003, "a suspended App's feed").await;
+    gateway::close("mefeeda", None, true);
+    gateway::close("mefeedb", None, true);
+}

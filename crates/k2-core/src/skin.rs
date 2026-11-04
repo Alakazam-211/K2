@@ -7320,6 +7320,63 @@ fn resolve_token(presented_raw: &str, used: bool) -> Result<Option<SkinPass>, St
     }))
 }
 
+/// One App's guests, each as a session of theirs on this App would resolve now
+/// (`scope=guests`, `prd-live-access-changes-v1` S7). K2 doesn't hold those guests'
+/// passes, so it asks by person. A guest with no enabled grant here isn't listed.
+/// One person per `with_conn`, so other requests get in between. No token is read:
+/// `id` is empty and `expires_at` is `None`.
+pub fn app_guests_now(service_id: &str) -> Result<Vec<SkinPass>, String> {
+    let guests: Vec<(String, String, bool)> = with_conn(|conn| {
+        let mut st = conn
+            .prepare(
+                "SELECT p.id, p.username,
+                        EXISTS (SELECT 1 FROM grants c WHERE c.subject_kind = 'principal' AND c.subject_id = p.id
+                                  AND c.kind = ?2 AND c.target_id = ?3 AND c.enabled != 0)
+                 FROM grants g JOIN principals p ON p.id = g.subject_id
+                 WHERE g.subject_kind = 'principal' AND g.kind = 'app' AND g.target_id = ?1 AND g.enabled != 0",
+            )
+            .map_err(|e| format!("app guests: {e}"))?;
+        let rows = st
+            .query_map(params![service_id, CHAT_GRANT_KIND, CHAT_GRANT_TARGET], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| format!("app guests: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("app guests: {e}"))
+    })?;
+    let mut out = Vec::with_capacity(guests.len());
+    for (principal_id, username, chat) in guests {
+        let mut pass = SkinPass {
+            id: String::new(),
+            principal_id: Some(principal_id.clone()),
+            username,
+            caps: Vec::new(),
+            rooms: Vec::new(),
+            session: true,
+            room_policy: RoomPolicy::new(),
+            app: service_id.to_string(),
+            room_paths: Default::default(),
+            expires_at: None,
+            chat,
+        };
+        let answer = with_conn(|conn| {
+            let Some(live) = live_session(conn, &pass)? else { return Ok(None) };
+            let tie = ties::get_conn(conn, &principal_id)?;
+            let app_rooms = if tie.is_some() { ties::app_rooms_conn(conn, service_id)? } else { Vec::new() };
+            Ok(Some((live, tie, app_rooms)))
+        })?;
+        let Some((live, tie, app_rooms)) = answer else { continue };
+        pass.caps = union_caps(&live.policy);
+        pass.rooms = rooms_from_policy(&live.policy);
+        pass.room_policy = live.policy;
+        pass.room_paths = live.paths;
+        // After the skin mutex is released, as in a resolve (A21).
+        let held = match tie {
+            None => Some(pass),
+            Some(tie) => clamp_resolved(pass, &tie, &app_rooms),
+        };
+        out.extend(held);
+    }
+    Ok(out)
+}
+
 /// What a login session has right now, on one read of its App's enabled grant:
 /// the policy ([`grant_login_policy`], what a fresh sign-in would get) and its
 /// folders ([`paths::session_paths`]).

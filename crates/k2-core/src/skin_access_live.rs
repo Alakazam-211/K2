@@ -153,6 +153,24 @@ pub fn token_rowid(raw: &str) -> Result<Option<i64>, String> {
     })
 }
 
+/// One App's login sessions that have ended since `since` (unix seconds), as `(token
+/// id, person)`: revoked, or past their expiry. A session ending changes nothing about
+/// the person's access on paper, but the server holding that pass needs to hear.
+pub fn sessions_ended_since(service_id: &str, since: i64) -> Result<Vec<(String, String)>, String> {
+    let now = super::now_secs();
+    super::with_conn(|conn| {
+        let mut st = conn
+            .prepare(
+                "SELECT id, principal_id FROM tokens
+                 WHERE app_service_id = ?1 AND session = 1 AND principal_id IS NOT NULL
+                   AND (revoked_at >= ?2 OR (expires_at >= ?2 AND expires_at <= ?3))",
+            )
+            .map_err(|e| format!("ended sessions: {e}"))?;
+        let found = st.query_map(rusqlite::params![service_id, since, now], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| format!("ended sessions: {e}"))?;
+        found.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("ended sessions: {e}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

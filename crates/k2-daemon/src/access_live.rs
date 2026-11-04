@@ -27,7 +27,9 @@
 //! `WS /cli/skin/me/events?scope=me` (`me.events`, S3) is the one socket that exists
 //! only for this: it sends `{"kind":"access_changed"}`, no details, and the client
 //! reads `me.get`. Closes and narrowing go out in the walk, whatever its size. Only
-//! those frames are paced ([`pace`]), because each one causes a `me.get`.
+//! those frames are paced ([`pace`]), because each one causes a `me.get`. An App's
+//! server can hold one socket for all its guests instead (`scope=guests`, S7): its
+//! frames add that guest's `principalId`, and only ever name that App's own guests.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -170,7 +172,12 @@ fn run() {
             match wake {
                 _ if force => walk_all(),
                 k2_core::skin::access_live::Wake::Full => walk_all(),
-                k2_core::skin::access_live::Wake::Tokens(rows) => walk(Which::Rows(rows.into_iter().collect())),
+                k2_core::skin::access_live::Wake::Tokens(rows) => {
+                    walk(Which::Rows(rows.into_iter().collect()));
+                    let mut owed = HashMap::new();
+                    feeds_hear_ended_sessions(&mut owed);
+                    pace(owed);
+                }
                 k2_core::skin::access_live::Wake::Nothing => {}
             }
             last_end = Instant::now();
@@ -203,9 +210,15 @@ fn until_earliest_expiry() -> Duration {
     }
 }
 
-/// Every open pass.
+/// Every open pass, then every App feed.
 fn walk_all() {
     walk(Which::All);
+    // One pacing, so a guest switched off (their answer changed and their sessions
+    // ended) is named once.
+    let mut owed = HashMap::new();
+    walk_feeds(&mut owed);
+    feeds_hear_ended_sessions(&mut owed);
+    pace(owed);
 }
 
 enum Which {
@@ -390,6 +403,8 @@ fn door_of(link: Option<&LinkCtx>) -> DoorKey {
 /// One frame the pacer owes.
 enum Owed {
     Me(Arc<MeSlot>),
+    /// `scope=guests`: this socket, naming this guest.
+    Guest(Arc<FeedSocket>, String),
 }
 
 /// A bucket for one door.
@@ -446,6 +461,7 @@ fn pace(owed: HashMap<DoorKey, Vec<Owed>>) {
             for item in items {
                 let fresh = match &item {
                     Owed::Me(s) => !s.queued.swap(true, Ordering::SeqCst),
+                    Owed::Guest(s, who) => s.queued.lock().insert(who.clone()),
                 };
                 if fresh {
                     door.queue.push_back(item);
@@ -486,12 +502,172 @@ fn spend() -> bool {
                     slot.queued.store(false, Ordering::SeqCst);
                     slot.owed.notify_one();
                 }
+                Owed::Guest(sock, who) => {
+                    sock.queued.lock().remove(&who);
+                    sock.ready.lock().push_back(who);
+                    sock.owed.notify_one();
+                }
             }
             door.tokens -= 1.0;
         }
         waiting |= !door.queue.is_empty();
     }
     waiting
+}
+
+// ── scope=guests: one socket per App ─────────────────────────────────
+
+/// One App's feed: every guest's answer, by person, for the sockets its own pass
+/// holds open. K2 doesn't hold those guests' passes, so these fingerprints come from
+/// [`k2_core::skin::app_guests_now`]. Keyed by the App: nothing about anyone else's
+/// guest can reach it, because nothing about anyone else's guest is read for it.
+struct Feed {
+    service_id: String,
+    prints: Mutex<HashMap<String, u64>>,
+    /// `(since when, sessions already named at that time)`: revoke times are whole
+    /// seconds, so the next look starts at the same second and skips these.
+    ended: Mutex<(i64, HashSet<String>)>,
+    sockets: Mutex<Vec<Weak<FeedSocket>>>,
+}
+
+struct FeedSocket {
+    door: DoorKey,
+    owed: Notify,
+    /// Named and waiting in the pacer's queue: a second change is the same frame.
+    queued: Mutex<HashSet<String>>,
+    /// Paid for by the pacer, ready to send.
+    ready: Mutex<VecDeque<String>>,
+}
+
+static FEEDS: Mutex<Option<HashMap<String, Arc<Feed>>>> = Mutex::new(None);
+
+fn with_feeds<T>(f: impl FnOnce(&mut HashMap<String, Arc<Feed>>) -> T) -> T {
+    let mut guard = FEEDS.lock();
+    f(guard.get_or_insert_with(HashMap::new))
+}
+
+fn guest_prints(service_id: &str, world: &World) -> Result<HashMap<String, u64>, String> {
+    Ok(k2_core::skin::app_guests_now(service_id)?
+        .into_iter()
+        .filter_map(|p| {
+            let print = fingerprint(&p, world);
+            p.principal_id.map(|id| (id, print))
+        })
+        .collect())
+}
+
+/// Tell a feed's sockets about these guests, through the pacer.
+fn owe_feed(feed: &Feed, who: Vec<String>, owed: &mut HashMap<DoorKey, Vec<Owed>>) {
+    let mut sockets = feed.sockets.lock();
+    sockets.retain(|w| w.strong_count() > 0);
+    for sock in sockets.iter().filter_map(Weak::upgrade) {
+        for id in &who {
+            owed.entry(sock.door.clone()).or_default().push(Owed::Guest(sock.clone(), id.clone()));
+        }
+    }
+}
+
+/// Compare every feed's guests. A guest who changed, arrived or is no longer on the
+/// App's list is named: each was the App's own guest a moment ago.
+fn walk_feeds(owed: &mut HashMap<DoorKey, Vec<Owed>>) {
+    drop_empty_feeds();
+    let feeds: Vec<Arc<Feed>> = with_feeds(|m| m.values().cloned().collect());
+    if feeds.is_empty() {
+        return;
+    }
+    let world = match World::load() {
+        Ok(w) => w,
+        Err(e) => {
+            k2_core::log_debug!("[access_live] the rooms and projects couldn't be read: {e}");
+            return;
+        }
+    };
+    for feed in feeds {
+        let now = match guest_prints(&feed.service_id, &world) {
+            Ok(p) => p,
+            Err(e) => {
+                k2_core::log_debug!("[access_live] an App's guests couldn't be read: {e}");
+                continue;
+            }
+        };
+        let mut prints = feed.prints.lock();
+        let mut who: Vec<String> = now.iter().filter(|(id, p)| prints.get(*id) != Some(*p)).map(|(id, _)| id.clone()).collect();
+        who.extend(prints.keys().filter(|id| !now.contains_key(*id)).cloned());
+        *prints = now;
+        drop(prints);
+        owe_feed(&feed, who, owed);
+    }
+}
+
+/// A session ending doesn't change a person's access on paper, but the App holding
+/// that pass needs to hear: its next read says the pass is dead. Asked of the rows, by
+/// time, not from what a write named: a revoke can land in the same walk as any other
+/// write. A new session is not news: nobody's access moved.
+fn feeds_hear_ended_sessions(owed: &mut HashMap<DoorKey, Vec<Owed>>) {
+    let feeds: Vec<Arc<Feed>> = with_feeds(|m| m.values().cloned().collect());
+    for feed in feeds {
+        let now = chrono::Utc::now().timestamp();
+        let since = feed.ended.lock().0;
+        let rows = match k2_core::skin::access_live::sessions_ended_since(&feed.service_id, since) {
+            Ok(rows) => rows,
+            Err(e) => {
+                k2_core::log_debug!("[access_live] an App's sessions couldn't be read: {e}");
+                continue;
+            }
+        };
+        let mut ended = feed.ended.lock();
+        let mut who: Vec<String> = rows.iter().filter(|(id, _)| !ended.1.contains(id)).map(|(_, person)| person.clone()).collect();
+        who.sort();
+        who.dedup();
+        *ended = (now, rows.into_iter().map(|(id, _)| id).collect());
+        drop(ended);
+        if !who.is_empty() {
+            owe_feed(&feed, who, owed);
+        }
+    }
+}
+
+/// Open `service_id`'s feed for one more socket. Reads skin.db. The socket joins
+/// under the map's lock, so a feed can't be dropped as a socket joins it.
+fn join_feed(service_id: &str, door: DoorKey) -> Result<(Arc<Feed>, Arc<FeedSocket>), String> {
+    let sock = Arc::new(FeedSocket { door, owed: Notify::new(), queued: Mutex::new(HashSet::new()), ready: Mutex::new(VecDeque::new()) });
+    let join = |f: &Arc<Feed>| f.sockets.lock().push(Arc::downgrade(&sock));
+    let found = with_feeds(|m| {
+        m.get(service_id).map(|f| {
+            join(f);
+            f.clone()
+        })
+    });
+    if let Some(feed) = found {
+        return Ok((feed, sock));
+    }
+    let generation = k2_core::skin::write_generation();
+    let prints = guest_prints(service_id, &World::load()?)?;
+    // What ended before this feed opened isn't news either.
+    let now = chrono::Utc::now().timestamp();
+    let already = k2_core::skin::access_live::sessions_ended_since(service_id, now)?.into_iter().map(|(id, _)| id).collect();
+    let fresh = Arc::new(Feed { service_id: service_id.to_string(), prints: Mutex::new(prints), ended: Mutex::new((now, already)), sockets: Mutex::new(Vec::new()) });
+    let feed = with_feeds(|m| {
+        let f = m.entry(service_id.to_string()).or_insert(fresh);
+        join(f);
+        f.clone()
+    });
+    if k2_core::skin::write_generation() != generation {
+        FORCE_FULL.store(true, Ordering::SeqCst);
+        on_write();
+    }
+    Ok((feed, sock))
+}
+
+/// Feeds whose sockets have all gone: nobody's reading those guests any more.
+fn drop_empty_feeds() {
+    with_feeds(|m| {
+        m.retain(|_, f| {
+            let mut sockets = f.sockets.lock();
+            sockets.retain(|w| w.strong_count() > 0);
+            !sockets.is_empty()
+        })
+    });
 }
 
 // ── me.events ────────────────────────────────────────────────────────
@@ -502,6 +678,9 @@ pub const ME_EVENTS_PATH: &str = "/cli/skin/me/events";
 const ACCESS_CHANGED: &str = r#"{"kind":"access_changed"}"#;
 /// On the main port nothing else bounds these (V20): each takes a task and a slot.
 const MAX_ME_SOCKETS_PER_PASS: usize = 16;
+/// The same bound for `scope=guests`, per App: its remote pass is on the main port,
+/// where no link quota counts sockets. One is what an App needs.
+const MAX_FEED_SOCKETS_PER_APP: usize = 16;
 
 fn refusal(status: &'static str, code: &str, hint: &str) -> CliResponse {
     CliResponse { status, content_type: "application/json", body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } }).to_string() }
@@ -529,14 +708,21 @@ pub fn me_events_off() -> CliResponse {
     refusal("404 Not Found", "not_found", "this server has no me.events: read me.get on open, and on each request's refusal")
 }
 
-/// `WS /cli/skin/me/events?scope=me`, for a live pass. The hub holds the pass
-/// **before** the upgrade, so a read after the socket opens can't miss a change: a
-/// commit before that read is in the read, and a commit after it moves the
-/// fingerprint taken here.
-pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, String>, raw: String) {
-    if params.get("scope").map(String::as_str) != Some("me") {
-        refuse(stream, refusal("400 Bad Request", "usage", "name the scope: scope=me")).await;
-        return;
+/// `WS /cli/skin/me/events?scope=me`, for a live pass, or `?scope=guests`, for an
+/// App's own pass. The hub holds the pass **before** the upgrade, so a read after
+/// the socket opens can't miss a change: a commit before that read is in the read,
+/// and a commit after it moves the fingerprint taken here.
+pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, String>, pass: SkinPass, raw: String) {
+    match params.get("scope").map(String::as_str) {
+        Some("me") => {}
+        Some("guests") => {
+            serve_guest_feed(stream, pass, raw).await;
+            return;
+        }
+        _ => {
+            refuse(stream, refusal("400 Bad Request", "usage", "name the scope: scope=me, or scope=guests with the App's own pass")).await;
+            return;
+        }
     }
     let link = crate::apps::gateway::current();
     let mut access = PassWatch::open(link, raw).await;
@@ -602,6 +788,99 @@ pub async fn serve_me_events(stream: &mut TcpStream, params: HashMap<String, Str
             },
         }
     }
+}
+
+/// `scope=guests`: one socket for all of this App's guests. Only the App's own pass
+/// opens it (AR50), and it only ever names that App's guests.
+async fn serve_guest_feed(stream: &mut TcpStream, pass: SkinPass, raw: String) {
+    let on_link = crate::guest_rooms_routes::OnLink::current();
+    let Some(service_id) = crate::guest_rooms_routes::app_of(&pass, on_link.as_ref()) else {
+        refuse(stream, refusal("403 Forbidden", "app_pass_required", "scope=guests is for this App's own pass; a guest's pass uses scope=me")).await;
+        return;
+    };
+    let link = crate::apps::gateway::current();
+    let door = door_of(link.as_deref());
+    let mut access = PassWatch::open(link, raw).await;
+    if access.entry.is_none() {
+        let r = if access.unreadable { CliResponse::internal_error("the pass couldn't be read; try again".to_string()) } else { crate::skin_routes::revoked_skin_response() };
+        refuse(stream, r).await;
+        return;
+    }
+    let joined = {
+        let (service, door) = (service_id.clone(), door.clone());
+        tokio::task::spawn_blocking(move || join_feed(&service, door)).await
+    };
+    let (feed, sock) = match joined {
+        Ok(Ok(j)) => j,
+        Ok(Err(e)) => {
+            refuse(stream, CliResponse::internal_error(e)).await;
+            return;
+        }
+        Err(e) => {
+            refuse(stream, CliResponse::internal_error(e.to_string())).await;
+            return;
+        }
+    };
+    let over = {
+        let mut sockets = feed.sockets.lock();
+        sockets.retain(|w| w.strong_count() > 0);
+        sockets.len() > MAX_FEED_SOCKETS_PER_APP
+    };
+    if over {
+        drop(sock);
+        refuse(stream, refusal("429 Too Many Requests", "rate_limited", "this App holds too many scope=guests sockets; one is plenty")).await;
+        return;
+    }
+    let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            k2_core::log_debug!("[access_live] handshake failed: {e}");
+            drop(sock);
+            drop_empty_feeds();
+            return;
+        }
+    };
+    use futures_util::{SinkExt, StreamExt};
+    let (mut write, mut read) = ws.split();
+    let mut keepalive = tokio::time::interval(crate::overlay_ws::ping_interval());
+    keepalive.tick().await;
+    'socket: loop {
+        tokio::select! {
+            biased;
+            _ = keepalive.tick() => {
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
+            _ = access.changed() => {
+                // The App's own pass: it rotates, or the App was suspended.
+                if matches!(access.answer(), Answer::Gone) {
+                    let _ = write.send(crate::presence::session_revoked_close_message()).await;
+                    break;
+                }
+            }
+            _ = sock.owed.notified() => {
+                let ready: Vec<String> = sock.ready.lock().drain(..).collect();
+                for who in ready {
+                    let frame = serde_json::json!({ "kind": "access_changed", "principalId": who }).to_string();
+                    if write.send(Message::Text(frame)).await.is_err() {
+                        break 'socket;
+                    }
+                }
+            }
+            incoming = read.next() => match incoming {
+                Some(Ok(Message::Ping(p))) => {
+                    if write.send(Message::Pong(p)).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    drop(sock);
+    drop_empty_feeds();
 }
 
 /// One open socket's view of its pass. Off when the hub is off, or when the pass

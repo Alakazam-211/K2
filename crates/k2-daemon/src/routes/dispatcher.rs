@@ -2772,14 +2772,14 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             };
-            if crate::apps::gateway::resolve_pass(&token).is_none() {
+            let Some(pass) = crate::apps::gateway::resolve_pass(&token) else {
                 let _ = stream.read(&mut buf).await;
                 let r = crate::skin_routes::revoked_skin_response();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
-            }
+            };
             let params = super::http::parse_params(&path, &query);
-            crate::access_live::serve_me_events(stream, params, token).await;
+            crate::access_live::serve_me_events(stream, params, pass, token).await;
             return DispatchOutcome::Done;
         }
         // 0.46.3 App project chat: `project.events`, one project's live

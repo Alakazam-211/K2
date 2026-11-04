@@ -327,3 +327,66 @@ async fn an_apps_link_stays_under_its_rate() {
     assert_eq!(limited.load(Ordering::SeqCst), 0, "no rate_limited");
     gateway::close("fanlink", None, true);
 }
+
+/// scope=guests: one socket, every guest of one App, a role edit naming them all.
+/// Paced at half the App's request rate, so this reports how long a big change takes
+/// through a link at default quotas.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "the night run"]
+async fn one_socket_for_every_guest_of_an_app() {
+    use k2_daemon::apps::gateway::{self, LinkSpec};
+    let count: usize = std::env::var("K2_FANOUT_GUESTS").ok().and_then(|v| v.parse().ok()).unwrap_or(500);
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "fanfeed");
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let svc = k2_core::published_services::insert(&conn, &ws.id, "fanfeed", k2_core::published_services::CMD_APP_SENTINEL, &ws.path.to_string_lossy(), 0, "local", "stopped", "cmd", "").expect("service").id;
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp { app_id: "fanfeed", service_id: &svc, seed_id: None, owner_workspace: &ws.id, isolation: "process", memory_limit_bytes: None, front_port: 0, created_by: "owner" },
+        )
+        .expect("insert app");
+        svc
+    };
+    let mut policy = skin::RoomPolicy::new();
+    policy.insert(ws.id.clone(), vec!["thread:read".to_string()]);
+    skin::create_role_for_app("fanfeedrole", &policy, None).expect("role");
+    for i in 0..count {
+        let user = format!("fanfeed{i}");
+        skin::add_principal(&user).expect("person");
+        let pid = skin::host_login_detail(&user).expect("guest").principal_id;
+        skin::create_grant(&skin::SkinGrantWrite { subject_kind: "principal".into(), subject_id: pid, kind: "app".into(), target_id: svc.clone(), role: Some("fanfeedrole".into()), scope: None, created_by: Some("owner".into()) }).expect("grant");
+    }
+    let spec = LinkSpec { app_id: "fanfeed".into(), service_id: svc.clone(), workspace_id: ws.id.clone(), port: 0, caps: vec!["thread:read".into()], rooms: vec![ws.id.clone()] };
+    let own = gateway::open(spec, None).expect("link");
+    let link = gateway::port_of("fanfeed").expect("listening");
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = format!("ws://127.0.0.1:{link}/cli/skin/me/events?scope=guests").into_client_request().expect("request");
+    req.headers_mut().insert("Authorization", format!("Bearer {own}").parse().expect("header"));
+    let t0 = Instant::now();
+    let (mut s, _) = tokio_tungstenite::connect_async(req).await.expect("open the feed");
+    eprintln!("[fanout] feed n={count}: opened in {:?}", t0.elapsed());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let stop = Arc::new(AtomicBool::new(false));
+    let start = Instant::now();
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": "fanfeedrole", "handle": ws.handle, "caps": ["thread:read", "files:read"] })).await;
+    let mut seen = std::collections::HashSet::new();
+    let deadline = start + Duration::from_secs(count as u64 / 10 + 30);
+    while seen.len() < count && Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(5), s.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let v: serde_json::Value = serde_json::from_str(&t).expect("json");
+                seen.insert(v["principalId"].as_str().expect("names a guest").to_string());
+            }
+            Ok(Some(Ok(_))) | Err(_) => {}
+            other => panic!("the feed ended: {other:?}"),
+        }
+    }
+    stop.store(true, Ordering::SeqCst);
+    eprintln!("[fanout] feed n={count}: {} guests named within {:?} (rate limit is half the App's rps); walks {:?}", seen.len(), start.elapsed(), k2_daemon::access_live::walk_stats());
+    assert_eq!(seen.len(), count, "everyone named");
+    gateway::close("fanfeed", None, true);
+}

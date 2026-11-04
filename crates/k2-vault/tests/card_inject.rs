@@ -1,6 +1,69 @@
 //! Secret cards that say how a secret is sent (prd-secret-card-injection-v1,
 //! vs-live SC-A1–SC-A18; Rosson's 0.46.6 rulings: no presets). Fakes only.
 
+/// A daemon restart opens the vault again from disk. A card's saved session
+/// secret, the card's state and a destroy all come back as they were, the
+/// value only ever encrypted; one past its time is gone.
+#[test]
+fn a_saved_session_card_survives_a_restart_until_its_time_runs_out() {
+    let t = TestDir::new("ci-restart");
+    let ks = Arc::new(FakeKeyStore::new());
+    let me = Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-1".into()) };
+    let readable = CardAnswer { readable_disclosed: true, ..Default::default() };
+    let (kept, gone) = {
+        let v = open(&t, &ks);
+        let mut keep = card("card-rs-keep-012345678", "RS_KEEP", None);
+        keep.proposed_scope = "session".into();
+        keep.proposed_hosts = vec![];
+        keep.proposed_delivery = Delivery::File;
+        v.request_create(keep).expect("card");
+        let kept = v.request_answer("card-rs-keep-012345678", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect("saved").meta;
+        let mut drop_it = card("card-rs-gone-012345678", "RS_GONE", None);
+        drop_it.proposed_scope = "session".into();
+        drop_it.proposed_hosts = vec![];
+        drop_it.proposed_delivery = Delivery::File;
+        v.request_create(drop_it).expect("card");
+        let gone = v.request_answer("card-rs-gone-012345678", SecretBytes::from_string(PW.to_string()), &readable, &Actor::Owner).expect("saved").meta;
+        v.destroy(&Selector::Id(gone.id.clone()), &Actor::Owner).expect("destroyed before the restart");
+        // A session secret near its end (a card's shortest time is a minute).
+        let mut brief = PutRequest::new(Namespace::User, Scope::session("sess-1"), "RS_BRIEF", Kind::Generic);
+        brief.default_delivery = Some(Delivery::File);
+        brief.expires_at = Some((chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339());
+        v.put(brief, SecretBytes::from_string(PW.to_string()), &Actor::Owner).expect("brief");
+        (kept, gone)
+    };
+    for f in walk(&t.path().join("vault")) {
+        let bytes = std::fs::read(&f).unwrap_or_default();
+        assert!(!bytes.windows(PW.len()).any(|w| w == PW.as_bytes()), "plaintext in {}", f.display());
+    }
+
+    let v = open(&t, &ks);
+    let r = v.resolve(&Selector::Id(kept.id.clone()), Use::File, &me).expect("the saved secret is there after the restart");
+    assert_eq!(r.value.expose(), PW.as_bytes());
+    assert_eq!(r.meta.expires_at, kept.expires_at, "its time is kept");
+    assert_eq!(v.request_get("card-rs-keep-012345678").expect("card").status, "set");
+    let names: Vec<String> = v.spawn_items(&me).expect("items").into_iter().map(|i| i.name).collect();
+    assert!(names.contains(&"RS_KEEP".to_string()) && !names.contains(&"RS_GONE".to_string()), "{names:?}");
+    assert!(v.resolve(&Selector::Id(gone.id.clone()), Use::File, &me).is_err(), "a destroy before the restart stays");
+    std::thread::sleep(std::time::Duration::from_millis(3200));
+    let brief = Selector::user(Scope::session("sess-1"), "RS_BRIEF");
+    assert!(v.resolve(&brief, Use::File, &me).is_err(), "past its time it is gone");
+    assert!(!v.spawn_items(&me).expect("items").iter().any(|i| i.name == "RS_BRIEF"));
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
 use std::sync::Arc;
 
 use base64::Engine as _;

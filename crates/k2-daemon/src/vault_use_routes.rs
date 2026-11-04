@@ -176,6 +176,22 @@ fn use_selector(vault: &LocalVault, c: &VaultCaller, s: &Sel) -> Result<Selector
                 return Ok(own);
             }
         }
+        // A session card's secret that followed this chat here from an earlier
+        // session of it (a share to this session; the newest wins).
+        let followed = vault
+            .list(&k2_vault::ListFilter::default(), &c.actor)
+            .ok()
+            .and_then(|all| {
+                all.into_iter()
+                    .filter(|m| m.namespace == Namespace::User && m.scope.kind == k2_vault::ScopeKind::Session && m.scope.id != sid && &m.name == name)
+                    .filter(|m| m.status == k2_vault::SecretStatus::Active)
+                    .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            });
+        if let Some(m) = followed {
+            if session_secret_may_shadow(&m) || !vault.user_secret_exists(scope, name) {
+                return Ok(Selector::Id(m.id));
+            }
+        }
     }
     Ok(sel)
 }
@@ -561,6 +577,8 @@ fn sync(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {
             ))
         }
     };
+    // A session card's secret follows its chat here first (after a restart).
+    crate::overlay_routes::follow_session_cards(vault);
     let t = crate::vault::spawn::top_up(vault, &sid, &ws);
     Ok(sync_json(&t))
 }

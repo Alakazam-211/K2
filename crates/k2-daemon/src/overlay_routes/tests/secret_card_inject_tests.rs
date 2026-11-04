@@ -364,7 +364,7 @@ fn a_session_file_card_reaches_the_session_that_asked() {
     let injects = recorded_injects();
     let line = injects.iter().find(|l| l.contains("secret SESSION_FILE set")).unwrap_or_else(|| panic!("{injects:?}"));
     assert!(line.contains("Delivered: $K2_SECRETS_DIR/SESSION_FILE is there now."), "{line}");
-    assert!(line.contains("even with --resume"), "the agent hears it ends with the session: {line}");
+    assert!(line.contains("It stays with this chat until it expires: after a restart or --resume"), "the agent hears it follows the chat: {line}");
     assert!(injects.iter().all(|l| !l.contains(SESSION_PW)), "{injects:?}");
     crate::vault::spawn::session_ended(&s.sid);
 }
@@ -843,4 +843,122 @@ fn a_file_already_in_the_folder_is_not_claimed_as_delivered() {
     let line = injects.iter().find(|l| l.contains("secret STALE_FILE set")).unwrap_or_else(|| panic!("{injects:?}"));
     assert!(line.contains("NOT delivered: $K2_SECRETS_DIR/STALE_FILE already exists"), "{line}");
     crate::vault::spawn::session_ended(&s.sid);
+}
+
+/// The vault's minute pass, as the daemon runs it.
+fn vault_tick(vault: &k2_vault::LocalVault) {
+    crate::vault::spawn::follow_and_top_up(vault);
+}
+
+/// A daemon restart without k2-ptyd ends the chat's session, and the chat comes
+/// back with a new session id. A secret a card saved for the chat's session
+/// follows it there until it expires: the file arrives, a bare name reaches
+/// it, and a destroy or a removed share still takes it back for good.
+#[cfg(unix)]
+#[test]
+fn a_session_card_follows_its_chat_to_the_session_after_a_restart() {
+    use k2_vault::{Actor, Selector};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlfr");
+    let t = k2_vault::fsutil::TestDir::new("sess-follow");
+    let _run = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+    let spawn = |sid: &str| {
+        crate::vault::spawn::materialize(&mut HashMap::new(), &project_id, sid, false, &crate::vault::spawn::SpawnRefs::default()).dir.expect("dir")
+    };
+    let first = RunningChat::start(&project_id);
+    let dir1 = spawn(&first.sid());
+    let posted = post_as(&first.sid(), &handle, "FOLLOW_FILE", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let set = answer(&handle, &id, SESSION_PW, serde_json::json!({}));
+    assert_eq!(set.status, "200 OK", "{}", set.body);
+    assert_eq!(std::fs::read(dir1.join("FOLLOW_FILE")).expect("delivered"), SESSION_PW.as_bytes());
+    let secret = vault.request_get(&id).expect("request").secret_id.expect("saved");
+    let sel = Selector::Id(secret.clone());
+    let meta = vault.meta(&sel, &Actor::Owner).expect("meta");
+
+    // The daemon restarts: the session ends, the chat runs again as another.
+    let first_sid = first.sid();
+    crate::vault::spawn::session_ended(&first_sid);
+    drop(first);
+    let second = RunningChat::start(&project_id);
+    let dir2 = spawn(&second.sid());
+    vault_tick(&vault);
+    assert_eq!(std::fs::read(dir2.join("FOLLOW_FILE")).expect("it followed the chat"), SESSION_PW.as_bytes());
+    let to_second: Vec<_> = vault.grants(&sel, &Actor::Owner).expect("grants").into_iter().filter(|g| g.consumer.id == second.sid()).collect();
+    assert_eq!(to_second.len(), 1, "one share to the new session");
+    assert_eq!(to_second[0].expires_at, meta.expires_at, "it ends when the secret does");
+    vault_tick(&vault);
+    assert_eq!(vault.grants(&sel, &Actor::Owner).expect("grants").len(), 1, "no second share on the next pass");
+
+    // A bare name reaches it from the new session.
+    let me = crate::vault::actor::VaultCaller {
+        actor: Actor::Agent(k2_vault::AgentActor { workspace_id: project_id.clone(), session_id: Some(second.sid()), shell: false, vault_manage: false }),
+        channel: crate::vault::actor::Channel::Plain,
+        session_id: Some(second.sid()),
+    };
+    let file = crate::vault_routes::handle_on(
+        &vault,
+        crate::vault_use_routes::FILE,
+        Ok(me.clone()),
+        serde_json::json!({ "secret": "FOLLOW_FILE" }).to_string().as_bytes(),
+        &HashMap::new(),
+        "test",
+        None,
+    );
+    assert_eq!(file.status, "200 OK", "{}", file.body);
+
+    // A removed share stays removed: the next pass doesn't put it back.
+    let owner = crate::vault::actor::VaultCaller { actor: Actor::Owner, channel: crate::vault::actor::Channel::Plain, session_id: None };
+    let call = |path: &str, body: serde_json::Value| {
+        let r = crate::vault_routes::handle_on(&vault, path, Ok(owner.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+        assert_eq!(r.status, "200 OK", "{path}: {}", r.body);
+    };
+    call(crate::vault_routes::REVOKE, serde_json::json!({ "grantId": to_second[0].id }));
+    assert!(!dir2.join("FOLLOW_FILE").exists(), "revoke took the file back");
+    vault_tick(&vault);
+    assert!(vault.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "a removed share stays removed");
+    assert!(!dir2.join("FOLLOW_FILE").exists());
+
+    // The chat runs again: it follows there, and a destroy takes it back for good.
+    crate::vault::spawn::session_ended(&second.sid());
+    drop(second);
+    let third = RunningChat::start(&project_id);
+    let dir3 = spawn(&third.sid());
+    vault_tick(&vault);
+    assert!(dir3.join("FOLLOW_FILE").exists(), "the next session of the chat gets it");
+    call(crate::vault_routes::DESTROY, serde_json::json!({ "id": secret, "yes": true }));
+    assert!(!dir3.join("FOLLOW_FILE").exists(), "destroy took it back");
+    vault_tick(&vault);
+    assert!(!dir3.join("FOLLOW_FILE").exists(), "a destroyed secret never follows again");
+    crate::vault::spawn::session_ended(&third.sid());
+}
+
+/// It follows only its own chat: another workspace's running chat, and a
+/// chat running again in the same session, get nothing new.
+#[cfg(unix)]
+#[test]
+fn a_session_card_follows_only_its_own_chat() {
+    use k2_vault::{Actor, Selector};
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlfo");
+    let (_other_handle, other_project) = ws("ovlfx");
+    let t = k2_vault::fsutil::TestDir::new("sess-follow-own");
+    let _run = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, t.path().join("run"));
+    let first = RunningChat::start(&project_id);
+    crate::vault::spawn::materialize(&mut HashMap::new(), &project_id, &first.sid(), false, &crate::vault::spawn::SpawnRefs::default());
+    let posted = post_as(&first.sid(), &handle, "OWN_FILE", "session", "file");
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    assert_eq!(answer(&handle, &id, SESSION_PW, serde_json::json!({})).status, "200 OK");
+    let sel = Selector::Id(vault.request_get(&id).expect("request").secret_id.expect("saved"));
+    vault_tick(&vault);
+    assert!(vault.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "its own session still runs: nothing to follow");
+    crate::vault::spawn::session_ended(&first.sid());
+    drop(first);
+    let elsewhere = RunningChat::start(&other_project);
+    vault_tick(&vault);
+    assert!(vault.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "another workspace's chat gets nothing");
+    drop(elsewhere);
 }

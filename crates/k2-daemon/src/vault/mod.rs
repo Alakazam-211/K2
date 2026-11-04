@@ -657,8 +657,9 @@ fn start_ticker(v: Arc<LocalVault>) {
                 spawn::sweep_dead(&|s: &str| live.contains(s));
                 // Papercut 8: a file granted to a live session (by any path:
                 // a grant, a set, a card the owner approved) reaches its
-                // $K2_SECRETS_DIR within a minute.
-                spawn::top_up_all(&v2);
+                // $K2_SECRETS_DIR within a minute. A session card's secret
+                // follows its chat to the chat's new session first.
+                spawn::follow_and_top_up(&v2);
             })
             .await;
         }

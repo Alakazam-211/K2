@@ -886,6 +886,14 @@ pub fn top_up_all(vault: &k2_vault::LocalVault) -> usize {
     sweep_live(vault).written
 }
 
+/// The vault's minute pass for running sessions: a session card's secret
+/// follows its chat to the chat's new session (after a restart or
+/// `--resume`), then every session gets what it is granted now.
+pub fn follow_and_top_up(vault: &k2_vault::LocalVault) -> usize {
+    crate::overlay_routes::follow_session_cards(vault);
+    top_up_all(vault)
+}
+
 /// One pass over every live session with a dir: files it now gets go in,
 /// files it no longer gets come out. After a destroy, a disable or a revoke
 /// this is what takes the file back at once; the vault's minute tick catches

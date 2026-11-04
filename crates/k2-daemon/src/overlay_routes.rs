@@ -2457,6 +2457,74 @@ fn chat_running_session(resolved: &ResolvedOverlay) -> Option<String> {
     (crate::session_token::workspace_for_session(&sid).as_deref() == Some(resolved.project_id.as_str())).then_some(sid)
 }
 
+/// A session card's secret stays with its chat until it expires: a daemon
+/// restart without k2-ptyd, or `--resume`, brings the chat back as another
+/// session, and this pass shares the secret with that session (at the
+/// secret's own delivery, ending when it does). Never when the session it was
+/// saved for still runs, never to another workspace, never a destroyed or
+/// disabled secret, and never again to a session a person removed it from.
+/// The vault's minute pass runs it. Returns how many shares it made.
+pub(crate) fn follow_session_cards(vault: &k2_vault::LocalVault) -> usize {
+    use k2_vault::{Actor, AuditQuery, Consumer, ConsumerKind, GrantRequest, ScopeKind, SecretStatus, SecretStore as _, Selector};
+    let system = Actor::System("card-follows-chat".into());
+    let Ok(requests) = vault.requests(None) else { return 0 };
+    let now = chrono::Utc::now();
+    let mut made = 0;
+    for req in requests {
+        let Some(id) = req.secret_id.clone().filter(|_| req.status == "set") else { continue };
+        let sel = Selector::Id(id.clone());
+        let Ok(m) = vault.meta(&sel, &system) else { continue };
+        let unexpired = m.expires_at.as_deref().and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok()).is_some_and(|x| x > now);
+        if m.scope.kind != ScopeKind::Session || m.status != SecretStatus::Active || !unexpired || crate::session_liveness::is_live(&m.scope.id) {
+            continue;
+        }
+        // The card's Thread may have moved with a re-pin.
+        let conversation = match pinned_chat_of(&req.workspace_id) {
+            Some(pin) if overlay::card_is_secret(&pin, &req.card_id).unwrap_or(false) => pin,
+            _ => req.conversation.clone(),
+        };
+        let chat = ResolvedOverlay {
+            conversation_id: conversation,
+            project_id: req.workspace_id.clone(),
+            addr: String::new(),
+            requested_addr: String::new(),
+            canonical_alias: false,
+        };
+        let Some(sid) = chat_running_session(&chat) else { continue };
+        if sid == m.scope.id {
+            continue;
+        }
+        let Ok(grants) = vault.grants(&sel, &system) else { continue };
+        if grants.iter().any(|g| g.consumer.kind == ConsumerKind::Session && g.consumer.id == sid) {
+            continue;
+        }
+        // A person removed it from this session: it stays removed.
+        let label = Consumer::session(&sid).label();
+        let removed = vault
+            .audit(&AuditQuery { secret_id: Some(id.clone()), limit: Some(5000), ..Default::default() }, &system)
+            .map(|rows| rows.iter().any(|r| r.action == "revoke" && r.consumer.as_deref() == Some(label.as_str())))
+            .unwrap_or(true);
+        if removed {
+            continue;
+        }
+        let grant = GrantRequest {
+            selector: sel,
+            consumer: Consumer::session(&sid),
+            delivery: m.default_delivery,
+            env_name: None,
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: m.expires_at.clone(),
+            version: None,
+        };
+        match vault.grant(grant, &system) {
+            Ok(_) => made += 1,
+            Err(e) => k2_core::log_debug!("[vault] a session card's secret couldn't follow its chat: {}", e.code),
+        }
+    }
+    made
+}
+
 /// Who an answer to a card reaches: the session that asked while it runs,
 /// else this chat's running session. A card stays open for 7 days, and an
 /// idle agent sleeps and comes back with a new session id.
@@ -2532,7 +2600,7 @@ fn wake_for_card(params: &HashMap<String, String>, resolved: &ResolvedOverlay, c
         return;
     }
     let line = format!(
-        "A person tried to save {name} on your secret card, but no session of yours was running, so nothing was saved. The card is still open and they were told to try Save again, and you get a line when it is saved. Ask again only if they tell you it failed. If it saves, only this running session can use it."
+        "A person tried to save {name} on your secret card, but no session of yours was running, so nothing was saved. The card is still open and they were told to try Save again, and you get a line when it is saved. Ask again only if they tell you it failed. If it saves, it stays with this chat until it expires."
     );
     if let Some(pass) = request_skin() {
         let label = guest_stamp(&pass);
@@ -2774,7 +2842,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     };
     let file_delivery = card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m);
     let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
-        " Only this running session can use it: after a restart, even with --resume, the new session can't. The encrypted value stays in the vault until it expires. To keep using it after a restart, ask again: k2 thread secret --scope workspace."
+        " It stays with this chat until it expires: after a restart or --resume, the chat's next session gets it within a minute, or at once with k2 vault sync. To keep it for good, ask again: k2 thread secret --scope workspace."
     } else {
         ""
     };

@@ -217,8 +217,9 @@ async fn answer<S: AsyncWrite + Unpin>(client: &mut S, status: &str, code: &str,
     let body = json!({ "error": { "code": code, "hint": hint, "details": null } }).to_string();
     let retry = retry_after.map(|s| format!("Retry-After: {s}\r\n")).unwrap_or_default();
     let msg = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{retry}Connection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{retry}{frame}Connection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = client.write_all(msg.as_bytes()).await;
     let _ = client.flush().await;

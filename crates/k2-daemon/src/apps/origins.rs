@@ -2,6 +2,10 @@
 //! the public https origins it is served on, so it can check `Origin` on
 //! CSRF-sensitive requests and WebSocket upgrades.
 //!
+//! - **One function** ([`for_service`], 0.46.9 vs-live A6): the
+//!   supervisor, the gateway's form-origin check, invite and pairing hosts
+//!   all read the same list, so a label an App serves is an origin to every
+//!   one of them.
 //! - **Sources** (the daemon's own bindings, read at each start):
 //!   the custom hostnames bound to the App (`k2 app domain add <app>
 //!   <host>`, role `app:<app>`, on an attached apex) **that are `live`**,
@@ -30,8 +34,14 @@ pub const ORIGINS_ENV: &str = "K2_APP_ORIGINS";
 /// Pure: the origins in order, deduplicated, each `https://<host>`
 /// (lowercase, no trailing dot, no path):
 /// 1. `primary`, when it is one of the live `custom` names;
-/// 2. the k2.dev labels in the order given (`meet` if bound, the App's own);
+/// 2. the k2.dev labels in the order given (the suite labels bound to the
+///    App, `meet` if bound, the App's own, then the labels it took or
+///    attached);
 /// 3. the other live custom names, sorted.
+///
+/// So a k2.dev label always ranks above a live custom name nobody marked
+/// primary: a custom domain going live never silently becomes
+/// `K2_APP_ORIGIN` (A6, R40.7).
 ///
 /// `custom` must already be the LIVE names only (the caller filters).
 pub fn ordered(labels: Vec<String>, custom: &[String], primary: Option<&str>) -> Vec<String> {
@@ -99,12 +109,35 @@ pub(crate) fn box_subdomain() -> String {
 }
 
 /// The public origins of the published service `service_id` named `name`
-/// (an App's name is its id), read from the daemon's bindings now.
+/// (an App's name is its id), read from the daemon's bindings now: its
+/// suite labels (`chat`, `meet` from the catalog, 0.46.9), the `meet` label
+/// bound by `k2 hostchat meet bind`, its own label, the labels it took or
+/// attached, and its live custom names (A6: every caller gets all of them).
 pub fn for_service(service_id: &str, name: &str) -> Vec<String> {
-    for_service_on(service_id, name, &box_subdomain(), crate::sew::meet::bound_live())
+    let (suite, attached) = if name.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let suite = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::suite::jobs::labels_of(&conn, name).map(|v| v.into_iter().map(|l| l.label).collect()).unwrap_or_else(|e| {
+                k2_core::log_debug!("[apps] suite labels of {name}: {e}");
+                Vec::new()
+            })
+        };
+        (suite, super::labels::taken(name))
+    };
+    for_service_on(service_id, name, &box_subdomain(), crate::sew::meet::bound_live(), &suite, &attached)
 }
 
-fn for_service_on(service_id: &str, name: &str, sub: &str, meet: Option<(String, Option<String>)>) -> Vec<String> {
+fn for_service_on(
+    service_id: &str,
+    name: &str,
+    sub: &str,
+    meet: Option<(String, Option<String>)>,
+    suite: &[String],
+    attached: &[String],
+) -> Vec<String> {
     let db = k2_core::db::shared();
     let (expose, custom, primary) = {
         let conn = db.lock();
@@ -128,13 +161,15 @@ fn for_service_on(service_id: &str, name: &str, sub: &str, meet: Option<(String,
         };
         (expose, custom, primary)
     };
-    let mut labels: Vec<String> = Vec::new();
+    let tunnel = k2_core::published_services::EXPOSE_TUNNEL;
+    let mut labels: Vec<String> = suite.iter().filter_map(|l| nested_origin(l, tunnel, sub)).collect();
     if let Some((app, Some(url))) = meet {
         if !name.is_empty() && app == name {
             labels.push(url);
         }
     }
     labels.extend(nested_origin(name, &expose, sub));
+    labels.extend(attached.iter().filter_map(|l| nested_origin(l, tunnel, sub)));
     ordered(labels, &custom, primary.as_deref())
 }
 
@@ -195,9 +230,9 @@ mod tests {
             let l = k2_core::published_services::insert(&conn, "ws-o", "quiet", "app", "/x", 0, "local", "running", "cmd", "").unwrap();
             (t.id, l.id)
         };
-        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None), vec!["https://hearth.sewlab.k2.dev".to_string()]);
-        assert!(for_service_on(&tunnel_id, "hearth", "", None).is_empty(), "no Connect subdomain");
-        assert!(for_service_on(&local_id, "quiet", "sewlab", None).is_empty(), "local-only, no custom domain");
+        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None, &[], &[]), vec!["https://hearth.sewlab.k2.dev".to_string()]);
+        assert!(for_service_on(&tunnel_id, "hearth", "", None, &[], &[]).is_empty(), "no Connect subdomain");
+        assert!(for_service_on(&local_id, "quiet", "sewlab", None, &[], &[]).is_empty(), "local-only, no custom domain");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -206,7 +241,7 @@ mod tests {
             k2_core::domains::upsert_name(&conn, "aaa.example.com", "example.com", "app:hearth").unwrap();
         }
         // CD-A4: bound but not served yet → not an origin at all.
-        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None), vec!["https://hearth.sewlab.k2.dev".to_string()]);
+        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None, &[], &[]), vec!["https://hearth.sewlab.k2.dev".to_string()]);
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -214,7 +249,7 @@ mod tests {
         }
         // Live: an origin, after the K2 label until it is picked as primary.
         assert_eq!(
-            for_service_on(&tunnel_id, "hearth", "sewlab", None),
+            for_service_on(&tunnel_id, "hearth", "sewlab", None, &[], &[]),
             vec!["https://hearth.sewlab.k2.dev".to_string(), "https://hearth.example.com".to_string()]
         );
         {
@@ -223,7 +258,7 @@ mod tests {
             assert!(k2_core::domains::set_primary(&conn, "hearth", "hearth.example.com").unwrap());
         }
         assert_eq!(
-            for_service_on(&tunnel_id, "hearth", "sewlab", None),
+            for_service_on(&tunnel_id, "hearth", "sewlab", None, &[], &[]),
             vec!["https://hearth.example.com".to_string(), "https://hearth.sewlab.k2.dev".to_string()]
         );
         {
@@ -231,15 +266,15 @@ mod tests {
             let conn = db.lock();
             k2_core::domains::remove_name(&conn, "hearth.example.com").unwrap();
         }
-        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None), vec!["https://hearth.sewlab.k2.dev".to_string()]);
+        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None, &[], &[]), vec!["https://hearth.sewlab.k2.dev".to_string()]);
         // The `meet` label bound to this App (K-M2) comes before its own;
         // bound to another App, it isn't this one's.
         let meet = |app: &str| Some((app.to_string(), Some("https://meet.sewlab.k2.dev".to_string())));
         assert_eq!(
-            for_service_on(&tunnel_id, "hearth", "sewlab", meet("hearth")),
+            for_service_on(&tunnel_id, "hearth", "sewlab", meet("hearth"), &[], &[]),
             vec!["https://meet.sewlab.k2.dev".to_string(), "https://hearth.sewlab.k2.dev".to_string()]
         );
-        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", meet("other")), vec!["https://hearth.sewlab.k2.dev".to_string()]);
+        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", meet("other"), &[], &[]), vec!["https://hearth.sewlab.k2.dev".to_string()]);
     }
 
     /// A client (Vanilla, 2026-10-27): with a live custom primary, the App's
@@ -288,6 +323,78 @@ mod tests {
             assert!(o.contains(&format!("https://{l}.acme.k2.dev")), "{l} dropped: {o:?}");
         }
         assert_eq!(o.len(), 6);
+    }
+
+    /// AT18 (vs-live A6): a local-only App whose address is an attached
+    /// label keeps that label as `K2_APP_ORIGIN` when a custom name nobody
+    /// marked primary goes live; before 0.46.9 the custom name silently
+    /// became the primary at the next start. The suite labels the catalog
+    /// bound lead, and every caller of `for_service` (gateway, invites,
+    /// pairing) sees them.
+    #[test]
+    fn attached_and_suite_labels_rank_above_a_live_custom_name() {
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+        cfg.subdomain = "lztek".into();
+        k2_core::tunnel::config::save(&cfg).unwrap();
+        let svc = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let s = k2_core::published_services::insert(&conn, "ws-l", "team-app", "app", "/x", 0, "local", "running", "cmd", "").unwrap();
+            k2_core::deploy::store::insert_app(
+                &conn,
+                &k2_core::deploy::store::NewApp {
+                    app_id: "team-app",
+                    service_id: &s.id,
+                    seed_id: None,
+                    owner_workspace: "ws-l",
+                    isolation: "container",
+                    memory_limit_bytes: None,
+                    front_port: 0,
+                    created_by: "owner",
+                },
+            )
+            .unwrap();
+            k2_core::domains::upsert_binding(&conn, "example.com", None, false).unwrap();
+            k2_core::domains::upsert_name(&conn, "team.example.com", "example.com", "app:team-app").unwrap();
+            k2_core::domains::set_app_state(&conn, "team.example.com", k2_core::domains::STATE_LIVE, None).unwrap();
+            s.id
+        };
+        let mut c = super::super::labels::load_cfg("team-app").unwrap();
+        c.subdomains.push(k2_core::app_grace::config::AttachedSubdomain {
+            label: "team-meet".into(),
+            added_at: 1,
+            added_by: "owner".into(),
+            previous_target: None,
+        });
+        super::super::labels::save_cfg("team-app", &c).unwrap();
+        let o = for_service(&svc, "team-app");
+        assert_eq!(o, vec!["https://team-meet.lztek.k2.dev".to_string(), "https://team.example.com".to_string()]);
+        assert_eq!(env_pairs(&o)[0], (ORIGIN_ENV, "https://team-meet.lztek.k2.dev".to_string()), "no silent primary change");
+        // The supervisor's path (with_taken_labels on top) gives the same list.
+        assert_eq!(with_taken_labels(for_service(&svc, "team-app"), &super::super::labels::taken("team-app")), o);
+        // A suite label bound to the App leads.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::suite::jobs::label_bind(
+                &conn,
+                &k2_core::suite::jobs::SuiteLabel { label: "meet".into(), app_id: "team-app".into(), front_port: 40100, bound_at: 2, bound_by: "owner".into() },
+            )
+            .unwrap();
+        }
+        let o = for_service(&svc, "team-app");
+        assert_eq!(o[0], "https://meet.lztek.k2.dev");
+        assert_eq!(o[1], "https://team-meet.lztek.k2.dev");
+        assert_eq!(o[2], "https://team.example.com");
+        // Once the owner marks the custom name primary, it leads.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            assert!(k2_core::domains::set_primary(&conn, "team-app", "team.example.com").unwrap());
+        }
+        assert_eq!(for_service(&svc, "team-app")[0], "https://team.example.com");
     }
 
     #[test]

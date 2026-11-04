@@ -5,6 +5,10 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
+// 0.46.9: one-click suite Apps (prd-one-click-suite-apps-v1): the catalog
+// routes and the daemon install job.
+pub mod catalog_job;
+pub mod catalog_routes;
 // An agent's App grants (the App-user switch, copy-host and label
 // transfers) and their held requests (0.46.4).
 pub mod agent_grants;

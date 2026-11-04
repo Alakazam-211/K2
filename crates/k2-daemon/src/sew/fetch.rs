@@ -159,13 +159,29 @@ impl ReleaseFile {
         }
     }
 
+    /// The release's git tag: `v<version>` for a Sew core release; a
+    /// named tag (`seeds-0.2.4`, the one-click Seeds' own release) as is.
+    pub fn release_tag(&self) -> String {
+        if self.tag.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("v{}", self.tag)
+        } else {
+            self.tag.clone()
+        }
+    }
+
+    /// A one-click suite Seed or source tarball (0.46.9) in its own release
+    /// (`tag` as published, e.g. `seeds-0.2.4`), capped at its pinned size.
+    pub fn suite(tag: &str, name: &str, sha256: &str, size: u64, label: &str) -> Self {
+        ReleaseFile { tag: tag.into(), name: name.into(), sha256: sha256.into(), cap: size, label: label.into() }
+    }
+
     /// The public URL (what a person fetches by hand).
     pub fn url(&self) -> String {
-        format!("{RELEASES_URL}/v{}/{}", self.tag, self.name)
+        format!("{RELEASES_URL}/{}/{}", self.release_tag(), self.name)
     }
 
     fn url_at(&self, o: &Origin) -> String {
-        format!("{}/v{}/{}", o.base, self.tag, self.name)
+        format!("{}/{}/{}", o.base, self.release_tag(), self.name)
     }
 
     /// What a box without internet does instead: `cmd` is the command that

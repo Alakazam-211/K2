@@ -602,6 +602,51 @@ fn foreign(label: &str, r: crate::label_owner::Refusal) -> Refusal {
 
 /// POST `/cli/app/domain/add {app, label}`.
 fn add(who: &Who, body: &[u8]) -> R<J> {
+    add_with(who, body, None)
+}
+
+/// 0.46.9 (one-click suite Apps, vs-live A5): attach an ordinary k2.dev
+/// label to a catalog install that has no deploy yet, so the label is in
+/// `K2_APP_ORIGIN` at its first start (Hearth and Meet refuse to boot
+/// without one). Every check of `k2 app domain add` runs; only the health
+/// check is skipped, and the label points at the App's front port, which
+/// routes to whichever instance is live.
+pub(crate) fn attach_before_first_deploy(who: &Who, app_id: &str, label: &str, front: u16) -> R<J> {
+    let body = json!({ "app": app_id, "label": label }).to_string();
+    add_with(who, body.as_bytes(), Some(front))
+}
+
+/// Whether `label` could be attached to an App of workspace `ws` now
+/// (`k2 app domain add`'s checks, read-only; `app_id` = the App it would
+/// go to, if it exists). The live address check (R13) uses it; the deploy
+/// repeats every check.
+pub(crate) fn label_check(app_id: &str, ws: &str, label: &str) -> R<()> {
+    if k2_core::skin::is_reserved_nested_label(label) {
+        return Err(no(RESERVED, 400, k2_core::skin::reserved_nested_label_error(label)));
+    }
+    if let Some(other) = served_by_other_app(app_id, label)? {
+        return Err(no(OTHER_APP, 409, format!("'{label}' already serves the App {other}")));
+    }
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT project_id FROM published_services WHERE name = ?1 LIMIT 1", rusqlite::params![label], |r| r.get::<_, String>(0))
+            .ok()
+    };
+    if let Some(holder) = row {
+        if holder != ws {
+            return Err(match crate::label_owner::check(label, ws, false) {
+                Err(r) => foreign(label, r),
+                Ok(_) => labels::foreign_refusal(label, &holder),
+            });
+        }
+        return Err(no(USE_LABEL_TAKE, 409, format!("'{label}' is a published service's label in your workspace (k2 publish list)")));
+    }
+    crate::label_owner::check(label, ws, false).map_err(|r| foreign(label, r))?;
+    Ok(())
+}
+
+fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
@@ -665,13 +710,16 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     // An existing hostname nobody holds: never an agent's to repoint; a
     // person only with --transfer.
     let transfer = labels::may_repoint(who, &ws, &label, b(&v, "transfer"))?;
-    let front = labels::healthy(&app).map_err(|why| {
-        no(
-            labels::NOT_HEALTHY,
-            409,
-            format!("{why}: deploy it and wait until it's live before it serves '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
-        )
-    })?;
+    let front = match front_override {
+        Some(p) => p,
+        None => labels::healthy(&app).map_err(|why| {
+            no(
+                labels::NOT_HEALTHY,
+                409,
+                format!("{why}: deploy it and wait until it's live before it serves '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
+            )
+        })?,
+    };
     let previous = current_target(&ws, &label);
     labels::point(&ws, &label, front).map_err(|e| no(labels::MOVE_FAILED, 409, format!("'{label}' is unchanged: {e}")))?;
     let by = actor(who);

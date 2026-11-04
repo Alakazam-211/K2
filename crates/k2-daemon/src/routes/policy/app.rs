@@ -51,6 +51,15 @@ pub(super) const ROWS: &[Route] = &[
     // 0.46.3 F8: undo box prep.
     post("/cli/app/box/unprep", Owner),
     post("/cli/app/build", Admin),
+    // One-click suite Apps (vs-live A15): the catalog, the live address
+    // check and a job are reads; install and retry write (handler: switch 1
+    // for passports, their own workspace).
+    get("/cli/app/catalog", Member),
+    get("/cli/app/catalog/check-address", Member),
+    post("/cli/app/catalog/install", Admin),
+    get("/cli/app/catalog/job", Member),
+    post("/cli/app/catalog/retry", Admin),
+    get("/cli/app/catalog/show", Member),
     // App-governed Spaces S1 (0.46.7): an App's chat key. Read: Admin and
     // the App's agent; on / widen: the owner in person (an Admin within
     // the defaults) with a vault confirm; narrow and revoke: Admin or the

@@ -119,6 +119,8 @@ pub fn is_route(p: &str) -> bool {
         || super::status::ROUTES.contains(&p)
         // 0.46.11: k2 app db connect|status|check|disconnect (db_connect.rs).
         || super::db_connect::ROUTES.contains(&p)
+        // 0.46.9: the suite App catalog and the one-click install.
+        || super::catalog_routes::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -153,6 +155,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::updates_routes::POST_ROUTES.contains(&p)
         // 0.46.11: k2 app db connect|check|disconnect (db_connect.rs).
         || super::db_connect::POST_ROUTES.contains(&p)
+        // 0.46.9: k2 app install --catalog, k2 app catalog retry.
+        || super::catalog_routes::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -522,6 +526,9 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::updates_routes::ROUTES.contains(&p) => super::updates_routes::handle(p, &who, body, params),
         // 0.46.11: an App's database, connected and checked (db_connect.rs).
         p if super::db_connect::ROUTES.contains(&p) => super::db_connect::handle(p, &who, body, params),
+        // 0.46.9: the suite App catalog and the one-click install job
+        // (catalog_routes.rs, catalog_job.rs).
+        p if super::catalog_routes::ROUTES.contains(&p) => super::catalog_routes::handle(p, &who, body, params),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),
@@ -843,7 +850,7 @@ pub(crate) fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
 /// No `memory` = 512 MiB (F2). The box's pool admits it (`admission`,
 /// every caller); an agent past its default limits is held (`limits`).
 /// A label another workspace holds is refused naming its agent (N6).
-fn install(who: &Who, body: &[u8]) -> R<J> {
+pub(crate) fn install(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
     let app_id = s(&v, "app").ok_or_else(|| no(codes::BAD_REQUEST, 400, "app is required (the App id)"))?.to_ascii_lowercase();
@@ -1256,7 +1263,7 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
     app_for(who, Some(&app.app_id))
 }
 
-fn deploy_inner(who: &Who, v: &J) -> R<J> {
+pub(crate) fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
     super::ownership::refuse_if_parked(&app)?;
@@ -2604,6 +2611,10 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     // 0.46.3: labels it took over from its workspace's legacy services go
     // back to them (or their hostnames go, when the service is gone).
     super::labels::give_back_all(&app);
+    // 0.46.9 (vs-live A7): a catalog App's suite labels (chat, meet) and
+    // its lineage go with it; its Meetings Space is unbound in Sew below
+    // (`app_removed`), because the install recorded it.
+    let released = super::catalog_job::forget_app(&app.app_id);
     let label_is_ours = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2640,7 +2651,7 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     if let Err(e) = k2_core::skin::app_chat::app_removed(&app.service_id, "system:app-removed") {
         k2_core::log_debug!("[apps] {}: WARN chat users of a removed App: {e}", app.app_id);
     }
-    audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge }));
+    audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge, "suiteLabels": released }));
     if purge {
         let _ = std::fs::remove_dir_all(deploy::app_dir(&app.app_id));
     } else {

@@ -1719,6 +1719,10 @@ async fn async_main() {
     // DNS re-checks (waiting every 10 min, served names daily) and the
     // first certificate of a proven name. Nothing under air-gap.
     crate::apps::custom_domain_flow::spawn_loop();
+    // 0.46.9: one-click suite App installs (prd-one-click-suite-apps-v1
+    // R41): every running or waiting install job resumes at its step and
+    // moves on with no client attached.
+    crate::apps::catalog_job::spawn_driver();
     // 0.46.8 (Path B): the custom-name table both terminators serve, built
     // now (so the tunnel's first frpc render below already carries this
     // box's Path B names) and every 30 s after, front443 or not; and K2's
